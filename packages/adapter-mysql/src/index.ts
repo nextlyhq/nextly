@@ -95,6 +95,7 @@ import type {
   ResultSetHeader,
 } from "mysql2/promise";
 
+import { sweepIdleConnections, type SweepablePool } from "./idle-sweep";
 import { boundPoolWait, type QueueingPool } from "./pool-wait";
 import { vercelPoolView } from "./vercel-pool";
 
@@ -288,10 +289,13 @@ export type {
 export const VERSION = "0.1.0";
 
 /**
- * Default pool configuration values.
+ * Default pool configuration values on a long-running server: the PostgreSQL
+ * adapter's for a standard server, so the same `pool` settings and
+ * `DB_POOL_*` variables mean the same pool on both. With `min` 0, every
+ * connection idle for 30 seconds is closed (`sweepIdleConnections`).
  */
 const DEFAULT_POOL_CONFIG = {
-  min: 2,
+  min: 0,
   max: 10,
   idleTimeoutMs: 30000,
   // How long a request waits for a connection, in the queue or opening one:
@@ -395,7 +399,7 @@ function errnoOf(error: unknown): number | undefined {
  * - No native ILIKE (uses LOWER() LIKE workaround)
  * - No native JSONB (uses JSON type)
  * - No array types
- * - Savepoints disabled for safety (MySQL has nested transaction quirks)
+ * - A transaction opened inside another's work joins it flat (its context still takes savepoints)
  *
  * @example
  * ```typescript
@@ -432,6 +436,9 @@ export class MySqlAdapter extends DrizzleAdapter {
    */
   private pool: Pool | null = null;
 
+  /** Stops closing the pool's idle connections; a no-op until a pool exists. */
+  private stopIdleSweep: () => void = () => {};
+
   /** The `withSession` calls running, each on a connection of its own, for `disconnect` to wait for. */
   private readonly sessions = new Set<Promise<unknown>>();
 
@@ -448,6 +455,15 @@ export class MySqlAdapter extends DrizzleAdapter {
   private functionalIndexes: boolean | undefined;
   private enforcesCheckConstraints: boolean | undefined;
   private serverVersion: string | undefined;
+
+  /**
+   * Whether a transaction context sets savepoints, read from the server's
+   * variant at connect. TiDB refuses `SAVEPOINT` before 6.2, and in a
+   * pessimistic transaction unless `tidb_constraint_check_in_place_pessimistic`
+   * is on, so on TiDB the context offers none and its callers run their work
+   * without one. MySQL and the other variants take them.
+   */
+  private takesSavepoints = true;
 
   /**
    * Creates a new MySQL adapter instance.
@@ -489,6 +505,12 @@ export class MySqlAdapter extends DrizzleAdapter {
       this.warnOnDriverZoneDisagreement();
       const poolConfig = this.buildPoolConfig();
       const pool = mysql.createPool(poolConfig);
+      // mysql2's own idle closing is off (`buildPoolConfig`); this closes
+      // connections idle past the timeout and keeps `min` of them.
+      this.stopIdleSweep = sweepIdleConnections(
+        pool.pool as unknown as SweepablePool,
+        this.idleSweepOptions(poolConfig)
+      );
       // Attached as soon as it exists, as Vercel's docs say, so the smoke
       // test's own connection is one `@vercel/functions` waits on as well.
       // Handed as the shape `attachDatabasePool` reads (`vercelPoolView`).
@@ -553,6 +575,7 @@ export class MySqlAdapter extends DrizzleAdapter {
         // and ignores it, and the variants are not spoken for.
         this.enforcesCheckConstraints = enforcesCheckConstraints;
         this.serverVersion = serverVersion;
+        this.takesSavepoints = variant !== "tidb";
         this.connected = true;
 
         if (this.config.logger?.info) {
@@ -566,6 +589,7 @@ export class MySqlAdapter extends DrizzleAdapter {
       }
     } catch (error) {
       // Clean up on failure
+      this.stopIdleSweep();
       if (this.pool) {
         await this.pool.end().catch(() => {});
         this.pool = null;
@@ -590,6 +614,9 @@ export class MySqlAdapter extends DrizzleAdapter {
     // the closing pool.
     const pool = this.pool;
     this.pool = null;
+    // The pool's end closes every connection; the sweep must not close one
+    // under it.
+    this.stopIdleSweep();
     this.drizzleBare = undefined;
     this.drizzleByRelations = new WeakMap();
     if (!pool) {
@@ -768,9 +795,6 @@ export class MySqlAdapter extends DrizzleAdapter {
    * @remarks
    * MySQL transactions support isolation levels. Automatic retry is
    * implemented for deadlocks (error 1213) when `retryCount` is specified.
-   *
-   * Note: Savepoints are disabled in this adapter for safety due to
-   * MySQL's quirks with nested transactions.
    *
    * A call made inside another transaction's work therefore joins it flat,
    * on its connection: its statements are the outer's. Its failure cannot be
@@ -970,7 +994,9 @@ export class MySqlAdapter extends DrizzleAdapter {
    * - No arrays
    * - No native ILIKE
    * - No RETURNING clause
-   * - Savepoints disabled for safety
+   * - No savepoint for a nested transaction: one opened inside another's work
+   *   joins it flat (`joinSteps`), so `supportsSavepoints` is false. The
+   *   transaction context's own savepoint methods are a separate matter.
    */
   getCapabilities(): DatabaseCapabilities {
     return {
@@ -982,7 +1008,7 @@ export class MySqlAdapter extends DrizzleAdapter {
       supportsFts: true, // MySQL has FULLTEXT indexes
       supportsIlike: false, // No native ILIKE, use LOWER() LIKE
       supportsReturning: false, // No RETURNING clause in MySQL
-      supportsSavepoints: false, // Disabled for safety per approved approach
+      supportsSavepoints: false, // A nested transaction joins flat; no savepoint isolates it
       supportsOnConflict: true, // ON DUPLICATE KEY UPDATE
       maxParamsPerQuery: 65535, // MySQL limit
       maxIdentifierLength: 64, // MySQL limit
@@ -1143,25 +1169,17 @@ export class MySqlAdapter extends DrizzleAdapter {
   private buildPoolConfig(): PoolOptions {
     const config: PoolOptions = this.buildConnectionConfig();
 
-    // Pool settings - mysql2 uses different property names. Inside Vercel
-    // functions the defaults are the serverless ones, a small pool whose idle
-    // connections close quickly, since a suspended instance keeps whatever it
-    // holds open; each setting the config gives still wins on its own.
-    const serverless = isVercelFunction();
-    const defaults = serverless
-      ? SERVERLESS_POOL_DEFAULTS
-      : DEFAULT_POOL_CONFIG;
+    // Pool settings - mysql2 uses different property names.
+    const defaults = this.poolDefaults();
     config.connectionLimit = this.config.pool?.max ?? defaults.max;
     config.idleTimeout =
       this.config.pool?.idleTimeoutMs ?? defaults.idleTimeoutMs;
-    if (serverless) {
-      // mysql2 closes idle connections past `idleTimeout` only while `maxIdle`
-      // is below `connectionLimit` (its default is equal to it), and closes
-      // any idle connection beyond `maxIdle` within a second. One below the
-      // limit lets the idle timeout apply and keeps all but one connection
-      // for its full length.
-      config.maxIdle = Math.max(config.connectionLimit - 1, 0);
-    }
+    // mysql2 never closes an idle connection by itself with `maxIdle` equal
+    // to the limit: below it, it closes every connection idle past
+    // `idleTimeout` and keeps no minimum. The adapter closes them instead,
+    // past `idleTimeout` and down to `min` (`sweepIdleConnections`), and
+    // `idleTimeout` stays set so the pool's config reads as it behaves.
+    config.maxIdle = config.connectionLimit;
 
     // A request waits for a connection when the pool is full. The queue has
     // no length limit; each wait in it is bounded instead (`boundPoolWait`).
@@ -1169,6 +1187,28 @@ export class MySqlAdapter extends DrizzleAdapter {
     config.queueLimit = 0;
 
     return config;
+  }
+
+  /**
+   * The pool defaults where this runs. Inside Vercel functions they are the
+   * serverless ones, a small pool whose idle connections close quickly, since
+   * a suspended instance keeps whatever it holds open; each setting the
+   * config gives still wins on its own.
+   */
+  private poolDefaults(): { min: number; max: number; idleTimeoutMs: number } {
+    return isVercelFunction() ? SERVERLESS_POOL_DEFAULTS : DEFAULT_POOL_CONFIG;
+  }
+
+  /** Which idle connections the pool built from `poolConfig` closes, and when. */
+  private idleSweepOptions(poolConfig: PoolOptions): {
+    min: number;
+    idleTimeoutMs: number;
+  } {
+    return {
+      min: this.config.pool?.min ?? this.poolDefaults().min,
+      idleTimeoutMs:
+        poolConfig.idleTimeout ?? DEFAULT_POOL_CONFIG.idleTimeoutMs,
+    };
   }
 
   /**
@@ -1316,10 +1356,6 @@ export class MySqlAdapter extends DrizzleAdapter {
 
   /**
    * Creates a TransactionContext for the given connection.
-   *
-   * @remarks
-   * Note: Savepoint methods are not implemented (set to undefined)
-   * as savepoints are disabled in this adapter per approved approach.
    */
   /**
    * Upsert with the meaning `INSERT … ON CONFLICT (target)` has on PostgreSQL
@@ -1829,10 +1865,17 @@ export class MySqlAdapter extends DrizzleAdapter {
 
       ...this.createTransactionForwarders(txDb),
 
-      // Savepoints disabled per approved approach
-      savepoint: undefined,
-      rollbackToSavepoint: undefined,
-      releaseSavepoint: undefined,
+      // InnoDB's savepoints, on this transaction's connection, so a part of the transaction can be
+      // undone alone (a failed item of a batch, say) and the rest kept, as on PostgreSQL and SQLite.
+      // A transaction opened inside this one's work still joins it flat: see `joinSteps`. Left
+      // undefined on a server that may refuse them (`takesSavepoints`), so a caller runs its work
+      // without one rather than fail on the SAVEPOINT. The effects held for the transaction are
+      // scoped to each savepoint (`contextSavepointMethods`).
+      ...(this.takesSavepoints
+        ? this.contextSavepointMethods(async statement => {
+            await connection.query(statement);
+          })
+        : {}),
     };
   }
 

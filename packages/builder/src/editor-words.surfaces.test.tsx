@@ -12,7 +12,13 @@
  */
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as React from "react";
 
@@ -26,14 +32,16 @@ vi.mock("./editor-words", async importOriginal => {
   };
 });
 
-const { panelLabel } = await import("./editor-rail");
-const { inspectorTabLabels } = await import("./inspector-panel");
-const { InsertPanel } = await import("./insert-panel");
-const { LayersPanel } = await import("./layers-panel");
+const { panelLabel } = await import("./shell/editor-rail");
+const { inspectorTabLabels } = await import("./inspector/inspector-panel");
+const { InsertPanel } = await import("./panels/add/insert-panel");
+const { LayersPanel } = await import("./panels/layers/layers-panel");
 const { useEditorState } = await import("./editor-state");
-const { HelpDialog } = await import("./help-dialog");
-const { FontsPanel } = await import("./fonts-panel");
-const { SharedStylesPanel } = await import("./shared-styles-panel");
+const { HelpDialog } = await import("./shell/help-dialog");
+const { FontsPanel } = await import("./panels/design/fonts-panel");
+const { SharedStylesPanel } = await import(
+  "./panels/design/shared-styles-panel"
+);
 
 afterEach(cleanup);
 
@@ -61,7 +69,11 @@ describe("the editor's surfaces read the catalogue", () => {
   it("names the rail's panels and the inspector's tabs from it", () => {
     expect(panelLabel("layers")).toBe("«layers»");
     expect(panelLabel("design")).toBe("«design»");
-    expect(inspectorTabLabels()).toEqual(["«content»", "«style»"]);
+    expect(inspectorTabLabels()).toEqual([
+      "«content»",
+      "«style»",
+      "«advanced»",
+    ]);
   });
 
   it("names the Add panel, its tabs and the Layers tree from it", () => {
@@ -99,7 +111,9 @@ describe("the editor's surfaces read the catalogue", () => {
     fireEvent.mouseDown(screen.getByRole("tab", { name: "«sections»" }), {
       button: 0,
     });
-    expect(screen.getByText("No «sections» are saved yet.")).toBeTruthy();
+    expect(
+      within(screen.getByRole("listbox")).getByText("No «sections» yet.")
+    ).toBeTruthy();
     clearBlocks();
   });
 

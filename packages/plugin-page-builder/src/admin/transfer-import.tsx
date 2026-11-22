@@ -85,8 +85,8 @@ function send(body: ImportRequest): Promise<Envelope | undefined> {
 /** What each kind of thing is called in the preview. */
 const KIND_WORDS: Record<ImportConflictKind, [one: string, many: string]> = {
   component: ["component", "components"],
-  pattern: ["pattern", "patterns"],
-  layout: ["Layout", "Layouts"],
+  pattern: ["saved section", "saved sections"],
+  layout: ["header & footer set", "header & footer sets"],
   class: ["shared style", "shared styles"],
   token: ["variable", "variables"],
   media: ["media file", "media files"],
@@ -108,7 +108,7 @@ export function TransferImport(): React.JSX.Element {
       const parsed: unknown = JSON.parse(await chosen.text());
       if (!looksExported(parsed)) {
         toast.error(
-          `"${chosen.name}" is not a page builder export. Choose a file exported from a Components, Patterns or Layouts list.`
+          `"${chosen.name}" is not a page builder export. Choose a file exported from the Components, Saved sections or Header & footer list.`
         );
         return;
       }
@@ -123,7 +123,8 @@ export function TransferImport(): React.JSX.Element {
   return (
     <div className="nx-pb-transfer-bar">
       <p className="nx-pb-transfer-bar__hint">
-        Bring in a pattern, component or Layout exported from another site.
+        Bring in a saved section, component or header & footer set exported from
+        another site.
       </p>
       <Button
         ref={opener}

@@ -37,8 +37,10 @@
  * against a database migrated for it, and must be the same number, with no
  * write among them but the start's own (below). Then again with migrations at
  * start turned on, against a database that step has already brought up to
- * date, counting the statements outside that step, which the test labels by
- * running it under an AsyncLocalStorage store the recorder reads. The warm-up
+ * date from the migration `nextly migrate:create` wrote for the configuration
+ * (a start refuses one no migration records), counting the statements outside
+ * that step, which the test labels by running it under an AsyncLocalStorage
+ * store the recorder reads. The warm-up
  * the start leaves running is labelled and left out the same way: its reads
  * land before or after the start resolves by timing alone.
  *
@@ -63,6 +65,9 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../__tests__/helpers/fresh-database";
+import { runMigrateCreate } from "../../cli/commands/migrate-create";
+import type { CommandContext } from "../../cli/program";
+import { createLogger } from "../../cli/utils/logger";
 import {
   recordStatements,
   type RecordedStatement,
@@ -75,6 +80,7 @@ import {
 } from "../../config";
 import { createAdapter } from "../../database/factory";
 import { shutdownServices } from "../../di/register";
+import { setNonInteractive } from "../../domains/schema/migrate/can-prompt";
 import { getNextly, shutdownNextly, startSettled } from "../../init";
 import {
   createTestNextly,
@@ -114,6 +120,22 @@ vi.mock("../prod-migrations", async original => {
       sentFrom.run("migrations at start", () =>
         actual.runProdMigrationsIfEnabled(...args)
       ),
+  };
+});
+/** The configuration `nextly migrate:create` loads, while one is set. */
+const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
+
+// `migrate:create` loads the test's configuration rather than a file; every
+// other caller, a start among them, loads as it always does.
+vi.mock("../../cli/utils/config-loader", async original => {
+  const actual =
+    await original<typeof import("../../cli/utils/config-loader")>();
+  return {
+    ...actual,
+    loadConfig: (...args: Parameters<typeof actual.loadConfig>) =>
+      loaded.config === undefined
+        ? actual.loadConfig(...args)
+        : Promise.resolve({ config: loaded.config, dependencies: [] }),
   };
 });
 vi.mock("../warm-companion-readiness", async original => {
@@ -302,6 +324,44 @@ describe.each(getConfiguredTestDialects())(
       await setup.disconnect().catch(() => undefined);
     }
 
+    /**
+     * `nextly migrate:create` for `shape`, into a migrations folder of its
+     * own, as a deployment that migrates at start writes before it deploys.
+     */
+    async function migrationWritten(
+      shape: ReturnType<typeof entities>
+    ): Promise<void> {
+      rmSync(migrationsDir, { recursive: true, force: true });
+      migrationsDir = mkdtempSync(join(tmpdir(), "nextly-pwnb-migrations-"));
+      loaded.config = defineConfig({ ...shape, db: { migrationsDir } });
+      const said: string[] = [];
+      const capture = (message: string) => {
+        said.push(message);
+      };
+      const context = {
+        logger: {
+          ...createLogger({ quiet: true }),
+          info: capture,
+          warn: capture,
+          success: capture,
+          error: capture,
+        },
+        options: {},
+        cwd: migrationsDir,
+      } as CommandContext;
+      const exit = vi.spyOn(process, "exit").mockImplementation(code => {
+        throw new Error(`exit ${String(code)}: ${said.join("\n")}`);
+      });
+      setNonInteractive(true);
+      try {
+        await runMigrateCreate("pwnb", { cwd: migrationsDir }, context);
+      } finally {
+        setNonInteractive(false);
+        exit.mockRestore();
+        loaded.config = undefined;
+      }
+    }
+
     /** The configuration a build of `shape` starts with. */
     function configOf(
       shape: ReturnType<typeof entities>,
@@ -426,14 +486,19 @@ describe.each(getConfiguredTestDialects())(
       migrationsAtStart: boolean
     ): Promise<RecordedStatement[]> {
       const shape = entities(count, false);
-      await migrated(shape);
-      const config = configOf(shape, migrationsAtStart);
       if (migrationsAtStart) {
-        // The step's first run against this database records what it finds;
-        // the start counted is a later one, against a database it has already
-        // brought up to date.
-        await recordStart(config, "the Direct API");
+        // A start refuses a configuration no migration records, so the
+        // migration for it is written first, and the step's first run
+        // migrates the empty database with it, as `nextly migrate` would; the
+        // start counted is a later one, against a database the step has
+        // already brought up to date.
+        await migrationWritten(shape);
+        await recordStart(configOf(shape, true), "the Direct API");
+      } else {
+        await migrated(shape);
       }
+      // Built once the step's migrations folder is the one written above.
+      const config = configOf(shape, migrationsAtStart);
       const { beforeResolved } = await recordStart(config, "the Direct API");
       // The step ran where it is on, and only there, so the statements left
       // out below are its own.

@@ -8,6 +8,12 @@ import { auditLog as mysqlAuditLog } from "../../schemas/audit/mysql";
 import { auditLog as postgresAuditLog } from "../../schemas/audit/postgres";
 import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
 import { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
+import { nextlyContentEventsMysql } from "../../schemas/content-events/mysql";
+import { nextlyContentEventsPg } from "../../schemas/content-events/postgres";
+import { emailQueueMysql } from "../../schemas/email-queue/mysql";
+import { emailQueuePg } from "../../schemas/email-queue/postgres";
+import { nextlyTranslationProvenanceMysql } from "../../schemas/translation-provenance/mysql";
+import { SYSTEM_COLUMNS } from "../../lib/system-columns";
 import type { PluginDefinition } from "../plugin-context";
 import { resolvePlugins } from "../resolve";
 
@@ -136,9 +142,33 @@ describe("collectPrincipalKinds", () => {
       mysqlAuditLog.targetPrincipalKind,
       emailDeliveriesPg.principalKind,
       emailDeliveriesMysql.principalKind,
+      emailQueuePg.principalKind,
+      emailQueueMysql.principalKind,
+      nextlyContentEventsPg.actorPrincipalKind,
+      nextlyContentEventsMysql.actorPrincipalKind,
+      nextlyTranslationProvenanceMysql.actorPrincipalKind,
     ].map(column => (column as { length?: number }).length);
+    // The column on every collection and Single that names who last changed a document, written
+    // in the same statement as the save: a kind longer than it fails the save itself.
+    const changedBy = SYSTEM_COLUMNS.find(
+      column => column.name === "_changed_by_principal_kind"
+    );
+    widths.push(
+      changedBy?.shape.postgresql.length,
+      changedBy?.shape.mysql.length
+    );
     expect(widths.every(width => typeof width === "number")).toBe(true);
     expect(PRINCIPAL_KIND_MAX_LENGTH).toBe(Math.min(...(widths as number[])));
+  });
+
+  it("refuses a kind one character longer than a document records who changed it in", () => {
+    // 65 characters: the audit trail would hold it, the column naming a document's last
+    // changer would not, so every save by such a person would fail.
+    const pluginName = "a".repeat(65 - ":account".length);
+    expect(`${pluginName}:account`.length).toBe(65);
+    expect(reasonFor([plugin(pluginName, [kind()])])).toBe(
+      "PLUGIN_RESOLUTION_ERROR:principal-kind-invalid"
+    );
   });
 
   it("refuses a kind with no resolver", () => {

@@ -35,6 +35,7 @@ import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
 import { reconcileCore } from "./core-reconcile";
+import { resolveDataLossConsent } from "./data-loss-consent";
 
 const COLUMN = "access_rules";
 
@@ -85,73 +86,137 @@ describe("the access_rules column on a database that predates its removal", () =
     ]);
   });
 
-  it("`nextly migrate` refuses, and the reason names the column", async () => {
+  const CONSENT = `dynamic_collections.${COLUMN},dynamic_singles.${COLUMN}`;
+
+  it("`nextly migrate` without consent refuses, naming both columns and the consent that drops them", async () => {
     const applyCore = vi.fn();
+    const executeSql = vi.fn();
 
-    await expect(
-      reconcileCore({
-        db: testDb.db,
-        dialect: "sqlite",
-        introspect: () => Promise.resolve(liveWithAccessRules()),
-        applyCore,
-        allowDestructive: false,
-      })
-    ).rejects.toMatchObject({
-      code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-      // The operator has to be able to act on this, which means reading which
-      // column is in question out of the message itself.
-      publicMessage: expect.stringContaining(
-        `drops column 'dynamic_collections.${COLUMN}'`
-      ),
-    });
-
-    // Refused means refused: nothing was applied on the way to the error.
-    expect(applyCore).not.toHaveBeenCalled();
-  });
-
-  it("drops it once the operator sets NEXTLY_ALLOW_CORE_DESTRUCTIVE", async () => {
-    // The mirror of the refusal, and the reason that one is not enough on its
-    // own: a reconcile that refused unconditionally would satisfy it while
-    // leaving the column permanently unremovable.
-    const applyCore = vi
-      .fn()
-      .mockResolvedValue({ statementsExecuted: ["ALTER TABLE …"] });
-
-    const result = await reconcileCore({
+    const refusal = reconcileCore({
       db: testDb.db,
       dialect: "sqlite",
       introspect: () => Promise.resolve(liveWithAccessRules()),
       applyCore,
-      allowDestructive: true,
+      executeSql,
+      consent: resolveDataLossConsent({}),
     });
 
-    expect(result.changed).toBe(true);
-    expect(applyCore).toHaveBeenCalledOnce();
+    await expect(refusal).rejects.toMatchObject({
+      code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
+    });
+    const message = await refusal.catch(
+      (error: { publicMessage: string }) => error.publicMessage
+    );
+    expect(message).toContain(`dynamic_collections.${COLUMN}`);
+    expect(message).toContain(`dynamic_singles.${COLUMN}`);
+    expect(message).toContain(`--accept-data-loss=${CONSENT}`);
+    // Refused means refused: nothing was applied on the way to the error.
+    expect(applyCore).not.toHaveBeenCalled();
+    expect(executeSql).not.toHaveBeenCalled();
   });
 
-  it("asks the operator to confirm on the dev path rather than deciding", async () => {
-    const applyCore = vi.fn();
-    const confirmDestructive = vi.fn().mockResolvedValue(false);
+  it("a strict run with no consent at all names the consent and the deprecated variable", async () => {
+    await expect(
+      reconcileCore({
+        db: testDb.db,
+        dialect: "sqlite",
+        introspect: () => Promise.resolve(liveWithAccessRules()),
+        applyCore: vi.fn(),
+      })
+    ).rejects.toMatchObject({
+      code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
+      publicMessage: expect.stringMatching(
+        new RegExp(
+          `column dynamic_collections\\.${COLUMN}: the collections' stored access rules.*--accept-data-loss=${CONSENT} \\(or NEXTLY_ACCEPT_DATA_LOSS=${CONSENT}\\)\\. NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 still works .* deprecated`
+        )
+      ),
+    });
+  });
+
+  it.each([
+    ["the consent naming both columns", { flag: CONSENT }],
+    [
+      "the deprecated NEXTLY_ALLOW_CORE_DESTRUCTIVE=1",
+      {
+        env: { NEXTLY_ALLOW_CORE_DESTRUCTIVE: "1" },
+        honours: ["NEXTLY_ALLOW_CORE_DESTRUCTIVE" as const],
+      },
+    ],
+  ])(
+    "drops both columns with %s, by Nextly's own statement",
+    async (_, given) => {
+      const applyCore = vi.fn();
+      const executeSql = vi.fn().mockResolvedValue(undefined);
+
+      const result = await reconcileCore({
+        db: testDb.db,
+        dialect: "sqlite",
+        introspect: () => Promise.resolve(liveWithAccessRules()),
+        applyCore,
+        executeSql,
+        consent: resolveDataLossConsent(given),
+      });
+
+      expect(result.changed).toBe(true);
+      // Nothing else to bring up, so no push; the drops are Nextly's.
+      expect(applyCore).not.toHaveBeenCalled();
+      expect(executeSql.mock.calls.map(([sql]) => sql as string)).toEqual([
+        expect.stringMatching(
+          /ALTER TABLE .dynamic_collections. DROP COLUMN .access_rules./
+        ),
+        expect.stringMatching(
+          /ALTER TABLE .dynamic_singles. DROP COLUMN .access_rules./
+        ),
+      ]);
+    }
+  );
+
+  it("the development boot keeps both columns and names the consent that drops them", async () => {
+    const executeSql = vi.fn();
+    const warnings: string[] = [];
+
+    await reconcileCore({
+      db: testDb.db,
+      dialect: "sqlite",
+      introspect: () => Promise.resolve(liveWithAccessRules()),
+      applyCore: vi.fn(),
+      executeSql,
+      allowDestructive: true,
+      logger: { warn: line => warnings.push(line) },
+    });
+
+    expect(executeSql).not.toHaveBeenCalled();
+    expect(warnings.join("\n")).toContain(
+      `\`nextly migrate\` drops them with the consent --accept-data-loss=${CONSENT} (or NEXTLY_ACCEPT_DATA_LOSS=${CONSENT})`
+    );
+  });
+
+  it("hands `upgrade --reconcile-core`'s judge both columns, and a refusal drops nothing", async () => {
+    const executeSql = vi.fn();
+    const judgeDeletions = vi.fn().mockRejectedValue(new Error("declined"));
 
     await expect(
       reconcileCore({
         db: testDb.db,
         dialect: "sqlite",
-        mode: "dev-loose",
-        confirmDestructive,
         introspect: () => Promise.resolve(liveWithAccessRules()),
-        applyCore,
+        applyCore: vi.fn(),
+        executeSql,
+        judgeDeletions,
       })
-    ).rejects.toMatchObject({ code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED" });
+    ).rejects.toThrow("declined");
 
-    // The column reaches the prompt, so what the operator is agreeing to is
-    // legible at the moment they agree to it.
-    expect(confirmDestructive).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        expect.stringContaining(`dynamic_collections.${COLUMN}`),
-      ])
-    );
-    expect(applyCore).not.toHaveBeenCalled();
+    expect(judgeDeletions).toHaveBeenCalledWith([
+      expect.objectContaining({
+        kind: "column",
+        table: "dynamic_collections",
+        column: COLUMN,
+        core: true,
+        reason: expect.stringContaining("stored access rules"),
+      }),
+      expect.objectContaining({ table: "dynamic_singles", column: COLUMN }),
+    ]);
+    expect(executeSql).not.toHaveBeenCalled();
   });
 
   it("is skipped, never applied, by the additive dev-server pass", () => {

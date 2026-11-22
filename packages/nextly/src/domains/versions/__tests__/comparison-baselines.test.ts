@@ -9,6 +9,7 @@ import {
   comparisonBaselineNames,
   registerComparisonBaseline,
   resolveComparisonBaseline,
+  resolveComparisonPair,
   type PartVersion,
 } from "../comparison-baselines";
 
@@ -158,5 +159,87 @@ describe("comparison baselines", () => {
         ),
       })
     ).resolves.toBe(4);
+  });
+});
+
+describe("why a baseline has nothing to compare with", () => {
+  /** The reason a request is refused with, as the reader is shown it. */
+  async function refusalOf(
+    baseline: string,
+    to: number,
+    history: PartVersion[]
+  ): Promise<string> {
+    const refused = await resolveComparisonPair(
+      {
+        ref,
+        to,
+        baseline,
+        userId: null,
+        partIsLive: () => Promise.resolve(true),
+        lifecycle: true,
+      },
+      history
+    ).then(
+      () => null,
+      (error: unknown) => error
+    );
+    expect(refused).toBeInstanceOf(NextlyError);
+    const issues = (
+      (refused as NextlyError).publicData as {
+        errors: { code: string; message: string }[];
+      }
+    ).errors;
+    expect(issues[0]?.code).toBe("NO_BASELINE");
+    return issues[0]?.message ?? "";
+  }
+
+  // Said as a sentence about the document, never by quoting the name the
+  // request used for the baseline, which a reader did not type.
+  it("says a part's first version has nothing before it", async () => {
+    const message = await refusalOf(
+      "previous",
+      1,
+      versions([1, "draft", "en"])
+    );
+    expect(message).toBe(
+      "Version 1 is the earliest version kept of this part of the document, so there is nothing before it to compare with."
+    );
+  });
+
+  it("says there is no current draft, or that this is it", async () => {
+    expect(await refusalOf("draft", 5, versions([5, "published", "en"]))).toBe(
+      "This part of the document has no draft saved since it was last published, so there is no current draft to compare with."
+    );
+    expect(
+      await refusalOf(
+        "draft",
+        6,
+        versions([6, "draft", "en"], [5, "published", "en"])
+      )
+    ).toBe(
+      "This is the current draft, so there is no other draft to compare it with."
+    );
+  });
+
+  it("says nothing published is kept, or that this is what is published", async () => {
+    expect(await refusalOf("published", 5, versions([5, "draft", "en"]))).toBe(
+      "No published version of this part of the document is kept, so there is nothing published to compare with."
+    );
+    expect(
+      await refusalOf("published", 5, versions([5, "published", "en"]))
+    ).toBe(
+      "This is the version that is published, so there is nothing else published to compare it with."
+    );
+  });
+
+  it("names a registered baseline by its label when it gives no reason of its own", async () => {
+    registerComparisonBaseline({
+      name: "test-never",
+      label: "Since the launch",
+      resolve: () => null,
+    });
+    expect(await refusalOf("test-never", 5, versions([5, "draft", "en"]))).toBe(
+      "Version 5 has no version to compare with for since the launch."
+    );
   });
 });

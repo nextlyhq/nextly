@@ -27,6 +27,13 @@ import { validateSingleConfig } from "../../../singles/config/validate-single";
 import { validateCollectionConfig } from "../../../collections/config/validate-config";
 import { defineSingle } from "../../../singles/config/define-single";
 import { DynamicCollectionSchemaService } from "../services/dynamic-collection-schema-service";
+import { configurationProblems } from "../../../shared/lib/config-problems";
+
+/** Every problem the configuration's load reports for these entities, as one text. */
+const problemText = (entities: Parameters<typeof configurationProblems>[0]) =>
+  configurationProblems(entities)
+    .map(problem => `[${problem.code}] ${problem.path}: ${problem.message}`)
+    .join("\n");
 
 /** Names that reach a column, including the shapes the Builder refuses but code paths allow. */
 const FIELD_NAMES = [
@@ -554,20 +561,28 @@ describe("the config factories inject on the column too", () => {
     // declared `title` twice. That is now refused at validation, which runs first, so the
     // duplicate can no longer be constructed at all.
     for (const declared of ["Title", "Slug"]) {
-      expect(() =>
-        defineCollection({
-          slug: "posts",
-          labels: { singular: "Post", plural: "Posts" },
-          fields: [{ type: "text", name: declared }],
-        } as never)
-      ).toThrow();
-      expect(() =>
-        defineSingle({
-          slug: "home",
-          label: "Home",
-          fields: [{ type: "text", name: declared }],
-        } as never)
-      ).toThrow();
+      expect(
+        problemText({
+          collections: [
+            defineCollection({
+              slug: "posts",
+              labels: { singular: "Post", plural: "Posts" },
+              fields: [{ type: "text", name: declared }],
+            } as never),
+          ],
+        })
+      ).not.toBe("");
+      expect(
+        problemText({
+          singles: [
+            defineSingle({
+              slug: "home",
+              label: "Home",
+              fields: [{ type: "text", name: declared }],
+            } as never),
+          ],
+        })
+      ).not.toBe("");
     }
   });
 
@@ -883,6 +898,12 @@ describe("altering a field that has no column", () => {
     }),
   };
 
+  // A many-to-many holds a list, which no dialect keeps unique, so marking it unique is refused
+  // before any statement (the list-relationship rule, `refuseUniqueOnList`); every other change
+  // here is one the save accepts and must emit no column statement for.
+  const refusedByRule = (label: string, change: Record<string, unknown>) =>
+    label === "manyToMany" && change.unique === true;
+
   it("emits no column statement when its index or flags change", () => {
     for (const dialect of DIALECTS) {
       for (const [label, make] of Object.entries(columnLess)) {
@@ -891,6 +912,7 @@ describe("altering a field that has no column", () => {
           { required: true },
           { unique: true },
         ]) {
+          if (refusedByRule(label, change)) continue;
           const sql = alterSql(dialect, [make({})], [make(change)]);
           const offending = [
             "CREATE INDEX",
@@ -903,6 +925,26 @@ describe("altering a field that has no column", () => {
           expect({ [at]: offending }).toEqual({ [at]: [] });
         }
       }
+    }
+  });
+
+  it("refuses a many-to-many marked unique, as the list-relationship rule does, on every dialect", () => {
+    for (const dialect of DIALECTS) {
+      const make = columnLess.manyToMany;
+      let refusal: unknown;
+      try {
+        alterSql(dialect, [make({})], [make({ unique: true })]);
+      } catch (error) {
+        refusal = error;
+      }
+      const codes = (
+        (refusal as { publicData?: { errors?: Array<{ code?: string }> } })
+          ?.publicData?.errors ?? []
+      ).map(error => error.code);
+
+      expect({ [dialect]: codes }).toEqual({
+        [dialect]: ["UNIQUE_NOT_ON_LIST"],
+      });
     }
   });
 

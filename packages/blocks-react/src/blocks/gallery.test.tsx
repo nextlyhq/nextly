@@ -67,9 +67,12 @@ describe("core/gallery", () => {
     const tracks = JSON.stringify(GALLERY_BASE_STYLES);
 
     expect(tracks).toContain("auto-fit");
-    // Capped by the available width: at a container narrower than the floor a
-    // bare `minmax(180px, 1fr)` makes one track wider than its parent.
-    expect(tracks).toContain("min(180px, 100%)");
+    // Three across where there is room (a track is a third of the width, less
+    // the widest gap), and one under a phone's width (no track narrower than
+    // 20rem), capped by the available width so a lone track never overflows.
+    expect(tracks).toContain(
+      "minmax(max(calc(33.333% - 2rem), min(100%, 20rem)), 1fr)"
+    );
   });
 
   it("imposes no aspect ratio, so the library is not cropped to one shape", () => {

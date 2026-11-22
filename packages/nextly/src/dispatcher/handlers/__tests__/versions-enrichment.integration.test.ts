@@ -4,6 +4,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -33,6 +34,9 @@ describe("version read enrichment (integration)", () => {
         }),
       ],
     });
+    // The reader is a super-admin the gate can look up: a history read asks
+    // the document's read gate as its caller, and names on a user grant nothing.
+    await superAdminUser(current, "system");
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
 
@@ -67,6 +71,9 @@ describe("version read enrichment (integration)", () => {
         }),
       ],
     });
+    // The reader is a super-admin the gate can look up: a history read asks
+    // the document's read gate as its caller, and names on a user grant nothing.
+    await superAdminUser(current, "system");
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
 

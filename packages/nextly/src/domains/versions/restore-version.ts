@@ -34,7 +34,7 @@ import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/serv
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 import { appLocalization } from "../i18n/configured-locales";
 import { storesPerLanguage } from "../i18n/per-language-storage";
-import { isValidLocale } from "../i18n/resolve-locale";
+import { configuredLocale } from "../i18n/resolve-locale";
 import type { UserContext } from "../singles/types";
 
 import { applyComponentReadAccess } from "./component-read-access";
@@ -85,6 +85,12 @@ export interface RestoreVersionArgs {
    */
   request?: Request;
   /**
+   * What the caller hands the update's hooks as `ctx.context`, as an ordinary
+   * write hands it: a plugin's own data, so a hook that reads it decides a
+   * restore as it decides the plugin's other writes.
+   */
+  context?: Record<string, unknown>;
+  /**
    * The version the restore was made from (`_rev`) and the overwrite choice
    * (`_overwrite`), as a save's data carries them. A restore puts an old
    * version's content over the document as it is now, so it is judged as the
@@ -95,8 +101,6 @@ export interface RestoreVersionArgs {
   /**
    * The fields to restore, by top-level name; every field the version holds
    * when absent. A name the version does not hold restores nothing.
-   *
-   * @experimental
    */
   fields?: readonly string[];
 }
@@ -337,7 +341,8 @@ function usableLocale(versionLocale: string | null): string | null {
   // Without languages there is no locale to validate against, and nothing
   // reads one either.
   if (!localization) return null;
-  return isValidLocale(localization, versionLocale) ? versionLocale : null;
+  // An older spelling of a configured language is read as the code its rows are stored under.
+  return configuredLocale(localization, versionLocale) ?? null;
 }
 
 /**
@@ -714,6 +719,10 @@ export async function restoreVersion(
       // Forward the actor so an API-key restore is attributed to the key, not
       // its owner — mirrors the collection branch below.
       ...(args.actor ? { actor: args.actor } : {}),
+      // The request and hook context, so the update's hooks see the restore
+      // as they see any edit made with them.
+      ...(args.request ? { request: args.request } : {}),
+      ...(args.context ? { context: args.context } : {}),
       // A snapshot that restores `status: "published"` must satisfy the key's
       // own publish grant, not the owner's RBAC.
       ...(args.authenticatedScope
@@ -741,6 +750,7 @@ export async function restoreVersion(
         // again in that language, its filter included.
         overrideAccess: !args.user,
         request: args.request,
+        ...(args.context ? { context: args.context } : {}),
         // A snapshot that restores `status: "published"` must satisfy the key's
         // own publish grant, not the owner's RBAC.
         ...(args.authenticatedScope

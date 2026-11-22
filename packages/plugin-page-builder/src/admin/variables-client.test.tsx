@@ -17,6 +17,7 @@ import { BUILDER_VIEW_PATH } from "../builder-view";
 import {
   SHARED_STYLE_COUNT_ROUTE_PATH,
   SHARED_STYLE_WHERE_USED_PAGES_MAX,
+  VARIABLE_CLEAN_UP_ROUTE_PATH,
   variableUsagePath,
   variableWhereUsedPath,
 } from "../library-contract";
@@ -59,7 +60,9 @@ vi.mock("./site-style-read", () => ({
   }),
 }));
 
-const { useVariablesClient } = await import("./variables-client");
+const { cleanUpUnused, useVariablesClient } = await import(
+  "./variables-client"
+);
 
 const signal = new AbortController().signal;
 
@@ -113,6 +116,51 @@ describe("reading how widely variables are used", () => {
     const { result } = renderHook(() => useVariablesClient());
     await expect(
       result.current.usage(["color.brand"], signal)
+    ).rejects.toThrow();
+  });
+});
+
+describe("reading how widely variables are used together", () => {
+  it("asks for each group's variables and the groups, and hands back each group's count in order", async () => {
+    const together = [
+      { documents: 4, byKind: { ...NONE, pages: 4 }, complete: true },
+      { documents: 1, byKind: { ...NONE, pages: 1 }, complete: false },
+    ];
+    readAnswer = {
+      whole: true,
+      counting: false,
+      mayCount: false,
+      variables: {},
+      together,
+    };
+    const { result } = renderHook(() => useVariablesClient());
+    const groups = [
+      ["font.display", "font.quote"],
+      ["font.quote", "font.code"],
+    ];
+    const read = await result.current.usageTogether?.(groups, signal);
+    expect(reads).toEqual([
+      {
+        path: variableUsagePath(
+          ["font.display", "font.quote", "font.code"],
+          groups
+        ),
+      },
+    ]);
+    expect(read).toEqual(together);
+  });
+
+  it("fails rather than answering no counts when the server counts no groups", async () => {
+    // A server from before groups were counted answers each variable only.
+    readAnswer = {
+      whole: true,
+      counting: false,
+      mayCount: false,
+      variables: {},
+    };
+    const { result } = renderHook(() => useVariablesClient());
+    await expect(
+      result.current.usageTogether?.([["font.display", "font.quote"]], signal)
     ).rejects.toThrow();
   });
 });
@@ -274,6 +322,206 @@ describe("counting the pages now", () => {
 
     expect(writes).toEqual([{ path: SHARED_STYLE_COUNT_ROUTE_PATH, body: {} }]);
     expect(counted).toEqual({ kind: "counted", whole: true, counting: false });
+  });
+});
+
+describe("cleaning up unused colours", () => {
+  /** A where-used page naming these places first. */
+  const placesOf = (
+    items: { id: string; title: string; collection: string; kind: string }[],
+    total = items.length,
+    hiddenCount = 0
+  ) => ({
+    items,
+    meta: {
+      total,
+      page: 1,
+      limit: 20,
+      totalPages: 1,
+      hasNext: false,
+      hiddenCount,
+    },
+  });
+  /** One stored colour entry. */
+  const entry = (id: string) => ({ id, name: `color.${id}`, kind: "color" });
+  /** The route's answer for one request: these removed, these kept. */
+  const answerOf = (
+    removed: string[],
+    kept: { id: string; name: string; reason: string }[] = []
+  ) => ({
+    message: "done",
+    item: {
+      removed,
+      kept,
+      taken: removed.map((id, at) => ({
+        id,
+        entry: entry(id),
+        at,
+        orderAt: null,
+      })),
+      ...(removed.length === 0
+        ? {}
+        : { section: { tokens: [entry("kept-one")], after: removed } }),
+    },
+  });
+  /** Each request answered by removing every id it names. */
+  const removingAll = () => {
+    writeBehaviour = async () => {
+      const body = writes.at(-1)?.body as { ids: string[] };
+      return answerOf(body.ids);
+    };
+  };
+  const accentKept = {
+    id: "color.accent",
+    name: "Accent",
+    reason: "Accent is used on 1 document.",
+  };
+
+  it("sends the colours to the clean-up route, and hands back what went and what stayed", async () => {
+    writeBehaviour = async () => answerOf(["color.spare"]);
+    const { result } = renderHook(() => useVariablesClient());
+    const cleaned = await cleanUpUnused(["color.spare"], result.current.uses);
+    expect(writes).toEqual([
+      { path: VARIABLE_CLEAN_UP_ROUTE_PATH, body: { ids: ["color.spare"] } },
+    ]);
+    expect(cleaned.result).toEqual({
+      kind: "done",
+      removed: ["color.spare"],
+      kept: [],
+    });
+  });
+
+  it("builds Undo's halves from what the server took out, not from a copy read before", async () => {
+    writeBehaviour = async () => answerOf(["spare"]);
+    const { result } = renderHook(() => useVariablesClient());
+    const cleaned = await cleanUpUnused(["spare"], result.current.uses);
+    expect(cleaned.halves).toEqual({
+      after: { tokens: [entry("kept-one")], after: ["spare"] },
+      before: {
+        tokens: [entry("spare"), entry("kept-one")],
+        after: ["spare"],
+      },
+    });
+  });
+
+  it("gives no halves when nothing was removed", async () => {
+    writeBehaviour = async () => answerOf([], [accentKept]);
+    readAnswer = placesOf([]);
+    const { result } = renderHook(() => useVariablesClient());
+    const cleaned = await cleanUpUnused(["color.accent"], result.current.uses);
+    expect(cleaned.halves).toBeUndefined();
+  });
+
+  it("sends at most fifty colours a request, in turn, and adds up what each did", async () => {
+    removingAll();
+    const ids = Array.from({ length: 51 }, (_, at) => `c${at}`);
+    const { result } = renderHook(() => useVariablesClient());
+    const cleaned = await cleanUpUnused(ids, result.current.uses);
+    expect(writes.map(write => (write.body as { ids: string[] }).ids)).toEqual([
+      ids.slice(0, 50),
+      ids.slice(50),
+    ]);
+    expect(cleaned.result).toMatchObject({ kind: "done", removed: ids });
+    // Undo puts back every one, the section being the last request's.
+    expect(cleaned.halves?.after).toMatchObject({ after: ["c50"] });
+    expect(
+      (cleaned.halves?.before as { tokens: unknown[] }).tokens
+    ).toHaveLength(52);
+  });
+
+  it("keeps what an earlier request removed when a later one is refused, saying why for the rest", async () => {
+    let request = 0;
+    writeBehaviour = async () => {
+      request += 1;
+      if (request === 1) {
+        return answerOf((writes.at(-1)?.body as { ids: string[] }).ids);
+      }
+      throw Object.assign(new Error("Too many requests."), { status: 429 });
+    };
+    const ids = Array.from({ length: 52 }, (_, at) => `c${at}`);
+    const { result } = renderHook(() => useVariablesClient());
+    const cleaned = await cleanUpUnused(ids, result.current.uses);
+    expect(cleaned.result).toMatchObject({
+      kind: "done",
+      removed: ids.slice(0, 50),
+      kept: [
+        { id: "c50", name: "c50", reason: expect.any(String) },
+        { id: "c51", name: "c51", reason: expect.any(String) },
+      ],
+    });
+    expect(cleaned.halves).toBeDefined();
+  });
+
+  it("names where a kept colour is used now, from its where-used list", async () => {
+    writeBehaviour = async () => answerOf(["color.spare"], [accentKept]);
+    readAnswer = placesOf(
+      [{ id: "p1", title: "Home", collection: "pages", kind: "pages" }],
+      3,
+      1
+    );
+    const { result } = renderHook(() => useVariablesClient());
+    const cleaned = await cleanUpUnused(
+      ["color.spare", "color.accent"],
+      result.current.uses
+    );
+    expect(reads).toEqual([{ path: variableWhereUsedPath("color.accent", 1) }]);
+    expect(cleaned.result).toMatchObject({
+      kept: [
+        {
+          id: "color.accent",
+          name: "Accent",
+          reason: "Accent is used on Home and 3 more places.",
+        },
+      ],
+    });
+  });
+
+  it("names a shared style using it as a shared style", async () => {
+    writeBehaviour = async () => answerOf([], [accentKept]);
+    readAnswer = placesOf([
+      {
+        id: "c-card",
+        title: "Card",
+        collection: "site-style",
+        kind: "shared-style",
+      },
+    ]);
+    const { result } = renderHook(() => useVariablesClient());
+    const cleaned = await cleanUpUnused(["color.accent"], result.current.uses);
+    expect(cleaned.result).toMatchObject({
+      kept: [{ reason: "Accent is used by the shared style Card." }],
+    });
+  });
+
+  it("keeps the route's own words where the list names no place, or cannot be read", async () => {
+    const named = {
+      ...accentKept,
+      reason: "Accent is used by the variable Lift.",
+    };
+    writeBehaviour = async () => answerOf([], [named]);
+    readAnswer = placesOf([]);
+    const { result } = renderHook(() => useVariablesClient());
+    expect(
+      (await cleanUpUnused(["color.accent"], result.current.uses)).result
+    ).toMatchObject({ kept: [named] });
+    readAnswer = undefined;
+    expect(
+      (await cleanUpUnused(["color.accent"], result.current.uses)).result
+    ).toMatchObject({ kept: [named] });
+  });
+
+  it("says a refusal of the first request in the route's words", async () => {
+    writeBehaviour = async () => {
+      throw Object.assign(new Error("You can't change this site's design."), {
+        code: "FORBIDDEN",
+        status: 403,
+      });
+    };
+    const { result } = renderHook(() => useVariablesClient());
+    const cleaned = await cleanUpUnused(["color.spare"], result.current.uses);
+    expect(cleaned).toEqual({
+      result: { kind: "refused", reason: expect.any(String) },
+    });
   });
 });
 

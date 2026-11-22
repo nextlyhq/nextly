@@ -1,5 +1,5 @@
 /**
- * `nextly upgrade` converts every role holding a retired `manage-` permission
+ * `nextly migrate` converts every role holding a retired `manage-` permission
  * and checks the scheduled releases once, after the last, not once a role.
  */
 import { describe, expect, it, vi } from "vitest";

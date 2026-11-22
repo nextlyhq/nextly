@@ -81,3 +81,27 @@ describe("companion DDL agrees with the canonical descriptor", () => {
     }
   );
 });
+
+/**
+ * A date field's companion column is the main table's own type where the two can agree: on
+ * PostgreSQL a plain `timestamp` holding the UTC wall clock, not one with a time zone, into which
+ * every value moved or written was read in the session's zone. MySQL keeps `DATETIME(3)` beside
+ * the main table's `timestamp`, which holds the same wall clock.
+ */
+describe("a date field's companion column", () => {
+  const date = {
+    name: "published",
+    type: "date",
+  } as unknown as FieldDefinition;
+
+  it.each(["postgresql", "sqlite"] as const)(
+    "is the main table's type on %s",
+    dialect => {
+      const spec = fieldToLocalizedColumnSpec(date, dialect, "collection");
+      const canonical = getColumnDescriptor(date, dialect, "collection");
+      expect(ddlType(spec as LocalizedColumnSpec, dialect).toLowerCase()).toBe(
+        canonical?.dialectType.toLowerCase()
+      );
+    }
+  );
+});

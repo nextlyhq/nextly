@@ -78,6 +78,7 @@ import type {
 import { resolveReadBounds } from "nextly/storage/fetch-stored-bytes";
 import { StorageReadTooLargeError } from "nextly/storage/read-errors";
 
+import { generateStorageKey, sanitizeFilename } from "./storage-key";
 import type { S3StorageConfig, ResolvedS3Config } from "./types";
 
 // ============================================================
@@ -243,7 +244,8 @@ export class S3StorageAdapter implements IStorageAdapter {
    */
   async upload(buffer: Buffer, options: UploadOptions): Promise<UploadResult> {
     const client = this.ensureClient();
-    const key = this.generateKey(options.filename, options.folder);
+    // The one key layout, shared with direct browser uploads.
+    const key = generateStorageKey(options.filename, options.folder);
 
     // Build upload parameters
     const uploadParams: PutObjectCommandInput = {
@@ -263,7 +265,7 @@ export class S3StorageAdapter implements IStorageAdapter {
     const disposition =
       options.contentDisposition ?? this.resolvedConfig.contentDisposition;
     if (disposition) {
-      const filename = this.sanitizeFilename(options.filename);
+      const filename = sanitizeFilename(options.filename);
       uploadParams.ContentDisposition =
         disposition === "attachment"
           ? `attachment; filename="${filename}"`
@@ -287,6 +289,37 @@ export class S3StorageAdapter implements IStorageAdapter {
       url: this.getPublicUrl(key),
       path: key,
     };
+  }
+
+  /**
+   * Write bytes at exactly `filePath`, beside a file already in the bucket.
+   *
+   * Core uses it to keep a file made from a stored one, such as a resized
+   * copy of an image, under a key derived from the original's. One request,
+   * since such a file is small, with the same cache setting and access as an
+   * upload, so it is served the way its original is.
+   *
+   * @experimental
+   */
+  async uploadAt(
+    filePath: string,
+    buffer: Buffer,
+    options: { mimeType: string }
+  ): Promise<UploadResult> {
+    const client = this.ensureClient();
+    const params: PutObjectCommandInput = {
+      Bucket: this.resolvedConfig.bucket,
+      Key: filePath,
+      Body: buffer,
+      ContentType: options.mimeType,
+      CacheControl: this.resolvedConfig.cacheControl,
+    };
+    // R2 ignores ACL settings, as for an upload.
+    if (!this.isR2) {
+      params.ACL = this.resolvedConfig.acl;
+    }
+    await client.send(new PutObjectCommand(params));
+    return { url: this.getPublicUrl(filePath), path: filePath };
   }
 
   /**
@@ -632,6 +665,12 @@ export class S3StorageAdapter implements IStorageAdapter {
    * itself refuses a body of another type or length. The browser sets the
    * length from the body; it is not a header the client sends.
    *
+   * It covers the configured `Cache-Control` too, which is returned in
+   * `headers`: S3 stores an object's Cache-Control only from the upload
+   * request's own header, so a browser upload is served with the same caching
+   * as a server one only when the client sends it. The client must send every
+   * header in `headers`, as it is; one left out fails the signature.
+   *
    * @param key - Storage path/key for the upload
    * @param mimeType - MIME type of the file being uploaded
    * @param expiresIn - URL validity in seconds, at most the configured
@@ -669,16 +708,29 @@ export class S3StorageAdapter implements IStorageAdapter {
 
     const uploadUrl = await getSignedUrl(client, command, {
       expiresIn: expiration,
-      // Signed, so S3 refuses an upload whose type or length differs.
-      signableHeaders: new Set(["content-type", "content-length"]),
+      /*
+       * Signed, so S3 refuses an upload whose type or length differs, and
+       * one without the configured caching. The SDK never signs
+       * `cache-control` unless named here, and an unsigned header is not
+       * part of the URL, so without it the browser's request would carry no
+       * Cache-Control and the stored object would have none.
+       */
+      signableHeaders: new Set([
+        "content-type",
+        "content-length",
+        "cache-control",
+      ]),
     });
 
     return {
       uploadUrl,
       path: key,
       method: "PUT",
+      // Every signed header the client sends itself; the browser adds the
+      // length and the host.
       headers: {
         "Content-Type": mimeType,
+        "Cache-Control": this.resolvedConfig.cacheControl,
       },
       expiresAt: new Date(Date.now() + expiration * 1000),
     };
@@ -687,38 +739,6 @@ export class S3StorageAdapter implements IStorageAdapter {
   // ============================================================
   // Helper Methods
   // ============================================================
-
-  /**
-   * Generate a unique storage key with date-based prefix.
-   *
-   * Creates keys in format: {folder}/{year}/{month}/{uuid}-{sanitized-filename}
-   *
-   * @param filename - Original filename (will be sanitized)
-   * @param folder - Optional folder/prefix for organizing uploads
-   * @returns Generated storage key
-   */
-  private generateKey(filename: string, folder?: string): string {
-    const sanitized = this.sanitizeFilename(filename);
-    const uuid = crypto.randomUUID();
-    const date = new Date();
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-
-    const prefix = folder ? `${folder}/${year}/${month}` : `${year}/${month}`;
-
-    return `${prefix}/${uuid}-${sanitized}`;
-  }
-
-  /**
-   * Sanitize filename to prevent directory traversal and S3 key issues.
-   *
-   * @param filename - Original filename
-   * @returns Sanitized filename safe for S3 keys
-   */
-  private sanitizeFilename(filename: string): string {
-    const basename = filename.split(/[/\\]/).pop() || filename;
-    return basename.replace(/[^a-zA-Z0-9._-]/g, "-");
-  }
 
   /**
    * Check if an error is a "not found" error from S3.

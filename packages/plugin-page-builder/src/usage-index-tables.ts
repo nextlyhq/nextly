@@ -140,7 +140,12 @@ type UsageSubjectValues = Record<keyof UsageSubject, string>;
 const CLASS_TABLE: UsageTable = usageTable(
   classUsageRows,
   db => db.table(classUsageRows),
-  data => ({ ...subjectOf(data), classId: text(data, "classId") })
+  data => ({
+    ...subjectOf(data),
+    classId: text(data, "classId"),
+    // How many blocks of the document wear the class; none on a marker row.
+    blocks: typeof data.blocks === "number" ? data.blocks : null,
+  })
 );
 
 /** The component index's table. */

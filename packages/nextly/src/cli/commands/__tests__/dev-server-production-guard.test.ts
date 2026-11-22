@@ -1,7 +1,7 @@
 /**
- * Production guard in performAutoSync: when NODE_ENV=production and pending
- * schema changes exist, the guard refuses to auto-apply and prints guidance
- * pointing users at the migration workflow. Every `nextly <command>` the
+ * Production guard in performAutoSync: when NODE_ENV=production the guard
+ * refuses to push, whether or not the registry step found a change, and prints
+ * guidance pointing users at the migration workflow. Every `nextly <command>` the
  * guidance references must be a real registered CLI command — otherwise the
  * user is told to run a command that exits with "unknown command".
  */
@@ -111,6 +111,9 @@ describe("performAutoSync production guard", () => {
     ).rejects.toThrow("process.exit(1)");
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(lines.join("\n")).toContain("(SCHEMA_SYNC_IN_PRODUCTION)");
+    // Both commands that change a production schema are named.
+    expect(lines.join("\n")).toContain("`nextly migrate:create");
+    expect(lines.join("\n")).toContain("`nextly migrate`");
 
     // Registered command names (plus aliases) form the set of valid
     // suggestions; `nextly <anything else>` fails with "unknown command".
@@ -141,5 +144,28 @@ describe("performAutoSync production guard", () => {
     // redirection, so placeholders must be wrapped in double quotes
     // (`--name="<migration-name>"`), which makes the brackets literal.
     expect(output).not.toMatch(/(?<!")<[^>]*>(?!")/);
+  });
+
+  it("refuses when the registry step found nothing to change", async () => {
+    const { logger, lines } = createCaptureLogger();
+    const context: CommandContext = { logger, options: {}, cwd: "/tmp" };
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((code?: string | number | null) => {
+        throw new NextlyError({
+          code: "TEST_PROCESS_EXIT",
+          publicMessage: `process.exit(${String(code)})`,
+        });
+      });
+    const unchanged = buildSyncResult();
+    unchanged.sync.created = [];
+
+    // Before, a run with no collection change went on past the guard, and the Single and
+    // field-group steps after it still wrote.
+    await expect(
+      performAutoSync(unusedConfig, unusedAdapter, unchanged, {}, context)
+    ).rejects.toThrow("process.exit(1)");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(lines.join("\n")).toContain("db:sync does not run in production.");
   });
 });

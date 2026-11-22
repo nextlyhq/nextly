@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AdminContributionsMeta, AdminPlaceId } from "nextly/config";
+import { useLayoutEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { registerComponent } from "@admin/lib/plugins/component-registry";
@@ -33,6 +34,22 @@ registerComponent(ECHO, ((props: { context?: unknown; entry?: unknown }) => (
   </pre>
 )) as never);
 registerComponent(TAB, () => <p>plugin tab body</p>);
+const ECHO_ALL = "@acme/a/admin#EchoAll";
+registerComponent(ECHO_ALL, ((props: Record<string, unknown>) => (
+  <pre data-testid="echo-all">{JSON.stringify(props)}</pre>
+)) as never);
+/** Whether the leaving tab says it does not apply, set per test. */
+const leaving = vi.hoisted(() => ({ out: true }));
+const LEAVING = "@acme/a/admin#Leaving";
+registerComponent(LEAVING, ((props: {
+  setLeftOut?: (out: boolean) => void;
+}) => {
+  const { setLeftOut } = props;
+  useLayoutEffect(() => {
+    setLeftOut?.(leaving.out);
+  });
+  return <p>leaving tab body</p>;
+}) as never);
 const PLUGIN_FORM = "@acme/a/admin#PluginForm";
 const pluginSubmit = vi.fn();
 registerComponent(PLUGIN_FORM, () => (
@@ -220,7 +237,87 @@ describe("TargetSlot", () => {
   });
 });
 
+describe("TargetSlot at a plugin's own place", () => {
+  const PLACE = "acme-billing.invoice" as AdminPlaceId;
+  const page = (context: unknown) => (
+    <TargetSlot
+      place={PLACE}
+      context={context as never}
+      fallback={<p>the page&apos;s own preview</p>}
+      blockProps={{ at: "panel", design: { nodes: 2 } }}
+    />
+  );
+
+  it("draws the page's fallback while nothing is contributed there, once it knows its ids", () => {
+    const { rerender } = render(page({ invoiceId: "i1" }));
+    expect(screen.getByText("the page's own preview")).toBeTruthy();
+    rerender(page(null));
+    expect(screen.queryByText("the page's own preview")).toBeNull();
+  });
+
+  it("draws a contributed block in its stead, handed what the page passes besides the context", () => {
+    meta.contributions = {
+      [PLACE]: { block: [block("acme-a.echo", ECHO_ALL)] },
+    };
+    render(page({ invoiceId: "i1" }));
+    expect(screen.queryByText("the page's own preview")).toBeNull();
+    expect(
+      JSON.parse(screen.getByTestId("echo-all").textContent ?? "")
+    ).toEqual({
+      at: "panel",
+      design: { nodes: 2 },
+      context: { invoiceId: "i1" },
+    });
+  });
+});
+
 describe("PlaceTabs", () => {
+  it("leaves a tab out of the strip while it says it does not apply, keeping its panel", () => {
+    leaving.out = true;
+    const tab = (id: string, label: string, component: string) =>
+      ({ plugin: "@acme/a", id, kind: "tab", label, component }) as const;
+    meta.contributions = {
+      "user.detail": {
+        tab: [tab("acme-a.leaving", "Leaving", LEAVING)],
+      },
+    };
+    const page = () => (
+      <PlaceTabs place="user.detail" context={CONTEXT} contentLabel="Profile">
+        <div data-testid="page-content">content</div>
+      </PlaceTabs>
+    );
+    const { rerender } = render(page());
+    // Its only tab left: no strip, its panel kept, hidden, and the content.
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.getByText("leaving tab body")).toBeTruthy();
+    expect(screen.getByTestId("page-content").style.display).not.toBe("none");
+
+    // Beside another tab, the strip names only that one.
+    meta.contributions = {
+      "user.detail": {
+        tab: [
+          tab("acme-a.leaving", "Leaving", LEAVING),
+          tab("acme-a.billing", "Billing", TAB),
+        ],
+      },
+    };
+    rerender(page());
+    expect(
+      within(screen.getByRole("tablist"))
+        .getAllByRole("tab")
+        .map(each => each.textContent)
+    ).toEqual(["Profile", "Billing"]);
+
+    // It comes back once it applies again.
+    leaving.out = false;
+    rerender(page());
+    expect(
+      within(screen.getByRole("tablist"))
+        .getAllByRole("tab")
+        .map(each => each.textContent)
+    ).toEqual(["Profile", "Leaving", "Billing"]);
+  });
+
   it("draws no tab strip without a delivered tab", () => {
     render(
       <PlaceTabs place="user.detail" context={CONTEXT} contentLabel="Profile">

@@ -37,6 +37,7 @@ import {
   introspectTableNames,
 } from "../pipeline/diff/introspect-live";
 import {
+  byNamingOrder,
   requiredColumnBreakMessage,
   requiredColumnOverNullsError,
   type RequiredColumnBreak,
@@ -253,17 +254,20 @@ async function countTarget(
 }
 
 /**
- * A field group's users with the rows each holds; a row whose parent table the registry does not
- * name is still counted in the total.
+ * A field group's users with the rows each holds, in the order every road names them
+ * (`byNamingOrder`), not the order the database returned the rows in; a row whose parent table the
+ * registry does not name is still counted in the total.
  */
 function usersOf(
   rows: RowsBreakingNotNull,
   facts: RequiredColumnFacts
 ): Array<RequiredColumnEntity & { count: number }> {
-  return [...rows.byParentTable].flatMap(([table, count]) => {
-    const holder = facts.owners.holder(table);
-    return holder === undefined ? [] : [{ ...holder, count }];
-  });
+  return [...rows.byParentTable]
+    .flatMap(([table, count]) => {
+      const holder = facts.owners.holder(table);
+      return holder === undefined ? [] : [{ ...holder, count }];
+    })
+    .sort(byNamingOrder);
 }
 
 /** A registry row's `fields`, which a dialect returns as JSON text or as the parsed value. */

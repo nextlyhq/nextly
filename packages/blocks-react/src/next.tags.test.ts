@@ -84,6 +84,26 @@ describe("createBlocksPage cache tags", () => {
     expect(tags).toContain("nextly:single:site-style");
   });
 
+  it("tags the singles the site's custom CSS is read from", () => {
+    // The site's CSS is read per render through the Direct API, which tags
+    // nothing, so a save of it would otherwise leave cached pages on the old.
+    created.mockClear();
+    createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      customCss: {
+        id: "checker",
+        accepts: () => true,
+        readSite: () => undefined,
+        singles: ["page-builder-site-code"],
+      },
+    });
+
+    const tags = (created.mock.calls[0][0] as { tags: string[] }).tags;
+
+    expect(tags).toContain("nextly:single:page-builder-site-code");
+  });
+
   it("adds no single tag when the provider declares it reads none", () => {
     // The control: the tag comes from the slug the route stated, not from the
     // helper deciding that any route using siteStyles reads one particular

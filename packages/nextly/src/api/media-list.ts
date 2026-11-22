@@ -14,6 +14,41 @@ import type {
 
 import { respondList } from "./response-shapes";
 
+/**
+ * The most media items one read by id names: a page of the library, so a
+ * request stays a bounded read however many images a page draws (a caller
+ * with more asks again).
+ */
+export const MEDIA_IDS_PER_READ = 100;
+
+/**
+ * The ids a list request names, as `?ids=a,b` or a repeated `?ids=`; nothing
+ * where it names none, and the list is the paged one. Raw: the caller checks
+ * them before the read.
+ */
+export function mediaIdsAskedIn(
+  searchParams: URLSearchParams
+): string[] | undefined {
+  const asked = searchParams.getAll("ids");
+  if (asked.length === 0) return undefined;
+  return asked.flatMap(value => value.split(",")).filter(id => id !== "");
+}
+
+/**
+ * The list envelope for the items a read by id found: one page holding all
+ * of them, in the order their ids were asked.
+ */
+export function mediaByIdsResponse(found: readonly unknown[]): Response {
+  return respondList([...found], {
+    total: found.length,
+    page: 1,
+    limit: Math.max(1, found.length),
+    totalPages: found.length === 0 ? 0 : 1,
+    hasNext: false,
+    hasPrev: false,
+  });
+}
+
 /** The page, search, type, folder and sort a list request's query names. */
 export function listMediaOptionsFrom(
   searchParams: URLSearchParams

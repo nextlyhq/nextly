@@ -24,6 +24,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
+import { container } from "../../di/container";
 import type { FieldOwner } from "../../domains/collections/services/collection-dependents";
 import { assertSaveLeavesNoFieldGroupCycle } from "../../domains/field-groups/field-group-cycles";
 import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
@@ -44,21 +45,31 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
-import type { SchemaChangeAnswers } from "../../domains/schema/builder-save/schema-change-save";
+import {
+  FirstQuestionWatch,
+  landingPush,
+} from "../../domains/schema/builder-save/landing-push";
+import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
+import {
+  renamedFieldsOf,
+  type SchemaChangeAnswers,
+} from "../../domains/schema/builder-save/schema-change-save";
 import { entityRelations } from "../../domains/schema/builder-save/single-relations";
 import { fieldGroupEntity } from "../../domains/schema/builder-save/stored-entity";
+import { refuseMovesOffTheFile } from "../../domains/schema/field-moves/moves-road";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
+import { getComponentRowColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
-import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 // From the types module, not the barrel, which loads every dialect's tables.
@@ -70,13 +81,17 @@ import type { FieldGroupRegistryService } from "../../services/field-groups/fiel
 import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 import { assertAddressAllowed } from "../../shared/address-rule";
 import type { Logger } from "../../shared/types";
-import { writeAppliedFieldsRow } from "../helpers/applied-fields-row";
+import {
+  registryInFileTransaction,
+  writeAppliedFieldsRow,
+} from "../helpers/applied-fields-row";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import {
   builderSaveDeps,
   checkBuilderSaveHistory,
+  entityDialogQuestions,
+  entityPushReason,
   reviewBuilderSchemaChange,
-  landingPush,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
@@ -84,6 +99,8 @@ import {
   builderSchemaPush,
   leavingSettingsStep,
   pushAndReconcileCompanion,
+  reconcileBuilderCompanion,
+  type BuilderCompanionReconcile,
 } from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
@@ -94,6 +111,7 @@ import {
   getLoggerFromDI,
 } from "../helpers/di";
 import { readRequestLocalized } from "../helpers/request-localized";
+import { readRequestedMoves } from "../helpers/request-moves";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
@@ -416,9 +434,8 @@ export const COMPONENTS_METHODS: Record<
         assertLocalizationConfigured("component", b.slug);
       }
       const schemaHash = calculateSchemaHash(b.fields);
-      // Canonical name derivation, shared with the registry sync and
-      // migrate:create paths, so the created table and the registry row agree.
-      const tableName = resolveComponentTableName(b.slug);
+      // The table is named by the service, under the naming the site's storage is on, so the
+      // created table and the registry row agree.
 
       // The table-name conflict is refused inside the service, alongside the DDL it guards, so all
       // three create transports get it rather than this one alone.
@@ -439,7 +456,6 @@ export const COMPONENTS_METHODS: Record<
         await metadata.createFieldGroup({
           slug: b.slug,
           label: b.label || b.slug,
-          tableName,
           fields: b.fields,
           admin: b.admin,
           description: b.description,
@@ -548,7 +564,10 @@ export const COMPONENTS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       // A field name the field group already holds keeps working whatever its case.
-      assertValidFieldsPayload(fields, { stored: component.fields ?? [] });
+      assertValidFieldsPayload(fields, {
+        kind: "component",
+        stored: component.fields ?? [],
+      });
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -607,12 +626,14 @@ export const COMPONENTS_METHODS: Record<
       // What the save writes beyond the person's change, for the review to show before they
       // confirm, as a collection's does: each conversion an adoption makes, each fill and delete.
       const answers = body as SchemaChangeAnswers;
-      const notices = await reviewBuilderSchemaChange(builderSaveDeps(), {
+      const review = await reviewBuilderSchemaChange(builderSaveDeps(), {
         kind: "fieldGroup",
         slug,
         table: tableName,
         stored: fieldGroupEntity(component),
         fields: fields as FieldDefinition[],
+        // Each move checked as the save checks it, and what its column does not carry named.
+        moves: readRequestedMoves(body),
         localized:
           readRequestLocalized(body) ??
           (component as { localized?: boolean }).localized === true,
@@ -627,7 +648,7 @@ export const COMPONENTS_METHODS: Record<
             : { acknowledgedConversions: answers.acknowledgedConversions }),
         },
       });
-      return respondData({ ...preview, notices });
+      return respondData({ ...preview, ...review });
     },
   },
 
@@ -686,6 +707,8 @@ export const COMPONENTS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields, { stored: "under-lock" });
+      // The fields the save moves, each kept by statements its migration file carries.
+      const moves = readRequestedMoves(body);
 
       return withSchemaChangeExcluded(
         {
@@ -696,6 +719,11 @@ export const COMPONENTS_METHODS: Record<
           // left to a partial object the exclusion would call methods on.
           logger: getLoggerFromDI() ?? DISCARDED_LOG,
           label: `apply schema changes to field group "${slug}"`,
+          // The apply writes a migration where a writer is registered: its folder is held first.
+          migrationsDir: container.has("builderSaveSetup")
+            ? container.get<{ migrationsDir: string }>("builderSaveSetup")
+                .migrationsDir
+            : undefined,
           // This path runs the push pipeline, so it issues DDL and may create the lock table.
           issuesDdl: true,
         },
@@ -717,7 +745,9 @@ export const COMPONENTS_METHODS: Record<
           assertNotDiverged(slug, component);
           // A field name the field group already holds keeps working whatever its case; one this
           // save creates is the Builder's own. Judged against the fields as stored now.
-          assertBuilderFieldNames(fields, component.fields ?? []);
+          assertBuilderFieldNames(fields, component.fields ?? [], {
+            surface: "fieldGroup",
+          });
           // A pair of sibling fields this save would create is refused before any statement or
           // archive write, against the fields as stored now; one the field group already holds keeps
           // working. Asked here because this road reaches its DDL through no shared service.
@@ -810,6 +840,40 @@ export const COMPONENTS_METHODS: Record<
             subject: `Field group '${slug}'`,
             component: true,
           });
+          // Whether the push applies this save rather than its file, asked at most once. A save
+          // whose moves would need the push is refused here, before the preflights below write
+          // anything; the write reuses the answer.
+          let pushAnswer: Promise<boolean> | undefined;
+          const pushes = () =>
+            (pushAnswer ??= pushCarriesValues({
+              oldFields: (component.fields ??
+                []) as unknown as FieldDefinition[],
+              newFields: fields as unknown as FieldDefinition[],
+              wasStored,
+              isStored,
+              renamed: companionRename,
+              liveTable: async () =>
+                (
+                  await introspectLiveSnapshot(
+                    adapter.getDrizzle(),
+                    adapter.dialect,
+                    [tableName]
+                  )
+                ).tables[0],
+              columnOf: field =>
+                getComponentRowColumnDescriptor(
+                  field,
+                  adapter.dialect,
+                  "fieldGroup"
+                ),
+              renames: renamedFieldsOf(renameResolutions ?? []),
+              moved: moves,
+            }));
+          await refuseMovesOffTheFile({
+            moves,
+            writes: builderSave !== undefined,
+            pushReason: () => entityPushReason(builderSave, pushes),
+          });
           // A field leaving translation has preconditions of its own, asked before the apply
           // alters anything.
           await archiveFieldsLeavingTranslation({
@@ -877,6 +941,9 @@ export const COMPONENTS_METHODS: Record<
             recordedFields: recordedFieldsOf(component),
           };
 
+          // A failed push changed nothing where it stopped at its first question, asked before
+          // any statement; any other failure on MySQL or SQLite may have changed it.
+          const firstQuestion = new FirstQuestionWatch();
           const landing = landingPush(
             builderSchemaPush({
               dialect,
@@ -889,8 +956,20 @@ export const COMPONENTS_METHODS: Record<
                 eventResolutions ?? [],
                 legacyBundle,
               ],
+              firstQuestion,
+              // A translated field's values the companion reconcile after the push drops, asked of
+              // the push by field name, as the save's file road asks them.
+              fields: {
+                tableName,
+                builtBy: "fieldGroup",
+                oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                wasLocalized,
+                isLocalized,
+              },
             }),
-            dialect
+            dialect,
+            firstQuestion
           );
           // Notes once the push may have changed the database, so a failure after it keeps the
           // files that record it.
@@ -900,46 +979,75 @@ export const COMPONENTS_METHODS: Record<
           // changes.
           // The change applied by the push and written as the field group's migration, so its table
           // stands on record for every migration after it, as a collection's Builder save leaves it.
-          await writeBuilderSchemaChange(
+          const companion: BuilderCompanionReconcile = {
+            slug,
+            tableName,
+            oldFields: component.fields as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            localized: isStored,
+            wasLocalized: wasStored,
+            adapter,
+            renamed: companionRename ?? undefined,
+            // The settings the first push left off, once the shared columns hold the default
+            // language's values. A new desired schema rather than an edit of the first: the
+            // pipeline keeps the last one it applied, by reference, to skip a push that changes
+            // nothing.
+            settleLeaving: settingsDeferred
+              ? leavingSettingsStep({
+                  adapter,
+                  entity: slug,
+                  tableName,
+                  builtBy: "fieldGroup",
+                  oldFields: (component.fields ??
+                    []) as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  renamed: companionRename,
+                  push: () =>
+                    push({
+                      ...desired,
+                      components: {
+                        ...desired.components,
+                        [slug]: {
+                          ...desired.components[slug],
+                          fields: fields as DesiredFieldGroup["fields"],
+                        },
+                      },
+                    }),
+                })
+              : undefined,
+          };
+          const newSchemaVersion = currentVersion + 1;
+          // The registry's row of the save, in the registry this database holds: the fields it
+          // applied, whether it is translated, and the advanced schema version, written with the
+          // stored version in one transaction and the cached rows cleared after it.
+          const registryTable = await resolveFieldGroupRegistryName(adapter);
+          // Handed the fields that applied where the save's file stopped part way and was settled.
+          const writeRow = (
+            stored: readonly unknown[] = fields
+          ): Promise<void> =>
+            writeAppliedFieldsRow(adapter, {
+              table: registryTable,
+              slug,
+              fields: stored as FieldConfig[],
+              localized: isLocalized,
+              schemaVersion: newSchemaVersion,
+            });
+          // The runtime table this process reads and writes the field group through, built from the
+          // fields its row records: the save's, or those a stopped save settled to.
+          const refreshRuntime = (stored: readonly unknown[]): void => {
+            registerComponentRuntimeSchema(
+              adapter,
+              dialect,
+              tableName,
+              stored as FieldConfig[],
+              componentTypeColumn,
+              isStored
+            );
+          };
+          const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
             () =>
-              pushAndReconcileCompanion(push, desired, "component", {
-                slug,
-                tableName,
-                oldFields: component.fields as unknown as FieldDefinition[],
-                newFields: fields as unknown as FieldDefinition[],
-                localized: isStored,
-                wasLocalized: wasStored,
-                adapter,
-                renamed: companionRename ?? undefined,
-                // The settings the first push left off, once the shared columns hold the default
-                // language's values. A new desired schema rather than an edit of the first: the
-                // pipeline keeps the last one it applied, by reference, to skip a push that changes
-                // nothing.
-                settleLeaving: settingsDeferred
-                  ? leavingSettingsStep({
-                      adapter,
-                      entity: slug,
-                      tableName,
-                      builtBy: "fieldGroup",
-                      oldFields: (component.fields ??
-                        []) as unknown as FieldDefinition[],
-                      newFields: fields as unknown as FieldDefinition[],
-                      renamed: companionRename,
-                      push: () =>
-                        push({
-                          ...desired,
-                          components: {
-                            ...desired.components,
-                            [slug]: {
-                              ...desired.components[slug],
-                              fields: fields as DesiredFieldGroup["fields"],
-                            },
-                          },
-                        }),
-                    })
-                  : undefined,
-              }),
+              pushAndReconcileCompanion(push, desired, "component", companion),
             {
               kind: "fieldGroup",
               slug,
@@ -947,6 +1055,7 @@ export const COMPONENTS_METHODS: Record<
               stored: fieldGroupEntity(component),
               fields: fields as unknown as FieldDefinition[],
               localized: isLocalized,
+              moves,
               answers: {
                 renameResolutions: renameResolutions ?? [],
                 eventResolutions: eventResolutions ?? [],
@@ -968,10 +1077,41 @@ export const COMPONENTS_METHODS: Record<
                     fields as unknown as FieldDefinition[]
                   )),
             },
-            landing.landed
+            landing.landed,
+            {
+              // The push where the save carries values across its change; its own migration file,
+              // run in tries as `nextly migrate` runs it, where it carries none.
+              pushWhen: pushes,
+              afterFile: () =>
+                reconcileBuilderCompanion("component", companion),
+              // The push's questions, asked of the file before anything is written: a rename the
+              // request does not answer, or a drop it does not confirm, refuses the save as the
+              // push refuses it.
+              questions: entityDialogQuestions({
+                desired,
+                db,
+                dialect,
+                tableName,
+                // The builder that made the table, which the offered rename is judged by.
+                builtBy: "fieldGroup",
+                oldFields: (component.fields ??
+                  []) as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                wasLocalized,
+                isLocalized,
+                renameResolutions,
+                eventResolutions,
+                legacy: legacyBundle,
+              }),
+              // On the file road the row is written in the file's own transaction, so a failed
+              // write leaves the save as it was and is answered as the failure it is. Not where the
+              // translations table is reconciled after the file: the row would then record the
+              // change before that step holds it, so it is written after it, as before.
+              ...(registryInFileTransaction({ wasStored, isStored })
+                ? { registry: writeRow, settled: refreshRuntime }
+                : {}),
+            }
           );
-
-          const newSchemaVersion = currentVersion + 1;
 
           // Post-apply: update dynamic_components fields JSON + schema_hash directly
           // (not via the registry helper, whose auto-bump would also reset
@@ -987,16 +1127,8 @@ export const COMPONENTS_METHODS: Record<
             // in the worst way: the DDL has already committed, this write is
             // treated as non-fatal, and the stale row rebuilds the pre-change
             // runtime schema on the next restart.
-            const registryTable = await resolveFieldGroupRegistryName(adapter);
-            // The row and the stored schema version in one transaction, and the
-            // cached rows cleared after it (`writeAppliedFieldsRow`).
-            await writeAppliedFieldsRow(adapter, {
-              table: registryTable,
-              slug,
-              fields: fields as FieldConfig[],
-              localized: isLocalized,
-              schemaVersion: newSchemaVersion,
-            });
+            // Written already, in the file's transaction, where the save ran its file.
+            if (!registryWritten) await writeRow();
           } catch (err) {
             // 🔴 The DDL has ALREADY COMMITTED. Reporting success here is worse than the failure
             // itself: the tables hold the new shape, the row still describes the old one, and the
@@ -1049,14 +1181,7 @@ export const COMPONENTS_METHODS: Record<
           // so the registered table includes component system columns
           // (_parent_id, _parent_table, _parent_field, _order, _component_type)
           // instead of collection columns (title, slug).
-          registerComponentRuntimeSchema(
-            adapter,
-            dialect,
-            tableName,
-            fields as FieldConfig[],
-            componentTypeColumn,
-            isStored
-          );
+          refreshRuntime(fields);
 
           // Reached only when the registry write landed, or when it raised and the row was found
           // to carry this edit anyway. Either way the version reported is the one now stored, so

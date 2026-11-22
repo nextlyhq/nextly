@@ -15,14 +15,15 @@ import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen, waitFor, within } from "@admin/__tests__/utils";
 import { CardTierContext } from "@admin/components/features/widgets/frame/tier";
 
-const { post, del, toast } = vi.hoisted(() => ({
+const { get, post, del, toast } = vi.hoisted(() => ({
+  get: vi.fn(),
   post: vi.fn(),
   del: vi.fn(),
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
-  protectedApi: { get: vi.fn(), post, delete: del },
+  protectedApi: { get, post, delete: del },
 }));
 vi.mock("@admin/components/ui", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/components/ui")>()),
@@ -36,14 +37,27 @@ vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
   useBranding: () => mockBranding,
 }));
 
+import { closeAllPins, useAllPinsOpen } from "./all-pins";
 import { ContinueCard, type ContinueCardProps } from "./ContinueCard";
+
+/** Whether "View all pins" is open, read the way its host reads it. */
+function OpenProbe() {
+  return <span data-testid="all-pins-open">{String(useAllPinsOpen())}</span>;
+}
 
 /** One row of the card's data, as JSON carries it. */
 type Row = CoreListWidgetData["items"][number];
 
 beforeEach(() => {
+  closeAllPins();
   vi.clearAllMocks();
   post.mockResolvedValue({ message: "Pinned." });
+  // The reader's layout holds this card, so a pin says it is on the dashboard.
+  get.mockResolvedValue({
+    placements: [
+      { id: "card-1", widgetId: "core/continue", w: 6, h: 5, removed: false },
+    ],
+  });
   del.mockResolvedValue({ message: "Unpinned." });
 });
 afterEach(() => {
@@ -229,6 +243,88 @@ describe("Continue where you left off", () => {
         expect.anything()
       )
     );
+  });
+
+  it("draws Mine's pins as their own group, 'Pinned' then 'Recent', each pin led by a pin", () => {
+    draw(
+      answered([
+        pinRow(1, { group: "pinned", pinCount: 2 }),
+        pinRow(2, { group: "pinned", pinCount: 2 }),
+        row(3, { group: "recent" }),
+        row(4, { group: "recent" }),
+      ])
+    );
+    const pinned = screen.getByRole("group", { name: "Pinned" });
+    const recent = screen.getByRole("group", { name: "Recent" });
+    // In that order on the card.
+    expect(
+      pinned.compareDocumentPosition(recent) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(pinned).toHaveTextContent(/^Pinned/);
+    expect(recent).toHaveTextContent(/^Recent/);
+    const titlesIn = (group: HTMLElement) =>
+      within(group)
+        .getAllByTestId("entity-row-title")
+        .map(title => title.textContent);
+    expect(titlesIn(pinned)).toEqual(["Doc 1", "Doc 2"]);
+    expect(titlesIn(recent)).toEqual(["Doc 3", "Doc 4"]);
+    // Each pinned row is led by a pin, and no recent one is.
+    for (const each of within(pinned).getAllByTestId("entity-row-leading")) {
+      expect(each.querySelector("[data-pin] svg")).not.toBeNull();
+    }
+    for (const each of within(recent).getAllByTestId("entity-row-leading")) {
+      expect(each.querySelector("[data-pin]")).toBeNull();
+    }
+    // Every pin shown: nothing more to open.
+    expect(screen.queryByText(/View all pins/)).not.toBeInTheDocument();
+  });
+
+  it("says 'View all pins (7)' at seven pins, and opens every pin from it", async () => {
+    const user = userEvent.setup();
+    render(<OpenProbe />);
+    draw(
+      answered([
+        pinRow(1, { group: "pinned", pinCount: 7 }),
+        pinRow(2, { group: "pinned", pinCount: 7 }),
+        pinRow(3, { group: "pinned", pinCount: 7 }),
+        row(4, { group: "recent" }),
+        row(5, { group: "recent" }),
+        row(6, { group: "recent" }),
+      ])
+    );
+    const pinned = screen.getByRole("group", { name: "Pinned" });
+    expect(within(pinned).getAllByTestId("entity-row")).toHaveLength(3);
+    const recent = screen.getByRole("group", { name: "Recent" });
+    // The card's five rows: three pins and two recent saves.
+    expect(within(recent).getAllByTestId("entity-row")).toHaveLength(2);
+    const viewAll = screen.getByRole("button", { name: "View all pins (7)" });
+    expect(screen.getByTestId("all-pins-open")).toHaveTextContent("false");
+    await user.click(viewAll);
+    expect(screen.getByTestId("all-pins-open")).toHaveTextContent("true");
+  });
+
+  it("names each group in its table's title column at the large tier", () => {
+    draw(
+      answered([
+        pinRow(1, { group: "pinned", pinCount: 1 }),
+        row(2, { group: "recent" }),
+      ]),
+      "large"
+    );
+    const headings = screen
+      .getAllByTestId("list-card-table")
+      .map(table => within(table).getAllByRole("columnheader")[0]!.textContent);
+    expect(headings).toEqual(["Pinned", "Recent"]);
+  });
+
+  it("draws Team as one list, with no groups", () => {
+    draw(
+      answered([pinRow(1), row(2)].map(each => ({ ...each, group: null }))),
+      "medium",
+      "team"
+    );
+    expect(screen.queryByRole("group", { name: "Pinned" })).toBeNull();
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(2);
   });
 
   it("shows a refusal of a pin in the server's own words", async () => {

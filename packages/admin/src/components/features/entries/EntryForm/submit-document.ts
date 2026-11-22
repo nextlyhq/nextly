@@ -12,6 +12,7 @@
 import type { BaseSyntheticEvent } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
+import { copiedValuesFor } from "@admin/components/features/entries/copied-values";
 import type { EditorRestore } from "@admin/components/features/versions/editor-restore";
 import { recordingsSettled } from "@admin/hooks/useSnapshotAutosave";
 
@@ -29,6 +30,12 @@ import {
  * the write's boundary and never stores.
  */
 const RESTORED_FROM_KEY = "_restoredFrom";
+
+/**
+ * The key a save names where its translated values came from under (a copy from another
+ * language), which the server reads at the write's boundary and never stores.
+ */
+const PROVENANCE_KEY = "_provenance";
 
 /** What one write came to, for the form to start from. */
 export interface DocumentWrite {
@@ -101,12 +108,20 @@ export async function submitDocument(args: {
       // Judged against what the form held when the save began, the values a
       // restore set, before validation's transforms.
       const sources = args.restore?.restoredFromForSave(submitted);
+      // And the fields a copy from another language filled, still as copied.
+      const copies = copiedValuesFor(form.control).beginSave(submitted);
+      const copied = copies.claims;
       try {
-        const written = await write(
-          sources ? { ...payload, [RESTORED_FROM_KEY]: sources } : payload
-        );
-        // Stored: the next save restores nothing unless another restore does.
+        const written = await write({
+          ...payload,
+          ...(sources ? { [RESTORED_FROM_KEY]: sources } : {}),
+          ...(copied ? { [PROVENANCE_KEY]: copied } : {}),
+        });
+        // Stored: the next save restores nothing unless another restore does,
+        // and claims no copy this save carried; one made while it was on its
+        // way is still claimed.
         args.restore?.saved();
+        copies.saved();
         // Only where the editor still shows what was written: after a move
         // the form holds another document's or language's values, which
         // these would replace for its next Save to write.

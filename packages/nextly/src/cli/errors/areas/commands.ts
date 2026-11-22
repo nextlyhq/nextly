@@ -318,12 +318,15 @@ export function coreTablesNotCreated(error: unknown): CliError {
   );
 }
 
-/** The sync refuses to change the schema in production, naming what it would have changed. */
-export function schemaSyncInProduction(pending: readonly string[]): CliError {
+/**
+ * `db:sync` does not run in production. Said before the database is opened, so nothing was read
+ * and nothing was changed; the way to change a production schema is named instead.
+ */
+export function schemaSyncInProduction(): CliError {
   return new CliError("SCHEMA_SYNC_IN_PRODUCTION", {
-    what: "Cannot auto-sync schema in production mode.",
-    why: `\`NODE_ENV\` is \`production\`, and ${counted(pending.length, "collection")} would change: ${pending.join(", ")}.`,
-    next: 'Run `nextly migrate:create --name="<migration-name>"` to create migrations, then `nextly migrate` to apply.',
+    what: "db:sync does not run in production.",
+    why: "`NODE_ENV` is `production`, and db:sync changes the database directly, without a migration. Nothing was changed.",
+    next: 'Run `nextly migrate:create --name="<migration-name>"` where you develop, commit the migration, then run `nextly migrate` against this database.',
   });
 }
 

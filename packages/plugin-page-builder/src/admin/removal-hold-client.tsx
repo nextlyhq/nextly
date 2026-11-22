@@ -126,11 +126,7 @@ export function useRemovalHold(input: RemovalHoldInput): JSX.Element {
   const identity = useDocumentIdentity();
   const locale = useDocumentLocale();
   const lifecycle = useDocumentStatus() !== null;
-  const [question, setQuestion] = useState<{
-    recount: Recount;
-    answer: (go: boolean) => void;
-  } | null>(null);
-  const told = useToldReach(input.editing, input.reach);
+  const { hold, dialog } = useRemovalQuestion(input.editing, input.reach);
   const latest = useRef({ input, id: identity?.documentId, locale, lifecycle });
   useEffect(() => {
     latest.current = { input, id: identity?.documentId, locale, lifecycle };
@@ -140,35 +136,84 @@ export function useRemovalHold(input: RemovalHoldInput): JSX.Element {
     if (!putsLive(action, latest.current.lifecycle)) return;
     const { id, locale: language } = latest.current;
     if (id === undefined) return;
-    const ask = (recount: Recount) =>
-      new Promise<boolean>(resolve => {
-        setQuestion({ recount, answer: resolve });
-      }).finally(() => setQuestion(null));
-    for (let change = 0; change < MAX_CHANGES; change += 1) {
-      const document = latest.current.input.document();
-      if (!isComponentDocument(document)) return;
-      const removed = await removedIds(
-        id,
-        document,
-        language?.code ?? undefined
-      );
-      if (removed.properties.length === 0 && removed.slots.length === 0) {
-        return;
-      }
-      await holdRemoval({ id, removed, said: told(removed), ask });
-      // Held for the document read above: a change made meanwhile may remove
-      // more, so it is asked about in turn before anything is stored.
-      if (latest.current.input.document() === document) return;
-    }
-    throw new Error(HOLD_MOVING);
+    await hold(
+      id,
+      () => latest.current.input.document(),
+      language?.code ?? undefined
+    );
   });
 
-  return (
-    <RemovalRecountDialog
-      recount={question?.recount ?? null}
-      onAnswer={go => question?.answer(go)}
-    />
+  return dialog;
+}
+
+/** A removal's hold, taken before a component is published, and its question. */
+export interface RemovalQuestion {
+  /**
+   * Hold what publishing `document` removes from component `id`, at the count
+   * the designer was told, asking again while it has grown. Throws when the
+   * designer calls the publish off or the hold cannot be had, so nothing is
+   * stored.
+   */
+  readonly hold: (
+    id: string,
+    document: () => BlockDocument,
+    locale: string | undefined
+  ) => Promise<void>;
+  /** The question asked again, to be drawn anywhere inside the editor. */
+  readonly dialog: JSX.Element;
+}
+
+/**
+ * The hold and its question for a component edited here: a component's own
+ * view, or a header or footer edited in place, whose publish goes through its
+ * own session rather than the form's actions. `session` names one editing of
+ * it: a new one starts with nothing told.
+ */
+export function useRemovalQuestion(
+  editing: BlockDocument,
+  reach: () => Reach | undefined,
+  session?: unknown
+): RemovalQuestion {
+  const [question, setQuestion] = useState<{
+    recount: Recount;
+    answer: (go: boolean) => void;
+  } | null>(null);
+  const told = useToldReach(editing, reach, session);
+  const hold = useCallback(
+    async (
+      id: string,
+      document: () => BlockDocument,
+      locale: string | undefined
+    ): Promise<void> => {
+      const ask = (recount: Recount) =>
+        new Promise<boolean>(resolve => {
+          setQuestion({ recount, answer: resolve });
+        }).finally(() => setQuestion(null));
+      for (let change = 0; change < MAX_CHANGES; change += 1) {
+        const stored = document();
+        if (!isComponentDocument(stored)) return;
+        const removed = await removedIds(id, stored, locale);
+        if (removed.properties.length === 0 && removed.slots.length === 0) {
+          return;
+        }
+        await holdRemoval({ id, removed, said: told(removed), ask });
+        // Held for the document read above: a change made meanwhile may
+        // remove more, so it is asked about in turn before anything is stored.
+        if (document() === stored) return;
+      }
+      throw new Error(HOLD_MOVING);
+    },
+    [told]
   );
+  return {
+    hold,
+    dialog: (
+      <RemovalRecountDialog
+        recount={question?.recount ?? null}
+        onAnswer={go => question?.answer(go)}
+      />
+    ),
+  };
 }
 
 /**
@@ -215,11 +260,20 @@ const toldKey = (kind: "property" | "slot", id: string) => `${kind}\u001F${id}`;
  */
 function useToldReach(
   editing: BlockDocument,
-  reach: () => Reach | undefined
+  reach: () => Reach | undefined,
+  session: unknown
 ): (removed: Removed) => Reach | undefined {
   const told = useRef(new Map<string, Reach | undefined>());
   const before = useRef<Set<string> | null>(null);
+  const editingOf = useRef(session);
   useEffect(() => {
+    // Another editing of it: nothing told in the one before is this one's,
+    // and its first document is where its own removals start from.
+    if (editingOf.current !== session) {
+      editingOf.current = session;
+      told.current = new Map();
+      before.current = null;
+    }
     const exposed = isComponentDocument(editing)
       ? exposureIdsOf(editing)
       : { properties: [], slots: [] };
@@ -235,7 +289,7 @@ function useToldReach(
       }
     }
     before.current = now;
-  }, [editing, reach]);
+  }, [editing, reach, session]);
   return useCallback((removed: Removed) => {
     const keys = [
       ...removed.properties.map(id => toldKey("property", id)),

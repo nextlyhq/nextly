@@ -110,6 +110,11 @@ export interface DefinitionActionRequest {
   readonly expect?: string;
   /** Publish the component with the change, rather than saving its working draft. */
   readonly publish?: boolean;
+  /**
+   * The language the component is read, planned and written in, where its
+   * document field is translated; ignored where it is not.
+   */
+  readonly locale?: string;
 }
 
 /** @experimental Settles when the composition API ships. */

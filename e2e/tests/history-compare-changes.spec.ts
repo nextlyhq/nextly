@@ -13,6 +13,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { includingHidden, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { expectNoAxeViolations } from "./support/axe";
 
 const ENTRIES = "/admin/api/collections/history-notes/entries";
 
@@ -122,6 +123,11 @@ test.describe("comparing two versions", () => {
     await tabTo(page, "Next change");
     await page.keyboard.press("Enter");
     await expect.poll(() => focusedId(page)).toBe("version-change-details");
+    // Focus moves silently, so the move says where it landed.
+    await expect(
+      page.getByRole("status").filter({ hasText: /^Change 2 of 2: Details$/ })
+    ).toHaveCount(1);
+    await expectNoAxeViolations(page);
     await tabTo(page, "Previous change", "back");
     await page.keyboard.press("Enter");
     await expect.poll(() => focusedId(page)).toBe("version-change-summary");

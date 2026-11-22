@@ -11,7 +11,7 @@
 import type { NextlyError } from "../../../errors/nextly-error";
 import type { CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
-import { contextString, sentences } from "../messages";
+import { asSentence, contextString, sentences } from "../messages";
 
 /**
  * The refusal of a start whose configured schema holds no installation while another schema of
@@ -100,10 +100,65 @@ function leftoverRefusal(error: NextlyError): CliErrorParts {
   const why = (next === undefined ? rest : rest.slice(0, -1)).join(" ");
   return {
     what: colon === -1 ? message : `${message.slice(0, colon)}.`,
-    why:
-      why ||
-      "Tables nothing registered owns stand where it would build, and they hold rows or something else depends on them.",
+    // Capitalised: after the colon a refusal may go on with "the view …" or "the shared …".
+    why: why
+      ? asSentence(why)
+      : "Tables nothing registered owns stand where it would build, and they hold rows or something else depends on them.",
     next: next ?? "Drop or rename the tables it names, then retry the create.",
+  };
+}
+
+/**
+ * The refusal of a command over a Builder save left part-way, as its three parts: what it
+ * refused, each save it names, and the step that settles them, all from the thrown text.
+ */
+function savesLeftPartWay(error: NextlyError): CliErrorParts {
+  const message = error.publicMessage;
+  const colon = message.indexOf(": ");
+  const settle = message.lastIndexOf(" To settle it, ");
+  if (colon === -1 || settle < colon) {
+    return {
+      what: message,
+      why: "A Builder save stopped before its outcome was recorded.",
+      next: "Start the app in development (`next dev`) on this project: its start settles the save.",
+    };
+  }
+  return {
+    what: `${message.slice(0, colon)}.`,
+    why: `Left part-way: ${message.slice(colon + 2, settle)}`,
+    next: message.slice(settle + 1),
+  };
+}
+
+/**
+ * The refusal of a Builder save over an earlier save's record that cannot be read: what was
+ * refused, then the one step that clears the record by hand, as the thrown text gives it.
+ */
+function unreadableSaveRecord(error: NextlyError): CliErrorParts {
+  const [what = error.publicMessage, ...next] = sentences(error.publicMessage);
+  return {
+    what,
+    why: "Each Builder save records that it is in progress until its outcome is recorded, and what an earlier save left cannot be told from a record that cannot be read.",
+    next:
+      next.length > 0
+        ? next.join(" ")
+        : "Once no Builder save is running, remove the record's row from the nextly_meta table, then save again.",
+  };
+}
+
+/**
+ * A Builder save refused over an earlier save of the same entity left part-way: the message's first
+ * sentence says what was left, the rest how to settle it.
+ */
+function earlierSaveLeft(error: NextlyError): CliErrorParts {
+  const [what = error.publicMessage, ...next] = sentences(error.publicMessage);
+  return {
+    what,
+    why: "An earlier Builder save was left part-way and is not settled, and a save written over it would start from a state nothing has finished.",
+    next:
+      next.length > 0
+        ? next.join(" ")
+        : "Start the app in development (`next dev`): its start settles the earlier save. Then save again.",
   };
 }
 
@@ -319,10 +374,16 @@ export const SCHEMA_CODES = defineCodes({
         describe: leftoverRefusal,
       },
       {
-        // A table not keyed as the create's junction stands where it would build one, or a view
-        // reads one of the leftover's tables.
+        // A table not keyed as the create's junction stands where it would build one.
         code: "CONFLICT",
         reason: "create-objects-taken",
+        describe: leftoverRefusal,
+      },
+      {
+        // A view reads one of the leftover's tables, and dropping or redefining the view is the
+        // remedy, not renaming the tables it reads.
+        code: "CONFLICT",
+        reason: "create-table-viewed",
         describe: leftoverRefusal,
       },
     ],
@@ -340,6 +401,56 @@ export const SCHEMA_CODES = defineCodes({
           why: "A save writes a migration into the folder, and the folder or its ledger is in a state `nextly migrate` refuses: an applied file was edited or removed, or an attempt is unfinished.",
           next: "Settle what the message names, with `nextly migrate:resolve` or by restoring the file, then save again.",
         }),
+      },
+    ],
+  },
+  // A command that would act on the migrations while a Builder save is recorded as left part-way:
+  // `nextly migrate` by the database's record, and the commands with no database by the marker.
+  BUILDER_SAVE_LEFT_PART_WAY: {
+    cause:
+      "A Builder save was left part-way, so the command refused: the project's migrations do not describe the database until the save is settled.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "builder-save-left-part-way",
+        describe: savesLeftPartWay,
+      },
+    ],
+  },
+  // A Builder save refused over the record of an earlier save of the same entity that cannot be
+  // read, whose part-way state cannot be told.
+  BUILDER_SAVE_RECORD_UNREADABLE: {
+    cause:
+      "A Builder save was refused, because the record that an earlier save of the same entity was in progress cannot be read.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "builder-save-record-unreadable",
+        describe: unreadableSaveRecord,
+      },
+    ],
+  },
+  // A Builder save refused because an earlier save it would build on was left part-way and is
+  // not settled: one its host's settle could not settle, or one whose remaining files have not run.
+  BUILDER_SAVE_EARLIER_LEFT: {
+    cause:
+      "A Builder save was refused, because an earlier Builder save was left part-way and is not settled.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "builder-save-left-unsettled",
+        describe: earlierSaveLeft,
+      },
+      {
+        code: "CONFLICT",
+        reason: "builder-save-pending-files",
+        describe: earlierSaveLeft,
+      },
+      // A save of another entity, refused while a save of any entity stands left part-way.
+      {
+        code: "CONFLICT",
+        reason: "builder-save-left-elsewhere",
+        describe: earlierSaveLeft,
       },
     ],
   },

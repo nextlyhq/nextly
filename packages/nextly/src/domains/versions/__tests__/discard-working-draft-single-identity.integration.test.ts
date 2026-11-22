@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import { defineSingle, text } from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
@@ -61,6 +62,10 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       });
+      // The discarding caller, a super-admin the read gate can look up: the
+      // discard reads the Single as its caller, and role names on a user grant
+      // nothing.
+      await superAdminUser(t, "system-check");
       const trusted = new Nextly();
       await trusted.updateSingle({
         slug: SETTINGS,

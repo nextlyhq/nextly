@@ -65,6 +65,11 @@ import {
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
+import {
+  type DeletedEntity,
+  deleteEntityRegistryRow,
+  entityTablesOn,
+} from "../../versions/entity-teardown";
 import { resolveVersionsConfig } from "../../versions/resolve-config";
 import { storedWebhookRecording } from "../../webhooks/builder-webhooks";
 import {
@@ -362,6 +367,16 @@ function metadataSyncNeeded(
     config.label !== existing.label ||
     (config.description ?? null) !== (existing.description ?? null)
   );
+}
+
+/**
+ * What removing a Single's registry row found: how many rows went (none where
+ * it was already gone), and the cached reads to expire once that commits, by
+ * the setting the row held.
+ */
+export interface UnregisteredSingleRow {
+  removed: number;
+  expire: DeletedEntity["expire"];
 }
 
 // ============================================================
@@ -1187,37 +1202,7 @@ export class SingleRegistryService extends BaseRegistryService<
         throw NextlyError.notFound({ logContext: { slug } });
       }
 
-      // Drop the in-process recording decision with the row, for the same
-      // reason as collections: a slug reused later must start from the
-      // recording default.
-      clearWebhookRecording("single", slug);
-
-      this.logger.info("Single deleted", { slug, force: true });
-
-      // Its document is gone with it, so a scheduled release holding it
-      // cannot run: stopped now rather than at its instant.
-      await this.recheckReleasesHolding(slug);
-
-      // Every cached read of it now describes content that is gone: expired
-      // here, the method every deletion path reaches, with the setting the
-      // deleted row held. A delete that found the row already gone has thrown
-      // above, so a retry never flushes a Single that opted out. Once the
-      // delete is durable, as for collections: after an enclosing
-      // transaction commits, and never for one that rolls back.
-      await this.afterCommit(() =>
-        flushContentChange(expire, this.logger, "a Single was deleted")
-      );
-
-      // Loaded when a delete runs, not with the registry.
-      const { deleteResourcePermissions } = await import(
-        "../../collections/services/delete-resource-permissions"
-      );
-      await deleteResourcePermissions({
-        service: this.permissionSeedService,
-        slug,
-        kind: "single",
-        logger: this.logger,
-      });
+      await this.forgetUnregisteredSingle(slug, { removed: count, expire });
     } catch (error) {
       // Preserve already-mapped NextlyErrors (the notFound above, forbidden
       // above). Raw DB errors map via fromDatabaseError per spec §8.2.
@@ -1227,6 +1212,85 @@ export class SingleRegistryService extends BaseRegistryService<
       }
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+  }
+
+  /**
+   * Remove Single `slug`'s registry row and what goes with it
+   * (`deleteEntityRegistryRow`) inside `tx`, a transaction the caller opened
+   * and commits: a Single's delete removes its storage and its row in one
+   * transaction where the database can undo a table drop. Answers what the
+   * removal found; a row already gone finds nothing and is not an error. What
+   * the process remembers about the Single is the caller's to forget once
+   * `tx` has committed (`forgetUnregisteredSingle`, given what this returns):
+   * forgotten earlier, a rollback would leave the row and lose what was known
+   * about it.
+   */
+  async unregisterSingleIn(
+    tx: TransactionContext,
+    slug: string
+  ): Promise<UnregisteredSingleRow> {
+    // Whether the dashboard's and the media library's tables exist, asked on
+    // `tx`'s own connection (`entityTablesOn`).
+    const tables = await entityTablesOn(this.adapter, this.logger, tx);
+    const { deleted, expire } = await deleteEntityRegistryRow(
+      tx,
+      "single",
+      slug,
+      tables,
+      this.dialect
+    );
+    return { removed: deleted, expire };
+  }
+
+  /**
+   * Forget, in this process, a Single whose registry row this delete removed,
+   * once the removal has committed: its cached rows, its recording decision,
+   * the releases holding its document, its cached reads and its permissions.
+   * Every way a Single's row is removed ends here (`deleteSingle`, and a
+   * delete that removed it inside its own transaction, `unregisterSingleIn`).
+   */
+  async forgetUnregisteredSingle(
+    slug: string,
+    unregistered: UnregisteredSingleRow
+  ): Promise<void> {
+    clearRegistryRowCache();
+    // A delete that found the row already gone forgets nothing: a retry never
+    // flushes a Single that opted out, or takes permissions a new one holds.
+    if (unregistered.removed === 0) return;
+
+    // Drop the in-process recording decision with the row, for the same
+    // reason as collections: a slug reused later must start from the
+    // recording default.
+    clearWebhookRecording("single", slug);
+
+    this.logger.info("Single deleted", { slug, force: true });
+
+    // Its document is gone with it, so a scheduled release holding it
+    // cannot run: stopped now rather than at its instant.
+    await this.recheckReleasesHolding(slug);
+
+    // Every cached read of it now describes content that is gone: expired
+    // here, with the setting the deleted row held. Once the delete is
+    // durable, as for collections: after an enclosing transaction commits,
+    // and never for one that rolls back.
+    await this.afterCommit(() =>
+      flushContentChange(
+        unregistered.expire,
+        this.logger,
+        "a Single was deleted"
+      )
+    );
+
+    // Loaded when a delete runs, not with the registry.
+    const { deleteResourcePermissions } = await import(
+      "../../collections/services/delete-resource-permissions"
+    );
+    await deleteResourcePermissions({
+      service: this.permissionSeedService,
+      slug,
+      kind: "single",
+      logger: this.logger,
+    });
   }
 
   // ============================================================

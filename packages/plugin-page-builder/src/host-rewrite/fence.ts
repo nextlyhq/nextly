@@ -28,8 +28,13 @@ import { and, eq, inArray, isNull } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
+  type PluginTransaction,
 } from "@nextlyhq/plugin-sdk/schema";
 
+import {
+  holdCompositionGraph,
+  isGraphSnapshotRefusal,
+} from "../composition-graph-lock";
 import { readStoredForms } from "../fields/lock-baselines";
 import { componentDeletionHosts, componentDeletions } from "../schema/tables";
 
@@ -186,6 +191,13 @@ const STORED_PHASES: ReadonlySet<string> = new Set<StoredPhase>([
 /** How many component ids one indexed read of the runs names. */
 const IDS_PER_READ = 200;
 
+/**
+ * How many transactions the move to `deleting` opens at most to take the
+ * composition graph lock: each retry follows a writer that committed, so a
+ * few are plenty, and a bound keeps a busy site from looping.
+ */
+const LOCK_ATTEMPTS = 3;
+
 /** A stored phase, read strictly: anything else is the converting walk. */
 function phaseOf(value: string): StoredPhase {
   return STORED_PHASES.has(value) ? (value as StoredPhase) : "converting";
@@ -198,6 +210,56 @@ function phaseOf(value: string): StoredPhase {
  */
 function purposeOf(value: string): RunPurpose {
   return value === "strip-retired" ? value : "delete";
+}
+
+/** The run table as a read of the fence needs it. */
+type RunReads = Pick<PluginDatabase, "select" | "table">;
+
+/** The runs of one chunk of components, by the index on the component's id. */
+const runsAmong = (db: RunReads, chunk: readonly string[]) =>
+  db
+    .select(componentDeletions)
+    .where(inArray(db.table(componentDeletions).componentId, [...chunk]))
+    .all();
+
+/** The runs of these components, a bounded number of ids per read. */
+async function runsOf(
+  db: RunReads,
+  ids: readonly string[]
+): Promise<Awaited<ReturnType<typeof runsAmong>>> {
+  const rows: Awaited<ReturnType<typeof runsAmong>> = [];
+  for (let at = 0; at < ids.length; at += IDS_PER_READ) {
+    rows.push(...(await runsAmong(db, ids.slice(at, at + IDS_PER_READ))));
+  }
+  return rows;
+}
+
+/**
+ * Every component a `delete` run is open for, or deleted by one, read on
+ * `db`: the plugin's own database, or a write's transaction, whose
+ * uncommitted writes it then sees. Among `among` alone when named.
+ *
+ * The one reading of the fence. A blocks field judges a write by it
+ * ({@link FenceStore.fenced}), and so does a Layout write adding a component
+ * (`layout-area-guard.ts`), so the two can never disagree on which runs fence.
+ */
+export async function fencedComponentsOn(
+  db: RunReads,
+  among?: readonly string[]
+): Promise<ReadonlySet<string>> {
+  // By the index on the component's id: a deleted component's row stays for
+  // good, so the table grows, and reading all of it is kept for a document
+  // read only in part. Filtered here, as a purpose read strictly fences when
+  // it cannot be told.
+  const rows =
+    among === undefined
+      ? await db.select(componentDeletions).all()
+      : await runsOf(db, among);
+  return new Set(
+    rows
+      .filter(row => purposeOf(row.purpose) === "delete")
+      .map(row => row.componentId)
+  );
 }
 
 /** A run row as this module hands it out. */
@@ -244,19 +306,6 @@ export function fenceStore(
       .where(both(eq(r.componentId, componentId), eq(r.purpose, purpose)))
       .first();
     return row === null ? null : runOf(row);
-  };
-
-  const runsAmong = (chunk: readonly string[]) =>
-    db
-      .select(componentDeletions)
-      .where(inArray(columns().componentId, [...chunk]))
-      .all();
-  const runsOf = async (ids: readonly string[]) => {
-    const rows: Awaited<ReturnType<typeof runsAmong>> = [];
-    for (let at = 0; at < ids.length; at += IDS_PER_READ) {
-      rows.push(...(await runsAmong(ids.slice(at, at + IDS_PER_READ))));
-    }
-    return rows;
   };
 
   const closeRun = (
@@ -308,28 +357,42 @@ export function fenceStore(
     advance: async (runId, from, to, cursor) => {
       // Every move writes a phase or a cursor it did not hold before, so the
       // count is the rows matched on MySQL too, which counts changed rows.
-      const r = columns();
-      const moved = await db
-        .update(componentDeletions, { phase: to, cursor })
-        .where(both(eq(r.id, runId), eq(r.phase, from)));
-      return moved > 0;
+      const move = async (
+        on: Pick<PluginTransaction, "update" | "table">
+      ): Promise<boolean> => {
+        const r = on.table(componentDeletions);
+        const moved = await on
+          .update(componentDeletions, { phase: to, cursor })
+          .where(both(eq(r.id, runId), eq(r.phase, from)));
+        return moved > 0;
+      };
+      if (to !== "deleting") return move(db);
+      // The move to the component's own delete takes the composition graph
+      // lock, as a Layout write adding a component takes it before reading
+      // the runs (`layout-area-guard.ts`). So a Layout write either commits
+      // before this move, and the delete's last check of the Layouts, made
+      // after it, sees the Layout; or it reads the run after the move, and is
+      // refused. Neither can leave a Layout naming a deleted component.
+      //
+      // Tried again in a fresh transaction when the lock refuses this one as
+      // reading from a snapshot older than the last holder: under MySQL's
+      // default isolation a transaction that waited for a Layout write still
+      // reads the lock row as it was before that write committed. A fresh
+      // transaction reads what it committed and takes the lock.
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          return await db.transaction(async tx => {
+            await holdCompositionGraph(tx, dialect);
+            return move(tx);
+          });
+        } catch (error) {
+          if (attempt >= LOCK_ATTEMPTS || !isGraphSnapshotRefusal(error)) {
+            throw error;
+          }
+        }
+      }
     },
-    fenced: async among => {
-      // The runs of the components named, by the index on the component's
-      // id: a deleted component's row stays for good, so the table grows,
-      // and reading all of it is kept for a document read only in part.
-      // Filtered here, as a purpose read strictly fences when it cannot be
-      // told.
-      const rows =
-        among === undefined
-          ? await db.select(componentDeletions).all()
-          : await runsOf(among);
-      return new Set(
-        rows
-          .filter(row => purposeOf(row.purpose) === "delete")
-          .map(row => row.componentId)
-      );
-    },
+    fenced: among => fencedComponentsOn(db, among),
     runsAt: async phase =>
       (
         await db

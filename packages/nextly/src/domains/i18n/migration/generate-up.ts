@@ -2,6 +2,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { TableSpec } from "../../schema/pipeline/diff/types";
 import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
+import { restatedColumn } from "../../schema/pipeline/sql-templates/mysql-live-restate";
 import {
   migrateStepColumnDescriptors,
   renderSystemColumnSql,
@@ -13,12 +14,9 @@ import {
   COMPANION_UPDATED_AT_COLUMN,
 } from "../companion-columns";
 
-import { ddlType, lit, q } from "./ddl-types";
-import type {
-  CompanionCopyRef,
-  CompanionMigrationSpec,
-  LocalizedColumnSpec,
-} from "./types";
+import { receivingColumnDefinition } from "./carried-definition";
+import { lit, q } from "./ddl-types";
+import type { CompanionCopyRef, CompanionMigrationSpec } from "./types";
 
 /** The `CREATE TABLE <companion> (...)` statement (no trailing `;`). Shared by the
  *  enable UP and the create-only path so the companion shape stays identical. */
@@ -42,26 +40,27 @@ export {
 } from "../companion-columns";
 
 /**
- * The logical kind {@link COMPANION_UPDATED_AT_COLUMN} is rendered from.
+ * The type of {@link COMPANION_UPDATED_AT_COLUMN}, per dialect: `TIMESTAMPTZ` / `DATETIME(3)` /
+ * `INTEGER`.
  *
- * Routed through `ddlType` rather than hand-spelled beside `_status` so this
- * column is, per dialect, exactly what every other timestamp in a companion
- * would be: `TIMESTAMPTZ` / `DATETIME(3)` / `INTEGER`.
- *
- * That is also what makes the back-fill safe. `nextly_versions.created_at` has
- * the SAME type on all three dialects, so seeding this column from version
- * history is a plain `MAX(created_at)` copy with no per-dialect conversion —
- * and a conversion expression is precisely where a back-fill would go wrong
- * silently, writing plausible timestamps that produce confident wrong answers.
+ * Spelled here rather than taken from a date field's column (`ddlType`), which on PostgreSQL is a
+ * plain `timestamp`: this column is an instant compared with `nextly_versions.created_at`, which
+ * has the SAME type on all three dialects. That is what makes the back-fill safe: seeding this
+ * column from version history is a plain `MAX(created_at)` copy with no per-dialect conversion —
+ * and a conversion expression is precisely where a back-fill would go wrong silently, writing
+ * plausible timestamps that produce confident wrong answers.
  */
-const COMPANION_UPDATED_AT_SPEC: LocalizedColumnSpec = {
-  name: COMPANION_UPDATED_AT_COLUMN,
-  kind: "timestamp",
-};
+function companionUpdatedAtType(dialect: SupportedDialect): string {
+  return dialect === "postgresql"
+    ? "TIMESTAMPTZ"
+    : dialect === "mysql"
+      ? "DATETIME(3)"
+      : "INTEGER";
+}
 
 /** The `_updated_at` column definition for a `CREATE TABLE`/`ADD COLUMN`. */
 export function companionUpdatedAtDdl(dialect: SupportedDialect): string {
-  return `${q(COMPANION_UPDATED_AT_COLUMN, dialect)} ${ddlType(COMPANION_UPDATED_AT_SPEC, dialect)}`;
+  return `${q(COMPANION_UPDATED_AT_COLUMN, dialect)} ${companionUpdatedAtType(dialect)}`;
 }
 
 function buildCompanionCreateStatement(
@@ -69,8 +68,12 @@ function buildCompanionCreateStatement(
   ifNotExists: boolean
 ): string {
   const { dialect, mainTable, companionTable, parentIdType, columns } = spec;
+  // Each column is the field's own, or, where it receives the values of a column with a wider
+  // type or a default, carries those (`receivingColumnDefinition`).
   const colDefs = columns
-    .map(c => `  ${q(c.name, dialect)} ${ddlType(c, dialect)}`)
+    .map(
+      c => `  ${q(c.name, dialect)} ${receivingColumnDefinition(c, dialect)}`
+    )
     .join(",\n");
   // i18n M6: per-locale draft/publish status column (only when the collection has Draft/Published).
   const statusDef = spec.status
@@ -118,7 +121,8 @@ function buildCompanionCreateStatement(
     statusDef +
     updatedAtDef +
     documentDefs +
-    `${colDefs},\n` +
+    // A translations table whose last translated field became shared keeps no column of its own.
+    (colDefs === "" ? "" : `${colDefs},\n`) +
     `  PRIMARY KEY (${COMPANION_KEY_COLUMNS.map(c => q(c, dialect)).join(", ")}),\n` +
     `  FOREIGN KEY (${q("_parent", dialect)}) REFERENCES ${q(mainTable, dialect)} (${q("id", dialect)}) ON DELETE CASCADE\n` +
     `)`
@@ -346,10 +350,12 @@ export function buildLocalizationUpStatements(
   // would fail every create from this point on. Retaining is a safety measure, and a column that
   // breaks writes is not the safe option.
   const relaxations = retaining
-    ? constrained.map(c =>
+    ? constrained.flatMap(c =>
         dialect === "sqlite"
-          ? `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`
-          : relaxNotNull(mainTable, c, dialect)
+          ? [
+              `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`,
+            ]
+          : relaxNotNull(mainTable, c.name, dialect)
       )
     : [];
 
@@ -453,20 +459,24 @@ export function buildDefaultLocaleRefreshStatements(
 }
 
 /**
- * Make one main-table column nullable.
+ * Make one main-table column nullable, keeping the rest of its definition.
  *
- * PostgreSQL states the change directly; MySQL has no equivalent and must restate the whole
- * column definition, which is why the type is rebuilt here rather than read back from the server.
- * SQLite supports neither and never reaches this.
+ * PostgreSQL states the change directly. MySQL has no such statement and restates the whole column
+ * in a MODIFY, so the column is restated from the database's own description of it
+ * (`restatedColumn`): its type, default, comment, character set and collation as they are, and
+ * only its nullability changed. Those statements share a session variable and a prepared
+ * statement, so the caller runs them on one connection. SQLite supports neither and never reaches
+ * this.
  */
 function relaxNotNull(
   mainTable: string,
-  col: Parameters<typeof ddlType>[0],
+  column: string,
   dialect: CompanionMigrationSpec["dialect"]
-): string {
-  const table = q(mainTable, dialect);
-  const name = q(col.name, dialect);
-  return dialect === "mysql"
-    ? `ALTER TABLE ${table} MODIFY COLUMN ${name} ${ddlType(col, dialect)} NULL`
-    : `ALTER TABLE ${table} ALTER COLUMN ${name} DROP NOT NULL`;
+): string[] {
+  if (dialect === "mysql") {
+    return restatedColumn(mainTable, column, { nullable: true });
+  }
+  return [
+    `ALTER TABLE ${q(mainTable, dialect)} ALTER COLUMN ${q(column, dialect)} DROP NOT NULL`,
+  ];
 }

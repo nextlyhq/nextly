@@ -4,10 +4,9 @@
  * and keeping a break the stored page already held.
  */
 import {
-  clearBlocks,
+  createBlockRegistry,
   COMPONENT_INSTANCE_TYPE,
   defineBlock,
-  registerBlocks,
   type BindingFieldShape,
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
@@ -23,6 +22,9 @@ import {
   newBindingIssues,
   type DeclaredShapesReader,
 } from "./binding-judgement";
+
+/** The site's block registry these tests seed and judge against. */
+const blocks = createBlockRegistry();
 
 /** As declared: `internalNote` is private but declared, so it may be bound. */
 const DECLARED: Readonly<Record<string, readonly BindingFieldShape[]>> = {
@@ -90,7 +92,11 @@ describe("a write's bindings judged against the declared schema", () => {
       ),
       args(),
       "Content",
-      { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
+      {
+        blocks,
+        shapesOf,
+        storedForms: async () => ({ readable: true, forms: [] }),
+      }
     );
     expect(issues).toHaveLength(1);
     expect(issues[0]).toMatchObject({
@@ -113,7 +119,7 @@ describe("a write's bindings judged against the declared schema", () => {
       ),
       args(),
       "Content",
-      { shapesOf: read }
+      { blocks, shapesOf: read }
     );
     // The entry and the Single first, then where the relation leads.
     expect(read.mock.calls.map(([ref]) => ref)).toEqual([
@@ -131,7 +137,11 @@ describe("a write's bindings judged against the declared schema", () => {
       ),
       args(),
       "Content",
-      { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
+      {
+        blocks,
+        shapesOf,
+        storedForms: async () => ({ readable: true, forms: [] }),
+      }
     );
     expect(issues.map(issue => issue.message)).toEqual([
       expect.stringContaining("/nodes/0/bindings/text"),
@@ -146,7 +156,11 @@ describe("a write's bindings judged against the declared schema", () => {
       },
       args(),
       "Content",
-      { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
+      {
+        blocks,
+        shapesOf,
+        storedForms: async () => ({ readable: true, forms: [] }),
+      }
     );
     expect(issues).toEqual([
       expect.objectContaining({
@@ -170,6 +184,7 @@ describe("a write's bindings judged against the declared schema", () => {
       args(),
       "Content",
       {
+        blocks,
         shapesOf: once,
         storedForms: async () => ({
           readable: true,
@@ -194,7 +209,7 @@ describe("a write's bindings judged against the declared schema", () => {
       ),
       args(),
       "Content",
-      { shapesOf: read, maxNodes: 1 }
+      { blocks, shapesOf: read, maxNodes: 1 }
     );
     expect(read.mock.calls.map(([ref]) => ref)).toEqual([
       { collection: "posts" },
@@ -205,6 +220,7 @@ describe("a write's bindings judged against the declared schema", () => {
     // `headline` was renamed after this page was saved.
     const value = page(heading("h", { $bind: "headline" }));
     const issues = await newBindingIssues(value, args(), "Content", {
+      blocks,
       shapesOf,
       storedForms: async () => ({ readable: true, forms: [value as never] }),
     });
@@ -217,7 +233,7 @@ describe("a write's bindings judged against the declared schema", () => {
       { ...page(heading("h", { $bind: "headline" })), kind: "component" },
       args(),
       "Content",
-      { shapesOf }
+      { blocks, shapesOf }
     );
     expect(issues).toEqual([]);
   });
@@ -229,6 +245,7 @@ describe("a write's bindings judged against the declared schema", () => {
       args(),
       "Content",
       {
+        blocks,
         shapesOf,
         storedForms: async () => ({ readable: false, forms: [] }),
         onUnjudged: kept,
@@ -245,7 +262,11 @@ describe("a write's bindings judged against the declared schema", () => {
       ),
       args(),
       "Content",
-      { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
+      {
+        blocks,
+        shapesOf,
+        storedForms: async () => ({ readable: true, forms: [] }),
+      }
     );
     expect(issues.map(issue => issue.code)).toEqual(["binding-field-missing"]);
   });
@@ -258,7 +279,7 @@ describe("a write's bindings judged against the declared schema", () => {
       page(heading("h", { $bind: "headline" })),
       args({ inTransaction: true }),
       "Content",
-      { shapesOf: read }
+      { blocks, shapesOf: read }
     );
     expect(issues).toEqual([]);
     expect(read).not.toHaveBeenCalled();
@@ -273,6 +294,7 @@ describe("a write's bindings judged against the declared schema", () => {
       })
     );
     const issues = await newBindingIssues(page(...many), args(), "Content", {
+      blocks,
       shapesOf,
     });
     expect(issues.map(issue => issue.code)).toEqual([
@@ -285,7 +307,11 @@ describe("a write's bindings judged against the declared schema", () => {
       page(heading("h", { $bind: "photo.url" })),
       args(),
       "Content",
-      { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
+      {
+        blocks,
+        shapesOf,
+        storedForms: async () => ({ readable: true, forms: [] }),
+      }
     );
     expect(issues).toEqual([]);
   });
@@ -294,7 +320,7 @@ describe("a write's bindings judged against the declared schema", () => {
 describe("a link to the entry a to-one relation names", () => {
   // A linking block, its link props as the core blocks declare them.
   beforeEach(() => {
-    registerBlocks(
+    blocks.register(
       [
         defineBlock({
           name: "acme/link",
@@ -313,7 +339,7 @@ describe("a link to the entry a to-one relation names", () => {
   });
 
   afterEach(() => {
-    clearBlocks();
+    blocks.clear();
   });
 
   const link = (id: string, path: string) => ({
@@ -326,6 +352,7 @@ describe("a link to the entry a to-one relation names", () => {
 
   const judge = async (...nodes: unknown[]) =>
     await newBindingIssues(page(...nodes), args(), "Content", {
+      blocks,
       shapesOf,
       storedForms: async () => ({ readable: true, forms: [] }),
     });
@@ -369,6 +396,7 @@ describe("a binding to the site settings", () => {
       args(),
       "Content",
       {
+        blocks,
         shapesOf: read,
         storedForms: async () => ({ readable: true, forms: [] }),
       }
@@ -385,7 +413,11 @@ describe("a binding to the site settings", () => {
       page(...["applicationName", "siteUrl", "logoUrl", "timezone"].map(site)),
       args(),
       "Content",
-      { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
+      {
+        blocks,
+        shapesOf,
+        storedForms: async () => ({ readable: true, forms: [] }),
+      }
     );
     expect(issues).toEqual([]);
   });
@@ -394,6 +426,7 @@ describe("a binding to the site settings", () => {
     const value = page(site("adminEmail"));
     expect(
       await newBindingIssues(value, args(), "Content", {
+        blocks,
         shapesOf,
         storedForms: async () => ({ readable: true, forms: [value as never] }),
       })
@@ -401,7 +434,7 @@ describe("a binding to the site settings", () => {
     const now = await currentBindingProblems(
       value as never,
       { collection: "posts" },
-      { shapesOf }
+      { blocks, shapesOf }
     );
     expect(now.found).toHaveLength(1);
     expect(now.found[0]).toMatchObject({ code: "binding-field-missing" });
@@ -428,7 +461,11 @@ describe("the bindings a page's placed components bring", () => {
       composed("headline"),
       host,
       args().write!,
-      { shapesOf, storedForms: async () => ({ readable: true, forms: [] }) }
+      {
+        blocks,
+        shapesOf,
+        storedForms: async () => ({ readable: true, forms: [] }),
+      }
     );
     // The page's own heading is the page's own check's.
     expect(issues).toEqual([
@@ -439,6 +476,7 @@ describe("the bindings a page's placed components bring", () => {
     ]);
     expect(
       await composedBindingIssues(composed("title"), host, args().write!, {
+        blocks,
         shapesOf,
       })
     ).toEqual([]);
@@ -449,10 +487,10 @@ describe("a template's bindings", () => {
   // The core blocks, as the plugin registers them at boot: what a prop will
   // take is read from the block, so an unregistered one has no misfits.
   beforeEach(() => {
-    registerBlocks([...coreBlocks], { source: "binding-judgement-test" });
+    blocks.register([...coreBlocks], { source: "binding-judgement-test" });
   });
   afterEach(() => {
-    clearBlocks();
+    blocks.clear();
   });
 
   // Templates are entries of their own collection, whose fields are not the
@@ -492,6 +530,7 @@ describe("a template's bindings", () => {
     }) as PluginFieldValidateArgs;
   const judge = (value: unknown, on: PluginFieldValidateArgs) =>
     newBindingIssues(value, on, "Content", {
+      blocks,
       shapesOf: read,
       templates,
       storedForms: async () => ({ readable: true, forms: [] }),

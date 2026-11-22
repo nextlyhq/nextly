@@ -22,15 +22,18 @@
 // The CLI then says "No schema changes detected" and exits 0, since nothing
 // to do is a finished run; a failure exits 1.
 
-import { mkdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { basename, resolve } from "node:path";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { underNaming } from "../../field-groups/services/field-group-storage-names";
+import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { JoinRetries } from "../../i18n/migration/archive-preflight";
+import { carriedDefinition } from "../../i18n/migration/carried-definition";
 import {
   type CompanionHistory,
   companionHistoryKey,
@@ -77,7 +80,7 @@ import type {
 } from "../../i18n/migration/types";
 import {
   companionMigrationPath,
-  writeCompanionMigrationFile,
+  prepareCompanionMigrationFile,
   type WriteCompanionMigrationOpts,
 } from "../../i18n/migration/write-migration-file";
 import {
@@ -87,6 +90,9 @@ import {
 } from "../../i18n/per-language-storage";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import type { Deletion } from "../migrate/data-loss-consent";
+import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
+import { mergedBy } from "../migrate/history-line";
+import { compareMigrationBaseNames } from "../migrate/migration-order";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -115,6 +121,7 @@ import { builtByFor } from "../pipeline/registered-collections";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { refuseSwitchesWithRename } from "../pipeline/several-references-refusal";
+import { renderedType } from "../pipeline/sql-templates/create-table-body";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import {
@@ -127,6 +134,7 @@ import {
   columnsDeclaredBy,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
+import { identifierCaseRules } from "../utils/resolve-catalog-name";
 import {
   resolveCollectionTableName,
   resolveComponentTableName,
@@ -147,6 +155,10 @@ import {
 } from "./declared-permissions";
 import { buildInverseOperations } from "./down-generator";
 import {
+  droppedTranslations,
+  translationsDropsPlaced,
+} from "./dropped-translations";
+import {
   describeSettingsChange,
   settingsChangesFor,
   settingsRecordOf,
@@ -161,7 +173,11 @@ import {
   formatTimestamp,
   slugify,
 } from "./format-file";
-import { refuseIndexedTextWidening } from "./indexed-text-widening";
+import { withIndexesLiftedForTextWidenings } from "./indexed-text-widening";
+import {
+  leftoverUniqueStatements,
+  type LiveUniqueIndexes,
+} from "./leftover-unique-indexes";
 import {
   fileStatements,
   judgedDeletions,
@@ -178,10 +194,21 @@ import {
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  newestSnapshotName,
+  prepareSnapshot,
   snapshotPathOf,
-  writeSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
+import {
+  assertWriterHold,
+  holdInBuilderChange,
+  prepareAll,
+  prepareWhole,
+  publishHeld,
+  type PreparedFile,
+  startMovedError,
+  underWriterHold,
+} from "./writer-hold";
 
 /**
  * A field as its entity declares it.
@@ -269,6 +296,14 @@ export interface GenerateArgs {
   collections: MinimalConfigEntity[];
   singles: MinimalConfigEntity[];
   components: MinimalConfigEntity[];
+  /**
+   * The latest snapshot as the caller already read it
+   * (`AppMigrationInputs.latest`), null where the folder has none. Given, the
+   * migration starts from it, so the caller's checks and the generator read
+   * one starting point: for a project made from a template, the tables the
+   * template's entities were taken as made with. Absent, the folder is read.
+   */
+  previous?: { data: SnapshotFile; filename?: string } | null;
   /**
    * UI-built metadata-row upserts (spec §4.12.7), keyed by data-table name.
    * Each is appended to the generated SQL when an operation touches its table
@@ -358,6 +393,24 @@ export interface GenerateArgs {
     down: AddedStatements;
   };
   /**
+   * Columns the file drops whose values its appended statements copied elsewhere first (a field
+   * moved into a group). Judged as deletions, as `nextly migrate` judges the file, with the
+   * reason that says they are moves.
+   */
+  valueMoves?: readonly { table: string; column: string; reason: string }[];
+  /**
+   * Columns the file adds whose values its appended statements bring last (a field moved out of a
+   * group): added without NOT NULL, and made required, as the newest snapshot has them, once the
+   * values are in.
+   */
+  refilledColumns?: readonly { table: string; column: string }[];
+  /**
+   * The tables whose values the appended statements move between places (a field moved into, out
+   * of or between groups): a change of those tables, named in the file's header with their
+   * registry rows, though no operation may name them.
+   */
+  valuesMovedIn?: readonly string[];
+  /**
    * Foreign keys a table this file creates is declared with, by table: a
    * Schema Builder collection's relationship keys, which the column mapping
    * does not describe. Rendered into the table's CREATE, as the Builder
@@ -421,6 +474,13 @@ export interface GenerateArgs {
   liveCompanionColumns?:
     | ((tableName: string) => Promise<readonly string[]>)
     | undefined;
+  /**
+   * The unique indexes the database the file is written against holds, by column. Read only for a
+   * column whose field stops being unique, so the file also drops an older unique index still
+   * holding it under a name Nextly did not make (`leftoverUniqueDrops`), and the run names it
+   * through `onWarning`. Absent, the file drops only Nextly's own index.
+   */
+  liveUniqueIndexes?: LiveUniqueIndexes;
   /**
    * Override the timestamp for tests. Production callers omit and get
    * `new Date()`.
@@ -642,11 +702,14 @@ const columnKey = (table: string, column: string) => `${table}\u0000${column}`;
 /**
  * `operations` with each settled column left nullable — its creation made
  * nullable, its change to NOT NULL taken out — and the changes that make each
- * NOT NULL once its rows are settled.
+ * NOT NULL once its rows are settled, for the columns `desired` declares NOT
+ * NULL. A column filled for an optional field (a Single's row given the
+ * field's default) stays nullable after its fill, as its field declares it.
  */
 function settledColumns(
   operations: readonly Operation[],
-  resolutions: readonly ColumnResolution[]
+  resolutions: readonly ColumnResolution[],
+  desired: readonly TableSpec[]
 ): {
   operations: Operation[];
   tighten: Operation[];
@@ -674,7 +737,12 @@ function settledColumns(
     }
     return [op];
   });
-  const tighten = resolutions.map(
+  const required = (r: ColumnResolution) =>
+    desired
+      .find(table => table.name === r.tableName)
+      ?.columns.find(column => column.name === r.columnName)?.nullable ===
+    false;
+  const tighten = resolutions.filter(required).map(
     (r): Operation => ({
       type: "change_column_nullable",
       tableName: r.tableName,
@@ -686,8 +754,13 @@ function settledColumns(
   return { operations: kept, tighten, columns };
 }
 
-/** `tables` with each settled column nullable, as the file leaves it before tightening. */
-function withSettledColumnsNullable(
+/**
+ * `tables` with each of `columns` (`columnKey`) nullable, as the file leaves them before they are
+ * made required: a column whose rows the person settled, and one a move fills from a group. On
+ * SQLite a table rebuilt before that copies its rows into this shape, so a column still to be
+ * filled declared NOT NULL there would refuse every row.
+ */
+function withColumnsNullable(
   tables: readonly TableSpec[],
   columns: ReadonlySet<string>
 ): TableSpec[] {
@@ -700,6 +773,13 @@ function withSettledColumnsNullable(
         : column
     ),
   }));
+}
+
+/** The `columnKey` of each column in `refilled`, a move's or a joining field's. */
+function columnKeysOf(
+  refilled: readonly { table: string; column: string }[] | undefined
+): Set<string> {
+  return new Set((refilled ?? []).map(r => columnKey(r.table, r.column)));
 }
 
 /**
@@ -809,6 +889,8 @@ async function renameDecisions(
 export async function generateMigration(
   requested: GenerateArgs
 ): Promise<GenerateResult | null> {
+  // Before anything is planned: a writer another has overtaken stops here.
+  await refuseStaleStart(requested);
   // Scoped, every planner below sees the scoped entity alone.
   const scoped = withScopedEntities(requested);
   const metaDir = resolve(scoped.migrationsDir, "meta");
@@ -817,7 +899,10 @@ export async function generateMigration(
   const now = scoped.now ?? new Date();
 
   // 1. Load previous state.
-  const previous = await loadLatestSnapshot(metaDir);
+  const previous =
+    scoped.previous === undefined
+      ? await loadLatestSnapshot(metaDir)
+      : scoped.previous;
 
   // Taken once, here, so the table diff and every companion planner below
   // see the same fields (`withKeptScopeFieldsOf`).
@@ -908,7 +993,8 @@ export async function generateMigration(
     args.defaultLocale ?? "en",
     companionHistory,
     companionRenames,
-    args.languageOrder
+    args.languageOrder,
+    desiredSnapshot
   );
 
   // 3. Diff.
@@ -918,6 +1004,7 @@ export async function generateMigration(
   //     from the main table — but the companion migration already relocates them
   //     (create + seed + drop). Strip those drops so we don't drop twice.
   operations = stripRelocatedDrops(operations, companionPlans);
+  refuseTurnOffBesideOtherChanges(operations, companionPlans);
 
   // 3b. Fields that stop being translated while their entity stays translated. The diff above gives
   //     the main table their columns; these files move the values around that migration.
@@ -987,9 +1074,11 @@ export async function generateMigration(
       latest: previous === null ? null : previous.data.permissions,
       ...permissionScopeOf(args),
     });
-  // What a run writes a file for even when no table changes.
+  // What a run writes a file for even when no table changes. A move of values is a change of its
+  // own though no table's shape changes with it: a field's values moved between two groups,
+  // whose columns both stand.
   const changesBeyondTables =
-    hasSettingsChanges || changedPermissions.length > 0;
+    hasSettingsChanges || changedPermissions.length > 0 || movesValues(args);
 
   const recorded = await recordedUnlessChanged(args, {
     // Not the per-language unique indexes: a snapshot from before the record has none of them, so
@@ -1005,6 +1094,7 @@ export async function generateMigration(
     ],
     hasSettingsChanges: changesBeyondTables,
     record: {
+      startedFrom: startOf(previous),
       written,
       contributions: stream.contributions,
       entities: settingsRecord,
@@ -1063,9 +1153,11 @@ export async function generateMigration(
     dialect: args.dialect,
     decide: candidates => renameDecisions(candidates, args),
   });
-  // A MySQL column widened into TEXT under a whole-column index cannot be altered; refused before
-  // any file is written (`refuseIndexedTextWidening`).
-  refuseIndexedTextWidening({
+  // A MySQL column widened into TEXT under a whole-column index cannot be altered while the index
+  // stands, so the index is lifted around the change and made again by prefix; a unique index, or
+  // one the snapshot cannot rule out, is refused before any file is written
+  // (`withIndexesLiftedForTextWidenings`).
+  operations = withIndexesLiftedForTextWidenings({
     operations,
     previous: previousSnapshot,
     dialect: args.dialect,
@@ -1079,6 +1171,8 @@ export async function generateMigration(
   //     copies the default language's values in. That file applies the settings after the copy.
   const heldSettings = fieldLeavesPlans.map(({ held }) => held);
   operations = withSettingsHeldBack(operations, heldSettings);
+  // A column a move fills from its group is added nullable; it is made required after the fill.
+  operations = restoredNullable(operations, args.refilledColumns);
 
   // 7. Generate UP SQL per op, a foreign-key cycle's keys split out of the
   // table operations that cannot carry them (see `withCyclicForeignKeysSplit`),
@@ -1099,22 +1193,50 @@ export async function generateMigration(
   // leads to — the desired side for the UP, the previous side for the DOWN.
   // A column whose rows the person settled (`resolutions`) is created, or
   // kept, nullable; the fill or delete runs; then it is made NOT NULL.
-  const settled = settledColumns(operations, args.resolutions ?? []);
+  const settled = settledColumns(
+    operations,
+    args.resolutions ?? [],
+    desiredSnapshot.tables
+  );
+  // 7'. A field that stops being unique on an older table that also holds its column unique under
+  //     a name Nextly did not make: that index is dropped too, by name and only where it stands, so
+  //     every database the file runs on ends with the column no longer unique. Named to the run,
+  //     since it may be one the user made. Dropped after the operations, Nextly's own drop and a
+  //     rename among them, and before any rows are filled: a fill writes one value into every row
+  //     it settles, which an index still holding the column unique refuses. Nothing goes back on the
+  //     way down: Nextly's own index makes the column unique again.
+  const leftoverDrops = await leftoverUniqueStatements({
+    operations,
+    desired: desiredSnapshot.tables,
+    dialect: args.dialect,
+    read: args.liveUniqueIndexes,
+    onWarning: args.onWarning,
+  });
+  // A column a move fills from its group is filled by the statements appended after these, so a
+  // table either list rebuilds holds it nullable until then, as its own add does.
+  const refilled = columnKeysOf(args.refilledColumns);
   const sqlStatements = [
     ...generateStatements(
       settled.operations,
       args.dialect,
       // A table rebuilt here is rebuilt to the shape this file leaves it in: the settings held back.
       tablesWithSettingsHeldBack(
-        withSettledColumnsNullable(desiredSnapshot.tables, settled.columns),
+        withColumnsNullable(
+          desiredSnapshot.tables,
+          new Set([...settled.columns, ...refilled])
+        ),
         heldSettings
       )
     ),
+    ...leftoverDrops,
     ...(args.resolutions ?? []).map(r => resolutionStatement(r, args.dialect)),
     ...generateStatements(
       settled.tighten,
       args.dialect,
-      tablesWithSettingsHeldBack(desiredSnapshot.tables, heldSettings)
+      tablesWithSettingsHeldBack(
+        withColumnsNullable(desiredSnapshot.tables, refilled),
+        heldSettings
+      )
     ),
   ];
 
@@ -1122,19 +1244,39 @@ export async function generateMigration(
   // Inverting the resolved ops — not re-diffing — keeps a forward rename as a
   // reverse rename rather than a data-losing drop+add. Object-removing ops
   // recover their original spec from previousSnapshot.
+  const refilledDown = refilledOnTheWayDown(fieldJoinsPlans, args.valueMoves);
   const inverseOps = withCyclicForeignKeysSplit(
     restoredNullable(
       buildInverseOperations(operations, previousSnapshot),
-      fieldJoinsPlans
+      refilledDown
     ),
     args.dialect,
     desiredSnapshot.tables
   );
+  // A table the DOWN rebuilds holds each column it refills nullable until its values are back, as
+  // the column's own add does; each is made required again once they are in.
   const downSqlStatements = generateStatements(
     inverseOps,
     args.dialect,
-    previousSnapshot.tables
+    withColumnsNullable(previousSnapshot.tables, columnKeysOf(refilledDown))
   );
+  // 7a'. A translated table this file drops takes its translations table with it, dropped first
+  //      so nothing references the main table when it goes; the DOWN makes it again, empty, once
+  //      the main table is back (`droppedTranslations`). The snapshot records no translations
+  //      table, so the diff above never drops one.
+  const translations = droppedTranslations({
+    operations,
+    previous: previousSnapshot,
+    previousEntities: previous?.data.entities,
+    dialect: args.dialect,
+    defaultLocale: args.defaultLocale ?? "en",
+  });
+  sqlStatements.splice(
+    0,
+    sqlStatements.length,
+    ...translationsDropsPlaced(sqlStatements, translations.up, args.dialect)
+  );
+  downSqlStatements.push(...translations.down);
   // A renamed field group's rows move once its tables are as the file leaves them, and move back
   // before the DOWN takes those tables back.
   sqlStatements.push(...groupRenames.up);
@@ -1145,6 +1287,9 @@ export async function generateMigration(
   //     is where a Builder entity's settings live, so it travels with them.
   const touched = new Set([
     ...operations.map(operationTableName),
+    // A table whose values the appended statements move, though no operation may name it: a
+    // field's values moved between two of its groups.
+    ...valuesMovedIn(args),
     // A renamed field group's parent changes with it, though no statement names that table.
     ...groupRenames.parentTables,
   ]);
@@ -1154,8 +1299,6 @@ export async function generateMigration(
     args,
     args.dialect
   );
-  sqlStatements.push(...rows.up);
-  downSqlStatements.push(...rows.down);
   const added = args.appendedStatements;
   if (added !== undefined) {
     sqlStatements.unshift(...added.up.first);
@@ -1163,6 +1306,20 @@ export async function generateMigration(
     downSqlStatements.unshift(...added.down.first);
     downSqlStatements.push(...added.down.last);
   }
+  // A column whose field moved into a group comes back nullable on the way down, its values
+  // copied back from the group last: it is made required again once they are in.
+  downSqlStatements.push(
+    ...requiredOnceRefilled(args.valueMoves, args.dialect, previousSnapshot)
+  );
+  // Each column a move out of a group added is made required once the group's values are in.
+  sqlStatements.push(
+    ...requiredOnceRefilled(args.refilledColumns, args.dialect, desiredSnapshot)
+  );
+  // The registry rows come once every value is where the new definition reads it: on MySQL,
+  // where each statement stands as it runs, a run stopped before them keeps the definition that
+  // still reads the values where they are.
+  sqlStatements.push(...rows.up);
+  downSqlStatements.push(...rows.down);
 
   // 7c. A translated relation whose shape changed keeps its values on the entity's companion,
   //     which the diff above does not reach: its guards lead the file, before any DDL, and its
@@ -1383,7 +1540,15 @@ export async function generateMigration(
         args,
         previous === null ? undefined : previous.data.entities
       ),
+      entities: coveredEntitiesOf(
+        args,
+        previous === null ? undefined : previous.data.entities,
+        previous === null
+          ? undefined
+          : new Set(previous.data.snapshot.tables.map(table => table.name))
+      ),
       translationMoves: [
+        ...(args.valueMoves ?? []),
         ...companionPlans.flatMap(({ plan: { kind, spec } }) =>
           kind === "enable"
             ? spec.columns.map(column => ({
@@ -1436,10 +1601,18 @@ export async function generateMigration(
       operations.length === 0 &&
       groupRenames.up.length === 0 &&
       (added?.up.first.length ?? 0) + (added?.up.last.length ?? 0) === 0,
+    // A disable puts its table's columns back itself, before this file.
+    tableChangesInCompanionFiles: disablePlans.length > 0,
     now,
   });
 
   const { sqlPath, snapshotPath } = await writeMigrationPair(args, {
+    startedFrom: startOf(previous),
+    companions: companionFiles.map(
+      ({ spec, opts }) =>
+        () =>
+          prepareCompanionMigrationFile(args.migrationsDir, spec, opts)
+    ),
     metaDir,
     now,
     sqlContent,
@@ -1448,12 +1621,6 @@ export async function generateMigration(
     entities: settingsRecord,
     permissions: permissionRecord,
   });
-
-  if (args.dryRun !== true) {
-    for (const { spec, opts } of companionFiles) {
-      writeCompanionMigrationFile(args.migrationsDir, spec, opts);
-    }
-  }
 
   return {
     sqlPath,
@@ -1472,6 +1639,65 @@ export async function generateMigration(
     permissionChanges: changedPermissions,
     deletions: judged.all,
   };
+}
+
+/**
+ * Stops a run that has no business planning, before it plans: one that
+ * stalled while another writer took the folder, or whose starting snapshot,
+ * read by its caller before it held the folder, is no longer the newest. A
+ * Builder save takes its hold here where it has none yet. A dry run, which
+ * writes nothing, is not asked; a run with no writer's hold is asked again,
+ * under one, as it writes (`writeMigrationPair`).
+ */
+async function refuseStaleStart(requested: GenerateArgs): Promise<void> {
+  if (requested.dryRun === true) return;
+  await holdInBuilderChange(requested.migrationsDir);
+  await assertWriterHold(requested.migrationsDir);
+  // One the generator reads itself, below, is the newest by its reading.
+  if (requested.previous === undefined) return;
+  await refuseMovedFrom(requested.migrationsDir, startOf(requested.previous));
+}
+
+/**
+ * The snapshot file a run starts from, as the checks of it read it: its name,
+ * undefined where it starts from none, and null where the caller gave a
+ * starting point without saying which file it is, which cannot be checked.
+ */
+function startOf(
+  previous: NonNullable<GenerateArgs["previous"]> | null
+): string | undefined | null {
+  return previous === null ? undefined : (previous.filename ?? null);
+}
+
+/**
+ * Where a migration's snapshot places it in the project's line, from the
+ * snapshot file its run started from (`startOf`): its parent is that
+ * migration (none for a run that started from none), and it records a merge
+ * of every other branch end in the folder as it is written (`mergedBy`).
+ * Nothing is recorded where the run cannot say what it started from.
+ */
+async function lineFrom(
+  migrationsDir: string,
+  startedFrom: string | undefined | null
+): Promise<{ parent: string | null; merges: string[] } | undefined> {
+  if (startedFrom === null) return undefined;
+  const parent = startedFrom?.replace(/\.snapshot\.json$/, "") ?? null;
+  return { parent, merges: await mergedBy(migrationsDir, parent) };
+}
+
+/**
+ * Refuses where the newest snapshot in the folder is no longer `startedFrom`,
+ * the one this run reads as its starting point: another writer has written a
+ * migration since, and this run's would be a second from the snapshot it
+ * read. Asked under the hold, when the run begins and again as it writes.
+ */
+async function refuseMovedFrom(
+  migrationsDir: string,
+  startedFrom: string | undefined | null
+): Promise<void> {
+  if (startedFrom === null) return;
+  const newest = await newestSnapshotName(resolve(migrationsDir, "meta"));
+  if (newest !== startedFrom) throw startMovedError(newest);
 }
 
 /**
@@ -1734,18 +1960,52 @@ async function recordSnapshot(
 
 /** A migration's `.sql` content and what its paired snapshot records. */
 interface MigrationPair {
+  /** The snapshot file the run started from (`startOf`), checked again as it writes. */
+  startedFrom: string | undefined | null;
+  /**
+   * Prepares each of the run's companion migration files, to be put in place
+   * with its own in one step. Absent where the run has none.
+   */
+  companions?: ReadonlyArray<() => Promise<PreparedFile>>;
   sqlContent: string;
   written: NextlySchemaSnapshot;
-  contributions: Parameters<typeof writeSnapshot>[4];
-  entities: Parameters<typeof writeSnapshot>[5];
-  permissions: Parameters<typeof writeSnapshot>[6];
+  contributions: Parameters<typeof prepareSnapshot>[4];
+  entities: Parameters<typeof prepareSnapshot>[5];
+  permissions: Parameters<typeof prepareSnapshot>[6];
   metaDir: string;
   now: Date;
 }
 
 /**
- * Writes a migration's `.sql` file, named for the run's name and time, then its paired snapshot:
- * the order every `migrate:create` writes them in. A dry run writes neither and returns the paths
+ * A migration's prepared files in the order `nextly migrate` runs them, which
+ * is the order they are put in place: the companions named before the
+ * migration file (at `sqlPath`), its snapshot and then the file itself, and
+ * the companions named after it.
+ */
+function inRunOrder(
+  files: readonly PreparedFile[],
+  sqlPath: string
+): PreparedFile[] {
+  // By the rule the run itself sorts by, on the names it sorts.
+  const nameOf = (path: string) => basename(path, ".sql");
+  const isCompanion = (file: PreparedFile) =>
+    file.path.endsWith(".sql") && file.path !== sqlPath;
+  const runsFirst = (file: PreparedFile) =>
+    compareMigrationBaseNames(nameOf(file.path), nameOf(sqlPath)) < 0;
+  const companions = files
+    .filter(isCompanion)
+    .sort((a, b) => compareMigrationBaseNames(nameOf(a.path), nameOf(b.path)));
+  return [
+    ...companions.filter(runsFirst),
+    ...files.filter(file => !file.path.endsWith(".sql")),
+    ...files.filter(file => file.path === sqlPath),
+    ...companions.filter(file => !runsFirst(file)),
+  ];
+}
+
+/**
+ * Writes a migration's snapshot, then its `.sql` file, named for the run's name and time: the
+ * order every `migrate:create` writes them in. A dry run writes neither and returns the paths
  * they would be written at.
  */
 async function writeMigrationPair(
@@ -1754,21 +2014,49 @@ async function writeMigrationPair(
 ): Promise<{ sqlPath: string; snapshotPath: string }> {
   const baseName = `${formatTimestamp(pair.now)}_${slugify(args.name)}`;
   const sqlPath = resolve(args.migrationsDir, `${baseName}.sql`);
-  if (args.dryRun === true) {
-    // Where `writeSnapshot` would put it, by the writer's own rule.
-    return { sqlPath, snapshotPath: snapshotPathOf(pair.metaDir, baseName) };
-  }
-  await mkdir(args.migrationsDir, { recursive: true });
-  await writeFile(sqlPath, pair.sqlContent, "utf-8");
-  const snapshotPath = await writeSnapshot(
-    pair.metaDir,
-    baseName,
-    pair.written,
-    pair.sqlContent,
-    pair.contributions,
-    pair.entities,
-    pair.permissions
-  );
+  // Where `writeSnapshot` puts it, by the writer's own rule.
+  const snapshotPath = snapshotPathOf(pair.metaDir, baseName);
+  if (args.dryRun === true) return { sqlPath, snapshotPath };
+  // As the folder's holder (`publishHeld`): every file written in full
+  // aside, the companions with the pair, so one that cannot be written leaves
+  // no migration without it. The last checks are made, then each is put in
+  // place in the order `nextly migrate` runs them (`inRunOrder`), the
+  // snapshot just before its file: a reader counts a migration from its
+  // `.sql` and so never finds one whose snapshot is still to come, and what
+  // is in the folder part-way is the start of the run, never a companion
+  // ahead of the table it points to.
+  const publish = () =>
+    publishHeld(
+      args.migrationsDir,
+      async () => {
+        await mkdir(args.migrationsDir, { recursive: true });
+        const files = await prepareAll([
+          () => prepareWhole(sqlPath, pair.sqlContent),
+          async () =>
+            prepareSnapshot(
+              pair.metaDir,
+              baseName,
+              pair.written,
+              pair.sqlContent,
+              pair.contributions,
+              pair.entities,
+              pair.permissions,
+              await lineFrom(args.migrationsDir, pair.startedFrom)
+            ),
+          ...(pair.companions ?? []),
+        ]);
+        return inRunOrder(files, sqlPath);
+      },
+      {
+        // Still from the newest snapshot: one written since would make this a
+        // second migration from the one it started at.
+        stillCurrent: () =>
+          refuseMovedFrom(args.migrationsDir, pair.startedFrom),
+      }
+    );
+  // Under the hold the running writer has, or one taken here for a caller
+  // with none, whose starting snapshot the last check then judges.
+  await underWriterHold(args.migrationsDir, "migrate:create", publish);
   return { sqlPath, snapshotPath };
 }
 
@@ -1947,6 +2235,12 @@ interface CompanionPlanEntry {
    * for this companion is keyed by kind as well as slug.
    */
   entity: I18nTransitionKind;
+  /**
+   * A DISABLE's unique indexes on the restored columns, which it creates itself once the values
+   * are back (`settingsAfterRestore`): the main migration's `add_index` for each is left out, as
+   * its `add_column` is (`stripRelocatedDrops`).
+   */
+  restoredIndexes?: readonly string[];
 }
 
 /**
@@ -2035,7 +2329,9 @@ function planCompanionMigrations(
   history: TranslationRecords,
   renames: ReadonlyMap<string, readonly CompanionRename[]> = new Map(),
   /** The site's languages in order, which decides the value a disable keeps (`copyLiveness`). */
-  languageOrder?: readonly string[]
+  languageOrder?: readonly string[],
+  /** The snapshot this run writes, whose main tables a disable puts its columns back as. */
+  desiredSnapshot?: NextlySchemaSnapshot
 ): CompanionPlanEntry[] {
   const entries: CompanionPlanEntry[] = [];
   for (const { entity: c, kind: entityKind } of entities) {
@@ -2065,7 +2361,8 @@ function planCompanionMigrations(
         previousSnapshot,
         dialect,
         defaultLocale,
-        languageOrder
+        languageOrder,
+        desiredSnapshot
       );
       if (disable) entries.push(disable);
       continue;
@@ -2109,12 +2406,28 @@ function planCompanionMigrations(
         ? prevTable !== undefined && !hadLocalizedColumns
         : previous.companion;
 
+    // Each companion column created from a main column takes what that column carries
+    // (`carriedDefinition`), as the previous snapshot records it.
+    const carriedSpec = prevTable
+      ? {
+          ...spec,
+          columns: spec.columns.map(col => {
+            const carried = carriedDefinition(
+              prevTable.columns.find(main => main.name === col.name),
+              col,
+              dialect
+            );
+            return carried ? { ...col, carried } : col;
+          }),
+        }
+      : spec;
     const plan = planCompanionMigration({
-      spec,
+      spec: carriedSpec,
       prevMainColumnNames,
       companionExisted,
     });
-    if (plan.kind !== "none") entries.push({ spec, plan, entity: entityKind });
+    if (plan.kind !== "none")
+      entries.push({ spec: carriedSpec, plan, entity: entityKind });
     // A companion that was there and stays: the translated fields it gains.
     const adds = companionExisted
       ? addsEntryFor(
@@ -2130,6 +2443,87 @@ function planCompanionMigrations(
     if (adds) entries.push(adds);
   }
   return entries;
+}
+
+/**
+ * The statements that give each restored column the settings the main table's snapshot records of
+ * it, run by a disable once the values are back: Required (`nullable: false`), which a column added
+ * empty could not take before the copy, and the unique indexes standing on it. The main file that
+ * follows does not add the column (its `add_column` is the disable's, `stripRelocatedDrops`), and
+ * the runner records it as applied only where the main table already is its target, so without
+ * them the table is at neither end of that file. Rendered as a field leaving translation renders
+ * them (`settingsAfterCopy`), against the main table as the disable leaves it: the previous one with
+ * the restored columns and their unique indexes, which a SQLite rebuild recreates, and nothing the
+ * main file adds after. The runner refuses Required over an entry left without a value, naming the
+ * field (`requiredColumnCheckpoint`), and the database a unique index over repeated values.
+ */
+function settingsAfterRestore(
+  prevMain: TableSpec,
+  desiredMain: TableSpec | undefined,
+  restored: readonly string[],
+  dialect: SupportedDialect
+): { up: string[]; down: string[]; indexes: string[] } | undefined {
+  // A unique index the disable can create: every column it stands on is there once the disable
+  // has run. One that also covers a column the main file adds stays the main file's.
+  const there = new Set([...prevMain.columns.map(c => c.name), ...restored]);
+  const allHeld = heldSettingsOf(prevMain.name, restored, desiredMain);
+  const held = {
+    ...allHeld,
+    uniqueIndexes: allHeld.uniqueIndexes.filter(index =>
+      index.columns.every(column => there.has(column))
+    ),
+  };
+  if (
+    desiredMain === undefined ||
+    (held.required.size === 0 && held.uniqueIndexes.length === 0)
+  ) {
+    return undefined;
+  }
+  const names = new Set(restored);
+  const kept = new Set(prevMain.columns.map(c => c.name));
+  // The previous table without its translation record, which describes the companion the disable
+  // drops, and with the restored columns as the snapshot records them.
+  const {
+    localized: _localized,
+    localizedColumns: _localizedColumns,
+    uniqueLocalizedColumns: _uniqueLocalizedColumns,
+    ...previous
+  } = prevMain;
+  const afterDisable: TableSpec = {
+    ...previous,
+    columns: [
+      ...prevMain.columns,
+      ...desiredMain.columns.filter(
+        c => names.has(c.name) && !kept.has(c.name)
+      ),
+    ],
+    indexes: [...(prevMain.indexes ?? []), ...held.uniqueIndexes],
+  };
+  return {
+    ...settingsAfterCopy(held, afterDisable, dialect, [afterDisable]),
+    indexes: held.uniqueIndexes.map(index => index.name),
+  };
+}
+
+/**
+ * `column` with the main-table column a snapshot records for it (`restoredAs`): its type as the
+ * main file renders it (`renderedType`) and its default. A disable that puts the values back on the
+ * main table then leaves the column the runner checks the next main file against, where a wider
+ * one (LONGTEXT for MySQL's `text`) left the table at neither end of it. Unchanged where the
+ * snapshot records no such column.
+ */
+function withRestoredAs(
+  column: LocalizedColumnSpec,
+  main: ColumnSpec | undefined
+): LocalizedColumnSpec {
+  if (main === undefined) return column;
+  return {
+    ...column,
+    restoredAs: {
+      type: renderedType(main),
+      ...(main.default === undefined ? {} : { default: main.default }),
+    },
+  };
 }
 
 /**
@@ -2150,7 +2544,8 @@ function disableEntryFor(
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
   defaultLocale: string,
-  languageOrder?: readonly string[]
+  languageOrder?: readonly string[],
+  desiredSnapshot?: NextlySchemaSnapshot
 ): CompanionPlanEntry | undefined {
   const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
   if (prevMain?.localized !== true) return undefined;
@@ -2190,11 +2585,26 @@ function disableEntryFor(
     defaultLocale
   );
   if (!disableSpec) return undefined;
+  // Each column goes back to the main table as this run's snapshot records it, since the main file
+  // that follows is checked against that table (`withRestoredAs`).
+  const desiredMain = desiredSnapshot?.tables.find(t => t.name === mainTable);
+  disableSpec.columns = disableSpec.columns.map(col =>
+    withRestoredAs(
+      col,
+      desiredMain?.columns.find(m => m.name === col.name)
+    )
+  );
   // Each entry keeps the value its readers saw, as the runtime disable keeps it.
   disableSpec.liveness = copyLiveness(
     languageOrder,
     // A disable turns off translation for an entity that was translated.
     companionHadStatus(previousSnapshot, mainTable, true)
+  );
+  const settings = settingsAfterRestore(
+    prevMain,
+    desiredMain,
+    disableSpec.columns.map(col => col.name),
+    dialect
   );
   const plan = planCompanionMigration({
     spec: disableSpec,
@@ -2202,10 +2612,18 @@ function disableEntryFor(
     companionExisted: false,
     localized: false,
     previouslyLocalized: true,
+    ...(settings === undefined ? {} : { afterRestore: settings }),
   });
   return plan.kind === "none"
     ? undefined
-    : { spec: disableSpec, plan, entity: entityKind };
+    : {
+        spec: disableSpec,
+        plan,
+        entity: entityKind,
+        ...(settings === undefined || settings.indexes.length === 0
+          ? {}
+          : { restoredIndexes: settings.indexes }),
+      };
 }
 
 /**
@@ -2885,7 +3303,7 @@ function planFieldsJoiningTranslation(
               ?.companion === true,
           restoreRequired: requiredAgain(
             c.tableName,
-            joining,
+            joining.map(({ column }) => column.name),
             prevMain,
             dialect,
             previousSnapshot
@@ -2904,13 +3322,13 @@ function planFieldsJoiningTranslation(
  */
 function requiredAgain(
   tableName: string,
-  joining: readonly LeavingField[],
+  columns: readonly string[],
   prevMain: TableSpec | undefined,
   dialect: SupportedDialect,
   previousSnapshot: NextlySchemaSnapshot
 ): string[] {
-  const ops: Operation[] = joining.flatMap(({ column }) => {
-    const before = prevMain?.columns.find(c => c.name === column.name);
+  const ops: Operation[] = columns.flatMap(name => {
+    const before = prevMain?.columns.find(c => c.name === name);
     if (!before || before.nullable) return [];
     return [
       dialect === "mysql"
@@ -2944,27 +3362,77 @@ function requiredAgain(
   return generateStatements(ops, dialect, previousSnapshot.tables);
 }
 
+/** The tables whose values the caller's appended statements move (`valuesMovedIn`). */
+function valuesMovedIn(
+  args: Pick<GenerateArgs, "valuesMovedIn">
+): readonly string[] {
+  return args.valuesMovedIn ?? [];
+}
+
+/** Whether the caller's appended statements move any table's values. */
+function movesValues(args: Pick<GenerateArgs, "valuesMovedIn">): boolean {
+  return valuesMovedIn(args).length > 0;
+}
+
+/** The columns the way down re-adds and then fills: each joining field's, and each moved field's. */
+function refilledOnTheWayDown(
+  joins: readonly FieldJoinsEntry[],
+  moves: GenerateArgs["valueMoves"]
+): { table: string; column: string }[] {
+  return [
+    ...joins.flatMap(({ plan }) =>
+      plan.spec.columns.map(c => ({
+        table: plan.spec.mainTable,
+        column: c.name,
+      }))
+    ),
+    ...(moves ?? []),
+  ];
+}
+
 /**
- * The main migration's DOWN with each joining field's column re-added nullable: on the way down
- * it runs before the `joins` file's DOWN copies the default language's values back, so a
- * required column added there would refuse every existing row. The `joins` DOWN makes it
- * required again once the values are in (`requiredAgain`).
+ * The main migration's DOWN with each column whose values are copied back after it is re-added
+ * made nullable: a joining field's, which the `joins` file's DOWN fills with the default
+ * language's values, and a field moved into a group, which the file's own DOWN fills from the
+ * group last. Added required, the column would refuse every existing row. Each is made required
+ * again once the values are in (`requiredAgain`).
  */
 function restoredNullable(
   inverse: Operation[],
-  joins: readonly FieldJoinsEntry[]
+  refilled: readonly { table: string; column: string }[] | undefined
 ): Operation[] {
-  const joining = new Set(
-    joins.flatMap(({ plan }) =>
-      plan.spec.columns.map(c => `${plan.spec.mainTable}::${c.name}`)
-    )
-  );
+  const keys = new Set((refilled ?? []).map(r => `${r.table}::${r.column}`));
   return inverse.map(op =>
     op.type === "add_column" &&
-    joining.has(`${op.tableName}::${op.column.name}`) &&
+    keys.has(`${op.tableName}::${op.column.name}`) &&
     !op.column.nullable
       ? { ...op, column: { ...op.column, nullable: true } }
       : op
+  );
+}
+
+/**
+ * The statements making each of `refilled` required, as `snapshot` has it, once a move's values
+ * are in (`requiredAgain`): on the way up a column a move out of a group added, against the newest
+ * snapshot; on the way down one a move into a group dropped, against the previous one.
+ */
+function requiredOnceRefilled(
+  refilled: readonly { table: string; column: string }[] | undefined,
+  dialect: SupportedDialect,
+  snapshot: NextlySchemaSnapshot
+): string[] {
+  const byTable = new Map<string, string[]>();
+  for (const { table, column } of refilled ?? []) {
+    byTable.set(table, [...(byTable.get(table) ?? []), column]);
+  }
+  return [...byTable].flatMap(([table, columns]) =>
+    requiredAgain(
+      table,
+      columns,
+      snapshot.tables.find(t => t.name === table),
+      dialect,
+      snapshot
+    )
   );
 }
 
@@ -3196,13 +3664,46 @@ function withLocalizedMarker(
 }
 
 /**
+ * Refuse, before any file is written, a run that turns an entity's translation off and changes its
+ * table otherwise too (a field added, an index changed). The disable runs before the main file and
+ * puts the table's columns back, and the runner runs the main file only over the table its snapshot
+ * starts from, recording it as applied only where the table already is its target. With another
+ * change to that table the main file would stand at neither end and be refused as drift once files
+ * were written and the disable applied. In two runs each file starts where the last left the table.
+ */
+function refuseTurnOffBesideOtherChanges(
+  operations: readonly Operation[],
+  companionPlans: readonly CompanionPlanEntry[]
+): void {
+  for (const { spec, plan } of companionPlans) {
+    if (plan.kind !== "disable") continue;
+    if (!operations.some(op => operationTableName(op) === spec.mainTable)) {
+      continue;
+    }
+    throw NextlyError.invalidInput({
+      message:
+        `"${spec.collection}" turns translation off and changes its table in other ways in the same ` +
+        `migration, which cannot be applied in one run. Turn translation off on its own and run ` +
+        `\`nextly migrate:create\`, then make the other changes and run it again.`,
+      logContext: {
+        reason: "translation-off-beside-other-changes",
+        entity: spec.collection,
+        table: spec.mainTable,
+      },
+    });
+  }
+}
+
+/**
  * Remove the main-table `drop_column` operations that a companion ENABLE migration already
  * performs (create + seed + drop). Without this, the localized columns would be dropped twice
  * — once by the main migration's diff, once by the companion — and the second drop fails.
  *
  * The DISABLE transition is the mirror image: its SQL re-adds the columns to the main table
  * itself, so the diff's `add_column` ops for those same columns are stripped too (otherwise
- * the column is added twice and the second ALTER fails).
+ * the column is added twice and the second ALTER fails), and so are the `add_index` ops of the
+ * unique indexes on them, which it creates once the values are back (`restoredIndexes`). The main
+ * file's snapshot still records them: the table the disable leaves is that file's target.
  */
 function stripRelocatedDrops(
   operations: Operation[],
@@ -3210,7 +3711,8 @@ function stripRelocatedDrops(
 ): Operation[] {
   const relocated = new Set<string>();
   const restored = new Set<string>();
-  for (const { spec, plan } of companionPlans) {
+  const restoredIndexes = new Set<string>();
+  for (const { spec, plan, restoredIndexes: indexes } of companionPlans) {
     // create-only has no main-table drops
     if (plan.kind === "enable") {
       for (const col of spec.columns) {
@@ -3220,6 +3722,10 @@ function stripRelocatedDrops(
       // The disable SQL re-adds these columns itself (step 1 of buildLocalizationDownSql).
       for (const col of spec.columns) {
         restored.add(`${spec.mainTable}::${col.name}`);
+      }
+      // So are the unique indexes on them, once the values are back (`settingsAfterRestore`).
+      for (const name of indexes ?? []) {
+        restoredIndexes.add(`${spec.mainTable}::${name}`);
       }
     }
   }
@@ -3234,6 +3740,12 @@ function stripRelocatedDrops(
     if (
       op.type === "add_column" &&
       restored.has(`${op.tableName}::${op.column.name}`)
+    ) {
+      return false;
+    }
+    if (
+      op.type === "add_index" &&
+      restoredIndexes.has(`${op.tableName}::${op.index.name}`)
     ) {
       return false;
     }
@@ -3265,6 +3777,19 @@ export function buildDesiredSnapshotFromConfig(
 ): NextlySchemaSnapshot {
   const tables: TableSpec[] = [];
   const kept = columnsByTable(existing ?? { tables: [] }, dialect);
+  // Each field group's discriminator, read off the table as the last migration recorded it: the
+  // storage migration renames a group's column whatever its table is called, so the name alone
+  // cannot say which one an existing table has (`chooseTypeColumns`).
+  const recordedTypeColumns = chooseTypeColumns(
+    (existing?.tables ?? []).map(table => ({
+      table: table.name,
+      columns: table.columns.map(column => column.name),
+    })),
+    components.map(component => component.tableName),
+    dialect === "mysql"
+      ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+      : identifierCaseRules({ dialect })
+  );
   for (const entity of collections) {
     const c = withKeptScopeFields("collection", entity, kept);
     // Why: forward the entity's Draft/Published flag so the snapshot
@@ -3318,6 +3843,9 @@ export function buildDesiredSnapshotFromConfig(
         buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
           builtBy: columnOriginOf(c, "fieldGroup"),
           localized: storesPerLanguage(c),
+          // The discriminator the table carries as the last migration left it, and for a table
+          // no migration has made yet, the one it is created with under its name.
+          typeColumn: recordedTypeColumns.get(c.tableName),
         }),
         c,
         "fieldGroup",
@@ -3665,6 +4193,109 @@ function removedEntitiesOf(
       slug,
       table: resolveComponentTableName(slug),
     })),
+  ];
+}
+
+/**
+ * Where an entity comes from, as its registry row will say: the provenance its declaration
+ * records (`plugin:<name>` for a plugin's), else the source its record was written under.
+ */
+function provenanceOf(entry: RecordedEntitySettings): string {
+  const declared = entry.settings.source;
+  return typeof declared === "string" ? declared : entry.source;
+}
+
+/**
+ * The collections and Singles a migration is planned against, each with every table it owns
+ * (`coveredEntity`): those the config declares, by the table it gives them, and those the latest
+ * snapshot records, by the table their recorded declaration names (its `dbName`, else its slug).
+ * A declared entity's fields are the config's and the snapshot's together, so a junction whose
+ * field the config just removed is still known as the entity's; and one whose recorded table
+ * differs from its declared one is also known by the recorded table, which the migration drops,
+ * with the recorded fields, which then belong to that table alone. A plugin's entity, or Nextly's
+ * own, is kept `excluded`, so its main table is still no other entity's.
+ */
+export function coveredEntitiesOf(
+  args: GenerateArgs,
+  recorded: EntitySettingsRecord | undefined,
+  recordedTables?: ReadonlySet<string>
+): CoveredEntity[] {
+  const of = (
+    kind: CoveredEntity["kind"],
+    declared: readonly MinimalConfigEntity[],
+    record: Record<string, RecordedEntitySettings> | undefined,
+    tableOf: (slug: string, dbName: string | undefined) => string
+  ): CoveredEntity[] => {
+    const fieldsOf = (entry: RecordedEntitySettings | undefined): unknown[] =>
+      Array.isArray(entry?.settings.fields) ? entry.settings.fields : [];
+    const recordedTable = (slug: string, entry: RecordedEntitySettings) => {
+      const dbName = entry.settings.dbName;
+      return tableOf(slug, typeof dbName === "string" ? dbName : undefined);
+    };
+    const entities = declared.map(entity => {
+      // The recorded fields join the declared ones only under the same table: under a new one,
+      // the recorded declaration is the old table's, kept below as the entity that owns what the
+      // old table's fields name, as the registry row `nextly migrate` reads still does.
+      const entry = record?.[entity.slug];
+      const sameTable =
+        entry !== undefined &&
+        recordedTable(entity.slug, entry).toLowerCase() ===
+          entity.tableName.toLowerCase();
+      return coveredEntity({
+        kind,
+        slug: entity.slug,
+        tableName: entity.tableName,
+        fields: [...entity.fields, ...(sameTable ? fieldsOf(entry) : [])],
+        ...(entity.settings === undefined
+          ? {}
+          : { source: provenanceOf(entity.settings) }),
+      });
+    });
+    for (const [slug, entry] of Object.entries(record ?? {})) {
+      const table = recordedTable(slug, entry);
+      const current = declared.find(entity => entity.slug === slug);
+      if (current?.tableName.toLowerCase() === table.toLowerCase()) continue;
+      entities.push(
+        coveredEntity({
+          kind,
+          slug,
+          tableName: table,
+          fields: fieldsOf(entry),
+          source: provenanceOf(entry),
+        })
+      );
+    }
+    return entities;
+  };
+  return [
+    ...of(
+      "collection",
+      args.collections,
+      recorded?.collections,
+      (slug, dbName) => resolveCollectionTableName(slug, dbName)
+    ),
+    ...of("single", args.singles, recorded?.singles, (slug, dbName) =>
+      resolveSingleTableName({ slug, dbName })
+    ),
+    // A field group's table is the one its record names (an earlier release let it choose one),
+    // else the one its slug gives, under the naming the last snapshot records it by: after the
+    // field-group storage migration, `fg_` in place of `comp_`.
+    ...of(
+      "fieldGroup",
+      args.components,
+      recorded?.fieldGroups,
+      (slug, dbName) => {
+        // A table an earlier release let the field group name keeps that name through the
+        // storage migration.
+        if (dbName !== undefined) return dbName;
+        const legacy = resolveComponentTableName(slug);
+        const current = underNaming("current", legacy);
+        return recordedTables?.has(legacy) !== true &&
+          recordedTables?.has(current) === true
+          ? current
+          : legacy;
+      }
+    ),
   ];
 }
 

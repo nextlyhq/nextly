@@ -21,8 +21,15 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { RevalidationIntent } from "../../revalidation/types";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import type { SupportedDialect } from "../../types/database";
-import { deletePinsOfTarget } from "../dashboard/dashboard-pins";
-import type { DashboardLogger, TableProbe } from "../dashboard/table-presence";
+import {
+  dashboardPinsPresent,
+  deletePinsOfTarget,
+} from "../dashboard/dashboard-pins";
+import {
+  type DashboardLogger,
+  type TableProbe,
+  transactionTableProbe,
+} from "../dashboard/table-presence";
 import { clearRegistryRowCache } from "../dynamic-collections/services/collection-row-cache";
 import { deletedEntityIntent } from "../flush-content-change";
 import { countRegistryWriteOn } from "../schema/schema-version";
@@ -62,6 +69,24 @@ export async function mediaUsageTablePresent(
     "../media/usage/media-usage-store"
   );
   return mediaUsagePresent(db, logger, via);
+}
+
+/**
+ * The tables a registry row's removal inside `tx` reaches ({@link DashboardTables}), asked on
+ * `tx`'s own connection: a statement against a missing one would abort the transaction on
+ * PostgreSQL, and the pool may have no second connection. For a delete that removes an entity's
+ * row inside its own transaction (`deleteEntityRegistryRow` on that `tx`).
+ */
+export async function entityTablesOn(
+  adapter: TableProbe & Parameters<typeof transactionTableProbe>[0],
+  logger: DashboardLogger | undefined,
+  tx: TransactionContext
+): Promise<DashboardTables> {
+  const probe = transactionTableProbe(adapter, tx);
+  return {
+    dashboardPinsPresent: await dashboardPinsPresent(adapter, logger, probe),
+    mediaUsagePresent: await mediaUsageTablePresent(adapter, logger, probe),
+  };
 }
 
 /**

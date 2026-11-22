@@ -102,7 +102,7 @@ const STORED_FAILURE = z.object({
 });
 
 /** A stored failure as the row keeps it, or undefined for none or garbage. */
-function storedFailureOf(text: unknown): EmailFailure | undefined {
+export function storedFailureOf(text: unknown): EmailFailure | undefined {
   if (typeof text !== "string") return undefined;
   try {
     const parsed = STORED_FAILURE.safeParse(JSON.parse(text));
@@ -122,8 +122,21 @@ interface QueueRow {
   settledAt: number | string | null;
 }
 
+/** Whether a stored failure says the email's template caused it. */
+export function templateCausedOf(text: unknown): boolean {
+  if (typeof text !== "string") return false;
+  try {
+    const value = JSON.parse(text) as { template?: unknown } | null;
+    return value?.template === true;
+  } catch {
+    return false;
+  }
+}
+
 /** How a row's state reads to its caller. */
-function standingOf(row: QueueRow): QueuedEmailStanding {
+export function standingOf(
+  row: Pick<QueueRow, "state" | "failure">
+): QueuedEmailStanding {
   if (row.state === "waiting" && row.failure !== null) return "retrying";
   return row.state as QueuedEmailStanding;
 }

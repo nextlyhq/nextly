@@ -109,6 +109,7 @@ import type { AdminPlacement } from "./admin-placement";
 import type {
   PluginContributions,
   PluginStoredValue,
+  PluginStoredValuesTarget,
   PluginStoredValueTarget,
 } from "./contributions";
 import { getCoreVersion } from "./core-version";
@@ -162,6 +163,10 @@ import {
   pluginVersionWrites,
   type PluginVersionWrites,
 } from "./plugin-versions";
+import {
+  pluginWorkflowsService,
+  type PluginWorkflowsService,
+} from "./plugin-workflows";
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
 import type { PluginReceivedWebhooks } from "./security/inbound-webhooks";
@@ -505,6 +510,18 @@ export interface InTransactionContext<T = Record<string, unknown>>
     target: PluginStoredValueTarget
   ): Promise<PluginStoredValue>;
   /**
+   * Read one stored field of several entries of one collection, on the
+   * write's transaction, by the rules of {@link readStored}: what it answers
+   * for each id, keyed by id, in one query for the rows and one for their
+   * working drafts. An id that names no stored entry is absent from the map.
+   *
+   * @experimental
+   */
+  readStoredOf(
+    fieldType: string,
+    target: PluginStoredValuesTarget
+  ): Promise<ReadonlyMap<string, PluginStoredValue>>;
+  /**
    * The paths of the written document's fields of a type this plugin
    * contributes, as its schema stands in this transaction: at the top level
    * and through named groups, as `readStored` names them (`hero.body`). A
@@ -721,14 +738,14 @@ export type QueuedEmailChangeHandler = (
   change: QueuedEmailChange,
   context: { db: PluginTransaction; transaction: PluginCollectionTransaction }
 ) => void | Promise<void>;
-/** @experimental `ctx.services.versions`. */
+/** `ctx.services.versions`. */
 export type PluginVersionsService = Pick<
   VersionsService,
   (typeof PLUGIN_VERSIONS_READS)[number]
 > &
   PluginVersionWrites & {
     /**
-     * @experimental A subject's content events (a document's or a release's),
+     * A subject's content events (a document's or a release's),
      * filtered by kind and part, newest first, as `{ items, meta }`; the next
      * page passes the last item's id as `before`. Runs as the system unless
      * `opts` names a user (`as: "user"`), who is then judged as REST judges them.
@@ -883,11 +900,18 @@ export interface PluginContext {
     /** Email service for sending emails via templates and providers */
     email: PluginEmailService;
     /**
-     * @experimental Read-only content version history (list/get), and a
+     * Read-only content version history (list/get), and a
      * subject's content events (`listEvents`). Restore and diff arrive in
      * later stages.
      */
     versions: PluginVersionsService;
+    /**
+     * @experimental Review state for the person or API key the plugin acts
+     * for: a document's review state, what waits for them and a workflow's
+     * definition, and a submit for review, judged as the REST routes judge
+     * that caller. Never as the plugin itself, and no step but a submit.
+     */
+    workflows: PluginWorkflowsService;
     /**
      * @experimental Read-only registry access to the app's Singles: which are
      * declared, and what fields they have.
@@ -2609,6 +2633,7 @@ export function createPluginContext(
               transaction,
               transactionKey,
               readStored: read.readStored,
+              readStoredOf: read.readStoredOf,
               fieldPaths: read.fieldPaths,
             });
           } catch (error) {
@@ -2705,6 +2730,11 @@ export function createPluginContext(
         target: PluginStoredValueTarget
       ): Promise<PluginStoredValue> =>
         tracked(open(fieldType).then(reads => reads.read(fieldType, target))),
+      readStoredOf: (
+        fieldType: string,
+        target: PluginStoredValuesTarget
+      ): Promise<ReadonlyMap<string, PluginStoredValue>> =>
+        tracked(open(fieldType).then(reads => reads.readOf(fieldType, target))),
       fieldPaths: (fieldType: string): Promise<readonly string[]> =>
         tracked(
           open(fieldType).then(reads =>
@@ -3189,6 +3219,11 @@ export function createPluginContext(
           ...pluginVersionWrites(() => versions, pluginName),
           listEvents: readEventsForPlugin,
         });
+      },
+      // Built per access like `users` above; it holds nothing of its own and
+      // loads the workflow operations only when a method is first called.
+      get workflows() {
+        return pluginWorkflowsService();
       },
       // Lazy for the same reason as `versions` directly above: this module is
       // exported, so a context built by a caller that never asks about Singles

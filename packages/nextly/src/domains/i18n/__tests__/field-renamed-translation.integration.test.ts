@@ -20,7 +20,9 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../../services";
+import { applyCollectionSchemaChange } from "../../schema/services/collection-schema-apply";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { archiveFieldsLeavingTranslation } from "../migration/archive-preflight";
 import { restoreI18nArchive } from "../migration/restore-archive";
@@ -36,6 +38,25 @@ const RENAMED = [
   { name: "title2", type: "text" },
   { name: "views", type: "number" },
 ];
+
+/**
+ * A Single's schema save says whether `heading` leaving and a field arriving in its place is a
+ * rename, as that road requires. The seeds hold `heading` and `views`: where the fields sent
+ * drop `heading` and add exactly one field, a text field as `heading` is, that pair is answered as
+ * a rename. A field of another type is no rename the change could make, so nothing answers it.
+ */
+function renamesFor(fields: unknown[]): { renames: unknown[] } {
+  const sent = fields as { name?: string; type?: string }[];
+  const added = sent.filter(f => f.name !== "heading" && f.name !== "views");
+  return {
+    renames:
+      !sent.some(f => f.name === "heading") &&
+      added.length === 1 &&
+      added[0]!.type === "text"
+        ? [{ from: "heading", to: added[0]!.name, choice: "rename" }]
+        : [],
+  };
+}
 
 interface Entries {
   createEntry(
@@ -105,6 +126,55 @@ describeEachDialect("a translated field that is renamed", dialect => {
       }
     ).executeQuery<T>(sql);
   }
+
+  /**
+   * Whether the save `path` names runs the migration file it writes, planned from the migration
+   * history: every schema dialog's, and a Single's settings save; a collection's settings save
+   * ("the builder saves the collection", "the collection's settings") is still applied by its push.
+   */
+  const runsItsFile = (path: string) =>
+    !path.startsWith("the builder saves the collection") &&
+    !path.startsWith("the collection's settings");
+
+  /**
+   * A refused save's drift, told with the way on that works for a save, and no command: the save
+   * withdrew its files, so none is left for `nextly migrate:resolve` to record.
+   */
+  function expectBuilderDriftWayOn(refusal: unknown): void {
+    // Read as text: a path that answers rather than throws hands its answer on in an Error.
+    const told = `${refusal instanceof Error ? refusal.message : String(refusal)} ${String(
+      (refusal as { publicMessage?: unknown } | undefined)?.publicMessage
+    )}`;
+    expect(told).toContain("schema drift detected");
+    expect(told).toContain("put the table back as the history records it");
+    expect(told).not.toContain("migrate:resolve");
+    expect(told).not.toContain("migrate:create");
+  }
+
+  /**
+   * A save over a rename an earlier apply left half-done: the translations table is not what the
+   * history records, so the save is refused as drift, with the way on, before anything changes,
+   * with every language where that apply left it. A file's reconcile and a push's check before it
+   * refuse alike.
+   */
+  async function expectRefusedAsDrift(
+    refusal: unknown,
+    table: string,
+    id: string
+  ): Promise<void> {
+    expectBuilderDriftWayOn(refusal);
+    expect(await companionValues(table, "title2", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+  }
+
+  /** Whatever `change` threw, or undefined when it resolved. */
+  const refusalOf = (change: () => Promise<unknown>) =>
+    change().then(
+      () => undefined,
+      (error: unknown) => error
+    );
 
   /** A table's column names, read from the database rather than the registry. */
   async function columnsOf(table: string): Promise<string[]> {
@@ -278,7 +348,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
         await dispatchSingles(
           "updateSingleSchema",
           { slug: "hero" },
-          { fields: RENAMED }
+          { fields: RENAMED, ...renamesFor(RENAMED) }
         );
       },
     },
@@ -339,22 +409,27 @@ describeEachDialect("a translated field that is renamed", dialect => {
 
   // An apply that renamed the companion column and then stopped (MySQL commits each schema
   // statement; the registry write comes last everywhere) leaves the column renamed while the
-  // registry still records the old field. Retried, the save has to finish rather than rename again.
+  // registry still records the old field. Retried, the save is refused as drift on every path, with
+  // every language where it is: a push is judged before it runs as a file is. The way on, followed
+  // (the column renamed back by hand), lets the same save finish.
   it.each(PATHS)(
-    "finishes a rename an earlier apply already made on the companion when $path",
+    "refuses as drift, with the way on, a rename an earlier apply already made on the companion, and finishes once it is put back, when $path",
     async ({ table, seed, change }) => {
       const id = await seed();
       await query(
         `ALTER TABLE ${quote(dialect, `${table}_locales`)} RENAME COLUMN ${quote(dialect, "heading")} TO ${quote(dialect, "title2")}`
       );
 
-      await change();
+      await expectRefusedAsDrift(await refusalOf(change), table, id);
 
+      await query(
+        `ALTER TABLE ${quote(dialect, `${table}_locales`)} RENAME COLUMN ${quote(dialect, "title2")} TO ${quote(dialect, "heading")}`
+      );
+      await change();
       expect(await companionValues(table, "title2", id)).toEqual({
         en: "Hello",
         es: "Hola",
       });
-      expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
     }
   );
 
@@ -387,14 +462,22 @@ describeEachDialect("a translated field that is renamed", dialect => {
         { name: "title2", type: "text" },
         { name: "count2", type: "number" },
       ],
+      // `views` leaving beside `count2`, both shared numbers, is a pair the shared table would
+      // rename: a road that takes answers refuses it as unanswered before any field is moved.
+      sharedPair: true,
     },
-    { shape: "a translated field renamed beside a new one", fields: TWO_ADDED },
+    {
+      shape: "a translated field renamed beside a new one",
+      fields: TWO_ADDED,
+      sharedPair: false,
+    },
     {
       shape: "a translated field renamed to another type",
       fields: [
         { name: "title2", type: "number" },
         { name: "views", type: "number" },
       ],
+      sharedPair: false,
     },
   ];
 
@@ -402,6 +485,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
   const UNANSWERED_SAVES = [
     {
       path: "the builder saves the collection",
+      takesAnswers: false,
       table: "dc_posts",
       seed: seedCollection,
       save: async (fields: unknown[]) => {
@@ -414,6 +498,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "the collection's schema dialog applies it",
+      takesAnswers: false,
       table: "dc_posts",
       seed: seedCollection,
       save: async (fields: unknown[]) =>
@@ -435,13 +520,19 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "a Single's schema is saved",
+      takesAnswers: true,
       table: "single_hero",
       seed: seedSingle,
       save: async (fields: unknown[]) =>
-        dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields }),
+        dispatchSingles(
+          "updateSingleSchema",
+          { slug: "hero" },
+          { fields, ...renamesFor(fields) }
+        ),
     },
     {
       path: "a Single's schema dialog applies it",
+      takesAnswers: false,
       table: "single_hero",
       seed: seedSingle,
       save: async (fields: unknown[]) =>
@@ -459,6 +550,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "a field group's schema dialog applies it",
+      takesAnswers: false,
       table: "comp_banner",
       seed: seedFieldGroup,
       save: async (fields: unknown[]) =>
@@ -485,7 +577,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     )
   )(
     "refuses $shape in one change when $path, keeping every language",
-    async ({ table, seed, save, fields }) => {
+    async ({ table, seed, save, fields, sharedPair, takesAnswers }) => {
       const id = await seed();
 
       const refusal = await save(fields).then(
@@ -493,10 +585,15 @@ describeEachDialect("a translated field that is renamed", dialect => {
         (error: unknown) => error
       );
 
-      expect(reported(refusal)).toMatch(
-        /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/
-      );
-      expect(reported(refusal)).toMatch(/heading/);
+      if (sharedPair && takesAnswers) {
+        expect(reported(refusal)).toMatch(/FIELD_RENAME_UNANSWERED/);
+        expect(reported(refusal)).toMatch(/views[\s\S]*count2/);
+      } else {
+        expect(reported(refusal)).toMatch(
+          /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/
+        );
+        expect(reported(refusal)).toMatch(/heading/);
+      }
       expect(await companionValues(table, "heading", id)).toEqual({
         en: "Hello",
         es: "Hola",
@@ -605,7 +702,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
       save: async (fields: unknown[]) => {
         const saved = await handler().updateCollection(
           { collectionName: "posts" },
-          { localized: true, fields }
+          { localized: true, fields, ...renamesFor(fields) }
         );
         if (!saved.success) throw new Error(JSON.stringify(saved));
       },
@@ -618,7 +715,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
         dispatchSingles(
           "updateSingleSchema",
           { slug: "hero" },
-          { localized: true, fields }
+          { localized: true, fields, ...renamesFor(fields) }
         ),
     },
   ];
@@ -715,8 +812,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
     { name: "views", type: "number" },
   ];
 
-  // Before translation is on, `heading` is a main-table column, so a schema dialog's push asks
-  // about its drop like any other: refused with no answer, and applied once the admin confirms it.
+  // Before translation is on, `heading` is a main-table column, so its drop is asked about like any
+  // other, by field: refused with no answer, and applied once the admin confirms it (below). A
+  // dialog whose save runs its file asks it as the push does, before anything is written.
   it.each(ENABLING_DIALOGS)(
     "refuses an unconfirmed drop in the save that turns translation on, when $path applies",
     async ({ table, seed, apply }) => {
@@ -1046,6 +1144,132 @@ describeEachDialect("a translated field that is renamed", dialect => {
     });
   });
 
+  /** `heading` renamed to `title2` and made a select whose only option is "a". */
+  const RETYPED = [
+    { name: "title2", type: "select", options: [{ label: "A", value: "a" }] },
+    { name: "views", type: "number" },
+  ];
+
+  it("refuses the schema dialog's rename of a translated field into a type its values do not fit, and changes nothing", async () => {
+    // Text and a select keep the same column, so the companion's rename would carry "Hello" and
+    // "Hola" into a select whose only option is "a". The request names that rename, which the
+    // dialog never offers.
+    const id = await seedCollection();
+
+    const refused = await dispatchCollections(
+      {} as ServiceContainer,
+      "applySchemaChanges",
+      { collectionName: "posts" },
+      {
+        fields: RETYPED,
+        confirmed: true,
+        localized: true,
+        renameResolutions: renamedOnCompanion("dc_posts"),
+        schemaVersion: await schemaVersionOf("dynamic_collections", "posts"),
+      }
+    ).then(
+      result => result,
+      (error: unknown) => error
+    );
+
+    // A rename is offered only between fields of one type and storage, so the dialog never offers
+    // this pair, and an answer naming it counts for nothing. Where text and a select share a column
+    // type (SQLite, PostgreSQL), the dialog's save runs its own file, judges the change with no
+    // rename and refuses the translated field's removal beside the added one. On MySQL the select's
+    // column is another type, so the push applies the change (`pushCarriesValues`), which judges
+    // the type change first. Either way it is refused before anything is written, and every
+    // language is kept.
+    expect(JSON.stringify(refused)).toMatch(
+      dialect === "mysql"
+        ? /TYPE_CHANGE_LOSES_VALUES/
+        : /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/
+    );
+    expect(await companionValues("dc_posts", "heading", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+  }, 120_000);
+
+  it("refuses the same change on the collection apply that runs without the save writer", async () => {
+    // The apply is a road of its own (the development push with no writer configured). A rename is
+    // only offered between fields of one type and one storage, so this pair is not one: the
+    // translated field's removal beside the added one is refused, or, were it paired, its type
+    // change, and every language is kept.
+    const id = await seedCollection();
+    const [row] = await query<{ fields: unknown }>(
+      `SELECT ${quote(dialect, "fields")} AS fields FROM ${quote(dialect, "dynamic_collections")} WHERE ${quote(dialect, "slug")} = 'posts'`
+    );
+    const recorded = (
+      typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+    ) as FieldDefinition[];
+
+    const refused = await applyCollectionSchemaChange({
+      slug: "posts",
+      collection: { tableName: "dc_posts", fields: recorded },
+      fields: RETYPED as unknown as FieldDefinition[],
+      wasLocalized: true,
+      isLocalized: true,
+      status: false,
+      wasStatus: false,
+      renameResolutions: renamedOnCompanion("dc_posts"),
+      eventResolutions: [],
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(JSON.stringify(refused)).toMatch(
+      /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED|TYPE_CHANGE_LOSES_VALUES/
+    );
+    expect(await companionValues("dc_posts", "heading", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+  }, 120_000);
+
+  it("refuses the builder's save of the same change, and changes nothing", async () => {
+    // The builder's save pairs no rename across two types: it refuses the translated field's
+    // removal beside the added one, or the type change, and keeps every language.
+    const id = await seedCollection();
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: RETYPED }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(false);
+    expect(JSON.stringify(saved)).toMatch(
+      /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED|TYPE_CHANGE_LOSES_VALUES/
+    );
+    expect(await companionValues("dc_posts", "heading", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+  }, 120_000);
+
+  it("keeps where each language's value came from under the renamed field", async () => {
+    // Each language's record of where its value came from is kept by field name. Renamed, the
+    // field keeps its records under the new name: left under the old one, every value would read
+    // as of unknown origin, and a translation could no longer be found out of date.
+    const id = await seedShortHeading();
+    const pathsOf = async () =>
+      (
+        await query<{ locale: string; field_path: string }>(
+          `SELECT ${quote(dialect, "locale")} AS locale, ${quote(dialect, "field_path")} AS field_path FROM ${quote(dialect, "nextly_translation_provenance")} WHERE ${quote(dialect, "scope_slug")} = 'posts' AND ${quote(dialect, "entry_id")} = '${id}'`
+        )
+      )
+        .map(row => `${row.locale}:${row.field_path}`)
+        .sort();
+    expect(await pathsOf()).toEqual(["en:heading", "es:heading"]);
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [shortText("title2", 64)] }
+    );
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await pathsOf()).toEqual(["en:title2", "es:title2"]);
+  });
+
   it("keeps every language through the rename and then the storage change, saved one after the other", async () => {
     const id = await seedShortHeading();
 
@@ -1210,7 +1434,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
         await dispatchSingles(
           "updateSingleSchema",
           { slug: "hero" },
-          { fields }
+          { fields, ...renamesFor(fields) }
         );
       },
     },
@@ -1378,7 +1602,11 @@ describeEachDialect("a translated field that is renamed", dialect => {
       change: async () => {
         const saved = await handler().updateCollection(
           { collectionName: "posts" },
-          { localized: false, fields: renamedShared() }
+          {
+            localized: false,
+            fields: renamedShared(),
+            ...renamesFor(renamedShared()),
+          }
         );
         if (!saved.success) throw new Error(JSON.stringify(saved));
       },
@@ -1413,7 +1641,11 @@ describeEachDialect("a translated field that is renamed", dialect => {
         await dispatchSingles(
           "updateSingleSchema",
           { slug: "hero" },
-          { localized: false, fields: renamedShared() }
+          {
+            localized: false,
+            fields: renamedShared(),
+            ...renamesFor(renamedShared()),
+          }
         );
       },
     },
@@ -1515,21 +1747,21 @@ describeEachDialect("a translated field that is renamed", dialect => {
       },
     },
   ])(
-    "finishes a rename to shared an earlier apply already made on the companion when $path",
+    "refuses as drift, with the way on, a rename to shared an earlier apply already made on the companion, and finishes once it is put back, when $path",
     async ({ table, seed, change }) => {
       const id = await seed();
       await query(
         `ALTER TABLE ${quote(dialect, `${table}_locales`)} RENAME COLUMN ${quote(dialect, "heading")} TO ${quote(dialect, "title2")}`
       );
 
-      await change();
+      await expectRefusedAsDrift(await refusalOf(change), table, id);
 
-      expect(await mainValue(table, "title2", id)).toBe("Hello");
-      const [archived] = await query<{ value: unknown }>(
-        `SELECT ${quote(dialect, "value")} AS value FROM ${quote(dialect, "nextly_i18n_archive")} ` +
-          `WHERE ${quote(dialect, "field")} = 'title2' AND ${quote(dialect, "locale")} = 'es'`
+      // The way on, followed: the column renamed back by hand, and the same save made again.
+      await query(
+        `ALTER TABLE ${quote(dialect, `${table}_locales`)} RENAME COLUMN ${quote(dialect, "title2")} TO ${quote(dialect, "heading")}`
       );
-      expect(String(archived?.value)).toContain("Hola");
+      await change();
+      expect(await mainValue(table, "title2", id)).toBe("Hello");
     }
   );
 
@@ -1582,7 +1814,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
       },
     },
   ])(
-    "finishes a rename to shared an earlier apply completed before the registry recorded it, when $path",
+    "refuses as drift, with the way on, a rename to shared an earlier apply completed before the registry recorded it, and finishes once it is put back, when $path",
     async ({ table, seed, change }) => {
       const id = await seed();
       // The state the earlier apply left: the value on main, the companion column gone.
@@ -1596,12 +1828,27 @@ describeEachDialect("a translated field that is renamed", dialect => {
         `ALTER TABLE ${quote(dialect, `${table}_locales`)} DROP COLUMN ${quote(dialect, "heading")}`
       );
 
-      await change();
-
+      // The history still records `heading` on the translations table: drift, refused on every
+      // path before anything changes, the file's reconcile and the push's check before it alike,
+      // each with the way on.
+      expectBuilderDriftWayOn(await refusalOf(change));
       expect(await mainValue(table, "title2", id)).toBe("Hello");
-      const companion = await columnsOf(`${table}_locales`);
-      expect(companion).not.toContain("title2");
-      expect(companion).not.toContain("heading");
+      expect(await columnsOf(`${table}_locales`)).not.toContain("title2");
+
+      // The way on, followed: the translations column added back holding the value, the main
+      // column dropped, and the same save made again moves it to the shared field.
+      await query(
+        `ALTER TABLE ${quote(dialect, `${table}_locales`)} ADD COLUMN ${quote(dialect, "heading")} TEXT`
+      );
+      await query(
+        `UPDATE ${quote(dialect, `${table}_locales`)} SET ${quote(dialect, "heading")} = 'Hello' ` +
+          `WHERE ${quote(dialect, "_parent")} = '${id}' AND ${quote(dialect, "_locale")} = 'en'`
+      );
+      await query(
+        `ALTER TABLE ${quote(dialect, table)} DROP COLUMN ${quote(dialect, "title2")}`
+      );
+      await change();
+      expect(await mainValue(table, "title2", id)).toBe("Hello");
     }
   );
 
@@ -1731,7 +1978,11 @@ describeEachDialect("a translated field that is renamed", dialect => {
       seed: seedSingle,
       answers: ["none"],
       save: async fields =>
-        dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields }),
+        dispatchSingles(
+          "updateSingleSchema",
+          { slug: "hero" },
+          { fields, ...renamesFor(fields) }
+        ),
     },
     {
       path: "a Single's schema dialog",
@@ -1838,6 +2089,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
   it.each(MATRIX)(
     "keeps every language or refuses, when $path is saved, $storage, answer $answer, $state, $target",
     async ({
+      path,
       table,
       seed,
       save,
@@ -1861,6 +2113,18 @@ describeEachDialect("a translated field that is renamed", dialect => {
         (error: unknown) => error
       );
 
+      // A save over a rename an earlier apply left half-done: refused as drift. A file's own
+      // refusals of an unanswered or storage-changing rename come first; a push is judged before it
+      // runs, ahead of everything but a storage change.
+      if (
+        state === "part-applied" &&
+        (runsItsFile(path)
+          ? !mustRefuse(answer, storage)
+          : storage === "same storage")
+      ) {
+        await expectRefusedAsDrift(refusal, table, id);
+        return;
+      }
       if (mustRefuse(answer, storage)) {
         expect(refusal, "the change is refused").toBeDefined();
       }
@@ -1977,7 +2241,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     const refusal = await dispatchSingles(
       "updateSingleSchema",
       { slug: "hero" },
-      { fields: RENAMED }
+      { fields: RENAMED, ...renamesFor(RENAMED) }
     ).then(
       () => undefined,
       (error: unknown) => error
@@ -1999,7 +2263,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     await dispatchSingles(
       "updateSingleSchema",
       { slug: "hero" },
-      { fields: RENAMED }
+      { fields: RENAMED, ...renamesFor(RENAMED) }
     );
 
     expect(await companionValues("single_hero", "title2", id)).toEqual({

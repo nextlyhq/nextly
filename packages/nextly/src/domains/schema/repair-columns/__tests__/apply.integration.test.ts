@@ -23,7 +23,15 @@ import { applyRepairs } from "../apply";
 import { dryRunReport } from "../run-report";
 import type { RepairEntity } from "../types";
 
-import { asJson, collection, f, recordOf, tableTools } from "./apply-fixture";
+import {
+  asJson,
+  collection,
+  f,
+  recordOf,
+  tableTools,
+  AUTHOR,
+  legacyFields,
+} from "./apply-fixture";
 
 const TABLE = "dc_ra_posts";
 
@@ -31,12 +39,6 @@ const LINKS = f({
   name: "links",
   type: "repeater",
   fields: [{ name: "url", type: "text" }],
-});
-const AUTHOR = f({
-  name: "author",
-  type: "relationship",
-  relationTo: "users",
-  required: true,
 });
 const PRICE = f({
   name: "price",
@@ -97,7 +99,7 @@ describe.each(getConfiguredTestDialects())(
           : dialect === "mysql"
             ? [TITLE, LINKS, AUTHOR, PRICE, STATUS]
             : [TITLE, LINKS, AUTHOR, PRICE];
-      await tools.createTable(TABLE, fields);
+      await tools.createTable(TABLE, legacyFields(fields));
       if (dialect !== "sqlite") {
         await tools.retype(TABLE, "links", "text");
         await tools.retype(TABLE, "price", "decimal(10,2)");
@@ -172,8 +174,8 @@ describe.each(getConfiguredTestDialects())(
 
     it("leaves a pending change and a plugin's column unchanged, and converts a legacy shape under a pending field to the applied definition only", async () => {
       const PLUGIN_TABLE = "dc_ra_seo";
-      await tools.createTable(TABLE, [TITLE, AUTHOR]);
-      await tools.createTable(PLUGIN_TABLE, [TITLE, AUTHOR]);
+      await tools.createTable(TABLE, legacyFields([TITLE, AUTHOR]));
+      await tools.createTable(PLUGIN_TABLE, legacyFields([TITLE, AUTHOR]));
       try {
         await tools.insert(TABLE, [{ id: "p1", title: "12", author: "u1" }]);
         await tools.insert(PLUGIN_TABLE, [
@@ -236,7 +238,7 @@ describe.each(getConfiguredTestDialects())(
           `CREATE TABLE ${q(TABLE)} (${q("id")} text PRIMARY KEY, ${q("slug")} text, ${q("title")} text, ${q("author")} text NOT NULL, ${q("score")} text, ${q("price")} integer)`
         );
       } else {
-        await tools.createTable(TABLE, fields);
+        await tools.createTable(TABLE, legacyFields(fields));
         await tools.retype(TABLE, "links", "text");
         await tools.retype(TABLE, "price", "bigint");
       }
@@ -312,7 +314,7 @@ describe.each(getConfiguredTestDialects())(
     it.skipIf(dialect !== "mysql")(
       "the MySQL 64-bit integer column is unchanged",
       async () => {
-        await tools.createTable(TABLE, [TITLE, PRICE]);
+        await tools.createTable(TABLE, legacyFields([TITLE, PRICE]));
         await tools.retype(TABLE, "price", "bigint");
         // Every stored value a double holds exactly: the pair is blocked all the same, as a value
         // written while the conversion ran could be rounded.
@@ -425,7 +427,7 @@ describe.each(getConfiguredTestDialects())(
     it("reads the entities it converts towards only once it holds the schema lock", async () => {
       // Read before the lock, a migration finishing while the run waited would leave it comparing
       // the migrated columns with the definitions from before, and converting them back.
-      await tools.createTable(TABLE, [TITLE, AUTHOR]);
+      await tools.createTable(TABLE, legacyFields([TITLE, AUTHOR]));
       await tools.insert(TABLE, [{ id: "p1", title: "a", author: "u1" }]);
       const seen: string[] = [];
       const document = await applyRepairs({
@@ -444,7 +446,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("changes nothing while the schema lock is held", async () => {
-      await tools.createTable(TABLE, [TITLE, AUTHOR]);
+      await tools.createTable(TABLE, legacyFields([TITLE, AUTHOR]));
       await tools.insert(TABLE, [{ id: "p1", title: "a", author: "u1" }]);
       const before = await tools.definition(TABLE);
       const entity = collection(TABLE, [TITLE, AUTHOR]);
@@ -496,8 +498,8 @@ describe.each(getConfiguredTestDialects())(
       "MySQL select held as text: converts when it fits, blocked when a value is longer",
       async () => {
         const OTHER = "dc_ra_pages";
-        await tools.createTable(TABLE, [TITLE, STATUS]);
-        await tools.createTable(OTHER, [TITLE, STATUS]);
+        await tools.createTable(TABLE, legacyFields([TITLE, STATUS]));
+        await tools.createTable(OTHER, legacyFields([TITLE, STATUS]));
         try {
           await tools.retype(TABLE, "status", "text");
           await tools.retype(OTHER, "status", "text");
@@ -539,7 +541,7 @@ describe.each(getConfiguredTestDialects())(
     it.skipIf(dialect === "mysql")("no such difference", async () => {
       // A select's column is what its field names on PostgreSQL and SQLite, so there is nothing
       // for a MySQL-only narrowing to meet.
-      await tools.createTable(TABLE, [TITLE, STATUS]);
+      await tools.createTable(TABLE, legacyFields([TITLE, STATUS]));
       await tools.insert(TABLE, [
         { id: "p1", title: "a", status: "x".repeat(300) },
       ]);
@@ -552,7 +554,7 @@ describe.each(getConfiguredTestDialects())(
       async () => {
         // A NOT NULL drop is reported as running in place, with reads and writes continuing.
         // MySQL cannot rebuild a table holding a FULLTEXT index in place, so it refuses.
-        await tools.createTable(TABLE, [TITLE, AUTHOR]);
+        await tools.createTable(TABLE, legacyFields([TITLE, AUTHOR]));
         await run(
           `ALTER TABLE ${q(TABLE)} ADD FULLTEXT INDEX ${q("ra_title_ft")} (${q("title")})`
         );
@@ -582,7 +584,7 @@ describe.each(getConfiguredTestDialects())(
       async () => {
         // PostgreSQL closes the table to reads and writes for both changes, as the report says;
         // the table is closed before the rows are judged, so it is closed when each step starts.
-        await tools.createTable(TABLE, [TITLE, LINKS, AUTHOR]);
+        await tools.createTable(TABLE, legacyFields([TITLE, LINKS, AUTHOR]));
         await tools.retype(TABLE, "links", "text");
         await tools.insert(TABLE, [
           { id: "p1", title: "a", links: "[]", author: "u1" },
@@ -650,7 +652,7 @@ describe.each(getConfiguredTestDialects())(
     it("one failing column among several, and failed with blocked exits with the failed code", async () => {
       const { entity } = await mixedTable();
       const SECOND = "dc_ra_pages";
-      await tools.createTable(SECOND, [TITLE, AUTHOR]);
+      await tools.createTable(SECOND, legacyFields([TITLE, AUTHOR]));
       try {
         await tools.insert(SECOND, [{ id: "q1", title: "a", author: "u1" }]);
         const secondBefore = await tools.definition(SECOND);

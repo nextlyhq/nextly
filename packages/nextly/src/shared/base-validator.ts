@@ -22,6 +22,7 @@
 
 import type { FieldAccess } from "../collections/fields/types/base";
 import { isIconIdShape } from "../collections/fields/types/icon";
+import { MAX_FIELD_NAME_LENGTH } from "../domains/dynamic-collections/field-name-rule";
 import { MIGRATION_TARGET } from "../domains/field-groups/migration/target";
 import { neverTranslatable } from "../domains/i18n/classify-fields";
 import {
@@ -185,7 +186,8 @@ export function validateSlugShared(
 
 /**
  * Validate a single field name against the standard Nextly rules:
- * required, string, pattern-conformant, not a SQL keyword. Whether it clashes
+ * required, string, pattern-conformant, no longer than any field name may be
+ * (`MAX_FIELD_NAME_LENGTH`, the field-name rule's own cap), not a SQL keyword. Whether it clashes
  * with a sibling's is the sibling rule's question, asked once for the whole
  * entity (`validateSiblingFieldsShared`).
  */
@@ -221,6 +223,16 @@ export function validateFieldNameShared(
     });
   }
 
+  // The cap the field-name rule holds every name to, column or not: a field group's rows point
+  // back to their field by its name, in a parent-pointer column of that width.
+  if (name.length > MAX_FIELD_NAME_LENGTH) {
+    errors.push({
+      path: `${path}.name`,
+      message: `Field name is longer than ${MAX_FIELD_NAME_LENGTH} characters, the longest a field group's rows can point back to`,
+      code: "FIELD_NAME_TOO_LONG",
+    });
+  }
+
   if (isSQLKeyword(name, sqlKeywordsSet)) {
     errors.push({
       path: `${path}.name`,
@@ -232,10 +244,10 @@ export function validateFieldNameShared(
 
 /**
  * Refuse, for a `define*` call, the pairs of sibling fields the one sibling
- * rule refuses that configuration refused before it (`configuredSiblingClashes`):
- * no entity configured in code can already hold one. The rest wait for the
- * start and the migrate commands, which know the definition the entity last
- * had, so an existing pair keeps working.
+ * rule refuses wherever they are found (`configuredSiblingClashes`): every pair
+ * sharing a stored value, and those configuration refused before the rule. The
+ * rest wait for the start and the migrate commands, which know the definition
+ * the entity last had, so an existing pair sharing nothing keeps working.
  */
 export function validateSiblingFieldsShared(
   kind: SiblingEntityKind,
@@ -244,7 +256,7 @@ export function validateSiblingFieldsShared(
   errors: BaseValidationError[]
 ): void {
   const entity = { kind, slug: typeof slug === "string" ? slug : "" };
-  for (const clash of configuredSiblingClashes(kind, fields)) {
+  for (const clash of configuredSiblingClashes(fields)) {
     errors.push({
       path: "fields",
       message: siblingClashMessage(entity, clash),

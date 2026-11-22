@@ -8,7 +8,12 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { Deletion } from "../../migrate/data-loss-consent";
-import { generateMigration, type MinimalConfigEntity } from "../generate";
+import { entityOwners } from "../../migrate/entity-coverage";
+import {
+  coveredEntitiesOf,
+  generateMigration,
+  type MinimalConfigEntity,
+} from "../generate";
 import { computeMigrationHash } from "../snapshot-io";
 
 const NOW = new Date("2026-04-29T15:45:00.123Z");
@@ -228,14 +233,103 @@ describe("generateMigration's deletions", () => {
           "translation turned on for docs; its values move to dc_docs_locales first",
       },
     ]);
+    // The translation table is the collection's own, so a consent naming its main table covers it.
     expect(await judgedFor(translated, plain)).toEqual([
       {
         kind: "table",
         table: "dc_docs_locales",
+        owner: "dc_docs",
         reason:
           "translation turned off for docs; the default language's values move back and the others are kept in the archive",
       },
     ]);
+  });
+
+  it("knows a removed collection's main table by its recorded dbName", async () => {
+    // Named through `dbName`, so its table is `dc_tales`, not `dc_stories`.
+    const stories: MinimalConfigEntity = {
+      slug: "stories",
+      tableName: "dc_tales",
+      fields: [{ name: "body", type: "text" }],
+      settings: {
+        source: "code",
+        settings: {
+          slug: "stories",
+          dbName: "tales",
+          fields: [{ name: "body", type: "text" }],
+        },
+      },
+    };
+    await generateMigration({
+      name: "initial",
+      dialect: "sqlite",
+      migrationsDir,
+      collections: [stories, PAGES],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    let judged: readonly Deletion[] = [];
+    await generateMigration({
+      name: "remove_stories",
+      dialect: "sqlite",
+      migrationsDir,
+      collections: [PAGES],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+      judgeDeletions: deletions => {
+        judged = deletions;
+        return Promise.resolve();
+      },
+    });
+    // Its rows in shared tables are listed with the drop of its main table, under that table: the
+    // one its recorded `dbName` names, not one derived from its slug.
+    expect(judged).toContainEqual(
+      expect.objectContaining({
+        kind: "rows",
+        table: "nextly_versions",
+        owner: "dc_tales",
+        of: { kind: "collection", slug: "stories" },
+      })
+    );
+  });
+
+  it("covers nothing of a removed plugin collection through its main table", async () => {
+    // Recorded under the config wrapper's source, with the plugin's provenance in its declaration.
+    const forms: MinimalConfigEntity = {
+      slug: "forms",
+      tableName: "dc_forms",
+      fields: [{ name: "title", type: "text" }],
+      settings: {
+        source: "code",
+        settings: { slug: "forms", source: "plugin:forms" },
+      },
+    };
+    await snapshotOf([forms, PAGES]);
+    let judged: readonly Deletion[] = [];
+    await generateMigration({
+      name: "remove_forms",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: [PAGES],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+      judgeDeletions: deletions => {
+        judged = deletions;
+        return Promise.resolve();
+      },
+    });
+    expect(judged).toContainEqual(
+      expect.objectContaining({ kind: "table", table: "dc_forms" })
+    );
+    expect(judged.some(d => d.kind === "rows" && d.of !== undefined)).toBe(
+      false
+    );
   });
 
   it("asks nothing and marks nothing when nothing is deleted", async () => {
@@ -301,5 +395,41 @@ describe("generateMigration's deletions", () => {
     expect(judged).toHaveLength(1);
     expect(result!.sqlContent).toContain("-- Deletes: table dc_posts");
     expect(await written()).toEqual(before);
+  });
+});
+
+describe("the entities a migration is planned against", () => {
+  it("keeps a junction the recorded declaration names with the recorded table, when dbName changes too", () => {
+    // `stories` moves from `dc_tales` to `dc_fables` and drops its tag links in the same change.
+    const tags = {
+      name: "tags",
+      type: "relationship",
+      options: {
+        relationType: "manyToMany",
+        target: "tags",
+        junctionTable: "dc_tales_tags",
+      },
+    };
+    const entities = coveredEntitiesOf(
+      {
+        collections: [{ slug: "stories", tableName: "dc_fables", fields: [] }],
+        singles: [],
+        components: [],
+      } as unknown as Parameters<typeof coveredEntitiesOf>[0],
+      {
+        collections: {
+          stories: {
+            source: "code",
+            settings: { slug: "stories", dbName: "tales", fields: [tags] },
+          },
+        },
+        singles: {},
+        fieldGroups: {},
+      }
+    );
+    const owners = entityOwners(entities);
+    // The old table's entity owns it alone, as the registry row `nextly migrate` reads says.
+    expect(owners.ownerOf("dc_tales_tags")?.table).toBe("dc_tales");
+    expect(owners.mainOf("dc_fables")?.slug).toBe("stories");
   });
 });

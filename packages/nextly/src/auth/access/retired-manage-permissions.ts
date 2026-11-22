@@ -3,7 +3,7 @@
  * email providers and email templates, each retired in favour of the plain
  * read, create, update and delete on that same resource. No gate counts one
  * any more; a role an earlier release left holding one keeps its access only
- * once `nextly upgrade` has stored the plain four in its place.
+ * once `nextly migrate` has stored the plain four in its place.
  *
  * `manage-background-jobs`, `manage-permissions` and a plugin's own `manage-`
  * permissions are not retired, and mean what they always have.
@@ -111,7 +111,7 @@ export async function plainFourOnLocked(
  * The permission ids as a role stores them: each retired `manage-` one
  * replaced by the plain read, create, update and delete on its resource, and
  * every other id as it is. Where a resource lacks one of the plain four, its
- * `manage-` id is kept as it is, counting for nothing, until `nextly upgrade`
+ * `manage-` id is kept as it is, counting for nothing, until `nextly migrate`
  * converts it once they exist.
  */
 export async function storedAsPlain(

@@ -252,6 +252,25 @@ describe("the Team activity card", () => {
     ).toHaveTextContent("posts");
   });
 
+  it("says a search of the email delivery log was one, naming no entry or collection", () => {
+    draw([
+      row(1, {
+        action: "read",
+        event: undefined,
+        collection: "email-deliveries",
+        entryId: null,
+        entryTitle: null,
+        subjectKind: undefined,
+      }),
+    ]);
+    const [only] = screen.getAllByTestId("entity-row");
+    expect(within(only!).getByTestId("entity-row-title")).toHaveTextContent(
+      /^Ana searched email deliveries$/
+    );
+    expect(only).not.toHaveTextContent("email-deliveries");
+    expect(within(only!).queryByRole("link")).toBeNull();
+  });
+
   it("names an untitled entry's collection by the label it shows, in the title and the meta alike", () => {
     // 🔴 Relabelled on the meta line alone, one row would say "Ana saved blog_posts" over
     // "Blog Posts".

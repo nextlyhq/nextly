@@ -31,11 +31,14 @@ vi.mock("../../cli/commands/migrate", () => ({
   migrateCore: (deps: unknown) => migrateCore(deps),
 }));
 /**
- * The registry reload's own loader, made to fail on request. Only the reload
- * that follows the migrations is failed — the boot's first registry load goes
- * through the same loader and must succeed for the boot to reach Layer 6.5.
+ * The registry's loader, watched: each load is counted, and each records
+ * whether the migrations had run when it began, so the order the start reads
+ * the registry in is observed rather than read from the code.
  */
-const loaderState = vi.hoisted(() => ({ fail: false, failed: 0 }));
+const loaderState = vi.hoisted(() => ({
+  migrated: false,
+  loads: [] as boolean[],
+}));
 vi.mock("../load-dynamic-tables", async importOriginal => {
   const original =
     await importOriginal<typeof import("../load-dynamic-tables")>();
@@ -44,10 +47,7 @@ vi.mock("../load-dynamic-tables", async importOriginal => {
     loadDynamicTables: (
       ...args: Parameters<typeof original.loadDynamicTables>
     ) => {
-      if (loaderState.fail) {
-        loaderState.failed += 1;
-        return Promise.reject(new Error("registry reload failed"));
-      }
+      loaderState.loads.push(loaderState.migrated);
       return original.loadDynamicTables(...args);
     },
   };
@@ -71,8 +71,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  loaderState.fail = false;
-  loaderState.failed = 0;
+  loaderState.migrated = false;
+  loaderState.loads = [];
   migrateCore.mockClear();
   vi.unstubAllEnvs();
   resetNextlyInstance();
@@ -111,12 +111,12 @@ describe("a production boot with runMigrationsOnBoot", () => {
     expect(settled).toBe(true);
   });
 
-  it("still finishes registration when the registry reload after migrating fails", async () => {
-    // The reload is documented never to throw: a stale registry leaves every
-    // pre-existing entity queryable, so it degrades instead of refusing. Run
-    // inside `registerServices`, an escaping error would abort the boot.
+  it("reads the registry only after the migrations, and needs no reload", async () => {
+    // The migrations at start run before the start reads anything of the
+    // registry, so every load sees what they wrote, and none is a reload made
+    // to catch up with them.
     migrateCore.mockImplementationOnce(async () => {
-      loaderState.fail = true;
+      loaderState.migrated = true;
       return { applied: 1, coreChanged: false, ran: true };
     });
     process.env.DB_DIALECT = "sqlite";
@@ -125,19 +125,19 @@ describe("a production boot with runMigrationsOnBoot", () => {
       memory: true,
     } as Parameters<typeof createAdapter>[0]);
 
-    await expect(
-      registerServices({
-        adapter,
-        db: {
-          runMigrationsOnBoot: true,
-          migrationsDir: "./migrations",
-          uiSchemaFile: "./ui-schema.json",
-        },
-      } as unknown as Parameters<typeof registerServices>[0])
-    ).resolves.toBeUndefined();
+    await registerServices({
+      adapter,
+      db: {
+        runMigrationsOnBoot: true,
+        migrationsDir: "./migrations",
+        uiSchemaFile: "./ui-schema.json",
+      },
+    } as unknown as Parameters<typeof registerServices>[0]);
 
-    // The failing loader was reached, and the boot still serves.
-    expect(loaderState.failed).toBeGreaterThan(0);
+    expect(migrateCore).toHaveBeenCalledTimes(1);
+    // The loader was reached, and never before the migrations had run.
+    expect(loaderState.loads.length).toBeGreaterThan(0);
+    expect(loaderState.loads).not.toContain(false);
     expect(() => requireNextly()).not.toThrow();
   });
 });

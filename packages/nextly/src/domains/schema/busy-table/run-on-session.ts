@@ -35,10 +35,15 @@ import {
   firstNoRetry,
   judgeStatement,
   targetTable,
+  type JudgeContext,
   type StatementJudgement,
 } from "./judge";
 import { tableBusyError, tryNotice } from "./report";
-import { triggerTables } from "./run-unit";
+import {
+  ddlEventTriggerTags,
+  eventTriggerContext,
+  triggerTables,
+} from "./run-unit";
 import {
   boundSessionTry,
   boundSqliteWait,
@@ -80,19 +85,23 @@ export interface StatementsInTries {
 async function judgedForResend(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
-  statement: string
+  statement: string,
+  eventTriggers: JudgeContext
 ): Promise<StatementJudgement> {
   let asksTriggers = false;
   const judgement = judgeStatement(statement, dialect, () => {
     asksTriggers = true;
     return true;
   });
-  if (!asksTriggers) return judgement;
+  if (judgement.kind === "no-retry" && !asksTriggers) return judgement;
   // Judged as a unit's statements are (`firstNoRetry`): where the account cannot see every trigger
-  // (`unseen`), any table may have one, so a row change fails closed as a hidden trigger.
-  const triggers = await triggerTables(adapter, dialect);
+  // (`unseen`), any table may have one, so a row change fails closed as a hidden trigger; and a
+  // schema statement that a DDL event trigger fires on may not be sent again.
+  const triggers = asksTriggers
+    ? await triggerTables(adapter, dialect)
+    : new Set<string>();
   return (
-    firstNoRetry([statement], dialect, triggers)?.judgement ??
+    firstNoRetry([statement], dialect, triggers, eventTriggers)?.judgement ??
     judgeStatement(statement, dialect, () => false)
   );
 }
@@ -112,6 +121,11 @@ export async function runStatementsInTries(
   const dialect = adapter.getCapabilities().dialect;
   const applied: string[] = [];
   if (statements.length === 0) return applied;
+  // Read once, before the list's session holds a connection of the pool, so the read never waits
+  // behind it; the statements here are Nextly's own, which make no event trigger.
+  const eventTriggers = eventTriggerContext(
+    await ddlEventTriggerTags(adapter, dialect)
+  );
   const nameOf =
     run.name ??
     ((index: number) =>
@@ -163,7 +177,12 @@ export async function runStatementsInTries(
         } catch (error) {
           const holder = await watch.ended(error);
           if (holder === undefined) throw error;
-          const judgement = await judgedForResend(adapter, dialect, statement);
+          const judgement = await judgedForResend(
+            adapter,
+            dialect,
+            statement,
+            eventTriggers
+          );
           return {
             kind: "ended",
             ended: { table: targetTable(statement, dialect), holder },

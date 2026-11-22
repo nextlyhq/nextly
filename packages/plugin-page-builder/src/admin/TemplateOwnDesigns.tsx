@@ -22,7 +22,6 @@
  */
 import {
   useDocumentIdentity,
-  usePluginRoute,
   type DocumentPanelSectionProps,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
@@ -41,6 +40,7 @@ import {
 } from "../layout-choices-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
+import { useBuilderRoute } from "./builder-route-read";
 import {
   editedWhen,
   entryHref,
@@ -257,7 +257,7 @@ export function TemplateOwnDesigns({
  */
 export function OwnDesignsChip(): JSX.Element | null {
   const identity = useDocumentIdentity();
-  const resolved = usePluginRoute<PageCollectionResponse>({
+  const resolved = useBuilderRoute<PageCollectionResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: PAGE_COLLECTION_ROUTE_PATH,
     enabled: identity?.kind === "collection",

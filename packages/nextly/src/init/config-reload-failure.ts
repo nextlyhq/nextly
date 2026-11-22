@@ -10,50 +10,49 @@
  * cannot compile TypeScript at all.
  */
 
+import { toCliError } from "../cli/errors";
+import { formatCliError } from "../cli/errors/render";
 import { NextlyError } from "../errors/index";
+import {
+  type BuildMessage,
+  buildMessagesOf,
+  editorPlaceOf,
+} from "../shared/lib/build-messages";
 
 const LEAD = "[Nextly HMR] Could not apply nextly.config.ts";
 const KEPT = "The previous config stays in place.";
 
-/** One of esbuild's build errors, as it reports them. */
-type EsbuildMessage = {
-  text: string;
-  location?: {
-    file: string;
-    line: number;
-    column: number;
-    lineText?: string;
-  } | null;
-};
-
-/** The build errors esbuild attached to a failure, if it was one. */
-function esbuildErrors(cause: unknown): EsbuildMessage[] {
-  if (!cause || typeof cause !== "object" || !("errors" in cause)) return [];
-  const { errors } = cause;
-  if (!Array.isArray(errors)) return [];
-  return errors.filter(
-    (entry): entry is EsbuildMessage =>
-      !!entry &&
-      typeof entry === "object" &&
-      typeof (entry as { text?: unknown }).text === "string"
-  );
+// The place as an editor shows it, computed where the CLI's error computes it
+// (`editorPlaceOf`), so the two name one error at one place.
+function where(message: BuildMessage): string {
+  const place = editorPlaceOf(message);
+  return place === undefined
+    ? ""
+    : ` (${place.file}:${place.line}:${place.column})`;
 }
 
-// esbuild counts a column in bytes from 0; an editor counts characters from 1.
-// The line's own text turns the byte offset into characters, so a line with
-// non-ASCII text before the error still points at the right place.
-function where(message: EsbuildMessage): string {
-  const at = message.location;
-  if (!at) return "";
-  const before =
-    typeof at.lineText === "string"
-      ? Buffer.from(at.lineText).subarray(0, at.column).toString().length
-      : at.column;
-  return ` (${at.file}:${at.line}:${before + 1})`;
-}
+/**
+ * The loader's refusals of a configuration that the CLI reports with a code of its own, each
+ * problem with its place and fix: every problem in it, no file at all, and a Builder entity the
+ * definition file lost.
+ */
+const REPORTED_AS_COMMANDS_REPORT: ReadonlySet<string> = new Set([
+  "config-invalid",
+  "config-missing",
+  "builder-definition-missing",
+]);
 
 /** The dev-log line for a config that could not be read. */
 export function describeConfigReloadFailure(error: unknown): string {
+  // A configuration the rules refuse is reported as every command reports it: each problem at its
+  // path, with the fix, then the count. Rendered by the CLI's own formatter, so the two cannot
+  // drift apart.
+  if (
+    NextlyError.is(error) &&
+    REPORTED_AS_COMMANDS_REPORT.has(String(error.logContext?.reason))
+  ) {
+    return `${LEAD}:\n${formatCliError(toCliError(error), { color: false })}\n${KEPT}`;
+  }
   if (
     NextlyError.is(error) &&
     error.code === "NEXTLY_CONFIG_TOOLING_UNAVAILABLE"
@@ -63,7 +62,7 @@ export function describeConfigReloadFailure(error: unknown): string {
 
   const cause = error instanceof Error ? error.cause : undefined;
 
-  const buildErrors = esbuildErrors(cause);
+  const buildErrors = buildMessagesOf(cause);
   const unresolved = buildErrors.find(entry =>
     entry.text.startsWith("Could not resolve ")
   );

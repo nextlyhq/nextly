@@ -240,7 +240,10 @@ describe("a route that requires the kind", () => {
       message: "Authentication required",
       error: "Unauthorized",
     } as never);
-    return runPluginRoute(call(""), match({ principal: undefined, siteWide: false }));
+    return runPluginRoute(
+      call(""),
+      match({ principal: undefined, siteWide: false })
+    );
   }
 
   async function shape(res: Response) {

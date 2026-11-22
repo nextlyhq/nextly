@@ -34,7 +34,12 @@ export { CANVAS_FRAME };
 const HOMEPAGE = "/admin/api/singles/homepage";
 
 /** Either label the builder's card uses, for an empty page and a built one. */
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+export const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+export const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 
 /** Something `.locator()` can be asked of: the page, or the canvas frame. */
 type Scope = Page | FrameLocator;
@@ -332,7 +337,10 @@ export async function openEditorWith(
     true
   );
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+  await page
+    .locator(PAGE_BUILDER_CARD)
+    .getByRole("link", { name: OPEN_BUILDER_ACTION })
+    .click();
   // The block must be ON SCREEN before anything is aimed at it: a gesture sent
   // at an element that has not rendered lands on the page behind it.
   await expect(await block(page, firstId)).toBeVisible({ timeout: 30_000 });

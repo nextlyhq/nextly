@@ -1,6 +1,9 @@
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
+  ChangeColumnTypeOp,
   DropColumnOp,
   DropIndexOp,
   DropTableOp,
@@ -408,19 +411,66 @@ describe("executePreResolutionOps - each finished statement told as it finishes"
       { type: "drop_table", tableName: "dc_a" } satisfies DropTableOp,
       { type: "drop_table", tableName: "dc_b" } satisfies DropTableOp,
     ];
-    let told = 0;
+    const finished: string[] = [];
     await expect(
       executePreResolutionOps(
         tx,
         ops,
         "mysql",
         ["ALTER TABLE x DROP CHECK c"],
-        () => {
-          told += 1;
+        {
+          starting: () => undefined,
+          finished: statement => {
+            finished.push(statement);
+          },
         }
       )
     ).rejects.toThrow("lock wait timeout");
     // The leading statement and the first drop finished; the second drop failed.
-    expect(told).toBe(2);
+    expect(finished).toHaveLength(2);
+  });
+
+  // An operation can run several statements: on MySQL a reference-list conversion is three (the
+  // column made text, its values rewritten, the column made the list type). Each commits as it
+  // runs, so each is told as it finishes, not the operation once.
+  it("tells each statement of an operation that runs several, and none after the one that fails", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    // The conversion's second statement, the rewrite, is refused by its text, not by what the
+    // record was told, so the record under test cannot decide where the failure falls. The reads
+    // before it (the conversion's checks) and the column made text run.
+    const mysql = new MySqlDialect();
+    const tx = {
+      execute: vi.fn(async (query: SQL) => {
+        if (/^UPDATE /.test(mysql.sqlToQuery(query).sql.trim())) {
+          throw new Error("refused by a trigger");
+        }
+        // mysql2's [rows, fields] shape; no read returns rows here.
+        return [[], []];
+      }),
+    };
+    const conversion: ChangeColumnTypeOp = {
+      type: "change_column_type",
+      tableName: "dc_posts",
+      columnName: "author",
+      fromType: "varchar(36)",
+      toType: "json",
+      conversion: "referenceList",
+    };
+    await expect(
+      executePreResolutionOps(tx, [conversion], "mysql", [], {
+        starting: statement => {
+          started.push(statement);
+        },
+        finished: statement => {
+          finished.push(statement);
+        },
+      })
+    ).rejects.toThrow("refused by a trigger");
+    // Positive control: the operation reached its second statement, which failed.
+    expect(started).toHaveLength(2);
+    // The first, the column made text, finished and stays.
+    expect(finished).toEqual([started[0]]);
+    expect(finished[0]).toMatch(/MODIFY COLUMN `author` text/);
   });
 });

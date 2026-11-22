@@ -55,7 +55,6 @@ import {
 import {
   createQueryBudget,
   createStandaloneContext,
-  DEFAULT_MAX_QUERIES,
   type ListBaseReader,
   type NamedQueryFailure,
   type NamedQueryHost,
@@ -82,6 +81,7 @@ import {
   type ListEntriesRequest,
   type ListEntriesResponse,
 } from "./list-entries-contract";
+import { allowanceFromWire, MOST_PAGE_READS } from "./page-allowance";
 import type { TemplateGuardSetup } from "./templates/template-guard";
 
 /** A field name a list may name: no paths, operators or quoting. */
@@ -221,7 +221,16 @@ const ListEntriesNamedBody = z
             message: "A node's id has no control characters.",
           })
           .optional(),
-        allowance: z.number().int().min(0).max(DEFAULT_MAX_QUERIES).optional(),
+        // What the canvas's draw has left of the page's limit, which a
+        // site may raise past the default (`pageBuilder({ maxQueries })`).
+        // `null` is no limit, for a site that sets none (`page-allowance`).
+        allowance: z
+          .number()
+          .int()
+          .min(0)
+          .max(MOST_PAGE_READS)
+          .nullable()
+          .optional(),
       })
       .strict(),
   })
@@ -307,7 +316,7 @@ export async function readNamedListEntries(
   const definition = reads.definitionOf(name);
   // No more than the canvas's draw has left, so the page's lists share one
   // allowance whichever of them runs where.
-  const budget = countingBudget(allowance);
+  const budget = countingBudget(allowanceFromWire(allowance));
   const host: NamedQueryHost = {
     definitionOf: asked => (asked === name ? definition : undefined),
     reader: await reads.baseReader(locale),

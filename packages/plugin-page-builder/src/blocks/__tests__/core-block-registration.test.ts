@@ -6,7 +6,7 @@
  * reported as the duplicate, and so the boot's one-time registry clear happens
  * before core is added rather than after.
  */
-import { clearBlocks, getBlock, getBlockSource } from "@nextlyhq/blocks-engine";
+import { createBlockRegistry } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -14,12 +14,15 @@ import { PAGE_BUILDER_PLUGIN, BLOCK_SERVICE } from "../registration-service";
 import { registerCoreBlocks } from "../registration-service";
 import { createBlockRegistrationService } from "../registration-service";
 
+/** The site's block registry the core library is registered in. */
+const blocks = createBlockRegistry();
+
 afterEach(() => {
-  clearBlocks();
+  blocks.clear();
 });
 
 function contextWithService(): Parameters<typeof registerCoreBlocks>[0] {
-  const service = createBlockRegistrationService();
+  const service = createBlockRegistrationService(blocks);
   return {
     config: { plugins: [] },
     services: {
@@ -30,12 +33,12 @@ function contextWithService(): Parameters<typeof registerCoreBlocks>[0] {
 
 describe("core block registration", () => {
   it("registers every block in the core library", () => {
-    clearBlocks();
-    registerCoreBlocks(contextWithService());
+    blocks.clear();
+    registerCoreBlocks(contextWithService(), blocks);
 
     for (const block of coreBlocks) {
       expect(
-        getBlock(block.name),
+        blocks.get(block.name),
         `${block.name} is not registered`
       ).toBeDefined();
     }
@@ -44,11 +47,11 @@ describe("core block registration", () => {
   it("attributes them to the page builder", () => {
     // The package a reader would have to go and change, not the package that
     // happened to perform the registration on someone's behalf.
-    clearBlocks();
-    registerCoreBlocks(contextWithService());
+    blocks.clear();
+    registerCoreBlocks(contextWithService(), blocks);
 
     for (const block of coreBlocks) {
-      expect(getBlockSource(block.name)).toBe(PAGE_BUILDER_PLUGIN);
+      expect(blocks.sourceOf(block.name)).toBe(PAGE_BUILDER_PLUGIN);
     }
   });
 

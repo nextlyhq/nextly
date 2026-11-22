@@ -40,6 +40,12 @@ const UPLOAD_CONCURRENCY = 3;
 export type UploadRow = UploadProgress & {
   id: string;
   folderId: string | null;
+  /**
+   * What the server saved, once the file has uploaded. The tray reads it to
+   * offer alt text for an image, which there was no form to write before it
+   * was sent.
+   */
+  media?: Media;
 };
 
 /** What a drop or a file choice hands the queue. */
@@ -188,6 +194,7 @@ export function useUploadQueue(options?: {
             status: "success",
             progress: 100,
             mediaId: media.id,
+            media,
             error: undefined,
           });
         })

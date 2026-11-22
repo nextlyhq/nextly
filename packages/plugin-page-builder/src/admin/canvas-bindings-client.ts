@@ -30,7 +30,10 @@ import {
 import {
   bindingsFromWire,
   listCollections,
+  listCollectionsWhere,
+  pageBindingRun,
   READ_KINDS,
+  registeredBlocks,
   type NamedQueryLookup,
   type PageBindings,
   type PageReadReport,
@@ -47,16 +50,25 @@ import {
   CANVAS_BINDINGS_ROUTE_PATH,
   conditionsToWire,
   demandToWire,
+  isSourceSlug,
+  sourcesChangedAskOf,
   type CanvasBindingsRequest,
   type CanvasBindingsResponse,
+  type CanvasSourcesChangedRequest,
 } from "../canvas-bindings-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
+import { allowanceToWire } from "../page-allowance";
 
+import { onCanvasSourcesChanged } from "./canvas-sources";
 import {
   useCanvasEntryIdentity,
   useCanvasEntryRead,
   type CanvasEntryRead,
 } from "./editor/canvas-entry";
+import {
+  firstReadsInOf,
+  useCanvasSourceCheck,
+} from "./editor/canvas-source-check";
 /**
  * What each answer's reads cost the page's allowance, by the bindings it
  * gave, so the editor's read meter adds the binding reads as the route made
@@ -64,6 +76,12 @@ import {
  * bindings keeps the shape it always had.
  */
 const READS = new WeakMap<PageBindings, PageReadReport>();
+
+/**
+ * The change check's mark each answer carried, taken before its sources were
+ * read; kept beside the answer as its reads are.
+ */
+const STAMPS = new WeakMap<PageBindings, string>();
 
 /** What reading these bindings cost, when the route said; none for none read. */
 export function bindingReadsOf(
@@ -118,11 +136,13 @@ function kindsIn(
 /** No source read: what the canvas draws with until an answer arrives. */
 const NONE: PageBindings = Object.freeze({});
 
-/** How long an answer is kept for the same ask. */
-const KEPT_FOR_MS = 15_000;
-
-/** The asks answered so far, by ask, for the current person only. */
-const KEPT = new Map<string, { at: number; read: Promise<PageBindings> }>();
+/**
+ * The asks answered so far, by ask, for the current person only. An answer
+ * is kept for as long as its ask is the same, with no lifetime of its own,
+ * and dropped when the sources the canvas reads change (`canvas-sources`).
+ */
+const KEPT = new Map<string, { read: Promise<PageBindings> }>();
+onCanvasSourcesChanged(() => KEPT.clear());
 /**
  * The person whose answers `KEPT` holds. Always a known person: until the
  * signed-in person is known nothing is asked, so no answer is ever kept under
@@ -265,11 +285,125 @@ export function canvasBindingsRequest(
     ...(conditions === undefined
       ? {}
       : { conditions: conditionsToWire(conditions) }),
-    // A whole number of reads the route can be asked for; none past it.
-    ...(reads.allowance === undefined || !Number.isFinite(reads.allowance)
+    // A whole number of reads the route can be asked for, none past it, or
+    // `null` for a site that sets no limit.
+    ...(reads.allowance === undefined
       ? {}
-      : { allowance: Math.max(0, Math.floor(reads.allowance)) }),
+      : { allowance: allowanceToWire(reads.allowance) }),
   };
+}
+
+/**
+ * What the change check asks about for the sources the canvas reads: the
+ * bindings' ask where the page reads through bindings, else its lists alone,
+ * so a page that only lists entries still sees them change.
+ */
+function sourcesCheckAskOf(
+  request: CanvasBindingsRequest | undefined,
+  drawn: readonly BlockDocument[],
+  identity: DocumentIdentity | null,
+  namedQueries: NamedQueryLookup | undefined,
+  locale: string | undefined,
+  bound: PageBindings | undefined
+): CanvasSourcesChangedRequest | undefined {
+  const drawnLists = boundListCollections(drawn, namedQueries, locale, bound);
+  if (request !== undefined) {
+    const asked = sourcesChangedAskOf(request);
+    const lists = [...new Set([...asked.lists, ...drawnLists])].sort();
+    return lists.length === asked.lists.length ? asked : { ...asked, lists };
+  }
+  if (identity === null) return undefined;
+  const lists = [
+    ...new Set([...listCollections(drawn, namedQueries), ...drawnLists]),
+  ].sort();
+  if (lists.length === 0) return undefined;
+  return {
+    source: requestSourceOf(identity),
+    singles: [],
+    lists,
+    ...(locale === undefined ? {} : { locale }),
+  };
+}
+
+/**
+ * The collections the page's lists draw once their bindings are filled by
+ * the answer the canvas drew with: a list whose collection is bound draws
+ * the one its binding names, not the fallback stored beside it. None until
+ * an answer is in.
+ */
+function boundListCollections(
+  drawn: readonly BlockDocument[],
+  namedQueries: NamedQueryLookup | undefined,
+  locale: string | undefined,
+  bound: PageBindings | undefined
+): readonly string[] {
+  if (bound === undefined) return [];
+  const run = pageBindingRun(bound, locale, registeredBlocks());
+  // A bound value that names no collection (free text in the bound field)
+  // draws nothing, and is not asked about.
+  return [...listCollectionsWhere(drawn, () => true, run, namedQueries)].filter(
+    isSourceSlug
+  );
+}
+
+/**
+ * Keep what the canvas reads in step with saves made elsewhere, through the
+ * editor's change check, for the sources {@link sourcesCheckAskOf} names.
+ */
+function useWatchedSources(
+  watched: {
+    readonly request: CanvasBindingsRequest | undefined;
+    /** The ask as text, which the answer below was read for. */
+    readonly key: string;
+    readonly drawn: readonly BlockDocument[];
+    readonly identity: DocumentIdentity | null;
+    readonly namedQueries: NamedQueryLookup | undefined;
+    readonly locale: string | undefined;
+  },
+  userId: string | null,
+  answer: {
+    readonly key: string;
+    readonly userId: string;
+    readonly bindings: PageBindings;
+  } | null
+): void {
+  const { request, key, drawn, identity, namedQueries, locale } = watched;
+  // This ask's own answer, read for this person: another ask's could fill a
+  // bound list with a collection the page no longer draws.
+  const bound =
+    answer !== null && answer.key === key && answer.userId === userId
+      ? answer.bindings
+      : undefined;
+  const asked = useMemo(
+    () =>
+      sourcesCheckAskOf(request, drawn, identity, namedQueries, locale, bound),
+    [request, drawn, identity, namedQueries, locale, bound]
+  );
+  useCanvasSourceCheck(
+    asked,
+    userId,
+    undefined,
+    firstReadsInOf(request, bound),
+    firstMarkOf(request, asked, bound)
+  );
+}
+
+/**
+ * The change check's first mark, from the answer the canvas first drew
+ * with: only where the check asks about exactly the sources that answer
+ * marked. A list whose collection a binding names is asked about too, which
+ * the answer's mark did not cover, so there the check takes its own.
+ */
+function firstMarkOf(
+  request: CanvasBindingsRequest | undefined,
+  asked: CanvasSourcesChangedRequest | undefined,
+  bound: PageBindings | undefined
+): string | undefined {
+  if (request === undefined || asked === undefined || bound === undefined) {
+    return undefined;
+  }
+  const marked = JSON.stringify(sourcesChangedAskOf(request));
+  return marked === JSON.stringify(asked) ? STAMPS.get(bound) : undefined;
 }
 
 /** The entry an ask is made for, as the route takes it. */
@@ -377,16 +511,15 @@ export function canvasBindingsFor(
   }
   const key = JSON.stringify(request);
   const kept = KEPT.get(key);
-  if (!fresh && kept !== undefined && Date.now() - kept.at < KEPT_FOR_MS) {
-    return kept.read;
-  }
+  if (!fresh && kept !== undefined) return kept.read;
   const reading = ask(request, signal).then(answer => {
     const bindings = bindingsFromWire(answer);
     const reads = readsIn(answer);
     if (reads !== undefined) READS.set(bindings, reads);
+    if (typeof answer.stamp === "string") STAMPS.set(bindings, answer.stamp);
     return bindings;
   });
-  KEPT.set(key, { at: Date.now(), read: reading });
+  KEPT.set(key, { read: reading });
   // A failed ask is not kept, so the next draw asks again.
   reading.catch(() => {
     if (KEPT.get(key)?.read === reading) KEPT.delete(key);
@@ -443,7 +576,13 @@ export function useCanvasBindings(
   /** The site's named queries, once the canvas has read them. */
   namedQueries?: NamedQueryLookup,
   /** What the page's conditions ask of the reads, where it holds any. */
-  conditions?: ConditionDemand
+  conditions?: ConditionDemand,
+  /**
+   * The site's page data limit (`readPageDataLimit`), which the published
+   * page reads its bindings under: `Infinity` for none. Absent, the ask
+   * names none and the route reads under its default.
+   */
+  allowance?: number
 ): PageBindings {
   // The entry the canvas is drawn as: the document's own, or a template's
   // previewed entry of the collection it draws.
@@ -453,15 +592,11 @@ export function useCanvasBindings(
   const userId = useCurrentUserId();
   const request = useMemo(
     () =>
-      canvasBindingsRequest(
-        drawn,
-        identity,
-        locale,
-        component,
-        namedQueries,
-        conditions === undefined ? {} : { conditions }
-      ),
-    [drawn, identity, locale, component, namedQueries, conditions]
+      canvasBindingsRequest(drawn, identity, locale, component, namedQueries, {
+        ...(conditions === undefined ? {} : { conditions }),
+        ...(allowance === undefined ? {} : { allowance }),
+      }),
+    [drawn, identity, locale, component, namedQueries, conditions, allowance]
   );
   // The ask as text: a new document that asks the same reads nothing new.
   const key = request === undefined ? "" : JSON.stringify(request);
@@ -475,10 +610,23 @@ export function useCanvasBindings(
   // The ask that failed last, so its failure is told rather than taken for
   // an answer on its way.
   const [failed, setFailed] = useState<string | null>(null);
-  // Bumped once an answer has been kept its while, so the same ask is made
-  // again: a source can change while what the page asks stays the same (a
-  // saved title, an updated Single).
+  // Saves made elsewhere to what this reads: asked once a minute at most
+  // while the builder is in sight, so a kept answer never outlives its data.
+  // With this ask's answer, so a list whose collection is bound is watched
+  // under the collection it draws.
+  useWatchedSources(
+    { request, key, drawn, identity, namedQueries, locale },
+    userId,
+    answer
+  );
+  // Bumped when the sources the canvas reads have changed, so the same ask is
+  // made again: a source can change while what the page asks stays the same
+  // (a saved title, an updated Single).
   const [round, setRound] = useState(0);
+  useEffect(
+    () => onCanvasSourcesChanged(() => setRound(value => value + 1)),
+    []
+  );
   // The retry this read last answered, so a retry the editor asks for reads
   // afresh rather than from what was kept for the same ask.
   const answeredRetry = useRef(retry);
@@ -489,23 +637,8 @@ export function useCanvasBindings(
     const fresh = answeredRetry.current !== retry;
     answeredRetry.current = retry;
     let current = true;
-    let stale: ReturnType<typeof setTimeout> | undefined;
     // Asked again, so an earlier failure of this ask is no longer the answer.
     setFailed(previous => (previous === key ? null : previous));
-    // Asked again when the editor is back in sight, never while it is not.
-    const onVisible = () => {
-      if (document.visibilityState === "hidden") return;
-      document.removeEventListener("visibilitychange", onVisible);
-      setRound(value => value + 1);
-    };
-    const askAgain = () => {
-      if (!current) return;
-      if (document.visibilityState === "hidden") {
-        document.addEventListener("visibilitychange", onVisible);
-        return;
-      }
-      setRound(value => value + 1);
-    };
     canvasBindingsFor(
       JSON.parse(key) as CanvasBindingsRequest,
       userId,
@@ -516,7 +649,6 @@ export function useCanvasBindings(
         if (!current) return;
         setAnswer({ key, userId, bindings, retry });
         setFailed(null);
-        stale = setTimeout(askAgain, KEPT_FOR_MS);
       },
       () => {
         // The sources could not be read: bound props keep their own values
@@ -530,8 +662,6 @@ export function useCanvasBindings(
     );
     return () => {
       current = false;
-      if (stale !== undefined) clearTimeout(stale);
-      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [key, userId, round, retry]);
   // Where this read stands, told to the editor that gave the entry, so what

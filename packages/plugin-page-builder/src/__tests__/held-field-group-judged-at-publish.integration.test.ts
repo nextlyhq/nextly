@@ -17,11 +17,7 @@ import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   expandSlotDefaults,
-  hasBlock,
   makeNode,
-  registerBlocks,
-  registryBlockSource,
-  registryNestingSource,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import { definePlugin } from "@nextlyhq/plugin-sdk";
@@ -41,6 +37,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
 import { BLOCKS_TYPE } from "../fields/blocksField";
+import { blockRegistry, blocksOf } from "../index";
 import { pageBuilder } from "../plugin";
 
 type Node = Record<string, unknown>;
@@ -77,16 +74,18 @@ const pageOf = (nodes: unknown[]) => ({
 const blocks = (name: string) => ({ name, type: BLOCKS_TYPE }) as never;
 
 /** A card whose body only takes content, for the lock case. */
-function registerSealedCard(): void {
-  if (hasBlock("fg/sealed-card")) return;
-  const base = {
-    version: 1,
-    description: "A block.",
-    example: { props: {} },
-    render: () => null,
-  };
-  registerBlocks(
-    [
+const sealedCardBlocks = definePlugin({
+  name: "test",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init: ctx => {
+    const base = {
+      version: 1,
+      description: "A block.",
+      example: { props: {} },
+      render: () => null,
+    };
+    blockRegistry(ctx).register([
       {
         ...base,
         name: "fg/headline",
@@ -106,10 +105,12 @@ function registerSealedCard(): void {
           },
         },
       },
-    ] as never,
-    { source: "test" } as never
-  );
-}
+    ] as never);
+  },
+});
+
+/** The page builder of the site booted last, whose blocks a card is made of. */
+let builder: ReturnType<typeof pageBuilder>;
 
 function sealedCard(align: string): BlockNode {
   const card = makeNode(
@@ -118,8 +119,8 @@ function sealedCard(align: string): BlockNode {
     {},
     expandSlotDefaults(
       "fg/sealed-card",
-      registryBlockSource(),
-      registryNestingSource()
+      blocksOf(builder).blockSource(),
+      blocksOf(builder).nestingSource()
     )
   );
   card.slots!.body![0]!.props.align = align;
@@ -229,10 +230,11 @@ describe.each(getConfiguredTestDialects())(
     const seen: Record<string, unknown>[] = [];
 
     beforeAll(async () => {
+      builder = pageBuilder({ limits: LIMITS });
       t = await createTestNextly({
         dialect,
         // A small depth limit, so a too-deep page stays short.
-        plugins: [pageBuilder({ limits: LIMITS }), payloadProbe(seen)],
+        plugins: [builder, payloadProbe(seen), sealedCardBlocks],
         fieldGroups: [
           defineFieldGroup({
             slug: "herobox",
@@ -259,7 +261,6 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       });
-      registerSealedCard();
       // Two deep, published with no pending draft: the same in a draft and live.
       const created = await t.nextly.create({
         collection: COMPONENTS_SLUG,

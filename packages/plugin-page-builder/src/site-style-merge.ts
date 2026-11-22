@@ -32,7 +32,12 @@
  *
  * @module site-style-merge
  */
-import { isPlainRecord, isTokenRef } from "@nextlyhq/blocks-engine";
+import {
+  fluidValue,
+  isPlainRecord,
+  isTokenRef,
+  type FluidRangeWidths,
+} from "@nextlyhq/blocks-engine";
 
 import { faceIdentity } from "./site-style";
 import { storedVariableIdentity } from "./site-style-storage";
@@ -391,6 +396,92 @@ function listOf(value: unknown): readonly unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+/**
+ * A class merged three ways, field by field as any entry is, except that each
+ * device's fluid size is ONE value with the sizes it was made from: the
+ * `fontSize` at rest and that device's `fluidSizes` pair are taken together
+ * from one side, so a merge never stores one side's size beside the other
+ * side's sizes, or one end of each side's pair.
+ */
+function mergedClass(
+  base: unknown,
+  mine: unknown,
+  theirs: unknown,
+  settle: MergeSettle
+): unknown {
+  const merged = mergedValue(base, mine, theirs, settle);
+  const devices = ownKeysOf(
+    ...[base, mine, theirs].map(side => ownValueAt(side, "fluidSizes"))
+  );
+  if (devices.length === 0 || !isPlainRecord(merged)) return merged;
+  let out: Record<string, unknown> = merged;
+  for (const device of devices) {
+    const kept = mergedLeaf(
+      fluidUnitOf(base, device),
+      fluidUnitOf(mine, device),
+      fluidUnitOf(theirs, device),
+      settle
+    );
+    out = withFluidUnit(out, device, kept);
+  }
+  return out;
+}
+
+/** One device's fluid size and the size at rest it made, as one value. */
+interface FluidUnit {
+  readonly fontSize: unknown;
+  readonly sizes: unknown;
+}
+
+/** A class's fluid unit on one device, as that side holds it. */
+function fluidUnitOf(entry: unknown, device: string): FluidUnit {
+  const atRest = ownValueAt(ownValueAt(entry, "styles"), "base");
+  return {
+    fontSize: ownValueAt(ownValueAt(atRest, device), "fontSize"),
+    sizes: ownValueAt(ownValueAt(entry, "fluidSizes"), device),
+  };
+}
+
+/** A record with one key set, or taken out where `value` is `undefined`. */
+function withKey(
+  record: unknown,
+  key: string,
+  value: unknown
+): Record<string, unknown> {
+  const kept = ownKeysOf(record)
+    .filter(each => each !== key)
+    .map((each): [string, unknown] => [each, ownValueAt(record, each)]);
+  return ownRecordOf(value === undefined ? kept : [...kept, [key, value]]);
+}
+
+/** `value` unless it is an empty record, which a merge leaves out. */
+function unlessEmpty(value: Record<string, unknown>): unknown {
+  return Object.keys(value).length === 0 ? undefined : value;
+}
+
+/**
+ * The merged class with one device's size at rest and its fluid sizes set
+ * from the unit kept, copied along the path so no side is changed.
+ */
+function withFluidUnit(
+  entry: Record<string, unknown>,
+  device: string,
+  unit: unknown
+): Record<string, unknown> {
+  const kept = isPlainRecord(unit) ? unit : {};
+  const styles = ownValueAt(entry, "styles");
+  const atRest = ownValueAt(styles, "base");
+  const values = withKey(ownValueAt(atRest, device), "fontSize", kept.fontSize);
+  const base = withKey(atRest, device, unlessEmpty(values));
+  const withStyles = withKey(
+    entry,
+    "styles",
+    withKey(styles, "base", unlessEmpty(base))
+  );
+  const sizes = withKey(ownValueAt(entry, "fluidSizes"), device, kept.sizes);
+  return withKey(withStyles, "fluidSizes", unlessEmpty(sizes));
+}
+
 /** A class's identity: its id. */
 function classKey(entry: unknown): string | undefined {
   return isPlainRecord(entry) && typeof entry.id === "string" && entry.id !== ""
@@ -433,6 +524,33 @@ function familiesOf(list: readonly unknown[]): Set<string> {
   return out;
 }
 
+/** Section-wide token settings merged as one value, never field by field. */
+const WHOLE_SETTINGS: ReadonlySet<string> = new Set(["fluidRange"]);
+
+/**
+ * The site's text merged row by row, each row whole: a row is a size and the
+ * line height that goes with it, so one author's size never lands beside the
+ * other's line height. An empty row is kept, as the rows it stands beside.
+ */
+function mergedRows(
+  base: unknown,
+  mine: unknown,
+  theirs: unknown,
+  settle: MergeSettle
+): unknown {
+  const out: [string, unknown][] = [];
+  for (const role of ownKeysOf(mine, base, theirs)) {
+    const row = mergedLeaf(
+      ownValueAt(base, role),
+      ownValueAt(mine, role),
+      ownValueAt(theirs, role),
+      settle
+    );
+    if (row !== undefined) out.push([role, row]);
+  }
+  return out.length > 0 ? ownRecordOf(out) : undefined;
+}
+
 /** A token set's entries merged, and its section-wide settings beside them. */
 function mergedTokenSet(
   base: unknown,
@@ -446,13 +564,26 @@ function mergedTokenSet(
     if (key === "tokens") continue;
     let conflicted = false;
     const sides = { base: ownValueAt(base, key), mine: ownValueAt(mine, key) };
-    const value = mergedValue(sides.base, sides.mine, ownValueAt(theirs, key), {
+    const settle: MergeSettle = {
       prefer,
       keepUnchanged: true,
       conflict: () => {
         conflicted = true;
       },
-    });
+    };
+    // The fluid range is one value: merged width by width, a width one side
+    // left alone takes the other side's, and the pair is no range at all.
+    const merge = WHOLE_SETTINGS.has(key)
+      ? mergedLeaf
+      : key === "siteText"
+        ? mergedRows
+        : mergedValue;
+    const value = merge(
+      sides.base,
+      sides.mine,
+      ownValueAt(theirs, key),
+      settle
+    );
     if (conflicted) {
       conflicts.push({
         key,
@@ -473,7 +604,82 @@ function mergedTokenSet(
     prefer,
     conflicts
   );
-  return { ...ownRecordOf(settings), tokens };
+  const merged = ownRecordOf(settings);
+  // A size made with Fluid… is written from its two sizes and the range, and
+  // the merge keeps each of the three on its own: one author's range beside
+  // another's sizes. Written again from what was kept, the stored value is
+  // the one "Fluid…" shows.
+  // Only across a range the tier stores, which it does wherever it holds a
+  // fluid size: one it leaves to the code is not known here, and the default
+  // is no stand-in for it.
+  // A Site text row made with Fluid… likewise, its size written again.
+  const range = fluidRangeIn(merged.fluidRange);
+  return range === undefined
+    ? { ...merged, tokens }
+    : {
+        ...merged,
+        tokens: tokens.map(token => withFluidValue(token, range)),
+        ...withFluidRows(merged.siteText, range),
+      };
+}
+
+/**
+ * The Site text rows with each fluid row's size written again from its two
+ * sizes and the range; nothing where the set holds no rows.
+ */
+function withFluidRows(
+  rows: unknown,
+  range: FluidRangeWidths
+): { siteText?: unknown } {
+  if (!isPlainRecord(rows)) return {};
+  return {
+    siteText: Object.fromEntries(
+      Object.entries(rows).map(([role, row]) => [
+        role,
+        withFluidSize(row, range),
+      ])
+    ),
+  };
+}
+
+/** A row with its size written from its two sizes, where it has them. */
+function withFluidSize(row: unknown, range: FluidRangeWidths): unknown {
+  const sizes = isPlainRecord(row) ? fluidSizesOf(row.fluid) : undefined;
+  if (!isPlainRecord(row) || sizes === undefined) return row;
+  const fontSize = fluidValue(sizes, range);
+  return row.fontSize === fontSize ? row : { ...row, fontSize };
+}
+
+/** A stored fluid range, or `undefined` where none, or none readable, is set. */
+function fluidRangeIn(value: unknown): FluidRangeWidths | undefined {
+  return isPlainRecord(value) &&
+    typeof value.min === "number" &&
+    typeof value.max === "number" &&
+    value.min < value.max
+    ? { min: value.min, max: value.max }
+    : undefined;
+}
+
+/** The two sizes a fluid value was made from, where it holds them. */
+function fluidSizesOf(
+  fluid: unknown
+): { small: number; large: number } | undefined {
+  return isPlainRecord(fluid) &&
+    typeof fluid.small === "number" &&
+    typeof fluid.large === "number"
+    ? { small: fluid.small, large: fluid.large }
+    : undefined;
+}
+
+/** A token with its light value written from its two sizes, where it has them. */
+function withFluidValue(token: unknown, range: FluidRangeWidths): unknown {
+  if (!isPlainRecord(token) || !isPlainRecord(token.values)) return token;
+  const sizes = fluidSizesOf(token.fluid);
+  if (sizes === undefined) return token;
+  const light = fluidValue(sizes, range);
+  return token.values.light === light
+    ? token
+    : { ...token, values: { ...token.values, light } };
 }
 
 /**
@@ -517,7 +723,7 @@ export function mergeSiteStyleSection(
   }
   const rules: EntryRules =
     section === "classes"
-      ? { keyOf: classKey, merge: mergedValue }
+      ? { keyOf: classKey, merge: mergedClass }
       : fontRules(listOf(b), listOf(m));
   return {
     value: mergedEntries(

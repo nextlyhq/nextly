@@ -1508,3 +1508,65 @@ describe("validateBlockPropValues", () => {
     expect(issues.map(issue => issue.path)).toEqual(["text"]);
   });
 });
+
+describe("a one-paragraph Text prop", () => {
+  const source: BlockPropsSource = {
+    props: { text: { type: "textarea", oneParagraph: true } },
+  };
+  const paragraph = {
+    root: {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [{ type: "text", text: "Bold", format: 1 }],
+        },
+      ],
+    },
+  };
+
+  it("holds its words as a string, as an older Text did", async () => {
+    expect(
+      await validateBlockPropValues({ text: "Old words" }, source)
+    ).toEqual([]);
+  });
+
+  it("holds an empty or blank string, a Text cleared of its words", async () => {
+    expect(await validateBlockPropValues({ text: "" }, source)).toEqual([]);
+    expect(await validateBlockPropValues({ text: "  " }, source)).toEqual([]);
+  });
+
+  it("holds one paragraph of editor content", async () => {
+    expect(await validateBlockPropValues({ text: paragraph }, source)).toEqual(
+      []
+    );
+  });
+
+  it("refuses anything else", async () => {
+    expect(await validateBlockPropValues({ text: 42 }, source)).toHaveLength(1);
+    expect(
+      await validateBlockPropValues({ text: { nope: true } }, source)
+    ).toHaveLength(1);
+  });
+
+  it("refuses a length bound it could not enforce on editor content", () => {
+    for (const bound of ["minLength", "maxLength"]) {
+      expect(() =>
+        blockPropsToFieldConfigs({
+          props: {
+            text: { type: "textarea", oneParagraph: true, [bound]: 10 },
+          },
+        })
+      ).toThrow();
+    }
+  });
+
+  it("is a control: a plain textarea prop still refuses editor content", async () => {
+    expect(
+      await validateBlockPropValues(
+        { text: paragraph },
+        { props: { text: { type: "textarea" } } }
+      )
+    ).toHaveLength(1);
+  });
+});

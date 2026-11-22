@@ -144,6 +144,61 @@ describe("ValidationRulesEditor — what it reports", () => {
   });
 });
 
+// A pattern cannot be put into words for the editor who fails it, so without a
+// message they learn only that the value "does not match the required format".
+// The author, who knows what it needs, is asked for one while it is missing.
+describe("ValidationRulesEditor — asking for a pattern's message", () => {
+  const nudge = /editors only see that the value does not match/i;
+
+  it("asks once a pattern is written and the message is blank", () => {
+    render(
+      <ValidationRulesEditor
+        allowed={["pattern", "message"]}
+        messageDescribes="pattern"
+        value={{ pattern: "@123" }}
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.getByText(nudge)).toBeInTheDocument();
+    expect(
+      screen.getByLabelText(/custom error message/i)
+    ).toHaveAccessibleDescription(expect.stringMatching(nudge));
+  });
+
+  it("does not ask with no pattern, or once a message is written", () => {
+    const { rerender } = render(
+      <ValidationRulesEditor
+        allowed={["pattern", "message"]}
+        messageDescribes="pattern"
+        value={{}}
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.queryByText(nudge)).toBeNull();
+
+    rerender(
+      <ValidationRulesEditor
+        allowed={["pattern", "message"]}
+        messageDescribes="pattern"
+        value={{ pattern: "@123", message: "Must contain @123" }}
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.queryByText(nudge)).toBeNull();
+  });
+
+  it("does not ask where the message is not the pattern's", () => {
+    render(
+      <ValidationRulesEditor
+        allowed={["pattern", "message"]}
+        value={{ pattern: "@123" }}
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.queryByText(nudge)).toBeNull();
+  });
+});
+
 describe("drawsAnyValidationRule", () => {
   it("is false for a set this editor draws nothing from", () => {
     expect(drawsAnyValidationRule([])).toBe(false);

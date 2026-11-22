@@ -37,6 +37,44 @@ import {
 import type { ServiceContainer } from "../../../services";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
+// The test's seam on the migration file a save runs: a statement `fileFailure.matches` names is sent
+// as one the database refuses, so the file stops at that statement as a server would stop it, inside
+// the real runner (its transaction, or MySQL's statements kept before it).
+const fileFailure = vi.hoisted(() => ({
+  matches: undefined as ((statement: string) => boolean) | undefined,
+}));
+vi.mock("../../schema/busy-table/run-unit", async original => {
+  const actual =
+    await original<typeof import("../../schema/busy-table/run-unit")>();
+  return {
+    ...actual,
+    runUnitInTries: (
+      adapter: Parameters<typeof actual.runUnitInTries>[0],
+      statements: Parameters<typeof actual.runUnitInTries>[1],
+      ...rest: Parameters<typeof actual.runUnitInTries> extends [
+        unknown,
+        unknown,
+        ...infer R,
+      ]
+        ? R
+        : never
+    ) => {
+      const matches = fileFailure.matches;
+      return actual.runUnitInTries(
+        adapter,
+        matches === undefined
+          ? statements
+          : statements.map(statement =>
+              matches(statement)
+                ? "SELECT injected_copy_failure FROM injected_copy_failure"
+                : statement
+            ),
+        ...rest
+      );
+    },
+  };
+});
+
 const LOCALES = ["en", "es", "ar"];
 const SHARED = [
   { name: "heading", type: "text", localized: false },
@@ -81,6 +119,21 @@ function quote(dialect: TestDialect, name: string): string {
   return dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 }
 
+/**
+ * A refused save's drift, told with the way on that works for a save, and no command: the save
+ * withdrew its files, so none is left for `nextly migrate:resolve` to record.
+ */
+function expectBuilderDriftWayOn(refusal: unknown): void {
+  // Read as text: a path that answers rather than throws hands its answer on in an Error.
+  const told = `${refusal instanceof Error ? refusal.message : String(refusal)} ${String(
+    (refusal as { publicMessage?: unknown } | undefined)?.publicMessage
+  )}`;
+  expect(told).toContain("schema drift detected");
+  expect(told).toContain("put the table back as the history records it");
+  expect(told).not.toContain("migrate:resolve");
+  expect(told).not.toContain("migrate:create");
+}
+
 describeEachDialect("a shared field that becomes translated", dialect => {
   let current: TestNextly;
 
@@ -95,6 +148,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
   });
 
   afterEach(async () => {
+    // A case that failed before clearing its seam leaves the next one's file whole.
+    fileFailure.matches = undefined;
     await current.destroy();
     vi.unstubAllEnvs();
   });
@@ -250,6 +305,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
   const PATHS = [
     {
       path: "the builder saves the field alone",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: false,
       table: "dc_posts",
       seed: seedCollection,
       read: readCollection,
@@ -264,6 +321,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     },
     {
       path: "the builder applies the change with the schema dialog",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: true,
       table: "dc_posts",
       seed: seedCollection,
       read: readCollection,
@@ -289,6 +348,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     },
     {
       path: "a Single's schema is saved with the field translated",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: true,
       table: "single_hero",
       seed: seedSingle,
       read: () => readSingle(),
@@ -302,6 +363,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     },
     {
       path: "a Single's schema is applied with the schema dialog",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: true,
       table: "single_hero",
       seed: seedSingle,
       read: () => readSingle(),
@@ -321,6 +384,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     },
     {
       path: "a field group's schema is applied with the schema dialog",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: true,
       table: "comp_banner",
       seed: seedFieldGroup,
       // A field group has no reader of its own: its rows are read through the entries embedding
@@ -391,8 +456,12 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     "refuses a field whose type changes as it becomes translated, and changes nothing, when $path",
     async ({ table, seed, change }) => {
       // The shared value would be copied as it is into a companion column of the new type: text
-      // into a number column fails part-way on PostgreSQL and is coerced on MySQL.
+      // into a number column fails part-way on PostgreSQL and is coerced on MySQL. A value the new
+      // type reads ("5") passes the judgement of the values, so this refusal is the one reached.
       const id = await seed();
+      await query(
+        `UPDATE ${quote(dialect, table)} SET ${quote(dialect, "heading")} = '5' WHERE ${quote(dialect, "id")} = '${id}'`
+      );
 
       const refusal = await change([
         { name: "heading", type: "number", localized: true },
@@ -412,41 +481,102 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       const [row] = await query<{ heading: string }>(
         `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, table)} WHERE ${quote(dialect, "id")} = '${id}'`
       );
-      expect(row?.heading).toBe("Hello");
+      expect(String(row?.heading)).toBe("5");
     }
   );
 
-  it("keeps the value on main when moving it fails, so the drop never runs, and moves it on the next try", async () => {
-    // The apply moves the value before it drops the main column, so a move that fails stops the
-    // apply with the column, and its value, still in place: the drop is never let through on a
-    // move that did not happen. MySQL commits each schema statement, so the companion may keep a
-    // new, empty column; the next apply takes it as it is.
-    const id = await seedCollection();
-    const dialog = PATHS.find(p => p.path.includes("schema dialog"));
-    if (!dialog) throw new Error("the collection dialog path is missing");
-    // Matched anywhere in the statement: on PostgreSQL and MySQL a schema
-    // statement carries the run's lock claim ahead of it (`markedForSchemaLock`).
-    const injected = failStatementsMatching(
-      statement =>
-        statement.includes("INSERT INTO") &&
-        statement.includes("dc_posts_locales")
+  it("refuses first a type change whose values the new type cannot read, as it becomes translated, through the collection's schema dialog", async () => {
+    // "Hello" is no number: the collection's save judges the values before the translation's
+    // own check, so its refusal names the field and the values, and nothing changes.
+    const dialog = PATHS.find(
+      p => p.path === "the builder applies the change with the schema dialog"
     );
+    if (!dialog) throw new Error("the collection dialog path is missing");
+    const { table, seed, change } = dialog;
+    const id = await seed();
 
-    const failed = await dialog.change(TRANSLATED).then(
+    const refusal = await change([
+      { name: "heading", type: "number", localized: true },
+      { name: "views", type: "number" },
+    ]).then(
       () => undefined,
       (error: unknown) => error
     );
-    injected.mockRestore();
 
-    expect(String(failed)).toMatch(/injected copy failure/);
-    expect(await mainHeading("dc_posts", id)).toBe("Hello");
-    expect(await readCollection(id)).toBe("Hello");
-
-    await dialog.change(TRANSLATED);
-
-    expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
-    expect(await readCollection(id)).toBe("Hello");
+    const reported =
+      refusal instanceof Error
+        ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
+        : String(refusal);
+    expect(reported).toMatch(/TYPE_CHANGE_LOSES_VALUES/);
+    expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
+    const [row] = await query<{ heading: string }>(
+      `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, table)} WHERE ${quote(dialect, "id")} = '${id}'`
+    );
+    expect(row?.heading).toBe("Hello");
   });
+
+  // The value moves before the main column is dropped, so a move that fails stops the change with
+  // the column, and its value, still in place: the drop is never let through on a move that did not
+  // happen. The push (a collection's settings save) moves it as its own step: PostgreSQL takes the
+  // whole push back, while SQLite and MySQL keep the companion's new, empty column, which the next
+  // save's push takes as it is and finishes. The migration file (the schema dialog) copies it before its drop, a copy the
+  // database refuses stops the file there, and on SQLite and PostgreSQL the save's files go back in
+  // one transaction; MySQL commits each schema statement, so there the save is told as part held.
+  it.each([
+    {
+      road: "the push",
+      path: "the builder saves the field alone",
+    },
+    {
+      road: "its migration file",
+      path: "the builder applies the change with the schema dialog",
+    },
+  ])(
+    "keeps the value on main when moving it fails, so the drop never runs, through $road",
+    async ({ path }) => {
+      const id = await seedCollection();
+      const save = PATHS.find(p => p.path === path);
+      if (!save) throw new Error(`the path "${path}" is missing`);
+      // Matched anywhere in the statement: on PostgreSQL and MySQL a schema
+      // statement carries the run's lock claim ahead of it (`markedForSchemaLock`).
+      const copies = (statement: string) =>
+        statement.includes("INSERT INTO") &&
+        statement.includes("dc_posts_locales");
+      const injected = save.runsFile
+        ? undefined
+        : failStatementsMatching(copies);
+      if (save.runsFile) fileFailure.matches = statement => copies(statement);
+
+      const failed = await save.change(TRANSLATED).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      injected?.mockRestore();
+      fileFailure.matches = undefined;
+
+      expect(String(failed)).toMatch(/injected[ _]copy[ _]failure/);
+      expect(await mainHeading("dc_posts", id)).toBe("Hello");
+      // MySQL commits each schema statement as it runs, so the save's files run one by one there:
+      // its own file, which records the field translated, stays applied, and the failure is told
+      // as part held, its translations file kept with the steps that finish it.
+      if (save.runsFile && dialect === "mysql") {
+        const said = (failed as { publicMessage?: string }).publicMessage ?? "";
+        expect(said).toContain("The database now holds part of this change");
+        expect(said).toContain("nextly migrate:resolve --applied");
+        return;
+      }
+      expect(await readCollection(id)).toBe("Hello");
+
+      const retried = await save.change(TRANSLATED).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(retried).toBeUndefined();
+      expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+      expect(await readCollection(id)).toBe("Hello");
+    }
+  );
 
   it("writes nothing when the schema dialog's apply is refused for a question left unanswered", async () => {
     // The same apply renames `views`, and the dialog sends no answer for that rename, so the apply
@@ -480,11 +610,11 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(moved.en ?? null).toBeNull();
   });
 
-  it("finishes on the next apply when one moved and dropped the column but failed before recording it", async () => {
-    // The apply moves the value and drops the main column, then the registry write after it
-    // fails, so the registry still describes the field as shared. Applied again, the main column is
-    // already gone and the value already on the companion: nothing is left to move, and the apply
-    // finishes from there instead of failing on the column it no longer has.
+  // The dialog's save runs its migration file, which records the change in the registry inside its
+  // own transaction, so the move and that record stand or fall together. The dialog's own write of
+  // the registry row after the translations table is brought in step is refused once: not fatal,
+  // as the file has recorded the change, and the value reads from the companion.
+  it("keeps the change its file recorded when the dialog's registry write after it fails", async () => {
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
@@ -529,21 +659,10 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     injected.mockRestore();
     expect(refusedOnce).toBe(true);
     expect(await mainHeading("dc_posts", id)).toBeUndefined();
-    // The registry still records the field shared: the next apply is a retry of this one.
-    const [registry] = await query<{ fields: unknown }>(
-      `SELECT ${quote(dialect, "fields")} AS fields FROM ${quote(dialect, "dynamic_collections")} WHERE ${quote(dialect, "slug")} = 'posts'`
-    );
-    const recorded = (
-      typeof registry?.fields === "string"
-        ? JSON.parse(registry.fields)
-        : registry?.fields
-    ) as { name: string; localized?: unknown }[];
-    // Recorded, and recorded shared as the seed declared it: a field missing from the record, or
-    // recorded with no answer either way, is another state.
-    const heading = recorded.find(f => f.name === "heading");
-    expect(heading).toBeDefined();
-    expect(heading?.localized).toBe(false);
+    expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+    expect(await readCollection(id)).toBe("Hello");
 
+    // Saved again, there is nothing left to change: the save goes through and the value stays.
     await dialog.change(TRANSLATED);
 
     expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
@@ -736,6 +855,288 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     );
     expect(String(row?.views)).toBe(views);
   });
+
+  it("refuses a code-first apply whose move would lose the column's comment or collation, and changes nothing", async () => {
+    const id = await seedCollection();
+    // The main column as a database may have it: with a comment, or on SQLite, where a collation
+    // lives only in the table's statement, beside a column that names one.
+    if (dialect === "sqlite") {
+      await query(
+        `ALTER TABLE ${quote(dialect, "dc_posts")} ADD COLUMN ${quote(dialect, "note")} TEXT COLLATE NOCASE`
+      );
+    } else if (dialect === "mysql") {
+      await query(
+        `ALTER TABLE ${quote(dialect, "dc_posts")} MODIFY COLUMN ${quote(dialect, "heading")} VARCHAR(255) NULL COMMENT 'kept'`
+      );
+    } else {
+      await query(
+        `COMMENT ON COLUMN ${quote(dialect, "dc_posts")}.${quote(dialect, "heading")} IS 'kept'`
+      );
+    }
+
+    const applied = await applyCodeFirst([
+      { name: "heading", type: "text", localized: true },
+      { name: "views", type: "number" },
+    ]);
+
+    expect(applied.success).toBe(false);
+    expect(JSON.stringify(applied)).toMatch(
+      dialect === "sqlite"
+        ? /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own collation/
+        : /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own comment/
+    );
+    expect(await mainHeading("dc_posts", id)).toBe("Hello");
+    expect(await columnsOf("dc_posts_locales")).not.toContain("heading");
+  });
+
+  /**
+   * Gives `table`'s `column` a definition of its own as a database may have it: a comment, or on
+   * SQLite, where a collation lives only in the table's statement, a column beside it naming one.
+   */
+  async function markColumn(table: string, column: string): Promise<void> {
+    if (dialect === "sqlite") {
+      await query(
+        `ALTER TABLE ${quote(dialect, table)} ADD COLUMN ${quote(dialect, "note")} TEXT COLLATE NOCASE`
+      );
+    } else if (dialect === "mysql") {
+      await query(
+        `ALTER TABLE ${quote(dialect, table)} MODIFY COLUMN ${quote(dialect, column)} TEXT NULL COMMENT 'kept'`
+      );
+    } else {
+      await query(
+        `COMMENT ON COLUMN ${quote(dialect, table)}.${quote(dialect, column)} IS 'kept'`
+      );
+    }
+  }
+
+  /** The refusal a move losing part of a column's definition answers with, as the caller receives it. */
+  function expectDefinitionRefusal(error: unknown): void {
+    expect(JSON.stringify(error)).toMatch(
+      dialect === "sqlite"
+        ? /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own collation/
+        : /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own comment/
+    );
+  }
+
+  it("refuses turning a Single's translation on with no field sent, where the move would lose its column's definition", async () => {
+    await dispatchSingles(
+      "createSingle",
+      {},
+      {
+        slug: "mkd_hero",
+        label: "Hero",
+        localized: false,
+        fields: [{ name: "heading", type: "text" }],
+      }
+    );
+    await markColumn("single_mkd_hero", "heading");
+
+    const refused = await dispatchSingles(
+      "updateSingleSchema",
+      { slug: "mkd_hero" },
+      { localized: true }
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toBeInstanceOf(Error);
+    expectDefinitionRefusal(
+      (refused as { publicData?: unknown }).publicData ?? refused
+    );
+    expect(await columnsOf("single_mkd_hero")).toContain("heading");
+    expect(await columnsOf("single_mkd_hero_locales")).not.toContain("heading");
+  });
+
+  it("refuses turning a field group's translation on with no field sent, where the move would lose its column's definition", async () => {
+    await dispatchComponents(
+      "createComponent",
+      {},
+      {
+        slug: "mkd_banner",
+        label: "Banner",
+        localized: false,
+        fields: [{ name: "heading", type: "text" }],
+      }
+    );
+    await markColumn("comp_mkd_banner", "heading");
+
+    const refused = await dispatchComponents(
+      "updateComponent",
+      { slug: "mkd_banner" },
+      { localized: true }
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toBeInstanceOf(Error);
+    expectDefinitionRefusal(
+      (refused as { publicData?: unknown }).publicData ?? refused
+    );
+    expect(await columnsOf("comp_mkd_banner")).toContain("heading");
+    expect(await columnsOf("comp_mkd_banner_locales")).not.toContain("heading");
+  });
+
+  /** The default `table`'s `column` has, as the database's catalog reports it. */
+  async function columnDefault(
+    table: string,
+    column: string
+  ): Promise<string | null> {
+    const [row] = await query<{ d: string | null }>(
+      dialect === "mysql"
+        ? `SELECT COLUMN_DEFAULT AS d FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' AND COLUMN_NAME = '${column}'`
+        : `SELECT column_default AS d FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}' AND column_name = '${column}'`
+    );
+    return row?.d ?? null;
+  }
+
+  // SQLite cannot give an existing column a default without rebuilding its table.
+  it.skipIf(dialect === "sqlite")(
+    "gives the companion column the main column's default as a code-first apply moves its values, or refuses where it cannot take it",
+    async () => {
+      const id = await seedCollection();
+      await query(
+        dialect === "mysql"
+          ? `ALTER TABLE ${quote(dialect, "dc_posts")} MODIFY COLUMN ${quote(dialect, "heading")} VARCHAR(255) NULL DEFAULT 'none'`
+          : `ALTER TABLE ${quote(dialect, "dc_posts")} ALTER COLUMN ${quote(dialect, "heading")} SET DEFAULT 'none'`
+      );
+
+      const applied = await applyCodeFirst([
+        { name: "heading", type: "text", localized: true },
+        { name: "views", type: "number" },
+      ]);
+
+      // MySQL gives a TEXT column no literal default, and the field's companion column is TEXT, so
+      // there the move is refused before anything runs and the value stays where it was.
+      if (dialect === "mysql") {
+        expect(applied.success).toBe(false);
+        expect(JSON.stringify(applied)).toMatch(
+          /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own default/
+        );
+        expect(await mainHeading("dc_posts", id)).toBe("Hello");
+        return;
+      }
+      expect(applied.success, JSON.stringify(applied)).toBe(true);
+      expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+      expect(
+        String(await columnDefault("dc_posts_locales", "heading"))
+      ).toMatch(/none/);
+    }
+  );
+
+  // A default given to the main column outside the history is drift, refused as `nextly migrate`
+  // refuses it, before anything changes: by a Single's and a field group's file, and by a
+  // collection's push, whose check before the push judges the table as the file road does. On MySQL
+  // the move's own refusal comes first wherever it is asked before the push or the file (its TEXT
+  // companion column could take no literal default).
+  it.skipIf(dialect === "sqlite").each(PATHS)(
+    "refuses a default given to the main column outside the history, and changes nothing, when $path",
+    async ({ path, table, seed, change }) => {
+      const id = await seed();
+      await query(
+        dialect === "mysql"
+          ? `ALTER TABLE ${quote(dialect, table)} MODIFY COLUMN ${quote(dialect, "heading")} VARCHAR(255) NULL DEFAULT 'none'`
+          : `ALTER TABLE ${quote(dialect, table)} ALTER COLUMN ${quote(dialect, "heading")} SET DEFAULT 'none'`
+      );
+
+      const refusal = await change(TRANSLATED).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      // On MySQL the move's own refusal comes first on every path, before a file is planned or a
+      // push is judged: the field's TEXT companion column could take no literal default.
+      if (dialect === "mysql") {
+        expect(reportedRefusal(refusal)).toMatch(
+          /own default; turning translation on moves its values into a new column/
+        );
+        expect(await mainHeading(table, id)).toBe("Hello");
+        return;
+      }
+      expectBuilderDriftWayOn(refusal);
+      expect(await mainHeading(table, id)).toBe("Hello");
+      expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
+
+      // The way on, followed: the column put back as the history records it by hand, and the same
+      // save made again.
+      await query(
+        `ALTER TABLE ${quote(dialect, table)} ALTER COLUMN ${quote(dialect, "heading")} DROP DEFAULT`
+      );
+      await change(TRANSLATED);
+      expect((await companionHeadings(table, id)).en).toBe("Hello");
+    }
+  );
+
+  // A Builder save refuses as the code-first apply does. SQLite is left out: its collation sits
+  // beside the field in a column of its own, which the Builder's dialogs would ask to drop.
+  it.skipIf(dialect === "sqlite").each(PATHS)(
+    "refuses a field whose move would lose its column's comment as it becomes translated, and changes nothing, when $path",
+    async ({ table, seed, change }) => {
+      const id = await seed();
+      await markColumn(table, "heading");
+
+      const refusal = await change(TRANSLATED).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(reportedRefusal(refusal)).toMatch(
+        /own comment; turning translation on moves its values into a new column/
+      );
+      expect(await mainHeading(table, id)).toBe("Hello");
+      expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
+    }
+  );
+
+  /** What a Builder save's refusal says, whether it arrives as an error or a refused result. */
+  function reportedRefusal(refusal: unknown): string {
+    return refusal instanceof Error
+      ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
+      : String(refusal);
+  }
+
+  // SQLite keeps a collation only in a table's statement; a quoted name holding the word is none.
+  it.runIf(dialect === "sqlite")(
+    "moves a field's values on SQLite beside a column named collate, which declares no collation",
+    async () => {
+      const id = await seedCollection();
+      await query(
+        `ALTER TABLE ${quote(dialect, "dc_posts")} ADD COLUMN ${quote(dialect, "collate")} TEXT`
+      );
+
+      const applied = await applyCodeFirst([
+        { name: "heading", type: "text", localized: true },
+        { name: "views", type: "number" },
+      ]);
+
+      expect(applied.success, JSON.stringify(applied)).toBe(true);
+      expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+    }
+  );
+
+  // MySQL reports an expression default holding a string literal in a form no statement accepts
+  // back, so a move that would need it is refused before the main column is dropped.
+  it.runIf(dialect === "mysql")(
+    "refuses a code-first apply whose move would lose a default MySQL cannot restate, and changes nothing",
+    async () => {
+      const id = await seedCollection();
+      await query(
+        `ALTER TABLE ${quote(dialect, "dc_posts")} MODIFY COLUMN ${quote(dialect, "heading")} VARCHAR(255) NULL DEFAULT (lower('X'))`
+      );
+
+      const applied = await applyCodeFirst([
+        { name: "heading", type: "text", localized: true },
+        { name: "views", type: "number" },
+      ]);
+
+      expect(applied.success).toBe(false);
+      expect(JSON.stringify(applied)).toMatch(
+        /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own default/
+      );
+      expect(await mainHeading("dc_posts", id)).toBe("Hello");
+    }
+  );
 
   it("refuses a code-first apply that makes a float an integer as it becomes translated, and changes nothing", async () => {
     // SQLite would keep 1.5 as it is in an INTEGER column, a value the whole-number field refuses;

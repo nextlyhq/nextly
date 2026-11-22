@@ -325,6 +325,81 @@ describe("firstNoRetry", () => {
     });
   });
 
+  it.each([
+    "CREATE TABLE posts (id integer)",
+    "ALTER TABLE posts ADD COLUMN late integer",
+    "DROP INDEX posts_idx",
+    "ALTER INDEX posts_idx RENAME TO posts_idx_v2",
+  ])(
+    "stops at a schema statement where PostgreSQL has a DDL event trigger: %s",
+    statement => {
+      expect(
+        firstNoRetry(
+          ["INSERT INTO plain (id) VALUES (1)", statement],
+          "postgresql",
+          triggers,
+          { ddlEventTriggers: true }
+        )
+      ).toEqual({
+        statementNumber: 2,
+        judgement: { kind: "no-retry", reason: "event-trigger" },
+      });
+    }
+  );
+
+  it("does not stop at a kept rename read only to follow its table, where a DDL event trigger exists", () => {
+    expect(
+      firstNoRetry(
+        ["ALTER TABLE plain RENAME TO plain_v2", "UPDATE plain_v2 SET x = 1"],
+        "postgresql",
+        triggers,
+        { ddlEventTriggers: true, ddlEventTriggersFrom: 1 }
+      )
+    ).toBeUndefined();
+  });
+
+  it("stops only at the schema statements a tag-limited event trigger fires on", () => {
+    const context = {
+      ddlEventTriggers: true,
+      ddlEventTriggerTags: new Set(["DROP TABLE"]),
+    };
+    expect(
+      firstNoRetry(
+        [
+          "CREATE TABLE posts (id integer)",
+          "CREATE UNIQUE INDEX i ON posts (id)",
+        ],
+        "postgresql",
+        triggers,
+        context
+      )
+    ).toBeUndefined();
+    expect(
+      firstNoRetry(
+        ["CREATE TABLE posts (id integer)", "DROP TABLE IF EXISTS old_posts"],
+        "postgresql",
+        triggers,
+        context
+      )
+    ).toEqual({
+      statementNumber: 2,
+      judgement: { kind: "no-retry", reason: "event-trigger" },
+    });
+  });
+
+  it("lets a row change run again where only a DDL event trigger exists", () => {
+    expect(
+      firstNoRetry(
+        ["INSERT INTO plain (id) VALUES (1)"],
+        "postgresql",
+        triggers,
+        {
+          ddlEventTriggers: true,
+        }
+      )
+    ).toBeUndefined();
+  });
+
   it("lets a change with no rename or trigger run again", () => {
     expect(
       firstNoRetry(
@@ -368,6 +443,49 @@ describe("judgeStatement on what drizzle-kit and the migration generator write",
       kind: "may-run-again",
     });
   });
+
+  it.each([
+    ["mysql", "ALTER TABLE posts ADD INDEX idx (slug, title(191))"],
+    ["mysql", "CREATE TABLE posts (title varchar(255), KEY k (title(191)))"],
+    ["mysql", "ALTER TABLE posts ADD PRIMARY KEY (slug(100))"],
+    ["mysql", "CREATE UNIQUE INDEX idx ON `posts` (`title`(191))"],
+    ["mysql", "CREATE INDEX idx ON shop.posts (title(191))"],
+    ["postgresql", "ALTER TABLE docs ADD COLUMN embedding vector(1536)"],
+    ["postgresql", "CREATE TABLE docs (id integer, embedding vector(1536))"],
+    ["postgresql", "ALTER TABLE docs ALTER COLUMN embedding TYPE vector(768)"],
+  ] as const)(
+    "reads an index prefix length as no call on %s: %s",
+    (dialect, statement) => {
+      expect(judgeStatement(statement, dialect, () => false)).toEqual({
+        kind: "may-run-again",
+      });
+    }
+  );
+
+  it.each([
+    [
+      "postgresql",
+      "ALTER TABLE posts ADD COLUMN marker integer DEFAULT site_fn(1)",
+    ],
+    [
+      "mysql",
+      "ALTER TABLE posts ADD COLUMN marker integer DEFAULT (site_fn(1))",
+    ],
+    [
+      "sqlite",
+      "ALTER TABLE posts ADD COLUMN marker integer DEFAULT site_fn(1)",
+    ],
+    ["postgresql", "CREATE INDEX idx ON posts (site_fn(1))"],
+    ["postgresql", "CREATE TABLE posts (id integer CHECK (site_fn(1) > 0))"],
+  ] as const)(
+    "reads a function called with numbers in a schema statement as a call on %s: %s",
+    (dialect, statement) => {
+      expect(judgeStatement(statement, dialect, () => false)).toEqual({
+        kind: "no-retry",
+        reason: "unknown-code",
+      });
+    }
+  );
 
   it("still reads a schema-qualified quoted call as a call", () => {
     expect(

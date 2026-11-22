@@ -138,6 +138,51 @@ export const singleKeys = {
 };
 
 /**
+ * The most pages of Singles read: past it, a server still saying there is
+ * more is answered with an error rather than read for ever.
+ */
+const MAX_EVERY_SINGLE_PAGES = 50;
+
+/**
+ * Every Single, each page of {@link NAV_SINGLES_PARAMS} in turn until
+ * `meta.hasNext` is false. Each page is the cache entry `useSingles` keeps for
+ * it, so a page already read is not asked for again while it is fresh.
+ */
+async function fetchEverySingle(
+  queryClient: QueryClient
+): Promise<ApiSingle[]> {
+  const items: ApiSingle[] = [];
+  for (let page = 0; page < MAX_EVERY_SINGLE_PAGES; page++) {
+    const params: TableParams = {
+      ...NAV_SINGLES_PARAMS,
+      pagination: { ...NAV_SINGLES_PARAMS.pagination, page },
+    };
+    const response = await queryClient.fetchQuery({
+      queryKey: singleKeys.list(params),
+      queryFn: () => singleApi.fetchSingles(params),
+    });
+    items.push(...response.items);
+    if (response.meta?.hasNext !== true) return items;
+  }
+  throw new Error("Unable to load every Single");
+}
+
+/**
+ * Every Single the reader may read, however many pages that takes, hidden
+ * ones and those in a custom sidebar group included: for the admin's one
+ * "open this document" rule, which reads a Single's fields wherever a link to
+ * it is drawn. Kept under {@link singleKeys.all}, so whatever refreshes the
+ * Singles refreshes it.
+ */
+export function useEverySingle(): UseQueryResult<ApiSingle[], Error> {
+  const queryClient = useQueryClient();
+  return useQuery<ApiSingle[], Error>({
+    queryKey: [...singleKeys.all(), "every"],
+    queryFn: () => fetchEverySingle(queryClient),
+  });
+}
+
+/**
  * useSingles - Query hook for fetching paginated Single list
  *
  * Fetches Singles with pagination, search, and sorting support.

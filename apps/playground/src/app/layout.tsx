@@ -1,4 +1,5 @@
 import { SiteCode } from "@nextlyhq/plugin-page-builder/site";
+import { Suspense } from "react";
 
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
@@ -54,6 +55,20 @@ import "@/nextly/cached-read";
  * Its read goes through the `"use cache"` function imported above, as the
  * page builder's docs tell a site under Cache Components to do.
  *
+ * ## Why a Suspense boundary holds the body
+ *
+ * A page stored ahead of time is drawn again on its next visit once a write
+ * after the build expires it: a database seeded or edited after `next build`,
+ * as on a fresh deploy. With Cache Components on, Next.js draws it as a
+ * prerender, and a read there that is not cached (Nextly starting, say) is
+ * refused when no Suspense boundary is above it, so the visit answers 500. A
+ * public page has no boundary of its own, so that its content is in the first
+ * HTML for a visitor without JavaScript. This one lets such a page finish on
+ * the request instead. React never sends a boundary that holds the body
+ * hidden, so the page still arrives whole and inline, and a page whose reads
+ * are cached is still stored whole. It does the same with Cache Components
+ * off, where nothing stops a render on a read.
+ *
  * @module app/layout
  */
 export default function RootLayout({
@@ -90,10 +105,12 @@ export default function RootLayout({
       <head>
         <SiteCode slot="head" />
       </head>
-      <body className="antialiased" suppressHydrationWarning>
-        {children}
-        <SiteCode slot="body" />
-      </body>
+      <Suspense>
+        <body className="antialiased" suppressHydrationWarning>
+          {children}
+          <SiteCode slot="body" />
+        </body>
+      </Suspense>
     </html>
   );
 }

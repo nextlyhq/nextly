@@ -14,7 +14,7 @@
 
 import type { FieldConfig } from "nextly/config";
 
-import { sameFormValue } from "./same-form-value";
+import { sameFieldValue } from "./same-form-value";
 import {
   formFieldsOf,
   snapshotToFormValues,
@@ -87,42 +87,8 @@ export function restorePlan(input: RestorePlanInput): RestoreRow[] {
   const rows: RestoreRow[] = [];
 
   for (const field of formFields) {
-    const name = field.name;
-    const base = {
-      name,
-      label: labelOf(field),
-      replacesUnsaved: input.dirty.has(name),
-      shared: input.translatable ? !input.translatable.has(name) : false,
-    };
-    // Hidden from this person: whether it changed cannot be told, and its
-    // value never reaches the editor.
-    if (withheld.has(name)) {
-      rows.push({ ...base, ...disabledAs("hidden") });
-      continue;
-    }
-    // A field the version does not hold is not the version's to restore.
-    if (!Object.hasOwn(input.snapshot, name)) continue;
-    // A value the version cleared stays cleared: the form reads an empty
-    // stored value as no value, and an undefined one would be dropped by
-    // the save rather than clear the field.
-    const value = Object.hasOwn(versionValues, name)
-      ? versionValues[name]
-      : storedEmpty(input.snapshot[name]);
-    if (sameFormValue(value, input.current[name])) continue;
-    // A translated value of a version that holds no language belongs to no
-    // language, so it is never put into the language being edited.
-    if (
-      input.versionLocale === null &&
-      input.translatable?.has(name) === true
-    ) {
-      rows.push({ ...base, ...disabledAs("no-language") });
-      continue;
-    }
-    rows.push(
-      input.canEdit(name)
-        ? { ...base, chosen: true, value }
-        : { ...base, ...disabledAs("read-only") }
-    );
+    const row = rowFor(field, input, withheld, versionValues);
+    if (row) rows.push(row);
   }
 
   // A field the version holds that the content type no longer has, as the
@@ -142,6 +108,50 @@ export function restorePlan(input: RestorePlanInput): RestoreRow[] {
   return rows;
 }
 
+/**
+ * How one field of the form is offered, or undefined where the version holds
+ * it as the editor does, or does not hold it at all.
+ */
+function rowFor(
+  field: NamedField,
+  input: RestorePlanInput,
+  withheld: ReadonlySet<string>,
+  versionValues: Record<string, unknown>
+): RestoreRow | undefined {
+  const name = field.name;
+  const base = {
+    name,
+    label: labelOf(field),
+    replacesUnsaved: input.dirty.has(name),
+    shared: input.translatable ? !input.translatable.has(name) : false,
+  };
+  // Hidden from this person: whether it changed cannot be told, and its
+  // value never reaches the editor.
+  if (withheld.has(name)) return { ...base, ...disabledAs("hidden") };
+  // A field the version does not hold is not the version's to restore.
+  if (!Object.hasOwn(input.snapshot, name)) return undefined;
+  // A value the version cleared stays cleared: the form reads an empty
+  // stored value as no value, and an undefined one would be dropped by
+  // the save rather than clear the field.
+  const value = Object.hasOwn(versionValues, name)
+    ? versionValues[name]
+    : storedEmpty(input.snapshot[name]);
+  // Compared as the field holds its values: a JSON field's empty values
+  // apart, a relationship by the ids it names.
+  if (sameFieldValue(field.type, value, input.current[name])) return undefined;
+  // A translated value of a version that holds no language belongs to no
+  // language, so it is never put into the language being edited.
+  if (input.versionLocale === null && input.translatable?.has(name) === true) {
+    return { ...base, ...disabledAs("no-language") };
+  }
+  // A field the person may read but not change now keeps the version's value:
+  // what stops the change (another editor holding the document, a condition)
+  // can clear while the version is on screen, and the field is offered then.
+  return input.canEdit(name)
+    ? { ...base, chosen: true, value }
+    : { ...base, ...disabledAs("read-only"), value };
+}
+
 /** An empty value as the version stored it: its own "" or [], else null. */
 function storedEmpty(stored: unknown): unknown {
   if (stored === "" || (Array.isArray(stored) && stored.length === 0)) {
@@ -155,7 +165,12 @@ function disabledAs(disabled: RestoreRowDisabled): {
   disabled: RestoreRowDisabled;
   reason: string;
 } {
-  return { chosen: false, disabled, reason: REASONS[disabled] };
+  return { chosen: false, disabled, reason: restoreRowReason(disabled) };
+}
+
+/** Why a field cannot be restored, as the person reads it. */
+export function restoreRowReason(disabled: RestoreRowDisabled): string {
+  return REASONS[disabled];
 }
 
 function labelOf(field: NamedField): string {

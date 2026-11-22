@@ -263,17 +263,20 @@ function pageKey(collection: string, id: string): string {
 }
 
 /**
- * How many rows one page of a Layout or page read takes: the Direct API's
- * clamp, so each page is the whole page.
+ * How a bounded read pages: how many rows one read takes, and how many reads
+ * it makes before calling its answer a floor. Bounded, so a very large site
+ * costs a fixed number of reads, and says so.
  */
-const ROWS_PER_READ = 500;
+export interface ReadBound {
+  readonly rowsPerRead: number;
+  readonly mostReads: number;
+}
 
 /**
- * How many pages of rows a Layout or page read takes before calling its
- * answer a floor. Bounded, so a very large site costs a fixed number of
- * reads, and says so.
+ * The bound the site's reads use: the Direct API's clamp per read, so each
+ * read is the whole page, and ten reads.
  */
-const MOST_READS = 10;
+const SITE_READ_BOUND: ReadBound = { rowsPerRead: 500, mostReads: 10 };
 
 /** What the site-backed sources read through and where. */
 export interface SitePageReachArgs {
@@ -302,7 +305,7 @@ export function sitePageReachSources(
     notPages: args.notPages,
     pagesCollection: args.pagesCollection,
     publishedLayouts: async () => {
-      const read = await pagedRows(page =>
+      const read = await boundedRows((page, limit) =>
         nextly.find({
           collection: slugs.layouts,
           // The form a visitor gets: a published Layout's pending edit wraps
@@ -312,7 +315,7 @@ export function sitePageReachSources(
           sort: "id",
           depth: 0,
           select: { id: true, areas: true },
-          limit: ROWS_PER_READ,
+          limit,
           page,
           overrideAccess: true,
         })
@@ -325,56 +328,83 @@ export function sitePageReachSources(
     },
     defaultLayout: async () =>
       (await readLayoutSettings(nextly, slugs)).defaultLayout,
-    pagesChoosing: async (layoutIds, includeDefault) => {
-      const read = await pagedRows(page =>
-        nextly.find({
-          collection: args.pagesCollection,
-          // A page that falls back to the default may name no Layout or one
-          // that is not published, so only without the default can the
-          // database narrow the read to the Layouts asked about.
-          ...(includeDefault
-            ? {}
-            : { where: { layout: { in: [...layoutIds] } } }),
-          // Every stored page, drafts too: a change reaches a page that is
-          // published later, as the direct count counts it.
-          status: "all",
-          sort: "id",
-          depth: 0,
-          select: { id: true, layout: true, noHeaderFooter: true },
-          limit: ROWS_PER_READ,
-          page,
-          overrideAccess: true,
-        })
-      );
-      const pages = read.rows.flatMap((row): PageLayoutRow[] => {
-        const id = relationId(row);
-        if (id === null) return [];
-        const stored = row as { layout?: unknown; noHeaderFooter?: unknown };
-        return [
-          {
-            id,
-            layout: relationId(stored.layout),
-            noHeaderFooter:
-              typeof stored.noHeaderFooter === "boolean"
-                ? stored.noHeaderFooter
-                : null,
-          },
-        ];
-      });
-      return { pages, complete: read.complete };
-    },
+    pagesChoosing: (layoutIds, includeDefault) =>
+      // A page that falls back to the default may name no Layout or one that
+      // is not published, so only without the default can the database
+      // narrow the read to the Layouts asked about.
+      readPageLayoutRows(nextly, args.pagesCollection, {
+        naming: includeDefault ? null : layoutIds,
+      }),
   };
 }
 
-/** Rows read a page at a time, up to {@link MOST_READS} pages. */
-async function pagedRows(
+/**
+ * The stored pages' Layout choices, read as the system, a page of rows at a
+ * time under `bound`, and whether that is every page. `naming` narrows the
+ * read to the pages naming one of those Layouts; `null` reads every page.
+ *
+ * Every stored page, drafts too, one row each: its main row, so a published
+ * page answers its live choice and a page never published its own.
+ */
+export async function readPageLayoutRows(
+  nextly: Pick<DefaultLayoutDirectApi, "find">,
+  pagesCollection: string,
+  options: {
+    readonly naming: readonly string[] | null;
+    readonly bound?: ReadBound;
+  }
+): Promise<{ readonly pages: PageLayoutRow[]; readonly complete: boolean }> {
+  const { naming } = options;
+  const read = await boundedRows(
+    (page, limit) =>
+      nextly.find({
+        collection: pagesCollection,
+        ...(naming === null ? {} : { where: { layout: { in: [...naming] } } }),
+        // Every stored page, drafts too: a change reaches a page that is
+        // published later, as the direct count counts it.
+        status: "all",
+        // A deterministic order, so paging neither skips nor repeats a row.
+        sort: "id",
+        depth: 0,
+        select: { id: true, layout: true, noHeaderFooter: true },
+        limit,
+        page,
+        overrideAccess: true,
+      }),
+    options.bound
+  );
+  const pages = read.rows.flatMap((row): PageLayoutRow[] => {
+    const id = relationId(row);
+    if (id === null) return [];
+    const stored = row as { layout?: unknown; noHeaderFooter?: unknown };
+    return [
+      {
+        id,
+        layout: relationId(stored.layout),
+        noHeaderFooter:
+          typeof stored.noHeaderFooter === "boolean"
+            ? stored.noHeaderFooter
+            : null,
+      },
+    ];
+  });
+  return { pages, complete: read.complete };
+}
+
+/**
+ * Rows read a page at a time under `bound`, and whether that is every row:
+ * a read that is still answering more after its last allowed page is not.
+ */
+export async function boundedRows(
   read: (
-    page: number
-  ) => Promise<{ items?: unknown[]; meta?: { hasNext?: boolean } }>
+    page: number,
+    limit: number
+  ) => Promise<{ items?: unknown[]; meta?: { hasNext?: boolean } }>,
+  bound: ReadBound = SITE_READ_BOUND
 ): Promise<{ rows: unknown[]; complete: boolean }> {
   const rows: unknown[] = [];
-  for (let page = 1; page <= MOST_READS; page += 1) {
-    const answered = await read(page);
+  for (let page = 1; page <= bound.mostReads; page += 1) {
+    const answered = await read(page, bound.rowsPerRead);
     rows.push(...(answered.items ?? []));
     if (answered.meta?.hasNext !== true) return { rows, complete: true };
   }

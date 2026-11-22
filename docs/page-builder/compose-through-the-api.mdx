@@ -1,11 +1,11 @@
 ---
 title: Compose pages through the API
-description: Insert patterns, place components, edit a component's fields and variants, choose a page's Layout, and build a collection's template with lists, bindings and conditions from a script, with a dry run before each change.
+description: Insert saved sections, place components, edit a component's fields and variants, choose a page's header & footer set, and build a collection's template with lists, bindings and conditions from a script, with a dry run before each change.
 ---
 
 Everything an editor does to compose a page can be done through the API: insert a
-pattern, place a component, change a placement's values or variant, choose a page's
-Layout, and edit a component's exposed fields and variants. So can everything that
+saved section, place a component, change a placement's values or variant, choose a page's
+header & footer set, and edit a component's exposed fields and variants. So can everything that
 makes a page show content: give a collection its [template](#give-a-collection-its-template),
 give one entry a design of its own, and fill either with dynamic data, through lists
 of entries, bindings of a block's props to fields and visibility conditions. A script
@@ -29,21 +29,21 @@ GET /admin/api/plugins/@nextlyhq/plugin-page-builder/manifest
 
 The manifest describes what the caller may compose with, read as the caller:
 
-- **`collections`**: where pages, patterns, components and Layouts live on this site,
+- **`collections`**: where pages, saved sections, components and header & footer sets live on this site,
   under the names it gave them, and `componentField`, the field a component's
   definition is stored in. `templates` is the collection templates and entries' own
   designs are kept in: a page action on a template names it as the `page`'s
   `collection`, and the template actions' ids are its documents' ids. It is optional:
   a server from before it was listed sends a manifest without it, with the same
   `formatVersion`. Where it's absent, use the default slug, `templates`.
-- **`patterns.items`**: each pattern's `id`, `title`, and `granularity` where it has one.
+- **`patterns.items`**: each saved section's `id`, `title`, and `granularity` where it has one.
 - **`components.items`**: each component's `id` and `title`, with the `fields` a
   placement may set (`id`, `label`, `type`, and `options` for a select), the `slots` it
   may fill, and its `variants` (`id` and `label`). Every component lists all three, empty
   where it has none.
-- **`layouts.items`**: each Layout's `id`, `title`, whether it is `published`, whether it
+- **`layouts.items`**: each header & footer set's `id`, `title`, whether it is `published`, whether it
   `isDefault`, and the `regions` it draws (`area` and `componentId`). `layouts.defaultLayout`
-  is the site default's id. A Layout being removed is left out, since a page cannot
+  is the site default's id. A header & footer set being removed is left out, since a page cannot
   choose it.
 - **`actions`**: the actions below, each with its `path`, every `kind` it takes and the
   JSON Schema of its `request` body.
@@ -55,12 +55,12 @@ The manifest describes what the caller may compose with, read as the caller:
 Each part says whether the caller could read it. A part whose collection the caller may
 not read answers `readable: false` with no items, and the rest is still answered.
 `truncated: true` means the site holds more than one read returns, under the same bounds
-the editor's panels read with. `?locale=fr` reads component and Layout text
+the editor's panels read with. `?locale=fr` reads component and header & footer set text
 in that language.
 
 Every id a page action takes comes from here: `place-component` takes a component's `id`,
 `variant` takes a variant's `id` (not its label, which can change), `values` is keyed by a
-field's `id`, and `set-layout` takes a Layout's `id`. So do a definition edit's field,
+field's `id`, and `set-layout` takes a header & footer set's `id`. So do a definition edit's field,
 slot and variant ids. An edit that points at a block inside the component (`expose` and
 `retarget-exposure`) names it by its `nodeId` in the definition: read the component's row
 from `collections.components`, where `componentField` holds the definition. The manifest's schema is published as `compositionManifestSchema`, so
@@ -121,23 +121,23 @@ on the page's collection. A collection with a Draft/Published lifecycle but no w
 drafts saves an edit straight onto the published entry, so there the caller needs
 **publish** too. `action` is one of:
 
-| `kind`                    | Fields                                      | What it does                                                                                                                            |
-| ------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `insert-pattern`          | `patternId`, `at?`                          | Copies a published pattern's blocks into the page, as the editor's insert panel does.                                                   |
-| `place-component`         | `componentId`, `variant?`, `values?`, `at?` | Places a component by reference, with a variant's id and values keyed by exposed field id.                                              |
-| `set-placement-values`    | `instanceId`, `values?`, `reset?`           | Sets a placement's values. `{ "$unset": true }` empties a field; `reset` lists fields to restore.                                       |
-| `choose-variant`          | `instanceId`, `variant`                     | Chooses a variant by its id, or `null` for the component's defaults.                                                                    |
-| `set-layout`              | `layout`, `noHeaderFooter?`                 | Chooses the page's Layout by id, or `null` for the site default. `noHeaderFooter: true` switches it off. Pages collection only.         |
-| `set-list-query`          | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`, `paginate`, `namedQuery`. See below. |
-| `set-conditions`          | `nodeId`, `conditions`                      | Sets a block's visibility conditions, or `null` to show it to everyone. See below.                                                      |
-| `place-entry-content`     | `field?`, `at?`                             | On a template, places Entry content, which draws the entry's own blocks field `field`. See below.                                       |
-| `set-entry-content-field` | `nodeId`, `field`                           | On a template, chooses the blocks field the Entry content block `nodeId` draws.                                                         |
-| `bind-prop`               | `nodeId`, `prop`, `binding`                 | Binds a block's prop to a field. See below.                                                                                             |
-| `unbind-prop`             | `nodeId`, `prop`, `keep?`                   | Unbinds a block's prop, keeping in its place what a visitor sees now. See below.                                                        |
+| `kind`                    | Fields                                      | What it does                                                                                                                                 |
+| ------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `insert-pattern`          | `patternId`, `at?`                          | Copies a published saved section's blocks into the page, as the editor's insert panel does.                                                  |
+| `place-component`         | `componentId`, `variant?`, `values?`, `at?` | Places a component by reference, with a variant's id and values keyed by exposed field id.                                                   |
+| `set-placement-values`    | `instanceId`, `values?`, `reset?`           | Sets a placement's values. `{ "$unset": true }` empties a field; `reset` lists fields to restore.                                            |
+| `choose-variant`          | `instanceId`, `variant`                     | Chooses a variant by its id, or `null` for the component's defaults.                                                                         |
+| `set-layout`              | `layout`, `noHeaderFooter?`                 | Chooses the page's header & footer set by id, or `null` for the site default. `noHeaderFooter: true` switches it off. Pages collection only. |
+| `set-list-query`          | `listId`, `query`                           | Changes a Collection list's query: `collection`, `relation`, `filters`, `sort`, `limit`, `offset`, `paginate`, `namedQuery`. See below.      |
+| `set-conditions`          | `nodeId`, `conditions`                      | Sets a block's visibility conditions, or `null` to show it to everyone. See below.                                                           |
+| `place-entry-content`     | `field?`, `at?`                             | On a template, places Entry content, which draws the entry's own blocks field `field`. See below.                                            |
+| `set-entry-content-field` | `nodeId`, `field`                           | On a template, chooses the blocks field the Entry content block `nodeId` draws.                                                              |
+| `bind-prop`               | `nodeId`, `prop`, `binding`                 | Binds a block's prop to a field. See below.                                                                                                  |
+| `unbind-prop`             | `nodeId`, `prop`, `keep?`                   | Unbinds a block's prop, keeping in its place what a visitor sees now. See below.                                                             |
 
 `at` is `{ "index": 2 }` for the page's top level, or `{ "parentId", "slot", "index" }`
 inside a block; without it the block goes at the end of the page. The answer holds the
-`ops` the change makes, the page's blocks as it leaves them (`document`) or its Layout
+`ops` the change makes, the page's blocks as it leaves them (`document`) or its header & footer set
 fields (`layout`), and `insertedId`, the new block's id for the next action to address.
 New blocks get fresh ids on every write, as in the editor, so the ids in a dry run's
 answer are not the ones an apply stores: address what the apply's own answer names.
@@ -156,7 +156,7 @@ each at its own address (`/news/page/2`), and `null` turns that off. The write i
 the editor's save is: a field the collection lacks or visitors can't see, a filter on a
 field holding several values, a related list nested more than one level deep, and a split
 into pages the page cannot serve (a second list split into pages, one inside another list,
-one of related entries, one in a component or a Layout region) are refused, in the words the
+one of related entries, one in a component or a header & footer set region) are refused, in the words the
 editor shows, for example `This list sorts by "rating", which Posts doesn't have. Choose another field.`
 
 `namedQuery` is a custom source: `{ "name", "params" }`, a [named query](/docs/page-builder/named-queries)
@@ -185,15 +185,23 @@ template in the `templates` collection), where the entry's own blocks content is
 `field` is the name of a blocks field stored on the collection's entries; without it, the
 collection's one blocks field is chosen where it has exactly one, and where it has several
 the write is refused until one is named. The write is judged as the editor's save is: a
-second Entry content block, one on a page, a component, a pattern or an entry's own blocks
+second Entry content block, one on a page, a component, a saved section or an entry's own blocks
 field, and a field that isn't one of the collection's blocks fields are refused, for
 example `Entry content shows "summary", which isn't a blocks field of Posts. Choose Body or Sidebar.`
 `set-entry-content-field` changes the field later, with the same refusals.
 
 `bind-prop` binds the prop `prop` of the block whose id is `nodeId` to a field. `binding` is
 stored as the block stores it: `{ "$bind": "title" }`, with `source` (`entry`, the
-default, `item` inside a Collection list, `single` with `sourceKey`, or `site`), a
-`fallback` and a `format`. The prop's own value stays, and is shown when the binding can't
+default, `item` inside a Collection list, `single` with `sourceKey`, `site`, or `setting`), a
+`fallback` and a `format`. A `setting` binding is for a block inside a component: its `$bind`
+is the id of one of the component's own settings (`{ "$bind": "title", "source": "setting" }`),
+and the block shows what each placement gives that setting, as the setting's own block does:
+the placement's value, else its binding, else the setting's default. Shown on its own, the
+component shows the default. A setting the component doesn't have, or one that shows or
+hides its block, is refused, as is one whose value the prop can't hold: another type, or a
+choice the prop doesn't offer. On a page, where no setting is there to follow, the block shows
+its own value. Removing the setting leaves each block that followed it showing the
+setting's last default, unbound. The prop's own value stays, and is shown when the binding can't
 be. The write is judged as the editor's save is: a prop the block lacks, a field its source
 lacks, a type that does not fit the prop and a fallback the prop can't hold are refused.
 
@@ -210,7 +218,8 @@ value. `keep` changes whose value is kept: `{ "entry": id }` names the entry, wh
 template's bindings need, since each of its entries shows its own value; `{ "item": id }`
 names the entry of a Collection list's collection, which a block inside the list needs; and
 `{ "value": … }` gives the value; in a list inside another list's items, the item is
-the nearest list's. An image a visitor saw by its address, not a library image, is kept
+the nearest list's, or, for a binding naming the list it reads (`list`), that list's. An
+image a visitor saw by its address, not a library image, is kept
 in the block's address prop (`src` on the Image block), the media prop emptied, and so is
 an image fallback address kept in place of a private field (a media library fallback stays
 in the media prop); a block declaring none refuses the unbind; and an image's typed address, which a bound image never draws, is emptied
@@ -233,8 +242,9 @@ Content-Type: application/json
 { "action": { "kind": "add-variant", "label": "Dark" }, "dryRun": true }
 ```
 
-Where the component store translates its definition field, an edit changes the default
-language's definition.
+Where the component store translates its definition field, **`locale`** names the
+language whose definition the edit reads and changes; without it, the edit changes the
+default language's definition. A store that translates nothing ignores it.
 
 The caller needs **update** on components; where `componentReadiness` names a collection
 of the site's own for them, the route edits that collection's document field and needs
@@ -381,12 +391,16 @@ entries the caller can see.
 
 ### In the admin
 
-- **The entry's Design section.** Every entry whose collection has, or may have, a
-  template shows a Design section first in its side panel: the template it is shown
-  with and **Give this post its own design**, or its own design with **Edit design** and
-  **Remove own design…**. While an own design is not published, the section says
-  visitors still see the template. Where the collection has no published template, it
-  says the entry isn't shown as a page, and offers the template to open or create.
+- **The entry's Design card.** Every entry whose collection has, or may have, a
+  template shows a Design card first in its side panel. While the template draws the
+  entry, the card is headed with the template's name (**Design: Blog post**) and says "Every
+  post uses it. Edit the template to change all posts.", with **Preview** and **Give this post its own
+  design**. **Preview** opens the entry's preview beside the form and folds the side
+  panel, as the document bar's Preview does. An entry with its own design says so, with
+  **Edit design**, **Preview** and **Remove own design…**; while the own design is not
+  published, the card says visitors still see the template. Where the collection has no
+  published template, the card says the entry isn't shown as a page, and offers the
+  template to open or create.
 - **The entry list.** A collection with a template gets a **Design** column marking
   each entry with its own design: **Own design**, or a dashed **Own design · not
   published**.
@@ -394,7 +408,7 @@ entries the caller can see.
   each opening its entry, and the builder's top bar shows how many there are.
 - **Deleting.** Deleting a template from its document lists the entries with their own
   design, which are kept, and says the others stop being shown as pages. Deleting an
-  entry deletes its own design with it, as its Design section says.
+  entry deletes its own design with it, as its Design card says.
 
 ## Build a template end to end
 
@@ -403,19 +417,21 @@ Each request below is a `POST` to the route named, and each can be sent with
 `dryRun: true` first.
 
 1. **Read the manifest** (`GET /manifest`). Note `collections.templates`, and the `id`
-   of a pattern holding the blocks you want, such as a heading and a Collection list.
+   of a saved section holding the blocks you want, such as a heading and a Collection list.
 2. **Create the template**: `{ "action": { "kind": "create-template", "collection": "posts" } }`
    to `/templates/actions`. The answer's `template.id` names it; it is a draft.
 3. **Add the blocks**, each a page action to `/pages/actions` with
    `"page": { "collection": <collections.templates>, "id": <template id> }`:
    `place-entry-content` for the entry's own blocks (`set-entry-content-field` to choose
-   another field later), then `insert-pattern` with the pattern's id. The answer's
+   another field later), then `insert-pattern` with the saved section's id. The answer's
    `document` holds the blocks with the ids the next actions address.
 4. **Fill them with data**: `set-list-query` on the list
    (`{ "collection": "posts", "sort": "-publishedAt", "limit": 6 }`); `bind-prop` on the
    heading (`{ "$bind": "title" }`) and on a block inside the list
-   (`{ "$bind": "title", "source": "item" }`); `set-conditions` on a block shown only to
-   some entries (`[[{ "field": "featured", "op": "is_true" }]]`).
+   (`{ "$bind": "title", "source": "item" }`), adding `"list": <list id>` to read an
+   enclosing list further out, for a block in a list inside another; `set-conditions`
+   on a block shown only to some entries
+   (`[[{ "field": "featured", "op": "is_true" }]]`).
 5. **Publish it**: `{ "action": { "kind": "publish-template", "id": <template id> } }`.
    Each entry with an address is now served drawn with it.
 6. **Give one entry its own design**, if it needs one: `give-entry-design` with
@@ -432,11 +448,49 @@ Visitors are drawn the published template and published entries only: a draft en
 never appears in a list, a draft design never draws its entry, and a binding to a field
 the public may not read shows its fallback.
 
+## Change a block's own fields
+
+A block's own fields, such as its CSS id or its CSS classes, have no action of their own.
+Change them in the page's blocks and save the page through the
+[REST API](/docs/api-reference/rest-api), as the editor does. The builder's `update` op from
+`@nextlyhq/blocks-engine` makes the change:
+
+```ts
+import { applyOps, type BlockDocument } from "@nextlyhq/blocks-engine";
+
+// The page's `content`, from your last read of it.
+declare const content: BlockDocument;
+
+// Give the block its own CSS classes, drawn on its element after Nextly's own.
+const { document } = applyOps(content, [
+  {
+    kind: "update",
+    id: "<block id>",
+    patch: { cssClasses: "promo hero-dark" },
+  },
+]);
+// And to take them off again: `{ kind: "update", id, patch: {}, unset: ["cssClasses"] }`.
+```
+
+Then send `document` as the page's `content`, with the `_rev` from your last read:
+
+```http
+PATCH /admin/api/collections/pages/entries/<page id>
+Content-Type: application/json
+
+{ "content": { "formatVersion": 1, "kind": "page", "nodes": [ ... ] }, "_rev": "<rev>" }
+```
+
+The save judges the whole page, whatever wrote it. A class name a block can't carry is
+refused with `400` (`VALIDATION_ERROR`, the field's error coded `invalid-css-classes`): one that starts with a digit, `.`, `#` or `nx-`, or holds a character
+a class name can't. The error names each such name and why, and nothing is saved. See
+[the block document format](/docs/api-reference/block-document-format#a-node) for the field.
+
 ## Other routes with a dry run
 
-- `POST /save-as-pattern` takes `dryRun: true` and answers the pattern it would save,
+- `POST /save-as-pattern` takes `dryRun: true` and answers the saved section it would save,
   with `refusals` saying why the site would refuse it.
-- [Making a Layout the default and removing one](/docs/page-builder/layouts) both take
+- [Making a header & footer set the default and removing one](/docs/page-builder/layouts) both take
   `dryRun`, and their answers carry `by`.
 - [Importing a file](/docs/page-builder/moving-between-sites#through-the-api) takes
   `dryRun` and `expect` in the same way.

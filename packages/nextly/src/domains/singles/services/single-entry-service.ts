@@ -25,16 +25,34 @@ import {
 } from "../../../auth/access/rule-language";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import type { RetentionRunner } from "../../../domains/retention/runner";
+import { withWriteParts } from "../../../hooks/hook-language";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import type { CacheRevalidator } from "../../../revalidation/types";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
+import { movesShared } from "../../collections/services/all-locales-lifecycle";
+import type { CollectionServiceResult } from "../../collections/services/collection-types";
+import {
+  publishCallerOf,
+  publishGate,
+} from "../../collections/services/publish-gate";
+import {
+  publishParts,
+  type PublishPartsAnswer,
+  type PublishPartsEngines,
+  type PublishPartsRequest,
+} from "../../collections/services/publish-parts";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import {
+  readInFirstPublishedLanguage,
+  readOfEveryLanguage,
+} from "../../i18n/read-in-language";
+import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import { releaseVisibilityFor } from "../../releases/release-visibility";
 import type { WebhookFastDrainScheduler } from "../../webhooks/after-drain";
 import type {
@@ -52,6 +70,7 @@ import {
   SinglePublishAllService,
   type PublishAllSinglePreview,
   type PublishAllSingleResult,
+  type SinglePartsOptions,
 } from "./single-publish-all";
 import { SingleQueryService } from "./single-query-service";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -193,15 +212,29 @@ export class SingleEntryService extends BaseService {
    * field values.
    */
   get(slug: string, options?: GetSingleOptions): Promise<SingleResult> {
-    return withRuleLanguage(
-      readLanguagesFor(
-        this.localization,
-        options?.locale,
-        options?.fallbackLocale,
-        options
-      ),
-      () => this.queryService.get(slug, options)
-    );
+    const read = (locale: string | undefined) => {
+      const inLanguage = { ...options, locale };
+      return withRuleLanguage(
+        readLanguagesFor(
+          this.localization,
+          inLanguage.locale,
+          inLanguage.fallbackLocale,
+          inLanguage
+        ),
+        // The query reads what the request stands for: `locale=all` is the
+        // default language with every language's values beside it.
+        () => this.queryService.get(slug, readOfEveryLanguage(inLanguage))
+      );
+    };
+    const [first, ...rest] = options?.wholeDocumentFallback
+      ? (resolveLocaleChain(
+          this.localization,
+          options.locale,
+          options.fallbackLocale
+        ) ?? [])
+      : [];
+    if (first === undefined) return read(options?.locale);
+    return readInFirstPublishedLanguage([first, ...rest], read);
   }
 
   // ============================================================
@@ -352,9 +385,15 @@ export class SingleEntryService extends BaseService {
     slug: string,
     options?: PublishAllSingleLocalesOptions
   ): Promise<SingleResult<PublishAllSingleResult>> {
+    // Its hooks are told whether it moves the shared part, by the rule a
+    // collection's publish of every language follows: a Single's chooses no
+    // parts, so it moves the shared part with every language.
     const result = await withRuleLanguage(
       everyLanguageOf(this.localization),
-      () => this.publishAllService.publishAllLocales(slug, options)
+      () =>
+        withWriteParts({ shared: movesShared(undefined) }, () =>
+          this.publishAllService.publishAllLocales(slug, options)
+        )
     );
     await this.afterWrite(result, options?.disableRevalidate === true);
     return result;
@@ -372,6 +411,87 @@ export class SingleEntryService extends BaseService {
     return withRuleLanguage(everyLanguageOf(this.localization), () =>
       this.publishAllService.previewPublishAllLocales(slug, options)
     );
+  }
+
+  /**
+   * Publish or unpublish the parts of a Single the request chooses: some of its languages, or
+   * every one, and its shared part, or say what doing so would do. The Single's counterpart of a
+   * collection entry's publish of chosen parts, carried out by the same service and answered in
+   * the same shape. A publish asks the publish gate under the Single's row lock.
+   *
+   * @experimental
+   */
+  async publishParts(
+    params: PublishAllSingleLocalesOptions & {
+      slug: string;
+      /** A publish made without review, and why; handed to the publish gate. */
+      withoutReview?: { reason: string };
+    },
+    request: PublishPartsRequest
+  ): Promise<SingleResult<PublishPartsAnswer>> {
+    const { slug, withoutReview, ...options } = params;
+    // The document's id, which the answer and the gate name; a Single with none ends here.
+    const document = await this.publishAllService.documentIdOf(slug);
+    if ("result" in document) return document.result;
+    // Asked in every language, as a publish of every language is; each part's own rule is then
+    // asked in its own language.
+    const everyLanguage = everyLanguageOf(this.localization);
+    const engines = {
+      reads: ask =>
+        withRuleLanguage(everyLanguage, async () => {
+          const read = await this.publishAllService.publishPartsReads(
+            slug,
+            options,
+            { action: request.direction, ...ask }
+          );
+          return "state" in read ? read : asServiceResult(read);
+        }),
+      gate: publishGate(),
+      collection: slug,
+      scopeKind: "single",
+      caller: publishCallerOf(options),
+      // Who moves the parts and whether without review, for the gate beside the caller.
+      ...(options.actor === undefined ? {} : { actor: options.actor }),
+      ...(withoutReview === undefined ? {} : { withoutReview }),
+      move: async (direction, parts, describe) => {
+        // The parts it moves, and a publish without review told to the gate under the lock.
+        const moveOptions: SinglePartsOptions = {
+          ...options,
+          partsMove: parts === undefined ? {} : { parts },
+          ...(withoutReview === undefined ? {} : { withoutReview }),
+        };
+        if (describe) {
+          return asServiceResult(
+            await withRuleLanguage(everyLanguage, () =>
+              this.publishAllService.previewPublishAllLocales(slug, moveOptions)
+            )
+          );
+        }
+        if (direction === "publish") {
+          return asServiceResult(
+            await withRuleLanguage(everyLanguage, () =>
+              this.publishAllService.publishAllLocales(slug, moveOptions)
+            )
+          );
+        }
+        // Asked of the languages it takes down: every one, or the chosen ones.
+        return asServiceResult(
+          await withRuleLanguage(
+            parts === undefined
+              ? everyLanguage
+              : { locales: [...parts.locales] },
+            () => this.publishAllService.unpublishParts(slug, moveOptions)
+          )
+        );
+      },
+    } satisfies PublishPartsEngines;
+    const result = asPartsResult(
+      await publishParts(document.id, request, engines)
+    );
+    // A committed move owes what every committed Single write owes: its cache tag flushed, a
+    // retention pass, and the fast drain where it recorded an event.
+    await this.afterWrite(result, options.disableRevalidate === true);
+    return result;
   }
 
   /**
@@ -449,4 +569,83 @@ export class SingleEntryService extends BaseService {
 
   /** Retention batches to attempt per write, matching the collection path. */
   private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
+}
+
+/** One validation issue as a result carries it, or as its error's public data lists it. */
+interface ResultIssue {
+  path: string;
+  code?: string;
+  message: string;
+}
+
+/** The issues a validation error's public data lists, read defensively. */
+function issuesOf(publicData: unknown): ResultIssue[] {
+  if (typeof publicData !== "object" || publicData === null) return [];
+  const { errors } = publicData as { errors?: unknown };
+  if (!Array.isArray(errors)) return [];
+  return errors.flatMap((issue: unknown): ResultIssue[] => {
+    if (typeof issue !== "object" || issue === null) return [];
+    const { path, code, message } = issue as Record<string, unknown>;
+    return typeof path === "string" && typeof message === "string"
+      ? [{ path, message, ...(typeof code === "string" ? { code } : {}) }]
+      : [];
+  });
+}
+
+/**
+ * A Single's result as the publish of chosen parts reads its engines' answers: the same fields,
+ * a message always present, and each issue named by its path rather than its field.
+ */
+function asServiceResult(
+  result: SingleResult<unknown>
+): CollectionServiceResult {
+  const { errors, message, data, ...rest } = result;
+  return {
+    ...rest,
+    message: message ?? "",
+    data: data ?? null,
+    ...(errors === undefined
+      ? {}
+      : {
+          errors: errors.map(issue => ({
+            path: issue.field ?? "",
+            code: issue.code ?? "INVALID",
+            message: issue.message,
+          })),
+        }),
+  };
+}
+
+/** Whether `data` is a publish of chosen parts' answer, as a successful request carries it. */
+function isPartsAnswer(data: unknown): data is PublishPartsAnswer {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "languages" in data &&
+    "shared" in data
+  );
+}
+
+/**
+ * The answer of a publish of chosen parts as a Single's result: the same fields, with each
+ * refused part as a field issue, as every Single result names them.
+ */
+function asPartsResult(
+  result: CollectionServiceResult
+): SingleResult<PublishPartsAnswer> {
+  const { errors, data, ...rest } = result;
+  const issues: ResultIssue[] = errors ?? issuesOf(result.publicData);
+  return {
+    ...rest,
+    ...(isPartsAnswer(data) ? { data } : {}),
+    ...(issues.length === 0
+      ? {}
+      : {
+          errors: issues.map(issue => ({
+            field: issue.path,
+            ...(issue.code === undefined ? {} : { code: issue.code }),
+            message: issue.message,
+          })),
+        }),
+  };
 }

@@ -85,6 +85,11 @@ describe("the builder's empty editor", () => {
       handleNestedFieldAdd: vi.fn(),
       validateFields: vi.fn(() => ({ valid: true })),
       resetFields: vi.fn(),
+      // The settings share the fields' history; none are shown here.
+      settings: null,
+      setSettings: vi.fn(),
+      snapshot: { fields: [], settings: null },
+      rewriteSnapshots: vi.fn(),
       clearHistory: vi.fn(),
       historyStep: 0,
       canUndo: false,
@@ -114,7 +119,6 @@ describe("the builder's empty editor", () => {
         active={{ kind: "none" }}
         onActiveChange={vi.fn()}
         onDuplicateField={vi.fn()}
-        onRowDragEnd={vi.fn()}
         isSaving={false}
         savingLabel=""
       />

@@ -130,6 +130,7 @@ describeEachDialect("files another item refers to", dialect => {
     // An item whose row is already deleted, as a delete's cleanup finds it.
     const deleted = {
       filename: "2026/10/1d1d-gone.png",
+      mimeType: "image/png",
       url: "/uploads/2026/10/1d1d-gone.png",
       thumbnailUrl: "/uploads/2026/10/1d1d-gone-thumb.webp",
     };

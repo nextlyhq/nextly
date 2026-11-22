@@ -9,7 +9,8 @@
  *      hash recorded in its paired `.snapshot.json` (someone edited
  *      the file after `migrate:create` generated it).
  *   2. MISSING_SNAPSHOT   - A `.sql` file has no paired `.snapshot.json`
- *      (operator deleted the snapshot or the file was added by hand).
+ *      (operator deleted the snapshot or the file was added by hand). A
+ *      blank migration (`isBlankMigration`) has none by design and passes.
  *   3. INVALID_SNAPSHOT   - A `.snapshot.json` file is malformed
  *      (corrupted JSON, hand-edited, or written by a future nextly
  *      version with an incompatible envelope).
@@ -65,6 +66,11 @@ import {
   fileDeletions,
   functionsDefinedBy,
 } from "../../domains/schema/migrate/file-deletions";
+import {
+  forkedHistoryError,
+  isBlankMigration,
+  unrecordedMerges,
+} from "../../domains/schema/migrate/history-line";
 import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
 import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import {
@@ -73,6 +79,10 @@ import {
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
+import {
+  permissionDifferences,
+  unwrittenChangesError,
+} from "../../domains/schema/migrate/unwritten-changes";
 import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
 import {
   appStreamSnapshots,
@@ -80,7 +90,10 @@ import {
   NO_APP_STREAM_TABLES,
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
-import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
+import {
+  declaredPermissionsOf,
+  type PermissionRecord,
+} from "../../domains/schema/migrate-create/declared-permissions";
 import {
   describeSettingsChange,
   settingsChangesFor,
@@ -91,28 +104,24 @@ import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-cre
 import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
 import {
   EMPTY_SNAPSHOT,
+  isOlderFormatSnapshot,
   loadLatestSnapshot,
   parseSnapshotFile,
   SnapshotFileError,
+  type TemplateStart,
   verifyMigrationHash,
 } from "../../domains/schema/migrate-create/snapshot-io";
+import { templateStartFor } from "../../domains/schema/migrate-create/template-start";
 import { describeOp } from "../../domains/schema/pipeline/diff/describe-operation";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
-import { validateCrossFile } from "../../domains/schema/ui-schema/cross-file";
-import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import {
-  applyDeferredExtendsToManifest,
-  mergeUiEntities,
-} from "../../domains/schema/ui-schema/merge";
-import {
-  resolveCollectionTableName,
-  resolveComponentTableName,
-} from "../../domains/schema/utils/resolve-table-name";
-import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+  type BuilderDefinitions,
+  judgeBuilderDefinitions,
+  readBuilderDefinitions,
+} from "../../domains/schema/ui-schema/builder-definitions";
 import { addressRefusalsError } from "../../shared/address-rule";
-import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import {
   type CliError,
   configDeclarationError,
@@ -126,7 +135,6 @@ import {
   settingsChangeWithoutMigration,
   snapshotWithoutMigration,
 } from "../errors/areas/migrations";
-import { builderSchemaConflict } from "../errors/areas/plugin-config";
 import { createContext, type CommandContext } from "../program";
 import type { SupportedDialect } from "../utils/adapter";
 import {
@@ -195,78 +203,25 @@ export async function runMigrateCheck(
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
-  // Layer 5: load + validate ui-schema.json (intra-file via loadUiSchema's Zod).
-  let manifest;
+  // The Builder's definitions, read by the rules `migrate:create` reads them
+  // by (`readBuilderDefinitions`), and judged against the newest snapshot once
+  // `runChecks` reads it, as `migrate:create` judges them: the same definition
+  // is refused by both with the same message, and a shadowed entity is warned
+  // about, naming its kind. Plugin extends that target a Builder entity are
+  // materialised, so the drift comparison below sees the schema
+  // `migrate:create` would produce.
+  let definitions: BuilderDefinitions;
   try {
-    manifest = await loadUiSchema({
+    definitions = await readBuilderDefinitions({
+      config: configResult.config,
+      deferredExtends: configResult.deferredExtends ?? [],
       projectRoot: cwd,
-      uiSchemaFile: configResult.config.db.uiSchemaFile,
-    });
-  } catch (error) {
-    exitWithError(logger, error);
-  }
-
-  // Materialize plugin extends that target Builder-made entities (P8) so the
-  // drift comparison below sees the same schema migrate:create would produce.
-  manifest = applyDeferredExtendsToManifest(
-    manifest,
-    configResult.deferredExtends ?? []
-  );
-
-  // The manifest gets the same check the code-first config got above, once its
-  // deferred extends are materialized: a Builder-owned entity can carry a
-  // plugin field too, and a plugin extending one contributes its fields here
-  // rather than in the config. Only entities a code-first entity does not
-  // shadow are checked, because a shadowed one never reaches the snapshot.
-  const surviving = <T extends { slug: string }>(
-    list: readonly T[] | undefined,
-    codeFirst: ReadonlyArray<{ slug: string }> | undefined
-  ): T[] => {
-    const shadowed = new Set((codeFirst ?? []).map(e => e.slug));
-    return (list ?? []).filter(e => !shadowed.has(e.slug));
-  };
-
-  try {
-    assertPluginFieldDeclarations({
-      collections: surviving(
-        manifest.collections,
-        configResult.config.collections
-      ),
-      singles: surviving(manifest.singles, configResult.config.singles),
-      fieldGroups: surviving(
-        manifest.components,
-        configResult.config.fieldGroups
-      ),
+      logger,
     });
   } catch (error) {
     exitWithError(logger, configDeclarationError(error) ?? error);
   }
-
-  // Cross-file checks (slug collision, relation targets).
-  const crossIssues = validateCrossFile({
-    codeCollectionSlugs: configResult.config.collections.map(
-      (c: { slug: string }) => c.slug
-    ),
-    manifest,
-  });
-  if (crossIssues.length > 0) {
-    exitWithError(logger, builderSchemaConflict(crossIssues));
-  }
-
-  // Merge code + UI entities (code-first wins) for the drift comparison.
-  const merged = mergeUiEntities({
-    codeCollections: toMinimalEntities(configResult.config.collections, e =>
-      resolveCollectionTableName(e.slug, e.dbName)
-    ),
-    codeSingles: toMinimalEntities(configResult.config.singles ?? [], e =>
-      resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
-    ),
-    codeComponents: toMinimalEntities(
-      configResult.config.fieldGroups ?? [],
-      e => resolveComponentTableName(e.slug)
-    ),
-    manifest,
-  });
+  const { merged } = definitions;
 
   // Built once the latest snapshot is read, as `migrate:create` builds it:
   // a field a plugin holds back from a type switched off keeps its column
@@ -306,8 +261,75 @@ export async function runMigrateCheck(
     // Each entity with its settings, as `migrate:create` records them; the
     // merge sets a Builder entity's (`uiToMinimal`).
     entities: merged,
+    // A project made from a template starts from the template's snapshot,
+    // read as `migrate:create` reads it.
+    templateStart: templateStartFor({
+      collections: merged.collections,
+      singles: merged.singles,
+      plugins: configResult.config.plugins,
+      dialect,
+    }),
+    definitions,
+    // Every permission the configuration declares, as `migrate:create` records them, so a plugin
+    // release that only adds or removes one is named here as `nextly migrate` names it.
+    permissions: declaredPermissionsOf(configResult.config, {
+      collections: merged.collections,
+      singles: merged.singles,
+    }),
     logger,
   });
+}
+
+/**
+ * Ends the check, in the CLI's error shape, where the folder's history holds
+ * migrations written without each other that no migration records together
+ * (`history-line.ts`).
+ */
+async function failOnUnrecordedMerge(
+  migrationsDir: string,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const forked = forkedHistoryError(await unrecordedMerges(migrationsDir));
+  if (forked !== undefined) exitWithError(logger, forked);
+}
+
+/**
+ * How one migration file fails its pairing with its snapshot, or undefined where it passes:
+ * the snapshot is malformed (INVALID_SNAPSHOT), missing (MISSING_SNAPSHOT), or records a hash
+ * the file no longer has (CHECKSUM_MISMATCH). Its own function so `runChecks` stays one list of
+ * checks rather than every branch of each.
+ */
+async function snapshotPairingError(
+  migrationsDir: string,
+  metaDir: string,
+  sqlName: string
+): Promise<CliError | undefined> {
+  const sqlContent = await readFile(resolve(migrationsDir, sqlName), "utf-8");
+  // Localization/companion migrations are snapshot-less by design (they carry
+  // cross-table seed SQL run verbatim), so skip the snapshot-pairing checks
+  // rather than flagging them MISSING_SNAPSHOT.
+  if (sqlContent.includes(LOCALIZATION_MIGRATION_MARKER)) return undefined;
+  let result;
+  try {
+    result = await verifyMigrationHash(metaDir, sqlName, sqlContent);
+  } catch (err) {
+    // A distinct INVALID_SNAPSHOT code so the operator can tell "snapshot file
+    // is corrupt / version-mismatched" (fix = regenerate or upgrade nextly)
+    // apart from "snapshot is missing entirely" (fix = git checkout).
+    if (err instanceof SnapshotFileError) {
+      return migrationSnapshotInvalid(err.message);
+    }
+    throw err;
+  }
+  if (result.ok) return undefined;
+  if (result.expected === undefined) {
+    // A blank migration is its author's SQL, which `migrate:create --blank` pairs with no
+    // snapshot, so none is missing. One that does have a snapshot is held to it above, as
+    // any file is.
+    if (isBlankMigration(sqlContent)) return undefined;
+    return migrationSnapshotMissing(sqlName, metaDir);
+  }
+  return migrationFileEdited(sqlName, result.expected, result.actual);
 }
 
 /**
@@ -347,6 +369,24 @@ export async function runChecks(args: {
     singles: readonly MinimalConfigEntity[];
     components: readonly MinimalConfigEntity[];
   };
+  /**
+   * How a template's older-format snapshot, where it is the newest, is read
+   * as starting tables (`templateStartFor`). Omitted, such a snapshot is
+   * refused as invalid.
+   */
+  templateStart?: TemplateStart;
+  /**
+   * The Builder's definitions as `readBuilderDefinitions` read them, judged
+   * against the newest snapshot as `migrate:create` judges them: a Builder
+   * entity the file lost, then each relationship's target. Omitted, neither is
+   * checked.
+   */
+  definitions?: BuilderDefinitions;
+  /**
+   * The permissions the configuration declares, compared with the newest
+   * snapshot's record of them. Omitted, permissions are not checked.
+   */
+  permissions?: PermissionRecord;
   logger: CommandContext["logger"];
 }): Promise<void> {
   const { migrationsDir, logger } = args;
@@ -379,35 +419,17 @@ export async function runChecks(args: {
     `Inspecting ${sqlFiles.length} .sql file(s) and ${snapshotFiles.length} snapshot file(s).`
   );
 
-  // Check 1+2: hash + missing snapshot per .sql file.
+  // Check 1+2: hash + missing snapshot per .sql file. A template's own
+  // migration is passed over: its snapshot carries no hash to hold it to.
+  const templateFiles = await templateMigrationFiles(migrationsDir, metaDir);
   for (const sqlName of sqlFiles) {
-    const sqlContent = await readFile(resolve(migrationsDir, sqlName), "utf-8");
-    // Localization/companion migrations are snapshot-less by design (they carry
-    // cross-table seed SQL run verbatim), so skip the snapshot-pairing checks
-    // rather than flagging them MISSING_SNAPSHOT.
-    if (sqlContent.includes(LOCALIZATION_MIGRATION_MARKER)) continue;
-    let result;
-    try {
-      result = await verifyMigrationHash(metaDir, sqlName, sqlContent);
-    } catch (err) {
-      // F11 PR 4 review fix #3: distinct INVALID_SNAPSHOT code so the
-      // operator can tell "snapshot file is corrupt / version-mismatched"
-      // (fix = regenerate or upgrade nextly) apart from "snapshot is
-      // missing entirely" (fix = git checkout).
-      if (err instanceof SnapshotFileError) {
-        return exitWithError(logger, migrationSnapshotInvalid(err.message));
-      }
-      throw err;
-    }
-    if (!result.ok && result.expected === undefined) {
-      return exitWithError(logger, migrationSnapshotMissing(sqlName, metaDir));
-    }
-    if (!result.ok) {
-      return exitWithError(
-        logger,
-        migrationFileEdited(sqlName, result.expected, result.actual)
-      );
-    }
+    if (templateFiles.has(sqlName)) continue;
+    const unpaired = await snapshotPairingError(
+      migrationsDir,
+      metaDir,
+      sqlName
+    );
+    if (unpaired !== undefined) return exitWithError(logger, unpaired);
   }
 
   // Check 3: missing migration per snapshot.
@@ -421,6 +443,12 @@ export async function runChecks(args: {
       );
     }
   }
+
+  // One line of history: migrations written without each other, by two
+  // writers at once or on two branches merged since, fail the check with
+  // each named until a migration records the merge, as `nextly migrate`
+  // refuses them.
+  await failOnUnrecordedMerge(migrationsDir, logger);
 
   // Statements a run would refuse, judged by the check the run makes, so CI
   // shows them before a deploy meets them. Warned rather than failed: this
@@ -442,7 +470,7 @@ export async function runChecks(args: {
   let desiredSnapshot: NextlySchemaSnapshot;
   let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
-    latest = await loadLatestSnapshot(metaDir);
+    latest = await loadLatestSnapshot(metaDir, args.templateStart);
     const existing = latest?.data.snapshot ?? EMPTY_SNAPSHOT;
     const stream = appStreamSnapshots({
       previous: existing,
@@ -461,6 +489,19 @@ export async function runChecks(args: {
       return exitWithError(logger, migrationSnapshotInvalid(err.message));
     }
     throw err;
+  }
+
+  // The Builder's definitions, judged before the drift that would show a lost
+  // entity as a drop: `migrate:create` refuses each of these with this message.
+  if (args.definitions !== undefined) {
+    try {
+      judgeBuilderDefinitions({
+        definitions: args.definitions,
+        recorded: latest?.data.entities,
+      });
+    } catch (error) {
+      return exitWithError(logger, error);
+    }
   }
 
   // Addresses, by the one address rule, before the drift a new entity also
@@ -497,6 +538,26 @@ export async function runChecks(args: {
   const settingsDrift = settingsInStep(args.entities, latest?.data.entities);
   if (settingsDrift !== undefined) return exitWithError(logger, settingsDrift);
 
+  // An app's or a plugin's permission added or removed with no migration, judged by the one
+  // comparison `nextly migrate` makes (`permissionDifferences`). This check reads no database,
+  // so a snapshot that predates the record, or none at all, names nothing.
+  const permissionDrift =
+    args.permissions === undefined
+      ? undefined
+      : unwrittenChangesError({
+          tables: [],
+          settings: [],
+          permissions: permissionDifferences(
+            args.permissions,
+            latest,
+            undefined
+          ),
+          noSnapshot: latest === null,
+        });
+  if (permissionDrift !== undefined) {
+    return exitWithError(logger, permissionDrift);
+  }
+
   logger.success(
     `migrate:check OK — ${sqlFiles.length} migration file(s), no drift.`
   );
@@ -505,6 +566,37 @@ export async function runChecks(args: {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/**
+ * The `.sql` files of each migration a template ships: the one whose snapshot
+ * is in the older format (`isOlderFormatSnapshot`), every dialect's file of
+ * it. Such a migration is written by hand and runs as written; its snapshot
+ * lists entities and records no hash, and the per-dialect files share the one
+ * snapshot, so neither the hash nor a snapshot per file can be asked of them.
+ */
+async function templateMigrationFiles(
+  migrationsDir: string,
+  metaDir: string
+): Promise<Set<string>> {
+  const files = new Set<string>();
+  for (const group of (await discoverMigrationGroups(migrationsDir)).values()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(
+        await readFile(
+          resolve(metaDir, `${group.baseName}.snapshot.json`),
+          "utf-8"
+        )
+      );
+    } catch {
+      // No snapshot, or not JSON: the checks below say so.
+      continue;
+    }
+    if (!isOlderFormatSnapshot(parsed)) continue;
+    for (const variant of group.variants) files.add(variant.file);
+  }
+  return files;
+}
 
 /**
  * `sqlFiles` as every reader of the folder reads them: an old Builder file is

@@ -10,13 +10,13 @@
  * 1. The field menu offers only fields visitors can see, and says so.
  * 2. The canvas draws the entries the author may read, in that order, their
  *    draft included: the canvas reads as the person editing.
- * 3. "Canvas shows: When empty" draws the list's empty state, tagged.
+ * 3. "Preview the empty message" draws the list's empty state, tagged.
  * 4. The saved list stores the shape the engine reads.
  * 5. Published, the page lists the published entries to a visitor who is
  *    not signed in: the draft the canvas showed never, and the sort and the
  *    limit hold.
  *
- * Under Number of items the selected list says how many entries match and
+ * Under How many the selected list says how many entries match and
  * how many show, taken from the canvas's own read of the list: the editor
  * makes no read of its own for it, and the published page shows none. A
  * second case presses a fallen-back sort's "Choose a field" from the
@@ -159,7 +159,7 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
   await layerRow(page, LIST).click();
   const inspector = page.locator(".nx-inspector");
   await expect(
-    inspector.getByRole("button", { name: "Source Blog posts" })
+    inspector.getByRole("button", { name: "Show entries from Blog posts" })
   ).toBeVisible();
   await expect(
     inspector.getByText(/match(es)?, so \d+ shows?\./)
@@ -197,7 +197,7 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
   await expect(order).toHaveText("Lowest first");
   await order.click();
   await page.getByRole("option", { name: "Highest first" }).click();
-  const items = inspector.getByLabel("Number of items", { exact: true });
+  const items = inspector.getByLabel("How many", { exact: true });
   await items.fill("2");
   await items.press("Enter");
 
@@ -221,11 +221,15 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
   });
 
   // 3. The empty state, on request, tagged, and the entries again after.
-  await inspector.getByRole("radio", { name: "When empty" }).click();
+  await inspector
+    .getByRole("switch", { name: "Preview the empty message" })
+    .click();
   const list = (await canvasRoot(page)).locator(`[data-nx-node="${LIST}"]`);
   await expect(list).toHaveAttribute("data-nx-list-empty-because", "chosen");
   await expect(list.locator("h3")).toHaveText(["Nothing yet"]);
-  await inspector.getByRole("radio", { name: "Entries" }).click();
+  await inspector
+    .getByRole("switch", { name: "Preview the empty message" })
+    .click();
   await expect
     .poll(() => canvasTitles(page), { timeout: 30_000 })
     .toEqual([`${mark} Draft`, `${mark} Birch`]);

@@ -293,6 +293,8 @@ describe("EntryForm hands its preview to what it draws", () => {
     );
 
     expect(typeof lastHeard()?.open).toBe("function");
+    // A document view takes the window alone, so no pane opens beside it.
+    expect(lastHeard()?.openBeside).toBeUndefined();
   });
 
   it("offers none where the header offers none", () => {

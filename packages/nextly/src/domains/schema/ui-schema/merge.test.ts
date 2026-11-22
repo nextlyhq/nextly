@@ -35,7 +35,7 @@ describe("mergeUiEntities", () => {
     });
     expect(r.collections.map(c => c.slug)).toEqual(["posts", "events"]);
     expect(r.collections[1].tableName).toBe("dc_events");
-    expect(r.droppedUiSlugs).toEqual([]);
+    expect(r.shadowed).toEqual([]);
   });
 
   it("drops a UI entity whose slug collides with code (code-first wins)", () => {
@@ -52,7 +52,7 @@ describe("mergeUiEntities", () => {
     });
     expect(r.collections).toHaveLength(1);
     expect(r.collections[0].fields.map(f => f.name)).toContain("title"); // code kept
-    expect(r.droppedUiSlugs).toEqual(["posts"]);
+    expect(r.shadowed).toEqual([{ kind: "collection", slug: "posts" }]);
   });
 
   it("maps singles/components to their prefixes", () => {

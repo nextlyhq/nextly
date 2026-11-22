@@ -39,6 +39,10 @@ import { emailBrandTables } from "./email-brand";
 import { EMAIL_QUEUE_TABLE } from "./email-queue/table-name";
 import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "./email-queue-recipients/table-name";
 import { EMAIL_SEND_CLAIMS_TABLE } from "./email-send-claims/table-name";
+import {
+  EXTERNAL_IDENTITIES_TABLE,
+  externalIdentitiesTables,
+} from "./external-identities";
 import { fieldGroupLockTables, schemaLockTables } from "./field-group-lock";
 import { jobsTables } from "./jobs";
 import { languagesTables } from "./languages";
@@ -75,6 +79,7 @@ import {
   spentChallengesTables,
 } from "./spent-challenges";
 import { STORAGE_FORMAT } from "./storage-format";
+import { translationProvenanceTables } from "./translation-provenance";
 import { userTables } from "./users";
 import { versionPinsTables } from "./version-pins";
 import { versionViewsTables } from "./version-views";
@@ -264,6 +269,10 @@ export function getCoreSchema(
     // `nextly_versions`.
     ...Object.values(reviewStatesTables(dialect)),
     ...Object.values(workflowSettingsTables(dialect)),
+    // Where each translated value came from, per field and language. Nothing
+    // records into it before it exists, so core-reconcile creating it is
+    // sufficient, as for `nextly_versions`.
+    ...Object.values(translationProvenanceTables(dialect)),
     // A plugin schedule's windows. Nothing writes them before they exist, so
     // core-reconcile creating them is sufficient.
     ...Object.values(scheduleWindowsTables(dialect)),
@@ -311,6 +320,12 @@ export function getCoreSchema(
     // `email_brand` — the site's email brand settings, one row. In the
     // snapshot for the reason every table above is.
     ...Object.values(emailBrandTables(dialect)),
+    // `nextly_external_identities` — the external identities a person signed
+    // in with, unique by provider key and by subject within the issuer that
+    // asserted it. Nothing writes them before the table exists, so
+    // core-reconcile creating it on fresh and existing databases is
+    // sufficient, as for its neighbours.
+    ...Object.values(externalIdentitiesTables(dialect)),
   ];
 
   const fieldGroupRegistry = fieldGroupRegistryFor(dialect, options);
@@ -386,6 +401,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "email_templates",
   "email_deliveries",
   "email_brand",
+  EXTERNAL_IDENTITIES_TABLE,
   EMAIL_SEND_CLAIMS_TABLE,
   EMAIL_QUEUE_TABLE,
   EMAIL_QUEUE_RECIPIENTS_TABLE,
@@ -395,6 +411,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_version_views",
   "nextly_review_states",
   "nextly_workflow_settings",
+  "nextly_translation_provenance",
   "nextly_schedule_windows",
   "nextly_content_events",
   "nextly_content_event_parts",

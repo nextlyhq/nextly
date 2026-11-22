@@ -1676,13 +1676,15 @@ describe.each(getConfiguredTestDialects())(
 
     it("reads a zone's translations once for each kind, not once for each instance", async () => {
       const overlays = vi.spyOn(
+        // The overlay every batch reader calls once per component, with that
+        // component's instances across the batch.
         FieldGroupQueryService.prototype as unknown as {
-          overlayLocalizedComponent(
+          overlayBatchByParentLanguages(
             meta: { slug: string; localized?: boolean },
-            rows: Record<string, unknown>[]
+            rows: { parentId: string; data: Record<string, unknown> }[]
           ): Promise<void>;
         },
-        "overlayLocalizedComponent"
+        "overlayBatchByParentLanguages"
       );
       try {
         const fieldGroups = t.getService(

@@ -74,6 +74,8 @@ vi.mock("@admin/hooks/queries", () => ({
   useBulkUpdateEntries: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock("@admin/hooks/queries/useCollections", () => ({
+  // The list opens rows by its own copy of the collection.
+  useEveryNavCollection: () => ({ data: undefined }),
   useCollection: () => ({
     data: { name: "tickets", label: "Tickets", fields: [] },
     isLoading: false,
@@ -154,6 +156,7 @@ describe("the toolbar", () => {
         onSortChange={vi.fn()}
         onSearchChange={vi.fn()}
         onEdit={vi.fn()}
+        entryHref={id => `/admin/collections/posts/${id}`}
         onDelete={vi.fn()}
         onBulkDelete={vi.fn()}
         onBulkPublish={vi.fn()}

@@ -1,5 +1,7 @@
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
+import type { SchemaTemplateKind } from "./schema-templates";
+
 /**
  * Default system fields present in every collection and single.
  * These cannot be deleted or renamed by the user.
@@ -27,34 +29,28 @@ export const DEFAULT_SYSTEM_FIELDS: BuilderField[] = [
 /**
  * The names the system fields above occupy. Derived rather than restated so a
  * change to that list cannot leave a loader filtering one set and a save
- * filtering another. Narrower than RESERVED_NAMES, which also covers columns
- * the builder never renders.
+ * filtering another. Which names a field may not take is the save's own
+ * field-name rule (`fieldNameProblem` on `nextly/config`), not a list here.
  */
 export const SYSTEM_FIELD_NAMES: string[] = DEFAULT_SYSTEM_FIELDS.map(
   f => f.name
 );
 
 /**
- * Single source of truth for reserved field names.
- * New user-defined fields cannot use these names because they collide with
- * built-in or framework-managed columns. Replaces ad-hoc per-call filtering
- * (e.g. `[slug].tsx` filtering by name vs by isSystem) noted in the audit.
+ * The built-in fields an entity of `kind` holds beside its own: a collection's and a Single's
+ * title and slug (`DEFAULT_SYSTEM_FIELDS`). A field group holds none, so a field it names `title`
+ * or `slug` is its own, shown, edited and saved as any other. The one table the Builder's loader,
+ * its save and the template check all read, so no kind's own field is taken for a built-in one.
  */
-export const RESERVED_NAMES = [
-  "id",
-  "title",
-  "slug",
-  "createdAt",
-  "updatedAt",
-  "status",
-] as const;
+export function builtInFieldsOf(
+  kind: SchemaTemplateKind
+): readonly BuilderField[] {
+  return kind === "fieldGroup" ? [] : DEFAULT_SYSTEM_FIELDS;
+}
 
-export type ReservedFieldName = (typeof RESERVED_NAMES)[number];
-
-/**
- * Case-sensitive check — `Title` is allowed, `title` is reserved.
- * The DB columns are camelCase, so case-sensitivity is the right safety bar.
- */
-export function isReservedFieldName(name: string): name is ReservedFieldName {
-  return (RESERVED_NAMES as readonly string[]).includes(name);
+/** The names `builtInFieldsOf(kind)` occupy. */
+export function builtInFieldNamesOf(
+  kind: SchemaTemplateKind
+): readonly string[] {
+  return builtInFieldsOf(kind).map(field => field.name);
 }

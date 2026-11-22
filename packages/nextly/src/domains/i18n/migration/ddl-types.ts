@@ -60,8 +60,11 @@ export function ddlType(
         : `NUMERIC(${precision}, ${scale})`;
     }
     case "timestamp":
+      // A date field's column, as the main table keeps it: on PostgreSQL a plain `timestamp`
+      // holding the UTC wall clock Nextly writes. With a time zone, every value moved or written
+      // here was read in the session's zone, so its instant was off by that zone's offset.
       return dialect === "postgresql"
-        ? "TIMESTAMPTZ"
+        ? "TIMESTAMP"
         : dialect === "mysql"
           ? "DATETIME(3)"
           : "INTEGER";

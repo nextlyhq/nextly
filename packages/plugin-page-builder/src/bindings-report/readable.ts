@@ -33,11 +33,25 @@ export type ReadableContext = IdentifiedCaller & {
 export interface ReadableDocument {
   /** The document as they know it: an entry's title, a Single's slug. */
   readonly title: string;
-  /** The top-level blocks fields of it they may read. */
+  /**
+   * The blocks fields of it they may read, each by its whole dotted path: a
+   * field inside a group counts only where the read kept that field itself,
+   * since core drops a nested field it refuses and keeps its group.
+   */
   readonly fields: ReadonlySet<string>;
   /** Its collection's name as the admin shows it; a Single's slug. */
   readonly collectionLabel: string;
 }
+
+/**
+ * A document as far as what the caller may read of it is asked: which one,
+ * and the blocks fields its rows are in. A stored report row is one, and so
+ * is a document's place in the index of where documents bind a Single.
+ */
+export type ReadableQuestion = Pick<
+  StoredDocumentReport,
+  "documentKey" | "kind" | "slug" | "documentId"
+> & { readonly rows: readonly Pick<BindingReportRow, "blocksField">[] };
 
 /** How many ids one read asks for. */
 const IDS_PER_READ = 200;
@@ -47,19 +61,37 @@ function topFieldOf(blocksField: string | undefined): string {
   return (blocksField ?? "").split(".")[0] ?? "";
 }
 
-/** The blocks fields a document's rows are in. */
-function fieldsNamed(entry: StoredDocumentReport): string[] {
+/** The top-level fields a document's rows are in, which the read selects. */
+function fieldsNamed(entry: ReadableQuestion): string[] {
   return [
     ...new Set(entry.rows.map(row => topFieldOf(row.blocksField))),
   ].filter(field => field !== "");
 }
 
-/** The fields of `fields` a read as the caller returned. */
+/** The whole paths of the blocks fields a document's rows are in. */
+function pathsNamed(entry: ReadableQuestion): string[] {
+  return [...new Set(entry.rows.map(row => row.blocksField ?? ""))].filter(
+    path => path !== ""
+  );
+}
+
+/** Whether a read as the caller holds the field at this dotted path. */
+function holds(row: unknown, path: string): boolean {
+  let value: unknown = row;
+  for (const segment of path.split(".")) {
+    if (typeof value !== "object" || value === null) return false;
+    if (!Object.hasOwn(value, segment)) return false;
+    value = (value as Record<string, unknown>)[segment];
+  }
+  return true;
+}
+
+/** The paths of `paths` a read as the caller returned. */
 function present(
   row: Record<string, unknown>,
-  fields: readonly string[]
+  paths: readonly string[]
 ): ReadonlySet<string> {
-  return new Set(fields.filter(field => Object.hasOwn(row, field)));
+  return new Set(paths.filter(path => holds(row, path)));
 }
 
 /**
@@ -128,7 +160,7 @@ async function readAsCaller(
 async function readCollection(
   ctx: ReadableContext,
   slug: string,
-  entries: readonly StoredDocumentReport[],
+  entries: readonly ReadableQuestion[],
   found: Map<string, ReadableDocument>
 ): Promise<void> {
   const naming = await collectionNaming(ctx, slug);
@@ -157,7 +189,7 @@ async function readCollection(
       if (entry === undefined || stored === undefined) continue;
       found.set(stored.documentKey, {
         title: entry.title,
-        fields: present(row as Record<string, unknown>, fieldsNamed(stored)),
+        fields: present(row as Record<string, unknown>, pathsNamed(stored)),
         collectionLabel: label,
       });
     }
@@ -206,10 +238,24 @@ export async function readableSingles(
   return readable;
 }
 
+/**
+ * Whether the caller may read this Single, read as them: only a read that
+ * answered its row says yes. Core answers a reader it refuses with "not
+ * found" as well as with "forbidden", so neither is taken for a yes; a
+ * Single's own edit page has read, and so stored, its row before anything
+ * asks this.
+ */
+export async function mayReadSingle(
+  ctx: IdentifiedCaller,
+  slug: string
+): Promise<boolean> {
+  return typeof (await singleAsCaller(ctx, slug)) === "object";
+}
+
 /** One reported Single, as the caller may read it. */
 async function readSingle(
   ctx: IdentifiedCaller,
-  entry: StoredDocumentReport,
+  entry: ReadableQuestion,
   found: Map<string, ReadableDocument>
 ): Promise<void> {
   const read = await singleAsCaller(ctx, entry.slug);
@@ -218,7 +264,7 @@ async function readSingle(
   if (typeof row !== "object" || row === null) return;
   found.set(entry.documentKey, {
     title: entry.slug,
-    fields: present(row as Record<string, unknown>, fieldsNamed(entry)),
+    fields: present(row as Record<string, unknown>, pathsNamed(entry)),
     collectionLabel: entry.slug,
   });
 }
@@ -226,10 +272,10 @@ async function readSingle(
 /** Each reported document the caller may read, by its key. */
 export async function readableAsCaller(
   ctx: ReadableContext,
-  entries: readonly StoredDocumentReport[]
+  entries: readonly ReadableQuestion[]
 ): Promise<ReadonlyMap<string, ReadableDocument>> {
   const found = new Map<string, ReadableDocument>();
-  const bySlug = new Map<string, StoredDocumentReport[]>();
+  const bySlug = new Map<string, ReadableQuestion[]>();
   for (const entry of entries) {
     if (entry.kind === "single") {
       await readSingle(ctx, entry, found);
@@ -251,9 +297,7 @@ export function readableRows(
   readable: ReadableDocument | undefined
 ): readonly BindingReportRow[] {
   if (readable === undefined) return [];
-  return entry.rows.filter(row =>
-    readable.fields.has(topFieldOf(row.blocksField))
-  );
+  return entry.rows.filter(row => readable.fields.has(row.blocksField ?? ""));
 }
 
 /** How many broken bindings of the report the caller may see. */

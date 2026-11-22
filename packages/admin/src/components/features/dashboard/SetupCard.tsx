@@ -52,6 +52,7 @@ import { Link } from "@admin/components/ui/link";
 import { useSingles } from "@admin/hooks/queries/useSingles";
 import { WIDGET_QUERIES_KEY } from "@admin/hooks/queries/widget-queries-key";
 import { isApiError } from "@admin/lib/api/parseApiError";
+import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
 import { cn } from "@admin/lib/utils";
 
 import { FrameState } from "../widgets/frame/card-state";
@@ -66,7 +67,6 @@ import {
 import { STEP_BUTTON, STEP_GHOST_BUTTON } from "./setup/step-buttons";
 import {
   filledIn,
-  singleHref,
   stepPresentation,
   type StepPresentation,
 } from "./setup/step-presentation";
@@ -323,6 +323,9 @@ function SkipToggle({
 
 /** One Single in the list: its state, and the button that fills it in while it is not. */
 function SingleRow({ single, label }: { single: SetupSingle; label: string }) {
+  // Filled in where the admin's one rule opens it, as the sidebar does: a
+  // Homepage whose main field is a page layout in the Page Builder.
+  const addressOf = useDocumentAddress();
   return (
     <li
       data-setup-single={single.slug}
@@ -346,7 +349,7 @@ function SingleRow({ single, label }: { single: SetupSingle; label: string }) {
           <span className="sr-only">Not filled in yet</span>
           <Button asChild variant="outline" size="sm" className={STEP_BUTTON}>
             <Link
-              href={singleHref(single.slug)}
+              href={addressOf({ kind: "single", slug: single.slug })}
               aria-label={`Fill in: ${label}`}
             >
               Fill in

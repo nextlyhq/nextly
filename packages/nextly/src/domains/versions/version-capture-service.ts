@@ -11,13 +11,17 @@
  */
 
 import { NextlyError } from "../../errors";
-import { markWriteIntegrityFailure } from "../../shared/write-integrity";
+import {
+  isWriteIntegrityFailure,
+  markWriteIntegrityFailure,
+} from "../../shared/write-integrity";
 import {
   CORE_CONTENT_EVENT_KINDS,
   ensureCoreContentEventKinds,
 } from "../content-events/core-kinds";
 import { recordContentEvent } from "../content-events/record";
 
+import type { ChangedParts } from "./changed-parts";
 import type { VersionsDbApi } from "./db-api";
 import type { RecordedVersionStatus } from "./recorded-status";
 import { selectVersionsToPrune } from "./retention";
@@ -37,6 +41,8 @@ export interface CaptureInput {
   sourceVersionNo?: number | null;
   /** The version each restored field came from; see `restored-from`. */
   fieldSources?: Readonly<Record<string, number>> | null;
+  /** The parts this version changed; null or absent records them as unknown. */
+  changedParts?: ChangedParts | null;
   /**
    * Durable versions retained for this document; `false` or omitted leaves
    * history unbounded. Applied in the caller's transaction right after the
@@ -79,8 +85,9 @@ export class VersionCaptureService {
     const repo = new VersionsRepository(db);
     const { versionNo, retried } = await insertWithRetry(db, repo, input);
     // Trim history to the configured cap inside the caller's transaction. What
-    // is always kept (the newest version, each language's latest published one,
-    // named versions and restore lineage) is decided by selectVersionsToPrune.
+    // is always kept (the newest version, the latest published one of each
+    // language and of the shared part, named versions and restore lineage) is
+    // decided by selectVersionsToPrune, from the parts each row records.
     if (typeof input.maxPerDoc === "number") {
       // After a lost race the scan reads with a lock too: on MySQL a plain read
       // answers from the snapshot the first allocation took, which lacks the
@@ -179,10 +186,14 @@ let savepointSequence = 0;
  * Only the insert repeats: the write around it, and its hooks, ran once and
  * stay as they are. On PostgreSQL a failed statement aborts the transaction,
  * so each attempt runs in a savepoint and a clash rolls back to it; SQLite
- * has savepoints too. MySQL has none here and needs none: a duplicate key
- * fails the statement, not the transaction. Each retry re-reads the newest
- * number with a locking read, which sees the row the other transaction
- * committed (a plain read on MySQL would answer from a stale snapshot).
+ * and MySQL take savepoints too. Where the transaction takes none (TiDB) the
+ * insert runs plainly, and a duplicate key there fails the statement, not the
+ * transaction. A failure marked write-integrity is never retried: the
+ * savepoint could not be rolled back, so the transaction's state is unknown
+ * and it must abort before anything more runs on it. Each retry re-reads
+ * the newest number with a locking read, which sees the row the other
+ * transaction committed (a plain read on MySQL would answer from a stale
+ * snapshot).
  *
  * Three lost races in a row surface as a VersionConflictError, which an
  * interactive write retries whole.
@@ -207,11 +218,15 @@ async function insertWithRetry(
           locale: input.locale ?? null,
           sourceVersionNo: input.sourceVersionNo ?? null,
           fieldSources: input.fieldSources ?? null,
+          changedParts: input.changedParts ?? null,
           createdBy: input.createdBy ?? null,
         })
       );
       return { versionNo, retried: attempt > 1 };
     } catch (err) {
+      // The savepoint could not be rolled back, so nothing more may run on the
+      // transaction: the failure aborts it, whatever the driver reported.
+      if (isWriteIntegrityFailure(err)) throw err;
       // The only unique index on nextly_versions is the version_no sequence,
       // so a unique violation is a lost allocation race. The insert throws the
       // RAW driver error, which isUniqueViolation recognizes; anything else
@@ -220,6 +235,23 @@ async function insertWithRetry(
       if (attempt >= INSERT_ATTEMPTS) throw new VersionConflictError(err);
     }
   }
+}
+
+/** A handle whose transaction takes savepoints. */
+type SavepointDb = VersionsDbApi &
+  Required<
+    Pick<
+      VersionsDbApi,
+      "savepoint" | "rollbackToSavepoint" | "releaseSavepoint"
+    >
+  >;
+
+/**
+ * Whether `db` takes savepoints, so {@link underSavepoint} can undo its work alone. Where it
+ * does not, nothing but the whole transaction undoes a part of it.
+ */
+export function takesSavepoints(db: VersionsDbApi): db is SavepointDb {
+  return !(!db.savepoint || !db.rollbackToSavepoint || !db.releaseSavepoint);
 }
 
 /**
@@ -231,9 +263,7 @@ export async function underSavepoint<T>(
   db: VersionsDbApi,
   work: () => Promise<T>
 ): Promise<T> {
-  if (!db.savepoint || !db.rollbackToSavepoint || !db.releaseSavepoint) {
-    return work();
-  }
+  if (!takesSavepoints(db)) return work();
   savepointSequence += 1;
   const name = `nextly_version_insert_${savepointSequence}`;
   await db.savepoint(name);
@@ -242,8 +272,47 @@ export async function underSavepoint<T>(
     await db.releaseSavepoint(name);
     return result;
   } catch (err) {
-    await db.rollbackToSavepoint(name);
-    await db.releaseSavepoint(name);
+    try {
+      await db.rollbackToSavepoint(name);
+      await db.releaseSavepoint(name);
+    } catch {
+      // The savepoint is gone with the transaction it was in (MySQL rolls the whole transaction
+      // back on a deadlock), so nothing of it can be kept: the failure aborts the transaction.
+      throw markWriteIntegrityFailure(err);
+    }
     throw err;
   }
+}
+
+/**
+ * Run `work` as a question only, inside a savepoint that is rolled back once it answers, where the
+ * transaction has them: nothing it writes stays, and the effects it holds for the commit are
+ * dropped with the savepoint (its `afterRollback` effects run once the transaction ends, as for
+ * any part undone). Its answer, or its failure, is kept. Without savepoints it runs plainly, and
+ * what it holds stays with the transaction.
+ */
+export async function undoneAfter<T>(
+  db: VersionsDbApi,
+  work: () => Promise<T>
+): Promise<T> {
+  if (!takesSavepoints(db)) return work();
+  savepointSequence += 1;
+  const name = `nextly_question_${savepointSequence}`;
+  await db.savepoint(name);
+  let answer: { value: T } | { error: unknown };
+  try {
+    answer = { value: await work() };
+  } catch (error) {
+    answer = { error };
+  }
+  try {
+    await db.rollbackToSavepoint(name);
+    await db.releaseSavepoint(name);
+  } catch (err) {
+    // The savepoint is gone with the transaction it was in, so nothing of it can be kept: the
+    // failure aborts the transaction, whatever `work` answered.
+    throw markWriteIntegrityFailure(err);
+  }
+  if ("error" in answer) throw answer.error;
+  return answer.value;
 }

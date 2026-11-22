@@ -25,6 +25,7 @@ import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors/nextly-error";
 import {
   DOCUMENT_OVERWRITE_KEY,
+  DOCUMENT_PROVENANCE_KEY,
   DOCUMENT_RESTORED_FROM_KEY,
   DOCUMENT_VERSION_KEY,
   MIGRATE_STEP_COLUMN_NAMES,
@@ -74,6 +75,8 @@ const SERVER_ONLY_KEYS: readonly string[] = [
   DOCUMENT_OVERWRITE_KEY,
   // Which values a save restored: recorded on its version, never stored.
   DOCUMENT_RESTORED_FROM_KEY,
+  // Where a save's translated values came from: recorded beside them, never stored as a column.
+  DOCUMENT_PROVENANCE_KEY,
   ...MIGRATE_STEP_COLUMN_NAMES,
 ];
 
@@ -283,7 +286,7 @@ export interface SelectsRows {
  * model does not declare the counter, since the same model serves
  * field-group translation tables, which are no documents and never carry it.
  */
-async function readLanguageRevisions(
+export async function readLanguageRevisions(
   db: SelectsRows,
   args: { dialect: SupportedDialect; table: string; ids: readonly string[] }
 ): Promise<Map<string, Map<string, number>>> {

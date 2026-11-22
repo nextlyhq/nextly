@@ -115,6 +115,39 @@ export interface SchemaPreviewResponse {
   renamed: SchemaPreviewRenameCandidate[];
   leavingTranslation?: SchemaPreviewLeavingTranslation[];
   joiningTranslation?: SchemaPreviewJoiningTranslation[];
+  /**
+   * What the save also brings up to date in a table an earlier Nextly version made, which it
+   * writes only once the apply confirms each by its key (`acknowledgedConversions`). Empty or
+   * absent when there is nothing to convert, and from an older server.
+   */
+  conversions?: SchemaPreviewConversion[];
+}
+
+/** One conversion a save makes to a table an earlier Nextly version made, as the preview names it. */
+export interface SchemaPreviewConversion {
+  /** The table it converts. */
+  table: string;
+  /** The key the apply confirms it by. Opaque: a column's name, or the table's for an index. */
+  column: string;
+  from: string;
+  to: string;
+  /** What it does, in plain words ("adds an index on created_at"), shown as it is. */
+  change: string;
+  /** Whether it deletes stored values (it removes a column or a table): shown as data loss. */
+  deletesValues: boolean;
+}
+
+/**
+ * The part of an apply's body that confirms the reviewed conversions: their keys, or nothing when
+ * there are none, so a save with nothing to convert sends what it always has.
+ */
+export function acknowledgedConversionsBody(
+  acknowledgedConversions: readonly string[] | undefined
+): { acknowledgedConversions?: readonly string[] } {
+  return acknowledgedConversions !== undefined &&
+    acknowledgedConversions.length > 0
+    ? { acknowledgedConversions }
+    : {};
 }
 
 /**
@@ -166,11 +199,19 @@ export const schemaApi = {
     // against a DIFFERENT localization state can miss a required-column
     // prompt the apply turns out to need — the save then fails after the user
     // already confirmed. Undefined leaves the persisted flag in charge.
-    localized?: boolean
+    localized?: boolean,
+    // The pending Draft/Published toggle, so a field taking one of the lifecycle's own names is
+    // refused when the same save turns the lifecycle on. Judged with, never applied: the settings
+    // save that follows the fields sets it. Undefined leaves the stored flag alone in charge.
+    status?: boolean
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
       `/collections/schema/${slug}/preview`,
-      { fields, ...(localized !== undefined ? { localized } : {}) }
+      {
+        fields,
+        ...(localized !== undefined ? { localized } : {}),
+        ...(status !== undefined ? { status } : {}),
+      }
     );
   },
 
@@ -196,7 +237,11 @@ export const schemaApi = {
     // fields provisions the companion in the same request instead of diffing
     // against the registry flag as it was before the save. Undefined leaves
     // the persisted value untouched.
-    localized?: boolean
+    localized?: boolean,
+    // The pending Draft/Published toggle, judged with as the preview is (see above).
+    status?: boolean,
+    // The keys of the conversions the review listed and its Save confirmed.
+    acknowledgedConversions?: readonly string[]
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -207,6 +252,8 @@ export const schemaApi = {
       resolutions,
       renameResolutions,
       ...(localized !== undefined ? { localized } : {}),
+      ...(status !== undefined ? { status } : {}),
+      ...acknowledgedConversionsBody(acknowledgedConversions),
     });
     return {
       success: true,

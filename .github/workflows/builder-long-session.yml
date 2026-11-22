@@ -1,0 +1,104 @@
+name: Builder long session
+
+# Half an hour of an author's ordinary editing on the 150-block page, on the
+# playground's production build with the processor slowed 4x, recording the
+# main thread's long tasks and the heap (e2e/builder-speed/long-session.mjs).
+# It fails when any task runs longer than a second after the first minute, or
+# the editor loses its document lock.
+#
+# Nightly and on demand rather than on every pull request: half an hour per
+# run would slow every change for little gain, and the per-PR Builder speed
+# check keeps the fast timings and counters. A pull request that changes this
+# session itself runs it, so its own edits are checked before they land.
+
+on:
+  schedule:
+    # After the nightly Lighthouse run, so the two do not contend for runners.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "How long the editing runs"
+        default: "30"
+      rate:
+        description: "Processor slowdown (1 measures without slowing)"
+        default: "4"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - ".github/workflows/builder-long-session.yml"
+      - "e2e/builder-speed/long-session.mjs"
+      - "e2e/builder-speed/long-session-report.mjs"
+
+permissions:
+  contents: read
+
+# A pull request's newer push supersedes its last run; every other run keeps a
+# group of its own, so a manual run never cancels the nightly.
+concurrency:
+  group: builder-long-session-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  session:
+    name: Builder long session
+    runs-on: ubuntu-latest
+    # The packages (mostly from the Turbo cache) and the playground's
+    # production build take about ten minutes, the session thirty, and the
+    # selection timings and readings around it a few more.
+    timeout-minutes: 50
+    env:
+      TURBO_CACHE_DIR: .turbo
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
+
+      # The Builder speed job's cache, read only: the same packages build the
+      # same way, and this job saves nothing of its own.
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-measure-builder-speed-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-measure-builder-speed-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Chromium and its system libraries
+        uses: ./.github/actions/chromium
+
+      - name: Build packages
+        run: pnpm turbo build --filter='./packages/*'
+
+      - name: Edit for half an hour, recording long tasks and heap
+        run: >-
+          node e2e/builder-speed/long-session.mjs --build
+          --minutes "${MINUTES}" --rate "${RATE}"
+          --json e2e/.playwright/builder-speed/long-session.json
+        env:
+          MINUTES: ${{ inputs.minutes || '30' }}
+          RATE: ${{ inputs.rate || '4' }}
+
+      - name: Upload the results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: builder-long-session-${{ github.run_id }}
+          path: e2e/.playwright/builder-speed
+          retention-days: 30

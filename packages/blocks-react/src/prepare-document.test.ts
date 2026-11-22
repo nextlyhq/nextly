@@ -8,12 +8,12 @@ import {
 import type {
   BlockDocument,
   BlockNode,
-  SiteSettingName,
+  SiteValueName,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { coreBlocks } from "./blocks";
-import { defineBlock, type BlocksSiteSettings } from "./context";
+import { defineBlock, type BlocksSiteValues } from "./context";
 import { prepareDocumentForRead } from "./prepare-document";
 import { createBlockResolver } from "./resolver";
 
@@ -244,9 +244,11 @@ describe("prepareDocumentForRead", () => {
 describe("the site settings a page may bind", () => {
   it("are the settings the renderer hands a page, no more and no fewer", () => {
     // The save judges a site binding by the engine's table, and the page
-    // reads `BlocksSiteSettings`: a setting in one and not the other would be
+    // reads `BlocksSiteValues`: a value in one and not the other would be
     // refused where it renders, or saved where it falls back.
-    expectTypeOf<SiteSettingName>().toEqualTypeOf<keyof BlocksSiteSettings>();
+    // The year is one the route works out, not a setting, so it is handed
+    // in beside the settings.
+    expectTypeOf<SiteValueName>().toEqualTypeOf<keyof BlocksSiteValues>();
     expect(Object.keys(SITE_SETTING_FIELD_TYPES).sort()).toEqual([
       "applicationName",
       "logoUrl",

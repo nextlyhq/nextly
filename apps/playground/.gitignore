@@ -54,9 +54,6 @@ yarn-debug.log*
 # coverage
 /coverage
 
-# schema-builder output (this harness defines its schema code-first)
-ui-schema.json
-
 # Theme lab screenshots (scripts/capture-themes.mjs) -- large regenerable
 # binaries, not source, so they stay out of history.
 .theme-captures/

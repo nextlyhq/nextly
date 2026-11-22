@@ -30,8 +30,12 @@ import {
   SEO_STATUS_COMPONENT,
   SEO_TAB_COMPONENT,
 } from "../tab/contributions";
-import { PAGE_BUILDER_TAB_COMPONENT } from "../template/contributions";
+import {
+  PAGE_BUILDER_SEARCH_COMPONENT,
+  PAGE_BUILDER_TAB_COMPONENT,
+} from "../template/contributions";
 
+import { PageBuilderSearchResult } from "./PageBuilderSearchResult";
 import { PageBuilderSeoTab } from "./PageBuilderSeoTab";
 import { SeoBulkMoved, SeoReceivedMoved, withTrail } from "./section";
 import { SeoImportPage } from "./SeoImportPage";
@@ -68,6 +72,7 @@ registerComponents({
   [RECEIVED_PAGE.component]: SeoReceivedMoved,
   [SEO_TAB_COMPONENT]: SeoTab,
   [PAGE_BUILDER_TAB_COMPONENT]: PageBuilderSeoTab,
+  [PAGE_BUILDER_SEARCH_COMPONENT]: PageBuilderSearchResult,
   [SEO_STATUS_COMPONENT]: SeoStatusSection,
   [SEO_DISPLAY_STATUS_COMPONENT]: SeoDisplaySection,
 });
@@ -94,6 +99,7 @@ export {
 export { SeoInspectPage } from "./SeoInspectPage";
 export { SeoTab } from "./SeoTab";
 export { PageBuilderSeoTab } from "./PageBuilderSeoTab";
+export { PageBuilderSearchResult } from "./PageBuilderSearchResult";
 export { SeoDisplaySection, SeoStatusSection } from "./status";
 export { SeoPanel, type SeoPanelProps } from "./SeoPanel";
 export {

@@ -37,7 +37,7 @@ export type RecoveryPointChanges =
  * The document's own table and whether it keeps translations, from the
  * registry; null when the collection or Single is gone.
  */
-async function documentShape(
+export async function documentShape(
   scopeKind: "collection" | "single",
   slug: string
 ): Promise<{ table: string; localized: boolean } | null> {

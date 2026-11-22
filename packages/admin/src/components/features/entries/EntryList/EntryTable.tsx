@@ -29,7 +29,12 @@ import {
   type ForwardRefExoticComponent,
 } from "react";
 
-import { Pencil, Trash2 } from "@admin/components/icons";
+import {
+  FileText,
+  PanelsTopLeft,
+  Pencil,
+  Trash2,
+} from "@admin/components/icons";
 import { useHoldForDecidingColumns } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { RangeField } from "@admin/components/shared/range-field";
 import type {
@@ -46,8 +51,9 @@ import {
   ListView,
   type ListColumnsControl,
 } from "@admin/components/ui/table/list-view";
-import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { navigateTo } from "@admin/lib/navigation";
+import type { WayIn } from "@admin/lib/navigation/document-address";
 
 import { BulkActionBar } from "./BulkActionBar";
 import type { TranslationListFilter } from "./entryFilters";
@@ -57,7 +63,7 @@ import {
   type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
-import type { OfferedListFilter } from "./plugin-filters";
+import type { ListFilter } from "./plugin-filters";
 import type { DeclaredBulkAction } from "./useDeclaredBulkActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import {
@@ -66,6 +72,10 @@ import {
   type EntryRow,
   type EntryVersions,
 } from "./useEntrySelection";
+import {
+  BulkMoveResultNote,
+  useWorkflowBulkMoves,
+} from "./useWorkflowBulkMoves";
 
 // ============================================================================
 // Types
@@ -116,6 +126,17 @@ export interface EntryTableProps {
   /** Callback when edit action is triggered */
   /** Open a row. `locale` opens it in that content language. */
   onEdit: (entryId: string, locale?: string) => void;
+  /**
+   * Where a row opens, by the admin's one rule for opening a document, so a
+   * row is a real link: a middle or modified click opens the same place.
+   */
+  entryHref: (entryId: string) => string;
+  /**
+   * The other ways into an entry its row's menu offers after Edit: "Edit
+   * details" where the entries open in a view, else the views an entry may
+   * be opened in. None when not given.
+   */
+  rowWaysIn?: (entryId: string) => readonly WayIn[];
   /** Callback when delete action is triggered */
   onDelete: (entryId: string) => void;
   /** Callback for bulk delete operation */
@@ -156,7 +177,7 @@ export interface EntryTableProps {
   /** Callback when the language filter changes. */
   onTranslationFilterChange?: (filter: TranslationListFilter | null) => void;
   /** The filters plugins offer this list (`contributes.admin.filters`). */
-  pluginFilters?: readonly OfferedListFilter[];
+  pluginFilters?: readonly ListFilter[];
   /** The option each plugin filter has chosen, by filter name. */
   chosenPluginFilters?: ReadonlyMap<string, string>;
   /** Choose a plugin filter's option, or `null` to clear it. */
@@ -225,7 +246,7 @@ function PluginFilterMenuSections({
   onChange,
   separateFirst,
 }: {
-  filters: readonly OfferedListFilter[];
+  filters: readonly ListFilter[];
   chosen: ReadonlyMap<string, string> | undefined;
   onChange: ((name: string, value: string | null) => void) | undefined;
   /** Whether a section of the list's own comes before the first. */
@@ -301,6 +322,8 @@ export const EntryTable: ForwardRefExoticComponent<
     onSortChange,
     onSearchChange,
     onEdit,
+    entryHref,
+    rowWaysIn,
     onDelete,
     onBulkDelete,
     onBulkUpdate,
@@ -362,6 +385,17 @@ export const EntryTable: ForwardRefExoticComponent<
     () => getEntryTitleField(collection),
     [collection]
   );
+
+  // The workflow's moves over the selection, each refusal named by the row's title.
+  const bulkMoves = useWorkflowBulkMoves({
+    collection,
+    offered: offered.workflowMoves,
+    rows: entries,
+    titleOf: (row, id) => {
+      const title = row && titleField ? row[titleField] : undefined;
+      return typeof title === "string" && title !== "" ? title : id;
+    },
+  });
 
   // A plugin's column decided by a read of its own (whether the collection
   // has what the column shows) is registered once that read answers. Asked
@@ -434,6 +468,19 @@ export const EntryTable: ForwardRefExoticComponent<
             icon: <Pencil className="h-4 w-4" />,
             onSelect: () => onEdit(id),
           },
+          // Each other way in goes where the shared rule says, as the row's
+          // own link does: the form, or a view.
+          ...(rowWaysIn?.(id) ?? []).map((way, index) => ({
+            id: `way-in-${index}`,
+            label: way.label,
+            icon:
+              way.opens === "form" ? (
+                <FileText className="h-4 w-4" />
+              ) : (
+                <PanelsTopLeft className="h-4 w-4" />
+              ),
+            onSelect: () => navigateTo(way.address),
+          })),
           ...(offered.delete
             ? [
                 {
@@ -448,7 +495,7 @@ export const EntryTable: ForwardRefExoticComponent<
           ...(declaredRowActions ?? []),
         ];
       },
-    [onEdit, onDelete, offered.delete, declaredRowActions]
+    [onEdit, rowWaysIn, onDelete, offered.delete, declaredRowActions]
   );
 
   // -------------------------------------------------------------------------
@@ -517,6 +564,11 @@ export const EntryTable: ForwardRefExoticComponent<
   return (
     // The table draws its columns from the ask the hold above was decided by.
     <HeldPluginColumnsPass.Provider value={pass}>
+      {bulkMoves.dialogs}
+      {/* What the last workflow move did, each refusal named, until the next one. */}
+      {bulkMoves.result ? (
+        <BulkMoveResultNote result={bulkMoves.result} />
+      ) : null}
       <ListView<EntryRow>
         search={{
           value: globalFilter,
@@ -638,9 +690,13 @@ export const EntryTable: ForwardRefExoticComponent<
                       onToChange={value => onUpdatedToChange?.(value)}
                     />
 
+                    {/* In the menu's text colour: the primary token is a fill
+                        a brand may set to any colour, and small text drawn in
+                        it can fall under AA. Underlined at rest, so it reads
+                        as a link in the menu's own colour. */}
                     <button
                       type="button"
-                      className="w-full text-left text-xs text-primary hover:underline"
+                      className="w-full text-left text-xs text-foreground underline underline-offset-2"
                       onClick={clearDateFilters}
                     >
                       Clear date filters
@@ -678,6 +734,7 @@ export const EntryTable: ForwardRefExoticComponent<
                 declaredBulkActions,
                 selected
               )}
+              workflowMoves={bulkMoves.movesFor(selected)}
             />
           ) : undefined
         }
@@ -700,12 +757,7 @@ export const EntryTable: ForwardRefExoticComponent<
         rowActions={rowActions}
         sort={sort}
         onSortChange={onSortChange}
-        rowHref={row =>
-          buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-            slug: collection.slug,
-            id: rowId(row),
-          })
-        }
+        rowHref={row => entryHref(rowId(row))}
         primaryColumn={titleField}
         registryKey={collection.slug}
         ariaLabel="Entries table"

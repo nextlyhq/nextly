@@ -66,6 +66,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  window.localStorage.clear();
 });
 
 const pageOfCall = (call: unknown[]) => (call[0] as { page: number }).page;
@@ -142,4 +143,39 @@ describe("the media page's pager", () => {
     expect(screen.queryAllByText("photo-1.jpg")).toHaveLength(0);
     expect(api.fetchMedia.mock.calls.map(pageOfCall)).toEqual([1, 2]);
   });
+});
+
+describe("what the media page's pager says", () => {
+  /*
+   * Both views draw a pager, and each is given the result's total, so the line
+   * on the left counts files rather than repeating the page count the right
+   * end already shows. The page holds 24 of 72, so the range is 1-24.
+   */
+  it.each([
+    ["list", "Media list pagination"],
+    ["grid", "Media grid pagination"],
+  ])(
+    "counts the files in the %s view, and says the page once",
+    async (view, name) => {
+      window.localStorage.setItem("nextly:admin:media:view-mode", view);
+      api.fetchMedia.mockImplementation(({ page }: { page: number }) =>
+        Promise.resolve(pageOf(page))
+      );
+
+      renderWithProviders(
+        <MediaProvider>
+          <MediaLibrary />
+        </MediaProvider>
+      );
+      const pager = await screen.findByRole("navigation", { name });
+
+      expect(
+        pager.querySelector('[data-slot="pagination-summary"]')?.textContent
+      ).toBe("Showing 1-24 of 72 files");
+      const pageCounts = Array.from(pager.querySelectorAll("div")).filter(
+        element => element.textContent === "Page 1 of 3"
+      );
+      expect(pageCounts).toHaveLength(1);
+    }
+  );
 });

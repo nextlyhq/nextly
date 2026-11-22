@@ -13,6 +13,19 @@
  * page builder exists. Because the store that refuses two documents one
  * address is also what routes, what is checked is what is served.
  *
+ * ## Why it is cached, and how a preview is served
+ *
+ * A published page is the same for every visitor, so this route answers a
+ * visit from the cache: each published path is built ahead of time, and a
+ * publish or unpublish of the page, its Layout's header or footer, a
+ * component it places or the site style refreshes the cached answer by its
+ * tags. A preview link turns on Next's draft mode, and only a draft-mode
+ * request asks the draft gate below; Next renders those on demand and never
+ * stores them, so a draft never reaches the cache or another visitor.
+ *
+ * Pre-rendering reads the database during `next build`, which is what the
+ * cached posture costs.
+ *
  * ## Why a REQUIRED catch-all, not an optional one
  *
  * `[...slug]` matches `/about` and `/pricing/enterprise` but never `/`, whereas
@@ -41,7 +54,7 @@
  *
  * @module app/(frontend)/[...slug]
  */
-import { createContentPage } from "@nextlyhq/blocks-react/next";
+import { createPublicContentPage } from "@nextlyhq/blocks-react/next";
 import { pageBuilderContent } from "@nextlyhq/plugin-page-builder";
 import { previewDraftGate } from "nextly/runtime";
 
@@ -49,6 +62,7 @@ import { withJournalLinks } from "../../../blog-fixture/links";
 import { withJournalMetadata } from "../../../blog-fixture/metadata";
 import { pagesRoute } from "../../../lib/pages-route";
 import { siteReader } from "../../../lib/site-content";
+import { pathsOrRoot } from "../../../lib/static-params";
 
 /**
  * Who holds each path, and the Posts template, from the page builder, through
@@ -65,22 +79,11 @@ const content = pageBuilderContent();
 const blogFixture = process.env.NEXTLY_E2E_STYLE_FIXTURE === "1";
 
 /**
- * Access-enforced and per-request, which is the secure default.
- *
- * `createContentPage` reads as the visitor would, so the answer depends on who
- * is asking and no path can be pre-rendered. It returns no
- * `generateStaticParams`, Next classifies the route dynamic because nothing
- * claims otherwise, and the build reads no database — which is what lets this
- * app build on a machine that has none.
- *
- * A site whose pages are wholly public calls `createPublicContentPage` instead
- * and exports the `generateStaticParams` it returns, pairing it with `tags` so
- * publishing busts the cached page rather than waiting for a rebuild. That is
- * the right posture for a marketing site and the wrong one here: it needs a
- * database during `next build`. The posture is the factory you call, not an
- * option you pass. `/site` serves the same pages that way (`../site`).
+ * Public and cached: read trusted, as every visitor reads it, built ahead of
+ * time and refreshed by its tags. A preview asks the draft gate, and only on a
+ * draft-mode request.
  */
-const { ContentPage, generateMetadata } = createContentPage({
+const route = createPublicContentPage({
   ...content,
   ...(blogFixture
     ? { entryPath: withJournalLinks(content.entryPath, siteReader) }
@@ -105,5 +108,16 @@ const { ContentPage, generateMetadata } = createContentPage({
   },
 });
 
-export { generateMetadata };
-export default ContentPage;
+/**
+ * Every path a published page or entry holds, built ahead of time. With none
+ * published yet, one path no page holds, which renders the not-found page: a
+ * required catch-all cannot build the root.
+ */
+export async function generateStaticParams(): Promise<
+  Array<{ slug: string[] }>
+> {
+  return pathsOrRoot(route, { slug: ["not-found"] });
+}
+
+export const { generateMetadata } = route;
+export default route.ContentPage;

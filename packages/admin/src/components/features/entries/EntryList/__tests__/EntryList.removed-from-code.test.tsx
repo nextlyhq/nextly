@@ -35,6 +35,8 @@ vi.mock("@admin/hooks/queries", () => ({
   useBulkUpdateEntries: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock("@admin/hooks/queries/useCollections", () => ({
+  // The list opens rows by its own copy of the collection.
+  useEveryNavCollection: () => ({ data: undefined }),
   useCollection: () => ({ data: collection, isLoading: false }),
 }));
 // Every permission held: what is withheld below is withheld because the

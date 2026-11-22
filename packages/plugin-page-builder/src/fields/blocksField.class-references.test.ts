@@ -4,12 +4,15 @@
  * keeps the rule a warning, since it cannot tell a new reference from an old
  * one; the write path can, by comparing with the stored forms.
  */
-import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+import { createBlockRegistry, DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import type { CompositionSetup } from "./blocks-composition";
 import { blocksFieldType } from "./blocksField";
+
+/** The site's block registry these tests judge against: it holds none. */
+const blocks = createBlockRegistry();
 
 const page = (...classes: string[][]) => ({
   formatVersion: 1,
@@ -54,12 +57,13 @@ function setup() {
   const composition: CompositionSetup = {
     store: { collection: "components", field: "definition" },
     limits: DEFAULT_LIMITS,
+    blocks,
     composesDocuments: false,
     siteDefinitions,
   };
   return {
     siteDefinitions,
-    field: blocksFieldType(undefined, () => composition),
+    field: blocksFieldType(undefined, () => composition, blocks),
   };
 }
 

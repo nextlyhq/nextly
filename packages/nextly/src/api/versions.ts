@@ -18,6 +18,8 @@
  */
 
 import { getService } from "../di";
+import { appLocalization } from "../domains/i18n/configured-locales";
+import { configuredLocale } from "../domains/i18n/resolve-locale";
 import { attachVersionAuthors } from "../domains/versions/author-hydration";
 import { NextlyError } from "../errors/nextly-error";
 import type { VersionScopeKind } from "../schemas/versions/types";
@@ -111,30 +113,30 @@ export const GET = privateToSession(
     // value is treated as absent (list every locale) rather than matching a
     // non-existent empty-string locale.
     const localeParam = url.searchParams.get("locale");
+    // An older spelling of a configured language lists the versions stored under its code.
+    const localization = appLocalization();
     const locale =
-      localeParam !== null && localeParam.length > 0 ? localeParam : undefined;
+      localeParam !== null && localeParam.length > 0
+        ? ((localization && configuredLocale(localization, localeParam)) ??
+          localeParam)
+        : undefined;
 
     // Always bounded: an unset limit still pages, and an oversized one is
     // clamped, so no single request can serialize an entire long history.
     const limit = Math.min(requestedLimit ?? DEFAULT_LIMIT, MAX_LIMIT);
 
+    // Asked in the language the listing names, or in any its history holds.
     const caller = await requireRouteVersionReadAccess(
       request,
       scopeKind,
       slug,
-      id
+      id,
+      locale
     );
 
     // The languages this caller may read the history in: the one asked for,
     // or every one they may read.
-    const languages = await historyListLanguages(
-      scopeKind,
-      slug,
-      id,
-      caller.user,
-      caller.authenticatedScope,
-      locale
-    );
+    const languages = historyListLanguages(locale, caller.readableLanguages);
 
     const versions = getService("versionsService");
     // Fetch one more than asked for: its presence is what proves another page

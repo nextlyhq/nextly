@@ -17,21 +17,30 @@ import * as React from "react";
 import { Loader2 } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import {
+  useDocumentAddress,
+  type DocumentAddressOf,
+} from "@admin/lib/navigation/useDocumentAddress";
 
 import type { MediaUsage, MediaUse } from "../media-library-api";
 import { useMediaUsage, type MediaUsageMore } from "../media-library-queries";
 
-/** The admin page a document using the item opens at. */
-function mediaUseHref(use: MediaUse): string {
+/**
+ * The admin page a document using the item opens at: an entry or a Single
+ * where the admin's one rule for opening a document opens it, an email
+ * template at its own editor.
+ */
+function mediaUseHref(use: MediaUse, addressOf: DocumentAddressOf): string {
   if (use.kind === "single") {
-    return buildRoute(ROUTES.SINGLE_EDIT, { slug: use.slug });
+    return addressOf({ kind: "single", slug: use.slug });
   }
   if (use.kind === "email-template") {
     return buildRoute(ROUTES.SETTINGS_EMAIL_TEMPLATES_EDIT, {
       id: use.documentId,
     });
   }
-  return buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
+  return addressOf({
+    kind: "collection",
     slug: use.slug,
     id: use.documentId,
   });
@@ -110,6 +119,8 @@ export function MediaUsageList({
   usage: MediaUsage;
   more?: MediaUsageMore | null;
 }): React.JSX.Element {
+  // Each use opens where every other link to its document opens.
+  const addressOf = useDocumentAddress();
   if (usageTotal(usage) === 0) {
     // Said to be unused only once the usage record is built: before then a
     // use the record lacks may still be in older content.
@@ -131,7 +142,7 @@ export function MediaUsageList({
               className="border-b border-border last:border-b-0"
             >
               <Link
-                href={mediaUseHref(use)}
+                href={mediaUseHref(use, addressOf)}
                 className="flex flex-col gap-0.5 rounded-sm py-2 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <span className="flex items-baseline justify-between gap-3">

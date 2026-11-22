@@ -596,7 +596,7 @@ async function layoutsNaming(site: RewriteSite): Promise<LeftHost[]> {
     left.push({
       host: { kind: "collection", slug: site.layouts, path: ["areas"] },
       reason: "unreadable",
-      detail: "There are too many Layouts to check them all.",
+      detail: "There are too many header & footer sets to check them all.",
     });
   }
   return left;

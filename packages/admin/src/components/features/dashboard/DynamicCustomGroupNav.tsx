@@ -17,6 +17,7 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { NAV_COLLECTIONS_PARAMS, useCollections } from "@admin/hooks/queries";
 import { useSingles } from "@admin/hooks/queries/useSingles";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
 import {
   filterCollectionItems,
   filterSingleItems,
@@ -37,6 +38,12 @@ interface GroupItem {
   key: string;
   label: string;
   href: string;
+  /**
+   * The address the item is current at, and under: its `href`, except for a
+   * Single, whose link follows the admin's one rule and whose views sit
+   * under its form's address.
+   */
+  activeHref: string;
   icon: string;
   order: number;
 }
@@ -56,6 +63,7 @@ export function DynamicCustomGroupNav({
   const isCollapsed = state === "collapsed";
   const branding = useBranding();
   const { capabilities } = useCurrentUserPermissions();
+  const addressOf = useDocumentAddress();
 
   const customGroups = branding?.customGroups;
 
@@ -114,6 +122,9 @@ export function DynamicCustomGroupNav({
               href: buildRoute(ROUTES.COLLECTION_ENTRIES, {
                 slug: collection.name,
               }),
+              activeHref: buildRoute(ROUTES.COLLECTION_ENTRIES, {
+                slug: collection.name,
+              }),
               icon: collection.admin?.icon || "Database",
               order: Number(collection.admin?.order) || 100,
             });
@@ -132,7 +143,12 @@ export function DynamicCustomGroupNav({
               type: "single",
               key: `single-${single.slug}`,
               label: capitalizeFirstLetter(single.label || single.slug),
-              href: buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug }),
+              // Where the sidebar's own Singles list opens it, by one rule.
+              href: addressOf(
+                { kind: "single", slug: single.slug },
+                { collection: single }
+              ),
+              activeHref: buildRoute(ROUTES.SINGLE_EDIT, { slug: single.slug }),
               icon: single.admin?.icon || "",
               order: Number(single.admin?.order) || 100,
             });
@@ -150,7 +166,14 @@ export function DynamicCustomGroupNav({
       .filter(entry => (search ? true : entry.items.length > 0)) // if searching, keep groups even if empty to show "No matching items"
       .filter(entry => (!search && entry.items.length === 0 ? false : true)) // hide empty groups if not searching
       .sort((a, b) => a.group.name.localeCompare(b.group.name));
-  }, [customGroups, collectionsData, singlesData, capabilities, search]);
+  }, [
+    customGroups,
+    collectionsData,
+    singlesData,
+    capabilities,
+    search,
+    addressOf,
+  ]);
 
   if (groupedItems.length === 0) {
     return null;
@@ -168,7 +191,7 @@ export function DynamicCustomGroupNav({
           )}
           <SidebarMenu>
             {items.map(item => {
-              const isItemActive = isActive(item.href);
+              const isItemActive = isActive(item.activeHref);
               const DefaultIcon = item.type === "collection" ? Database : Globe;
               const IconComponent = iconMap[item.icon] || DefaultIcon;
 

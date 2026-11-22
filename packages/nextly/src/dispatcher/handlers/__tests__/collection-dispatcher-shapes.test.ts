@@ -682,6 +682,55 @@ describe("dispatchCollections, mutations (respondMutation)", () => {
     });
   });
 
+  it("never takes a copy from a REST request's parameters or body", async () => {
+    // A copy is minted by core from its own read of the source; the
+    // dispatcher names none, and offers no method for a create from a source.
+    const created = vi.fn().mockResolvedValue({
+      success: true,
+      statusCode: 201,
+      message: "ok",
+      data: { id: "e1" },
+    });
+    const duplicated = vi.fn().mockResolvedValue({
+      success: true,
+      statusCode: 201,
+      message: "ok",
+      data: { id: "e2" },
+    });
+    const fromSource = vi.fn();
+    const container = makeContainer({
+      createEntry: created,
+      duplicateEntry: duplicated,
+      createEntryFromSource: fromSource,
+    });
+    const claim = { collection: "posts", id: "e9", forms: ["published"] };
+
+    await dispatchCollections(
+      container,
+      "createEntry",
+      { collectionName: "posts", copiedFrom: claim } as never,
+      { title: "Hello", copiedFrom: claim }
+    );
+    expect(created.mock.calls[0][0]).not.toHaveProperty("copiedFrom");
+    await dispatchCollections(
+      container,
+      "duplicateEntry",
+      { collectionName: "posts", entryId: "e1", copiedFrom: claim } as never,
+      { overrides: { title: "Copy" }, copiedFrom: claim }
+    );
+    expect(duplicated.mock.calls[0][0]).not.toHaveProperty("copiedFrom");
+    expect(duplicated.mock.calls[0][0]).not.toHaveProperty("source");
+    expect(() =>
+      dispatchCollections(
+        container,
+        "createEntryFromSource",
+        { collectionName: "posts" },
+        { data: {}, source: claim }
+      )
+    ).toThrow(/Unknown method/);
+    expect(fromSource).not.toHaveBeenCalled();
+  });
+
   it("duplicateEntry returns { message, item } body and 201 status", async () => {
     // duplicateEntry delegates to createEntry, so the shape is identical
     // to createEntry. We pin 201 explicitly since duplicate is a create.
@@ -979,6 +1028,9 @@ function makeFakeRegistry(seed: {
 function makeFakeAdapter() {
   return {
     dialect: "postgresql" as const,
+    // The real adapter's dialect question, asked by the translation-move precondition a localized
+    // apply runs before it moves any column.
+    getCapabilities: () => ({ dialect: "postgresql" as const }),
     // The index names a change takes are looked up across the schema even for a table that does
     // not exist yet: nothing holds them here, in node-postgres's `{ rows }` shape.
     getDrizzle: vi.fn().mockReturnValue({
@@ -987,6 +1039,9 @@ function makeFakeAdapter() {
     update: vi.fn().mockResolvedValue(undefined),
     // Asked before the apply, for the index names a change takes and for the companion.
     tableExists: vi.fn().mockResolvedValue(false),
+    // Asked after the registry write (`afterEnclosingCommit`): outside a transaction here, as
+    // the real adapter answers where no file's transaction encloses the write.
+    inTransaction: () => false,
   };
 }
 
@@ -1440,7 +1495,11 @@ describe("dispatchCollections, localized persistence failure", () => {
     });
     const adapter = {
       dialect: "postgresql" as const,
+      // Asked by the translation-move precondition, as on the real adapter.
+      getCapabilities: () => ({ dialect: "postgresql" as const }),
       tableExists: vi.fn().mockResolvedValue(true),
+      // Asked after the registry write (`afterEnclosingCommit`): outside a transaction here.
+      inTransaction: () => false,
       getDrizzle: vi.fn().mockReturnValue({
         all: vi.fn().mockResolvedValue([]),
         run: vi.fn().mockResolvedValue(undefined),

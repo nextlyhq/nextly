@@ -1,5 +1,7 @@
+import { WORKFLOW_SETTINGS_READ } from "../components/features/settings/workflows/workflow-permissions";
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import {
+  EMAIL_DELIVERIES_READ_PERMISSION,
   EMAIL_HUB_PERMISSIONS,
   EMAIL_PROVIDER_CREATE_PERMISSIONS,
   EMAIL_PROVIDER_READ_PERMISSIONS,
@@ -55,6 +57,7 @@ import { lazyRoute } from "./lazy-route";
 // each chunk is fetched when its route renders, so opening one screen
 // does not download the other pages.
 const CollectionsPage = lazyRoute(() => import("./dashboard/collection/index"));
+const EmailActivityPage = lazyRoute(() => import("./dashboard/email/activity"));
 const EmailDesignPage = lazyRoute(() => import("./dashboard/email/design"));
 const EmailMessagesPage = lazyRoute(() => import("./dashboard/email/index"));
 const CreateEmailTemplatePage = lazyRoute(
@@ -107,6 +110,9 @@ const CollectionsOverviewPage = lazyRoute(
 const ContentOverviewPage = lazyRoute(
   () => import("./dashboard/content/index")
 );
+const ContentWaitingPage = lazyRoute(
+  () => import("./dashboard/content/waiting")
+);
 const EmailSettingsRedirect = lazyRoute(
   () => import("./dashboard/redirects/EmailSettingsRedirect")
 );
@@ -151,6 +157,12 @@ const EditWebhookPage = lazyRoute(
 );
 const WebhooksPage = lazyRoute(
   () => import("./dashboard/settings/webhooks/index")
+);
+const WorkflowsPage = lazyRoute(
+  () => import("./dashboard/settings/workflows/index")
+);
+const WorkflowDetailPage = lazyRoute(
+  () => import("./dashboard/settings/workflows/[slug]")
 );
 const SingleAPIPlaygroundPage = lazyRoute(
   () => import("./dashboard/singles/[slug]/api")
@@ -445,6 +457,14 @@ export const routeConfig: Record<string, RouteConfig> = {
     type: "private",
     section: "collections",
   },
+  // What waits for the reader's review, across collections and Singles: the Content panel's
+  // first link where anything can wait for them.
+  [ROUTES.CONTENT_WAITING]: {
+    component: ContentWaitingPage,
+    screenName: "Waiting for my review",
+    type: "private",
+    section: "collections",
+  },
   [ROUTES.COLLECTIONS]: {
     component: CollectionsOverviewPage,
     // Named here, not by the rail: the rail holds one Content item for both, so it has no
@@ -659,6 +679,13 @@ export const routeConfig: Record<string, RouteConfig> = {
     requiredPermission: [...EMAIL_PROVIDER_READ_PERMISSIONS],
     section: overridableBy("settings"),
   },
+  [ROUTES.EMAIL_ACTIVITY]: {
+    component: EmailActivityPage,
+    screenName: emailHubScreen(ROUTES.EMAIL_ACTIVITY),
+    type: "private",
+    requiredPermission: [EMAIL_DELIVERIES_READ_PERMISSION],
+    section: overridableBy("settings"),
+  },
   [ROUTES.EMAIL_MESSAGES_CREATE]: {
     component: CreateEmailTemplatePage,
     screenName: emailHubScreen(ROUTES.EMAIL),
@@ -795,6 +822,23 @@ export const routeConfig: Record<string, RouteConfig> = {
     screenName: settingsScreen(ROUTES.SETTINGS_BACKGROUND_JOBS),
     type: "private",
     requiredPermission: "manage-background-jobs",
+    section: overridableBy("settings"),
+  },
+  // Workflows are read by whoever may read settings or change them, as the
+  // server's workflow routes are; what each reader may change is decided on
+  // the page, control by control.
+  [ROUTES.SETTINGS_WORKFLOWS]: {
+    component: WorkflowsPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_WORKFLOWS),
+    type: "private",
+    requiredPermission: [...WORKFLOW_SETTINGS_READ],
+    section: overridableBy("settings"),
+  },
+  [ROUTES.SETTINGS_WORKFLOW_DETAIL]: {
+    component: WorkflowDetailPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_WORKFLOWS),
+    type: "private",
+    requiredPermission: [...WORKFLOW_SETTINGS_READ],
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_WEBHOOKS]: {

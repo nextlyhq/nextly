@@ -134,11 +134,15 @@ function previewOf(
 }
 
 /** The strip inside the providers the editor's shell gives what it draws. */
-function renderStrip(preview: TemplatePreview, extra?: ReactNode) {
+function renderStrip(
+  preview: TemplatePreview,
+  extra?: ReactNode,
+  visitor?: ReactNode
+) {
   return render(
     <ShortcutProvider>
       <TooltipProvider>
-        <TemplatePreviewStrip preview={preview} />
+        <TemplatePreviewStrip preview={preview} visitor={visitor} />
         {extra}
       </TooltipProvider>
     </ShortcutProvider>
@@ -157,6 +161,32 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+describe("the visitor's row", () => {
+  it("sits under the Previewing row, as a row of its own", () => {
+    const { container } = renderStrip(
+      previewOf(),
+      undefined,
+      <div className="nx-preview-strip" data-visitor-preview="">
+        Previewing as a visitor
+      </div>
+    );
+    const rows = container.querySelectorAll(
+      "[data-template-preview] > .nx-preview-strip"
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain("Previewing");
+    expect(rows[0]?.textContent).not.toContain("as a visitor");
+    expect(rows[1]?.hasAttribute("data-visitor-preview")).toBe(true);
+  });
+
+  it("is not drawn while the view is off", () => {
+    const { container } = renderStrip(previewOf());
+    expect(
+      container.querySelectorAll("[data-template-preview] > .nx-preview-strip")
+    ).toHaveLength(1);
+  });
 });
 
 describe("the chip", () => {

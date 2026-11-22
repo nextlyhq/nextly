@@ -184,6 +184,13 @@ export interface CollectionAdminConfig {
   disableDelete?: boolean;
 
   /**
+   * @experimental Where the admin opens the collection's entries: `"form"` or
+   * a document view's path. Code-first only; the Schema Builder never writes
+   * it, so its collections follow the default rule.
+   */
+  opensIn?: string;
+
+  /**
    * Preview URL configuration for content preview workflows.
    *
    * For UI-created collections, use `urlTemplate` with placeholders.

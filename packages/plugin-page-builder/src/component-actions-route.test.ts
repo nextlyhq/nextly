@@ -4,6 +4,7 @@
  * untouched, and what each hands the editor.
  */
 import {
+  createBlockRegistry,
   applyOps,
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
@@ -32,6 +33,9 @@ import type {
   StoredPageRead,
 } from "./composition-route-kit";
 import type { OriginStore } from "./origin-store";
+
+/** The site's block registry these tests read: it holds none. */
+const blocks = createBlockRegistry();
 
 const heading = (id: string, text: string): BlockNode => ({
   id,
@@ -218,6 +222,7 @@ describe("detaching a placement", () => {
 
     const item = await itemOf<DetachResult>(
       await detachPlacement(request({ document: doc, instanceId: "p" }), ctx, {
+        blocks,
         reads,
       })
     );
@@ -244,7 +249,7 @@ describe("detaching a placement", () => {
       await detachPlacement(
         request({ document: page([placement("p", "card")]), instanceId: "p" }),
         ctx,
-        { reads }
+        { blocks, reads }
       )
     );
 
@@ -273,7 +278,7 @@ describe("detaching a placement", () => {
         instanceId: "p",
       }),
       ctx,
-      { reads }
+      { blocks, reads }
     );
 
     const [slug, id, data] = services.updateEntry.mock.calls[0] ?? [];
@@ -302,7 +307,7 @@ describe("detaching a placement", () => {
           instanceId: "p",
         }),
         ctx,
-        { reads }
+        { blocks, reads }
       )
     );
 
@@ -324,7 +329,7 @@ describe("detaching a placement", () => {
     await detachPlacement(
       request({ document: doc, instanceId: "p", locale: "fr" }),
       ctx,
-      { reads }
+      { blocks, reads }
     );
 
     expect(asked).toContain("fr");
@@ -345,7 +350,7 @@ describe("detaching a placement", () => {
         instanceId: "p",
       }),
       ctx,
-      { reads }
+      { blocks, reads }
     );
 
     expect(services.updateEntry.mock.calls[0]?.[3]).toMatchObject({
@@ -379,7 +384,7 @@ describe("detaching a placement", () => {
           instanceId: "p",
         }),
         ctx,
-        { reads }
+        { blocks, reads }
       )
     );
 
@@ -407,7 +412,7 @@ describe("detaching a placement", () => {
         instanceId: "p",
       }),
       ctx,
-      { reads }
+      { blocks, reads }
     );
 
     expect(asked).toEqual(["card"]);
@@ -417,6 +422,7 @@ describe("detaching a placement", () => {
     const { ctx } = contextOver();
     const error = await thrownBy(
       detachPlacement(request({ document: doc, instanceId: "before" }), ctx, {
+        blocks,
         reads: readsOver(),
       })
     );
@@ -433,7 +439,7 @@ describe("detaching a placement", () => {
           instanceId: "p",
         }),
         ctx,
-        { reads: readsOver({ stored: doc }) }
+        { blocks, reads: readsOver({ stored: doc }) }
       )
     );
     expect(error.statusCode).toBe(403);
@@ -460,6 +466,7 @@ describe("duplicating a component", () => {
         request({ placement: { document: twoPlacements, instanceId: "p1" } }),
         ctx,
         {
+          blocks,
           reads: readsOver({
             published: { card: card(CARD) },
             shown: { card: card(CARD_DRAFT) },
@@ -492,6 +499,7 @@ describe("duplicating a component", () => {
     const { ctx } = contextOver({ params: { id: "card" } });
     const item = await itemOf<DuplicateResult>(
       await duplicateComponent(request({}), ctx, {
+        blocks,
         reads: readsOver({ published: { card: card(CARD) } }),
       })
     );
@@ -502,6 +510,7 @@ describe("duplicating a component", () => {
     const { ctx, journal } = contextOver({ params: { id: "card" } });
     const record = vi.fn(() => Promise.resolve());
     await duplicateComponent(request({ dryRun: true }), ctx, {
+      blocks,
       reads: readsOver({ published: { card: card(CARD) } }),
       origins: () => ({ record, sourceOf: () => Promise.resolve(null) }),
     });
@@ -521,6 +530,7 @@ describe("duplicating a component", () => {
       }),
       ctx,
       {
+        blocks,
         reads: readsOver({
           stored: twoPlacements,
           published: { card: card(CARD) },
@@ -567,7 +577,7 @@ describe("duplicating a component", () => {
           },
         }),
         ctx,
-        { reads }
+        { blocks, reads }
       )
     ).rejects.toThrow();
     expect(journal).toEqual(["begin", "create-in-tx"]);
@@ -580,6 +590,7 @@ describe("duplicating a component", () => {
     });
     const error = await thrownBy(
       duplicateComponent(request({}), ctx, {
+        blocks,
         reads: readsOver({ published: { card: card(CARD) } }),
       })
     );
@@ -591,6 +602,7 @@ describe("duplicating a component", () => {
     const { ctx, journal } = contextOver({ params: { id: "card" } });
     const error = await thrownBy(
       duplicateComponent(request({}), ctx, {
+        blocks,
         reads: readsOver({ published: { card: card(CARD) } }),
         store: { collection: "site_blocks", field: "body" },
       })
@@ -602,7 +614,7 @@ describe("duplicating a component", () => {
   it("answers 404 for a source the caller may not read", async () => {
     const { ctx, journal } = contextOver({ params: { id: "card" } });
     const error = await thrownBy(
-      duplicateComponent(request({}), ctx, { reads: readsOver({}) })
+      duplicateComponent(request({}), ctx, { blocks, reads: readsOver({}) })
     );
     expect(error.statusCode).toBe(404);
     expect(journal).toEqual([]);
@@ -611,6 +623,7 @@ describe("duplicating a component", () => {
   it("still answers success when the origin cannot be recorded", async () => {
     const { ctx } = contextOver({ params: { id: "card" } });
     const response = await duplicateComponent(request({}), ctx, {
+      blocks,
       reads: readsOver({ published: { card: card(CARD) } }),
       origins: () => ({
         record: () => Promise.reject(new Error("bookkeeping unavailable")),
@@ -626,7 +639,7 @@ describe("duplicating a component", () => {
       duplicateComponent(
         request({ placement: { document: twoPlacements, instanceId: "p1" } }),
         ctx,
-        { reads: readsOver({ published: { other: card(CARD) } }) }
+        { blocks, reads: readsOver({ published: { other: card(CARD) } }) }
       )
     );
     expect(error.statusCode).toBe(400);
@@ -642,7 +655,7 @@ describe("updating a pattern from a selection", () => {
       await updatePatternFromSelection(
         request({ document: doc, selectedIds: ["a"] }),
         ctx,
-        { reads: readsOver({ pattern: { id: "pat-1" } }) }
+        { blocks, reads: readsOver({ pattern: { id: "pat-1" } }) }
       )
     );
     const [slug, id, data] = services.updateEntry.mock.calls[0] ?? [];
@@ -658,7 +671,7 @@ describe("updating a pattern from a selection", () => {
     await updatePatternFromSelection(
       request({ document: doc, selectedIds: ["a"], dryRun: true }),
       ctx,
-      { reads: readsOver({ pattern: { id: "pat-1" } }) }
+      { blocks, reads: readsOver({ pattern: { id: "pat-1" } }) }
     );
     expect(journal).toEqual([]);
   });
@@ -672,7 +685,7 @@ describe("updating a pattern from a selection", () => {
       updatePatternFromSelection(
         request({ document: doc, selectedIds: ["a"] }),
         ctx,
-        { reads: readsOver({ pattern: { id: "pat-1" } }) }
+        { blocks, reads: readsOver({ pattern: { id: "pat-1" } }) }
       )
     );
     expect(error.statusCode).toBe(403);
@@ -685,7 +698,7 @@ describe("updating a pattern from a selection", () => {
       updatePatternFromSelection(
         request({ document: doc, selectedIds: ["a"] }),
         ctx,
-        { reads: readsOver({ pattern: null }) }
+        { blocks, reads: readsOver({ pattern: null }) }
       )
     );
     expect(error.statusCode).toBe(404);
@@ -713,6 +726,7 @@ describe("the version each write sends", () => {
       }),
       ctx,
       {
+        blocks,
         reads: readsOver({
           stored: detachable,
           revs: ["7", "8"],
@@ -738,6 +752,7 @@ describe("the version each write sends", () => {
       }),
       ctx,
       {
+        blocks,
         reads: readsOver({
           stored: duplicable,
           revs: ["7", "8"],
@@ -758,7 +773,7 @@ describe("the version each write sends", () => {
         selectedIds: ["a"],
       }),
       ctx,
-      { reads: readsOver({ pattern: { id: "pat-1", _rev: "3" } }) }
+      { blocks, reads: readsOver({ pattern: { id: "pat-1", _rev: "3" } }) }
     );
     expect(services.updateEntry.mock.calls[0]?.[2]).toMatchObject({
       _rev: "3",
@@ -776,6 +791,7 @@ describe("the version each write sends", () => {
       }),
       ctx,
       {
+        blocks,
         reads: readsOver({
           stored: detachable,
           shown: { card: card(CARD) },

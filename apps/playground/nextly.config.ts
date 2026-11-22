@@ -24,13 +24,14 @@
  */
 
 import { formBuilder } from "@nextlyhq/plugin-form-builder";
-import { pageBuilder } from "@nextlyhq/plugin-page-builder";
+import { blocks, pageBuilder } from "@nextlyhq/plugin-page-builder";
 import { seoPlugin } from "@nextlyhq/plugin-seo";
 import {
   defineCollection,
   defineConfig,
   date,
   defineSingle,
+  reviewWorkflow,
   text,
   textarea,
   upload,
@@ -40,10 +41,13 @@ import { JOURNAL, JOURNAL_COLLECTIONS } from "./src/blog-fixture/collections";
 import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
 import { BoundEntries } from "./src/collections/bound-entries";
+import { BuilderFirstPages } from "./src/collections/builder-first-pages";
 import { EntryArticles } from "./src/collections/entry-articles";
 import { ContributionStories } from "./src/collections/contribution-stories";
 import { ListStories } from "./src/collections/list-stories";
+import { e2eRateLimit } from "./src/e2e-rate-limit";
 import { E2E_NAMED_QUERIES } from "./src/named-queries";
+import { E2E_STARTER_PAGES } from "./src/starter-pages";
 import { Categories } from "./src/collections/categories";
 import { DevReloadProbe } from "./src/collections/dev-reload-probe";
 import { HistoryNotes } from "./src/collections/history-notes";
@@ -57,8 +61,10 @@ import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
+import { pageCheckFixturePlugin } from "./src/plugins/page-check-fixture/plugin";
 import { contributionsFixturePlugin } from "./src/plugins/contributions-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
+import { pageSummaryFixturePlugin } from "./src/plugins/page-summary-fixture/plugin";
 import { readingListsFixturePlugin } from "./src/plugins/reading-lists-fixture/plugin";
 import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
 import { startupReadFixturePlugin } from "./src/plugins/startup-read-fixture/plugin";
@@ -120,9 +126,31 @@ const SeoPages = defineCollection({
     text({ name: "author", label: "Author" }),
     date({ name: "publishedAt", label: "Published at" }),
     upload({ name: "coverImage", label: "Cover image", relationTo: "media" }),
+    // A Page Builder field after the excerpt, so these pages still open as a
+    // form while the builder can open them too: the builder's SEO tab is then
+    // the plugin's own, as on the entry page, for builder-seo-tab.spec.ts.
+    blocks({ name: "body", label: "Body" }),
   ],
   publicAddress: "/seo/{slug}",
 });
+/**
+ * A collection a workflow holds: the preset `review` workflow (Drafting, In review, Approved),
+ * so the editor's next step, the review panel and the publish gate can be shown and tested.
+ * Its own collection rather than one another spec publishes, which the workflow would hold.
+ * Registered for the e2e run and the visual check only, by the fixture switch.
+ */
+const ReviewedNotes = defineCollection({
+  slug: "reviewed-notes",
+  labels: { singular: "Reviewed note", plural: "Reviewed notes" },
+  status: true,
+  versions: { drafts: true },
+  fields: [
+    text({ name: "title", label: "Title", required: true }),
+    textarea({ name: "summary", label: "Summary" }),
+  ],
+  workflow: reviewWorkflow(),
+});
+
 /** A kind of listing page hidden from search as a whole, as tag pages often are. */
 const SeoTags = defineCollection({
   slug: "seo-tags",
@@ -175,10 +203,21 @@ const speedExtraCollections = Array.from(
  */
 export const pageBuilderPlugin = pageBuilder({
   siteStyle: SITE_STYLE_DEFAULTS,
+  // A site that draws its header and footer in code, for the browser tests
+  // of that mode alone (`NEXTLY_E2E_SITE_HEADER_FOOTER=code`); the Page
+  // Builder's own sets otherwise, as a default install has.
+  ...(process.env.NEXTLY_E2E_SITE_HEADER_FOOTER === "code"
+    ? { siteHeaderFooter: "code" as const }
+    : {}),
   // The browser tests' custom sources, registered by the same switch as
   // the collections and the Single they read.
   ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
     ? { namedQueries: [...E2E_NAMED_QUERIES] }
+    : {}),
+  // The browser tests' starter page, by the same switch: a new page made
+  // from it in the New page dialog, and an empty page started from it.
+  ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+    ? { starterPages: [...E2E_STARTER_PAGES] }
     : {}),
   pagePreviewPath: "/{slug}",
   // Each post is served at `/blog/<its slug>` by the same route as the pages,
@@ -275,6 +314,12 @@ export default defineConfig({
     // collection with a translated blocks field; registered for the e2e run
     // only, by the same switch as the style fixture below.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [TranslatedPages] : []),
+    // A collection that says its entries open in the Page Builder, for the
+    // browser tests of where an entry opens; registered for the e2e run only,
+    // by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [BuilderFirstPages]
+      : []),
     // A collection embedding field groups that hold a relationship and an
     // upload, for the browser test of a related item the editor cannot read
     // inside one; registered for the e2e run only, by the same switch.
@@ -283,6 +328,9 @@ export default defineConfig({
     // field group, so a past version can be read in that layout; registered
     // for the e2e run only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [HistoryNotes] : []),
+    // A collection the `review` workflow holds, for the browser tests and the
+    // visual check of the editor under a workflow; by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ReviewedNotes] : []),
     // The browser test of a document editable in one language and read-only
     // in another needs a rule that answers by language; registered for the
     // e2e run only, by the same switch.
@@ -375,10 +423,17 @@ export default defineConfig({
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [releaseNotesFixturePlugin, whatsNewFixturePlugin]
       : []),
-    // Always on, because its widgets are drawn by their own components, which
-    // the committed component map must hold; offered only from the add panel,
-    // named as test fixtures.
-    widgetKitFixturePlugin,
+    // The test fixtures' "Test fixture: …" dashboard widgets, for the
+    // dashboard and widget-kit specs: on the suite's own server only, so a
+    // contributor's dashboard never offers them. The committed component map
+    // is written with them off; `widget-kit-fixture/admin.tsx` registers
+    // their components from the admin route instead. To see these fixtures
+    // locally, start with `NEXTLY_E2E_STYLE_FIXTURE=1` and, as the suite does,
+    // `NEXTLY_GENERATED_FILES_WRITE=0`, or the dev server rewrites the
+    // committed map to import them.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [widgetKitFixturePlugin]
+      : []),
     // The widget check's page, where the e2e suite draws every widget from its
     // preview cases and checks each state's accessibility. A test page, so it
     // exists only on that suite's own server.
@@ -391,16 +446,28 @@ export default defineConfig({
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [startupReadFixturePlugin]
       : []),
-    // Always on, for the same reason: the blocks it contributes reach the
-    // editor through the committed component map. Offered only in the Add
-    // panel, named as test fixtures, for plugin-blocks.spec.ts.
-    blockFixturePlugin,
-    // Always on: the plugin contributions a page offers (today one entry-list
-    // filter on Posts) appear only in its menus until someone chooses them,
-    // and their screenshots, and the browser tests to come, need them in every
-    // build.
-    // Named as a fixture, and inert: no tables, routes, jobs or hooks.
-    contributionsFixturePlugin,
+    // A "Summary" field on the Page Builder's Pages, as a site adds one, for
+    // the browser test of the builder's Page settings. Fixtures only.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [pageSummaryFixturePlugin]
+      : []),
+    // The "Test fixture: …" blocks in the builder's Add panel, for
+    // plugin-blocks.spec.ts, by the same switch; `block-fixture/admin.tsx`
+    // hands their editor modules over, as the map would.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [blockFixturePlugin]
+      : []),
+    // A plugin's own page check, listed in the builder's Page checks, for
+    // builder-plugin-page-checks.spec.ts. Fixtures only.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [pageCheckFixturePlugin]
+      : []),
+    // The plugin contributions fixture (the dashed card on the dashboard, its
+    // pieces on Posts, its proxy header), for the contributions specs, by the
+    // same switch; `contributions-fixture/admin.tsx` registers its components.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [contributionsFixturePlugin]
+      : []),
     // The SEO plugin as it ships, for the browser test of its dashboard card
     // and its Needs attention line, by the switch above. No sitemap: a public
     // route is not what that test is about.
@@ -438,6 +505,9 @@ export default defineConfig({
   typescript: {
     outputFile: "./src/types/nextly-types.ts",
   },
+  // The product's REST limits, unless the browser suite's server asks for
+  // its higher ones (`NEXTLY_E2E_RATE_LIMIT=1`; see `src/e2e-rate-limit.ts`).
+  ...e2eRateLimit(process.env.NEXTLY_E2E_RATE_LIMIT),
   db: {
     schemasDir: "./src/db/schemas/collections",
     migrationsDir: "./src/db/migrations",

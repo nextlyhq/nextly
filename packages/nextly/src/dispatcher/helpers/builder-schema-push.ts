@@ -21,7 +21,9 @@ import {
   type LeavingFieldLike,
   leavingFieldConstraints,
 } from "../../domains/i18n/migration/field-leaves-translation-rules";
+import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
 import type { FieldRename } from "../../domains/i18n/migration/reconcile-companion";
+import type { FirstQuestionWatch } from "../../domains/schema/builder-save/landing-push";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
@@ -38,6 +40,10 @@ import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detect
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { ColumnOrigin } from "../../domains/schema/services/field-column-descriptor";
+import {
+  type FieldsSave,
+  unconfirmedTranslatedDrops,
+} from "../../domains/schema/services/translated-drops";
 import { NextlyError } from "../../errors/nextly-error";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -58,18 +64,28 @@ export function builderSchemaPush(args: {
   /** Recorded on the journal row, so the entity's history finds it under its own kind. */
   kind: "single" | "component";
   resolutions: ConstructorParameters<typeof BrowserPromptDispatcher>;
+  /** Notes a push refused at its first question, which ran no statement (`landingPush`). */
+  firstQuestion?: FirstQuestionWatch;
+  /**
+   * The save's fields, before and after, whose translated values the entity's translations-table
+   * step after the push drops: each the answers do not confirm by name is asked of the push at its
+   * prompt stage (`unconfirmedTranslatedDrops`).
+   */
+  fields?: Omit<FieldsSave, "dialect">;
 }): (desired: DesiredSchema) => Promise<PipelineResult> {
   const { dialect, db } = args;
+  const answering = new BrowserPromptDispatcher(...args.resolutions);
   const pipeline = new PushSchemaPipeline({
     executor: new DrizzleStatementExecutor(dialect, db),
     renameDetector: new RegexRenameDetector(),
     classifier: new RealClassifier(),
-    promptDispatcher: new BrowserPromptDispatcher(...args.resolutions),
+    promptDispatcher: args.firstQuestion?.watching(answering) ?? answering,
     preRenameExecutor: noopPreRenameExecutor,
     preCleanupExecutor: new RealPreCleanupExecutor(),
     migrationJournal: getMigrationJournalFromDI() ?? noopMigrationJournal,
     notifier: getProductionNotifier(),
   });
+  const saveFields = args.fields;
   return desired =>
     pipeline.apply({
       desired,
@@ -85,7 +101,31 @@ export function builderSchemaPush(args: {
       // A field becoming translated keeps its value as this language's; the apply moves it after
       // its prompts and refusals, before it drops the main column.
       defaultLocale: appLocalization()?.defaultLocale ?? "en",
+      ...(saveFields === undefined
+        ? {}
+        : { unconfirmedDropsBeside: () => unconfirmedOf(saveFields, args) }),
     });
+}
+
+/**
+ * The fields of `save` whose translated values no answer of the push confirms by name
+ * (`unconfirmedTranslatedDrops`): the push's own answers are the save's.
+ */
+async function unconfirmedOf(
+  save: Omit<FieldsSave, "dialect">,
+  args: {
+    dialect: SupportedDialect;
+    resolutions: ConstructorParameters<typeof BrowserPromptDispatcher>;
+  }
+): Promise<string[]> {
+  const [renameResolutions, , legacy] = args.resolutions;
+  const unconfirmed = await unconfirmedTranslatedDrops({
+    ...save,
+    dialect: args.dialect,
+    renameResolutions,
+    ...(legacy === undefined ? {} : { legacy }),
+  });
+  return unconfirmed.map(field => field.name);
 }
 
 /** What a Single's or field group's companion reconcile is given, beyond the entity's kind. */
@@ -122,8 +162,8 @@ export interface BuilderCompanionReconcile {
  * translations behind its main table.
  *
  * @throws Error when the push is refused; the settings step's own refusal as it is, the fields
- *   still translated; and `NEXTLY_INTERNAL_ERROR` naming the entity when the push landed but its
- *   companion could not be brought in step.
+ *   still translated; a busy-table stop (`NEXTLY_TABLE_BUSY`) as it is; and `NEXTLY_INTERNAL_ERROR`
+ *   naming the entity when the push landed but its companion could not be brought in step.
  */
 export async function pushAndReconcileCompanion(
   push: (desired: DesiredSchema) => Promise<PipelineResult>,
@@ -133,6 +173,10 @@ export async function pushAndReconcileCompanion(
 ): Promise<PipelineResult> {
   const result = await push(desired);
   if (!result.success) {
+    // A busy-table stop as it is, its code, status and report: the API answers it with 409, as
+    // every other bounded schema path does, and the stop carries the table and its tries.
+    const stopped = result.error?.details;
+    if (NextlyError.isCode(stopped, "NEXTLY_TABLE_BUSY")) throw stopped;
     // The push's own words, under the code its status already was: what the dialog tells the
     // admin about a refused apply is the only account of it they get.
     throw new NextlyError({
@@ -142,7 +186,27 @@ export async function pushAndReconcileCompanion(
   }
   // Columns this apply already moved onto the companion, with their values, before its drop, so
   // the reconcile takes them as done rather than adding them again.
-  const joinedBefore = movedOnto(result, companion.tableName);
+  await reconcileBuilderCompanion(
+    kind,
+    companion,
+    movedOnto(result, companion.tableName)
+  );
+  return result;
+}
+
+/**
+ * Brings a Single's or field group's companion in step with its main table, once the main table's
+ * change has run: after the dialog's push, or after the writer ran the save's migration file. It
+ * plans from the companion as it stands, so a change the file already made there is taken as done.
+ *
+ * @param joinedBefore - Columns the push already moved onto the companion, with their values.
+ * @throws as `pushAndReconcileCompanion` does once the push has landed (`companionReconcileFailure`).
+ */
+export async function reconcileBuilderCompanion(
+  kind: "single" | "component",
+  companion: BuilderCompanionReconcile,
+  joinedBefore: string[] = []
+): Promise<void> {
   try {
     if (kind === "single") {
       const { reconcileSingleCompanion } = await import(
@@ -161,22 +225,68 @@ export async function pushAndReconcileCompanion(
       await reconcileComponentCompanion({ ...companion, joinedBefore });
     }
   } catch (error) {
-    // A refused setting is the dialog's answer to the admin, naming the field, and nothing has
-    // been dropped by then, so it is passed on as it is rather than as a companion out of step.
-    if (isLeavingSettingsRefusal(error)) throw error;
-    throw NextlyError.internal({
-      cause: error instanceof Error ? error : undefined,
-      logContext: {
-        op:
-          kind === "single"
-            ? "singleCompanionReconcile"
-            : "componentCompanionReconcile",
-        slug: companion.slug,
-        detail: error instanceof Error ? error.message : String(error),
-      },
+    throw companionReconcileFailure(error, {
+      op:
+        kind === "single"
+          ? "singleCompanionReconcile"
+          : "componentCompanionReconcile",
+      slug: companion.slug,
     });
   }
-  return result;
+}
+
+/** What a companion reconcile stopped after its entity's push landed leaves, for the admin. */
+const COMPANION_LEFT_BEHIND =
+  "The main table's change was applied, but its translations table's was not: save again to finish it.";
+
+/**
+ * What a companion reconcile that failed after its entity's push landed is reported as, for every
+ * Builder dialog and save that reconciles one. Passed on as they are: a refused setting, the
+ * dialog's answer to the admin naming the field, with nothing dropped by then; and a busy-table
+ * stop (`NEXTLY_TABLE_BUSY`), which the API answers with 409 and a report of the table, its tries
+ * and what to do next, as every other bounded schema path does, saying too that the main table's
+ * change landed and a save again finishes the translations table's. Anything else is an internal error
+ * saying the companion is out of step with its main table, which a save again brings in step.
+ */
+export function companionReconcileFailure(
+  error: unknown,
+  context: { op: string; slug: string; note?: string }
+): unknown {
+  if (isLeavingSettingsRefusal(error)) return error;
+  // A renamed field's provenance move that failed once its change landed says so itself, with the
+  // statements that finish it for the server log (`provenanceNotMoved`).
+  if (isProvenanceNotMoved(error)) return error;
+  if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) {
+    // The busy-table stop as it is, its code, status and report, with what it leaves said beside
+    // its first line: the entity's main table has its change, and only the translations table's
+    // waits for the next save.
+    const lines = error.publicMessage.split("\n");
+    lines.splice(1, 0, COMPANION_LEFT_BEHIND);
+    return new NextlyError({
+      code: error.code,
+      publicMessage: lines.join("\n"),
+      ...(error.publicData === undefined
+        ? {}
+        : { publicData: error.publicData }),
+      statusCode: error.statusCode,
+      logContext: {
+        ...error.logContext,
+        op: context.op,
+        slug: context.slug,
+        note: COMPANION_LEFT_BEHIND,
+      },
+      cause: error,
+    });
+  }
+  return NextlyError.internal({
+    cause: error instanceof Error ? error : undefined,
+    logContext: {
+      op: context.op,
+      slug: context.slug,
+      detail: error instanceof Error ? error.message : String(error),
+      ...(context.note === undefined ? {} : { note: context.note }),
+    },
+  });
 }
 
 /**
@@ -220,7 +330,7 @@ const leavingSettingsRefusals = new WeakSet<Error>();
  * Whether `error` is a settings step's refusal, which a caller passes on as it is: nothing has
  * been dropped by then, and it names the fields.
  */
-export function isLeavingSettingsRefusal(error: unknown): boolean {
+function isLeavingSettingsRefusal(error: unknown): boolean {
   return error instanceof Error && leavingSettingsRefusals.has(error);
 }
 

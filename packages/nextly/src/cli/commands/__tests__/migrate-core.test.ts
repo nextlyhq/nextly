@@ -7,6 +7,7 @@ import {
   migrationChecksum,
   type PluginMigration,
 } from "../../../domains/schema/migrate/plugin/plugin-migration";
+import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import { CliError } from "../../errors";
 import { migrateCore, migrateExitCode } from "../migrate";
 
@@ -24,6 +25,7 @@ function deps(over: Record<string, unknown> = {}) {
     logger: createLogger({ quiet: true }),
     lockMode: "fail-fast" as const,
     reconcileCoreFn: vi.fn(async () => ({ changed: false })),
+    planCoreDeletionsFn: vi.fn(async () => []),
     runFileMigrationsFn: vi.fn(async () => 0),
     refuseUnresolvedAttemptsFn: vi.fn(async () => {}),
     assertAppliedFilesUnchangedFn: vi.fn(async () => {}),
@@ -118,6 +120,96 @@ describe("what migrateCore hands the core reconcile", () => {
     const withFlag = (on.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as Record<string, unknown>;
     expect(withFlag.dropRetiredAuthTables).toBe(true);
+  });
+});
+
+describe("what the core upgrade deletes, judged with the run's consent", () => {
+  const ACCESS_RULES = ["dynamic_collections", "dynamic_singles"].map(
+    table => ({
+      kind: "column" as const,
+      table,
+      column: "access_rules",
+      core: true,
+      reason: "stored access rules, no longer enforced since 0.0.2-alpha.66",
+    })
+  );
+  const NAMED = "dynamic_collections.access_rules,dynamic_singles.access_rules";
+
+  it("refuses before the lock without consent, naming each column and the consent", async () => {
+    const withLock = vi.fn();
+    const d = deps({
+      planCoreDeletionsFn: vi.fn(async () => ACCESS_RULES),
+      consent: resolveDataLossConsent({}),
+      interactive: false,
+      withLock,
+    });
+
+    const run = migrateCore(d as never);
+    await expect(run).rejects.toThrow(/dynamic_collections\.access_rules/);
+    await expect(run).rejects.toThrow(`--accept-data-loss=${NAMED}`);
+    expect(withLock).not.toHaveBeenCalled();
+    expect(d.reconcileCoreFn).not.toHaveBeenCalled();
+  });
+
+  it("asks once at a terminal, the core upgrade listed under its own heading", async () => {
+    const asked: string[] = [];
+    const lines: string[] = [];
+    const d = deps({
+      planCoreDeletionsFn: vi.fn(async () => ACCESS_RULES),
+      consent: resolveDataLossConsent({}),
+      interactive: true,
+      askToDelete: vi.fn(async (question: string) => {
+        asked.push(question);
+        return false;
+      }),
+      logger: {
+        ...createLogger({ quiet: true }),
+        warn: (line: string) => lines.push(line),
+      },
+    });
+
+    await expect(migrateCore(d as never)).rejects.toMatchObject({});
+    expect(asked).toHaveLength(1);
+    expect(lines.join("\n")).toContain("Nextly's own tables (core upgrade)");
+    expect(d.reconcileCoreFn).not.toHaveBeenCalled();
+  });
+
+  it("with consent naming the columns, hands the reconcile a judge that accepts them and refuses anything else", async () => {
+    const d = deps({
+      planCoreDeletionsFn: vi.fn(async () => ACCESS_RULES),
+      consent: resolveDataLossConsent({ flag: NAMED }),
+    });
+    await migrateCore(d as never);
+
+    const passed = (d.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as {
+      judgeDeletions?: (deletions: readonly unknown[]) => Promise<void>;
+      allowDestructive?: boolean;
+    };
+    expect(passed.allowDestructive).toBeUndefined();
+    await expect(
+      passed.judgeDeletions?.(ACCESS_RULES)
+    ).resolves.toBeUndefined();
+    await expect(
+      passed.judgeDeletions?.([
+        ...ACCESS_RULES,
+        { kind: "column", table: "users", column: "name", core: true },
+      ])
+    ).rejects.toThrow(/users\.name/);
+  });
+
+  it("the development boot's run plans no core deletion and hands the reconcile no judge", async () => {
+    const d = deps({
+      allowDestructive: true,
+      planCoreDeletionsFn: vi.fn(async () => ACCESS_RULES),
+    });
+    await migrateCore(d as never);
+
+    expect(d.planCoreDeletionsFn).not.toHaveBeenCalled();
+    const passed = (d.reconcileCoreFn as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as Record<string, unknown>;
+    expect(passed.allowDestructive).toBe(true);
+    expect(passed.judgeDeletions).toBeUndefined();
   });
 });
 

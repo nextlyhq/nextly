@@ -1,22 +1,34 @@
 /**
- * The "How is this edited?" answer must reach both places a new collection is
- * recorded: the create request (so the server makes the field) and
- * ui-schema.json (so the committed schema agrees). The file was written with
- * no fields, so it missed the blocks field the server had just created.
+ * Create on the collection create page makes the collection a pending change:
+ * it waits in this tab's unsaved entities, with the starting field the "What
+ * will editors make?" answer names, and its editor opens. Nothing is created on
+ * the server until the editor's save.
  */
 import { render } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
+import type { UnsavedEntity } from "@admin/lib/builder/unsaved-entities";
+import type { FieldDefinition } from "@admin/types/collection";
 
-let submit: ((values: BuilderSettingsValues) => void) | undefined;
+let submit:
+  | ((
+      values: BuilderSettingsValues,
+      templateFields: FieldDefinition[],
+      needed: Omit<UnsavedEntity, "token">[]
+    ) => void)
+  | undefined;
 vi.mock(
-  "@admin/components/features/schema-builder/BuilderSettingsModal",
+  "@admin/components/features/schema-builder/new-entity/NewEntityDialog",
   () => ({
-    BuilderSettingsModal: (props: {
-      onSubmit: (values: BuilderSettingsValues) => void;
+    NewEntityDialog: (props: {
+      onCreate: (
+        values: BuilderSettingsValues,
+        templateFields: FieldDefinition[],
+        needed: Omit<UnsavedEntity, "token">[]
+      ) => void;
     }) => {
-      submit = props.onSubmit;
+      submit = props.onCreate;
       return null;
     },
   })
@@ -27,26 +39,27 @@ vi.mock("@admin/hooks/queries", () => ({
   useCreateCollection: () => ({ mutate: mockCreate, isPending: false }),
 }));
 
-const mockWriteCollection = vi.fn();
-vi.mock("@admin/services/schemaFileApi", () => ({
-  schemaFileApi: {
-    writeCollection: (...args: unknown[]) => mockWriteCollection(...args),
-  },
+const mockNavigate = vi.fn();
+vi.mock("@admin/lib/navigation", () => ({
+  navigateTo: (...args: unknown[]) => mockNavigate(...args),
 }));
-
-vi.mock("@admin/lib/navigation", () => ({ navigateTo: vi.fn() }));
 vi.mock("@admin/components/ui", () => ({
   toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
 }));
 
-import { toast } from "@admin/components/ui";
-import { parseApiError } from "@admin/lib/api/parseApiError";
+import {
+  addUnsavedEntity,
+  removeUnsavedEntity,
+  unsavedEntity,
+} from "@admin/lib/builder/unsaved-entities";
 
 import CollectionBuilderPage from "../index";
 
 function values(startingFieldType: string | null): BuilderSettingsValues {
   return {
     singularName: "Post",
+    slug: "post",
+    icon: "FileText",
     startingFieldType,
   } as BuilderSettingsValues;
 }
@@ -54,66 +67,95 @@ function values(startingFieldType: string | null): BuilderSettingsValues {
 beforeEach(() => {
   vi.clearAllMocks();
   submit = undefined;
-  mockWriteCollection.mockResolvedValue(undefined);
 });
 
+afterEach(() => {
+  removeUnsavedEntity("collection", "post");
+  removeUnsavedEntity("collection", "authors");
+});
+
+/** A collection the template needs, made too, owned by the new one. */
+const authors: Omit<UnsavedEntity, "token"> = {
+  kind: "collection",
+  address: "authors",
+  settings: {
+    singularName: "Authors",
+    pluralName: "Authors",
+    slug: "authors",
+    icon: "User",
+  },
+  fields: [],
+  ownedBy: { kind: "collection", address: "post" },
+};
+
 describe("Collection create page", () => {
-  it("creates the collection with the starting field its answer names", () => {
+  it("keeps the collection unsaved, with the starting field its answer names", () => {
     render(<CollectionBuilderPage />);
-    submit?.(values("blocks"));
+    submit?.(values("blocks"), [], []);
 
-    expect(mockCreate).toHaveBeenCalledTimes(1);
-    expect(mockCreate.mock.calls[0][0].fields).toEqual([
+    expect(unsavedEntity("collection", "post")).toEqual({
+      // The store gives each entity a token of its own.
+      token: expect.any(String),
+      kind: "collection",
+      address: "post",
+      settings: expect.objectContaining({
+        singularName: "Post",
+        pluralName: "Posts",
+        slug: "post",
+        icon: "FileText",
+      }),
+      fields: [{ name: "blocks", type: "blocks" }],
+    });
+  });
+
+  it("keeps a collection with no starting field for standard fields", () => {
+    render(<CollectionBuilderPage />);
+    submit?.(values(null), [], []);
+
+    expect(unsavedEntity("collection", "post")?.fields).toEqual([]);
+  });
+
+  it("keeps the template's fields after the starting field", () => {
+    render(<CollectionBuilderPage />);
+    submit?.(values("blocks"), [{ name: "lede", type: "text" }], []);
+
+    expect(unsavedEntity("collection", "post")?.fields).toEqual([
       { name: "blocks", type: "blocks" },
+      { name: "lede", type: "text" },
     ]);
   });
 
-  it("writes the same starting field to ui-schema.json", async () => {
+  it("keeps what the template needs with it, owned by it", () => {
     render(<CollectionBuilderPage />);
-    submit?.(values("blocks"));
-    const { onSuccess } = mockCreate.mock.calls[0][1];
-    onSuccess();
-    await vi.waitFor(() =>
-      expect(mockWriteCollection).toHaveBeenCalledTimes(1)
-    );
+    submit?.(values(null), [], [authors]);
 
-    const entity = mockWriteCollection.mock.calls[0][0];
-    expect(entity.fields).toEqual([
-      expect.objectContaining({ name: "blocks", type: "blocks" }),
-    ]);
+    expect(unsavedEntity("collection", "authors")).toEqual({
+      ...authors,
+      token: expect.any(String),
+    });
+    expect(unsavedEntity("collection", "post")).toBeDefined();
   });
 
-  it("creates a collection with no starting field for standard fields", () => {
+  it("keeps neither when what the template needs was taken meanwhile", () => {
+    // Held already as an entity of its own.
+    const { ownedBy: _owner, ...ownerless } = authors;
+    addUnsavedEntity(ownerless);
+    const before = unsavedEntity("collection", "authors");
     render(<CollectionBuilderPage />);
-    submit?.(values(null));
+    submit?.(values(null), [], [authors]);
 
-    expect(mockCreate.mock.calls[0][0].fields).toEqual([]);
+    expect(unsavedEntity("collection", "post")).toBeUndefined();
+    expect(unsavedEntity("collection", "authors")).toBe(before);
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  /**
-   * A refused address arrives as a validation envelope whose own message is
-   * only "Validation failed."; the reason is the field's. Toasting the
-   * envelope's message told the person their collection was refused without why.
-   */
-  it("shows the reason a refused address gives, not the envelope's message", () => {
-    const reason =
-      "Collection address 'settings' is reserved: it names a Nextly system resource, whose permissions the collection would share";
+  it("creates nothing on the server, and opens the collection's editor", () => {
     render(<CollectionBuilderPage />);
-    submit?.(values(null));
-    const { onError } = mockCreate.mock.calls[0][1];
-    onError(
-      parseApiError(
-        {
-          error: {
-            code: "VALIDATION_ERROR",
-            message: "Validation failed.",
-            data: { errors: [{ path: "slug", message: reason }] },
-          },
-        },
-        400
-      )
-    );
+    submit?.(values(null), [], []);
 
-    expect(toast.error).toHaveBeenCalledWith(reason);
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockNavigate).toHaveBeenCalledWith(
+      "/admin/builder/collections/post"
+    );
   });
 });

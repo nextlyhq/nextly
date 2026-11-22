@@ -12,7 +12,11 @@ import {
 } from "./orphan-thumbnails";
 import { RETIRED_SIZES_COLUMN } from "./retired-image-sizes-constants";
 import type { SizeLocator } from "./size-location";
-import { storedFilesOf, type MediaFilesRecord } from "./stored-files";
+import {
+  copiesToRemove,
+  storedFilesOf,
+  type MediaFilesRecord,
+} from "./stored-files";
 
 /**
  * Removing a media item's stored files, once its record is gone: the one way
@@ -27,6 +31,11 @@ import { storedFilesOf, type MediaFilesRecord } from "./stored-files";
  */
 export interface StoredFileRemover {
   delete(filePath: string, collection?: string): Promise<void>;
+  /**
+   * Whether the collection's storage can keep resized copies beside its
+   * files. A remover that cannot say keeps none, and is asked to remove none.
+   */
+  keepsCopies?(collection?: string): boolean;
   getPublicUrl?(filePath: string, collection?: string): string;
   getStorageType?(collection?: string): string;
 }
@@ -57,6 +66,8 @@ function sizeLocatorOf(
 export interface StorageReading {
   locator: SizeLocator | undefined;
   keys: StoredKeys;
+  /** Whether the storage keeps resized copies beside its files. */
+  keepsCopies: boolean;
 }
 
 /**
@@ -64,10 +75,33 @@ export interface StorageReading {
  * canonically, as a storage whose spellings may be one file.
  */
 export function storageReadingOf(
-  storage: Pick<StoredFileRemover, "getPublicUrl" | "getStorageType">
+  storage: Pick<
+    StoredFileRemover,
+    "getPublicUrl" | "getStorageType" | "keepsCopies"
+  >
 ): StorageReading {
   const locator = sizeLocatorOf(storage);
-  return { locator, keys: storedKeysOn(locator?.getType() ?? "") };
+  return {
+    locator,
+    keys: storedKeysOn(locator?.getType() ?? ""),
+    keepsCopies: storage.keepsCopies?.("media") ?? false,
+  };
+}
+
+/**
+ * Every file a removal of `record` takes, as read against one storage: its
+ * stored files and, where the storage keeps them, every resized copy it can
+ * have. What a removal asks the search for files another item refers to
+ * about, so a copy another item names is kept like any other file.
+ */
+export function filesToRemoveOf(
+  record: MediaFilesRecord,
+  reading: StorageReading
+): string[] {
+  return [
+    ...storedFilesOf(record, reading.locator).paths,
+    ...copiesToRemove(record, reading.keepsCopies, new Set()),
+  ];
 }
 
 /**
@@ -152,6 +186,8 @@ export function warnSizeNotHere(url: string, mediaId: string): void {
 /** The media columns a search for files another item refers to reads. */
 export interface StoredFileColumns {
   filename: AnyColumn;
+  /** Read for the resized copies an item can have beside its original. */
+  mimeType: AnyColumn;
   url: AnyColumn;
   thumbnailUrl: AnyColumn;
 }
@@ -337,7 +373,7 @@ export async function filesKeptByOthers(
 
 /**
  * Removes every file stored for a deleted item: the original, every image
- * size and the thumbnail made at upload, except any of them in `kept`, the
+ * size, the thumbnail made at upload and every resized copy, except any of them in `kept`, the
  * files another item still refers to. Each is removed on its own, retried
  * on a transient failure, so one that fails leaves the others to go, and is
  * named in the log with its item, so the leftover can be found. Never throws:
@@ -360,8 +396,13 @@ export async function removeStoredFiles(
   );
   for (const url of unlocated) warnUnlocated(url, mediaId);
   for (const url of notHere) warnSizeNotHere(url, mediaId);
+  const copies = copiesToRemove(
+    record,
+    storageReadingOf(storage).keepsCopies,
+    kept
+  );
   const removed = await Promise.all(
-    paths
+    [...paths, ...copies]
       .filter(filePath => !kept.has(filePath))
       .map(async filePath => {
         try {

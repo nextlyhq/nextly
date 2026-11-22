@@ -17,12 +17,10 @@ import { signIn } from "../support/production-sign-in";
  * visitor, because the claim is about what the product serves for content the
  * product accepted.
  *
- * What this route cannot show is the COUNT of revalidations a write causes:
- * it is per-request (its preview gate reads a cookie), so only the reads
- * inside it are cached, not the page. What it does show is that a region's
- * cached component read is refreshed by that component's publish, which is
- * the tag doing its work in a real build; which pages each write reaches, and
- * how many times, is measured over the tag sets in
+ * The route answers visitors from the cache, so what it shows is that the
+ * cached page is refreshed by that component's publish, which is the tag doing
+ * its work in a real build. Which pages each write reaches, and how many
+ * times, is measured over the tag sets in
  * `packages/blocks-react/src/next.layouts.test.ts`.
  *
  * @module tests/production/pages-in-their-layout
@@ -74,6 +72,36 @@ async function served(request: APIRequestContext): Promise<string> {
   const response = await request.get(`/${SLUG}`, { headers: { cookie: "" } });
   expect(response.status()).toBe(200);
   return await response.text();
+}
+
+/** How long a write may take to show: well under a cached answer's life. */
+const REFRESH_MS = 15_000;
+
+/**
+ * The page as served once a write has shown: polled for `REFRESH_MS`.
+ *
+ * A page published after the build is answered from its route's fallback
+ * shell, and Next.js renders the path's own page in the background as it
+ * does. A visit made while that render is still running shares it, so the
+ * first visit after a write can still show the page from before the write.
+ * The render that shared it is not kept, so the next visit is fresh. The
+ * guarantee is a refresh within `REFRESH_MS`, not on the very next visit.
+ */
+async function servedOnceShown(
+  request: APIRequestContext,
+  shown: (html: string) => boolean
+): Promise<string> {
+  let html = "";
+  await expect
+    .poll(
+      async () => {
+        html = await served(request);
+        return shown(html);
+      },
+      { timeout: REFRESH_MS }
+    )
+    .toBe(true);
+  return html;
 }
 
 test.describe("a page served inside its Layout", () => {
@@ -191,7 +219,10 @@ test.describe("a page served inside its Layout", () => {
       switchedOff.ok(),
       `switching off: ${switchedOff.status()} ${await switchedOff.text()}`
     ).toBe(true);
-    const bare = await served(request);
+    const bare = await servedOnceShown(
+      request,
+      html => !html.includes("data-nextly-region")
+    );
     expect(bare).toContain(BODY);
     expect(bare).not.toContain("data-nextly-region");
     expect(bare).not.toContain(HEADER_ONE);
@@ -205,7 +236,7 @@ test.describe("a page served inside its Layout", () => {
       { data: { noHeaderFooter: false, status: "published", _overwrite: true } }
     );
     expect(switchedOn.ok()).toBe(true);
-    expect(await served(request)).toContain(HEADER_ONE);
+    await servedOnceShown(request, html => html.includes(HEADER_ONE));
 
     const revised = await api.patch(
       `${API}/collections/components/entries/${header.id}`,
@@ -221,7 +252,9 @@ test.describe("a page served inside its Layout", () => {
       revised.ok(),
       `publishing the header: ${revised.status()} ${await revised.text()}`
     ).toBe(true);
-    const after = await served(request);
+    const after = await servedOnceShown(request, html =>
+      html.includes(HEADER_TWO)
+    );
     expect(after).toContain(HEADER_TWO);
     expect(after).not.toContain(HEADER_ONE);
   });

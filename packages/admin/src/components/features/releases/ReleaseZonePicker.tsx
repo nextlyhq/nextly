@@ -63,6 +63,18 @@ export function ReleaseZonePicker({
   );
   const offset = zoneOffsetLabel(zone, at);
   const valueId = `${id}-value`;
+  const offsetId = `${id}-offset`;
+  const mineId = `${id}-mine`;
+  const mine = zone === readerZone;
+  // Named by its label, then what it draws in the order drawn (the zone, then
+  // its offset), then whether it is the reader's own: a name holding every
+  // drawn word, in order, is what Label in Name asks of it.
+  const labelledBy = [
+    labelId,
+    valueId,
+    ...(offset ? [offsetId] : []),
+    ...(mine ? [mineId] : []),
+  ].join(" ");
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -72,7 +84,7 @@ export function ReleaseZonePicker({
           type="button"
           variant="outline"
           className="h-[var(--nx-control-height)] w-full justify-between gap-2 px-3 font-normal"
-          aria-labelledby={`${labelId} ${valueId}`}
+          aria-labelledby={labelledBy}
           {...(describedBy === undefined
             ? {}
             : { "aria-describedby": describedBy })}
@@ -84,15 +96,22 @@ export function ReleaseZonePicker({
             />
             <span id={valueId} className="truncate text-foreground">
               {zoneDisplayName(zone)}
-              {zone === readerZone ? (
-                <span className="sr-only">, your time zone</span>
-              ) : null}
             </span>
           </span>
+          {/* A real space between the zone and its offset, which the flex
+              row does not draw: without it the two read as one word. */}{" "}
           <span className="flex shrink-0 items-center gap-2">
             {offset ? (
-              <span className="tabular-nums text-xs text-muted-foreground">
+              <span
+                id={offsetId}
+                className="tabular-nums text-xs text-muted-foreground"
+              >
                 {offset}
+              </span>
+            ) : null}
+            {mine ? (
+              <span id={mineId} className="sr-only">
+                , your time zone
               </span>
             ) : null}
             <ChevronDown className="size-4 text-muted-foreground" aria-hidden />

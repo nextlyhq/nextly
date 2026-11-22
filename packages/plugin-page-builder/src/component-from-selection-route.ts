@@ -6,7 +6,7 @@
  * half: `save-as` stores the selection as a published component and leaves
  * the page alone; `convert` also replaces the selection with a placement of
  * it. The engine's planners decide what is stored and what the page becomes,
- * against the server's block registry, which knows every block a plugin
+ * against the site's block registry, which knows every block a plugin
  * declared.
  *
  * ## Two ways to apply a convert
@@ -35,6 +35,12 @@
  * A convert is refused when the page would compose components deeper than
  * the limit, judged against the definitions the selection places.
  *
+ * A library request may name the stored page its document is (`page`): the
+ * component is then created through core's copy of that page, read as the
+ * caller first, so custom CSS the page already holds is no change to the
+ * component. A convert applied to the stored page creates in a transaction,
+ * where no copy is made, so its CSS is judged as new.
+ *
  * ## Dry run and attribution
  *
  * `dryRun: true` answers the plan (the definition, the page ops, the
@@ -50,8 +56,8 @@ import {
   DEFAULT_LIMITS,
   planConvertToComponent,
   planSaveAsComponent,
-  registryNestingSource,
   type BlockDocument,
+  type BlockRegistryReader,
   type BuilderOp,
   type ComponentDocument,
   type ComponentExposure,
@@ -182,6 +188,8 @@ export interface ComponentFromSelectionReads {
 /** Where the route stores components, and what it reads and reconciles. */
 export interface ComponentFromSelectionSetup extends CompositionRouteSetup {
   readonly reads?: ComponentFromSelectionReads;
+  /** The site's block registry, whose nesting rules the planners follow. */
+  readonly blocks: BlockRegistryReader;
 }
 
 /**
@@ -190,7 +198,7 @@ export interface ComponentFromSelectionSetup extends CompositionRouteSetup {
 export async function componentFromSelection(
   req: Request,
   ctx: ComponentFromSelectionContext,
-  setup: ComponentFromSelectionSetup = {}
+  setup: ComponentFromSelectionSetup
 ): Promise<Response> {
   requirePluginStore(ctx, setup);
   const by = await actingCaller(ctx, [
@@ -221,6 +229,7 @@ export async function componentFromSelection(
       componentId,
       exposure: body.exposure ?? {},
       limits,
+      blocks: setup.blocks,
       ...(components === undefined ? {} : { components }),
     });
 
@@ -260,10 +269,11 @@ export async function componentFromSelection(
   });
 
   if (page === undefined || body.action === "save-as") {
-    const created = await ctx.services.collections.createEntry(
+    const created = await createComponent(
+      ctx,
       store.collection,
       row(preview.definition),
-      asCaller(ctx)
+      body.page === undefined ? undefined : pageAddressOf(body)
     );
     const id = createdId(created.item);
     const plan = planFor(id);
@@ -295,6 +305,32 @@ export async function componentFromSelection(
   );
 }
 
+/**
+ * Create the component as the caller. Where the request names the stored
+ * page the selection was made in, through core's copy of that page: core
+ * reads the page as the caller (refusing one they can't read) before
+ * creating anything, and only text the page holds, in the language the
+ * request names, vouches for the component's CSS.
+ */
+function createComponent(
+  ctx: ComponentFromSelectionContext,
+  collection: string,
+  data: Record<string, unknown>,
+  source: StoredAddress | undefined
+): Promise<{ item: unknown }> {
+  const collections = ctx.services.collections;
+  return source === undefined
+    ? collections.createEntry(collection, data, asCaller(ctx))
+    : collections.createEntryFromSource(
+        collection,
+        data,
+        { collection: source.collection, id: source.id, field: source.field },
+        // In the page's language, so the caller's read of it, the rules that
+        // judge it and the stored text that vouches are that translation's.
+        asCaller(ctx, source.locale)
+      );
+}
+
 /** A plan this route can answer with: the definition, the ops, the warnings. */
 interface Planned {
   readonly definition: ComponentDocument;
@@ -312,10 +348,11 @@ function plannedAction(args: {
   componentId: string;
   exposure: ComponentExposure;
   limits: DocumentLimits;
+  blocks: BlockRegistryReader;
   components?: ComponentLookup;
 }): Planned | PlanRefusal {
   const target = { collection: args.collection, fields: {} };
-  const nesting = registryNestingSource();
+  const nesting = args.blocks.nestingSource();
   const result: PlanResult<object> =
     args.action === "save-as"
       ? planSaveAsComponent(
@@ -583,7 +620,7 @@ function directReads(store: {
  * handler asks the rest (see the module docblock).
  */
 export function componentFromSelectionRoute(
-  setup: ComponentFromSelectionSetup = {}
+  setup: ComponentFromSelectionSetup
 ): {
   method: "POST";
   path: string;

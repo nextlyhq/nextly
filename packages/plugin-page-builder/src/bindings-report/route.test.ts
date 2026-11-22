@@ -4,6 +4,7 @@
  * each tab's count is of every place, and the documents page a hundred at a
  * time.
  */
+import { createBlockRegistry } from "@nextlyhq/blocks-engine";
 import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
@@ -72,6 +73,8 @@ function routeOver(
     defaultLocale: () => "en",
     readableSingles: async (_ctx, slugs) =>
       new Set([...slugs].filter(slug => !unreadableSingles.has(slug))),
+    // The site's block registry: it holds none.
+    blocks: createBlockRegistry(),
   });
 }
 

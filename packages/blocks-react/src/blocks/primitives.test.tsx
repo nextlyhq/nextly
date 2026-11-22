@@ -80,28 +80,46 @@ const html = (element: ReactElement | null): string =>
   element === null ? "" : renderToStaticMarkup(element);
 
 describe("core/heading", () => {
-  it("renders the stored level rather than one derived from nesting", () => {
+  it("renders the stored level rather than one derived from nesting", async () => {
     // A level computed from depth changes when a block is dragged, which is the
     // accessibility failure headings exist to prevent.
-    expect(html(renderHeading(args({ text: "Title", level: "h3" })))).toBe(
-      '<h3 class="nx-n1">Title</h3>'
-    );
+    expect(
+      html(await renderHeading(args({ text: "Title", level: "h3" })))
+    ).toBe('<h3 class="nx-n1">Title</h3>');
   });
 
-  it("falls back to h2 for a level nothing recognises", () => {
+  it("falls back to h2 for a level nothing recognises", async () => {
     const stored = { text: "Title", level: "h9" } as never;
-    expect(html(renderHeading(args(stored)))).toContain("<h2");
+    expect(html(await renderHeading(args(stored)))).toContain("<h2");
   });
 
-  it("puts the link inside the heading, not around it", () => {
+  it("puts the link inside the heading, not around it", async () => {
     // Around it, a screen reader announces the whole heading as a link.
-    const out = html(renderHeading(args({ text: "Title", href: "/docs" })));
+    const out = html(
+      await renderHeading(args({ text: "Title", href: "/docs" }))
+    );
     expect(out).toBe('<h2 class="nx-n1"><a href="/docs">Title</a></h2>');
   });
 
-  it("adds noopener noreferrer to a new-tab link", () => {
+  it("links to an entry through the shared link, as a button does", async () => {
+    // The heading's link is the one every linking block declares: a page on
+    // this site is linked by its entry, followed to its current address.
     const out = html(
-      renderHeading(args({ text: "T", href: "/x", target: "_blank" }))
+      await renderHeading(
+        args(
+          { text: "Read more", entryCollection: "posts", entryId: "p1" },
+          context({ resolveEntryPath: () => Promise.resolve("/posts/current") })
+        )
+      )
+    );
+    expect(out).toBe(
+      '<h2 class="nx-n1"><a href="/posts/current">Read more</a></h2>'
+    );
+  });
+
+  it("adds noopener noreferrer to a new-tab link", async () => {
+    const out = html(
+      await renderHeading(args({ text: "T", href: "/x", target: "_blank" }))
     );
     expect(out).toContain('target="_blank"');
     expect(out).toContain("noopener");
@@ -142,10 +160,13 @@ describe("core/list", () => {
 });
 
 describe("core/quote", () => {
-  it("keeps the attribution outside the quotation", () => {
+  it("keeps the attribution outside the quotation", async () => {
     // Inside, the quotation claims the speaker also said their own name.
+    // Awaited: a quote may wait on its cited source before it draws.
     const out = html(
-      renderQuote(args({ text: "Words", attribution: "Ada", source: "A Book" }))
+      await renderQuote(
+        args({ text: "Words", attribution: "Ada", source: "A Book" })
+      )
     );
     expect(out).toContain("<figure");
     // The quotation holds the words and NOTHING else. Asserted on what sits
@@ -166,11 +187,15 @@ describe("core/quote", () => {
     // The figcaption is a PART now, so it carries a class. Asserted on the
     // content and the element rather than on the exact opening tag, which is
     // what made this pin markup the block is free to change.
-    expect(out).toContain("Ada, <cite>A Book</cite></figcaption>");
+    // The dash drawn in CSS on an empty, hidden element before the name, so
+    // it is never part of the words, copied or read out.
+    expect(out).toContain(
+      '<span data-nx-quote-dash="" aria-hidden="true"></span>Ada, <cite>A Book</cite></figcaption>'
+    );
   });
 
-  it("is a bare blockquote when there is nothing to attribute", () => {
-    const out = html(renderQuote(args({ text: "Words" })));
+  it("is a bare blockquote when there is nothing to attribute", async () => {
+    const out = html(await renderQuote(args({ text: "Words" })));
     expect(out).toBe('<blockquote class="nx-n1"><p>Words</p></blockquote>');
   });
 });
@@ -258,18 +283,18 @@ describe("executable urls", () => {
     }
   });
 
-  it("refuses them on a heading link", () => {
+  it("refuses them on a heading link", async () => {
     for (const href of hostile) {
       expect(
-        html(renderHeading(args({ text: "t", href }))),
+        html(await renderHeading(args({ text: "t", href }))),
         href
       ).not.toContain("href=");
     }
   });
 
-  it("refuses them as an embed source", () => {
+  it("refuses them as an embed source", async () => {
     for (const src of hostile) {
-      expect(html(renderEmbed(args({ src, title: "t" }))), src).toBe("");
+      expect(html(await renderEmbed(args({ src, title: "t" }))), src).toBe("");
     }
   });
 
@@ -412,8 +437,8 @@ describe("core/image", () => {
   });
 });
 
-describe("core/embed", () => {
-  it("has a SHAPE before an author gives it one", () => {
+describe("core/embed", async () => {
+  it("has a SHAPE before an author gives it one", async () => {
     /*
      * A user agent sizes an `<iframe>` at 300x150, and this block declared no
      * defaults at all — so a video dropped on a page rendered postage-stamp
@@ -437,7 +462,7 @@ describe("core/embed", () => {
     expect(base?.aspectRatio).toBe("16 / 9");
   });
 
-  it("still lets an author override the shape", () => {
+  it("still lets an author override the shape", async () => {
     /*
      * `16 / 9` is what the sources this block exists for actually serve, and it
      * is a DEFAULT rather than a rule — an audio player or a square embed needs
@@ -447,31 +472,33 @@ describe("core/embed", () => {
     expect(embed.supports?.dimensions).toBe(true);
   });
 
-  it("sandboxes without granting same-origin alongside scripts", () => {
+  it("sandboxes without granting same-origin alongside scripts", async () => {
     // Both together let the frame remove its own sandbox.
     const out = html(
-      renderEmbed(args({ src: "https://e.com/v", title: "Demo" }))
+      await renderEmbed(args({ src: "https://e.com/v", title: "Demo" }))
     );
     expect(out).toContain("allow-scripts");
     expect(out).not.toContain("allow-same-origin");
   });
 
-  it("always carries a title", () => {
+  it("always carries a title", async () => {
     // Without one an iframe is announced only as "frame".
-    const out = html(renderEmbed(args({ src: "https://e.com/v" })));
+    const out = html(await renderEmbed(args({ src: "https://e.com/v" })));
     expect(out).toContain('title="Embedded content"');
   });
 
-  it("does not leak the page path to the embedded party", () => {
-    const out = html(renderEmbed(args({ src: "https://e.com/v", title: "t" })));
+  it("does not leak the page path to the embedded party", async () => {
+    const out = html(
+      await renderEmbed(args({ src: "https://e.com/v", title: "t" }))
+    );
     expect(out.toLowerCase()).toContain(
       'referrerpolicy="strict-origin-when-cross-origin"'
     );
   });
 
-  it("grants same-origin to an origin the host trusted", () => {
+  it("grants same-origin to an origin the host trusted", async () => {
     const out = html(
-      renderEmbed(
+      await renderEmbed(
         args({ src: "https://player.example.com/v", title: "t" }, context(), {
           trustedFrameOrigins: ["https://player.example.com"],
         })
@@ -480,7 +507,7 @@ describe("core/embed", () => {
     expect(out).toContain("allow-same-origin");
   });
 
-  it("ignores a stored request to drop the sandbox", () => {
+  it("ignores a stored request to drop the sandbox", async () => {
     // The flag used to be a checkbox on the block, which put a security posture
     // in the hands of whoever edited the page. Documents written then still
     // carry it, and it must now do nothing at all.
@@ -490,7 +517,9 @@ describe("core/embed", () => {
       allowSameOrigin: true,
     } as never;
 
-    expect(html(renderEmbed(args(stored)))).not.toContain("allow-same-origin");
+    expect(html(await renderEmbed(args(stored)))).not.toContain(
+      "allow-same-origin"
+    );
   });
 
   it.each([
@@ -509,9 +538,9 @@ describe("core/embed", () => {
     // let the frame reach the document around it. The most dangerous case, and
     // the one a prefix test is likeliest to wave through.
     ["a relative url", "/player/v"],
-  ])("refuses same-origin for %s", (label, src) => {
+  ])("refuses same-origin for %s", async (label, src) => {
     const out = html(
-      renderEmbed(
+      await renderEmbed(
         args({ src, title: "t" }, context(), {
           trustedFrameOrigins: ["https://player.example.com"],
         })
@@ -520,7 +549,7 @@ describe("core/embed", () => {
     expect(out, label).not.toContain("allow-same-origin");
   });
 
-  it("survives an unparseable entry in the trusted list", () => {
+  it("survives an unparseable entry in the trusted list", async () => {
     // One typo in configuration must not throw out of a render and take the
     // page with it, and must not widen the list either.
     const policy = {
@@ -529,7 +558,7 @@ describe("core/embed", () => {
 
     expect(
       html(
-        renderEmbed(
+        await renderEmbed(
           args(
             { src: "https://player.example.com/v", title: "t" },
             context(),
@@ -540,7 +569,7 @@ describe("core/embed", () => {
     ).toContain("allow-same-origin");
     expect(
       html(
-        renderEmbed(
+        await renderEmbed(
           args(
             { src: "https://other.example/v", title: "t" },
             context(),
@@ -1208,76 +1237,30 @@ describe("declared empty output", () => {
   // rules, and a rule may name a URL. `rendersNothing` is how a block says so
   // without being rendered, and these pin the answers against the SAME props
   // the render path treats as empty — the two must not drift.
-  it.each([
-    ["core/image", image, {}, true],
-    ["core/image with a direct url", image, { src: "/a.jpg" }, false],
-    ["core/image with a media id", image, { mediaId: "m1" }, false],
-    // A refused scheme leaves nothing usable, so it is empty for this purpose
-    // exactly as `renderImage` treats it.
-    [
-      "core/image with a refused url",
-      image,
-      { src: "javascript:alert(1)" },
-      true,
-    ],
-    ["core/embed", embed, {}, true],
-    ["core/embed with a url", embed, { src: "https://e.com/v" }, false],
-    [
-      "core/embed with a refused url",
-      embed,
-      { src: "javascript:alert(1)" },
-      true,
-    ],
-  ])("%s answers %s", (_label, definition, props, expected) => {
-    expect(definition.rendersNothing?.(props as never)).toBe(expected);
+  it("is not declared by core/embed, whose empty box the canvas draws", async () => {
+    // An Embed with no link draws the box the editor's "paste a link" field
+    // sits on where an author is looking, in the block's own classes, and the
+    // stylesheet holds back the rules of a block declaring it draws nothing:
+    // declared, the box would lose the size it takes from them. So it
+    // declares nothing, and draws nothing at render time on a page a visitor
+    // is served, with no link or with a refused one.
+    expect(embed.rendersNothing).toBeUndefined();
+    expect(html(await renderEmbed(args({})))).toBe("");
+    expect(
+      html(await renderEmbed(args({ src: "javascript:alert(1)", title: "t" })))
+    ).toBe("");
   });
 
-  it("agrees with what the render actually produces", async () => {
-    // The declaration and the render are written separately on purpose, so this
-    // is the assertion that stops them drifting.
-    //
-    // The stakes changed when the boundary began CONSULTING the declaration. It
-    // used to be carried and unread, so drift cost nothing; now a block that
-    // says it draws nothing is exempted from the node-fields diagnostic, and a
-    // wrong declaration silently drops the anchor the author asked for. So every
-    // case is checked in BOTH directions, and through the real render rather
-    // than through one of the two blocks.
-    const declaredEmpty = [
-      { label: "image with nothing", definition: image, props: {} },
-      {
-        label: "image with a refused scheme",
-        definition: image,
-        props: { src: "javascript:alert(1)" },
-      },
-      { label: "embed with nothing", definition: embed, props: {} },
-      {
-        label: "embed with a refused scheme",
-        definition: embed,
-        props: { src: "javascript:alert(1)" },
-      },
-    ] as const;
-
-    for (const { label, definition, props } of declaredEmpty) {
-      expect(definition.rendersNothing?.(props as never), label).toBe(true);
-    }
-
-    // Every one of them, rendered. `core/image` is asynchronous, which is why it
-    // was the one this assertion previously skipped.
+  it("is not declared by core/image, whose empty box the canvas draws", async () => {
+    // An Image with no picture draws its empty box where an author is looking,
+    // in the block's own classes, and the stylesheet holds back the rules of a
+    // block declaring it draws nothing: declared, the box would lose them.
+    // So it declares nothing, and draws nothing at render time on a page a
+    // visitor is served, with no source or with a refused one.
+    expect(image.rendersNothing).toBeUndefined();
     expect(html(await renderImage(args({})))).toBe("");
     expect(html(await renderImage(args({ src: "javascript:alert(1)" })))).toBe(
       ""
-    );
-    expect(html(renderEmbed(args({})))).toBe("");
-    expect(
-      html(renderEmbed(args({ src: "javascript:alert(1)", title: "t" })))
-    ).toBe("");
-
-    // And the other direction: a block with usable input must NOT declare empty,
-    // or a drawing block would be exempted from the diagnostic it needs.
-    expect(image.rendersNothing?.({ src: "/a.png" } as never)).toBe(false);
-    expect(image.rendersNothing?.({ mediaId: "m1" } as never)).toBe(false);
-    expect(embed.rendersNothing?.({ src: "https://e.com/v" } as never)).toBe(
-      false
     );
   });
 });

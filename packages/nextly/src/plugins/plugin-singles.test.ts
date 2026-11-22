@@ -250,14 +250,9 @@ describe("the published record says what the registry can actually return", () =
     return result.data[0]!;
   }
 
-  it("does not carry timestamps, which the registry cannot answer per dialect", async () => {
-    // `normalizeDbTimestamp`, which the registry uses, documents itself as
-    // assuming every `Date` is naive and always un-offsetting, and names
-    // `dbTimestampToInstant` as the dialect-aware alternative "safe for
-    // SQLite". SQLite's columns are epoch-backed, so its driver already holds
-    // the correct instant and un-offsetting shifts it by the server timezone —
-    // wrong on one dialect of three, and only on a non-UTC server, so it reads
-    // as correct wherever it is checked.
+  it("does not carry timestamps, which the registry answers as strings typed `Date`", async () => {
+    // `normalizeDbTimestamp`, which the registry uses, returns an ISO string,
+    // and the registry casts it to `Date`, so a date method on it throws.
     const record = await listOne();
 
     expect(record).not.toHaveProperty("createdAt");

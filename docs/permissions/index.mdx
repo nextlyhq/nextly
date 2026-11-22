@@ -149,7 +149,8 @@ A collection's `read` rule may return a filter, written as a list's `where` is, 
 `true`. The caller then reads only the entries the filter matches. The filter narrows what
 the grant allows and never widens it: a signed-in user or an API key still needs
 `read-<collection>`, a caller with no session reads the matching entries in place of the
-public default, and the rule's filter is added to whatever the caller asked for.
+public default, a plugin-defined person, who holds no grants, reads the matching entries
+by the rule alone, and the rule's filter is added to whatever the caller asked for.
 
 This is not finished. In this release a list, its total, a count, and the group and
 timeseries reads made through the Direct API or a plugin service apply the filter, as do a
@@ -218,8 +219,9 @@ A collection's `update`, `delete`, `publish` and `unpublish` rules may return a 
 its `read` rule may, typed by the collection's fields in the same way. The write then
 changes an entry only if the filter matches it. An entry outside the filter is refused and
 left as it was: with a 403 where the caller may read the entry, and as a missing entry
-(404) where it may not. The filter applies to a signed-in user or an API key: a visitor,
-with neither, is refused a write whose rule answers a filter, whatever the filter matches.
+(404) where it may not. The filter applies to a signed-in user, an API key or a
+plugin-defined person: a visitor, with none of them, is refused a write whose rule answers a
+filter, whatever the filter matches.
 
 ```ts
 import { defineCollection, relationship, text } from "nextly/config";
@@ -458,6 +460,9 @@ caller who could read that `users` row by name:
   read rule if it declares one.
 - **An API key** always needs `read-<collection>` in its own grants, and then the collection's
   rule if it has one. A key granted only `read-posts` does not see populated authors.
+- **A plugin-defined person** holds no grants, so the related collection's read rule alone
+  decides, and one with no read rule refuses them (see
+  [Signed-in people of your own kind](/docs/plugins/signed-in-people#let-a-person-read-and-write-your-collections)).
 - **`users` and media** have no rules of their own, so the grant decides: a signed-in user or
   an API key needs `read-users` to see a populated user and `read-media` to see an upload's
   media row. Visitors keep media, which public pages embed, but never see a populated user:
@@ -513,6 +518,14 @@ where the reader can't see it.
 This is the level most systems either do not have or sell separately. It is what lets one
 collection serve two audiences — an editor who sees the article, and a finance user who
 also sees the fields describing what it cost.
+
+The Page Builder's page code and custom CSS are not read-restricted this way. Anyone who may
+edit a page can read its code and CSS, draft, published and history, and visitors get the
+published ones in the page; only people with **Manage page builder site settings** may change
+them, as
+[site code](/docs/page-builder/site-code#page-code) and
+[custom CSS](/docs/page-builder/custom-css#who-may-change-page-and-block-css) explain. Page
+code is printed into the published page, so it must never hold a secret.
 
 ## The Direct API bypasses these rules by default
 

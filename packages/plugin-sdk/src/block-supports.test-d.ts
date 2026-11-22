@@ -22,7 +22,7 @@ export const AUTHORING_SUPPORTS: {
   typography: [],
   color: ["text", "link"],
   background: ["color", "image", "gradient"],
-  border: ["line", "radius"],
+  border: ["line", "radius", "outline"],
   shadow: [],
   effects: [],
   position: [],

@@ -355,7 +355,7 @@ test.describe("an entry's own design", () => {
       await expect(
         row(REDESIGNED.title).locator('[data-own-design="published"]')
       ).toHaveText("Own design");
-      await expect(row(PLAIN.title)).toContainText("Template");
+      await expect(row(PLAIN.title)).toContainText("Collection template");
       await expect(row(PLAIN.title).locator("[data-own-design]")).toHaveCount(
         0
       );

@@ -3,7 +3,7 @@
  * module per widget; `core-widgets/index.ts` lists them in their order.
  *
  * Its `load` reads `system:continue` as the caller its read services were
- * bound for, on the tab its reader chose: their pins first, then their saves
+ * bound for, on the tab its reader chose: their newest pins, then their saves
  * (Mine), or what other people saved (Team), as the reader may read each of
  * them now. Asked as core's own lists are: its "Number of entries"
  * (`listEntries`), and one more, so the card can say more exist.
@@ -69,6 +69,10 @@ export const continueWidget = defineWidget({
           "status",
           "pendingChanges",
           "pinned",
+          // Mine's group for each row, and on a pinned row how many pins the
+          // reader has in all, for "View all pins (N)".
+          "group",
+          "pinCount",
         ],
         // The source narrows by the tab its reader chose, Mine unless chosen.
         where: { tab: settings.tab },

@@ -52,13 +52,14 @@ function renderRail(
     hasNextPage?: boolean;
     nextPageError?: unknown;
     onLoadMore?: () => void;
+    compared?: { from: number; to: number } | null;
   } = {}
 ) {
   return render(
     <VersionTimelineRail
       scope={scope}
       versions={versions}
-      selected={null}
+      compared={extra.compared ?? null}
       onSelect={vi.fn()}
       hasNextPage={extra.hasNextPage}
       nextPageError={extra.nextPageError}
@@ -267,5 +268,40 @@ describe("VersionTimelineRail — a version with no recorded author", () => {
 
     expect(screen.getByText(/Author not recorded/)).toBeInTheDocument();
     expect(screen.queryByText(/Unknown author/)).not.toBeInTheDocument();
+  });
+});
+
+describe("VersionTimelineRail — the two versions compared", () => {
+  beforeEach(() => {
+    useLocalization.mockReset();
+    useLocalization.mockReturnValue({ enabled: false, getLocale: () => null });
+  });
+
+  /**
+   * Both sides of the comparison beside the list are marked, so a reader can
+   * find them in the history, and each says which side it is: the older side
+   * of a comparison is often not the row just below the newer one.
+   */
+  it("marks both versions being compared, and which side each is, with one current row", () => {
+    renderRail(
+      [
+        version({ id: "v5", versionNo: 5 }),
+        version({ id: "v4", versionNo: 4 }),
+        version({ id: "v3", versionNo: 3 }),
+      ],
+      { compared: { from: 3, to: 5 } }
+    );
+
+    const row = (n: number) =>
+      screen.getByRole("button", { name: new RegExp(`Version ${n}`) });
+    // One current item in the list: the version compared to. The other side
+    // is said in its own row's name, which a screen reader reads with it.
+    expect(row(5)).toHaveAttribute("aria-current", "true");
+    expect(row(3)).not.toHaveAttribute("aria-current");
+    expect(row(4)).not.toHaveAttribute("aria-current");
+    expect(row(3)).toHaveAccessibleName(/Compared from/);
+    expect(within(row(3)).getByText("Compared from")).toBeInTheDocument();
+    expect(within(row(5)).getByText("Compared to")).toBeInTheDocument();
+    expect(within(row(4)).queryByText(/^Compared/)).toBeNull();
   });
 });

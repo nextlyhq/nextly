@@ -275,9 +275,11 @@ describe("selectVersionsToPrune — named versions and restore lineage", () => {
     expect(selectVersionsToPrune(input, 2)).toEqual(["v3", "v1"]);
   });
 
-  it("keeps a save's row and every version its restored fields came from", () => {
+  it("keeps every version a save's restored fields came from, but not the save's row itself", () => {
     // A save carried fields restored from two versions: "Restored from" names
-    // both, so both outlive the cap, as does the row that records them.
+    // both, so both outlive the cap. The row that records them is not pinned:
+    // its sources are named by the client's save, and pinning every such row
+    // would let a caller keep each new version past the cap by resending them.
     const input = [
       version(7),
       version(6),
@@ -288,7 +290,7 @@ describe("selectVersionsToPrune — named versions and restore lineage", () => {
       version(1),
     ];
 
-    expect(selectVersionsToPrune(input, 2)).toEqual(["v3", "v1"]);
+    expect(selectVersionsToPrune(input, 2)).toEqual(["v5", "v3", "v1"]);
   });
 
   it("ignores a restore source that is no longer in the history", () => {
@@ -308,5 +310,126 @@ describe("selectVersionsToPrune — named versions and restore lineage", () => {
     ];
 
     expect(selectVersionsToPrune(input, 0)).toEqual(["v1"]);
+  });
+});
+
+describe("selectVersionsToPrune — what is kept for every part a version records", () => {
+  /**
+   * A durable row whose parts are recorded. A publish of chosen parts, or of
+   * every language, records no language in `locale`, so only its parts say
+   * which languages it put live.
+   */
+  function recorded(
+    versionNo: number,
+    locales: string[],
+    shared: boolean,
+    fields: Partial<Omit<PrunableVersion, "id" | "versionNo">> = {}
+  ): PrunableVersion {
+    return version(versionNo, {
+      changedParts: { locales, shared },
+      ...fields,
+    });
+  }
+  const published = { status: "published" } as const;
+
+  it("keeps the other language's latest publish through a run of later saves and publishes in one language", () => {
+    // English was published alone, then Spanish alone, then English again
+    // with saves around it. Each of those publishes records `locale: null`, so
+    // a rule keyed on `locale` sees one key and keeps only the newest of them,
+    // removing Spanish's only published version.
+    const input = [
+      recorded(7, ["en"], false, { locale: "en" }),
+      recorded(6, ["en"], false, { locale: "en" }),
+      recorded(5, ["en"], false, published),
+      recorded(4, ["en"], false, { locale: "en" }),
+      recorded(3, ["es"], false, published),
+      recorded(2, ["en"], false, published),
+      recorded(1, ["en", "es"], true, published),
+    ];
+
+    const pruned = selectVersionsToPrune(input, 2);
+
+    // v5 is English's latest publish, v3 Spanish's and v1 the shared part's.
+    expect(pruned).not.toContain("v3");
+    expect(pruned).toEqual(["v4", "v2"]);
+  });
+
+  it("keeps a publish of the shared part alone after many publishes of single languages", () => {
+    const input = [
+      recorded(6, ["en"], false, published),
+      recorded(5, ["es"], false, published),
+      recorded(4, ["en"], false, published),
+      recorded(3, ["es"], false, published),
+      recorded(2, ["en"], false, published),
+      recorded(1, [], true, published),
+    ];
+
+    expect(selectVersionsToPrune(input, 2)).toEqual(["v4", "v3", "v2"]);
+  });
+
+  it("counts a publish of every language and the shared part for each of them", () => {
+    // v3, a later publish of the shared part alone, takes the shared part;
+    // v2 is still the latest publish of English and of Spanish, so it stays
+    // though a newer publish with no language exists.
+    const input = [
+      recorded(5, ["en"], false, { locale: "en" }),
+      recorded(4, ["es"], false, { locale: "es" }),
+      recorded(3, [], true, published),
+      recorded(2, ["en", "es"], true, published),
+      recorded(1, ["en", "es"], true, published),
+    ];
+
+    expect(selectVersionsToPrune(input, 1)).toEqual(["v4", "v1"]);
+    // Once English is published again, v2 still holds Spanish's.
+    expect(
+      selectVersionsToPrune(
+        [recorded(6, ["en"], false, published), ...input],
+        1
+      )
+    ).toEqual(["v5", "v4", "v1"]);
+  });
+
+  it("keeps every version recorded before the parts by the rule it had, whatever recorded versions sit beside it", () => {
+    // v4, v3 and v2 were recorded before versions named their parts: each is
+    // its `locale`'s latest published version among them, so each is kept as
+    // it always was. A newer recorded publish carrying the same `locale` (v7's
+    // null, v6's "es") must not take its place.
+    const input = [
+      recorded(8, ["en"], false, { locale: "en" }),
+      recorded(7, ["en"], false, published),
+      recorded(6, ["es"], false, { locale: "es", ...published }),
+      version(5, { locale: "en" }),
+      version(4, { locale: null, ...published }),
+      version(3, { locale: "es", ...published }),
+      version(2, { locale: "en", ...published }),
+      version(1, { locale: null, ...published }),
+    ];
+
+    expect(selectVersionsToPrune(input, 1)).toEqual(["v5", "v1"]);
+  });
+
+  it("never lets a version recorded before the parts stand in for a part's latest publish", () => {
+    // v1 recorded that it published Spanish; v2 has no parts recorded. v2 is
+    // kept for its own `locale`, and v1 stays as Spanish's latest publish.
+    const input = [
+      recorded(3, ["en"], false, { locale: "en" }),
+      version(2, { locale: "es", ...published }),
+      recorded(1, ["es"], false, { locale: "es", ...published }),
+    ];
+
+    expect(selectVersionsToPrune(input, 1)).toEqual([]);
+  });
+
+  it("gives a version that changed no part no protection as a part's latest publish", () => {
+    // v2 records content as it already stood (a restore's snapshot of what it
+    // replaced): it put nothing live, so the latest publish of English and of
+    // the shared part is still v1, and v2 goes.
+    const input = [
+      recorded(3, ["en"], false, { locale: "en" }),
+      recorded(2, [], false, published),
+      recorded(1, ["en"], true, published),
+    ];
+
+    expect(selectVersionsToPrune(input, 1)).toEqual(["v2"]);
   });
 });

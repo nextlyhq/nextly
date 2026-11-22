@@ -77,6 +77,20 @@ export interface ShownCopy {
   version: string | undefined;
   locale?: string;
   draft?: boolean;
+  /**
+   * The document the editor records recovery points under (`documentRecordingKey`), so a write
+   * made outside the editor's own save waits for one on its way, as the editor's own do.
+   */
+  recordings?: string | null;
+}
+
+/**
+ * Where an editor puts how to read the copy it shows, for an action drawn outside it (the page's
+ * own) that must send what the editor's copy started from, as the editor's own actions do. Empty
+ * while no editor is drawn.
+ */
+export interface ShownCopyHandle {
+  current: (() => ShownCopy) | null;
 }
 
 /**

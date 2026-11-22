@@ -23,10 +23,13 @@ export interface FieldGroupPlacement {
   fieldPath: string;
 }
 
-export function useFieldGroupUsedBy(
-  slug: string | undefined
-): UseQueryResult<FieldGroupPlacement[], Error> {
-  return useQuery({
+/**
+ * The query reading where a field group is used, for one slug: what
+ * `useFieldGroupUsedBy` reads, and what a page asking about several field
+ * groups at once reads for each.
+ */
+export function fieldGroupUsedByQuery(slug: string | undefined) {
+  return {
     queryKey: [...fieldGroupKeys.detail(slug ?? ""), "used-by"],
     queryFn: async () => {
       const result = await protectedApi.get<ListResponse<FieldGroupPlacement>>(
@@ -41,5 +44,11 @@ export function useFieldGroupUsedBy(
     // the old holders, or none.
     staleTime: 0,
     gcTime: 0,
-  });
+  };
+}
+
+export function useFieldGroupUsedBy(
+  slug: string | undefined
+): UseQueryResult<FieldGroupPlacement[], Error> {
+  return useQuery(fieldGroupUsedByQuery(slug));
 }

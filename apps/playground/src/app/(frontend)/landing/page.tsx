@@ -43,9 +43,8 @@ const { SinglePage, generateMetadata } = createSinglePage({
   // exactly one document, so its slug is its identity and there is no second
   // row for the route to check the answer against.
   draft: previewSingleDraftGate(),
-  // An explicit set rather than the process registry, which is populated by
-  // whatever booted the editor — so a public route depending on it draws the
-  // unknown-block placeholder whenever a visitor arrives before an admin does.
+  // An explicit set, which the route always uses as given. The site's other
+  // routes pass none and draw the blocks the site registered.
   blocks: createBlockResolver(coreBlocks),
   styleContext: SITE_STYLE_CONTEXT,
   siteStyles: SITE_STYLES,

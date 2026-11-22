@@ -9,12 +9,19 @@
  *
  * The core blocks' looks are known at config time. Blocks other plugins
  * declare register at init, and the plugin refreshes the code tier with
- * every registered block's looks then, before any request reads it.
+ * every registered block's looks then, before any request reads it. The
+ * canvas and the published page's site style both take theirs from
+ * {@link withRegisteredLooks}, so a look the canvas shows is one the
+ * published page has a rule for.
  *
  * @module core-looks
  */
 
-import { blockLooks, blockOwnLooks } from "@nextlyhq/blocks-engine";
+import {
+  blockLooks,
+  blockOwnLooks,
+  type AnyBlockDefinition,
+} from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 
 import type { SiteStyleData } from "./site-style";
@@ -52,4 +59,26 @@ export function withCoreLooks(
   siteStyle: SiteStyleData | undefined
 ): SiteStyleData {
   return withBlockLooks(siteStyle, coreBlocks);
+}
+
+/**
+ * The site's config style with the looks of every block its registry holds
+ * (`registered`, other plugins' among them), and the core blocks even before
+ * anything has registered them. The server passes its site's registry, the
+ * canvas its bundle's.
+ *
+ * The core blocks lead, as the plugin registers them first, so a booted
+ * process reads exactly its registry's order. They are kept when the registry
+ * is empty, as it is between a boot's clear and its registration, because a
+ * page rendered then would otherwise lose every core look it wears.
+ */
+export function withRegisteredLooks(
+  siteStyle: SiteStyleData | undefined,
+  registered: readonly AnyBlockDefinition[]
+): SiteStyleData {
+  const names = new Set(registered.map(definition => definition.name));
+  const unregisteredCore = coreBlocks.filter(
+    definition => !names.has(definition.name)
+  );
+  return withBlockLooks(siteStyle, [...unregisteredCore, ...registered]);
 }

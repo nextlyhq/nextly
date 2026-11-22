@@ -35,7 +35,19 @@ export type StyleOrigin =
    * block that differ only in which element they landed on are otherwise
    * indistinguishable.
    */
-  | { kind: "blockType"; type: string; part?: string }
+  | {
+      kind: "blockType";
+      type: string;
+      part?: string;
+      /**
+       * Set on a default of ONE block of the type, which takes the type's
+       * place on that block alone: a Section's padding preset. The id of the
+       * block it was written for.
+       *
+       * @experimental
+       */
+      node?: string;
+    }
   /**
    * The typographic baseline for one element, shared by every `h1` on the page.
    *
@@ -60,6 +72,23 @@ export type StyleOrigin =
       slug: string;
       /** The block type a look is bound to; absent for a shared style. */
       blockType?: string;
+      /**
+       * `"text"` for a text style, so a reader can say "From text style:
+       * Eyebrow" rather than naming it as a shared style. Absent on a
+       * block style and a shared style.
+       *
+       * @experimental
+       */
+      role?: "text";
+      /**
+       * Set on a block type's ★ look as written for the blocks of the type
+       * that wear none of its looks: the ids of those looks. Such a rule
+       * reaches a block of the type that applies none of them, whether or not
+       * it applies the ★ look itself.
+       *
+       * @experimental
+       */
+      unlessWearing?: readonly string[];
     }
   /** One node's own values. */
   | { kind: "node"; id: string };

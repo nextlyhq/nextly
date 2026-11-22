@@ -20,7 +20,9 @@
 import type { SystemColumnEntity } from "../../lib/system-columns";
 import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
 
+import { NO_PART, type ChangedParts } from "./changed-parts";
 import type { VersionsDbApi } from "./db-api";
+import { draftSlotParts } from "./part-drafts";
 import { sourcesHeld, type FieldSources } from "./restored-from";
 import { documentSystemKeys } from "./snapshot-system-keys";
 import type { VersionCaptureService } from "./version-capture-service";
@@ -53,6 +55,12 @@ export interface DraftSaveInput {
   /** The fields named as restored, and their versions; see `restored-from`. */
   restoredFrom?: FieldSources;
   /**
+   * The parts this save wrote, which its version records: the language it
+   * held values in and whether it held shared ones (`partsWritten`), or the
+   * shared part alone for a document kept as one part.
+   */
+  changedParts: ChangedParts;
+  /**
    * Durable versions kept for the document, from its versions config; `false`
    * or omitted leaves history unbounded, as for every capture.
    */
@@ -61,7 +69,8 @@ export interface DraftSaveInput {
    * Stores the working draft in place of the one-row write, on the same
    * handle: under per-language storage a held save keeps a shared draft and a
    * language's draft (`part-drafts`) rather than one row of the whole
-   * document. The version below is recorded from `snapshot` either way.
+   * document. The version below is recorded from `snapshot` either way. Each
+   * draft row it stores records the part it holds (`draftSlotParts`).
    */
   storeWorkingDraft?: (repo: VersionsRepository) => Promise<void>;
 }
@@ -99,9 +108,17 @@ export async function storeDraftSave(
       locale: input.locale,
       snapshot: input.snapshot,
       createdBy: input.createdBy,
+      // The one draft of the slot records the part that slot holds.
+      parts: draftSlotParts(input.locale),
     });
   }
   const entity = input.ref.scopeKind === "single" ? "single" : "collection";
+  const isRestore = typeof input.sourceVersionNo === "number";
+  // A save that changes nothing captures no version, a restore included. A
+  // restore's version is one retention keeps whatever the cap, so a repeated
+  // restore of what the draft holds would otherwise keep a row each time. It
+  // still leaves its trace: the save's event records every restore, naming its
+  // version, with or without a version of its own (`recordSaveEvent`).
   if (sameContent(input.snapshot, input.replaces, entity)) {
     return { versionNo: null };
   }
@@ -111,13 +128,16 @@ export async function storeDraftSave(
   // restore's undo point carries, so it takes the number just below the
   // restore's own, which retention keeps. No retention runs here; the restore's
   // capture below trims once, with that protection in place.
-  if (typeof input.sourceVersionNo === "number") {
+  if (isRestore) {
     await capture.capture(tx, {
       ref: input.ref,
       status: "draft",
       snapshot: withoutStatus(input.replaces),
       createdBy: input.createdBy,
       locale: versionLocaleOf(input),
+      // What the draft held before the restore, which this version writes
+      // nowhere: it changes no part.
+      changedParts: NO_PART,
       label: "Before restore",
       // A held draft exists only under the Draft/Published lifecycle.
       lifecycle: true,
@@ -136,6 +156,7 @@ export async function storeDraftSave(
     locale: versionLocaleOf(input),
     sourceVersionNo: input.sourceVersionNo ?? null,
     fieldSources: fieldSources ?? null,
+    changedParts: input.changedParts,
     maxPerDoc: input.maxPerDoc,
     lifecycle: true,
   });

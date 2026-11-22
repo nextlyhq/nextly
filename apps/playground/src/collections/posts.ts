@@ -11,6 +11,7 @@ import {
   relationship,
   select,
   option,
+  previewUrlFromTemplate,
 } from "nextly/config";
 
 // Demo Posts collection for the contributor playground. Exercises the
@@ -109,5 +110,12 @@ export const Posts = defineCollection({
   versions: { drafts: true },
   admin: {
     useAsTitle: "title",
+    // Where a post previews: the address its `(frontend)/[...slug]` route
+    // serves it at, so the editor's Preview, beside the form or in a tab,
+    // shows the post as its template draws it. That route draws published
+    // posts only: its draft gate speaks for pages, so a post never published
+    // previews as not found, and a published post's unpublished edits are
+    // not in its preview.
+    preview: { url: previewUrlFromTemplate("/blog/{slug}") },
   },
 });

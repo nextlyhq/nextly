@@ -140,7 +140,9 @@ export function resolveActiveTarget(
 
 /** One document's outstanding work in one language. */
 export interface TranslationWorkRow {
-  /** Collection slug — also how the row is opened. */
+  /** A collection entry, or a Single, which is opened at its own route. */
+  kind: "collection" | "single";
+  /** The collection's or Single's slug — also how the row is opened. */
   collection: string;
   /** Its plural label, because a person reads this, not a route. */
   collectionLabel: string;

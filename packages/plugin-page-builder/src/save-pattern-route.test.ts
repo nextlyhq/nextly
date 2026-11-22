@@ -12,6 +12,7 @@
  * left in the default state is a save the author cannot find afterwards.
  */
 import {
+  createBlockRegistry,
   DOCUMENT_FORMAT_VERSION,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -23,6 +24,9 @@ import {
   savePattern,
   type SavePatternRouteContext,
 } from "./save-pattern-route";
+
+/** The site's block registry these tests read: it holds none. */
+const blocks = createBlockRegistry();
 
 function node(id: string, type = "core/box"): BlockNode {
   return { id, type, version: 1, props: {} };
@@ -94,7 +98,8 @@ describe("where a saved pattern goes", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a"], fields }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(createEntry.mock.calls[0]?.[0]).toBe("site_blocks");
@@ -105,7 +110,8 @@ describe("where a saved pattern goes", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a"], fields }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(createEntry.mock.calls[0]?.[0]).toBe(PATTERNS_SLUG);
@@ -120,7 +126,8 @@ describe("where a saved pattern goes", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a"], fields }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(createEntry.mock.calls[0]?.[2]).toEqual({
@@ -136,7 +143,8 @@ describe("what a saved pattern is made of", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a", "b"], fields }),
-      ctx
+      ctx,
+      blocks
     );
 
     // The field name is the translation this module makes: the collection calls
@@ -163,7 +171,8 @@ describe("what a saved pattern is made of", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a", "b"], fields }),
-      ctx
+      ctx,
+      blocks
     );
 
     const stored = written(createEntry).content as { nodes: BlockNode[] };
@@ -180,7 +189,8 @@ describe("what a saved pattern is made of", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a"], fields }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(written(createEntry).status).toBe("published");
@@ -212,7 +222,8 @@ describe("what a saved pattern is made of", () => {
           invented: true,
         },
       }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(Object.keys(written(createEntry)).sort()).toEqual([
@@ -256,7 +267,8 @@ describe("what a saved pattern is made of", () => {
           ])
         ),
       }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(declared.length).toBeGreaterThan(1);
@@ -280,7 +292,8 @@ describe("what a completed save answers", () => {
 
     const response = await savePattern(
       request({ document: pageDocument, selectedIds: ["a"], fields }),
-      ctx
+      ctx,
+      blocks
     );
     const body = (await response.json()) as Record<string, unknown>;
 
@@ -299,7 +312,8 @@ describe("what a completed save answers", () => {
     const error = await thrownBy(
       savePattern(
         request({ document: pageDocument, selectedIds: ["a"], fields }),
-        ctx
+        ctx,
+        blocks
       )
     );
 
@@ -317,7 +331,8 @@ describe("the identifier a pattern is keyed by", () => {
         selectedIds: ["a"],
         fields: { title: "Hero Banner!", granularity: "section" },
       }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(written(createEntry).slug).toBe("hero-banner");
@@ -332,7 +347,8 @@ describe("the identifier a pattern is keyed by", () => {
         selectedIds: ["a"],
         fields: { title: "Hero", slug: "legacy-hero", granularity: "section" },
       }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(written(createEntry).slug).toBe("legacy-hero");
@@ -353,7 +369,8 @@ describe("the identifier a pattern is keyed by", () => {
           selectedIds: ["a"],
           fields: { title, granularity: "section" },
         }),
-        ctx
+        ctx,
+        blocks
       );
 
       expect(written(createEntry).slug).toEqual(expect.stringMatching(/^.+$/));
@@ -373,7 +390,8 @@ describe("the identifier a pattern is keyed by", () => {
           selectedIds: ["a"],
           fields: { title: "見出し", granularity: "section" },
         }),
-        ctx
+        ctx,
+        blocks
       );
       slugs.add(String(written(createEntry).slug));
     }
@@ -392,7 +410,8 @@ describe("what the route refuses, and how it says so", () => {
     const error = await thrownBy(
       savePattern(
         request({ document: pageDocument, selectedIds: ["a", "c"], fields }),
-        ctx
+        ctx,
+        blocks
       )
     );
 
@@ -413,7 +432,8 @@ describe("what the route refuses, and how it says so", () => {
     const error = await thrownBy(
       savePattern(
         request({ document: pageDocument, selectedIds: ["nowhere"], fields }),
-        ctx
+        ctx,
+        blocks
       )
     );
 
@@ -426,7 +446,7 @@ describe("what the route refuses, and how it says so", () => {
     // sends whoever reads the log looking at the wrong side.
     const { ctx } = contextOver();
 
-    const error = await thrownBy(savePattern(request("{"), ctx));
+    const error = await thrownBy(savePattern(request("{"), ctx, blocks));
 
     expect(error.statusCode).toBe(400);
   });
@@ -455,7 +475,7 @@ describe("what the route refuses, and how it says so", () => {
   ])("refuses a request whose %s is not one", async (path, body) => {
     const { ctx, createEntry } = contextOver();
 
-    const error = await thrownBy(savePattern(request(body), ctx));
+    const error = await thrownBy(savePattern(request(body), ctx, blocks));
 
     expect(error.statusCode).toBe(400);
     expect(error.publicData).toMatchObject({ errors: [{ path }] });
@@ -468,7 +488,8 @@ describe("what the route refuses, and how it says so", () => {
     const error = await thrownBy(
       savePattern(
         request({ document: pageDocument, selectedIds: [], fields }),
-        ctx
+        ctx,
+        blocks
       )
     );
 
@@ -485,10 +506,139 @@ describe("what the route refuses, and how it says so", () => {
 
     await savePattern(
       request({ document: pageDocument, selectedIds: ["a"], fields: {} }),
-      ctx
+      ctx,
+      blocks
     );
 
     expect(createEntry).toHaveBeenCalled();
     expect(written(createEntry)).not.toHaveProperty("title");
+  });
+});
+
+describe("a save of a stored entry's document", () => {
+  /** A context recording a plain create and a create from a source. */
+  function copyContext() {
+    const createEntry = vi.fn(() => Promise.resolve({ item: { id: "p1" } }));
+    const createEntryFromSource = vi.fn(() =>
+      Promise.resolve({ item: { id: "p2" } })
+    );
+    const ctx = {
+      self: { collections: {} },
+      user: { id: "u1" },
+      services: { collections: { createEntry, createEntryFromSource } },
+    } as unknown as SavePatternRouteContext;
+    return { ctx, createEntry, createEntryFromSource };
+  }
+
+  it("is made through core's copy of that entry, as the user, naming only its address", async () => {
+    const { ctx, createEntry, createEntryFromSource } = copyContext();
+
+    await savePattern(
+      request({
+        document: pageDocument,
+        selectedIds: ["a"],
+        fields,
+        source: {
+          collection: "pages",
+          id: "page-1",
+          field: "content",
+          forms: ["published", "draft"],
+        },
+      }),
+      ctx,
+      blocks
+    );
+
+    expect(createEntry).not.toHaveBeenCalled();
+    const [slug, , source, as] = createEntryFromSource.mock.calls[0] as
+      | unknown[]
+      | [];
+    expect(slug).toBe(PATTERNS_SLUG);
+    // Nothing the caller sent beside the address reaches core.
+    expect(source).toEqual({
+      collection: "pages",
+      id: "page-1",
+      field: "content",
+    });
+    expect(as).toEqual({ as: "user", user: { id: "u1" } });
+  });
+
+  it("makes a dry run through the same copy, on its transaction, warming the source first", async () => {
+    const journal: string[] = [];
+    const createEntryInTransaction = vi.fn(() => Promise.resolve({}));
+    const createEntryFromSourceInTransaction = vi.fn(() => {
+      journal.push("copy-in-tx");
+      return Promise.resolve({ id: "p9" });
+    });
+    const ctx = {
+      self: { collections: {} },
+      user: { id: "u1" },
+      services: {
+        collections: {
+          createEntry: vi.fn(),
+          createEntryFromSource: vi.fn(),
+          createEntryInTransaction,
+          createEntryFromSourceInTransaction,
+          warmLocalizedReadiness: (slug: string) => {
+            journal.push(`warm ${slug}`);
+            return Promise.resolve();
+          },
+          withTransaction: async (work: (tx: unknown) => Promise<never>) => {
+            journal.push("begin");
+            return work({});
+          },
+        },
+      },
+    } as unknown as SavePatternRouteContext;
+
+    await savePattern(
+      request({
+        document: pageDocument,
+        selectedIds: ["a"],
+        fields,
+        dryRun: true,
+        source: { collection: "pages", id: "page-1", field: "content" },
+      }),
+      ctx,
+      blocks
+    );
+
+    expect(createEntryInTransaction).not.toHaveBeenCalled();
+    expect(journal).toEqual(["warm pages", "begin", "copy-in-tx"]);
+    const [, slug, , source, as] = createEntryFromSourceInTransaction.mock
+      .calls[0] as unknown as unknown[];
+    expect(slug).toBe(PATTERNS_SLUG);
+    expect(source).toEqual({
+      collection: "pages",
+      id: "page-1",
+      field: "content",
+    });
+    expect(as).toMatchObject({ as: "user", user: { id: "u1" } });
+  });
+
+  it("refuses a source that is not an address, and writes nothing", async () => {
+    for (const source of [
+      "pages/page-1",
+      { collection: "pages" },
+      { collection: "pages", id: "" },
+      { collection: "pages", id: "page-1", field: 3 },
+    ]) {
+      const { ctx, createEntry, createEntryFromSource } = copyContext();
+      const error = await thrownBy(
+        savePattern(
+          request({
+            document: pageDocument,
+            selectedIds: ["a"],
+            fields,
+            source,
+          }),
+          ctx,
+          blocks
+        )
+      );
+      expect(error.code).toBe("VALIDATION_ERROR");
+      expect(createEntry).not.toHaveBeenCalled();
+      expect(createEntryFromSource).not.toHaveBeenCalled();
+    }
   });
 });

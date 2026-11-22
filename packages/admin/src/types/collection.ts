@@ -1,6 +1,7 @@
 // Collection and dynamic content types for the admin app
 
 import type { RemovedFromCodeMark } from "./removed-from-code";
+import type { WorkflowStepKind } from "./workflows";
 
 /**
  * All supported field types in Nextly
@@ -265,6 +266,18 @@ export interface Collection extends RemovedFromCodeMark {
    * Schema Builder always resolves drafts off.
    */
   draftsEnabled?: boolean;
+  /**
+   * The workflow that holds the collection's publishing, from the schema read;
+   * `null` (or absent) where none is attached. Read-only.
+   */
+  workflow?: {
+    slug: string;
+    label: string;
+    /** Its stages in order, by name and the label the code gives them. */
+    stages?: { name: string; label: string }[];
+    /** Its steps, each by name, label and kind, as the schema read summarises them. */
+    steps?: { name: string; label: string; kind: WorkflowStepKind }[];
+  } | null;
   /**
    * Why drafts are off, when the configuration asked for them. With
    * `localized-component`, a draft saved before the rule may still be held,

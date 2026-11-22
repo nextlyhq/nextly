@@ -30,6 +30,8 @@ export interface HostedRecoveryOffer {
   restore: () => void;
   /** Stop offering for this session, without deleting anything. */
   dismiss: () => void;
+  /** Stop offering for good, in every later session and tab (Discard). */
+  discard: () => void;
 }
 
 interface RecoveryOfferValue {

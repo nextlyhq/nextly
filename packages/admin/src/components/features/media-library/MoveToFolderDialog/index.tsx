@@ -77,7 +77,7 @@ export function MoveToFolderDialog({
   const hasFolders = (rootFolders?.length ?? 0) > 0;
 
   // Mutations
-  const { mutate: moveMedia, isPending } = useMoveMediaToFolder();
+  const { mutateAsync: moveMedia, isPending } = useMoveMediaToFolder();
   const {
     mutate: createFolder,
     isPending: isCreating,
@@ -128,23 +128,18 @@ export function MoveToFolderDialog({
 
     setMoveProgress({ current: 0, total: mediaIds.length });
 
+    // One promise per file, from `mutateAsync`. Wrapping `mutate` and its
+    // per-call callbacks instead hung the dialog on "Moving 1 of 2...": TanStack
+    // Query runs those callbacks for the latest call only, so every earlier
+    // file's promise never settled even though the file had moved. A failure
+    // counts towards the progress too, so the count always reaches the total.
     const results = await Promise.allSettled(
-      mediaIds.map(
-        mediaId =>
-          new Promise<void>((resolve, reject) => {
-            moveMedia(
-              { mediaId, folderId: selectedFolderId },
-              {
-                onSuccess: () => {
-                  setMoveProgress(prev =>
-                    prev ? { ...prev, current: prev.current + 1 } : null
-                  );
-                  resolve();
-                },
-                onError: (error: Error) => reject(error),
-              }
-            );
-          })
+      mediaIds.map(mediaId =>
+        moveMedia({ mediaId, folderId: selectedFolderId }).finally(() => {
+          setMoveProgress(prev =>
+            prev ? { ...prev, current: prev.current + 1 } : null
+          );
+        })
       )
     );
 

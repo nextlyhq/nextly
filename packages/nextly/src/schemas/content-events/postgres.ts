@@ -26,6 +26,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 import type { ContentEventActorKind, ContentEventSubjectKind } from "./types";
+import { CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH } from "./widths";
 
 export const nextlyContentEventsPg = pgTable(
   "nextly_content_events",
@@ -60,7 +61,9 @@ export const nextlyContentEventsPg = pgTable(
       .notNull(),
     actorId: text("actor_id"),
     // A principal's kind, beside its id, for a `principal` actor only.
-    actorPrincipalKind: varchar("actor_principal_kind", { length: 64 }),
+    actorPrincipalKind: varchar("actor_principal_kind", {
+      length: CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH,
+    }),
     actorName: text("actor_name"),
 
     occurredAt: timestamp("occurred_at", {

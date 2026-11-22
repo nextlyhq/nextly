@@ -4,8 +4,9 @@
  * Where the document stands in the language being edited: Draft, Published, or
  * Changed (published, with a working draft waiting to be published).
  *
- * Drawn once, at the start of the document bar, at every width. It reads the
- * status the editor passes for the language being edited, so it never says
+ * On screen once: beside the title while the title is in view, and at the
+ * start of the document bar once it has scrolled away (`title-in-view`), at
+ * every width. It reads the status the editor passes for the language being edited, so it never says
  * "Published" beside a Publish button for a translation that lags its default
  * language.
  *

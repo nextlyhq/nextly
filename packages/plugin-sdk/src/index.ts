@@ -13,6 +13,8 @@
  * @packageDocumentation
  */
 
+import type { PluginContext } from "nextly";
+
 /** @public The plugin entry point — wraps a definition for `defineConfig({ plugins })`. */
 export { definePlugin } from "nextly";
 
@@ -340,6 +342,7 @@ export type {
   PluginFieldType,
   PluginFieldValidateArgs,
   PluginFieldWrite,
+  PluginFieldWriteCaller,
   PluginStoredValue,
   PluginStoredValueTarget,
   PluginFieldInstance,
@@ -753,15 +756,10 @@ export type {
  * plugin can type a helper that takes one of them.
  * @experimental `PluginConfig` (`ctx.config`), `PluginSummary` (an entry of
  *   `ctx.config.plugins`), `PluginEmailSettings` (`ctx.config.email`),
- *   `PluginUserService`, `PluginMediaService`, `PluginEmailService`,
- *   `PluginVersionsService` (the methods `ctx.services.users`, `media`,
- *   `email` and `versions` expose), `PluginCollectionTransaction` (what
- *   `ctx.services.collections.withTransaction` hands its work), and the
- *   version pins of `ctx.services.versions.pins`: `PluginVersionPins`,
- *   `PluginVersionPinHolder`, `PluginVersionPin`, `PluginPinOptions`,
- *   `PluginPinTransaction`, `VersionPinHolderDefinition` (what
- *   `registerHolder` takes) and `VersionRef` (the document a pin is on).
- *   `FrozenCopy`
+ *   `PluginUserService`, `PluginMediaService`, `PluginEmailService` (the
+ *   methods `ctx.services.users`, `media` and `email` expose) and
+ *   `PluginCollectionTransaction` (what
+ *   `ctx.services.collections.withTransaction` hands its work). `FrozenCopy`
  *   is the readonly-all-the-way-down type `PluginConfig` is built from, and
  *   `FrozenValue` the type of each of its properties, both exported so a
  *   plugin's declaration files can name them. See STABILITY.md.
@@ -783,8 +781,26 @@ export type {
   QueuedRecipientOutcome,
   QueuedEmailStanding,
   QueuedEmailStatus,
-  PluginVersionsService,
   PluginCollectionTransaction,
+} from "nextly";
+
+/**
+ * A document's history for a plugin: `ctx.services.versions` (`PluginVersionsService`: reading
+ * versions and content events, naming, restoring, discarding a working draft and recording a
+ * recovery point) and its version pins, `ctx.services.versions.pins` (`PluginVersionPins`,
+ * `PluginVersionPinHolder`, `PluginVersionPin`, `PluginPinOptions`, `PluginPinTransaction`,
+ * `VersionPinHolderDefinition`, what `registerHolder` takes, and `VersionRef`, the document a pin
+ * is on). Stable: `plugin-page-builder` depends on both, on every database. See STABILITY.md.
+ * With them, every type their methods take or return, so a plugin names each from here: the
+ * reads' options and rows (`VersionListOptions`, `VersionMeta`, `VersionRow`, `VersionStatus`,
+ * `PendingEditOrder`, `PendingEditCursor`), a recovery point's result (`AutosaveWriteResult`,
+ * `AutosaveSupersession`), a restore's (`RestoreVersionResult`), and the content events
+ * `listEvents` reads (`ContentEventSubject`, `SubjectEventsQuery`, `ContentEventRecord`).
+ *
+ * @public
+ */
+export type {
+  PluginVersionsService,
   PluginVersionPins,
   PluginVersionPinHolder,
   PluginVersionPin,
@@ -792,7 +808,66 @@ export type {
   PluginPinTransaction,
   VersionPinHolderDefinition,
   VersionRef,
+  VersionListOptions,
+  VersionMeta,
+  VersionRow,
+  VersionStatus,
+  PendingEditOrder,
+  PendingEditCursor,
+  AutosaveWriteResult,
+  AutosaveSupersession,
+  RestoreVersionResult,
+  ContentEventSubject,
+  SubjectEventsQuery,
+  ContentEventRecord,
 } from "nextly";
+
+/**
+ * @experimental Review state for the person or API key a plugin acts for:
+ * `ctx.services.workflows` (`PluginWorkflowsService`), reading a document's review state
+ * (`PluginWorkflowReview`), what waits for the caller (`PluginWorkflowWaitingQuery`,
+ * `PluginWorkflowWaitingPart`) and the definition of the workflow attached to a collection or
+ * Single (`PluginWorkflowDefinition`), and submitting for review (`PluginWorkflowSubmitInput`,
+ * `PluginWorkflowSeenPart`, `PluginWorkflowSubmitResult`), each document or entity named as
+ * `PluginWorkflowDocumentRef` or `PluginWorkflowEntityRef` names it. Each is read off the service's own signature, so the names
+ * here cannot drift from what the service takes and returns. Experimental until review through
+ * plugins is finished: its shape may still change.
+ */
+export type PluginWorkflowsService = PluginContext["services"]["workflows"];
+/** @experimental A collection or a Single, as `definitionOf` names it. */
+export type PluginWorkflowEntityRef = Parameters<
+  PluginWorkflowsService["definitionOf"]
+>[0];
+/** @experimental A document, as `reviewState` names it. */
+export type PluginWorkflowDocumentRef = Parameters<
+  PluginWorkflowsService["reviewState"]
+>[0]["document"];
+/** @experimental A workflow's stages and steps, as `definitionOf` tells them. */
+export type PluginWorkflowDefinition = NonNullable<
+  Awaited<ReturnType<PluginWorkflowsService["definitionOf"]>>["workflow"]
+>;
+/** @experimental A document's review state, part by part, as `reviewState` tells it. */
+export type PluginWorkflowReview = Awaited<
+  ReturnType<PluginWorkflowsService["reviewState"]>
+>;
+/** @experimental A page of what waits for the caller, as `waiting` takes it. */
+export type PluginWorkflowWaitingQuery = NonNullable<
+  Parameters<PluginWorkflowsService["waiting"]>[0]
+>;
+/** @experimental A part waiting for the caller, as `waiting` lists it. */
+export type PluginWorkflowWaitingPart = Awaited<
+  ReturnType<PluginWorkflowsService["waiting"]>
+>["items"][number];
+/** @experimental A submit for review, as `submit` takes it. */
+export type PluginWorkflowSubmitInput = Parameters<
+  PluginWorkflowsService["submit"]
+>[0];
+/** @experimental A part as the caller saw it, as a submit names it. */
+export type PluginWorkflowSeenPart = PluginWorkflowSubmitInput["seen"][number];
+/** @experimental What a submit moved and left, as `submit` tells it. */
+export type PluginWorkflowSubmitResult = Awaited<
+  ReturnType<PluginWorkflowsService["submit"]>
+>;
 
 /**
  * @experimental Read-only registry access to the app's Singles.
@@ -843,6 +918,21 @@ export type {
  *   still be reaching past the boundary that makes one possible.
  */
 export { getCachedNextly } from "nextly";
+
+/**
+ * @experimental Whether the request in hand is in Next's draft mode, as
+ *   Nextly's own content routes ask it: false outside a request (a page drawn
+ *   by a test or a script, or the CLI), and Next's own signals during a
+ *   prerender handed back to it rather than read as no.
+ *
+ *   For a plugin's server component that draws differently in the preview
+ *   pane. `next/headers` is imported inside the call, so a module using this
+ *   can be loaded by plain Node, which can't load `next/headers` itself.
+ *   Re-exported, so a plugin asks the same question core asks, through the
+ *   surface its compatibility is governed on; `@experimental` per the ladder
+ *   above.
+ */
+export { isDraftModeRequest } from "nextly/runtime";
 
 /**
  * @experimental Whether a failure means Nextly is unavailable (its start
@@ -1324,6 +1414,23 @@ export {
 } from "nextly";
 
 /**
+ * Resized copies of stored images, for a plugin showing an image at a known
+ * width: `ctx.services.media.copyOf(source, width)` answers a copy's address
+ * (`MediaCopy`), or `null` when the image is to be used as it is. Copies come
+ * only at `MEDIA_COPY_WIDTHS`, and any other width is served the nearest
+ * (`nearestMediaCopyWidth`), so a plugin can build `srcset` from the same
+ * list the server keeps.
+ * @experimental until a first-party plugin serves them on a deployed site.
+ */
+export {
+  MEDIA_COPY_WIDTHS,
+  nearestMediaCopyWidth,
+  type MediaCopy,
+  type MediaCopySource,
+  type MediaCopyWidth,
+} from "nextly";
+
+/**
  * Account lifecycle events — `user.created` and `user.deleted`, which core
  * emits after the change commits, with `{ userId }`.
  * @experimental `UserEvents`, `UserEventName`, `UserCreatedPayload`,
@@ -1339,8 +1446,9 @@ export {
 
 /**
  * Filter/action registry (D63) — `ctx.filters` / `ctx.actions` surface + seam types.
- * @experimental No first-party plugin contributes a filter/action through this
- *   surface yet (see STABILITY.md).
+ * @experimental The form builder contributes one: an `email.templateReferences`
+ *   handler reporting the notification rules that send a template (see
+ *   STABILITY.md).
  */
 export {
   FilterSeams,
@@ -1363,6 +1471,8 @@ export {
   type ListQueryWhere,
   type ListQueryFilterContext,
   type PublicAddressTemplateContext,
+  type EmailTemplateReference,
+  type EmailTemplateReferencesContext,
 } from "nextly";
 
 /**

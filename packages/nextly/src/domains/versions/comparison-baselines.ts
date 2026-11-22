@@ -17,12 +17,12 @@
  * German version is never English's "previous".
  *
  * @module domains/versions/comparison-baselines
- * @experimental
  */
 
 import { getService } from "../../di";
 import { NextlyError } from "../../errors";
 
+import { isComparisonBaselineName } from "./comparison-baseline-name";
 import {
   recordsServedContent,
   type RecordedVersionStatus,
@@ -87,8 +87,6 @@ export interface BaselineChoice {
 
 /**
  * A registered baseline.
- *
- * @experimental
  */
 export interface ComparisonBaseline {
   /** Its name in a comparison request (`?baseline=`): kebab-case, unique. */
@@ -122,8 +120,6 @@ export interface ComparisonBaseline {
   ): string | Promise<string>;
 }
 
-const BASELINE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-
 const registry = new Map<string, ComparisonBaseline>();
 
 /**
@@ -132,11 +128,10 @@ const registry = new Map<string, ComparisonBaseline>();
  * Refuses a name that is not kebab-case, and a name already taken: two
  * features answering one name differently would make a comparison mean
  * whichever registered last.
- *
- * @experimental
  */
 export function registerComparisonBaseline(baseline: ComparisonBaseline): void {
-  if (!BASELINE_NAME.test(baseline.name)) {
+  // The one grammar a baseline's name has, which the admin reads names by.
+  if (!isComparisonBaselineName(baseline.name)) {
     throw NextlyError.invalidInput({
       message: `Comparison baseline name "${baseline.name}" must be kebab-case, such as "since-approved".`,
       logContext: { name: baseline.name },
@@ -241,6 +236,10 @@ registerComparisonBaseline({
   label: "Previous version",
   resolve: ({ versions, target }) =>
     versions.find(v => v.versionNo < target)?.versionNo ?? null,
+  // Every reason here is a sentence about the document, never the baseline's
+  // name in quotes: a reader opened a comparison, and did not type the name.
+  unavailable: ({ target }) =>
+    `Version ${target} is the earliest version kept of this part of the document, so there is nothing before it to compare with.`,
 });
 
 registerComparisonBaseline({
@@ -249,10 +248,14 @@ registerComparisonBaseline({
   // Nothing is currently published in a part that has been withdrawn.
   resolve: ({ versions, live, lifecycle }) =>
     live ? (latestPublished(versions, lifecycle)?.versionNo ?? null) : null,
-  unavailable: ({ live, target }) =>
-    live
-      ? `Version ${target} has no "published" version to compare with.`
-      : "Nothing is published in this language now, so there is no published version to compare with.",
+  // `found` is the target itself when the version compared is what is
+  // published; otherwise nothing published is kept for the part.
+  unavailable: ({ live }, found) =>
+    !live
+      ? "Nothing is published in this language now, so there is no published version to compare with."
+      : found !== null
+        ? "This is the version that is published, so there is nothing else published to compare it with."
+        : "No published version of this part of the document is kept, so there is nothing published to compare with.",
 });
 
 registerComparisonBaseline({
@@ -260,6 +263,14 @@ registerComparisonBaseline({
   label: "Current draft",
   resolve: ({ versions, lifecycle }) =>
     currentDraft(versions, lifecycle)?.versionNo ?? null,
+  // `found` is the target itself when the version compared is the current
+  // draft. Without the lifecycle nothing is ever a draft.
+  unavailable: ({ lifecycle }, found) =>
+    !lifecycle
+      ? "This document keeps no drafts, so there is no current draft to compare with."
+      : found !== null
+        ? "This is the current draft, so there is no other draft to compare it with."
+        : "This part of the document has no draft saved since it was last published, so there is no current draft to compare with.",
 });
 
 registerComparisonBaseline({
@@ -303,6 +314,18 @@ registerComparisonBaseline({
       : "This is the version you last looked at, so nothing has changed since.",
 });
 
+/**
+ * The shared part's versions: every language's, each named as the shared part (null), since each
+ * language's version carries the fields every language shares. A comparison of the shared part
+ * resolves its pair over these, so its baselines read the shared part's own records (workflows'
+ * `approved:*` pin, the newest publish in any language) rather than one language's.
+ */
+export function sharedPartVersions(
+  versions: readonly PartVersion[]
+): PartVersion[] {
+  return versions.map(version => ({ ...version, locale: null }));
+}
+
 /** What a comparison request names, before its pair is resolved. */
 export interface ComparisonRequest {
   ref: VersionRef;
@@ -326,6 +349,14 @@ export interface ComparisonRequest {
   partIsLive: (part: string | null) => Promise<boolean>;
   /** Whether the document has the Draft/Published lifecycle. */
   lifecycle: boolean;
+  /**
+   * Asked of the target before any baseline is resolved, and of the version a
+   * baseline chose before the pair is returned or refused: a comparison whose
+   * versions span languages (the shared part's) is authorized for each
+   * version's own language, so a refusal never speaks about a language the
+   * caller may not read. Throws to refuse.
+   */
+  authorizeVersion?: (versionNo: number) => Promise<void>;
 }
 
 /** The pair a request resolves to, and the baseline that chose `from`. */
@@ -367,6 +398,7 @@ export async function resolveComparisonPair(
       logContext: { reason: "comparison-no-versions", part },
     });
   }
+  await request.authorizeVersion?.(target);
   const live = await request.partIsLive(part);
   const name =
     request.baseline ??
@@ -382,6 +414,9 @@ export async function resolveComparisonPair(
     lifecycle: request.lifecycle,
   };
   const choice = await chooseComparisonBaseline(name, context);
+  if (choice !== null && "versionNo" in choice) {
+    await request.authorizeVersion?.(choice.versionNo);
+  }
   if (choice !== null && "unavailable" in choice) {
     throw noBaseline(choice.unavailable);
   }
@@ -447,16 +482,21 @@ function defaultBaseline(
     : "previous";
 }
 
-/** Why a baseline has nothing to compare with, in its own words if it has them. */
+/**
+ * Why a baseline has nothing to compare with, in its own words if it has them,
+ * else by its label as a reader would say it, never by its name in a request.
+ */
 async function unavailableMessage(
   name: string,
   context: BaselineContext,
   found: BaselineChoice | null
 ): Promise<string> {
   const baseline = requireBaseline(name);
+  const label =
+    baseline.label.charAt(0).toLowerCase() + baseline.label.slice(1);
   return baseline.unavailable
     ? baseline.unavailable(narrowToPart(context), found)
-    : `Version ${context.target} has no "${name}" version to compare with.`;
+    : `Version ${context.target} has no version to compare with for ${label}.`;
 }
 
 /** The part a request compares: its target's own, or the one it names. */

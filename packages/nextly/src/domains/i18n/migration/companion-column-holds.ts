@@ -16,6 +16,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { columnHolds } from "../../schema/pipeline/diff/declared-size";
+import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { resolveLocalizedFieldNames } from "../classify-fields";
@@ -54,7 +55,9 @@ export function companionColumnsThatCannotHold(args: {
     const found = liveAndWanted(field, args);
     if (!found) return [];
     const { column, wanted } = found;
-    return columnHolds(column, wanted, { sizes: enforcesSizes(args.dialect) })
+    return columnHolds(column, wanted, {
+      sizes: enforcesSizes(args.dialect),
+    }) || zonedDateColumn(column, wanted, args.dialect)
       ? []
       : [cannotHold(field.name, column, wanted, args.surface, "new")];
   });
@@ -87,6 +90,55 @@ function liveAndWanted(
       nullable: true,
     },
   };
+}
+
+/**
+ * The type an earlier release gave a companion column whose type is now `wanted`, where it differs:
+ * on PostgreSQL a date field's column was `timestamp with time zone`, where it is now a plain
+ * `timestamp`, as the main table's is. Undefined where no earlier release spelled it otherwise.
+ */
+export function earlierCompanionColumnType(
+  wanted: string,
+  dialect: SupportedDialect
+): string | undefined {
+  return dialect === "postgresql" && normalizeType(wanted) === "timestamp"
+    ? "timestamp with time zone"
+    : undefined;
+}
+
+/**
+ * Whether `live` is a companion column as an earlier release spelled it
+ * (`earlierCompanionColumnType`). It holds the same instants, each read in the session's zone, so
+ * it is converted (`zonedDateColumns`) rather than judged as a column that cannot hold its field.
+ */
+function zonedDateColumn(
+  live: ColumnSpec,
+  wanted: ColumnSpec,
+  dialect: SupportedDialect
+): boolean {
+  const earlier = earlierCompanionColumnType(wanted.type, dialect);
+  return (
+    earlier !== undefined && normalizeType(live.type) === normalizeType(earlier)
+  );
+}
+
+/**
+ * The companion columns among `live` of translated date fields that an earlier release made with a
+ * time zone (`zonedDateColumn`), each to be converted to the field's own type.
+ */
+export function zonedDateColumns(args: {
+  fields: readonly CompanionFieldLike[];
+  live: readonly ColumnSpec[];
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+}): { column: string; type: string }[] {
+  if (args.dialect !== "postgresql") return [];
+  return args.fields.flatMap(field => {
+    const found = liveAndWanted(field, args);
+    return found && zonedDateColumn(found.column, found.wanted, args.dialect)
+      ? [{ column: found.column.name, type: found.wanted.type }]
+      : [];
+  });
 }
 
 /** What the code-first sync does with the columns of fields translated before the run. */
@@ -136,6 +188,8 @@ export function planColumnsTranslatedBefore(args: {
     if (!found) continue;
     const { column, wanted } = found;
     const asIs: ColumnSpec = { ...column, nullable: true };
+    // Converted by the reconcile, not judged (`zonedDateColumns`).
+    if (zonedDateColumn(asIs, wanted, args.dialect)) continue;
     if (columnHolds(asIs, wanted, { sizes })) continue;
     if (columnHolds(wanted, asIs, { sizes })) {
       plan.widen.push({ column: column.name, type: wanted.type });

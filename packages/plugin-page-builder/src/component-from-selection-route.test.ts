@@ -7,6 +7,7 @@
  * its two writes in one transaction.
  */
 import {
+  createBlockRegistry,
   applyOps,
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
@@ -26,6 +27,9 @@ import {
   DRY_RUN_COMPONENT_ID,
   type ComponentFromSelectionResult,
 } from "./library-contract";
+
+/** The site's block registry these tests read: it holds none. */
+const blocks = createBlockRegistry();
 
 function node(id: string, type = "core/box"): BlockNode {
   return { id, type, version: 1, props: {} };
@@ -75,6 +79,18 @@ function contextOver(
   const createEntry = vi.fn(
     (_slug: string, _data: Record<string, unknown>, _opts: unknown) => {
       journal.push("create");
+      return Promise.resolve({ item: { id: createdId } });
+    }
+  );
+  // A create made through core's copy of a stored page.
+  const createEntryFromSource = vi.fn(
+    (
+      _slug: string,
+      _data: Record<string, unknown>,
+      _source: unknown,
+      _opts: unknown
+    ) => {
+      journal.push("create-from-source");
       return Promise.resolve({ item: { id: createdId } });
     }
   );
@@ -131,6 +147,7 @@ function contextOver(
     services: {
       collections: {
         createEntry,
+        createEntryFromSource,
         withTransaction,
         createEntryInTransaction,
         updateEntryInTransaction,
@@ -142,6 +159,7 @@ function contextOver(
     ctx,
     journal,
     createEntry,
+    createEntryFromSource,
     createEntryInTransaction,
     updateEntryInTransaction,
   };
@@ -209,7 +227,7 @@ describe("a dry run", () => {
           fields,
         }),
         ctx,
-        { reads: readsOver(null) }
+        { blocks, reads: readsOver(null) }
       )
     );
 
@@ -238,7 +256,7 @@ describe("a dry run", () => {
         fields,
       }),
       ctx,
-      { reads: readsOver(threeBlocks) }
+      { blocks, reads: readsOver(threeBlocks) }
     );
 
     expect(journal).toEqual([]);
@@ -258,7 +276,7 @@ describe("in the editor's library mode", () => {
           fields,
         }),
         ctx,
-        { reads: readsOver(null) }
+        { blocks, reads: readsOver(null) }
       )
     );
 
@@ -294,7 +312,7 @@ describe("in the editor's library mode", () => {
           fields,
         }),
         ctx,
-        { reads: readsOver(null) }
+        { blocks, reads: readsOver(null) }
       )
     );
 
@@ -313,7 +331,7 @@ describe("in the editor's library mode", () => {
           fields,
         }),
         ctx,
-        { reads: readsOver(null) }
+        { blocks, reads: readsOver(null) }
       )
     );
 
@@ -346,7 +364,7 @@ describe("in the editor's library mode", () => {
         },
       }),
       ctx,
-      { reads: readsOver(null) }
+      { blocks, reads: readsOver(null) }
     );
 
     const stored = createEntry.mock.calls[0]?.[1]?.content as {
@@ -357,6 +375,77 @@ describe("in the editor's library mode", () => {
     expect(stored.exposed[0]?.id).toBe("headline");
     expect(stored.exposed[0]?.nodeId).toBe(stored.nodes[0]?.id);
     expect(stored.exposed[0]?.nodeId).not.toBe("h");
+  });
+});
+
+describe("a library request naming its stored page", () => {
+  it("creates through core's copy of that page, as the caller", async () => {
+    const { ctx, createEntry, createEntryFromSource } = contextOver();
+
+    await componentFromSelection(
+      request({
+        action: "convert",
+        document: threeBlocks,
+        page: { collection: "pages", id: "page-1", field: "body" },
+        selectedIds: ["b"],
+        fields,
+      }),
+      ctx,
+      { blocks }
+    );
+
+    expect(createEntry).not.toHaveBeenCalled();
+    const [slug, , source, opts] = createEntryFromSource.mock.calls[0] ?? [];
+    expect(slug).toBe("components");
+    expect(source).toEqual({
+      collection: "pages",
+      id: "page-1",
+      field: "body",
+    });
+    expect(opts).toMatchObject({ as: "user" });
+    expect(opts).not.toHaveProperty("locale");
+  });
+
+  it("reads the page in the language the request names", async () => {
+    const { ctx, createEntryFromSource } = contextOver();
+
+    await componentFromSelection(
+      request({
+        action: "convert",
+        document: threeBlocks,
+        page: { collection: "pages", id: "page-1", locale: "de" },
+        selectedIds: ["b"],
+        fields,
+      }),
+      ctx,
+      { blocks }
+    );
+
+    const [, , source, opts] = createEntryFromSource.mock.calls[0] ?? [];
+    expect(source).toEqual({
+      collection: "pages",
+      id: "page-1",
+      field: "content",
+    });
+    expect(opts).toMatchObject({ as: "user", locale: "de" });
+  });
+
+  it("creates as before where it names none", async () => {
+    const { ctx, createEntry, createEntryFromSource } = contextOver();
+
+    await componentFromSelection(
+      request({
+        action: "convert",
+        document: threeBlocks,
+        selectedIds: ["b"],
+        fields,
+      }),
+      ctx,
+      { blocks }
+    );
+
+    expect(createEntry).toHaveBeenCalledTimes(1);
+    expect(createEntryFromSource).not.toHaveBeenCalled();
   });
 });
 
@@ -373,7 +462,7 @@ describe("who may run it", () => {
           fields,
         }),
         ctx,
-        { reads: readsOver(null) }
+        { blocks, reads: readsOver(null) }
       )
     );
 
@@ -394,7 +483,7 @@ describe("who may run it", () => {
         fields,
       }),
       ctx,
-      { reads: readsOver(null) }
+      { blocks, reads: readsOver(null) }
     );
 
     expect(createEntry).toHaveBeenCalledTimes(1);
@@ -412,6 +501,7 @@ describe("who may run it", () => {
       }),
       ctx,
       {
+        blocks,
         reads: readsOver(null),
         store: { collection: "components", field: "content" },
       }
@@ -433,6 +523,7 @@ describe("who may run it", () => {
         }),
         ctx,
         {
+          blocks,
           reads: readsOver(null),
           store: { collection: "site_blocks", field: "body" },
         }
@@ -444,7 +535,9 @@ describe("who may run it", () => {
   });
 
   it("saves from a stored page the caller may read but not update", async () => {
-    const { ctx, createEntry } = contextOver({ grants: { update: false } });
+    const { ctx, createEntry, createEntryFromSource } = contextOver({
+      grants: { update: false },
+    });
 
     await componentFromSelection(
       request({
@@ -455,10 +548,17 @@ describe("who may run it", () => {
         fields,
       }),
       ctx,
-      { reads: readsOver(threeBlocks) }
+      { blocks, reads: readsOver(threeBlocks) }
     );
 
-    expect(createEntry).toHaveBeenCalledTimes(1);
+    // Made through core's copy of the page it was read from.
+    expect(createEntry).not.toHaveBeenCalled();
+    expect(createEntryFromSource).toHaveBeenCalledTimes(1);
+    expect(createEntryFromSource.mock.calls[0]?.[2]).toEqual({
+      collection: "pages",
+      id: "page-1",
+      field: "content",
+    });
   });
 
   it("refuses a convert whose page's definitions could not all be read", async () => {
@@ -477,7 +577,7 @@ describe("who may run it", () => {
           fields,
         }),
         ctx,
-        { reads }
+        { blocks, reads }
       )
     );
 
@@ -505,7 +605,7 @@ describe("who may run it", () => {
         fields,
       }),
       ctx,
-      { reads }
+      { blocks, reads }
     );
 
     expect(asked[0]).toMatchObject({ locale: "fr" });
@@ -527,7 +627,7 @@ describe("who may run it", () => {
           fields,
         }),
         ctx,
-        { reads: readsOver(threeBlocks) }
+        { blocks, reads: readsOver(threeBlocks) }
       )
     );
 
@@ -547,7 +647,7 @@ describe("who may run it", () => {
           fields,
         }),
         ctx,
-        { reads: readsOver(null) }
+        { blocks, reads: readsOver(null) }
       )
     );
 
@@ -575,7 +675,7 @@ describe("what it refuses", () => {
           fields,
         }),
         ctx,
-        { reads: readsOver(null) }
+        { blocks, reads: readsOver(null) }
       )
     );
 
@@ -601,7 +701,7 @@ describe("what it refuses", () => {
             fields,
           }),
           ctx,
-          { reads: readsOver(null, chain) }
+          { blocks, reads: readsOver(null, chain) }
         )
       ).catch(() => undefined);
       if (probe !== undefined) {
@@ -619,7 +719,7 @@ describe("what it refuses", () => {
           fields,
         }),
         ctx,
-        { reads: readsOver(null, definitions) }
+        { blocks, reads: readsOver(null, definitions) }
       )
     );
 
@@ -635,7 +735,7 @@ describe("what it refuses", () => {
       componentFromSelection(
         request({ action: "save-as", selectedIds: ["a"], fields }),
         ctx,
-        { reads: readsOver(null) }
+        { blocks, reads: readsOver(null) }
       )
     );
 
@@ -659,7 +759,7 @@ describe("in the API's stored mode", () => {
           fields,
         }),
         ctx,
-        { reads: readsOver(threeBlocks) }
+        { blocks, reads: readsOver(threeBlocks) }
       )
     );
 
@@ -694,7 +794,7 @@ describe("in the API's stored mode", () => {
         fields,
       }),
       ctx,
-      { reads: readsOver(threeBlocks, {}, ["7", "8"]) }
+      { blocks, reads: readsOver(threeBlocks, {}, ["7", "8"]) }
     );
     expect(updateEntryInTransaction.mock.calls[0]?.[3]).toMatchObject({
       _rev: "8",
@@ -714,7 +814,7 @@ describe("in the API's stored mode", () => {
           fields,
         }),
         ctx,
-        { reads: readsOver(threeBlocks) }
+        { blocks, reads: readsOver(threeBlocks) }
       )
     ).rejects.toThrow("the page refused the write");
     expect(journal).toEqual([
@@ -750,7 +850,7 @@ describe("in the API's stored mode", () => {
           fields,
         }),
         ctx,
-        { reads: changing }
+        { blocks, reads: changing }
       )
     );
 
@@ -772,6 +872,7 @@ describe("in the API's stored mode", () => {
       }),
       ctx,
       {
+        blocks,
         reads: readsOver(threeBlocks),
         reconcile: () => reconcile,
         directApi: () => ({}) as never,

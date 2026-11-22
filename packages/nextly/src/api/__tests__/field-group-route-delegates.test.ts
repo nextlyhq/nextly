@@ -75,7 +75,12 @@ describe("the field-group create route", () => {
     // Stated as well as the positive, because the defect was not that the row went unwritten: it
     // was that the row was written ALONE. A route that called both would look correct here.
     expect(registerComponent).not.toHaveBeenCalled();
-    expect(createFieldGroup.mock.calls[0]?.[0]?.tableName).toBe("comp_hero");
+    // The route names no table: the service names it inside its exclusion, under the names the
+    // site's storage is on, so a group created after the storage migration starts on `fg_`.
+    expect(createFieldGroup.mock.calls[0]?.[0]).toMatchObject({
+      slug: "hero",
+    });
+    expect(createFieldGroup.mock.calls[0]?.[0]?.tableName).toBeUndefined();
   });
 
   it("says so when the table could not be provisioned", async () => {

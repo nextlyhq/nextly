@@ -206,7 +206,10 @@ export function layersLockBreak(
         ? { lockedId: node.id, where: "within" }
         : aroundBreak(family, op.id);
     }
-    case "remove": {
+    // Turning a block into another type replaces it whole, so a lock on it,
+    // inside it or around it holds as it does for a delete.
+    case "remove":
+    case "turnInto": {
       const node = family.byId.get(op.id);
       if (node === undefined) return undefined;
       return withinBreak(node) ?? aroundBreak(family, op.id);

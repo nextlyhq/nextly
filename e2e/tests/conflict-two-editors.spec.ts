@@ -435,11 +435,15 @@ test.describe(
           const fetchFirst = (
             route: Parameters<Parameters<Page["route"]>[1]>[0]
           ) => route.fetch();
+          // Each read is fetched once, before A saves, and that answer is
+          // replayed for every later read of the same address. It is answered
+          // at once rather than held: the form makes some reads only after an
+          // earlier one answers, and a held first read would keep the rest
+          // from ever being made.
           await other.page.route(readPath, async route => {
             if (route.request().method() !== "GET") return route.fallback();
             const key = route.request().url();
             if (!before.has(key)) before.set(key, await fetchFirst(route));
-            await released;
             await route.fulfill({ response: before.get(key) });
           });
           // B's first claim too: it reaches the server only once A has left,

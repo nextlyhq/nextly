@@ -86,7 +86,7 @@ describe("a template's metadata, from the entry's content it draws", () => {
     return seen;
   }
 
-  it("is titled and described by the entry's own heading and text", async () => {
+  it("is described by the entry's own text, and never titled by its heading", async () => {
     const seen = await derivedFor({
       content: template,
       body: bodyOf(
@@ -105,9 +105,10 @@ describe("a template's metadata, from the entry's content it draws", () => {
       ),
     });
     expect(seen).toMatchObject({
-      title: "Writing alt text that helps",
       description: "Describe what the picture says.",
     });
+    // The page's title comes from its SEO title or its title pattern.
+    expect(seen).not.toHaveProperty("title");
   });
 
   it("has neither where the entry holds no content (the control)", async () => {

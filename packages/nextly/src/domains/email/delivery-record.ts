@@ -499,4 +499,97 @@ export interface EmailDeliveryInput {
    * every record of the send, when it carried one.
    */
   keyDigest?: string | null;
+  /** The queued email this was an attempt of, when it was one. */
+  queuedId?: string | null;
+  /**
+   * Where the provider came from: `stored` for a provider row, `code` for
+   * the site's configured one. Left out, it reads as not recorded.
+   */
+  providerOrigin?: ProviderSource;
+  /**
+   * Which version of its template was sent, or `none` for a send without
+   * one. Left out, the record says the version was not recorded.
+   */
+  templateVersion?: DeliveryTemplateVersion;
+  /** The provider's structured answer, for a failed recipient. */
+  failure?: DeliveryFailure | null;
+}
+
+/**
+ * Which version of a template a delivery was sent from: its owner (`core`,
+ * `plugin:<name>`, `site`, or `code` for the site's code version), whether
+ * the site had overridden it, and a digest of the version as saved, never
+ * its content. `none` for a send without a template.
+ */
+export type DeliveryTemplateVersion =
+  | {
+      owner: string;
+      overridden: boolean;
+      digest: string | null;
+      /** A test of the editor's unsaved fields, no saved version. */
+      draft?: true;
+    }
+  | "none";
+
+/** The stored digest of a draft test send, which no saved version has. */
+export const DRAFT_TEMPLATE_DIGEST = "draft";
+
+/**
+ * A failure as the delivery log keeps it: whether a retry can help
+ * (`retryable`), the provider refused it (`refused`), or no definite answer
+ * came back (`unknown`), and the provider's status where it gave one.
+ */
+export interface DeliveryFailure {
+  kind: DeliveryFailureKind;
+  status?: number;
+}
+
+export type DeliveryFailureKind = "retryable" | "refused" | "unknown";
+
+/** Where a send's provider came from, as a delivery records it. */
+export type ProviderSource = "stored" | "code";
+
+/** The delivery log's form of a send's `failure`. */
+export function deliveryFailureOf(failure: {
+  retryable: boolean;
+  status?: number;
+  unknown?: true;
+}): DeliveryFailure {
+  return {
+    kind: failure.unknown
+      ? "unknown"
+      : failure.retryable
+        ? "retryable"
+        : "refused",
+    ...(failure.status !== undefined ? { status: failure.status } : {}),
+  };
+}
+
+/** The stored columns of a template version, or of none recorded. */
+export function templateVersionColumns(
+  version: DeliveryTemplateVersion | undefined
+): {
+  templateOwner: string | null;
+  templateOverridden: boolean | null;
+  templateDigest: string | null;
+} {
+  if (version === undefined) {
+    return {
+      templateOwner: null,
+      templateOverridden: null,
+      templateDigest: null,
+    };
+  }
+  if (version === "none") {
+    return {
+      templateOwner: "none",
+      templateOverridden: null,
+      templateDigest: null,
+    };
+  }
+  return {
+    templateOwner: version.owner,
+    templateOverridden: version.overridden,
+    templateDigest: version.draft ? DRAFT_TEMPLATE_DIGEST : version.digest,
+  };
 }

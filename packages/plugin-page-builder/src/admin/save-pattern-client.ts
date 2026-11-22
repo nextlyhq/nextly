@@ -40,6 +40,7 @@ import {
   LIBRARY_ROUTE_PATH,
   PAGE_BUILDER_PLUGIN_NAME,
   SAVE_PATTERN_ROUTE_PATH,
+  type CopySourceAddress,
   type SavePatternFields,
   type SavePatternRequest,
   type SavePatternResponse,
@@ -65,7 +66,12 @@ export interface SavePatternWriter {
   readonly save: (
     document: BlockDocument,
     selectedIds: readonly string[],
-    fields: SavePatternFields
+    fields: SavePatternFields,
+    /**
+     * The stored entry the document is, where it is one: the server reads it
+     * as the author, and the custom CSS it already holds is no change.
+     */
+    source?: CopySourceAddress
   ) => Promise<SavePatternResponse | undefined>;
   /** Whether a save is in flight. */
   readonly saving: boolean;
@@ -85,7 +91,7 @@ export interface SavePatternWriter {
  * is nothing to read. Said in the author's terms rather than the network's,
  * because "Failed to fetch" describes the program rather than what to do.
  */
-const UNEXPLAINED = "The pattern could not be saved. Try again.";
+const UNEXPLAINED = "The section could not be saved. Try again.";
 
 /**
  * What to show an author for a failed save.
@@ -139,8 +145,16 @@ export function useSavePattern(): SavePatternWriter {
     async (
       document: BlockDocument,
       selectedIds: readonly string[],
-      fields: SavePatternFields
-    ) => await write({ document, selectedIds, fields }),
+      fields: SavePatternFields,
+      source?: CopySourceAddress
+    ) =>
+      await write({
+        document,
+        selectedIds,
+        fields,
+        // The stored entry the document is, so CSS it holds is no change.
+        ...(source === undefined ? {} : { source }),
+      }),
     [write]
   );
 

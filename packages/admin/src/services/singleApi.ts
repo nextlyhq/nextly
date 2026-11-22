@@ -32,11 +32,18 @@ import type {
   PublishAllLanguageOutcome,
   PublishAllPreview,
 } from "./publishAllPreview";
-import type {
-  FieldResolution,
-  SchemaApplyResponse,
-  SchemaPreviewResponse,
-  SchemaRenameResolution,
+import {
+  publishPartsBody,
+  type PublishPartsChoice,
+  type PublishPartsDirection,
+  type PublishPartsResult,
+} from "./publishParts";
+import {
+  acknowledgedConversionsBody,
+  type FieldResolution,
+  type SchemaApplyResponse,
+  type SchemaPreviewResponse,
+  type SchemaRenameResolution,
 } from "./schemaApi";
 
 /**
@@ -112,7 +119,8 @@ type SingleApiType = {
   readonly previewSchemaChanges: (
     slug: string,
     fields: unknown[],
-    localized?: boolean
+    localized?: boolean,
+    status?: boolean
   ) => Promise<SchemaPreviewResponse>;
   readonly applySchemaChanges: (
     slug: string,
@@ -120,7 +128,9 @@ type SingleApiType = {
     schemaVersion: number,
     resolutions?: Record<string, FieldResolution>,
     renameResolutions?: SchemaRenameResolution[],
-    localized?: boolean
+    localized?: boolean,
+    status?: boolean,
+    acknowledgedConversions?: readonly string[]
   ) => Promise<SchemaApplyResponse>;
   readonly remove: (slug: string) => Promise<{ message: string }>;
   readonly getDocument: (
@@ -158,6 +168,12 @@ type SingleApiType = {
   readonly previewPublishAllLocales: (
     slug: string
   ) => Promise<PublishAllPreview>;
+  /** @experimental Until publishing per language is complete. */
+  readonly publishParts: (
+    slug: string,
+    direction: PublishPartsDirection,
+    choice: PublishPartsChoice
+  ) => Promise<PublishPartsResult>;
 };
 
 /**
@@ -245,11 +261,19 @@ export const singleApi: SingleApiType = {
     // i18n: mirrors schemaApi.preview — the preview collects the resolutions
     // the apply runs with, so both have to diff against the same localization
     // state or the apply can need a prompt the preview never showed.
-    localized?: boolean
+    localized?: boolean,
+    // The pending Draft/Published toggle, so a field taking one of the lifecycle's own names is
+    // refused when the same save turns the lifecycle on. Judged with, never applied: the settings
+    // save that follows the fields sets it. Undefined leaves the stored flag alone in charge.
+    status?: boolean
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
       `/singles/schema/${slug}/preview`,
-      { fields, ...(localized !== undefined ? { localized } : {}) }
+      {
+        fields,
+        ...(localized !== undefined ? { localized } : {}),
+        ...(status !== undefined ? { status } : {}),
+      }
     );
   },
 
@@ -266,7 +290,11 @@ export const singleApi: SingleApiType = {
     // i18n: the current Internationalization toggle, so an apply that flips i18n AND changes
     // fields provisions the companion in the same request instead of reading a stale registry
     // flag. Undefined leaves the persisted value untouched.
-    localized?: boolean
+    localized?: boolean,
+    // The pending Draft/Published toggle, judged with as the preview is (see above).
+    status?: boolean,
+    // The keys of the conversions the review listed and its Save confirmed.
+    acknowledgedConversions?: readonly string[]
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -277,6 +305,8 @@ export const singleApi: SingleApiType = {
       resolutions,
       renameResolutions,
       ...(localized !== undefined ? { localized } : {}),
+      ...(status !== undefined ? { status } : {}),
+      ...acknowledgedConversionsBody(acknowledgedConversions),
     });
     return {
       success: true,
@@ -410,6 +440,23 @@ export const singleApi: SingleApiType = {
    */
   previewPublishAllLocales: async (slug: string): Promise<PublishAllPreview> =>
     protectedApi.get<PublishAllPreview>(`/singles/${slug}/publish-all`),
+
+  /**
+   * Publish or unpublish the parts of a Single a person chose: some of its languages, and
+   * separately its shared fields. With `describe`, say what that would do and change nothing.
+   * Hits `POST /api/singles/{slug}/publish` (or `/unpublish`).
+   */
+  publishParts: async (
+    slug: string,
+    direction: PublishPartsDirection,
+    choice: PublishPartsChoice
+  ): Promise<PublishPartsResult> => {
+    const result = await protectedApi.post<{
+      message: string;
+      item: PublishPartsResult;
+    }>(`/singles/${slug}/${direction}`, publishPartsBody(choice));
+    return result.item;
+  },
 } as const;
 
 // ============================================================

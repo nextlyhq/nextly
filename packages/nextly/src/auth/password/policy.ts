@@ -20,6 +20,7 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 import { COMMON_PASSWORDS } from "../../plugins/security/common-passwords";
+import { processGlobal } from "../../shared/process-global";
 
 /**
  * Password hasher interface for authentication.
@@ -65,7 +66,10 @@ export const MAX_MIN_PASSWORD_LENGTH = 15;
 export const MAX_PASSWORD_LENGTH_CHARS = 128;
 export const DEFAULT_DIGESTER_REACH_BYTES = 72;
 
-let activeMinPasswordLength = DEFAULT_MIN_PASSWORD_LENGTH;
+/** One per process: see {@link processGlobal}. */
+const active = processGlobal("passwordPolicy", () => ({
+  minLength: DEFAULT_MIN_PASSWORD_LENGTH,
+}));
 
 // Pre-compute lowercased, NFC-normalized common password set for fast O(1) lookup.
 const commonPasswordsSet = new Set<string>(
@@ -73,15 +77,15 @@ const commonPasswordsSet = new Set<string>(
 );
 
 export function getMinPasswordLength(): number {
-  return activeMinPasswordLength;
+  return active.minLength;
 }
 
 export function setMinPasswordLength(length: number): void {
-  activeMinPasswordLength = length;
+  active.minLength = length;
 }
 
 export function resetPasswordPolicy(): void {
-  activeMinPasswordLength = DEFAULT_MIN_PASSWORD_LENGTH;
+  active.minLength = DEFAULT_MIN_PASSWORD_LENGTH;
 }
 
 /**

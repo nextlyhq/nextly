@@ -23,6 +23,7 @@ import { diffSnapshots } from "../../diff/diff";
 import { introspectLiveSnapshot } from "../../diff/introspect-live";
 import type { TableSpec } from "../../diff/types";
 import { generateSQL, generateStatements } from "../index";
+import { sqliteTableRebuildStatements } from "../sqlite-rebuild";
 
 const ORDERS = "fx__orders";
 
@@ -669,5 +670,80 @@ describe("Schema Builder tables and the foreign keys their specs cannot track", 
     ).toEqual({
       sql: expect.stringContaining("ck_dc_fx_given_later_contributed"),
     });
+  });
+});
+
+// A table an older release made declares a UNIQUE inline, which no spec describes. The rebuild
+// keeps one it is told to keep (`keptUnique`) and leaves out one it is told was left out on purpose
+// (`leftOutUnique`); one it is told nothing of, it refuses to lose.
+describe("an inline UNIQUE the rebuild keeps or leaves out", () => {
+  const CARDS: TableSpec = {
+    name: "fx__cards",
+    columns: [
+      { name: "id", type: "text", nullable: false, primaryKey: true },
+      { name: "code", type: "text", nullable: true },
+    ],
+    indexes: [],
+    checks: [],
+    foreignKeys: [],
+  };
+
+  async function rebuild(
+    options: Parameters<typeof sqliteTableRebuildStatements>[2]
+  ): Promise<void> {
+    await executeTransaction(adapter, async tx => {
+      for (const statement of sqliteTableRebuildStatements(
+        CARDS,
+        [],
+        options
+      )) {
+        await tx.execute(statement);
+      }
+    });
+  }
+
+  const inlineUniques = () =>
+    db
+      .prepare(
+        "SELECT name FROM pragma_index_list('fx__cards') WHERE origin = 'u'"
+      )
+      .all();
+
+  async function cards(): Promise<void> {
+    db = await databaseWith([]);
+    db.exec(`
+      CREATE TABLE fx__cards (id TEXT PRIMARY KEY, code TEXT UNIQUE);
+      INSERT INTO fx__cards VALUES ('c1', 'A');
+    `);
+  }
+
+  it("refuses to lose one it is told nothing of", async () => {
+    await cards();
+
+    await expect(rebuild({})).rejects.toThrow(
+      /would drop indexes its schema does not track/
+    );
+    expect(inlineUniques()).toHaveLength(1);
+  });
+
+  it("keeps one it is told to keep", async () => {
+    await cards();
+
+    await rebuild({ keptUnique: [["code"]] });
+
+    expect(inlineUniques()).toHaveLength(1);
+  });
+
+  it("leaves out one it is told was left out on purpose, keeping the rows", async () => {
+    await cards();
+
+    await rebuild({ leftOutUnique: [["code"]] });
+
+    expect(inlineUniques()).toEqual([]);
+    db.prepare("INSERT INTO fx__cards VALUES ('c2', 'A')").run();
+    expect(db.prepare("SELECT id FROM fx__cards ORDER BY id").all()).toEqual([
+      { id: "c1" },
+      { id: "c2" },
+    ]);
   });
 });

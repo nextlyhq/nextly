@@ -34,6 +34,12 @@ import { UTApi } from "uploadthing/server";
 // Adapter Implementation
 // ============================================================
 
+/**
+ * Stores media on UploadThing. It keeps no files made from a stored one, such
+ * as resized copies of an image: UploadThing chooses every file's key, so a
+ * key derived from the original's cannot be written, and core serves the
+ * original wherever a copy would go.
+ */
 export class UploadthingStorageAdapter extends BaseStorageAdapter {
   private readonly utapi: UTApi;
 

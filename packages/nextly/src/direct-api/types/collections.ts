@@ -9,6 +9,7 @@
 import type { TimeseriesInterval } from "../../domains/collections/query/timeseries-interval";
 import type { PartOutcome } from "../../domains/collections/services/publish-parts";
 import type { FieldRewriteValue } from "../../domains/versions/field-rewrite";
+import type { RowPartReview } from "../../domains/workflows/row-review-states";
 import type { HookWarning } from "../../hooks/side-effect-warnings";
 
 import type {
@@ -19,6 +20,19 @@ import type {
   SingleSlug,
   WhereFilter,
 } from "./shared";
+
+/**
+ * What a row of a list read carries beside its fields when the read asks for its review state
+ * (`reviewState: true`): each part where it stands in the collection's workflow. Absent where the
+ * read did not ask, for a visitor, and for a collection no workflow holds. `find`'s row type is
+ * left as it is, so existing callers keep compiling; a caller that asks for the review state
+ * intersects its rows with this (`RowFromCollectionSlug<"posts"> & RowReviewState`).
+ *
+ * @experimental
+ */
+export interface RowReviewState {
+  _review?: { parts: RowPartReview[] };
+}
 
 /**
  * Arguments for finding multiple documents in a collection.
@@ -44,6 +58,29 @@ import type {
 export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
   extends DirectAPIConfig,
     RunAsPrincipal {
+  /**
+   * Attach `_sources`: for each translatable field, the language its value
+   * came from, its own or a fallback one; `null` where no language holds one.
+   *
+   * @default false
+   */
+  sourceLocales?: boolean;
+  /**
+   * Give each row its review state under `_review`: each part where it stands in the
+   * collection's workflow, as `workflows.reviewState` places it. Rows of a collection no
+   * workflow holds carry none.
+   *
+   * @experimental
+   */
+  reviewState?: boolean;
+
+  /**
+   * `"all"`: attach every language's values beside the read's own, under
+   * `_allLocales` (`{ field: { code: value } }`). Every field keeps its own
+   * type. A public read holds published values only.
+   */
+  translations?: "all";
+
   /** Collection slug (required) */
   collection: TSlug;
 
@@ -219,6 +256,32 @@ export interface FindByIDArgs<TSlug extends CollectionSlug = CollectionSlug>
    * and a caller passing it before this field existed was silently ignored.
    */
   status?: "published" | "draft" | "all";
+
+  /**
+   * Whole-document fallback. A published read in a language the document is
+   * not published in answers not found; with this set it answers in the first
+   * language of the fallback chain the document is published in instead, and
+   * says which in `_locale`. Its relationships, components and field fallback
+   * are read in that language.
+   *
+   * @default false
+   */
+  wholeDocumentFallback?: boolean;
+
+  /**
+   * Attach `_sources`: for each translatable field, the language its value
+   * came from, its own or a fallback one; `null` where no language holds one.
+   *
+   * @default false
+   */
+  sourceLocales?: boolean;
+
+  /**
+   * `"all"`: attach every language's values beside the read's own, under
+   * `_allLocales` (`{ field: { code: value } }`). Every field keeps its own
+   * type. A public read holds published values only.
+   */
+  translations?: "all";
 
   /**
    * Specific fields to include/exclude.
@@ -645,6 +708,35 @@ export interface DuplicateArgs<TSlug extends CollectionSlug = CollectionSlug>
 }
 
 /**
+ * @experimental Arguments for `createFromSource()`: create a document that
+ * copies a stored one, read as the caller first.
+ */
+export interface CreateFromSourceArgs<
+  TSlug extends CollectionSlug = CollectionSlug,
+> extends DirectAPIConfig,
+    RunAsPrincipal {
+  /** Collection slug the new document is created in (required) */
+  collection: TSlug;
+
+  /** Document data (required) */
+  data: Record<string, unknown>;
+
+  /**
+   * The stored document the new one copies, read as the caller before
+   * anything is created. `field` names the source field the copied value
+   * came from, where it differs from the field it is written to.
+   */
+  source: { collection: string; id: string; field?: string };
+
+  /**
+   * Skip cache revalidation for this write (the outbox drain still runs).
+   *
+   * @default false
+   */
+  disableRevalidate?: boolean;
+}
+
+/**
  * Result of a count operation.
  *
  * the wire API's `respondCount` envelope both speak the same key.
@@ -754,6 +846,11 @@ export interface PublishArgs<TSlug extends CollectionSlug = CollectionSlug>
    * `"7.es:3"` from a read of Spanish), or `_overwrite: true`.
    */
   data?: { _rev?: string; _overwrite?: boolean };
+  /**
+   * A publish made without review, and why: told to the publish gate, which decides whether this
+   * caller may (trusted code may, with a reason), and never stored. @experimental
+   */
+  withoutReview?: { reason: string };
 }
 
 /**

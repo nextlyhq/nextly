@@ -1,6 +1,10 @@
 import { test } from "vitest";
 
-import { migrateDocument } from "./migration";
+import { byteCapRefusal } from "./byte-cap";
+import { keptJsonBytes } from "./kept-sizes";
+import { DEFAULT_LIMITS, editorForestShape } from "./limits";
+import { migrateDocument } from "./migrate-document";
+import { applyOp } from "./ops";
 import {
   SCALE_BREAKPOINTS,
   fiveThousandNodePage,
@@ -62,5 +66,63 @@ test("migrate", async ({ bench }) => {
     bench("4000 nodes, every node one version behind", () => {
       migrateDocument(staleFourThousand, source);
     })
+  );
+});
+
+// One whole editor edit (`applyOp`), on a 4-block and a 150-block page. Each
+// document's own size is kept first, as an editor holding it already has. This
+// is the cap check plus the op layer's per-edit validity pass, which still
+// reads every node; "the cap check alone" below is the part kept sizes make
+// independent of the page's size.
+const fourBlocks = scaleDocument({ nodes: 4 });
+const longPage = scaleDocument({ nodes: 150 });
+keptJsonBytes(fourBlocks);
+keptJsonBytes(longPage);
+let edit = 0;
+const updateFirst = (document: typeof longPage) =>
+  applyOp(document, {
+    kind: "update",
+    id: "n0",
+    patch: { props: { text: `edit ${String((edit += 1))}` } },
+  });
+
+test("one whole edit", async ({ bench }) => {
+  await bench.compare(
+    bench("4 blocks", () => {
+      updateFirst(fourBlocks);
+    }),
+    bench("150 blocks", () => {
+      updateFirst(longPage);
+    })
+  );
+});
+
+// The cap check alone: a fresh edit each run (the first block's text, the rest
+// shared), then the node count and depth and the byte cap it must fit, as
+// `assertFitsCaps` asks them. The edited path is measured; the rest is kept.
+const freshEdit = (document: typeof longPage) => {
+  const [first, ...rest] = document.nodes;
+  if (first === undefined) return document;
+  return {
+    ...document,
+    nodes: [
+      { ...first, props: { text: `edit ${String((edit += 1))}` } },
+      ...rest,
+    ],
+  };
+};
+editorForestShape(fourBlocks.nodes);
+editorForestShape(longPage.nodes);
+
+const capCheck = (document: typeof longPage) => () => {
+  const result = freshEdit(document);
+  editorForestShape(result.nodes);
+  byteCapRefusal(document, result, DEFAULT_LIMITS.maxBytes, "update");
+};
+
+test("the cap check alone", async ({ bench }) => {
+  await bench.compare(
+    bench("4 blocks", capCheck(fourBlocks)),
+    bench("150 blocks", capCheck(longPage))
   );
 });

@@ -147,18 +147,23 @@ function rowsInWords(count: number): string {
 }
 
 /**
- * What a first run says when it writes the registry rows from the
- * configuration: how many it wrote, of how many the configuration declares,
- * and that they are kept as the registry baseline.
+ * The one notice a first run gives when it writes the registry rows from the
+ * configuration, because the newest snapshot predates recording settings and
+ * permissions: they are now recorded in the database but in no migration,
+ * and the next `migrate:create` writes the migration that captures them. With
+ * how many rows it wrote, of how many the configuration declares. One line,
+ * so a start's log holds it whole. Given once, since the record written in
+ * the same commit makes every later run an ordinary one.
  */
 export function configurationRowsMessage(
   written: number,
   declared: number
 ): string {
   return (
-    `First run on this release: ${rowsInWords(written)} written from the configuration ` +
-    `(${declared} declared, the rest already matched), and kept with the database's ` +
-    `registry record as its baseline. From now on the registry rows come from the migrations.`
+    `First run on this release: the site's current settings and permissions are now recorded in ` +
+    `the database (${rowsInWords(written)} written from the configuration, ${declared} declared, ` +
+    `the rest already matched), but in no migration yet. The next \`nextly migrate:create\` ` +
+    `writes the migration that captures them.`
   );
 }
 

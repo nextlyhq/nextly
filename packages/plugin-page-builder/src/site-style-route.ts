@@ -59,7 +59,6 @@ import {
   SITE_STYLE_SLUG,
   type SiteStyleReader,
 } from "./site-style-storage";
-import { bootedSpacingModeReader } from "./spacing-mode-booted";
 
 /**
  * What the route reads of the plugin route context: the caller, the plugin's
@@ -233,40 +232,12 @@ export function siteLocales(config: LocalizedConfig): string[] {
 }
 
 /**
- * Where the site's block documents may live: every collection and live Single
- * holding a blocks field the builder opens, the Singles with the form paths of
- * those fields, and the site's configured languages. The survey this route
- * admits editors by, so a reader asking where blocks live gets the same
- * answer.
- */
-export async function blocksSurvey(
-  ctx: PageCollectionsContext &
-    Pick<SiteStyleRouteContext, "services"> & {
-      readonly config: SiteStyleRouteContext["config"] & LocalizedConfig;
-    }
-): Promise<{
-  collections: string[];
-  singles: { slug: string; paths: readonly string[] }[];
-  locales: string[];
-}> {
-  return {
-    // The site's languages, since a Single's document may exist in one of
-    // them alone.
-    locales: siteLocales(ctx.config),
-    collections: (await collectionsTheBuilderOpens(ctx)).map(type => type.slug),
-    singles: (await singlesTheBuilderOpens(ctx)).map(({ slug, paths }) => ({
-      slug,
-      paths,
-    })),
-  };
-}
-
-/**
  * Whether this caller may read the stored site style through the editor.
  *
- * Asked in order of how often it answers: Design's read, then the plugin's
- * own pages and components, which need no listing; only a caller refused all
- * of those has the registry walked for the other documents the builder opens.
+ * Asked in order of how often it answers: Design's read and Design's
+ * update, then the plugin's own pages and components, which need no listing;
+ * only a caller refused all of those has the registry walked for the other
+ * documents the builder opens.
  * Each question stops at the first yes.
  */
 export async function mayReadSiteStyle(
@@ -279,6 +250,9 @@ export async function mayReadSiteStyle(
   if (caller === null) return false;
   const style = ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG;
   if (await caller.can("read", style)) return true;
+  // Whoever may change the site's design may read what they change: the
+  // admin's Fonts page admits on that permission and reads through here.
+  if (await caller.can("update", style)) return true;
   const known = [
     ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
     store.collection ??
@@ -327,9 +301,6 @@ export async function readSiteStyleForEditor(
     slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
     // Past the Single's own permission: the caller was admitted above.
     overrideAccess: true,
-    // The model of the booted instance when the route's reader has no plugin
-    // services; this route is server-only, so it may import that read.
-    bootedReader: bootedSpacingModeReader,
   });
   // The version the same read gave, so the editor's saves made from this
   // answer are refused rather than written over a save made in between.

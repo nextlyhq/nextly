@@ -2,28 +2,32 @@
 
 exports[`a command that ends with an error > adds the context and stack under --verbose, below the same plain message > with --verbose 1`] = `
 "✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
-  Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
-  Next: Fix line 3 of \`nextly.config.ts\`, then run the command again.
+  Why:  nextly.config.ts:3:21: Expected "}" but found "fields"
+            { slug: "…" fields: [] },
+  Next: Fix the code shown above, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)
 
-  Context: {"code":"INVALID_INPUT","configPath":"<project>/nextly.config.ts","reason":"load-error","cause":"Build failed with 1 error:\\nnextly.config.ts:3:20: ERROR: Expected \\"}\\" but found \\"fields\\""}
+  Context: {"code":"INVALID_INPUT","configPath":"<project>/nextly.config.ts","reason":"load-error","cause":"Build failed:\\nnextly.config.ts:3:21: Expected \\"}\\" but found \\"fields\\"\\n    { slug: \\"…\\" fields: [] },"}
   Stack:
-    Error: Build failed with 1 error:
-    nextly.config.ts:3:20: ERROR: Expected "}" but found "fields"
+    Error: Build failed:
+    nextly.config.ts:3:21: Expected "}" but found "fields"
+    { slug: "…" fields: [] },
     at <frames>"
 `;
 
 exports[`a command that ends with an error > adds the context and stack under --verbose, below the same plain message > without --verbose 1`] = `
 "✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
-  Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
-  Next: Fix line 3 of \`nextly.config.ts\`, then run the command again.
+  Why:  nextly.config.ts:3:21: Expected "}" but found "fields"
+            { slug: "…" fields: [] },
+  Next: Fix the code shown above, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
 `;
 
 exports[`a command that ends with an error > names a configuration's syntax error once, with its file, line and column 1`] = `
 "✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
-  Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
-  Next: Fix line 3 of \`nextly.config.ts\`, then run the command again.
+  Why:  nextly.config.ts:3:21: Expected "}" but found "fields"
+            { slug: "…" fields: [] },
+  Next: Fix the code shown above, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
 `;
 
@@ -91,6 +95,41 @@ exports[`each cause a documented code covers, as a command ends with it > PLUGIN
   Why:  The audit trail stores each entry's kind in a column of that width.
   Next: Shorten the audit kind to 64 characters or fewer.
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-resolution-error  (PLUGIN_RESOLUTION_ERROR)"
+`;
+
+exports[`each cause a documented code covers, as a command ends with it > PLUGIN_BEHIND_AFTER_CONSENT_REFUSED_ITS_MIGRATIONS 1`] = `
+"✗ The plugin "@acme/seo" expects schema version 3, and the database has 2, because this start did not apply its pending migrations.
+  Why:  Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive).
+        This would delete:
+        plugin:@acme/seo/20261020_120000_add_redirects:
+        - column seo_pages.summary (3 non-empty values)
+        Nothing was changed.
+  Next: To consent: start with NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary, or run "nextly migrate --accept-data-loss=seo_pages.summary".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-behind  (PLUGIN_SCHEMA_BEHIND)"
+`;
+
+exports[`each cause a documented code covers, as a command ends with it > PLUGIN_BEHIND_AFTER_CONSENT_REFUSED_WITH_A_TRIGGER_NAMED_LIKE_THE_CONSENT 1`] = `
+"✗ The plugin "@acme/seo" expects schema version 3, and the database has 2, because this start did not apply its pending migrations.
+  Why:  Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive).
+        This would delete:
+        plugin:@acme/seo/20261020_120000_add_redirects:
+        - column seo_pages.summary (3 non-empty values)
+        Nothing was changed.
+        This database has the DDL event trigger "audit. To consent: drop everything": it runs on schema changes, and Nextly cannot see what it does, so what it deletes is not listed.
+  Next: To consent: start with NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary, or run "nextly migrate --accept-data-loss=seo_pages.summary".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-behind  (PLUGIN_SCHEMA_BEHIND)"
+`;
+
+exports[`each cause a documented code covers, as a command ends with it > PLUGIN_BEHIND_AFTER_CONSENT_REFUSED_WITH_EVENT_TRIGGERS 1`] = `
+"✗ The plugin "@acme/seo" expects schema version 3, and the database has 2, because this start did not apply its pending migrations.
+  Why:  Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive).
+        This would delete:
+        plugin:@acme/seo/20261020_120000_add_redirects:
+        - column seo_pages.summary (3 non-empty values)
+        Nothing was changed.
+        This database has the DDL event trigger audit_ddl: it runs on schema changes, and Nextly cannot see what it does, so what it deletes is not listed.
+  Next: To consent: start with NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary, or run "nextly migrate --accept-data-loss=seo_pages.summary".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-behind  (PLUGIN_SCHEMA_BEHIND)"
 `;
 
 exports[`each cause a documented code covers, as a command ends with it > PLUGIN_CAPABILITY_ADDED_BY_SETUP 1`] = `
@@ -506,6 +545,13 @@ exports[`each code, as a command ends with it > BUILD_STRICT_WARNINGS 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/build-strict-warnings  (BUILD_STRICT_WARNINGS)"
 `;
 
+exports[`each code, as a command ends with it > BUILDER_DEFINITION_MISSING 1`] = `
+"✗ The newest migration snapshot records a Builder collection 'articles' that neither \`nextly.config.ts\` nor \`./ui-schema.json\` declares.
+  Why:  \`./ui-schema.json\` is part of the code: \`migrate:create\` reads the Builder's entities from it. Without them, a migration written now would drop each one's table and its content.
+  Next: Restore \`./ui-schema.json\` from version control and commit it with your migrations. To remove an entity, delete it in the Schema Builder, which writes the migration that drops it. Then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-definition-missing  (BUILDER_DEFINITION_MISSING)"
+`;
+
 exports[`each code, as a command ends with it > BUILDER_MIGRATION_SNAPSHOT_MISSING 1`] = `
 "✗ nextly migrate does not apply a file with a Schema Builder name that is not recognised as an earlier Builder's: 1761732000000_update_posts.sql, which has a statement on a table that is not its own entity's, or one that cannot be read.
   Why:  1761732000000_update_posts.sql was written by the Schema Builder and has no snapshot beside it (meta/1761732000000_update_posts.snapshot.json), so nothing says what the database should look like once it has run.
@@ -514,10 +560,31 @@ exports[`each code, as a command ends with it > BUILDER_MIGRATION_SNAPSHOT_MISSI
 `;
 
 exports[`each code, as a command ends with it > BUILDER_RELATION_TARGET_UNKNOWN 1`] = `
-"✗ A field in \`ui-schema.json\` relates to a collection that does not exist.
+"✗ A field in \`./ui-schema.json\` relates to a collection that does not exist.
   Why:  articles.author relates to unknown target 'authors'
-  Next: Point each field listed at a collection in \`nextly.config.ts\` or \`ui-schema.json\`, or create the collection it names, then run the command again.
+  Next: Point each field listed at a collection in \`nextly.config.ts\` or \`./ui-schema.json\`, or create the collection it names, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/builder-relation-target-unknown  (BUILDER_RELATION_TARGET_UNKNOWN)"
+`;
+
+exports[`each code, as a command ends with it > BUILDER_SAVE_EARLIER_LEFT 1`] = `
+"✗ An earlier Builder save stopped between its migration files (collection "posts"), and the rest of them have not run yet.
+  Why:  An earlier Builder save was left part-way and is not settled, and a save written over it would start from a state nothing has finished.
+  Next: Start the app in development (\`next dev\`): its start finishes the previous save. Then save again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-save-earlier-left  (BUILDER_SAVE_EARLIER_LEFT)"
+`;
+
+exports[`each code, as a command ends with it > BUILDER_SAVE_LEFT_PART_WAY 1`] = `
+"✗ A Builder save was left part-way, so the database does not match its migrations yet.
+  Why:  Left part-way: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio.
+  Next: To settle it, start the app in development (\`next dev\`) on this project: its start settles the save.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-save-left-part-way  (BUILDER_SAVE_LEFT_PART_WAY)"
+`;
+
+exports[`each code, as a command ends with it > BUILDER_SAVE_RECORD_UNREADABLE 1`] = `
+"✗ A Builder save of this collection was left part-way, and its record cannot be read.
+  Why:  Each Builder save records that it is in progress until its outcome is recorded, and what an earlier save left cannot be told from a record that cannot be read.
+  Next: To clear it, first check that no Builder save is running, then remove the one row "builder-save-in-progress:collection:posts" from the nextly_meta table; the next save then records its own.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-save-record-unreadable  (BUILDER_SAVE_RECORD_UNREADABLE)"
 `;
 
 exports[`each code, as a command ends with it > BUILDER_SLUG_COLLISION 1`] = `
@@ -545,7 +612,8 @@ exports[`each code, as a command ends with it > COMPONENT_MAP_OUT_OF_DATE 1`] = 
 
 exports[`each code, as a command ends with it > CONFIG_IMPORT_NOT_FOUND 1`] = `
 "✗ \`nextly.config.ts\` imports something that could not be found.
-  Why:  nextly.config.ts:2:22: Could not resolve "./collections/posts"
+  Why:  nextly.config.ts:2:23: Could not resolve "./collections/posts"
+        import { posts } from "…";
   Next: Correct the import's path, or install the package it names, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-import-not-found  (CONFIG_IMPORT_NOT_FOUND)"
 `;
@@ -571,6 +639,13 @@ exports[`each code, as a command ends with it > CONFIG_LOAD_FAILED 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/config-load-failed  (CONFIG_LOAD_FAILED)"
 `;
 
+exports[`each code, as a command ends with it > CONFIG_MISSING 1`] = `
+"✗ No Nextly configuration file was found in /home/you/app.
+  Why:  Looked for \`nextly.config.ts\`, \`nextly.config.mts\`, \`nextly.config.js\` or \`nextly.config.mjs\` in the project folder, \`src/\` and \`config/\`.
+  Next: Pass \`-c\` the path of your configuration file, or start a new project with \`npx create-nextly-app\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-missing  (CONFIG_MISSING)"
+`;
+
 exports[`each code, as a command ends with it > CONFIG_NOT_FOUND 1`] = `
 "✗ \`-c config/nextly.config.ts\` names a configuration file that does not exist.
   Why:  Nothing is at /home/you/app/config/nextly.config.ts.
@@ -580,8 +655,9 @@ exports[`each code, as a command ends with it > CONFIG_NOT_FOUND 1`] = `
 
 exports[`each code, as a command ends with it > CONFIG_SYNTAX_ERROR 1`] = `
 "✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
-  Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
-  Next: Fix line 3 of \`nextly.config.ts\`, then run the command again.
+  Why:  nextly.config.ts:3:21: Expected "}" but found "fields"
+            { slug: "…" fields: [] },
+  Next: Fix the code shown above, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
 `;
 
@@ -630,8 +706,8 @@ exports[`each code, as a command ends with it > CORE_TABLES_NOT_RECONCILED 1`] =
 
 exports[`each code, as a command ends with it > CREATE_BLOCKED_BY_LEFTOVER_TABLE 1`] = `
 "✗ Creating the Single "home" was refused.
-  Why:  "comp_hero" (2 rows) already exists and holds rows, but nothing registered describes them.
-  Next: Drop or rename those tables, then retry the create.
+  Why:  The shared field-group table "comp_hero" (2 rows) holds rows whose \`_parent_table\` is "single_home", which nothing registered owns.
+  Next: Delete the field-group rows "single_home" left in that table: those whose \`_parent_table\` is "single_home" and every row nested beneath them, keeping the table and other entities' rows, then retry the create.
   Docs: https://nextlyhq.com/docs/cli/errors/create-blocked-by-leftover-table  (CREATE_BLOCKED_BY_LEFTOVER_TABLE)"
 `;
 
@@ -666,11 +742,33 @@ exports[`each code, as a command ends with it > DATA_LOSS_DECLINED 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/data-loss-declined  (DATA_LOSS_DECLINED)"
 `;
 
+exports[`each code, as a command ends with it > DATA_STEPS_BACKUP_DECLINED 1`] = `
+"✗ The data an earlier Nextly release stored was left as it is (hash passwords stored before this release: 3): the backup question was answered no.
+  Why:  The command rewrites stored values in place, so it asks for a backup first, and the answer was no. Nothing was changed.
+  Next: Back up the database, then run \`nextly migrate\` again and answer yes, or pass \`--backup-confirmed\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/data-steps-backup-declined  (DATA_STEPS_BACKUP_DECLINED)"
+`;
+
+exports[`each code, as a command ends with it > DATA_STEPS_BACKUP_NOT_CONFIRMED 1`] = `
+"✗ \`nextly migrate\` would change data an earlier Nextly release stored (hash passwords stored before this release: 3), and does so only once a backup is confirmed.
+  Why:  No terminal is attached to ask whether the database is backed up, and \`--backup-confirmed\` was not passed. Nothing was changed.
+  Next: Back up the database, then run \`nextly migrate --backup-confirmed\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/data-steps-backup-not-confirmed  (DATA_STEPS_BACKUP_NOT_CONFIRMED)"
+`;
+
 exports[`each code, as a command ends with it > DATABASE_ADAPTER_MISSING 1`] = `
 "✗ The MySQL adapter, \`@nextlyhq/adapter-mysql\`, is not installed.
   Why:  \`DATABASE_URL\` names a MySQL database, and Nextly reaches it through that package.
   Next: Install it in the project, for example \`pnpm add @nextlyhq/adapter-mysql\`, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/database-adapter-missing  (DATABASE_ADAPTER_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > DATABASE_BEHIND_MIGRATIONS 1`] = `
+"✗ The database lacks 2 tables or columns its applied migrations created, so it no longer matches its ledger. Nothing was changed.
+  Why:  - table dc_posts (created by 20261116_120000_000_create_posts)
+        - column dc_tags.label (created by 20261116_120000_001_add_label)
+  Next: Restore what is missing (from a backup, or by running again the statements of the migration named), then run \`nextly migrate\` again. Nothing applies until the database holds what its ledger says it does.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-behind-migrations  (DATABASE_BEHIND_MIGRATIONS)"
 `;
 
 exports[`each code, as a command ends with it > DATABASE_CATALOG_UNREADABLE 1`] = `
@@ -836,7 +934,7 @@ exports[`each code, as a command ends with it > INVALID_SNAPSHOT 1`] = `
 exports[`each code, as a command ends with it > LEGACY_BOOKKEEPING_FOUND 1`] = `
 "✗ Legacy bookkeeping tables detected (nextly_migrations).
   Why:  They hold the history an earlier release recorded, which this release keeps in \`nextly_schema_events\`.
-  Next: Run \`pnpm nextly upgrade\` once to consolidate them into nextly_schema_events before continuing.
+  Next: Back up the database, then run \`nextly migrate --backup-confirmed\` once to move them into nextly_schema_events before continuing.
   Docs: https://nextlyhq.com/docs/cli/errors/legacy-bookkeeping-found  (LEGACY_BOOKKEEPING_FOUND)"
 `;
 
@@ -889,6 +987,34 @@ exports[`each code, as a command ends with it > MEDIA_THUMBNAILS_NOT_REMOVED 1`]
   Docs: https://nextlyhq.com/docs/cli/errors/media-thumbnails-not-removed  (MEDIA_THUMBNAILS_NOT_REMOVED)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATE_BACKUP_DECLINED 1`] = `
+"✗ The migration records of an earlier Nextly release were not moved: the backup question was answered no.
+  Why:  \`nextly migrate\` moves those records into \`nextly_schema_events\` and drops the tables that held them, so it asks for a backup first, and the answer was no. Nothing was changed.
+  Next: Back up the database, then run \`nextly migrate\` again and answer yes, or pass \`--backup-confirmed\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-backup-declined  (MIGRATE_BACKUP_DECLINED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATE_BACKUP_NOT_CONFIRMED 1`] = `
+"✗ This database keeps its migration records the way an earlier Nextly release did, and \`nextly migrate\` moves them only once a backup is confirmed.
+  Why:  No terminal is attached to ask whether the database is backed up, and \`--backup-confirmed\` was not passed. Nothing was changed.
+  Next: Back up the database, then run \`nextly migrate --backup-confirmed\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-backup-not-confirmed  (MIGRATE_BACKUP_NOT_CONFIRMED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATE_EVENTS_TABLE_TAKEN 1`] = `
+"✗ A table named "nextly_schema_events" already exists with an unexpected shape.
+  Why:  \`nextly migrate\` moves the migration records of an earlier release into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.
+  Next: Rename it, then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-events-table-taken  (MIGRATE_EVENTS_TABLE_TAKEN)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATE_LEDGER_UNREADABLE 1`] = `
+"✗ The table "nextly_migrations" holds records \`nextly migrate\` cannot read: the record of 0001_init.sql has the status "rolled_back".
+  Why:  \`nextly migrate\` moves the records an earlier release kept in \`nextly_migrations\` into \`nextly_schema_events\`, and reads every one before writing any. One of them it cannot read, so nothing was changed.
+  Next: Rename the table if Nextly did not create it, then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-ledger-unreadable  (MIGRATE_LEDGER_UNREADABLE)"
+`;
+
 exports[`each code, as a command ends with it > MIGRATION_APPLY_FAILED 1`] = `
 "✗ Migration \`20261020_120000_add_posts\` failed.
   Why:  relation "dc_authors" does not exist
@@ -926,6 +1052,13 @@ exports[`each code, as a command ends with it > MIGRATION_DRIFT 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/migration-drift  (MIGRATION_DRIFT)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATION_HISTORY_FORKED 1`] = `
+"✗ Two migrations were written from 20261020_120000_add_posts.sql: 20261021_090000_add_tags.sql and 20261021_090500_add_price.sql.
+  Why:  20261021_090000_add_tags.sql is applied on this database, and 20261021_090500_add_price.sql was written without its changes, so it was not applied.
+  Next: Run \`nextly migrate:create --name record_merge\` to record the merge.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-history-forked  (MIGRATION_HISTORY_FORKED)"
+`;
+
 exports[`each code, as a command ends with it > MIGRATION_IRREVERSIBLE 1`] = `
 "✗ 20261020_120000_add_posts.sql has no down SQL — it is irreversible.
   Why:  \`nextly migrate:down\` runs a migration's \`-- DOWN\` section, and this file's is empty.
@@ -947,6 +1080,23 @@ exports[`each code, as a command ends with it > MIGRATION_NAME_REQUIRED 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/migration-name-required  (MIGRATION_NAME_REQUIRED)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATION_NOT_PROVEN 1`] = `
+"✗ 20261020_120000_add_posts.sql is pending, and the database already stands where it ends, not where it starts.
+  Why:  It was neither run nor recorded as applied without running: its snapshot does not show what 1 statement does.
+        Statements it would have skipped:
+          1. ALTER TABLE "dc_posts" ADD COLUMN "slug" text (the database has it)
+          2. UPDATE "dc_posts" SET "slug" = (not shown by its snapshot)
+  Next: Run the statements not marked "the database has it" by hand, or confirm they are not needed, then record the file with \`nextly migrate:resolve --applied 20261020_120000_add_posts\` and run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-not-proven  (MIGRATION_NOT_PROVEN)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_NOT_WRITTEN 1`] = `
+"✗ The migration was not written: moving 20261020_120000_001_create_localization_posts.sql into place failed (EACCES).
+  Why:  The files already placed were removed; the folder is as it was.
+  Next: Check that the migrations folder can be written to and has room, then run \`migrate:create\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-not-written  (MIGRATION_NOT_WRITTEN)"
+`;
+
 exports[`each code, as a command ends with it > MIGRATION_SQL_UNCHECKABLE 1`] = `
 "✗ A migration contains SQL whose drops cannot be read, so which owner's tables it drops cannot be checked.
   Why:  A statement in \`@acme/seo/20261020_120000_add_redirects\` could not be read: unterminated block comment. It has been refused.
@@ -961,6 +1111,20 @@ exports[`each code, as a command ends with it > MIGRATION_TAMPERED 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/migration-tampered  (MIGRATION_TAMPERED)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATIONS_WRITER_BUSY 1`] = `
+"✗ \`migrate:create\` wrote nothing: another run is still writing this project's migration files after waiting 60 s.
+  Why:  \`migrate:baseline\` holds it (process 4242 on build-01, started 75 s ago at 2026-10-29T10:00:45Z). If that process has stopped, the lock lapses in 45 s, at 2026-10-29T10:02:45Z, with nobody clearing it by hand.
+  Next: Run it again once that finishes.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrations-writer-busy  (MIGRATIONS_WRITER_BUSY)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATIONS_WRITER_OVERTAKEN 1`] = `
+"✗ \`migrate:create\` wrote no migration and no snapshot: it lost its hold on this project's migration files.
+  Why:  It stopped for longer than its lease, so another run may have written a migration. \`migrate:baseline\` has held it since.
+  Next: Run it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrations-writer-overtaken  (MIGRATIONS_WRITER_OVERTAKEN)"
+`;
+
 exports[`each code, as a command ends with it > MISSING_MIGRATION 1`] = `
 "✗ The snapshot \`20261020_120000_add_posts.snapshot.json\` exists but \`20261020_120000_add_posts.sql\` does not.
   Why:  A snapshot is written beside the migration it describes, and this one's migration was deleted or never committed.
@@ -970,18 +1134,31 @@ exports[`each code, as a command ends with it > MISSING_MIGRATION 1`] = `
 
 exports[`each code, as a command ends with it > MISSING_SNAPSHOT 1`] = `
 "✗ \`20261020_120000_add_posts.sql\` has no paired snapshot file in /home/you/app/migrations/meta.
-  Why:  Nothing is at \`20261020_120000_add_posts.snapshot.json\`, which \`migrate:create\` writes beside every migration; a migration generated before it wrote snapshots has none.
-  Next: Either delete it, or re-create it with \`nextly migrate:create --blank\` and copy the SQL across.
+  Why:  Nothing is at \`20261020_120000_add_posts.snapshot.json\`, which \`migrate:create\` writes beside every migration it generates, and the file does not say it is a blank migration, which has none; a migration generated before snapshots were written has none either.
+  Next: Restore the snapshot if it was deleted. For SQL you wrote yourself: if no database has applied the file, re-create it with \`nextly migrate:create --blank\` and copy the SQL across; if one has, add the line \`-- This is a blank migration file for custom SQL.\` to its header instead, then accept the edit with \`nextly migrate:resolve --applied '20261020_120000_add_posts' --skip-verify\` on every database that has applied it. Otherwise delete the file.
   Docs: https://nextlyhq.com/docs/cli/errors/missing-snapshot  (MISSING_SNAPSHOT)"
 `;
 
 exports[`each code, as a command ends with it > NEXTLY_CORE_DESTRUCTIVE_REFUSED 1`] = `
-"✗ Core schema reconciliation requires destructive operations.
-  Why:  drops column 'nextly_users.legacy_role'
-        drops table 'nextly_sessions_old'
-        This usually means a Nextly version mismatch.
-  Next: Set NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).
+"✗ Bringing Nextly's own tables up to date deletes data. Nothing was changed.
+  Why:  column dynamic_collections.access_rules: the collections' stored access rules, no longer enforced since 0.0.2-alpha.66
+        column dynamic_singles.access_rules: the Singles' stored access rules, no longer enforced since 0.0.2-alpha.66
+  Next: To go ahead, give consent: --accept-data-loss=dynamic_collections.access_rules,dynamic_singles.access_rules (or NEXTLY_ACCEPT_DATA_LOSS=dynamic_collections.access_rules,dynamic_singles.access_rules). NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 still works for Nextly's own tables but is deprecated.
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-core-destructive-refused  (NEXTLY_CORE_DESTRUCTIVE_REFUSED)"
+`;
+
+exports[`each code, as a command ends with it > NEXTLY_CORE_UPGRADE_INCOMPLETE 1`] = `
+"✗ The core upgrade ran, but Nextly's own tables are not up to date.
+  Why:  The core upgrade ran, but Nextly's own tables still lack what this version declares (dynamic_collections: revalidate, webhooks).
+  Next: Run \`npx nextly@0.0.2-alpha.65 migrate\` first, then this version's \`nextly migrate\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-core-upgrade-incomplete  (NEXTLY_CORE_UPGRADE_INCOMPLETE)"
+`;
+
+exports[`each code, as a command ends with it > NEXTLY_CORE_UPGRADE_UNSUPPORTED 1`] = `
+"✗ This version of Nextly cannot bring dynamic_collections, dynamic_singles up to date from this database in one step, so it changed nothing.
+  Why:  drizzle-kit cannot plan this upgrade of Nextly's own tables from the database as it stands.
+  Next: Run \`npx nextly@0.0.2-alpha.65 migrate\` first, then this version's \`nextly migrate\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-core-upgrade-unsupported  (NEXTLY_CORE_UPGRADE_UNSUPPORTED)"
 `;
 
 exports[`each code, as a command ends with it > NEXTLY_MIGRATE_LOCK_BUSY 1`] = `
@@ -1056,7 +1233,7 @@ exports[`each code, as a command ends with it > NEXTLY_ROUTE_INVALID_PATH 1`] = 
 `;
 
 exports[`each code, as a command ends with it > NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED 1`] = `
-"✗ This save also converts body from text to varchar(255), from an earlier Nextly version. Review the save and confirm the conversion to write it.
+"✗ dc_posts was made by an earlier Nextly version. This save brings it up to date: changes body from text to varchar(255). Review the save and confirm the conversion to write it.
   Why:  The column's type differs from what its field makes now, and a save converts only the columns its review showed.
   Next: Review the save in the Schema Builder and confirm the conversion, or pass the column in \`acknowledgedConversions\`.
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-schema-conversion-unconfirmed  (NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED)"
@@ -1795,9 +1972,9 @@ exports[`each code, as a command ends with it > SCHEMA_LOCK_UNAVAILABLE 1`] = `
 `;
 
 exports[`each code, as a command ends with it > SCHEMA_SYNC_IN_PRODUCTION 1`] = `
-"✗ Cannot auto-sync schema in production mode.
-  Why:  \`NODE_ENV\` is \`production\`, and 2 collections would change: posts, pages.
-  Next: Run \`nextly migrate:create --name="<migration-name>"\` to create migrations, then \`nextly migrate\` to apply.
+"✗ db:sync does not run in production.
+  Why:  \`NODE_ENV\` is \`production\`, and db:sync changes the database directly, without a migration. Nothing was changed.
+  Next: Run \`nextly migrate:create --name="<migration-name>"\` where you develop, commit the migration, then run \`nextly migrate\` against this database.
   Docs: https://nextlyhq.com/docs/cli/errors/schema-sync-in-production  (SCHEMA_SYNC_IN_PRODUCTION)"
 `;
 
@@ -1879,6 +2056,20 @@ exports[`each code, as a command ends with it > UNEXPECTED_ERROR 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/unexpected-error  (UNEXPECTED_ERROR)"
 `;
 
+exports[`each code, as a command ends with it > UNIQUE_COLUMN_HAS_REPEATS 1`] = `
+"✗ \`20261111_120000_profiles.sql\` was not applied.
+  Why:  Collection 'profiles': field 'person' cannot become unique while 1 value repeats: "3f2c9a1e-7b44-4d2a-9c61-0e5d8b7a2f10" (2 entries).
+  Next: Give each entry its own value, or clear the repeats, then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/unique-column-has-repeats  (UNIQUE_COLUMN_HAS_REPEATS)"
+`;
+
+exports[`each code, as a command ends with it > UNIQUE_INDEX_NAME_TAKEN 1`] = `
+"✗ Making one-to-one relationships unique was not applied.
+  Why:  profiles.person (its index uq_dc_profiles_person is the name of the index on dc_people).
+  Next: Rename or drop what holds the name, then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/unique-index-name-taken  (UNIQUE_INDEX_NAME_TAKEN)"
+`;
+
 exports[`each code, as a command ends with it > UPGRADE_BACKUP_NOT_CONFIRMED 1`] = `
 "✗ Refusing to upgrade without a confirmed backup.
   Why:  No terminal is attached to ask whether the database is backed up, and \`--confirm-backed-up\` was not passed. Nothing was changed.
@@ -1893,11 +2084,65 @@ exports[`each code, as a command ends with it > UPGRADE_CANCELLED 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-cancelled  (UPGRADE_CANCELLED)"
 `;
 
+exports[`each code, as a command ends with it > UPGRADE_CANNOT_START 1`] = `
+"✗ No \`package.json\` could be read in /srv/app.
+  Why:  \`nextly upgrade\` moves the Nextly packages a project's \`package.json\` declares, with the project's own package manager. Nothing was changed.
+  Next: Run \`nextly upgrade\` in the project's folder, or name it with \`--cwd\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-cannot-start  (UPGRADE_CANNOT_START)"
+`;
+
 exports[`each code, as a command ends with it > UPGRADE_EVENTS_TABLE_TAKEN 1`] = `
 "✗ A table named "nextly_schema_events" already exists with an unexpected shape.
   Why:  \`nextly upgrade\` moves the migration records into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.
   Next: Rename it, or re-run with \`--target-table-name <name>\`.
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-events-table-taken  (UPGRADE_EVENTS_TABLE_TAKEN)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_INSTALL_FAILED 1`] = `
+"✗ \`pnpm install\` failed while moving the Nextly packages to 0.0.2-alpha.79.
+  Why:  \`package.json\` and the lockfile were put back as they were, the packages were installed again from them, and every Nextly package is at the version it had. The package manager said:
+          ERR_PNPM_FETCH_500 GET https://registry.npmjs.org/@nextlyhq/admin: Internal Server Error
+  Next: Fix what the package manager reported, then run \`nextly upgrade\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-install-failed  (UPGRADE_INSTALL_FAILED)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_LEDGER_UNREADABLE 1`] = `
+"✗ The table "nextly_migrations" holds records \`nextly upgrade\` cannot read: the record of 0001_init.sql has the status "rolled_back".
+  Why:  \`nextly upgrade\` moves the records an earlier release kept in \`nextly_migrations\` into \`nextly_schema_events\`, and reads every one before writing any. One of them it cannot read, so nothing was changed.
+  Next: Rename the table if Nextly did not create it, then run \`nextly upgrade\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-ledger-unreadable  (UPGRADE_LEDGER_UNREADABLE)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_NOT_RESTORED 1`] = `
+"✗ \`pnpm install\` failed while moving the Nextly packages to 0.0.2-alpha.79, and the installed packages could not be put back.
+  Why:  \`package.json\` and the lockfile were put back as they were, but installing from them again left these at another version than they had:
+          nextly: 0.0.2-alpha.78 → 0.0.2-alpha.79
+        The package manager said:
+          ERR_PNPM_META_FETCH_FAIL GET https://registry.npmjs.org/nextly: getaddrinfo ENOTFOUND
+  Next: Run \`pnpm install\` once the cause is fixed: it installs what the restored files record. Until then the installed packages do not match them.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-not-restored  (UPGRADE_NOT_RESTORED)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_PACKAGE_CANNOT_MOVE 1`] = `
+"✗ Not every Nextly package of this project can move to 0.0.2-alpha.79.
+  Why:  Nextly's packages version together, so \`nextly upgrade\` moves all of them or none. Nothing was changed. These cannot move:
+          @nextlyhq/plugin-seo is declared as \`workspace:*\`, which is not a version of the registry.
+  Next: Name a release every package has (\`nextly upgrade <version>\`), or declare the package by a version in \`package.json\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-package-cannot-move  (UPGRADE_PACKAGE_CANNOT_MOVE)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_RELEASE_UNKNOWN 1`] = `
+"✗ \`0.0.2-beta.9\` is not a published release of Nextly.
+  Why:  With no version given, \`nextly upgrade\` follows the channel of the installed release: the tag its prerelease identifier names, or \`latest\`. Nothing was changed.
+  Next: Run \`nextly upgrade 0.0.2-alpha.79\`, the release \`nextly upgrade\` moves to with no version given.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-release-unknown  (UPGRADE_RELEASE_UNKNOWN)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_WORK_MOVED 1`] = `
+"✗ \`nextly upgrade\` no longer changes the database, and changed nothing.
+  Why:  \`nextly migrate\` now moves the migration records of an earlier release, brings Nextly's own tables up to date, hashes passwords stored before this release, removes passwords kept in version history and converts roles holding a retired manage permission. \`nextly i18n:convert-zoned-dates\` converts translated date columns kept with a time zone. \`nextly upgrade\` moves the project's Nextly packages to a release, and takes none of the flags that work had.
+  Next: Run \`nextly migrate\` (\`nextly migrate --backup-confirmed\` where no terminal is attached). Once the release serves every instance, run \`nextly i18n:convert-zoned-dates\` if a start or \`nextly migrate\` named such a column. To move the packages, run \`nextly upgrade\` without the flag.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-work-moved  (UPGRADE_WORK_MOVED)"
 `;
 
 exports[`each code, as a command ends with it > WIDGET_GENERATE_CANCELLED 1`] = `

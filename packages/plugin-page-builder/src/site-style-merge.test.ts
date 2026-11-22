@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { fluidValue } from "@nextlyhq/blocks-engine";
 import { mergedValue, mergeSiteStyleSection } from "./site-style-merge";
 
 const token = (name: string, light: string, extra: object = {}) => ({
@@ -252,6 +253,133 @@ describe("merging tokens", () => {
   });
 });
 
+describe("merging sizes made with Fluid… and the fluid range", () => {
+  const OLD = { min: 360, max: 1280 };
+  const NEW = { min: 320, max: 1440 };
+  const lead = (small: number, large: number, range: typeof OLD) => ({
+    name: "font-size.lead",
+    kind: "dimension",
+    values: { light: fluidValue({ small, large }, range) },
+    fluid: { small, large },
+  });
+
+  it("writes a size again from the sizes and the range the merge kept", () => {
+    // Mine changed the range and remade the size across it; theirs changed
+    // the size's two sizes across the old range. Merged field by field, the
+    // value would be neither: mine's clamp beside their sizes.
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [lead(16, 20, OLD)], fluidRange: OLD },
+      { tokens: [lead(16, 20, NEW)], fluidRange: NEW },
+      { tokens: [lead(18, 24, OLD)], fluidRange: OLD },
+      "mine"
+    );
+    const value = merged.value as {
+      tokens: { values: { light: string }; fluid: unknown }[];
+      fluidRange: unknown;
+    };
+    expect(value.fluidRange).toEqual(NEW);
+    expect(value.tokens[0]?.fluid).toEqual({ small: 18, large: 24 });
+    expect(value.tokens[0]?.values.light).toBe(
+      fluidValue({ small: 18, large: 24 }, NEW)
+    );
+  });
+
+  it("writes a fluid Site text row again across the range the merge kept", () => {
+    // Mine changed the range; theirs added a fluid Heading 2 across the old
+    // one. Kept as theirs wrote it, the row would grow between the old widths
+    // while Fluid… shows the new ones.
+    const h2 = (range: typeof OLD) => ({
+      fontSize: fluidValue({ small: 24, large: 40 }, range),
+      fluid: { small: 24, large: 40 },
+    });
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [], fluidRange: OLD },
+      { tokens: [], fluidRange: NEW },
+      { tokens: [], fluidRange: OLD, siteText: { h2: h2(OLD) } },
+      "mine"
+    );
+    const value = merged.value as {
+      siteText: { h2: { fontSize: string; fluid: unknown } };
+    };
+    expect(value.siteText.h2).toEqual(h2(NEW));
+  });
+
+  it("merges the range whole, never one width from each side", () => {
+    // Field by field, the width mine left alone took theirs, which held no
+    // range: { max: 1440 } alone, a range the save refuses.
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [lead(16, 20, OLD)], fluidRange: OLD },
+      {
+        tokens: [lead(16, 20, { min: 360, max: 1440 })],
+        fluidRange: { min: 360, max: 1440 },
+      },
+      { tokens: [lead(16, 20, OLD)] },
+      "mine"
+    );
+    expect((merged.value as { fluidRange: unknown }).fluidRange).toEqual({
+      min: 360,
+      max: 1440,
+    });
+  });
+
+  it("rewrites nothing where no tier stores a range to write a size across", () => {
+    // Made across the code's own range, which the stored tier does not hold:
+    // writing it across the default would move every fluid size.
+    const coded = lead(16, 20, NEW);
+    const brand = {
+      name: "color.brand",
+      kind: "color",
+      values: { light: "#111" },
+    };
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [coded, brand] },
+      { tokens: [coded, { ...brand, label: "Brand" }] },
+      { tokens: [coded, { ...brand, values: { light: "#222" } }] },
+      "mine"
+    );
+    const value = merged.value as { tokens: { values: { light: string } }[] };
+    expect(value.tokens[0]?.values.light).toBe(
+      fluidValue({ small: 16, large: 20 }, NEW)
+    );
+  });
+
+  it("leaves a size written by hand as it is", () => {
+    const typed = {
+      name: "space.stack",
+      kind: "dimension",
+      values: { light: "clamp(1rem, 2vw, 2rem)" },
+    };
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [typed], fluidRange: OLD },
+      { tokens: [typed], fluidRange: NEW },
+      { tokens: [typed], fluidRange: OLD },
+      "mine"
+    );
+    expect(merged.value).toEqual({ tokens: [typed], fluidRange: NEW });
+  });
+});
+
+describe("merging the colour order", () => {
+  it("merges the order whole, never one position from each side", () => {
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [], order: ["a", "b", "c"] },
+      { tokens: [], order: ["c", "a", "b"] },
+      { tokens: [], order: ["a", "c", "b"] },
+      "mine"
+    );
+    expect((merged.value as { order: unknown }).order).toEqual(["c", "a", "b"]);
+    expect(merged.conflicts).toMatchObject([
+      { key: "order", setting: true, kind: "changed", kept: "mine" },
+    ]);
+  });
+});
+
 describe("merging classes", () => {
   it("keeps their lock beside mine padding, with no conflict", () => {
     const mine = {
@@ -341,6 +469,91 @@ describe("merging classes", () => {
   });
 });
 
+describe("merging a text style's fluid sizes", () => {
+  const range = { min: 360, max: 1280 };
+  /** A text style whose Desktop size was made fluid from `sizes`. */
+  const lead = (
+    sizes: { small: number; large: number },
+    extra: Record<string, unknown> = {}
+  ) => ({
+    id: "t-lead",
+    slug: "lead",
+    orderIndex: 0,
+    role: "text",
+    styles: {
+      base: { base: { fontSize: fluidValue(sizes, range), lineHeight: 1.2 } },
+    },
+    fluidSizes: { base: sizes },
+    ...extra,
+  });
+  const base = lead({ small: 16, large: 32 });
+  const mine = lead({ small: 20, large: 32 });
+  const theirs = lead({ small: 16, large: 40 });
+
+  /** The merged entry's size and the sizes kept for it. */
+  const unit = (value: unknown) => {
+    const entry = (value as Partial<ReturnType<typeof lead>>[])[0];
+    return {
+      fontSize: entry?.styles.base.base.fontSize,
+      sizes: entry?.fluidSizes?.base,
+    };
+  };
+
+  it("keeps the size and the sizes it was made from as one, never one end from each side", () => {
+    const forward = mergeSiteStyleSection(
+      "classes",
+      [base],
+      [mine],
+      [theirs],
+      "mine"
+    );
+    expect(unit(forward.value)).toEqual({
+      fontSize: fluidValue({ small: 20, large: 32 }, range),
+      sizes: { small: 20, large: 32 },
+    });
+    expect(forward.conflicts).toHaveLength(1);
+    const undo = mergeSiteStyleSection(
+      "classes",
+      [base],
+      [mine],
+      [theirs],
+      "theirs"
+    );
+    expect(unit(undo.value)).toEqual({
+      fontSize: fluidValue({ small: 16, large: 40 }, range),
+      sizes: { small: 16, large: 40 },
+    });
+  });
+
+  it("keeps their fluid size beside mine change to another part, with no conflict", () => {
+    const merged = mergeSiteStyleSection(
+      "classes",
+      [base],
+      [{ ...base, label: "Lead" }],
+      [theirs],
+      "mine"
+    );
+    expect(merged.value).toEqual([{ ...theirs, label: "Lead" }]);
+    expect(merged.conflicts).toEqual([]);
+  });
+
+  it("drops the sizes with the size when the side that wins typed one by hand", () => {
+    const typed = {
+      ...base,
+      styles: { base: { base: { fontSize: "18px", lineHeight: 1.2 } } },
+    };
+    const { fluidSizes: _gone, ...withoutSizes } = typed;
+    const merged = mergeSiteStyleSection(
+      "classes",
+      [base],
+      [withoutSizes],
+      [theirs],
+      "mine"
+    );
+    expect(unit(merged.value)).toEqual({ fontSize: "18px", sizes: undefined });
+  });
+});
+
 describe("merging fonts", () => {
   it("keeps a face they added beside the one mine added", () => {
     const merged = mergeSiteStyleSection(
@@ -408,5 +621,63 @@ describe("merging fonts", () => {
       "mine"
     );
     expect(merged.value).toEqual([unreadable, loraRegular, loraBold]);
+  });
+});
+
+describe("merging the site's text", () => {
+  const row = (fontSize: string, lineHeight: number) => ({
+    fontSize,
+    lineHeight,
+  });
+
+  it("keeps a row each author changed, and the rows only one of them did", () => {
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [], siteText: { h1: row("40px", 1.1) } },
+      { tokens: [], siteText: { h1: row("44px", 1.1), h2: row("30px", 1.2) } },
+      {
+        tokens: [],
+        siteText: { h1: row("40px", 1.1), body: row("18px", 1.6) },
+      },
+      "mine"
+    );
+    expect((merged.value as { siteText: unknown }).siteText).toEqual({
+      h1: row("44px", 1.1),
+      h2: row("30px", 1.2),
+      body: row("18px", 1.6),
+    });
+    expect(merged.conflicts).toEqual([]);
+  });
+
+  it("merges a row whole, never a size from one author beside the other's line height", () => {
+    // Field by field, mine's size and theirs' line height would make a pair
+    // neither author chose.
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [], siteText: { h1: row("40px", 1.1) } },
+      { tokens: [], siteText: { h1: row("44px", 1.1) } },
+      { tokens: [], siteText: { h1: row("40px", 1.3) } },
+      "mine"
+    );
+    expect((merged.value as { siteText: { h1: unknown } }).siteText.h1).toEqual(
+      row("44px", 1.1)
+    );
+    expect(merged.conflicts.map(conflict => conflict.key)).toContain(
+      "siteText"
+    );
+  });
+
+  it("keeps an empty row, which leaves that text to the site's own CSS", () => {
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [], siteText: { h1: row("40px", 1.1) } },
+      { tokens: [], siteText: { h1: row("40px", 1.1), h3: {} } },
+      { tokens: [], siteText: { h1: row("41px", 1.1) } },
+      "mine"
+    );
+    expect((merged.value as { siteText: unknown }).siteText).toEqual({
+      h1: row("41px", 1.1),
+      h3: {},
+    });
   });
 });

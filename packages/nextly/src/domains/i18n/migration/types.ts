@@ -51,6 +51,26 @@ export interface LocalizedColumnSpec {
   /** precision/scale for the `decimal` kind (DECIMAL/NUMERIC); ignored otherwise. */
   precision?: number;
   scale?: number;
+  /**
+   * What the column the values come from carries into this one as translation is turned on or
+   * off (`carriedDefinition`); absent, the column is the field's own (`ddlType`).
+   */
+  carried?: CarriedDefinition;
+  /**
+   * The column the main table's snapshot records for this field, where a migration file turning
+   * translation off puts the values back on the main table: its type and default, so the main table the file leaves is the one that snapshot describes, which the
+   * migration runner checks it against. Absent, the column is put back from `carried` or wider
+   * (`restoreTargetType`), as a reconcile with no snapshot to follow puts it back.
+   */
+  restoredAs?: CarriedDefinition;
+}
+
+/** A receiving column's type and default, taken from the column its values come from. */
+export interface CarriedDefinition {
+  /** The source's type, where it holds every value the field's own type holds and more. */
+  type?: string;
+  /** The source's default, as DDL. */
+  default?: string;
 }
 
 /**

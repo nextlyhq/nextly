@@ -84,8 +84,14 @@ function nodeFor(
   };
 }
 
+/**
+ * The canvas an author inserts a block on, where an author is looking: a
+ * block waiting for its content (an Image with no picture) draws the box its
+ * author fills there, and nothing on a page a visitor is served.
+ */
 function context(): PageContext {
   return {
+    diagnostics: true,
     entry: null,
     // A reader that answers with nothing. `core/collection-loop` queries it, and
     // a loop over an empty collection still renders its own container — which is

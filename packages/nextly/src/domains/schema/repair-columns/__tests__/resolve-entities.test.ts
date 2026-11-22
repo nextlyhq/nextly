@@ -339,3 +339,219 @@ describe("resolveRepairEntities: the app's column overrides", () => {
     expect(entity?.applied?.recordedTypes).toBeUndefined();
   });
 });
+
+describe("resolveRepairEntities: the applied storage of a removed entity", () => {
+  it("is unknown where only a registry row says what was applied: the overrides went with the configuration", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [],
+        registry: [registry()],
+        snapshots: [],
+      })
+    );
+    expect(entity?.configured).toBeNull();
+    expect(entity?.applied?.storageUnknown).toBe(true);
+  });
+
+  it("is known from the snapshot's recorded types", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [],
+        registry: [registry()],
+        snapshots: [
+          snapshot({
+            table: "dc_posts",
+            columnTypes: { title: "varchar(20)" },
+          }),
+        ],
+      })
+    );
+    expect(entity?.configured).toBeNull();
+    expect(entity?.applied?.storageUnknown).toBeUndefined();
+    expect(entity?.applied?.recordedTypes).toEqual({ title: "varchar(20)" });
+  });
+
+  it("is the configuration's where the entity is still configured", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured()],
+        registry: [registry()],
+        snapshots: [],
+      })
+    );
+    expect(entity?.applied?.storageUnknown).toBeUndefined();
+  });
+});
+
+describe("resolveRepairEntities: the applied storage of a renamed entity", () => {
+  const wider = {
+    column: "title",
+    kind: "shortText" as const,
+    length: 200,
+    owner: { kind: "app" as const },
+  };
+
+  it("does not take the override declared for the table it moves to, where only a registry row says what was applied", () => {
+    // The override is declared for `articles`, the table the next migration creates. What the
+    // old table's column was applied with is not what that declares.
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured({ table: "articles" })],
+        registry: [registry({ tableName: "dc_posts" })],
+        snapshots: [],
+        overrides: { byTable: new Map([["articles", [wider]]]) },
+      })
+    );
+    expect(entity?.table).toBe("dc_posts");
+    expect(entity?.renamedTo).toBe("articles");
+    expect(entity?.applied?.columnOverrides).toBeUndefined();
+    expect(entity?.applied?.storageUnknown).toBe(true);
+    expect(entity?.configured?.columnOverrides).toEqual([wider]);
+  });
+
+  it("keeps the configuration's override as applied where the table is the same", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured()],
+        registry: [registry()],
+        snapshots: [],
+        overrides: { byTable: new Map([["dc_posts", [wider]]]) },
+      })
+    );
+    expect(entity?.applied?.columnOverrides).toEqual([wider]);
+    expect(entity?.applied?.storageUnknown).toBeUndefined();
+  });
+});
+
+describe("resolveRepairEntities: which registry rows say what was applied", () => {
+  // With no snapshot, only a row a sync or a migration finished stands for the database.
+  it.each(["applied", "synced"])(
+    "takes a %s row as the applied definition",
+    migrationStatus => {
+      const entity = only(
+        resolveRepairEntities({
+          configured: [configured()],
+          registry: [registry({ migrationStatus })],
+          snapshots: [],
+        })
+      );
+      expect(entity?.applied?.source).toBe("registry");
+    }
+  );
+
+  it.each(["pending", "generated", "failed"])(
+    "leaves the applied definition unknown for a %s row",
+    migrationStatus => {
+      const entity = only(
+        resolveRepairEntities({
+          configured: [configured()],
+          registry: [registry({ migrationStatus })],
+          snapshots: [],
+        })
+      );
+      expect(entity?.applied).toBeNull();
+      expect(entity?.configured).not.toBeNull();
+    }
+  );
+});
+
+describe("resolveRepairEntities: each side's table", () => {
+  it("keeps the table the snapshot's migration created, and names the configured one as a rename", () => {
+    // A code-first row's table is rewritten from the configuration at each start, so only the
+    // snapshot still names the table the database holds.
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured({ table: "articles" })],
+        registry: [registry({ tableName: "articles" })],
+        snapshots: [snapshot({ table: "dc_posts" })],
+      })
+    );
+    expect(entity?.table).toBe("dc_posts");
+    expect(entity?.renamedTo).toBe("articles");
+  });
+
+  it("names no rename where both sides name one table", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured()],
+        registry: [registry()],
+        snapshots: [snapshot({ table: "dc_posts" })],
+      })
+    );
+    expect(entity?.table).toBe("dc_posts");
+    expect(entity).not.toHaveProperty("renamedTo");
+  });
+
+  it("puts an entity nothing has applied at the configured table, with no rename", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured({ table: "articles" })],
+        registry: [
+          registry({ tableName: "dc_posts", migrationStatus: "pending" }),
+        ],
+        snapshots: [],
+      })
+    );
+    expect(entity?.applied).toBeNull();
+    expect(entity?.table).toBe("articles");
+    expect(entity).not.toHaveProperty("renamedTo");
+  });
+
+  it("keeps a removed entity at its applied table", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [],
+        registry: [],
+        snapshots: [snapshot({ table: "dc_posts" })],
+      })
+    );
+    expect(entity?.configured).toBeNull();
+    expect(entity?.table).toBe("dc_posts");
+    expect(entity).not.toHaveProperty("renamedTo");
+  });
+});
+
+describe("resolveRepairEntities: a Builder entity the manifest leaves out", () => {
+  const builderRow = () => registry({ source: "ui", locked: false });
+
+  it("has no configured definition where a manifest is checked out: its removal is pending", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [],
+        registry: [builderRow()],
+        snapshots: [],
+        hasManifest: true,
+      })
+    );
+    expect(entity?.applied?.source).toBe("registry");
+    expect(entity?.configured).toBeNull();
+  });
+
+  it.each([false, undefined])(
+    "keeps its registry row as the configured definition with no manifest (hasManifest %s)",
+    hasManifest => {
+      const entity = only(
+        resolveRepairEntities({
+          configured: [],
+          registry: [builderRow()],
+          snapshots: [],
+          ...(hasManifest === undefined ? {} : { hasManifest }),
+        })
+      );
+      expect(entity?.configured?.origin).toBe("collection");
+    }
+  );
+
+  it("is no entity where its row still waits for a migration and the manifest leaves it out", () => {
+    expect(
+      resolveRepairEntities({
+        configured: [],
+        registry: [
+          registry({ source: "ui", locked: false, migrationStatus: "pending" }),
+        ],
+        snapshots: [],
+        hasManifest: true,
+      })
+    ).toEqual([]);
+  });
+});

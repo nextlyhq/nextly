@@ -18,7 +18,7 @@ import {
   listPageOf,
   type BindingSourceRef,
 } from "nextly/runtime";
-import { createElement, type ReactElement } from "react";
+import { createElement, Suspense, type ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -42,10 +42,16 @@ const runtime = vi.hoisted(() => ({
   structuredPaths: [] as string[],
   structuredData: undefined as string | undefined,
 }));
+// Whether the request in hand is in Next's draft mode, as the public route
+// reads it before asking its draft gate.
+const request = vi.hoisted(() => ({ draftMode: false }));
 vi.mock("nextly/runtime", async importOriginal => {
   const actual = await importOriginal<typeof import("nextly/runtime")>();
   return {
     ...actual,
+    // What core answers for the request in hand: the draft-mode flag the
+    // public route reads before asking its draft gate.
+    isDraftModeRequest: async () => request.draftMode,
     createPublicReader: (
       ...[source, binding]: Parameters<typeof actual.createPublicReader>
     ) =>
@@ -276,6 +282,7 @@ async function served(
 }
 
 beforeEach(() => {
+  request.draftMode = false;
   runtime.tags = [];
   runtime.events = [];
   runtime.keys = [];
@@ -313,6 +320,36 @@ describe("the content route", () => {
       expect(html).toContain("Hello world");
       expect(html).not.toContain("No title");
       expect(html).not.toContain("The about page");
+    }
+  );
+
+  it.each([
+    ["a page", ["about"], "The about page"],
+    ["an entry", ["blog", "hello"], "Hello world"],
+  ] as const)(
+    "draws what the provider draws around %s, before it and after it, asked of its own document",
+    async (_name, slug, text) => {
+      const asked: unknown[] = [];
+      const route = createContentPage(
+        config({
+          around: async ({ document }) => {
+            asked.push(document);
+            return {
+              before: createElement("i", { id: "before" }, "before"),
+              after: createElement("b", { id: "after" }, "after"),
+            };
+          },
+        })
+      );
+      const html = await renderToHtml(
+        await route.ContentPage({ params: { slug: [...slug] } })
+      );
+      const page = html.indexOf(text);
+      expect(page).toBeGreaterThan(-1);
+      expect(html.indexOf('id="before"')).toBeGreaterThan(-1);
+      expect(html.indexOf('id="before"')).toBeLessThan(page);
+      expect(html.indexOf('id="after"')).toBeGreaterThan(page);
+      expect(asked).toHaveLength(1);
     }
   );
 
@@ -484,6 +521,26 @@ describe("the content route", () => {
     const html = await served(route, ["about"]);
     expect(html).toContain("The about page");
     expect(html).not.toContain("Hello world");
+  });
+
+  it("asks the public route's draft gate only on a draft-mode request", async () => {
+    // An ordinary visit to the cached route must read no cookie, so the gate
+    // (which reads the preview cookie) is not asked at all: the path a draft
+    // would answer is not found, as for any visitor.
+    const draft = vi.fn(async () => true);
+    const options = config();
+    const route = createPublicContentPage({
+      ...options,
+      pages: { ...options.pages, draft },
+      resolveAddress: async () => null,
+    });
+    await expect(served(route, ["about"])).rejects.toMatchObject(NOT_FOUND);
+    expect(draft).not.toHaveBeenCalled();
+
+    // A preview link turns draft mode on, and only then is the gate asked.
+    request.draftMode = true;
+    await served(route, ["about"]).catch(() => undefined);
+    expect(draft).toHaveBeenCalled();
   });
 
   it("serves the entry where the gate grants nothing", async () => {
@@ -896,6 +953,27 @@ describe("an entry's list split into pages", () => {
     });
   });
 
+  it("answers a public route's redirect beneath a boundary under Cache Components, so a browser without JavaScript follows it", async () => {
+    // Thrown above every boundary, Next.js answers a redirect on a path no
+    // build listed with an empty document only its script follows; beneath
+    // one, it writes a refresh a browser follows by itself.
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    try {
+      const route = createPublicContentPage(pagedConfig());
+      const answer = (await route.ContentPage({
+        params: { slug: ["blog", "hello", "page", "1"] },
+      })) as ReactElement;
+      expect(answer.type).toBe(Suspense);
+      await expect(
+        throughBoundary(Promise.resolve(answer))
+      ).rejects.toMatchObject({
+        digest: expect.stringContaining(";/blog/hello;308;"),
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each([
     ["a page past the list's last", ["blog", "hello", "page", "4"]],
     ["a page number written another way", ["blog", "hello", "page", "02"]],
@@ -1118,20 +1196,59 @@ describe("a site's own not-found handler", () => {
     expect(site.calls()).toBe(2);
   });
 
-  it("answers a public route's miss under Cache Components, where the route answers it per request", async () => {
+  it.each([
+    ["on the route", (notFound: () => never) => config({ notFound })],
+    [
+      "on its pages",
+      (notFound: () => never) => {
+        const options = config();
+        return { ...options, pages: { ...options.pages, notFound } };
+      },
+    ],
+  ] as const)(
+    "answers a public route's miss under Cache Components beneath a boundary, with the handler given %s",
+    async (_, configured) => {
+      // The handler may read the request, which a build refuses above a
+      // boundary, so the page answers the miss beneath one; the head asks the
+      // handler itself, as before.
+      vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+      try {
+        const site = handler();
+        const route = createPublicContentPage(configured(site.notFound));
+        const answer = (await route.ContentPage(missing)) as ReactElement;
+        expect(answer.type).toBe(Suspense);
+        expect(site.calls()).toBe(0);
+        await expect(throughBoundary(Promise.resolve(answer))).rejects.toThrow(
+          "site: not found"
+        );
+        await expect(route.generateMetadata(missing)).rejects.toThrow(
+          "site: not found"
+        );
+        expect(site.calls()).toBe(2);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }
+  );
+
+  it("passes on anything else a public route's page throws under Cache Components", async () => {
+    // Only the route's own deferred miss is answered beneath the boundary: a
+    // fault reading the address store still fails the page.
     vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
     try {
       const site = handler();
       const route = createPublicContentPage(
-        config({ notFound: site.notFound })
+        config({
+          notFound: site.notFound,
+          resolveAddress: async () => {
+            throw new Error("the store is down");
+          },
+        })
       );
-      await expect(throughBoundary(route.ContentPage(missing))).rejects.toThrow(
-        "site: not found"
+      await expect(route.ContentPage(missing)).rejects.toThrow(
+        "the store is down"
       );
-      await expect(route.generateMetadata(missing)).rejects.toThrow(
-        "site: not found"
-      );
-      expect(site.calls()).toBe(2);
+      expect(site.calls()).toBe(0);
     } finally {
       vi.unstubAllEnvs();
     }

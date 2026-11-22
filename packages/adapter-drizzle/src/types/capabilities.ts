@@ -108,7 +108,8 @@ export interface DatabaseCapabilities {
    *
    * @remarks
    * - PostgreSQL: Yes
-   * - MySQL: No (limited support, not recommended)
+   * - MySQL: No (a nested transaction joins flat; the transaction context
+   *   still takes savepoints of its own)
    * - SQLite: Yes
    */
   supportsSavepoints: boolean;

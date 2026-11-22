@@ -112,8 +112,21 @@ function sealPath(owner: string): readonly string[] {
   return ["nextly_meta", digestKeyMetaKey(owner)];
 }
 
+/**
+ * The error for a key that cannot be used: the public message generic, and
+ * the operator told what to change. A key no configured secret opens was
+ * sealed under the secret the database was last run with, as on a copy of a
+ * site's database started elsewhere, so the fix is that secret. Names why,
+ * never the key or a secret.
+ */
 function keyUnreadable(owner: string, reason: string): NextlyError {
-  return NextlyError.internal({
+  const sealedElsewhere = reason === "auth-failed" || reason === "unknown-key";
+  return new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "An unexpected error occurred.",
+    logMessage: sealedElsewhere
+      ? `Plugin "${owner}" keeps a key sealed under a secret this install is not configured with, so it cannot be opened. Set NEXTLY_SECRET to the secret this database was last run with, or keep the new one and set the earlier one as NEXTLY_SECRET_PREVIOUS.`
+      : `Plugin "${owner}" keeps a key in nextly_meta (${digestKeyMetaKey(owner)}) that cannot be read (${reason}).`,
     logContext: {
       reason: "plugin-digest-key-unreadable",
       owner,

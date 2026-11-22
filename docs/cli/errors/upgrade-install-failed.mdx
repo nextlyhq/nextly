@@ -1,0 +1,25 @@
+---
+title: UPGRADE_INSTALL_FAILED
+description: "The package manager failed while `nextly upgrade` was moving the packages, and the project was put back as it was."
+---
+
+## Cause
+
+The package manager failed while `nextly upgrade` was moving the packages, and the project was put back as it was.
+
+`nextly upgrade` writes the one exact version for every Nextly package into `package.json` and runs the package manager's install. That install failed: the registry did not serve a file, a script of the project failed, the disk filled. The command then put `package.json` and the lockfile back byte for byte, installed from them again, and read every Nextly package back at the version it had. The project is as it was before the run, and the message shows what the package manager said.
+
+## Fix
+
+- Fix what the package manager reported.
+- Run `nextly upgrade` again.
+
+## Example
+
+```text
+✗ `pnpm install` failed while moving the Nextly packages to 0.0.2-alpha.79.
+  Why:  `package.json` and the lockfile were put back as they were, the packages were installed again from them, and every Nextly package is at the version it had. The package manager said:
+          ERR_PNPM_FETCH_500 GET https://registry.npmjs.org/@nextlyhq/admin: Internal Server Error
+  Next: Fix what the package manager reported, then run `nextly upgrade` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-install-failed  (UPGRADE_INSTALL_FAILED)
+```

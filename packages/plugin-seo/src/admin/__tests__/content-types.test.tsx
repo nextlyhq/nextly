@@ -114,6 +114,18 @@ describe("the Content types tab", () => {
     expect(within(row("Posts")).queryByText("Title pattern")).toBeNull();
   });
 
+  it("opens on the type a link names, as a design's SEO panel links to a title pattern", () => {
+    window.history.replaceState(null, "", "/admin?tab=types&type=authors");
+    try {
+      render(<Tab types={[posts, authors]} />);
+      expect(within(row("Authors")).getByText("Title pattern")).toBeTruthy();
+      // CONTROL: only the type named opens.
+      expect(within(row("Posts")).queryByText("Title pattern")).toBeNull();
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
   it("declares a type's questions an FAQ section of its pages, and takes it back", () => {
     render(<Tab types={[posts]} />);
     fireEvent.click(

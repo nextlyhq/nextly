@@ -215,6 +215,14 @@ const BOTH_ENTITIES: readonly SystemColumnEntity[] = ["collection", "single"];
  * Order is load-bearing: it is the column order of the emitted `CREATE TABLE`, so reordering this
  * array reorders physical tables.
  */
+/**
+ * The width of `_changed_by_principal_kind`, a varchar on PostgreSQL and MySQL:
+ * the kind of a plugin-defined person who last changed a row. It is written in
+ * the same statement as the save, so it also bounds the longest kind a plugin
+ * may register: a longer one would fail every save that person makes.
+ */
+export const CHANGED_BY_PRINCIPAL_KIND_LENGTH = 64;
+
 export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
   {
     name: "id",
@@ -509,8 +517,16 @@ export const SYSTEM_COLUMNS: readonly SystemColumnDeclaration[] = [
     strippedFromResponses: true,
     reservedIn: [],
     shape: {
-      postgresql: { kind: "varchar", length: 64, nullable: true },
-      mysql: { kind: "varchar", length: 64, nullable: true },
+      postgresql: {
+        kind: "varchar",
+        length: CHANGED_BY_PRINCIPAL_KIND_LENGTH,
+        nullable: true,
+      },
+      mysql: {
+        kind: "varchar",
+        length: CHANGED_BY_PRINCIPAL_KIND_LENGTH,
+        nullable: true,
+      },
       sqlite: { kind: "text", nullable: true },
     },
     addedByMigrateStep: true,
@@ -723,6 +739,16 @@ export const DOCUMENT_OVERWRITE_KEY = "_overwrite";
  * @experimental
  */
 export const DOCUMENT_RESTORED_FROM_KEY = "_restoredFrom";
+
+/**
+ * The key a write names where its translated values came from under: per field, a machine
+ * translation, an agent's, a copy from another language, or a value written in its own language.
+ * Read and checked at the boundary (`domains/i18n/provenance/provenance-claims`), never stored as a
+ * column.
+ *
+ * @experimental Until per-field provenance is complete.
+ */
+export const DOCUMENT_PROVENANCE_KEY = "_provenance";
 
 /**
  * The columns a step of `nextly migrate` adds to existing tables, which no snapshot comparison

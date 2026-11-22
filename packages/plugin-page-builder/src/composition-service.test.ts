@@ -7,6 +7,7 @@
  * call here hands it a request it would refuse as malformed: a service that
  * read the request first would answer with that validation error instead.
  */
+import { createBlockRegistry } from "@nextlyhq/blocks-engine";
 import { NextlyError, type PluginContext } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
@@ -38,6 +39,8 @@ async function refusal(call: () => Promise<unknown>): Promise<unknown> {
 
 describe("a call with no signed-in caller", () => {
   const service = compositionService(unreachable, {
+    // The site's block registry: it holds none.
+    blocks: createBlockRegistry(),
     templates: {
       guard: () => {
         throw new Error("the service read the templates guard");

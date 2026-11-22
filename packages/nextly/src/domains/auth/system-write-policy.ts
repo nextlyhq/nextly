@@ -159,6 +159,9 @@ const ROLE_OR_PERMISSION_READ: RouteGrant = {
  *   groups' settings-gated list included.
  * - Email providers and templates: `read-` on each. The provider types are
  *   read to choose one to add, so `create-email-providers` reads them too.
+ * - Email deliveries: `read-email-deliveries`, for the delivery log, queued
+ *   email, each template's last send and whether queued email is overdue.
+ *   `manage-email-deliveries` does not include it.
  *
  * The Direct API asks field groups no grant: it reads them as the builder's
  * palette does, open to any signed-in caller.
@@ -196,6 +199,9 @@ export const SYSTEM_READ_POLICY = {
   },
   emailTemplates: {
     read: only("read", "email-templates"),
+  },
+  emailDeliveries: {
+    read: only("read", "email-deliveries"),
   },
 } as const satisfies Record<string, Record<string, RouteGrant>>;
 

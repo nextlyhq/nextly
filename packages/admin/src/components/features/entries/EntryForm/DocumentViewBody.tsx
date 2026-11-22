@@ -54,6 +54,7 @@ import {
   viewFieldRefusal,
   type ViewFieldRefusal,
 } from "./document-view-field-refusal";
+import { useOfferPendingRecovery } from "./DocumentActionsContext";
 import { DocumentLockBanner } from "./DocumentLockBanner";
 import {
   DocumentRestoreProvider,
@@ -62,6 +63,7 @@ import {
 } from "./DocumentRestoreContext";
 import { DocumentViewFieldChooser } from "./DocumentViewFieldChooser";
 import { DocumentViewFieldRefused } from "./DocumentViewFieldRefused";
+import { FieldRevealScope } from "./field-reveal";
 import { FormErrorSummary } from "./FormErrorSummary";
 import { MissingDocumentViewComponent } from "./MissingDocumentViewComponent";
 import {
@@ -69,6 +71,7 @@ import {
   useRecoveryOfferHost,
   type HostedRecoveryOffer,
 } from "./RecoveryOfferContext";
+import type { KeepOutcome, PendingRecovery } from "./useDocumentActionBindings";
 import type { DocumentLockSurface } from "./useDocumentLockSurface";
 
 /** The view the route names, as the page hands it to the editor. */
@@ -167,33 +170,87 @@ function useRestoreRemount(
   restoreInView: () => boolean
 ): {
   recovery: UseAutosaveRecoveryResult;
+  /** The checked restore as Save keeps an offer with it; see `PendingRecovery`. */
+  keep: PendingRecovery["restoreChecked"];
   generation: number;
   /** True for the one commit between the view leaving and the restore. */
   withdrawn: boolean;
 } {
   const [generation, setGeneration] = useState(0);
   const [withdrawn, setWithdrawn] = useState(false);
-  const { take } = recovery;
+  const { take, restoreChecked } = recovery;
+  // Told once a fresh view is drawn over the restored values, so a checked
+  // restore answers only when the restore has reached the view.
+  const redrawn = useRef<(() => void) | null>(null);
+  // Whether this body is still drawn: the editor can leave the view while a
+  // restore is being checked, and nothing here is drawn afresh after that.
+  const drawn = useRef(true);
+  useEffect(() => {
+    drawn.current = true;
+    return () => {
+      drawn.current = false;
+      redrawn.current?.();
+      redrawn.current = null;
+    };
+  }, []);
   useEffect(() => {
     if (!withdrawn) return;
     take();
     setGeneration(count => count + 1);
     setWithdrawn(false);
+    redrawn.current?.();
+    redrawn.current = null;
   }, [withdrawn, take]);
+  // Once the offer is confirmed (see `restore`), the view's own restore
+  // first, as an edit it can undo; drawn afresh only when it has none or
+  // declines, and then `redrawn` (if given) is told once it is. Nothing
+  // changes before then. Both restores below take these steps.
+  const applyHere = useCallback(
+    (redrawnThen?: () => void) => {
+      if (restoreInView()) {
+        redrawnThen?.();
+        return;
+      }
+      redrawn.current = redrawnThen ?? null;
+      setWithdrawn(true);
+    },
+    [restoreInView]
+  );
+  // The checked restore answers once the restore has reached the view. It
+  // writes nothing where `stillWanted` says no (answering `edited`), and
+  // answers `unchecked` where the view went away before it could land.
+  const keep = useCallback(
+    async (stillWanted: () => boolean): Promise<KeepOutcome> => {
+      let reached: Promise<void> = Promise.resolve();
+      // Where the restore went, set by the steps below once it is confirmed.
+      const landing: { at: "here" | "edited" | "gone" } = { at: "here" };
+      const outcome = await restoreChecked(() => {
+        if (!stillWanted()) {
+          landing.at = "edited";
+          return;
+        }
+        if (!drawn.current) {
+          landing.at = "gone";
+          return;
+        }
+        reached = new Promise(resolve => applyHere(resolve));
+      });
+      await reached;
+      if (outcome !== "restored") return outcome;
+      if (landing.at === "edited") return "edited";
+      // Gone before the restore could reach it, or while it was drawn afresh.
+      return landing.at === "gone" || !drawn.current ? "unchecked" : "restored";
+    },
+    [restoreChecked, applyHere]
+  );
   const offered = useMemo(
     () => ({
       ...recovery,
-      // Once the offer is confirmed (see `restore`), the view's own restore
-      // first, as an edit it can undo; drawn afresh only when it has none or
-      // declines. Nothing changes before then.
-      restore: () =>
-        recovery.restore(() => {
-          if (!restoreInView()) setWithdrawn(true);
-        }),
+      restore: () => recovery.restore(() => applyHere()),
     }),
-    [recovery, restoreInView]
+    [recovery, applyHere]
   );
-  return { recovery: offered, generation, withdrawn };
+  return { recovery: offered, keep, generation, withdrawn };
 }
 
 /**
@@ -274,13 +331,25 @@ function valueAtPath(record: Record<string, unknown>, path: string): unknown {
   return at;
 }
 
+/** The offer as Save can keep it, while it is `offered`; else null. */
+function useKeepableOffer(
+  keep: PendingRecovery["restoreChecked"],
+  dismiss: () => void,
+  offered: boolean
+): PendingRecovery | null {
+  return useMemo(
+    () => (offered ? { restoreChecked: keep, dismiss } : null),
+    [offered, keep, dismiss]
+  );
+}
+
 /** The offer the save chip may make, as the banner would make it. */
 function useChipRecoveryOffer(
   recovery: UseAutosaveRecoveryResult,
   viewingVersion: ViewedVersion | null
 ): HostedRecoveryOffer | null {
   const offer = liveRecoveryOffer(recovery, viewingVersion);
-  const { restore, dismiss } = recovery;
+  const { restore, dismiss, discard } = recovery;
   return useMemo(
     () =>
       offer === null
@@ -290,8 +359,9 @@ function useChipRecoveryOffer(
             olderVersion: offer.olderVersion,
             restore,
             dismiss,
+            discard,
           },
-    [offer, restore, dismiss]
+    [offer, restore, dismiss, discard]
   );
 }
 
@@ -495,6 +565,17 @@ export function DocumentViewBody({
   const recoveryOffer = useRecoveryOfferHost(
     useChipRecoveryOffer(offered.recovery, viewingVersion)
   );
+  // And to the document's Save, which keeps the changes on offer while the
+  // view draws the save chip that makes the offer (the host applies it only
+  // then). A view that leaves the offer to the banner has its Save wait for
+  // an edit, as the entry page's does.
+  useOfferPendingRecovery(
+    useKeepableOffer(
+      offered.keep,
+      offered.recovery.dismiss,
+      recoveryOffer.value.offer !== null
+    )
+  );
 
   const { errors, submitCount } = form.formState;
   const viewProps: DocumentViewProps = {
@@ -507,59 +588,63 @@ export function DocumentViewBody({
 
   return (
     <FormProvider {...form}>
-      <div
-        data-testid="document-view-frame"
-        // The content area's height, handed down by the split around the
-        // form, rather than the window's: below the desktop breakpoint the
-        // admin keeps a header above that area, and a frame the window's
-        // height was that header taller than the area, which then scrolled.
-        className="flex h-full min-h-0 flex-col bg-background"
-      >
-        {/* Above the view, in the editor's order: a document somebody else is
+      {/* The view draws some fields out of sight (a closed dialog): it says
+          here how to show one, so a refused save's message offers "Show me". */}
+      <FieldRevealScope>
+        <div
+          data-testid="document-view-frame"
+          // The content area's height, handed down by the split around the
+          // form, rather than the window's: below the desktop breakpoint the
+          // admin keeps a header above that area, and a frame the window's
+          // height was that header taller than the area, which then scrolled.
+          className="flex h-full min-h-0 flex-col bg-background"
+        >
+          {/* Above the view, in the editor's order: a document somebody else is
             in changes what the view's edits mean, so it is read before the
             offer to restore work into it. A save the shortcut attempted and
             validation refused is said here too, since none of the fields it
             names are on screen to say it themselves. */}
-        <div className="shrink-0">
-          {banner}
-          <DocumentLockBanner
-            notice={lock.notice}
-            onTakeOver={lock.takeOver}
-            onRequestAccess={lock.requestAccess}
-            onRetry={lock.retryLoad}
-            onChoose={lock.answerChange}
-          />
-          {recoveryOffer.claimed ? null : (
-            <LiveDocumentRecoveryOffer
-              recovery={offered.recovery}
-              viewingVersion={viewingVersion}
+          <div className="shrink-0">
+            {banner}
+            <DocumentLockBanner
+              notice={lock.notice}
+              onTakeOver={lock.takeOver}
+              onRequestAccess={lock.requestAccess}
+              onRetry={lock.retryLoad}
+              onChoose={lock.answerChange}
+            />
+            {recoveryOffer.claimed ? null : (
+              <LiveDocumentRecoveryOffer
+                recovery={offered.recovery}
+                viewingVersion={viewingVersion}
+                className="mx-6 mt-3"
+              />
+            )}
+            <FormErrorSummary
+              errors={errors}
+              submitCount={submitCount}
               className="mx-6 mt-3"
             />
-          )}
-          <FormErrorSummary
-            errors={errors}
-            submitCount={submitCount}
-            className="mx-6 mt-3"
-          />
-        </div>
-        {/* The view fills what is left. Boxed so a view rooted in bare text
+          </div>
+          {/* The view fills what is left. Boxed so a view rooted in bare text
             or `display: contents` still has an element taking the height. */}
-        <div className="min-h-0 flex-1" aria-busy={recovering || undefined}>
-          <RecoveryOfferProvider value={recoveryOffer.value}>
-            <DocumentRestoreProvider registry={restoreRegistry}>
-              <ViewArea
-                editing={editing}
-                refusal={refusal}
-                withdrawn={offered.withdrawn}
-                generation={offered.generation}
-                reloads={lock.reloads}
-                component={view.component}
-                viewProps={viewProps}
-              />
-            </DocumentRestoreProvider>
-          </RecoveryOfferProvider>
+          <div className="min-h-0 flex-1" aria-busy={recovering || undefined}>
+            <RecoveryOfferProvider value={recoveryOffer.value}>
+              <DocumentRestoreProvider registry={restoreRegistry}>
+                <ViewArea
+                  editing={editing}
+                  refusal={refusal}
+                  withdrawn={offered.withdrawn}
+                  generation={offered.generation}
+                  reloads={lock.reloads}
+                  component={view.component}
+                  viewProps={viewProps}
+                />
+              </DocumentRestoreProvider>
+            </RecoveryOfferProvider>
+          </div>
         </div>
-      </div>
+      </FieldRevealScope>
     </FormProvider>
   );
 }

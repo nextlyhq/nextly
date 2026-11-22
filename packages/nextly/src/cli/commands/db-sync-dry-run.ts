@@ -15,10 +15,18 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { loadBuilderEntities } from "../../di/load-dynamic-tables";
 import { assertNoMigrationInFlight } from "../../domains/field-groups/migration/sync-guard";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
+import { blockedConversionMessages } from "../../domains/schema/pipeline/classifier/conversion-refusal";
 import { describeOp } from "../../domains/schema/pipeline/diff/describe-operation";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
-import type { ClassifierEvent } from "../../domains/schema/pipeline/resolution/types";
+import type {
+  ClassifierEvent,
+  TypeChangeEvent,
+} from "../../domains/schema/pipeline/resolution/types";
 import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
+import {
+  describeClassed,
+  describeRowCount,
+} from "../../domains/schema/value-conversion/describe";
 import { CollectionSyncService } from "../../services/collections/collection-sync-service";
 import type { Logger as ServiceLogger } from "../../services/shared/types";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
@@ -32,7 +40,7 @@ import { deletionChanges } from "../utils/data-loss-consent";
 import type { ResolvedDevOptions } from "./db-sync";
 import { syncRefusalOf } from "./db-sync-registry";
 import { collectOrphanDeletions, publishExtensionSchema } from "./dev-build";
-import { desiredSchemaForSync, productionSyncRefusal } from "./dev-server";
+import { desiredSchemaForSync } from "./dev-server";
 import { fieldsLeavingForSync } from "./sync-schema";
 
 /** What a sync's dry run does not show, and what its schema plan is made against. */
@@ -100,24 +108,6 @@ export async function planDbSync(
           target: projectPath(cwd, file),
         }))
       );
-
-      // In production a real sync pushes nothing, and refuses on what its registry step found
-      // created or updated, as that step decides it.
-      if (options.autoSync !== false && process.env.NODE_ENV === "production") {
-        const refusal = productionSyncRefusal(planned.sync);
-        return {
-          changes,
-          ...(refusal === undefined
-            ? {}
-            : { refusals: [`${refusal.what} ${refusal.why}`] }),
-          notes: [
-            // Only collection changes are refused there: the Single and field-group steps still
-            // create and update their tables, so the note must not promise an unchanged schema.
-            "NODE_ENV is production: a real run pushes no collection schema change, but still creates or updates Single and field-group tables, which are not shown here (use nextly migrate:create and nextly migrate for collections).",
-            SYNC_DRY_RUN_NOTE,
-          ],
-        };
-      }
 
       const push = await planPush(
         configResult,
@@ -216,12 +206,22 @@ async function planPush(
     context.logger,
     { registriesPresent }
   );
-  const preview = await previewDesiredSchema({
-    desired,
-    db: adapter.getDrizzle(),
-    dialect: adapter.getCapabilities().dialect,
-    defaultLocale: configResult.config.localization?.defaultLocale ?? "en",
-  });
+  // Each type change judged by the repair command's rule, as the real sync judges it: a blocked
+  // one is a refusal the real run would make, named with its rows, before anything.
+  let preview: Awaited<ReturnType<typeof previewDesiredSchema>>;
+  try {
+    preview = await previewDesiredSchema({
+      desired,
+      db: adapter.getDrizzle(),
+      dialect: adapter.getCapabilities().dialect,
+      defaultLocale: configResult.config.localization?.defaultLocale ?? "en",
+      nextStep: "run db:sync again",
+    });
+  } catch (err) {
+    const blocked = blockedConversionMessages(err);
+    if (blocked === null) throw err;
+    return { changes: [], notes: [], refusals: [...refusals, ...blocked] };
+  }
 
   return {
     changes: preview.operations.map(operation => ({
@@ -238,6 +238,10 @@ async function planPush(
         candidate =>
           `A real run would ask whether ${candidate.tableName}.${candidate.fromColumn} was renamed to ${candidate.toColumn}.`
       ),
+      ...(preview.safeConversions ?? []).map(
+        safe =>
+          `A real run converts ${safe.tableName}.${safe.columnName} from ${safe.fromType} to ${safe.toType} without asking: safe (rows checked: ${String(safe.rowsChecked)}).`
+      ),
       ...preview.events.map(questionOf),
     ],
   };
@@ -253,6 +257,23 @@ function quietLogger(context: CommandContext): ServiceLogger {
   };
 }
 
+/**
+ * What a real run does with a type change: a lossy one, judged by the repair command's rule, clears
+ * the named values only under the consent naming the column or a yes at a terminal; any other is
+ * asked about, with how many rows hold a value where the rule has no conversion for the pair.
+ */
+function typeChangeQuestionOf(event: TypeChangeEvent): string {
+  const column = `${event.tableName}.${event.columnName}`;
+  if (event.lossy !== undefined) {
+    return `A real run converts ${column} from ${event.fromType} to ${event.toType} only under the consent naming the column (--accept-data-loss=${column}) or a yes at a terminal, as it is ${describeClassed(event.lossy.judgement)}.`;
+  }
+  const held =
+    event.rowsHoldingValue === undefined
+      ? ""
+      : ` (${describeRowCount(event.rowsHoldingValue)} holding a value)`;
+  return `A real run would ask before changing ${column} from ${event.fromType} to ${event.toType}${held}.`;
+}
+
 /** The question a real run would ask about `event`, named. */
 function questionOf(event: ClassifierEvent): string {
   const column = `${event.tableName}.${event.columnName}`;
@@ -262,7 +283,7 @@ function questionOf(event: ClassifierEvent): string {
     case "add_required_field_no_default":
       return `A real run would ask how to fill ${column}, a required column with no default, in ${event.tableRowCount} existing row(s).`;
     case "type_change":
-      return `A real run would ask before changing ${column} from ${event.fromType} to ${event.toType}.`;
+      return typeChangeQuestionOf(event);
     case "destructive_drop":
       return `A real run would ask before dropping ${column} and its values in ${event.tableRowCount} row(s).`;
   }

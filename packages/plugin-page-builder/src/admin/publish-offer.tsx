@@ -38,6 +38,7 @@ import {
 } from "@nextlyhq/ui";
 import { Component, PanelRight, TriangleAlert } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useId,
   useRef,
@@ -58,8 +59,10 @@ import {
   type UnpublishedDependency,
 } from "../publish-readiness-contract";
 
+import { PUBLISHING_ACTIONS } from "./publishing-actions";
+
 /** What is being published, in the words the dialog uses for it. */
-export type PublishSubject = "page" | "component" | "Layout";
+export type PublishSubject = "page" | "component" | "header & footer set";
 
 /** The author's answer. */
 export type PublishChoice =
@@ -82,9 +85,6 @@ export interface PublishOfferInput {
    */
   readonly enabled?: boolean;
 }
-
-/** The action ids that put the document live. */
-const PUBLISHING_ACTIONS: ReadonlySet<string> = new Set(["publish"]);
 
 /**
  * How many times one publish asks, the draft having changed while it was
@@ -110,37 +110,11 @@ function readinessRequest(input: PublishOfferInput): PublishReadinessRequest {
  * place it anywhere inside the document editor.
  */
 export function usePublishOffer(input: PublishOfferInput): JSX.Element {
-  const [question, setQuestion] = useState<{
-    readiness: PublishReadinessResponse;
-    answer: (choice: PublishChoice) => void;
-  } | null>(null);
+  const { ask, dialog } = usePublishAsk(input.subject);
   const latest = useRef(input);
   useEffect(() => {
     latest.current = input;
   });
-
-  /**
-   * Put the question, when the answer calls for one: the author's choice, or
-   * null when there was nothing to ask.
-   */
-  const ask = async (
-    readiness: PublishReadinessResponse | null
-  ): Promise<PublishChoice | null> => {
-    if (
-      readiness === null ||
-      (readiness.dependencies.length === 0 && readiness.missing === 0)
-    ) {
-      return null;
-    }
-    const choice = await new Promise<PublishChoice>(answer => {
-      setQuestion({ readiness, answer });
-    });
-    setQuestion(null);
-    if (choice.kind === "cancel") {
-      throw new DOMException("Publishing was cancelled.", "AbortError");
-    }
-    return choice;
-  };
 
   useBeforeDocumentAction(async (action, store) => {
     if (!PUBLISHING_ACTIONS.has(action)) return;
@@ -180,13 +154,101 @@ export function usePublishOffer(input: PublishOfferInput): JSX.Element {
     );
   });
 
-  return (
-    <PublishOfferDialog
-      readiness={question?.readiness ?? null}
-      subject={input.subject}
-      onAnswer={choice => question?.answer(choice)}
-    />
+  return dialog;
+}
+
+/**
+ * The question asked before a publish, and the dialog that asks it: `ask`
+ * puts it when the readiness answer calls for one, and answers the author's
+ * choice, or null when there was nothing to ask; called off, it throws.
+ */
+function usePublishAsk(subject: PublishSubject): {
+  ask: (
+    readiness: PublishReadinessResponse | null
+  ) => Promise<PublishChoice | null>;
+  dialog: JSX.Element;
+} {
+  const [question, setQuestion] = useState<{
+    readiness: PublishReadinessResponse;
+    answer: (choice: PublishChoice) => void;
+  } | null>(null);
+  const ask = useCallback(
+    async (
+      readiness: PublishReadinessResponse | null
+    ): Promise<PublishChoice | null> => {
+      if (
+        readiness === null ||
+        (readiness.dependencies.length === 0 && readiness.missing === 0)
+      ) {
+        return null;
+      }
+      const choice = await new Promise<PublishChoice>(answer => {
+        setQuestion({ readiness, answer });
+      });
+      setQuestion(null);
+      if (choice.kind === "cancel") {
+        throw new DOMException("Publishing was cancelled.", "AbortError");
+      }
+      return choice;
+    },
+    []
   );
+  return {
+    ask,
+    dialog: (
+      <PublishOfferDialog
+        readiness={question?.readiness ?? null}
+        subject={subject}
+        onAnswer={choice => question?.answer(choice)}
+      />
+    ),
+  };
+}
+
+/** The question asked before publishing a document stored by its own session. */
+export interface PublishQuestion {
+  /**
+   * Ask about the unpublished parts `documents` place, publishing those the
+   * author chooses with them. Throws when the author calls the publish off,
+   * so nothing goes live, and, when `stillMay` says the document may no
+   * longer be written once the author answered, before any part is published.
+   */
+  readonly offer: (
+    documents: readonly unknown[],
+    stillMay?: () => boolean
+  ) => Promise<void>;
+  /** The question, to be drawn anywhere inside the editor. */
+  readonly dialog: JSX.Element;
+}
+
+/**
+ * The same question for a document published through its own session
+ * rather than the form's actions: a header or footer edited in place.
+ */
+export function usePublishQuestion(subject: PublishSubject): PublishQuestion {
+  const { ask, dialog } = usePublishAsk(subject);
+  const offer = useCallback(
+    async (
+      documents: readonly unknown[],
+      stillMay?: () => boolean
+    ): Promise<void> => {
+      const readiness = await askReadiness({ documents, layout: null });
+      const choice = await ask(readiness);
+      // Its parts go live only with it: a document no longer to be written
+      // (its lock taken meanwhile) takes none of them live.
+      if (stillMay !== undefined && !stillMay()) {
+        throw new Error(
+          `This ${subject} can no longer be published from here, so nothing it uses was published either.`
+        );
+      }
+      if (choice?.kind === "with" && readiness !== null) {
+        const result = await publishChosen(choice.dependencies);
+        reportLeftUnpublished(result, readiness, subject);
+      }
+    },
+    [ask, subject]
+  );
+  return { offer, dialog };
 }
 
 /**
@@ -348,7 +410,7 @@ export function reportLeftUnpublished(
 function nameOf(entry: UnpublishedDependency): string {
   if (entry.title !== null) return entry.title;
   return entry.kind === "layout"
-    ? "A Layout you can't view"
+    ? "A header & footer set you can't view"
     : "A component you can't view";
 }
 
@@ -357,7 +419,7 @@ function withheldBecause(entry: UnpublishedDependency): string | null {
   if (entry.mayPublish) return null;
   if (entry.title === null) return "You can't view it";
   return entry.kind === "layout"
-    ? "You can't publish Layouts"
+    ? "You can't publish header & footer sets"
     : "You can't publish components";
 }
 
@@ -375,11 +437,21 @@ function headingFor(
       ? `This ${subject} uses a component that no longer exists`
       : `This ${subject} uses components that no longer exist`;
   }
-  if (components === 0) return `This ${subject}'s Layout isn't published`;
+  if (components === 0)
+    return `This ${subject}'s header & footer set isn't published`;
   const noun =
     components === 1 ? "1 component" : `${String(components)} components`;
+  // Live, each named for a new setting only its unpublished changes have.
+  const allNewSettings = readiness.dependencies.every(
+    entry => entry.kind !== "component" || entry.newSettings === true
+  );
+  if (allNewSettings && !layout) {
+    return `This ${subject} uses ${noun} with a new setting that ${
+      components === 1 ? "isn't" : "aren't"
+    } published`;
+  }
   return layout
-    ? `This ${subject}'s Layout and ${noun} aren't published`
+    ? `This ${subject}'s header & footer set and ${noun} aren't published`
     : `This ${subject} uses ${noun} that ${
         components === 1 ? "isn't" : "aren't"
       } published`;
@@ -392,14 +464,20 @@ function consequenceFor(
 ): string {
   const layout = readiness.dependencies.some(entry => entry.kind === "layout");
   const components = readiness.dependencies.some(
-    entry => entry.kind === "component"
+    entry => entry.kind === "component" && entry.newSettings !== true
+  );
+  const newSettings = readiness.dependencies.some(
+    entry => entry.kind === "component" && entry.newSettings === true
   );
   const parts = [
     components
       ? `Visitors see nothing where an unpublished component sits until it's published.`
       : null,
+    newSettings
+      ? `Visitors see a component without its new setting until it's published, and publishing it publishes its other unpublished changes too.`
+      : null,
     layout
-      ? `Until its Layout is published, the ${subject} is shown inside the site's default Layout.`
+      ? `Until its header & footer set is published, the ${subject} is shown inside the site's default header & footer set.`
       : null,
     readiness.missing > 0
       ? `${
@@ -518,7 +596,9 @@ export function PublishOfferDialog({
                   >
                     {nameOf(entry)}
                     <span className="sr-only">
-                      {entry.kind === "layout" ? ", Layout" : ", component"}
+                      {entry.kind === "layout"
+                        ? ", header & footer set"
+                        : ", component"}
                     </span>
                   </label>
                   {withheld === null ? null : (

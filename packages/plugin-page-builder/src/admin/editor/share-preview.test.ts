@@ -1,6 +1,7 @@
 /**
- * The share preview: the SEO fields, then what the page offers, then its
- * title, with only what every visitor sees speaking for the page.
+ * The share preview: the SEO fields, then what the page offers (never its
+ * title), then its title, with only what every visitor sees speaking for the
+ * page.
  */
 import type {
   BlockDocument,
@@ -8,7 +9,7 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { sharePreview } from "./share-preview";
+import { sharePreview, shareTitle } from "./share-preview";
 
 /** A block that offers its props as the page's title, prose and image. */
 const definitions: SeoDefinitionSource = type =>
@@ -37,8 +38,18 @@ const hero = {
   },
 };
 
+describe("the title a result shows", () => {
+  it("is the SEO title, else the page's own, trimmed, else Untitled", () => {
+    expect(shareTitle({ metaTitle: " Plans " }, "Pricing")).toBe("Plans");
+    expect(shareTitle(undefined, "  Pricing ")).toBe("Pricing");
+    expect(shareTitle({ metaTitle: "" }, "")).toBe("Untitled");
+  });
+});
+
 describe("the share preview", () => {
-  it("takes what the page offers when there are no SEO fields", () => {
+  it("takes what the page offers when there are no SEO fields, but never its title", () => {
+    // The title is the page's own, as the published page's is: nothing in the
+    // design offers it, even a block that answers with one.
     expect(
       sharePreview({
         seo: undefined,
@@ -47,7 +58,7 @@ describe("the share preview", () => {
         definitions,
       })
     ).toEqual({
-      title: "Who we are",
+      title: "About us",
       description: "We build tools people keep.",
       image: { kind: "url", url: "/uploads/team.jpg" },
     });

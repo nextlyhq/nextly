@@ -246,7 +246,9 @@ describe("reading a module's imports", () => {
 
   it("ignores relative imports of the package's own code", () => {
     expect(
-      importedSpecifiers(`import { x } from "./canvas";`, "m.ts").filter(isBare)
+      importedSpecifiers(`import { x } from "./canvas/canvas";`, "m.ts").filter(
+        isBare
+      )
     ).toEqual([]);
   });
 });

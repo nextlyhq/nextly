@@ -17,8 +17,11 @@ export function setNonInteractive(value: boolean): void {
   nonInteractive = value;
 }
 
-/** `CI` as the tools that read it do: set unless empty, `false` or `0`. */
-function inCi(): boolean {
+/**
+ * `CI` as the tools that read it do: set unless empty, `false` or `0`. The one reading of it: what
+ * the CLI asks and what an error shows of the user's source both follow it.
+ */
+export function inCi(): boolean {
   const value = process.env.CI;
   return (
     value !== undefined && value !== "" && value !== "false" && value !== "0"

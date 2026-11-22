@@ -41,6 +41,7 @@ import { componentUsageCount, componentUsageIndex } from "../component-usage";
 import { BLOCKS_TYPE } from "../fields/blocksField";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import { SITE_STYLE_SLUG } from "../site-style-storage";
 import { USAGE_BACKFILL_JOB } from "../usage-backfill-job";
 import { backfillScopeKey } from "../usage-backfill-scope";
 import {
@@ -750,6 +751,88 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
           })
         ).rejects.toThrow();
+      });
+    });
+
+    describe("a shared style's block counts", () => {
+      const styled = (id: string): Node => ({
+        ...text(id),
+        classes: ["c-card"],
+      });
+
+      /** Each page's stored rows for `c-card`: its id, field, copy and count. */
+      async function cardRows(t: TestNextly) {
+        const rows = await t.adapter.select<Record<string, unknown>>(
+          CLASS_ROWS,
+          { where: { and: [{ column: "classId", op: "=", value: "c-card" }] } }
+        );
+        return rows
+          .map(
+            row =>
+              `${String(row.entityKey)}|${String(row.field)}|${String(row.locale)}|${String(row.variant)}|${String(row.blocks)}`
+          )
+          .sort();
+      }
+
+      it("keeps a page's count on every save, and a rebuild finds the same", async () => {
+        const { t, tick, options } = await boot();
+        // The shared style the pages wear, which a page save checks exists.
+        await t.nextly.updateSingle({
+          slug: SITE_STYLE_SLUG,
+          data: {
+            classes: [
+              {
+                id: "c-card",
+                slug: "card",
+                label: "Card",
+                orderIndex: 0,
+                styles: { base: { base: { color: "#333333" } } },
+              },
+            ],
+            _overwrite: true,
+          },
+          overrideAccess: true,
+        });
+        const first = await page(t, [styled("a"), styled("b")]);
+        const second = await page(t, [styled("c"), text("d")]);
+        await tick();
+        expect(await cardRows(t)).toEqual(
+          [
+            `${first}|content||published|2`,
+            `${second}|content||published|1`,
+          ].sort()
+        );
+
+        // An edit takes one block's style off and adds it to another: the
+        // save alone brings the count up to date, with no rebuild.
+        await t.nextly.update({
+          collection: "pages",
+          id: first,
+          data: {
+            content: document("page", [styled("a"), text("b")]),
+            _overwrite: true,
+          },
+          overrideAccess: true,
+        });
+        await t.events.settle();
+        const saved = await cardRows(t);
+        expect(saved).toEqual(
+          [
+            `${first}|content||published|1`,
+            `${second}|content||published|1`,
+          ].sort()
+        );
+
+        // A full rebuild from the stored pages writes the same counts.
+        await t.adapter.delete(CLASS_ROWS, {
+          and: [{ column: "classId", op: "=", value: "c-card" }],
+        });
+        options.limits = {
+          ...options.limits,
+          maxBytes: options.limits.maxBytes + 1,
+        };
+        await tick();
+        expect(await cardRows(t)).toEqual(saved);
       });
     });
 

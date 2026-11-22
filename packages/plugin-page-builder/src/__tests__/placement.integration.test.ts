@@ -14,10 +14,9 @@
 import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
-  hasBlock,
-  registerBlocks,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -28,6 +27,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
 import { BLOCKS_TYPE } from "../fields/blocksField";
+import { blockRegistry } from "../index";
 import { pageBuilder } from "../plugin";
 
 const base = {
@@ -47,10 +47,12 @@ const RULE = { on: false };
 /** The box's slots, so turning the rule on can withdraw the aside. */
 const BOX_SLOTS: Record<string, object> = { children: {}, aside: {} };
 
-function registerPlacementBlocks(): void {
-  if (hasBlock("acme/linkbox")) return;
-  registerBlocks(
-    [
+const placementBlocks = definePlugin({
+  name: "acme",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init: ctx => {
+    blockRegistry(ctx).register([
       {
         ...base,
         name: "acme/linkbox",
@@ -69,10 +71,9 @@ function registerPlacementBlocks(): void {
         contentModel: () => ({ is: ["flow", "phrasing", "interactive"] }),
       },
       { ...base, name: "acme/note" },
-    ] as never,
-    { source: "acme" }
-  );
-}
+    ] as never);
+  },
+});
 
 function ruleOn(): void {
   RULE.on = true;
@@ -163,7 +164,7 @@ describe.each(getConfiguredTestDialects())(
       warned.length = 0;
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [pageBuilder(), placementBlocks],
         logger,
         ...(options.translated
           ? {
@@ -181,7 +182,6 @@ describe.each(getConfiguredTestDialects())(
             }
           : {}),
       });
-      registerPlacementBlocks();
       return current;
     }
 

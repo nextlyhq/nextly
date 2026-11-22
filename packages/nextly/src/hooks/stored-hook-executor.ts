@@ -28,6 +28,7 @@ import type { StoredHookConfig } from "@nextly/schemas/dynamic-collections/types
 import { NextlyError } from "../errors/nextly-error";
 import { consoleLogger } from "../shared/types";
 
+import { withHookLanguage } from "./hook-language";
 import type { SideEffectHookFailure } from "./hook-registry";
 import { contextForPhase, isSideEffectHookType } from "./hook-registry";
 import { normalizeHookError } from "./normalize-hook-error";
@@ -206,11 +207,12 @@ export class StoredHookExecutor {
       try {
         // Build context for this hook execution
         // Offered `afterCommit` only in a phase after the write, as a
-        // code-registered handler is (see `contextForPhase`).
-        const hookContext: PrebuiltHookContext = {
+        // code-registered handler is (see `contextForPhase`), and told the
+        // languages and the shared part as one is (`withHookLanguage`).
+        const hookContext: PrebuiltHookContext = withHookLanguage({
           ...contextForPhase(hookType, context),
           data: currentData,
-        };
+        });
 
         // Execute the pre-built hook with stored configuration
         const result = await prebuiltHook.execute(

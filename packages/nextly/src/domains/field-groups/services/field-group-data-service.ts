@@ -201,6 +201,18 @@ export class FieldGroupDataService {
   }
 
   /**
+   * A read of every language: each entry's field groups in every language beside it
+   * (`_allLocales`); see `FieldGroupQueryService.populateComponentDataBesideEntries`.
+   */
+  populateComponentDataBesideEntries(
+    params: Parameters<
+      FieldGroupQueryService["populateComponentDataBesideEntries"]
+    >[0]
+  ): Promise<void> {
+    return this.queryService.populateComponentDataBesideEntries(params);
+  }
+
+  /**
    * One entry's component data in several languages at once, each component
    * table read once for them all; see
    * `FieldGroupQueryService.populateComponentDataByLanguage`.

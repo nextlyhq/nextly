@@ -38,8 +38,7 @@ import {
   type ListEntriesVisitor,
 } from "../list-entries-contract";
 
-/** How long an answer is kept, so drawing the page again reads nothing new. */
-const KEPT_FOR_MS = 15_000;
+import { onCanvasSourcesChanged } from "./canvas-sources";
 
 /** A refusal as the renderer reads one: its code, words and problems. */
 interface ReadRefusal extends Error {
@@ -87,28 +86,25 @@ async function readThrough(
 
 /**
  * The canvas's data provider. Each distinct read is made once and its answer
- * kept a short while, so the page drawn again for a selection or an edit
- * elsewhere does not read again; a read in flight is shared. A refusal is not
- * kept, so the next draw asks again.
+ * kept for the provider's life, so the page drawn again for a selection or an
+ * edit elsewhere does not read again; a read in flight is shared. A refusal
+ * is not kept, so the next draw asks again. The editor's providers are
+ * replaced when the canvas's sources change (`canvasListReadsIn`).
  */
 export function canvasListData(
-  read: (query: BlocksQuery) => Promise<ListEntriesResponse> = readThrough,
-  now: () => number = Date.now
+  read: (query: BlocksQuery) => Promise<ListEntriesResponse> = readThrough
 ): BlocksDataProvider {
-  const kept = new Map<
-    string,
-    { readonly at: number; readonly answer: Promise<ListEntriesResponse> }
-  >();
+  const kept = new Map<string, Promise<ListEntriesResponse>>();
   return {
     find: async query => {
       const key = JSON.stringify(query);
       const held = kept.get(key);
-      if (held !== undefined && now() - held.at < KEPT_FOR_MS) {
-        const answer = await held.answer;
+      if (held !== undefined) {
+        const answer = await held;
         return { items: answer.items, total: answer.meta.total };
       }
       const answer = read(query);
-      kept.set(key, { at: now(), answer });
+      kept.set(key, answer);
       try {
         const settled = await answer;
         return { items: settled.items, total: settled.meta.total };
@@ -157,6 +153,9 @@ export interface CanvasListReads {
  * drafts and protected fields included.
  */
 const READS = new Map<string, CanvasListReads>();
+// The canvas's sources changed: every kept read goes, so the canvas, drawn
+// again, reads its lists afresh through new providers.
+onCanvasSourcesChanged(() => READS.clear());
 /**
  * The person whose reads `READS` holds, so another's are dropped first.
  * Always a person known by id: reads made before the signed-in person is
@@ -213,8 +212,14 @@ export function canvasListReadsIn(
 ): CanvasListReads {
   // The route answers whoever the session cookie names, so while the person
   // is not known by id, each ask gets reads of its own that nothing keeps:
-  // a sign-in under way cannot be handed the previous account's rows.
-  if (userId === null) return listReadsIn(locale, visitor);
+  // a sign-in under way cannot be handed the previous account's rows. What
+  // was kept goes too: signed out, not even the same person signing back in
+  // is answered from it.
+  if (userId === null) {
+    READS.clear();
+    readsFor = undefined;
+    return listReadsIn(locale, visitor);
+  }
   if (readsFor !== userId) {
     READS.clear();
     readsFor = userId;

@@ -14,6 +14,7 @@
  * server rejected with `DISALLOWED_DOCUMENT_KIND`. Every test in the suite
  * asserted declarations, and none of them opened the create flow.
  */
+import { createBlockRegistry } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { componentsCollection } from "../collections/components";
@@ -34,7 +35,9 @@ function contentFieldOf(collection: { fields: unknown }): { blocks?: unknown } {
 
 /** What the registered type says about a value written to that field. */
 function validateAgainst(declaration: { blocks?: unknown }, value: unknown) {
-  const type = blocksFieldType() as {
+  // The site's block registry, holding none: the field judges a document by
+  // the registry it is built with.
+  const type = blocksFieldType(undefined, undefined, createBlockRegistry()) as {
     validate: (
       value: unknown,
       args: { data: object; req: object; field: unknown; path: string }

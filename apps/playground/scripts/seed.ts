@@ -16,11 +16,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { blocksOf } from "@nextlyhq/plugin-page-builder";
 import { getNextly } from "nextly";
 import { seedPermissions, seedSuperAdmin } from "nextly/database/seeders";
 
 import { isCliEntry } from "../../../scripts/cli-entry.mjs";
-import config from "../nextly.config";
+import config, { pageBuilderPlugin } from "../nextly.config";
 import { seedCompositionDemo, type DemoStore } from "../seed/composition-demo";
 import {
   KITCHEN_SINK_DOCUMENT,
@@ -340,6 +341,8 @@ async function seedDemoSite(nextly: DemoStore): Promise<{ created: number }> {
       (await seedMedia(nextly, ["hero-desk.webp"])).idByFilename.get(
         "hero-desk.webp"
       ) ?? null,
+    // The site's own nesting rules, from the page builder this seed started.
+    nesting: blocksOf(pageBuilderPlugin).nestingSource(),
   });
 }
 

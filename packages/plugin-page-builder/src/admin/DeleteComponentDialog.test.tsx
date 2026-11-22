@@ -336,7 +336,7 @@ describe("the dry run", () => {
         })
       );
     show();
-    expect(await screen.findByText(/A Layout uses/)).toBeTruthy();
+    expect(await screen.findByText(/A header & footer set uses/)).toBeTruthy();
     expect(calls).toEqual([{ dryRun: true }]);
   });
 
@@ -356,7 +356,7 @@ describe("the dry run", () => {
         })
       );
     show();
-    expect(await screen.findByText(/A Layout uses/)).toBeTruthy();
+    expect(await screen.findByText(/A header & footer set uses/)).toBeTruthy();
     expect(screen.getByRole("link", { name: /^Main\b/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /then delete/ })).toBeNull();
     expect(

@@ -51,7 +51,6 @@ import { withMigrationExcluded } from "../domains/field-groups/migration/sync-gu
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
 import {
-  assertPerLanguageStorageUnchanged,
   publishesPerLanguage,
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
@@ -69,7 +68,10 @@ import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier
 import { hasRelationSwitches } from "../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
 import { desiredCollectionTable } from "../domains/schema/pipeline/desired-collection-table";
-import { buildDesiredTableFromFields } from "../domains/schema/pipeline/diff/build-from-fields";
+import {
+  buildDesiredTableFromComponentFields,
+  buildDesiredTableFromFields,
+} from "../domains/schema/pipeline/diff/build-from-fields";
 import { diffSnapshots } from "../domains/schema/pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../domains/schema/pipeline/diff/introspect-live";
 import type {
@@ -171,6 +173,10 @@ import { consoleLogger } from "../shared/types";
 import type { SanitizedNextlyConfig } from "../shared/types/config";
 import type { SingleHooks } from "../singles/config/types";
 
+import {
+  type TypeChangedEntity,
+  typeChangesHeldBack,
+} from "./code-first-type-changes";
 import { planFieldGroupReload } from "./field-group-reload-plan";
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
 import { bootSeedingFollows } from "./seed-permissions";
@@ -516,6 +522,10 @@ async function pruneRemovedSingleDefaults(
 }
 
 interface ComponentRegistrySurface {
+  /**
+   * The sync reports a group it could not write in `errors` rather than throwing, so a caller that
+   * only catches would take an unwritten group for a synced one (`componentSyncErrors`).
+   */
   syncCodeFirstComponents(configs: unknown[]): Promise<unknown>;
   // See CollectionRegistrySurface.getAllCollections — same orphan-drop guard,
   // for UI-created components (components have no status column). Optional.
@@ -523,6 +533,22 @@ interface ComponentRegistrySurface {
     Array<{ slug?: string; tableName?: string; fields?: unknown[] }>
   >;
 }
+/**
+ * The groups a code-first sync reported it could not write, as `slug: error` lines. Empty for a
+ * result that reports none, including one from a registry that returns nothing.
+ */
+function componentSyncErrors(result: unknown): string[] {
+  const errors = (result as { errors?: unknown } | undefined)?.errors;
+  if (!Array.isArray(errors)) return [];
+  return errors.map(entry => {
+    const { slug, error } = (entry ?? {}) as {
+      slug?: unknown;
+      error?: unknown;
+    };
+    return `${String(slug)}: ${String(error)}`;
+  });
+}
+
 interface SchemaRegistrySurface {
   registerDynamicSchema(
     tableName: string,
@@ -731,7 +757,17 @@ async function syncCodeFirstMetadataOnly(
       "fieldGroupRegistryService"
     )) as ComponentRegistrySurface;
     const payload = buildComponentSyncPayload(newConfig.fieldGroups ?? []);
-    if (payload.length > 0) await compReg.syncCodeFirstComponents(payload);
+    if (payload.length > 0) {
+      const failed = componentSyncErrors(
+        await compReg.syncCodeFirstComponents(payload)
+      );
+      if (failed.length > 0) {
+        components = false;
+        logger?.warn(
+          `[Nextly HMR] metadata-only component sync left groups unwritten:\n  - ${failed.join("\n  - ")}`
+        );
+      }
+    }
   } catch (err) {
     components = false;
     logger?.warn(
@@ -766,7 +802,9 @@ function publishScopeRecording(
     webhooks?: CollectionDef["webhooks"];
   }>,
   pluginSlugs: Set<string>,
-  synced: boolean
+  synced: boolean,
+  /** Whether an entity keeps its prior policy: still present, so never pruned, and given no opt-in. */
+  keepsPrior: (slug: string) => boolean = () => false
 ): void {
   // Provenance comes from the plugin contribution list, not `admin.isPlugin`:
   // a plugin's opt-out must be tagged `plugin` so the prune below never removes
@@ -795,7 +833,7 @@ function publishScopeRecording(
   }
   pruneRemovedCodeFirstRecording(scope, present);
   for (const e of entities) {
-    if (!e.slug) continue;
+    if (!e.slug || keepsPrior(e.slug)) continue;
     const resolved = resolveWebhookRecording(e.webhooks);
     if (resolved.record === true) {
       setWebhookRecording(scope, e.slug, true, sourceOf(e.slug), resolved.emit);
@@ -839,7 +877,13 @@ function republishRecordingPolicies(
     singles?: SingleDef[];
     plugins?: unknown[];
   },
-  scopes: { collections: boolean; singles: boolean }
+  scopes: { collections: boolean; singles: boolean },
+  /**
+   * Entities deferred this reload, as `<kind>:<slug>`: their table and registry row keep the
+   * stored shape, so they keep the recording policy published for it and gain no opt-in or `emit`
+   * the new configuration adds, whose stripping would read fields they do not have yet.
+   */
+  deferred: ReadonlySet<string> = new Set()
 ): void {
   const pluginCollections = collectPluginContributedSlugs(
     newConfig.plugins,
@@ -853,13 +897,15 @@ function republishRecordingPolicies(
     "collection",
     newConfig.collections ?? [],
     pluginCollections,
-    scopes.collections
+    scopes.collections,
+    slug => deferred.has(`collection:${slug}`)
   );
   publishScopeRecording(
     "single",
     newConfig.singles ?? [],
     pluginSingles,
-    scopes.singles
+    scopes.singles,
+    slug => deferred.has(`single:${slug}`)
   );
 }
 
@@ -1209,6 +1255,9 @@ async function ensureLocalizedCompanionsForReload(
   // apply run for these: the copy is the only thing standing between the apply's DROP and the
   // values it would take with it.
   const preservationFailed: string[] = [];
+  // Whether any translations table was refused or could not be brought into step this reload, in
+  // either phase: what the date-column conversion after the pass waits on.
+  let companionRefused = false;
   // Entities whose content could not be copied BACK onto main when localization was turned off.
   // The caller must not publish the non-localized configuration for these: the app would read the
   // stale main values, accept edits on them, and a later successful retry would copy the
@@ -1231,8 +1280,9 @@ async function ensureLocalizedCompanionsForReload(
     resolveCompanionSeedDebt,
     survivingCompanionRefusal,
   } = await import("../domains/i18n/runtime/companion-io");
-  const { resolveCollectionTableName, resolveComponentTableName } =
-    await import("../domains/schema/utils/resolve-table-name");
+  const { resolveCollectionTableName } = await import(
+    "../domains/schema/utils/resolve-table-name"
+  );
   const { resolveSingleTableName } = await import(
     "../domains/singles/services/resolve-single-table-name"
   );
@@ -1278,8 +1328,12 @@ async function ensureLocalizedCompanionsForReload(
     ],
     [
       "fieldGroup",
-      (config.fieldGroups ?? []) as Localizable[],
-      e => fieldGroupTables.get(e.slug!) ?? resolveComponentTableName(e.slug!),
+      // Only the groups whose table the reload resolved. One it left out is one whose storage it
+      // could not read, and a name derived for it would address a table that may not be there.
+      ((config.fieldGroups ?? []) as Localizable[]).filter(
+        e => e.slug !== undefined && fieldGroupTables.has(e.slug)
+      ),
+      e => fieldGroupTables.get(e.slug!)!,
     ],
   ];
 
@@ -1419,6 +1473,7 @@ async function ensureLocalizedCompanionsForReload(
         },
         error => {
           if (phase === "beforeApply") preservationFailed.push(entity.slug!);
+          companionRefused = true;
           consoleLogger.warn(
             `[nextly] Could not prepare the translations table for "${entity.slug}". ` +
               `Writes in a non-default locale will be refused until it exists: ` +
@@ -1460,6 +1515,7 @@ async function ensureLocalizedCompanionsForReload(
           recordedBefore: recordedBeforeOf(recordedBefore, kind, entity.slug),
         },
         error => {
+          companionRefused = true;
           consoleLogger.warn(
             `[nextly] Could not update the translations table for "${entity.slug}". ` +
               `Newly translatable fields may fail to save until it is in step: ` +
@@ -1474,7 +1530,10 @@ async function ensureLocalizedCompanionsForReload(
       );
       // Its per-language unique indexes, once its columns are in step. Best-effort, as above, and
       // not after a column failure: a refused column is not the field's to index.
-      if (!columnsInStep) continue;
+      if (!columnsInStep) {
+        companionRefused = true;
+        continue;
+      }
       const { reconcileCompanionUniqueIndexes } = await import(
         "../domains/i18n/runtime/companion-unique-reconcile"
       );
@@ -1486,12 +1545,42 @@ async function ensureLocalizedCompanionsForReload(
           fields: entity.fields ?? [],
         },
         error => {
+          companionRefused = true;
           consoleLogger.warn(
             `[nextly] Could not index the translations table for "${entity.slug}". ` +
               `Unique translated fields are not enforced in each language until it is: ` +
               `${error instanceof Error ? error.message : String(error)}`
           );
         }
+      );
+    }
+  }
+
+  // Each translated date column an earlier release made with a time zone, of every entity the
+  // registry holds, converted as the development sync converts it: only after the apply (or on a
+  // reload with no schema change), so a reload whose apply is then refused has converted nothing,
+  // and only once this pass refused nothing and brought every translations table into step. Best-effort like the rest of the reload: a failure is told, and the next one retries.
+  if (
+    phase === "afterApply" &&
+    !companionRefused &&
+    preservationFailed.length === 0 &&
+    restoreFailed.length === 0
+  ) {
+    try {
+      const { convertZonedDateCompanions } = await import(
+        "../domains/i18n/runtime/zoned-date-companions"
+      );
+      await convertZonedDateCompanions(
+        adapter as unknown as Parameters<typeof convertZonedDateCompanions>[0],
+        {
+          convert: true,
+          onNotice: message => consoleLogger.info(`[nextly] ${message}`),
+        }
+      );
+    } catch (error) {
+      consoleLogger.warn(
+        `[nextly] Could not convert a translated date column: ` +
+          `${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
@@ -1527,7 +1616,8 @@ const globalForReload = globalThis as unknown as {
 /**
  * How a reload ended. `"refused"`: another process held the schema lock, or a
  * storage migration was in flight, so nothing was read or applied and trying
- * again later can succeed. `"finished"`: everything else, including a reload
+ * again later can succeed; or `NODE_ENV` is `production`, where a reload never
+ * applies and nothing was read either. `"finished"`: everything else, including a reload
  * that failed and logged why; another try reads the same files and fails the
  * same way.
  */
@@ -1623,8 +1713,12 @@ function terminalPromptDispatcher(): PromptDispatcher {
       loaded ??= import(
         "../domains/schema/pipeline/prompt-dispatcher/clack-terminal"
       ).then(
+        // A reload runs inside the development server: a lossy type change clears its values only
+        // under the consent naming its column, never on a question.
         ({ ClackTerminalPromptDispatcher }) =>
-          new ClackTerminalPromptDispatcher()
+          new ClackTerminalPromptDispatcher(undefined, {
+            asksAboutTypeChanges: false,
+          })
       );
       return (await loaded).dispatch(args);
     },
@@ -1701,6 +1795,25 @@ function startReload(opts?: ReloadOptions): Promise<ReloadOutcome> {
 async function runReload(opts?: ReloadOptions): Promise<ReloadOutcome> {
   const resolveService = (name: string): unknown =>
     opts?.resolver ? opts.resolver(name) : defaultResolver(name);
+
+  // Production never takes the development push: a reload applies the configuration straight to
+  // the database, without a migration. Asked before the lock and before the configuration is
+  // read, so nothing is locked, created or written, and the running configuration stays in
+  // place. Skipped with a warning rather than thrown, for the reason a refused lock is: an
+  // exception escaping here turns every later request into a 500. Only `NODE_ENV=production`
+  // counts, as for `db:sync`.
+  if (process.env.NODE_ENV === "production") {
+    const skipped =
+      "[Nextly HMR] schema reload skipped: `NODE_ENV` is `production`, and a reload changes the database directly, without a migration. Nothing was changed. " +
+      'Run `nextly migrate:create --name="<migration-name>"` where you develop, commit the migration, then run `nextly migrate` against this database.';
+    try {
+      ((await resolveService("logger")) as LoggerLike).warn(skipped);
+    } catch {
+      // No logger is registered yet; the refusal is still said once.
+      consoleLogger.warn(skipped);
+    }
+    return "refused";
+  }
 
   let adapter: AdapterLike | undefined;
   let logger: LoggerLike | undefined;
@@ -1846,7 +1959,7 @@ async function applyReloadHolding(
         singles?: SingleDef[];
         fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
-        /** The per-language storage choice, which a reload may not change. */
+        /** The deprecated per-language storage setting: it chooses nothing, so a reload ignores it. */
         perLanguageStorage?: boolean;
         auditRetention?: ResolvedAuditRetentionConfig;
         localization?: { defaultLocale?: string };
@@ -1940,7 +2053,12 @@ async function applyReloadHolding(
     const previousExtended = currentConfiguredExtensions();
     reloadUndo.push(() => publishConfiguredExtensions(previousExtended));
     clearConfigCache();
-    const result = await loadConfig();
+    // A reload a save starts refuses a missing configuration file, keeping the one it has: a file
+    // deleted or still being renamed is not a configuration that declares nothing. The start's
+    // own reload keeps the default, as a site without one starts today.
+    const result = await loadConfig({
+      missing: opts?.atStart === true ? "defaults" : "refuse",
+    });
     loadedConfig = result.config;
     // Watch exactly what this read: the config and every file it imported. Set
     // before the checks below, which may still refuse the edit; the fix for a
@@ -1969,10 +2087,6 @@ async function applyReloadHolding(
         };
       }
     ).config;
-
-    // The tables the running site reads and writes were laid out for the per-language storage
-    // choice it started with, so a config that changes it is refused until the site restarts.
-    assertPerLanguageStorageUnchanged(newConfig?.perLanguageStorage);
 
     // The reload repopulates the field-type registry through `loadConfig` but
     // never goes back through `registerServices`, so the boot gate does not run
@@ -2254,7 +2368,23 @@ async function applyReloadHolding(
   });
   let extensionSchemaChanged: boolean;
   try {
+    // Each field group under the table it is stored in, so a contribution to a group stays on
+    // that table: `fg_<slug>` on a site whose field-group storage was migrated. An unreadable
+    // registry refuses the reload, as an unreadable one refuses the start.
+    const { declaredFieldGroupStorage } = await import(
+      "../domains/field-groups/services/field-group-stored-tables"
+    );
+    const fieldGroups = await declaredFieldGroupStorage(
+      adapter,
+      newConfig.fieldGroups
+    );
     const reloadedExtensionSchema = await compileAndPublishExtensionSchema({
+      ...(fieldGroups === undefined
+        ? {}
+        : {
+            fieldGroupTables: fieldGroups.tables,
+            fieldGroupTypeColumns: fieldGroups.typeColumns,
+          }),
       dialect,
       plugins: newConfig.plugins ?? [],
       config: newConfig,
@@ -2572,6 +2702,13 @@ async function applyReloadHolding(
     [...skippedComponentSlugs].map(slug => `fieldGroup:${slug}`)
   );
 
+  // Each entity whose diff the reload applies, as `<kind>:<slug>`, and those whose diff changes a
+  // column's type, which are judged once every entity carries its recorded fields
+  // (`typeChangesHeldBack`, below).
+  const startedAsChange = hasChanges;
+  const changedEntities = new Set<string>();
+  const typeChanged: TypeChangedEntity[] = [];
+
   const desiredCollections: Record<string, DesiredCollection> = {};
   for (const target of targets) {
     // Always register the entry so drizzle-kit's schema stays complete.
@@ -2624,6 +2761,13 @@ async function applyReloadHolding(
         continue;
       }
       hasChanges = true;
+      changedEntities.add(`collection:${target.slug}`);
+      typeChanged.push({
+        kind: "collection",
+        slug: target.slug,
+        table: desiredTable,
+        operations,
+      });
       desiredCollections[target.slug] = entry;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2683,6 +2827,13 @@ async function applyReloadHolding(
         continue;
       }
       hasChanges = true;
+      changedEntities.add(`single:${target.slug}`);
+      typeChanged.push({
+        kind: "single",
+        slug: target.slug,
+        table: desiredTable,
+        operations,
+      });
       desiredSingles[target.slug] = entry;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2707,11 +2858,26 @@ async function applyReloadHolding(
       const live = liveByTable.has(target.tableName)
         ? { tables: [liveByTable.get(target.tableName)!] }
         : { tables: [] };
-      const desiredTable = buildDesiredTableFromFields(
+      // A field group's table as the apply builds it (`buildDesiredSnapshot`): its system columns,
+      // its timestamps as the field-group creator types them, and the discriminator the live
+      // table carries. Built as a collection's, the judgement saw a type change that is not there
+      // (MySQL's `datetime` timestamps read as `timestamp`) and deferred every edit to the group.
+      const desiredTable = buildDesiredTableFromComponentFields(
         target.tableName,
         heldFields(leaving.entries, "fieldGroup", target.slug, target.fields),
         dialect,
-        { builtBy: "codeFirst" as const, localized: storesPerLanguage(target) }
+        {
+          builtBy: "codeFirst" as const,
+          localized: storesPerLanguage(target),
+          typeColumn: chooseTypeColumns(
+            live.tables.map(table => ({
+              table: table.name,
+              columns: table.columns.map(column => column.name),
+            })),
+            [target.tableName],
+            identifierCase
+          ).get(target.tableName),
+        }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
@@ -2733,6 +2899,13 @@ async function applyReloadHolding(
         continue;
       }
       hasChanges = true;
+      changedEntities.add(`fieldGroup:${target.slug}`);
+      typeChanged.push({
+        kind: "fieldGroup",
+        slug: target.slug,
+        table: desiredTable,
+        operations,
+      });
       desiredComponents[target.slug] = entry;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2753,6 +2926,102 @@ async function applyReloadHolding(
     resolve,
     adapter,
   });
+
+  // Each field type change, judged now that every code-first entity carries its recorded fields,
+  // by the judge db:sync asks (`typeChangesHeldBack`). An entity whose change is blocked, would
+  // clear a value no consent naming its column covers, or has no conversion Nextly runs is held
+  // back whole, as a change needing review is: deferred, so its translations table's work waits
+  // too, and left out of the apply, so nothing of it changes while every other entity's change
+  // still applies. A judgement that cannot read the rows (a lost connection) applies nothing this
+  // cycle, as an introspection that fails does.
+  let heldBack: Awaited<ReturnType<typeof typeChangesHeldBack>>;
+  try {
+    heldBack = await typeChangesHeldBack({
+      db,
+      dialect,
+      live: liveSnapshot,
+      schema: {
+        collections: desiredCollections,
+        singles: desiredSingles,
+        components: desiredComponents,
+      },
+      entities: typeChanged,
+      env: process.env,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.error(
+      `[Nextly HMR] Could not judge the type changes against the stored values: ${msg}. ` +
+        `No code-first schema changes were applied this cycle.`
+    );
+    undoOptimisticReloadWork();
+    return;
+  }
+  for (const { kind, slug, reasons } of heldBack) {
+    logger?.warn(
+      `[Nextly HMR] Code-first change for ${KIND_NOUN[kind]}'${slug}' was not applied: ${reasons.join(" ")}`
+    );
+    deferredSchemaChange = true;
+    deferredEntities.add(`${kind}:${slug}`);
+  }
+  const heldWhole = new Set(
+    heldBack.map(({ kind, slug }) => `${kind}:${slug}`)
+  );
+  // A development start synced the registry from the configuration before this reload, so a held
+  // entity's row already records its new fields: written back to the fields the start found, so
+  // the next start or reload judges the same change again over the same values.
+  if (heldWhole.size > 0 && held.atStart !== undefined) {
+    // Fail closed: a row not written back would record the new fields, and the next start would
+    // then find no change to judge. The reload applies nothing, and keeps what the start found for
+    // the next reload to judge from.
+    const unrestored = await restoreHeldRows(
+      heldWhole,
+      held.atStart,
+      newConfig,
+      resolve
+    );
+    if (unrestored.length > 0) {
+      logger?.error(
+        `[Nextly HMR] Could not keep the registry row of ${unrestored.join(", ")} as the start found it, ` +
+          `so its held type change could not be judged again: no code-first schema changes were ` +
+          `applied this cycle. Until the row is written back (a later reload in this process ` +
+          `retries it), revert the field's type in the configuration before the next start.`
+      );
+      holdRecordedAtStart(held.atStart);
+      undoOptimisticReloadWork();
+      return;
+    }
+  }
+  // Held whole: left out of the apply, which then never names its tables, so nothing of it changes
+  // (the drop guard keeps a table outside the desired schema as it is), and out of the registry
+  // syncs after it, so its row keeps recording it as it was and the next reload judges the same
+  // change again.
+  const leaveOutHeld = () => {
+    for (const key of heldWhole) {
+      const [kind, slug] = key.split(":") as [
+        TypeChangedEntity["kind"],
+        string,
+      ];
+      delete (
+        kind === "collection"
+          ? desiredCollections
+          : kind === "single"
+            ? desiredSingles
+            : desiredComponents
+      )[slug];
+    }
+  };
+  const notHeld =
+    (kind: TypeChangedEntity["kind"]) =>
+    (entity: { slug?: unknown }): boolean =>
+      !heldWhole.has(`${kind}:${String(entity.slug)}`);
+  leaveOutHeld();
+  // The reload has a change to apply only where an entity it does not hold back has one.
+  if (heldBack.length > 0) {
+    hasChanges =
+      startedAsChange ||
+      [...changedEntities].some(key => !deferredEntities.has(key));
+  }
 
   // A type switched off or on for a plugin's scope since its runtime tables
   // were built: in the configuration or made in the Schema Builder, whose
@@ -3036,6 +3305,10 @@ async function applyReloadHolding(
       ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
       : undefined;
 
+  // The registry merges above add back every declared entity the desired schema lacks, from its
+  // row: a held one is left out again.
+  leaveOutHeld();
+
   const desired: DesiredSchema = {
     collections: desiredCollections,
     singles: desiredSingles,
@@ -3227,7 +3500,7 @@ async function applyReloadHolding(
         "collectionRegistryService"
       )) as CollectionRegistrySurface;
       const codeFirstConfigs = buildCollectionSyncPayload(
-        newConfig.collections ?? []
+        (newConfig.collections ?? []).filter(notHeld("collection"))
       );
       const collectionSync = await registry.syncCodeFirstCollections(
         codeFirstConfigs,
@@ -3302,7 +3575,7 @@ async function applyReloadHolding(
         "singleRegistryService"
       )) as SingleRegistrySurface;
       const codeFirstSingleConfigs = buildSingleSyncPayload(
-        newConfig.singles ?? []
+        (newConfig.singles ?? []).filter(notHeld("single"))
       );
       let failedSlugs = new Set<string>();
       if (codeFirstSingleConfigs.length > 0) {
@@ -3341,7 +3614,13 @@ async function applyReloadHolding(
       // the new config; a single whose sync failed keeps its prior snapshot so
       // its new fields never pair with stale serialized metadata.
       singleReg.setCodeFirstSingles?.(newConfig.singles ?? [], {
-        keepPriorFor: failedSlugs,
+        // A held single keeps its prior snapshot too: its table and row keep the stored shape.
+        keepPriorFor: new Set([
+          ...failedSlugs,
+          ...(newConfig.singles ?? [])
+            .filter(single => !notHeld("single")(single))
+            .map(single => String(single.slug)),
+        ]),
       });
     } catch {
       // Non-fatal: same reasoning as collection metadata sync above, and the
@@ -3369,12 +3648,22 @@ async function applyReloadHolding(
       // that description and fail every read and write for it. The metadata and
       // the storage it describes move together or not at all.
       const codeFirstComponentConfigs = buildComponentSyncPayload(
-        (newConfig.fieldGroups ?? []).filter(
-          group => !skippedComponentSlugs.has(group.slug ?? "")
-        )
+        (newConfig.fieldGroups ?? [])
+          .filter(notHeld("fieldGroup"))
+          .filter(group => !skippedComponentSlugs.has(group.slug ?? ""))
       );
       if (codeFirstComponentConfigs.length > 0) {
-        await compReg.syncCodeFirstComponents(codeFirstComponentConfigs);
+        // A group the sync reports rather than writes leaves the registry behind the DDL the
+        // pipeline just applied: the reload is not in step, as it is not when the sync throws.
+        const failed = componentSyncErrors(
+          await compReg.syncCodeFirstComponents(codeFirstComponentConfigs)
+        );
+        if (failed.length > 0) {
+          componentSynced = false;
+          logger?.warn(
+            `[Nextly HMR] component sync left groups unwritten:\n  - ${failed.join("\n  - ")}`
+          );
+        }
       }
     } catch {
       // Non-fatal: same reasoning as collection/single metadata sync above.
@@ -3387,10 +3676,14 @@ async function applyReloadHolding(
     // (webhookFieldTree / expandComponentFields), so a failed component sync
     // holds both scopes' new decisions back; but a singles-only sync failure no
     // longer blocks the committed collections' decisions (and vice versa).
-    republishRecordingPolicies(newConfig, {
-      collections: collectionSynced && componentSynced,
-      singles: singleSynced && componentSynced,
-    });
+    republishRecordingPolicies(
+      newConfig,
+      {
+        collections: collectionSynced && componentSynced,
+        singles: singleSynced && componentSynced,
+      },
+      deferredEntities
+    );
 
     // Pre-compute fresh Drizzle table objects for all affected collections,
     // singles, and components. Synchronous (schema generation, no DB I/O).
@@ -3729,6 +4022,96 @@ async function recordRegistryHistory(args: {
   return atStart;
 }
 
+/**
+ * Writes each held entity's registry row back to the fields a development start found in it
+ * (`held.atStart`), through the same code-first syncs, so the row keeps describing its table until
+ * the held change lands. Returns each held entity, as `<kind> '<slug>'`, whose row a sync did not
+ * write (or every one, where a sync threw): the caller refuses the reload over any.
+ */
+async function restoreHeldRows(
+  heldWhole: ReadonlySet<string>,
+  atStart: RecordedAtStart,
+  newConfig: {
+    collections?: CollectionDef[];
+    singles?: SingleDef[];
+    fieldGroups?: ComponentDef[];
+  },
+  resolve: ServiceResolver
+): Promise<string[]> {
+  const startFields = (
+    rows: readonly { slug?: unknown; fields?: unknown }[],
+    slug: string | undefined
+  ) => rows.find(row => row.slug === slug)?.fields;
+  const restored = <T extends { slug?: string; fields?: unknown }>(
+    kind: string,
+    defs: readonly T[] | undefined,
+    rows: readonly { slug?: unknown; fields?: unknown }[]
+  ): T[] =>
+    (defs ?? []).flatMap(def => {
+      const fields = startFields(rows, def.slug);
+      return heldWhole.has(`${kind}:${def.slug}`) && Array.isArray(fields)
+        ? [{ ...def, fields }]
+        : [];
+    });
+  const named = (kind: string, slug: string) =>
+    `${kind === "fieldGroup" ? "component" : kind} '${slug}'`;
+  try {
+    const failed: string[] = [];
+    const collections = restored(
+      "collection",
+      newConfig.collections,
+      atStart.collections
+    );
+    if (collections.length > 0) {
+      const result = await (
+        (await resolve(
+          "collectionRegistryService"
+        )) as CollectionRegistrySurface
+      ).syncCodeFirstCollections(buildCollectionSyncPayload(collections), {
+        seedPermissions: false,
+      });
+      failed.push(
+        ...unwrittenSlugs(result).map(slug => named("collection", slug))
+      );
+    }
+    const singles = restored("single", newConfig.singles, atStart.singles);
+    if (singles.length > 0) {
+      const result = await (
+        (await resolve("singleRegistryService")) as SingleRegistrySurface
+      ).syncCodeFirstSingles(buildSingleSyncPayload(singles), {
+        seedPermissions: false,
+      });
+      failed.push(...unwrittenSlugs(result).map(slug => named("single", slug)));
+    }
+    const groups = restored(
+      "fieldGroup",
+      newConfig.fieldGroups,
+      atStart.components
+    );
+    if (groups.length > 0) {
+      const result = await (
+        (await resolve("fieldGroupRegistryService")) as ComponentRegistrySurface
+      ).syncCodeFirstComponents(buildComponentSyncPayload(groups));
+      failed.push(
+        ...unwrittenSlugs(result).map(slug => named("fieldGroup", slug))
+      );
+    }
+    return failed;
+  } catch {
+    return [...heldWhole].map(key => {
+      const [kind, slug] = key.split(":") as [string, string];
+      return named(kind, slug);
+    });
+  }
+}
+
+/** How a reload's notice names each kind of entity before its slug. */
+const KIND_NOUN = {
+  collection: "",
+  single: "single ",
+  fieldGroup: "component ",
+} as const;
+
 // Decides whether a collection's ops can be auto-applied from code-first.
 //
 // Most destructive ops now flow into the pipeline's Classifier +
@@ -3738,8 +4121,6 @@ async function recordRegistryHistory(args: {
 // resolution UX:
 //
 //   - drop_table: no destructive-confirm event exists for tables yet.
-//   - change_column_type: only emits a warning, no resolution. A relation
-//     switched from one related entry to many is not held: it keeps every value.
 //   - change_column_nullable (NOT NULL adds on existing rows): pipeline
 //     classifier emits add_not_null_with_nulls + asks the user, BUT
 //     only when there are actually NULL rows. Tables with no NULLs flow
@@ -3747,8 +4128,12 @@ async function recordRegistryHistory(args: {
 //     correctly. This gate is therefore a no-op for the NOT NULL case
 //     today; kept here only as a future-proof slot.
 //
-// Pure-drop, mixed drop+add, type widenings, and additive changes all
-// pass through to the pipeline.
+// Pure-drop, mixed drop+add, type changes and additive changes all pass
+// through to the pipeline. A type change is judged there by the values its
+// column holds, as `db:sync` judges it (`typeChangeJudge`): a safe one is
+// applied, a lossy one is refused unless the data-loss consent names the
+// column (NEXTLY_ACCEPT_DATA_LOSS, as nobody is asked at a reload), and a
+// blocked one is refused naming why, each before any statement runs.
 function classifyForCodeFirst(
   operations: Operation[],
   _dialect: SupportedDialect
@@ -3759,15 +4144,6 @@ function classifyForCodeFirst(
   for (const op of operations) {
     if (op.type === "drop_table") {
       reasons.push(`drops table '${op.tableName}'`);
-    } else if (
-      op.type === "change_column_type" &&
-      op.conversion !== "referenceList"
-    ) {
-      // A relation switched from one related entry to many keeps every value, each id as a
-      // one-item list, so it is not held back for review as a plain retype is.
-      reasons.push(
-        `changes column '${op.columnName}' type from '${op.fromType}' to '${op.toType}'`
-      );
     } else if (op.type === "change_column_nullable" && !op.toNullable) {
       reasons.push(
         `adds NOT NULL to column '${op.columnName}' (would fail on existing rows without a default)`

@@ -58,8 +58,12 @@ test.describe("the schema builder on a production build", () => {
     await gotoAdmin(page, "/collections/posts/create");
     await page.getByRole("textbox", { name: "Title", exact: true }).fill(TITLE);
     await page.getByRole("button", { name: /save draft/i }).click();
-    // Saving a NEW entry returns to the list.
-    await page.waitForURL(/\/collections\/posts$/, { timeout: 30_000 });
+    // The first save stays on the new post, at its own address, and the
+    // list then shows it.
+    await page.waitForURL(/\/collections\/posts\/(?!create$)[^/]+$/, {
+      timeout: 30_000,
+    });
+    await gotoAdmin(page, "/collections/posts");
     await expect(page.getByRole("link", { name: TITLE })).toBeVisible({
       timeout: 30_000,
     });

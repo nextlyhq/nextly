@@ -15,6 +15,7 @@ import {
   OPEN_BUILDER_LABEL,
   PageBuilderCard,
   PREVIEW_PAGE_LABEL,
+  SAVE_DRAFT_AND_OPEN_LABEL,
 } from "./PageBuilderCard";
 import { pageRenderInputs } from "./page-render-inputs";
 
@@ -84,12 +85,25 @@ const base = {
 };
 
 const MINIATURE = '[data-slot="page-miniature-surface"]';
-// The preview's part of the view. The section list beneath it names each
-// section by its first line, so whether the PAGE was drawn is asked of this.
-const PREVIEW = '[data-slot="page-entry-preview"]';
+// The card itself. Its section list names each section by its first line,
+// and is folded until asked for, so whether the PAGE was drawn is asked of
+// the card as it is first drawn.
+const PREVIEW = '[data-slot="page-builder-card"]';
+
+/**
+ * What the card shows: its text, leaving out the folded section list, which
+ * names each section by its first line and is in the page, hidden, until the
+ * fold is opened.
+ */
+function shownText(card: Element | null): string {
+  if (card === null) return "";
+  const shown = card.cloneNode(true) as Element;
+  for (const hidden of shown.querySelectorAll("[hidden]")) hidden.remove();
+  return shown.textContent ?? "";
+}
 
 function previewText(container: HTMLElement): string {
-  return container.querySelector(PREVIEW)?.textContent ?? "";
+  return shownText(container.querySelector(PREVIEW));
 }
 
 describe("PageBuilderCard", () => {
@@ -97,7 +111,7 @@ describe("PageBuilderCard", () => {
     render(<PageBuilderCard {...base} document={doc(0)} />);
 
     expect(
-      screen.getByRole("link", { name: /build this page/i })
+      screen.getByRole("link", { name: OPEN_BUILDER_LABEL })
     ).toBeDefined();
   });
 
@@ -109,21 +123,10 @@ describe("PageBuilderCard", () => {
     expect(container.querySelector(MINIATURE)).toBeNull();
   });
 
-  it("reads out how many sections the page holds", () => {
-    const { container } = render(
-      <PageBuilderCard {...base} document={doc(3)} />
-    );
+  it("reads out how many sections the page holds, on the fold over them", () => {
+    render(<PageBuilderCard {...base} document={doc(3)} />);
 
-    expect(previewText(container)).toContain("Live preview · 3 sections");
-  });
-
-  it("counts one section in the singular", () => {
-    const { container } = render(
-      <PageBuilderCard {...base} document={doc(1)} />
-    );
-
-    expect(previewText(container)).toContain("1 section");
-    expect(previewText(container)).not.toContain("1 sections");
+    expect(screen.getByRole("button", { name: "Sections (3)" })).toBeDefined();
   });
 
   /*
@@ -158,7 +161,7 @@ describe("PageBuilderCard", () => {
       <PageBuilderCard {...base} document={doc(2)} styleState="pending" />
     );
 
-    expect(previewText(container)).toContain("2 sections");
+    expect(previewText(container)).toContain("Sections (2)");
   });
 
   /*
@@ -196,7 +199,7 @@ describe("PageBuilderCard", () => {
     );
 
     expect(
-      screen.getByRole("link", { name: /open page builder/i })
+      screen.getByRole("link", { name: OPEN_BUILDER_LABEL })
     ).toBeDefined();
   });
 
@@ -242,7 +245,7 @@ describe("PageBuilderCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(retry).toHaveBeenCalledTimes(1);
     expect(
-      screen.getByRole("link", { name: /open page builder/i })
+      screen.getByRole("link", { name: OPEN_BUILDER_LABEL })
     ).toBeDefined();
   });
 
@@ -276,7 +279,10 @@ describe("PageBuilderCard", () => {
   it("offers no action when the field cannot be edited", () => {
     render(<PageBuilderCard {...base} document={doc(2)} canEdit={false} />);
 
-    expect(screen.queryByRole("button")).toBeNull();
+    // The fold over the sections is the only control: it shows, never edits.
+    expect(
+      screen.getAllByRole("button").map(button => button.textContent)
+    ).toEqual(["Sections (2)"]);
     expect(screen.queryByRole("link")).toBeNull();
   });
 
@@ -292,7 +298,7 @@ describe("PageBuilderCard", () => {
     render(<PageBuilderCard {...base} document={doc(2)} />);
     expect(
       screen
-        .getByRole("link", { name: /open page builder/i })
+        .getByRole("link", { name: OPEN_BUILDER_LABEL })
         .getAttribute("href")
     ).toBe(base.href);
   });
@@ -302,7 +308,7 @@ describe("PageBuilderCard", () => {
     render(
       <PageBuilderCard {...base} document={doc(2)} onNavigate={onNavigate} />
     );
-    const link = screen.getByRole("link", { name: /open page builder/i });
+    const link = screen.getByRole("link", { name: OPEN_BUILDER_LABEL });
     // `fireEvent` returns false when a handler prevented the default.
     expect(fireEvent.click(link, { button: 0 })).toBe(false);
     expect(onNavigate).toHaveBeenCalledWith(base.href);
@@ -320,7 +326,7 @@ describe("PageBuilderCard", () => {
       render(
         <PageBuilderCard {...base} document={doc(2)} onNavigate={onNavigate} />
       );
-      const link = screen.getByRole("link", { name: /open page builder/i });
+      const link = screen.getByRole("link", { name: OPEN_BUILDER_LABEL });
       expect(fireEvent.click(link, { button: 0, ...init })).toBe(true);
       expect(onNavigate).not.toHaveBeenCalled();
     }
@@ -331,7 +337,7 @@ describe("PageBuilderCard", () => {
     render(
       <PageBuilderCard {...base} document={doc(2)} onNavigate={onNavigate} />
     );
-    const link = screen.getByRole("link", { name: /open page builder/i });
+    const link = screen.getByRole("link", { name: OPEN_BUILDER_LABEL });
     fireEvent(
       link,
       new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 })
@@ -348,9 +354,7 @@ describe("PageBuilderCard", () => {
         note="Opens the default language, the one the Page Builder edits."
       />
     );
-    expect(
-      screen.getByRole("link", { name: /open page builder/i })
-    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: OPEN_BUILDER_LABEL })).toBeTruthy();
     expect(
       screen.queryByText(
         "Opens the default language, the one the Page Builder edits."
@@ -358,20 +362,99 @@ describe("PageBuilderCard", () => {
     ).not.toBeNull();
   });
 
-  it("offers the way in only once the page has been saved, and says why", () => {
-    // A page with no id has no address for the builder to open at.
-    render(<PageBuilderCard {...base} document={doc(2)} href={undefined} />);
+  it("draws the way in disabled, with the field's reason, where the field has no address", () => {
+    // A row added since the last save: the builder's address names the row
+    // by its saved id, which it does not have yet.
+    render(
+      <PageBuilderCard
+        {...base}
+        document={doc(2)}
+        href={undefined}
+        note="Save the entry once to design this row."
+      />
+    );
     expect(screen.queryByRole("link")).toBeNull();
     expect(
       (
         screen.getByRole("button", {
-          name: /open page builder/i,
+          name: OPEN_BUILDER_LABEL,
         }) as HTMLButtonElement
       ).disabled
     ).toBe(true);
     expect(
-      screen.queryByText("Save this page to open the Page Builder.")
+      screen.queryByText("Save the entry once to design this row.")
     ).not.toBeNull();
+  });
+});
+
+describe("PageBuilderCard on an entry never saved", () => {
+  const saveAndOpen = (run = vi.fn(), saving = false) => ({
+    label: SAVE_DRAFT_AND_OPEN_LABEL,
+    run,
+    saving,
+  });
+
+  it.each([
+    ["with blocks", 2],
+    ["empty", 0],
+  ])("offers to save the draft and open the builder, enabled, %s", (_, n) => {
+    const run = vi.fn();
+    render(
+      <PageBuilderCard
+        {...base}
+        document={doc(n)}
+        href={undefined}
+        saveAndOpen={saveAndOpen(run)}
+      />
+    );
+
+    const action = screen.getByRole("button", {
+      name: SAVE_DRAFT_AND_OPEN_LABEL,
+    }) as HTMLButtonElement;
+    expect(action.disabled).toBe(false);
+    // A button, not a submit: it runs the form's save itself.
+    expect(action.type).toBe("button");
+    fireEvent.click(action);
+    expect(run).toHaveBeenCalledTimes(1);
+    // No disabled "Open in builder" beside it, and no sentence saying to
+    // save first.
+    expect(
+      screen.queryByRole("button", { name: OPEN_BUILDER_LABEL })
+    ).toBeNull();
+    expect(screen.queryByText(/save this page/i)).toBeNull();
+  });
+
+  it("is not asked again while its save is under way", () => {
+    render(
+      <PageBuilderCard
+        {...base}
+        document={doc(2)}
+        href={undefined}
+        saveAndOpen={saveAndOpen(vi.fn(), true)}
+      />
+    );
+
+    const action = screen.getByRole("button", {
+      name: SAVE_DRAFT_AND_OPEN_LABEL,
+    }) as HTMLButtonElement;
+    expect(action.disabled).toBe(true);
+    expect(action.getAttribute("aria-busy")).toBe("true");
+  });
+
+  it("is not offered to someone who may not edit the page", () => {
+    render(
+      <PageBuilderCard
+        {...base}
+        document={doc(2)}
+        href={undefined}
+        canEdit={false}
+        saveAndOpen={saveAndOpen()}
+      />
+    );
+
+    expect(
+      screen.queryByRole("button", { name: SAVE_DRAFT_AND_OPEN_LABEL })
+    ).toBeNull();
   });
 });
 
@@ -422,9 +505,64 @@ const FIVE = {
   ],
 } as unknown as BlockDocument;
 
-function sectionList(): HTMLElement {
-  return screen.getByRole("list", { name: "Sections" });
+/** The fold over the sections. */
+function sectionsFold(): HTMLElement {
+  return screen.getByRole("button", { name: /^Sections \(\d+\)$/ });
 }
+
+/** The section list, opened from its fold first where it is folded. */
+function sectionList(): HTMLElement {
+  const fold = sectionsFold();
+  if (fold.getAttribute("aria-expanded") !== "true") fireEvent.click(fold);
+  return screen.getByRole("list", { name: /^Sections \(\d+\)$/ });
+}
+
+describe("PageBuilderCard's sections fold", () => {
+  it("is folded at first, under the section count, so the card stays short", () => {
+    render(<PageBuilderCard {...base} document={FIVE} />);
+
+    const fold = screen.getByRole("button", { name: "Sections (5)" });
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("list", { name: "Sections (5)" })).toBeNull();
+    // What the fold controls is there, hidden, so its reference holds.
+    const controlled = document.getElementById(
+      fold.getAttribute("aria-controls") ?? ""
+    );
+    expect(controlled?.hidden).toBe(true);
+    expect(screen.queryByRole("link", { name: /^Edit section/ })).toBeNull();
+  });
+
+  it("opens on request, naming the list it shows, and folds again", () => {
+    render(<PageBuilderCard {...base} document={FIVE} />);
+    const fold = screen.getByRole("button", { name: "Sections (5)" });
+
+    fireEvent.click(fold);
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    const list = screen.getByRole("list", { name: "Sections (5)" });
+    // The list it controls holds the rows, each a way in.
+    expect(
+      document
+        .getElementById(fold.getAttribute("aria-controls") ?? "")
+        ?.contains(list)
+    ).toBe(true);
+    expect(within(list).getAllByRole("link")).toHaveLength(5);
+
+    fireEvent.click(fold);
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("list", { name: "Sections (5)" })).toBeNull();
+  });
+
+  it("is a button of its own, never the form's submit", () => {
+    render(<PageBuilderCard {...base} document={FIVE} />);
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Sections (5)",
+        }) as HTMLButtonElement
+      ).type
+    ).toBe("button");
+  });
+});
 
 describe("PageBuilderCard's sections", () => {
   it("lists every section in page order, numbered, named, with its first line", () => {
@@ -477,6 +615,7 @@ describe("PageBuilderCard's sections", () => {
 
   it("says that adding, reordering and styling happen in the builder", () => {
     render(<PageBuilderCard {...base} document={FIVE} />);
+    sectionList();
 
     expect(
       screen.getByText("Add, reorder and style sections in the Page Builder.")
@@ -536,7 +675,7 @@ describe("PageBuilderCard for someone who may not edit the page", () => {
 
     expect(container.querySelector(MINIATURE)).not.toBeNull();
     expect(within(sectionList()).getAllByRole("listitem")).toHaveLength(5);
-    // No Edit link, no link over the picture, no Open Page Builder.
+    // No Edit link, no link over the picture, no "Open in builder".
     expect(screen.queryAllByRole("link")).toHaveLength(0);
     expect(
       screen.queryByText("Add, reorder and style sections in the Page Builder.")
@@ -545,14 +684,11 @@ describe("PageBuilderCard for someone who may not edit the page", () => {
 });
 
 describe("PageBuilderCard for a page never saved", () => {
-  it("lists its sections without links, and says to save first", () => {
+  it("lists its sections without links, since none has an address yet", () => {
     render(<PageBuilderCard {...base} document={FIVE} href={undefined} />);
 
     expect(within(sectionList()).getAllByRole("listitem")).toHaveLength(5);
     expect(screen.queryAllByRole("link")).toHaveLength(0);
-    expect(
-      screen.getByText("Save this page to open the Page Builder.")
-    ).toBeDefined();
   });
 });
 

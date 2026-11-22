@@ -35,6 +35,8 @@ function harness(
     bounds?: BusyTableBounds;
     assertHeld?: () => Promise<void>;
     leaseDeadline?: () => number | undefined;
+    /** How much later than asked each pause resumes, as a busy event loop can. */
+    sleepLate?: number;
   } = {}
 ) {
   const bounds = options.bounds ?? DEFAULT_BUSY_TABLE_BOUNDS;
@@ -55,7 +57,7 @@ function harness(
       leaseDeadline: options.leaseDeadline,
       now: () => clock,
       sleep: ms => {
-        clock += ms;
+        clock += ms + (options.sleepLate ?? 0);
         return Promise.resolve();
       },
     },
@@ -70,6 +72,22 @@ function harness(
 }
 
 describe("withBusyTableTries", () => {
+  it("starts no try a late pause leaves without room for a whole one, and stops instead", async () => {
+    // One try of 5 s in 12: the second may start at 6 s, but the pause resumes at 9 s, when a
+    // whole try no longer fits.
+    const { run, starts, notices } = harness(() => ENDED, {
+      bounds: { tryMs: 5_000, totalMs: 12_000 },
+      sleepLate: 3_000,
+    });
+
+    const stopped = await run.catch((error: unknown) => error);
+
+    expect(stopped).toBeInstanceOf(Stopped);
+    expect((stopped as Stopped).stop.tries).toBe(1);
+    expect(starts).toEqual([0]);
+    expect(notices).toEqual([]);
+  });
+
   it("returns at once where the first try gets its locks, saying nothing", async () => {
     const { run, notices, assertHeld } = harness(() => ({
       kind: "done",

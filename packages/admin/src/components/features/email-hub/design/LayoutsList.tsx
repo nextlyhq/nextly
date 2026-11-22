@@ -19,6 +19,7 @@ import {
 import { Link } from "@admin/components/ui/link";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useEmailTemplates } from "@admin/hooks/queries/useEmailTemplates";
+import { plural } from "@admin/lib/count-words";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
 import {
@@ -33,7 +34,7 @@ import { TemplateActionsMenu } from "../TemplateActionsMenu";
 import { editRouteFor, useTemplateActions } from "../useTemplateActions";
 
 import { EmailsByOwner } from "./BrandReachCard";
-import { emailsByLayout, plural } from "./design-model";
+import { emailsByLayout } from "./design-model";
 
 /** What the Default layout is built from, or that the site changed it. */
 function DefaultLayoutBadge({ layout }: { layout: EmailTemplateRecord }) {

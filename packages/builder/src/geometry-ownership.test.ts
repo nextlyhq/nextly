@@ -76,7 +76,7 @@ const GEOMETRY_MODULE = "geometry.ts";
  * are both refused. Adding a third is a decision to be argued in a review, not a
  * name to be chosen.
  */
-const GEOMETRY_DOM_MODULE = "geometry-dom.ts";
+const GEOMETRY_DOM_MODULE = "canvas/geometry-dom.ts";
 
 /** This file, which necessarily names the reads it is looking for. */
 const OWN_TEST = "geometry-ownership.test.ts";
@@ -220,7 +220,7 @@ describe("rectangles are read across the frame in one place", () => {
     // becomes a family of names, because the argument for adding one reads just
     // as well the third time.
     expect(
-      isModule(join(SRC_DIR, "geometry-dom.ts"), GEOMETRY_DOM_MODULE)
+      isModule(join(SRC_DIR, "canvas", "geometry-dom.ts"), GEOMETRY_DOM_MODULE)
     ).toBe(true);
     expect(
       isModule(join(SRC_DIR, "canvas-geometry-dom.ts"), GEOMETRY_DOM_MODULE)

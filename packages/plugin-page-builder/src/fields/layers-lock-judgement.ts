@@ -17,9 +17,13 @@
  * @module fields/layers-lock-judgement
  */
 import {
+  ForestTooLargeError,
   layersLockChanges,
+  migrateDocument,
+  treeDepth,
   type BlockDocument,
   type LayersLockChange,
+  type MigrationSource,
 } from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldIssue,
@@ -34,10 +38,10 @@ import {
   type OpenRemovalReader,
 } from "../breakpoint-removal/lock-acceptance";
 
+import { storedFormsOnce } from "./added-undefined-ids";
 import { documentOf, type LayersLockUnjudged } from "./blocks-composition";
 import { isForest } from "./blocks-document";
 import { LAYERS_LOCK_CHANGED, pageLockMessage } from "./layers-lock-wording";
-import { readStoredForms } from "./lock-baselines";
 
 /**
  * Whether a field path names a top-level field. A stored value can be read
@@ -114,7 +118,14 @@ export async function layersLockIssues(
   args: PluginFieldValidateArgs,
   label: string,
   onUnjudged?: (found: LayersLockUnjudged) => void,
-  openRemoval?: OpenRemovalReader
+  openRemoval?: OpenRemovalReader,
+  /**
+   * The site's block versions and upgrade steps. The write and the stored
+   * form are compared with every block upgraded, as the editor holds them: a
+   * block stored at an older version reaches the save upgraded by the editor
+   * that opened it, and must not read as a locked block changed.
+   */
+  migration?: MigrationSource
 ): Promise<PluginFieldIssue[]> {
   if (!judgesLayersLocks(args) || args.write === undefined) return [];
   if (!isTopLevel(args.path)) {
@@ -127,14 +138,10 @@ export async function layersLockIssues(
   }
   const stored =
     (await copyInRewrite(args.path)) ??
-    (await readStoredForms(
-      args.write,
-      args.path,
-      // The draft form alone: what an editor's preview reads, the working draft
-      // where one is shown and the live row otherwise, so the newest stored form.
-      [true],
-      (args.field as { localized?: unknown }).localized === true
-    ));
+    // The draft form alone: what an editor's preview reads, the working draft
+    // where one is shown and the live row otherwise, so the newest stored form.
+    // Read once for the whole judgement, which the other checks share.
+    (await storedFormsOnce(args, [true]));
   if (!stored.readable) {
     onUnjudged?.({
       field: args.path,
@@ -143,9 +150,12 @@ export async function layersLockIssues(
     });
     return [];
   }
-  const [newest] = stored.forms;
-  if (newest === undefined) return [];
-  const changes = layersLockChanges(value, newest);
+  const [held] = stored.forms;
+  if (held === undefined) return [];
+  const upgrade = upgradedBy(migration);
+  const newest = upgrade(held);
+  const written = upgrade(value);
+  const changes = layersLockChanges(written, newest);
   if (changes.length === 0) return [];
   // Asked only once a lock is broken, so a write breaking none reads nothing.
   const work = await openRemovalFor(openRemoval, args.write);
@@ -157,10 +167,53 @@ export async function layersLockIssues(
           work,
           lockTargetOf(args.write, args.path)
         );
-  if (accepted.some(form => layersLockChanges(value, form).length === 0)) {
+  if (accepted.some(form => layersLockChanges(written, form).length === 0)) {
     return [];
   }
   return layersLockIssuesFor(changes, args.path, label);
+}
+
+/**
+ * A value with every block in it upgraded to its current version, for a
+ * comparison only; never stored. A value that is not a document, and every
+ * value when no migration source was given, is compared as it came.
+ */
+function upgradedBy(
+  migration: MigrationSource | undefined
+): <T>(value: T) => T {
+  return value => {
+    if (migration === undefined || !isForest(value)) return value;
+    const document = value as BlockDocument;
+    // Upgrading walks the tree by recursion, which a value nested deep enough
+    // would overflow. Only a write the field's own rules already refused nests
+    // that deep, so it is compared as it came: the rules' refusal is what its
+    // writer reads.
+    if (!walkableDepth(document)) return value;
+    return migrateDocument(document, migration).doc as typeof value;
+  };
+}
+
+/**
+ * How deep a value the lock judgement upgrades before comparing. A machine
+ * bound on the upgrade's recursion, not the site's cap: a site may lower its
+ * cap below pages it already stored, and a stored page left un-upgraded while
+ * the write beside it is upgraded would read every locked block on it as
+ * changed. Far above any cap a site uses, and far below the depth that
+ * overflows the stack.
+ */
+export const UPGRADE_DEPTH_BOUND = 1_000;
+
+/**
+ * Whether a document nests no deeper than the upgrade may walk, measured by
+ * the engine's bounded walk. One too large to measure is not.
+ */
+function walkableDepth(document: BlockDocument): boolean {
+  try {
+    return treeDepth(document.nodes) <= UPGRADE_DEPTH_BOUND;
+  } catch (error) {
+    if (error instanceof ForestTooLargeError) return false;
+    throw error;
+  }
 }
 
 /**

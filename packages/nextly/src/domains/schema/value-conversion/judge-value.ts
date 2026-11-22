@@ -26,10 +26,12 @@ import type {
   StoredValue,
 } from "./types";
 import {
+  byteLength,
   characterLength,
   exactNumber,
   keptByDouble,
   keptByFloat4,
+  MYSQL_TEXT_BYTES,
   readsAsPostgresJson,
   readsAsPostgresTextArray,
   sqliteStores,
@@ -168,7 +170,18 @@ function stringJudge(
     }
     return ({ text }) => (readsAsPostgresJson(text) ? null : "not-json");
   }
-  if (to.family === "text") return keeps;
+  if (to.family === "text") {
+    // MySQL's `text` holds 65,535 bytes, and strict mode refuses a longer value; its larger text
+    // types, and PostgreSQL's and SQLite's `text`, hold any length.
+    if (
+      conversion.dialect === "mysql" &&
+      conversion.to.type.trim().toLowerCase() === "text"
+    ) {
+      return ({ text }) =>
+        byteLength(text) > MYSQL_TEXT_BYTES ? "too-long" : null;
+    }
+    return keeps;
+  }
   if (to.family === "varchar") {
     const limit = to.length;
     if (limit === undefined) return keeps;

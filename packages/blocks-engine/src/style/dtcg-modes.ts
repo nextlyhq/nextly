@@ -19,15 +19,27 @@
  */
 import type { ValidationIssue } from "../validation";
 
+import type { TokenKind } from "./catalog-types";
 import { parseColor } from "./contrast";
+import { tokenCustomProperty } from "./declarations";
 import {
   dtcgToTokens,
   exportNamingRefusal,
+  largestPixels,
+  nativeReading,
   readFamilyList,
   tokensToDtcg,
   type DtcgNode,
+  NEXTLY_EXTENSION,
+  TEXT_STYLES_GROUP,
 } from "./dtcg";
-import type { SiteToken, SiteTokenSet, TokenMode } from "./site-tokens";
+import {
+  resolveTokenPrefix,
+  tokenIdentity,
+  type SiteToken,
+  type SiteTokenSet,
+  type TokenMode,
+} from "./site-tokens";
 
 /** The Resolver format version a theme file declares. */
 export const RESOLVER_VERSION = "2025.10";
@@ -71,8 +83,15 @@ export function tokensToResolver(
       values: { light: token.values.dark },
     });
   }
+  // Without the light file's variables: a dark shadow naming a colour
+  // variable has no value a reader of the theme alone resolves, so it stays
+  // in the token file's extension, exactly.
   const dark = tokensToDtcg({ tokens: darkTokens });
   stripExtensions(dark.document);
+  // The document's own extension too: it carries the variables the format
+  // cannot type, whose dark values the token file's extension already holds
+  // exactly, so the theme file states only what a reader of the standard can use.
+  delete dark.document.$extensions;
   return {
     resolver: {
       version: RESOLVER_VERSION,
@@ -106,7 +125,7 @@ export function tokensToResolver(
 export function resolverToTokens(
   resolver: unknown,
   files: ReadonlyMap<string, unknown>
-): { tokens: SiteToken[]; issues: ValidationIssue[] } {
+): ModesRead {
   const issues: ValidationIssue[] = [];
   if (!isRecord(resolver) || typeof resolver.version !== "string") {
     return {
@@ -117,12 +136,33 @@ export function resolverToTokens(
   const base = mergeSources(baseSources(resolver), files, issues);
   const modes = themeContexts(resolver);
   const light = mergeTrees(base, mergeSources(modes.light, files, issues));
+  // The dark tree takes the base without its own extension: the variables the
+  // base carries are read once, from the light tree, with their exact dark
+  // values, and a dark value the theme file types for one of them is not a
+  // second one. A dark source's OWN extension stays, so the variables a
+  // separate dark file carries are read as its dark values.
   const dark =
     modes.dark === undefined
       ? undefined
-      : mergeTrees(base, mergeSources(modes.dark, files, issues));
+      : mergeTrees(
+          withoutRootExtensions(base),
+          mergeSources(modes.dark, files, issues)
+        );
   const read = combineModes(light, dark);
-  return { tokens: read.tokens, issues: [...issues, ...read.issues] };
+  return { ...read, issues: [...issues, ...read.issues] };
+}
+
+/**
+ * A token tree without its own root `$extensions`, nor the typography values
+ * written beside the text styles those extensions keep: the light tree reads
+ * the kept copy, and a dark tree has no text styles of its own.
+ */
+function withoutRootExtensions(tree: DtcgNode): DtcgNode {
+  const { $extensions: extensions, ...rest } = tree;
+  const own = isRecord(extensions) ? extensions[NEXTLY_EXTENSION] : undefined;
+  if (!isRecord(own) || !("textStyles" in own)) return rest;
+  const { [TEXT_STYLES_GROUP]: _styles, ...tokens } = rest;
+  return tokens;
 }
 
 /** The sources of every set, in the order the theme file resolves them. */
@@ -290,6 +330,38 @@ export function modeFilesToTokens(files: readonly ModeFile[]): {
 }
 
 /**
+ * What a stored dark value reads as in the dark file this system wrote: its
+ * conversion, with each `var()` of a variable read as that variable's dark
+ * value, which is how the dark file's aliases resolve. A dark shadow naming
+ * a colour variable then reads as unedited, and keeps naming it.
+ */
+function darkReading(
+  lightRead: ModesRead,
+  darkByName: ReadonlyMap<string, SiteToken>
+): (kind: TokenKind, stored: string) => string | undefined {
+  const prefix = resolveTokenPrefix(lightRead.site?.prefix).prefix;
+  const darkOf = new Map(
+    lightRead.tokens.map(token => [
+      tokenCustomProperty(tokenIdentity(token), prefix),
+      darkByName.get(token.name)?.values.light ??
+        token.values.dark ??
+        token.values.light,
+    ])
+  );
+  return (kind, stored) => {
+    const direct = nativeReading(kind, stored);
+    if (direct !== undefined || !stored.includes("var(")) return direct;
+    return nativeReading(
+      kind,
+      stored.replace(
+        /var\(\s*(--[A-Za-z0-9_-]+)\s*\)/g,
+        (whole, property: string) => darkOf.get(property) ?? whole
+      )
+    );
+  };
+}
+
+/**
  * Light tokens, each given its dark value from the dark document by name.
  *
  * A dark value equal to the light one is not stored, because a token with no
@@ -297,10 +369,7 @@ export function modeFilesToTokens(files: readonly ModeFile[]): {
  * A token only the dark document holds is named and skipped: every token needs
  * a light value.
  */
-function combineModes(
-  light: unknown,
-  dark: unknown
-): { tokens: SiteToken[]; issues: ValidationIssue[] } {
+function combineModes(light: unknown, dark: unknown): ModesRead {
   const lightRead = dtcgToTokens(light);
   if (dark === undefined) return lightRead;
   const darkRead = dtcgToTokens(dark);
@@ -310,10 +379,25 @@ function combineModes(
     ...darkRead.issues.filter(entry => !said.has(entry.message)),
   ];
   const darkByName = new Map(darkRead.tokens.map(token => [token.name, token]));
+  const asDark = darkReading(lightRead, darkByName);
   const tokens = lightRead.tokens.map(token => {
     const other = darkByName.get(token.name);
     darkByName.delete(token.name);
-    if (other === undefined || other.values.light === token.values.light) {
+    // A dark value the light file already states came from this system's own
+    // extension, exactly as the author wrote it. The dark file holds it
+    // converted to what the format can type (a fluid size's px, a colour's
+    // hex); while it still reads as that conversion the exact one is kept, and
+    // a different value is an edit made to the dark file, which is taken.
+    const stored = token.values.dark;
+    const unedited =
+      stored !== undefined &&
+      other !== undefined &&
+      other.values.light === asDark(token.kind, stored);
+    if (
+      other === undefined ||
+      unedited ||
+      other.values.light === token.values.light
+    ) {
       return token;
     }
     // A dark value of another kind would make a token the site refuses to
@@ -338,8 +422,20 @@ function combineModes(
       )
     );
   }
-  return { tokens, issues };
+  // The site's data and text styles come from the light file, which holds
+  // the token file's own extension.
+  return {
+    ...(lightRead.site === undefined ? {} : { site: lightRead.site }),
+    ...(lightRead.textStyles === undefined
+      ? {}
+      : { textStyles: lightRead.textStyles }),
+    tokens,
+    issues,
+  };
 }
+
+/** What a set of files reads as: the variables, and what the file keeps beside them. */
+export type ModesRead = ReturnType<typeof dtcgToTokens>;
 
 /* ---------------------------------------------------------------- For Figma */
 
@@ -414,11 +510,17 @@ function figmaPair(
   return { light, dark };
 }
 
-/** A dimension in px, which is the one unit Figma's import takes. */
+/**
+ * A dimension in px, which is the one unit Figma's import takes: a px or rem
+ * value, or a fluid size's largest value, as the DTCG export writes it.
+ */
 function figmaDimension(text: string): FigmaValue {
-  const px = pixelsOf(text);
+  const px = largestPixels(text);
   return px === undefined
-    ? { refused: "is a size Figma cannot read: it takes px and rem only." }
+    ? {
+        refused:
+          "is a size Figma cannot read: it takes px, rem and fluid sizes that end in px or rem.",
+      }
     : { type: "dimension", value: { value: px, unit: "px" } };
 }
 
@@ -461,7 +563,7 @@ function figmaDuration(text: string): FigmaValue {
   };
 }
 
-/** How each kind is written for Figma; shadows and custom values are not. */
+/** How each kind is written for Figma; shadows are not. */
 const FIGMA_CONVERTERS: Readonly<
   Record<SiteToken["kind"], (text: string) => FigmaValue>
 > = {
@@ -472,11 +574,12 @@ const FIGMA_CONVERTERS: Readonly<
   number: figmaNumber,
   duration: figmaDuration,
   shadow: () => ({
-    refused: "is a shadow, which Figma variables cannot hold.",
+    refused:
+      "is a shadow. Figma keeps shadows as effect styles, not variables.",
   }),
-  custom: () => ({
-    refused: "is a custom value, which Figma variables cannot hold.",
-  }),
+  // Figma's import takes a string variable, which holds a custom value as the
+  // text the author wrote.
+  custom: text => ({ type: "string", value: text }),
 };
 
 const WEIGHT_WORDS: Readonly<Record<string, number>> = {
@@ -505,15 +608,6 @@ function figmaColour(text: string): FigmaValue {
       hex: `#${hex}`,
     },
   };
-}
-
-/** A length in px, from px or rem (16px each), or `undefined`. */
-function pixelsOf(text: string): number | undefined {
-  if (text === "0") return 0;
-  const match = /^(-?\d*\.?\d+)(px|rem)$/.exec(text);
-  if (match === null) return undefined;
-  const amount = Number(match[1]);
-  return match[2] === "rem" ? amount * 16 : amount;
 }
 
 /**

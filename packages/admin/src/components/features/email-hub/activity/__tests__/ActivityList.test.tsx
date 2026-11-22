@@ -1,0 +1,257 @@
+// @vitest-environment jsdom
+/**
+ * The Activity list draws each delivery and queued email with its time,
+ * outcome, email, provider, recipient and what happened, as a table and as
+ * phone cards carrying the same, and says what it does not keep.
+ *
+ * @module components/features/email-hub/activity/__tests__/ActivityList.test
+ */
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+
+import { activityRow } from "../activity-model";
+
+// The admin's own formatter, which writes times in the General Settings time
+// zone; marked here so a row shown in the browser's zone can't pass.
+vi.mock("@admin/hooks/useAdminDateFormatter", () => ({
+  formatDateWithAdminTimezone: (value: Date | string) =>
+    `ADMIN-TZ ${new Date(value).toISOString()}`,
+}));
+import { ActivityList, type ActivityListProps } from "../ActivityList";
+
+const NOW = new Date("2026-11-16T12:00:00.000Z");
+
+const ROWS = [
+  activityRow({
+    kind: "delivery",
+    id: "d1",
+    createdAt: "2026-11-16T11:00:00.000Z",
+    status: "sent",
+    template: { slug: "password-reset" },
+    provider: { id: "p1", type: "resend", origin: "stored" },
+    recipientKinds: ["cc"],
+    failureReason: null,
+    attempts: null,
+    nextAttemptAt: null,
+    erased: false,
+  }),
+  activityRow({
+    kind: "queued",
+    id: "q1",
+    createdAt: "2026-11-16T10:30:00.000Z",
+    status: "retrying",
+    template: { slug: "order-shipped" },
+    provider: { id: null, type: "smtp", origin: "code" },
+    recipientKinds: ["to", "bcc"],
+    failureReason: "Resend answered 503",
+    attempts: 2,
+    nextAttemptAt: "2026-11-16T12:10:00.000Z",
+    erased: false,
+  }),
+  activityRow({
+    kind: "delivery",
+    id: "d2",
+    createdAt: "2026-11-16T09:00:00.000Z",
+    status: "failed",
+    template: "none",
+    provider: { id: null, type: "postmark", origin: "deleted" },
+    recipientKinds: ["to"],
+    failureReason: "Mailbox does not exist",
+    attempts: null,
+    nextAttemptAt: null,
+    erased: true,
+  }),
+];
+
+function renderList(over: Partial<ActivityListProps> = {}) {
+  const props: ActivityListProps = {
+    rows: ROWS,
+    names: {
+      template: slug =>
+        slug === "password-reset" ? "Password reset" : undefined,
+      provider: id => (id === "p1" ? "Resend (main)" : undefined),
+    },
+    now: NOW,
+    isLoading: false,
+    filtered: false,
+    hasMore: false,
+    isLoadingMore: false,
+    onLoadMore: vi.fn(),
+    ...over,
+  };
+  render(<ActivityList {...props} />);
+  return props;
+}
+
+describe("the Activity list", () => {
+  it("draws each row in the table, newest first, with what it knows of each", () => {
+    renderList();
+    const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(3);
+    const text = rows.map(row => row.textContent ?? "");
+
+    // A delivery: the template's name, the stored provider's name, Cc.
+    expect(text[0]).toContain("Password reset");
+    expect(text[0]).toContain("Resend (main)");
+    expect(text[0]).toContain("Cc");
+    expect(text[0]).toContain("Sent");
+    expect(text[0]).not.toContain("Erased");
+
+    // A queued email: its state, its attempt, and when it tries next.
+    expect(text[1]).toContain("Retrying");
+    expect(text[1]).toContain("Attempt 2");
+    expect(text[1]).toContain("Queued");
+    expect(text[1]).toContain("Next attempt in 10 min");
+    expect(text[1]).toContain("Resend answered 503");
+    // A template the hub cannot name is shown by its slug.
+    expect(text[1]).toContain("order-shipped");
+    // Its latest attempt's provider, set in code, and every kind it went to.
+    expect(text[1]).toContain("smtp (in code)");
+    expect(text[1]).toContain("To, Bcc");
+
+    // A delivery without a template, by a provider deleted since, erased.
+    expect(text[2]).toContain("No template");
+    expect(text[2]).toContain("postmark (deleted)");
+    expect(text[2]).toContain("Erased");
+    expect(text[2]).toContain("Mailbox does not exist");
+  });
+
+  it("keeps provider and recipient in the table below the width that shows their columns", () => {
+    renderList();
+    const firstRow = within(screen.getByRole("table")).getAllByRole("row")[1];
+    // Shown only where the Provider and Recipient columns are hidden.
+    const compact = firstRow.querySelector("[data-compact-details]");
+    expect(compact?.className).toContain("xl:hidden");
+    expect(compact?.textContent).toContain("Resend (main)");
+    expect(compact?.textContent).toContain("Cc");
+  });
+
+  it("writes each row's time with the admin's formatter, in the site's time zone", () => {
+    renderList();
+    const firstRow = within(screen.getByRole("table")).getAllByRole("row")[1];
+    expect(firstRow.textContent).toContain("ADMIN-TZ 2026-11-16T11:00:00.000Z");
+  });
+
+  it("draws a phone card per row carrying the same", () => {
+    renderList();
+    const cards = screen.getAllByRole("article");
+    expect(cards).toHaveLength(3);
+    expect(cards[0].textContent).toContain("Password reset");
+    expect(cards[0].textContent).toContain("Resend (main)");
+    expect(cards[2].textContent).toContain("postmark (deleted)");
+  });
+
+  it("says what this log keeps, and that a queued email's message is held only while it can be sent", () => {
+    renderList();
+    const line = screen.getByText(
+      /This log keeps no addresses, subjects or bodies/
+    );
+    expect(line.textContent).toContain(
+      "message is held, encrypted, only while it can still be sent"
+    );
+  });
+
+  it("says a queued email's template wasn't recorded, and shows no provider or recipient before it is tried", () => {
+    renderList({
+      rows: [
+        activityRow({
+          kind: "queued",
+          id: "q9",
+          createdAt: "2026-11-16T10:00:00.000Z",
+          status: "waiting",
+          template: "not-recorded",
+          provider: null,
+          recipientKinds: null,
+          failureReason: null,
+          attempts: 0,
+          nextAttemptAt: "2026-11-16T12:05:00.000Z",
+          erased: false,
+        }),
+      ],
+    });
+    const row = within(screen.getByRole("table")).getAllByRole("row")[1];
+    expect(row.textContent).toContain("Template not recorded");
+    expect(row.querySelector("[data-compact-details]")).toBeNull();
+  });
+
+  it("keeps a queued email's recipients in the compact line before any provider is known", () => {
+    renderList({
+      rows: [
+        activityRow({
+          kind: "queued",
+          id: "q8",
+          createdAt: "2026-11-16T10:00:00.000Z",
+          status: "waiting",
+          template: { slug: "order-shipped" },
+          provider: null,
+          recipientKinds: ["to", "bcc"],
+          failureReason: null,
+          attempts: 0,
+          nextAttemptAt: "2026-11-16T12:05:00.000Z",
+          erased: false,
+        }),
+      ],
+    });
+    const row = within(screen.getByRole("table")).getAllByRole("row")[1];
+    expect(row.querySelector("[data-compact-details]")?.textContent).toBe(
+      "To, Bcc"
+    );
+  });
+
+  it("says why it is empty, filtered or not", () => {
+    renderList({ rows: [] });
+    expect(
+      screen.getByText("No email has been sent in this time.")
+    ).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("says nothing went to the address when an unfiltered search finds nothing", () => {
+    renderList({ rows: [], filtered: false, searching: true });
+    expect(
+      screen.getByText("Nothing was sent to this address in this time.")
+    ).toBeTruthy();
+  });
+
+  it("says only that nothing sent there matches when a filtered search finds nothing", () => {
+    renderList({ rows: [], filtered: true, searching: true });
+    expect(
+      screen.getByText("Nothing sent to this address matches these filters.")
+    ).toBeTruthy();
+    expect(screen.queryByText(/Nothing was sent to this address/)).toBeNull();
+  });
+
+  it("says nothing matches when filters leave it empty", () => {
+    renderList({ rows: [], filtered: true });
+    expect(screen.getByText("Nothing matches these filters.")).toBeTruthy();
+  });
+
+  it("loads more at its end while more is left", () => {
+    const props = renderList({ hasMore: true });
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    expect(props.onLoadMore).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a row's sheet from its email, by keyboard or click, naming which row", () => {
+    const onOpen = vi.fn();
+    renderList({ onOpen });
+    const rows = within(screen.getByRole("table")).getAllByRole("row");
+    fireEvent.click(
+      within(rows[2]).getByRole("button", { name: "order-shipped" })
+    );
+    expect(onOpen).toHaveBeenLastCalledWith({ source: "queued", id: "q1" });
+    // A click anywhere else on the row opens it too.
+    fireEvent.click(rows[1]);
+    expect(onOpen).toHaveBeenLastCalledWith({ source: "delivery", id: "d1" });
+  });
+
+  it("offers nothing to open where no sheet is wired", () => {
+    renderList();
+    expect(screen.queryByRole("button", { name: "Password reset" })).toBeNull();
+  });
+
+  it("offers no Load more once everything is shown", () => {
+    renderList({ hasMore: false });
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+  });
+});

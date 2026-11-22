@@ -37,6 +37,7 @@ const LOCALES = {
 };
 
 const ROW = {
+  kind: "collection",
   collection: "posts",
   collectionLabel: "Posts",
   id: "p1",
@@ -419,5 +420,57 @@ describe("metadataVerdict", () => {
     expect(
       metadataVerdict({ pending: false, unavailable: false, enabled: true })
     ).toBe("ready");
+  });
+
+  it("opens a Single's row at the Single, in the target language, translating from the source", async () => {
+    worklistQuery.mockReturnValue(
+      settled({
+        data: {
+          items: [
+            {
+              kind: "single",
+              collection: "banner",
+              collectionLabel: "Banner",
+              id: "s1",
+              title: "Banner",
+              updatedAt: "2026-08-01T00:00:00.000Z",
+            },
+          ],
+          meta: META,
+        },
+      })
+    );
+    renderWorklist();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Translate Banner in Banner" })
+    );
+    const path = navigateTo.mock.calls[0]?.[0] as string;
+    expect(path).toContain("/admin/singles/banner");
+    expect(path).not.toContain("/admin/collections/");
+    expect(path).toContain("locale=es");
+    expect(path).toContain("translate=en");
+  });
+
+  it("pages through the list with the server's own paging", async () => {
+    worklistQuery.mockReturnValue(
+      settled({
+        data: {
+          items: [ROW],
+          meta: { ...META, total: 3, totalPages: 3, hasNext: true },
+        },
+      })
+    );
+    renderWorklist();
+    expect(worklistQuery).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 1 })
+    );
+    expect(
+      screen.getByRole("button", { name: "Previous page" })
+    ).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Next page" }));
+    expect(worklistQuery).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 2 })
+    );
   });
 });

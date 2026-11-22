@@ -26,7 +26,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { Pool } from "pg";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -41,6 +41,13 @@ import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import { toMinimalEntities } from "../../../domains/schema/migrate-create/config-entities";
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { generateMigration } from "../../../domains/schema/migrate-create/generate";
+import {
+  historyAsOneLine,
+  sqlFiles,
+} from "../../../domains/schema/migrate-create/__tests__/helpers/history-one-line";
+import { writeCollectionSave } from "../../../domains/schema/builder-save/collection-save";
+import { isWriterOvertaken } from "../../../domains/schema/migrate-create/writer-hold";
+import { withSchemaChangeExcluded } from "../../../domains/schema/services/schema-change-exclusion";
 import { compileAppStreamTables } from "../../../domains/schema/migrate-create/app-stream";
 import { clearActiveExtensionSchema } from "../../../domains/schema/extension/active-schema";
 import type { SchemaHook } from "../../../domains/schema/extension/draft";
@@ -62,6 +69,7 @@ import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { CommandContext } from "../../program";
 import type { CLIDatabaseAdapter } from "../../utils/adapter";
 import type { LoadConfigResult } from "../../utils/config-loader";
@@ -1574,6 +1582,124 @@ function runSuite(dialect: SupportedDialect): void {
     expect(await hasColumn(h, "subtitle")).toBe(true);
   });
 
+  describe("with another writer of the project's migration files", () => {
+    /** The baseline of the database `on` holds, written into this project's folder. */
+    const baseline = (on: Harness) =>
+      baselineCore({
+        adapter: on.adapter,
+        db: on.db,
+        dialect: on.dialect,
+        migrationsDir: h.migrationsDir,
+        logger,
+      });
+    /** The files and snapshots as one line, by the tables a snapshot records. */
+    const oneLine = () =>
+      historyAsOneLine(h.migrationsDir, table => table === TABLE);
+
+    it("two baselines together, of two databases sharing the folder, write one: the second finds the first's history", async () => {
+      // Each database is its own, so no database lock stands between the two.
+      const other = await makeHarness(dialect, "second");
+      try {
+        await runDbSync(h, configV1);
+        // The second database has not been pushed to: the first one's push is
+        // not taken for it.
+        clearCachedSnapshot();
+        await runDbSync(other, configV1);
+        expect(await tableExists(other, TABLE)).toBe(true);
+
+        const kinds = (await Promise.all([baseline(h), baseline(other)])).map(
+          result => result.kind
+        );
+
+        expect(kinds.sort()).toEqual(["already-baselined", "baselined"]);
+        expect(oneLine()).toEqual([[TABLE]]);
+      } finally {
+        await other.dispose();
+      }
+    });
+
+    it("a baseline and migrate:create together write the table once", async () => {
+      await runDbSync(h, configV1);
+
+      const [adopted, created] = await Promise.all([
+        baseline(h),
+        // The generator alone, with no command's hold: it takes the folder
+        // as it writes, and one that read the folder before the baseline
+        // went in writes nothing and says so.
+        runMigrateCreate(h, configV1, "create").catch((error: unknown) => {
+          if (isWriterOvertaken(error)) return null;
+          throw error;
+        }),
+      ]);
+
+      // Whichever wrote first, the other read its file: a baseline second
+      // refuses a project that has a history, and a create second writes only
+      // what the baseline's snapshot does not record, never the table again.
+      expect(adopted.kind === "baselined" || created !== null).toBe(true);
+      expect(oneLine().flat()).toEqual([TABLE]);
+    });
+
+    it("a baseline and a Schema Builder save together keep one line of history", async () => {
+      await runDbSync(h, configV1);
+      const noted = `baseline_notes_${RUN_ID}`;
+      const save = () =>
+        withSchemaChangeExcluded(
+          {
+            adapter: h.adapter as unknown as DrizzleAdapter,
+            logger: logger as never,
+            label: `create collection "${noted}"`,
+            issuesDdl: false,
+          },
+          () =>
+            writeCollectionSave(
+              {
+                adapter: h.adapter as unknown as DrizzleAdapter,
+                config: configV1,
+                projectRoot: dirname(h.migrationsDir),
+                migrationsDir: h.migrationsDir,
+                applies: false,
+                logger: { info: () => {}, warn: () => {}, error: () => {} },
+              },
+              {
+                slug: noted,
+                previous: null,
+                entity: {
+                  slug: noted,
+                  labels: { singular: "Note", plural: "Notes" },
+                  fields: [{ name: "title", type: "text" }],
+                } as UiSchemaEntity,
+                change: "create",
+              }
+            )
+        ).then(
+          () => "saved" as const,
+          (error: unknown) =>
+            (error as { publicMessage?: string }).publicMessage
+        );
+
+      const [adopted, saved] = await Promise.all([baseline(h), save()]);
+
+      // The save either wrote after the baseline or was refused at once while
+      // the baseline held the folder; a baseline that came second found the
+      // save's history and refused.
+      if (saved !== "saved") {
+        expect(saved).toMatch(/Save it again/);
+        expect(adopted.kind).toBe("baselined");
+      }
+      const notesTable = resolveCollectionTableName(noted);
+      const made = historyAsOneLine(
+        h.migrationsDir,
+        table => table === TABLE || table === notesTable
+      );
+      expect(made.flat().filter(table => table === TABLE).length).toBeLessThan(
+        2
+      );
+      expect(sqlFiles(h.migrationsDir).length).toBe(
+        (adopted.kind === "baselined" ? 1 : 0) + (saved === "saved" ? 1 : 0)
+      );
+    });
+  });
+
   it("refuses to give a project that already migrated a second starting point", async () => {
     await runDbSync(h, configV1);
     await baselineCore({
@@ -1691,6 +1817,39 @@ describe.each([
         ["applied", checksumOf(await readFile(adopted.sqlPath, "utf-8"))],
       ]);
     });
+
+    it.runIf(run)(
+      "at the one instant its run is stamped with, ending no earlier than it started",
+      async () => {
+        await runDbSync(h, configV1);
+        // The run's clock, which names the file: the row is stamped from it
+        // too, start and end alike, as nothing runs between them.
+        const now = new Date("2026-01-02T03:04:05.678Z");
+        const adopted = await baselineCore({
+          adapter: h.adapter,
+          db: h.db,
+          dialect: h.dialect,
+          migrationsDir: h.migrationsDir,
+          logger,
+          now,
+        });
+        if (adopted.kind !== "baselined") {
+          throw new Error("expected a baseline");
+        }
+        const recorded = await new SchemaEventsRepository(
+          h.db,
+          h.dialect
+        ).listFileApplies();
+        expect(
+          recorded
+            .filter(r => r.filename === basename(adopted.sqlPath))
+            .map(r => [
+              new Date(r.startedAt).getTime(),
+              r.endedAt === null ? null : new Date(r.endedAt).getTime(),
+            ])
+        ).toEqual([[now.getTime(), now.getTime()]]);
+      }
+    );
   }
 );
 

@@ -13,7 +13,7 @@
 
 import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import type React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
@@ -33,6 +33,8 @@ import {
   UnsavedWorkProvider,
   useUnsavedWork,
 } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
+import { usePublishPartsAction } from "@admin/components/features/entries/publish-parts/usePublishPartsAction";
+import { languageLabelOf } from "@admin/components/features/entries/publishAllOutcomes";
 import {
   isRemovedFromCode,
   removedEntityHasNoTable,
@@ -40,6 +42,7 @@ import {
 import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
 import { useScheduleDocumentAction } from "@admin/components/features/releases/ScheduleDocumentAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
+import { autosaveEnabledFor } from "@admin/components/features/versions/autosave-interval";
 import {
   CONTENT_PAGE_MEASURE,
   CONTENT_MEASURE_LENGTH,
@@ -54,21 +57,26 @@ import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { useEntryReadStart } from "@admin/hooks/queries/entry-read-start";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
 import { usePlaceStartupReads } from "@admin/hooks/queries/usePluginRoute";
+import { useStartReleasesContaining } from "@admin/hooks/queries/useReleasesContaining";
 import {
   useStoredEntry,
   useWithStoredReferences,
 } from "@admin/hooks/queries/useStoredReferences";
+import { useStartRecoveryPointRead } from "@admin/hooks/useAutosaveRecovery";
+import { useCan } from "@admin/hooks/useCan";
 import { useAsksTranslationStatus } from "@admin/hooks/useCanRequest";
+import { autosaveScopeFor } from "@admin/hooks/useDocumentAutosave";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
-import { readsHeldDraft } from "@admin/lib/held-draft";
+import type { ShownCopy } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
@@ -238,16 +246,18 @@ export default function EditEntryPage({
   // The overview reads every language's state, so it is asked only of a user
   // the server lets read them all; otherwise the editor would be refused.
   const asksTranslationStatus = useAsksTranslationStatus(slug ?? "");
+  // Load the pending working draft in place of the live row when the
+  // collection has the draft/published split enabled, so the editor shows and
+  // saves onto the unpublished edits. Known from the navigation's list before
+  // the schema arrives, so the reads start beside the schema's read; once it
+  // has arrived, the schema says, as it does for a save.
+  const readStart = useEntryReadStart(slug, collection);
 
   const populatedEntry = useEntry({
     collectionSlug: slug || "",
     entryId: id,
     depth: 2,
-    // Load the pending working draft in place of the live row when the
-    // collection has the draft/published split enabled, so the editor shows and
-    // saves onto the unpublished edits. Inert for non-drafts collections (the
-    // server only overlays a draft it actually has).
-    draft: readsHeldDraft(collection),
+    draft: readStart.draft,
     locale,
     // Edit the ACTUAL per-locale values — disable fallback so an untranslated field
     // shows empty (not the default-language text, which a save would otherwise persist
@@ -255,9 +265,11 @@ export default function EditEntryPage({
     // hint. Gated on localizationEnabled so a non-localized app sends no fallback param.
     fallbackLocale: localizationEnabled ? "none" : undefined,
     translationStatus: asksTranslationStatus,
-    // Once the schema says whether the collection keeps drafts: asked before,
-    // the entry is read as published and then again as its draft.
-    enabled: collection !== undefined,
+    // Once it is known whether the collection keeps drafts: asked before, the
+    // entry is read as published and then again as its draft.
+    enabled: readStart.ready,
+    // The stored read below comes in this read's answer: one request.
+    carriesStored: true,
   });
   // The same document as stored, read in the same language and view. The
   // populated read above leaves out a related item the editor may not read,
@@ -267,11 +279,11 @@ export default function EditEntryPage({
   const storedEntry = useStoredEntry({
     collectionSlug: slug,
     entryId: id,
-    draft: readsHeldDraft(collection),
+    draft: readStart.draft,
     locale,
     fallbackLocale: localizationEnabled ? "none" : undefined,
-    // Held for the schema, as the populated read above is.
-    enabled: collection !== undefined,
+    // Held as the populated read above is.
+    enabled: readStart.ready,
   });
   const {
     document: entry,
@@ -333,6 +345,31 @@ export default function EditEntryPage({
       collection.localized === true
         ? locales.map(each => each.label)
         : undefined,
+  });
+  // "Choose what to publish…", on the Publish split: each language, and separately the shared
+  // fields. A translated entry offers its languages; one that is not offers the shared fields,
+  // which are the whole document.
+  const translatedLanguages =
+    localizationEnabled &&
+    collection !== undefined &&
+    "localized" in collection &&
+    collection.localized === true
+      ? locales.map(each => each.code)
+      : [];
+  // How to read the copy the editor shows, filled by the editor once it is drawn, so a publish
+  // of chosen parts is refused when the entry changed since the editor opened it.
+  const shownCopy = useRef<(() => ShownCopy) | null>(null);
+  const publishParts = usePublishPartsAction({
+    target: slug && id ? { kind: "collection", slug, id } : undefined,
+    shown: () => shownCopy.current?.(),
+    lifecycleEnabled: collection?.status,
+    languages: translatedLanguages,
+    labelOf: languageLabelOf(locales),
+    currentLocale: locale,
+    defaultLocale,
+    sharedPending:
+      (entry as { _sharedChangesPending?: unknown } | undefined)
+        ?._sharedChangesPending === true,
   });
   const { translateFrom, enterTranslationMode, exitTranslationMode } =
     useTranslationMode({ activeLocale: locale, defaultLocale });
@@ -401,6 +438,8 @@ export default function EditEntryPage({
   // answer is on its way the view and the edit slots hold their writes as the
   // editor does, since the answer on screen grants nothing in the new one.
   const customViewAnswer = useUpdateAnswer(slug ?? "");
+  // The releases list is gated, as the banner says: asked only with the grant.
+  const canReadReleases = useCan("read-content-releases");
   // A collection removed from code refuses every write to its entries, so the
   // custom view and the edit slots are handed their writes held, as a
   // reader's are, whoever opens it.
@@ -450,6 +489,31 @@ export default function EditEntryPage({
         entry
     ),
   });
+
+  /*
+   * What the editor reads once it is drawn, started as the page renders, so
+   * it is on its way or answered by then: which releases hold this entry (the
+   * banner on either branch), and, for the default editor, the recovery point
+   * it offers back. Each under the key its reader keeps it under, asked only
+   * where that reader would ask it. The lock's claim stays the editor's own,
+   * so a refusal holds the form read-only before any edit.
+   */
+  useStartReleasesContaining(
+    slug && id
+      ? { scopeKind: "collection", scopeSlug: slug, entryId: id }
+      : undefined,
+    canReadReleases
+  );
+  useStartRecoveryPointRead(
+    collection &&
+      id &&
+      !CustomEditView &&
+      !removedFromCode &&
+      customViewAnswer !== "refused" &&
+      autosaveEnabledFor(collection)
+      ? autosaveScopeFor("collection", collection.name, id)
+      : null
+  );
 
   /**
    * The page's measure, on every branch.
@@ -785,7 +849,9 @@ export default function EditEntryPage({
             </div>
           )}
           {schedule.dialog}
+          {publishParts.dialog}
           <EntryForm
+            shownCopy={shownCopy}
             revealOutline={<EditEntryPageSkeleton />}
             revealWaiting={partsStartup.pending}
             /* A standing fact about the whole document, so a band across the
@@ -830,15 +896,19 @@ export default function EditEntryPage({
             onViewApi={() =>
               navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_API, { slug }))
             }
-            /* Contributed to the editor's action model, which places both on
-             the Publish split's arrow: they decide when this goes live, and
-             the toolbar is reserved for the verbs an author reaches for while
-             writing. Schedule first, the one most often reached for. A
-             document whose collection was removed from code offers none. */
+            /* Contributed to the editor's action model, which places them on
+             the Publish split's arrow: they decide what goes live and when,
+             and the toolbar is reserved for the verbs an author reaches for
+             while writing. Choosing what to publish first, as it publishes
+             now; then Schedule. A document whose collection was removed from
+             code offers none. */
             documentActions={
               removedFromCode
                 ? []
                 : [
+                    ...(publishParts.contributed === null
+                      ? []
+                      : [publishParts.contributed]),
                     ...(schedule.contributed === null
                       ? []
                       : [schedule.contributed]),

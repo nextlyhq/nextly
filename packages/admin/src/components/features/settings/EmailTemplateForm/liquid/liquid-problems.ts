@@ -47,6 +47,9 @@ const REMOVED_TAGS = [
   "cycle",
 ];
 
+/** The filters the server's engine adds for written emails. */
+const WRITTEN_FILTERS = ["has_value", "as_list", "safe_url"];
+
 function makeParser(): Liquid {
   const liquid = new Liquid({
     strictFilters: true,
@@ -60,6 +63,12 @@ function makeParser(): Liquid {
     if (typeof filter === "object" && filter !== null && filter.raw) {
       delete liquid.filters[name];
     }
+  }
+  // The filters the server adds for written emails, which a coded email can
+  // use too. Only parsed here, so only their names matter; the server's
+  // engine is what renders them.
+  for (const name of WRITTEN_FILTERS) {
+    liquid.registerFilter(name, (value: unknown) => value);
   }
   return liquid;
 }

@@ -8,6 +8,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { defineCollection, text } from "../../../config";
 import {
@@ -115,6 +116,9 @@ async function documentWithHistory(
       createdAt: now,
       updatedAt: now,
     });
+    // Each may read the posts, as a signed-in reader of them does: a history
+    // read asks the document's read gate as its caller.
+    await grantTo(current, person.id, "read", ["posts"]);
   }
   const created = await current
     .getService("collectionsHandler")
@@ -750,6 +754,8 @@ describe.each(getConfiguredTestDialects())(
         createdAt: now,
         updatedAt: now,
       });
+      // A reader of the posts, as the others are.
+      await grantTo(current!, "leaving", "read", ["posts"]);
       await doc.mark({ id: "leaving", email: "leaving@x.test" }, 1);
       await doc.mark(ANA, 1);
       await new UserMutationService(current!.adapter, silentLogger).deleteUser(

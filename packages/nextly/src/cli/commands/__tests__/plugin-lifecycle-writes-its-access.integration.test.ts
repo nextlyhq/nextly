@@ -29,17 +29,20 @@
  * - A permission an uninstall orphaned keeps the admin role's grant when
  *   another plugin's install sets the presets again.
  * - A newer release's install sets every preset role's grants to its own and
- *   records itself; an older release's `nextly migrate` then leaves them. One
+ *   records itself; an older release's `nextly migrate`, applying a migration
+ *   that records the plugins, then leaves them. One
  *   stopped just before the record leaves every grant and the record as they
  *   were. An uninstall sets no preset grant and records no release.
- * - A `nextly migrate` with an uninstalled plugin still configured leaves its
- *   permission orphaned and its grants as they were, while it still adds an
- *   installed plugin's new permission and a never-installed plugin's.
+ * - A `nextly migrate` with an uninstalled plugin still configured, and a
+ *   migration recording the configuration, leaves its permission orphaned and
+ *   its grants as they were, while it still adds an installed plugin's new
+ *   permission and a never-installed plugin's.
  * - The uninstall of a plugin named `app`, the key the app's own permissions
  *   are stored under, leaves the app's permission live with its grants.
  * - A migration written before a plugin named `app` joined, which drops one
  *   of the app's own permissions, orphans that permission and not the
- *   plugin's, though both are stored under the owner key `app`.
+ *   plugin's, though both are stored under the owner key `app`, applied in
+ *   the run that also applies the migration recording the plugin.
  * - A migration written after a plugin joined, and applied after its
  *   uninstall, leaves the plugin's permission orphaned, though its snapshot
  *   still declares it: only the plugin's install declares it again.
@@ -820,7 +823,10 @@ describe.each(getConfiguredTestDialects())(
       expect(held(rows, "viewer")).not.toContain("export-pla-posts");
       expect(held(rows, "admin")).toContain(FEEDS_PERMISSION);
 
-      // The older release's migrate leaves them, row for row.
+      // The older release's migrate leaves them, row for row, applying the
+      // migration that records the configured plugins (without one, it is
+      // refused before it changes anything).
+      await migrateCreate("plugins_joined", configWith(FEEDS, DIGEST));
       const said = await migrate(OLD, configWith(FEEDS, DIGEST));
       expect(await grantRows()).toEqual(rows);
       expect(await recorded()).toBe(NEW);
@@ -874,7 +880,13 @@ describe.each(getConfiguredTestDialects())(
         expect(feedsGrants.length).toBeGreaterThan(0);
 
         // The uninstalled plugin is still listed, beside the installed one's
-        // next release and a plugin never installed.
+        // next release and a plugin never installed, and a migration records
+        // the configuration (without one, the run is refused before it
+        // changes anything).
+        await migrateCreate(
+          "plugins_listed",
+          configWith(FEEDS, DIGEST_NEXT, NEVER)
+        );
         await migrate(NEW, configWith(FEEDS, DIGEST_NEXT, NEVER));
 
         expect(await permission(FEEDS_PERMISSION)).toEqual({
@@ -948,6 +960,12 @@ describe.each(getConfiguredTestDialects())(
         permissions: [],
       });
       await migrateCreate("drop_export", without(configWith()));
+      // The next migration records the plugin, and one run applies both:
+      // first the one written without it.
+      await migrateCreate(
+        "app_plugin_joined",
+        without(configWith(APP_NAMED_DECLARING))
+      );
       const said = await migrate(NEW, without(configWith(APP_NAMED_DECLARING)));
 
       // The control: the migration speaks for the app, and its log says so.

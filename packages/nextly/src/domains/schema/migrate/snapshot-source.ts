@@ -11,8 +11,10 @@
  * @module domains/schema/migrate/snapshot-source
  */
 
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
+
+import { recordedSnapshotNames } from "../migrate-create/snapshot-io";
 
 /**
  * Collection definition from migration snapshot
@@ -111,16 +113,17 @@ export async function loadSnapshots(
   const { migrationsDir, logger, isApplied } = options;
   const metaDir = resolve(migrationsDir, "meta");
 
-  let files: string[];
+  // In lexicographic order, so "later snapshot wins" is deterministic, and
+  // only those whose migration file was written (`recordedSnapshotNames`): a
+  // snapshot left by a writer stopped before its `.sql` records entities no
+  // migration made.
+  let snapshotFiles: string[];
   try {
-    files = await readdir(metaDir);
+    snapshotFiles = await recordedSnapshotNames(metaDir);
   } catch {
-    // Meta directory doesn't exist or isn't readable
+    // The folder isn't readable
     return [];
   }
-
-  // Sort files lexicographically to ensure deterministic "later snapshot wins" behavior
-  const snapshotFiles = files.filter(f => f.endsWith(".snapshot.json")).sort();
 
   if (snapshotFiles.length === 0) {
     return [];

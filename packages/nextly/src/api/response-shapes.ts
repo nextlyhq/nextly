@@ -233,6 +233,20 @@ export type PerItemError = {
   message: string;
 };
 
+/**
+ * A per-item failure of an item the request named by a Single's slug rather than an id: a Single
+ * is one document, named by its slug, and its stored id is not the caller's to learn from a
+ * refusal.
+ */
+export type SingleItemError = {
+  /** The Single's slug, as the request named it. */
+  single: string;
+  /** Canonical NextlyErrorCode value. */
+  code: string;
+  /** Public-safe message. No identifier echo, no value leaking. */
+  message: string;
+};
+
 export type BulkUploadError = {
   /** Positional index in the original request payload. */
   index: number;
@@ -257,7 +271,7 @@ export type BulkUploadError = {
 export function respondBulk<T>(
   message: string,
   items: T[],
-  errors: PerItemError[],
+  errors: (PerItemError | SingleItemError)[],
   init?: ResponseInit
 ): Response {
   // Same rule as `respondMutation`: a hook that failed after the write

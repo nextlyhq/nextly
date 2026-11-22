@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 
 import { defaultSeoFields } from "../fields";
 import { seoPlugin } from "../plugin";
-import { typesLeftOut } from "../seo-types";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
@@ -35,6 +34,14 @@ const PAGE_BUILDER_TAB_DECLARED = {
   place: PAGE_BUILDER_PLACE,
   label: "SEO",
   component: "@nextlyhq/plugin-seo/admin#PageBuilderSeoTab",
+};
+
+/** The search result block, as the plugin declares it at the same place. */
+const PAGE_BUILDER_SEARCH_DECLARED = {
+  id: "nextlyhq-plugin-seo.page-builder-search",
+  kind: "block",
+  place: PAGE_BUILDER_PLACE,
+  component: "@nextlyhq/plugin-seo/admin#PageBuilderSearchResult",
 };
 
 /** The contributions a plugin adds to the entry and Single edit pages. */
@@ -493,12 +500,13 @@ describe("the dashboard card the plugin contributes", () => {
 
     expect(plugin.contributes?.admin).not.toHaveProperty("widgets");
     // Its admin contributions are the SEO tab, its two side panel lines, and
-    // the tab in the Page Builder's Settings.
+    // the tab and the search result in the Page Builder's Settings.
     expect(plugin.contributes?.admin?.contributions).toEqual([
       expect.objectContaining({ kind: "tab" }),
       expect.objectContaining({ kind: "sidebarSection" }),
       expect.objectContaining({ kind: "sidebarSection" }),
       expect.objectContaining({ kind: "tab", place: PAGE_BUILDER_PLACE }),
+      expect.objectContaining({ kind: "block", place: PAGE_BUILDER_PLACE }),
     ]);
     // Read as a property of the value: `widgetSources` is no field of the
     // contributions type, so a typed read of it does not compile.
@@ -596,6 +604,7 @@ describe("the SEO tab the plugin contributes", () => {
         singles: ["homepage"],
       },
       PAGE_BUILDER_TAB_DECLARED,
+      PAGE_BUILDER_SEARCH_DECLARED,
     ]);
   });
 
@@ -607,6 +616,7 @@ describe("the SEO tab the plugin contributes", () => {
       "collection.edit",
       "collection.edit",
       "collection.edit",
+      PAGE_BUILDER_PLACE,
       PAGE_BUILDER_PLACE,
     ]);
   });
@@ -683,75 +693,37 @@ describe("the SEO tab in the Page Builder's Settings", () => {
     });
   });
 
-  it("is told which collections' pages it edits: those the SEO tab edits", () => {
-    const editing = seoPlugin({ collections: ["pages"], sitemap: false });
-    expect(editing.contributes?.admin?.clientConfig).toMatchObject({
-      tabCollections: ["pages"],
-    });
-    // A group the tab cannot edit stays among the page's fields: no page's
-    // SEO is the Page Builder tab's either, though a template's rule still is.
+  it("draws the page's search result in the builder at the same place", () => {
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+    expect(plugin.contributes?.admin?.contributions).toContainEqual(
+      PAGE_BUILDER_SEARCH_DECLARED
+    );
+  });
+
+  it("is handed no list of the types the SEO tab edits: it asks the admin, as the edit page decides", () => {
+    for (const options of [
+      { collections: ["pages"] },
+      { exclude: ["pages"] },
+      {},
+    ]) {
+      const plugin = seoPlugin({ ...options, sitemap: false });
+      const config = plugin.contributes?.admin?.clientConfig ?? {};
+      expect(config).not.toHaveProperty("tabCollections");
+      expect(config).not.toHaveProperty("tabEveryType");
+      expect(config).not.toHaveProperty("tabExcluded");
+    }
+    // A group the tab cannot edit stays among the page's fields, so no edit
+    // page draws the SEO tab, and the builder's asks the same; a template's
+    // rule is still the builder tab's.
     const gated = seoPlugin({
       collections: ["pages"],
       sitemap: false,
       fields: [text({ name: "metaTitle" }), text({ name: "focusKeyword" })],
     });
-    expect(gated.contributes?.admin?.clientConfig).toMatchObject({
-      tabCollections: [],
-    });
     expect(gated.contributes?.admin?.contributions).toEqual([
       PAGE_BUILDER_TAB_DECLARED,
+      PAGE_BUILDER_SEARCH_DECLARED,
     ]);
-  });
-
-  it("is told which types the site's code leaves out, where SEO is on every type", () => {
-    const leaving = seoPlugin({ exclude: ["pages", "pages"], sitemap: false });
-    expect(leaving.contributes?.admin?.clientConfig).toMatchObject({
-      tabEveryType: true,
-      tabExcluded: ["pages"],
-    });
-    const every = seoPlugin({ sitemap: false });
-    expect(every.contributes?.admin?.clientConfig).toMatchObject({
-      tabEveryType: true,
-      tabExcluded: [],
-    });
-  });
-
-  it("is told a type is out exactly where the plugin's extend clauses leave it without the group", () => {
-    // `logs` is excluded from every type and given the group by `include`,
-    // so only `pages` is without it.
-    const plugin = seoPlugin({
-      exclude: ["pages", "logs"],
-      include: ["logs"],
-      sitemap: false,
-    });
-    expect(plugin.contributes?.admin?.clientConfig).toMatchObject({
-      tabExcluded: ["pages"],
-    });
-    // Read from the same clauses the schema is given.
-    expect(typesLeftOut(plugin.contributes?.extend ?? [])).toEqual(["pages"]);
-  });
-});
-
-describe("typesLeftOut", () => {
-  it("names each type the every-type clause leaves out that no named clause gives the group", () => {
-    expect(
-      typesLeftOut([
-        { target: ["logs"], fields: [] },
-        {
-          target: {
-            every: ["collection", "single"],
-            except: ["pages", "logs"],
-          },
-          fields: [],
-        },
-      ])
-    ).toEqual(["pages"]);
-  });
-
-  it("names none where the site names its types", () => {
-    expect(typesLeftOut([{ target: ["posts", "home"], fields: [] }])).toEqual(
-      []
-    );
   });
 });
 

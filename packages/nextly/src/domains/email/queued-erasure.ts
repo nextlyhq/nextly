@@ -21,9 +21,12 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Column, SQL, Table } from "drizzle-orm";
-import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 
-import { loadedDialectHolding } from "../../database/dialect-tables";
+import {
+  loadedDialect,
+  loadedDialectHolding,
+} from "../../database/dialect-tables";
 import { NextlyError } from "../../errors";
 import {
   type RowLockStrength,
@@ -169,6 +172,57 @@ async function cancelAndClear(
     .set({ ...values, message: null, updatedAt: now })
     .where(these);
   await db.delete(recipients).where(inArray(recipients.queuedId, ids));
+  await retireJobsOf(db, tables, ids, now);
+}
+
+/**
+ * Retire the pending job of each email among `ids` that is now cancelled,
+ * so a jobs trigger never runs it and nothing counts it as overdue: an
+ * email cancelled while waiting has no attempt to come. A job already
+ * running is left as it is, as its attempt is with the provider and ends
+ * as a cancel during an attempt does.
+ */
+async function retireJobsOf(
+  db: QueuedErasureDb,
+  tables: EmailQueueTables,
+  ids: string[],
+  now: number
+): Promise<void> {
+  const { queue } = tables;
+  const rows = (await db
+    .select({ jobId: queue.jobId })
+    .from(queue)
+    .where(
+      and(
+        inArray(queue.id, ids),
+        eq(queue.state, "cancelled"),
+        isNotNull(queue.jobId)
+      )
+    )
+    .limit(ids.length)) as Array<{ jobId: string }>;
+  if (rows.length === 0) return;
+  const jobs = loadedDialect(tables.dialect).tables.nextlyJobs;
+  await db
+    .update(jobs)
+    .set({
+      // Finished as the runner finishes a job with nothing left to do.
+      state: "done",
+      nextAttemptAt: null,
+      lastError: "The queued email was cancelled.",
+      lockedBy: null,
+      lockedUntil: null,
+      dedupeKey: null,
+      updatedAt: new Date(now),
+    })
+    .where(
+      and(
+        inArray(
+          jobs.id,
+          rows.map(row => row.jobId)
+        ),
+        eq(jobs.state, "pending")
+      )
+    );
 }
 
 /**

@@ -20,6 +20,7 @@ const offer: HostedRecoveryOffer = {
   savedAt: new Date(),
   restore: vi.fn(),
   dismiss: vi.fn(),
+  discard: vi.fn(),
 };
 
 /** A host and a chip, saying whether the banner would stand down. */

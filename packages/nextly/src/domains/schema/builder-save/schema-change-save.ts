@@ -21,6 +21,7 @@ import {
 } from "../services/field-column-descriptor";
 
 import type { CollectionSave } from "./collection-save";
+import type { ConfirmedDeletion } from "./deletion-counts";
 
 /** A field's answer in the earlier per-field shape the admin still sends. */
 export interface PerFieldResolution {
@@ -34,6 +35,17 @@ export interface SchemaChangeAnswers {
   eventResolutions?: readonly Resolution[];
   resolutions?: Readonly<Record<string, PerFieldResolution>>;
   acknowledgedConversions?: readonly string[];
+  /**
+   * How many values of each removed field the review showed and the person confirmed deleting:
+   * the save deletes only where each still holds that many (`CollectionSave.confirmedDeletions`).
+   */
+  confirmedDeletions?: readonly ConfirmedDeletion[];
+  /**
+   * A Single's one row given the default each field new to its table states, by field
+   * (`singleRowFills`): not an answer the person gave, and judged as a Single's fill alone
+   * (`CollectionSave.rowFills`).
+   */
+  rowFills?: readonly { field: string; value: unknown }[];
 }
 
 /** A field as an answer is matched to it: by its name, which a layout-only field lacks. */
@@ -72,6 +84,8 @@ export function saveOfSchemaChange(args: {
   row: {
     labels?: { singular: string; plural: string };
     fields?: FieldDefinition[];
+    /** Whether the registry stores the collection as translated. */
+    localized?: boolean;
   };
   fields: readonly FieldDefinition[];
   localized: boolean;
@@ -90,11 +104,7 @@ export function saveOfSchemaChange(args: {
   const previous =
     listed.find(c => c.slug === args.slug) ??
     args.stored ??
-    ({
-      slug: args.slug,
-      labels: args.row.labels ?? { singular: args.slug, plural: args.slug },
-      fields: args.row.fields ?? [],
-    } satisfies UiSchemaEntity);
+    entityOfRegistryRow(args.slug, args.row);
   // Answers name columns of the row, a field inside a group with no name included: it is a
   // column there (`fieldsStoredOnRow`), and its change is asked about like one beside the group.
   const answers = answersOf(
@@ -129,9 +139,21 @@ export function saveOfSchemaChange(args: {
       change: "update",
       renamedFields: renamedFieldsOf(args.answers.renameResolutions ?? []),
       ...(resolutions.length === 0 ? {} : { resolutions }),
+      ...(args.answers.rowFills === undefined ||
+      args.answers.rowFills.length === 0
+        ? {}
+        : {
+            rowFills: args.answers.rowFills.map(fill => ({
+              column: fill.field,
+              value: fill.value,
+            })),
+          }),
       ...(args.answers.acknowledgedConversions === undefined
         ? {}
         : { acknowledgedConversions: args.answers.acknowledgedConversions }),
+      ...(args.answers.confirmedDeletions === undefined
+        ? {}
+        : { confirmedDeletions: args.answers.confirmedDeletions }),
       ...(args.junctions === undefined ? {} : { junctions: args.junctions }),
       ...(args.keys === undefined ? {} : { keys: args.keys }),
     },
@@ -158,6 +180,27 @@ function withOptional(
     }
     return optional.has(field.name) ? { ...field, required: false } : field;
   });
+}
+
+/**
+ * A collection the definition file lacks, as its registry row records it: translated as the
+ * registry stores it, which decides where its values are before the save (`deletionHoldOf` counts
+ * them there).
+ */
+function entityOfRegistryRow(
+  slug: string,
+  row: {
+    labels?: { singular: string; plural: string };
+    fields?: FieldDefinition[];
+    localized?: boolean;
+  }
+): UiSchemaEntity {
+  return {
+    slug,
+    labels: row.labels ?? { singular: slug, plural: slug },
+    fields: row.fields ?? [],
+    ...(row.localized === true ? { localized: true } : {}),
+  } satisfies UiSchemaEntity;
 }
 
 /**

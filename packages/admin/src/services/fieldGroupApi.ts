@@ -25,11 +25,12 @@ import type {
 } from "../lib/api/response-types";
 
 import { withListOwner, type ListOwner } from "./list-owner";
-import type {
-  FieldResolution,
-  SchemaApplyResponse,
-  SchemaPreviewResponse,
-  SchemaRenameResolution,
+import {
+  acknowledgedConversionsBody,
+  type FieldResolution,
+  type SchemaApplyResponse,
+  type SchemaPreviewResponse,
+  type SchemaRenameResolution,
 } from "./schemaApi";
 
 /**
@@ -160,7 +161,8 @@ type FieldGroupApiType = {
     schemaVersion: number,
     resolutions?: Record<string, FieldResolution>,
     renameResolutions?: SchemaRenameResolution[],
-    localized?: boolean
+    localized?: boolean,
+    acknowledgedConversions?: readonly string[]
   ) => Promise<SchemaApplyResponse>;
   readonly previewReconcile: (
     fieldGroupSlug: string
@@ -264,7 +266,9 @@ export const fieldGroupApi: FieldGroupApiType = {
     renameResolutions?: SchemaRenameResolution[],
     // i18n: the current Internationalization toggle, so an apply that flips i18n AND changes
     // fields provisions the companion in the same request. Undefined leaves the persisted value.
-    localized?: boolean
+    localized?: boolean,
+    // The keys of the conversions the review listed and its Save confirmed.
+    acknowledgedConversions?: readonly string[]
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -275,6 +279,7 @@ export const fieldGroupApi: FieldGroupApiType = {
       resolutions,
       renameResolutions,
       ...(localized !== undefined ? { localized } : {}),
+      ...acknowledgedConversionsBody(acknowledgedConversions),
     });
     return {
       success: true,

@@ -11,9 +11,9 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import type { ActivityEvent } from "nextly/widget-result";
 
-import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { describeActivityActor } from "@admin/lib/dashboard";
+import type { DocumentAddressOf } from "@admin/lib/navigation/useDocumentAddress";
 import type {
   Activity,
   ActivityCategory,
@@ -39,7 +39,8 @@ interface ActivityLogEntry {
   userName: string | null;
   /** Null once the actor's account was deleted and their identity erased. */
   userEmail: string | null;
-  action: "create" | "update" | "delete";
+  /** `read` is a search of the email delivery log by address, which is logged. */
+  action: "create" | "update" | "delete" | "read";
   /** What happened, by the server's closed set. Absent from an older server, or for a row it names none for. */
   event?: ActivityEvent;
   collection: string;
@@ -76,15 +77,23 @@ const ACTION_LABELS: Record<string, string> = {
   create: "created",
   update: "updated",
   delete: "deleted",
+  read: "searched",
 };
 
 const ACTION_CATEGORIES: Record<string, ActivityCategory> = {
   create: "success",
   update: "info",
   delete: "destructive",
+  read: "info",
 };
 
 function mapEntry(entry: ActivityLogEntry): Activity {
+  // A search of the email delivery log is about no entry and no collection:
+  // its subject is what was searched, so the row reads "Ana searched email
+  // deliveries", with no collection on its meta line.
+  if (entry.action === "read") {
+    return { ...shared(entry), target: "email deliveries" };
+  }
   const entryTitle = entry.entryTitle ?? undefined;
   // A Single's row is headed by the Single's label alone. Its `collection` is
   // the Single's slug, not a collection, so showing it as the collection the
@@ -135,7 +144,14 @@ function shared(
 // A widget answer's rows
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ACTIONS: ReadonlySet<string> = new Set(["create", "update", "delete"]);
+// Every action the feed can hold: a row whose action is missing here is
+// dropped as unreadable, so a new action needs its place here too.
+const ACTIONS: ReadonlySet<string> = new Set([
+  "create",
+  "update",
+  "delete",
+  "read",
+]);
 /**
  * Every event the server names, keyed so the list cannot miss one: a key the union lacks, or a
  * member without a key, fails to compile.
@@ -221,23 +237,27 @@ export function activityFromRow(
 }
 
 /**
- * Where an activity row leads: the entry it is about, or the Single. Nothing for a deletion,
+ * Where an activity row leads: the entry it is about, where the admin's one rule for opening a
+ * document opens it, or the Single. Nothing for a deletion,
  * whose subject is gone, for a change to settings, or for a row naming no entry. The feed holds
  * only events about what the reader may read, so the link opens something they may open.
  */
-export function activityHref(row: Record<string, unknown>): string | undefined {
+export function activityHref(
+  row: Record<string, unknown>,
+  /** Where a link to a document opens, by the admin's one rule. */
+  addressOf: DocumentAddressOf
+): string | undefined {
   const collection = textOrNull(row.collection);
-  if (!collection || row.action === "delete") return undefined;
+  // A deletion's subject is gone, and a search reads no one document.
+  if (!collection || row.action === "delete" || row.action === "read")
+    return undefined;
   if (row.subjectKind === "single") {
-    return buildRoute(ROUTES.SINGLE_EDIT, { slug: collection });
+    return addressOf({ kind: "single", slug: collection });
   }
   if (row.subjectKind === "settings") return undefined;
   const entryId = textOrNull(row.entryId);
   return entryId
-    ? buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-        slug: collection,
-        id: entryId,
-      })
+    ? addressOf({ kind: "collection", slug: collection, id: entryId })
     : undefined;
 }
 

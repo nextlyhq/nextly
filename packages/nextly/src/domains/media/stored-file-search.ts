@@ -33,6 +33,7 @@ export class StoredFileSearchReader extends BaseService {
         this.db
           .select({
             filename: media.filename,
+            mimeType: media.mimeType,
             url: media.url,
             thumbnailUrl: media.thumbnailUrl,
             ...(sizes === undefined ? {} : { sizes: sql<unknown>`${sizes}` }),

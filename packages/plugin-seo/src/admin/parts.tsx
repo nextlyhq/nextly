@@ -65,7 +65,7 @@ export function LinkAction({
 }
 
 /** Pattern or code text, set in the code face. */
-function Code({ children }: { children: ReactNode }): ReactNode {
+export function Code({ children }: { children: ReactNode }): ReactNode {
   return (
     <code className="rounded bg-muted px-[5px] py-px font-mono text-xs whitespace-nowrap text-foreground">
       {children}

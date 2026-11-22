@@ -29,8 +29,10 @@ import {
   createTestQueryClient,
   screen,
   waitFor,
+  within,
 } from "@admin/__tests__/utils";
 import { RoutedPathnameContext } from "@admin/context/RoutedPathnameContext";
+import type { RestoreOutcome } from "@admin/hooks/useAutosaveRecovery";
 import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 import {
   clearRegistry,
@@ -55,7 +57,10 @@ const { useDocumentLock, update, recovery, updateOptions } = vi.hoisted(() => ({
       offer: null as { savedAt: Date; snapshot: unknown } | null,
       isResolved: true,
       dismiss: () => {},
+      discard: () => {},
       restore: () => {},
+      restoreChecked: (_apply?: () => void): Promise<RestoreOutcome> =>
+        Promise.resolve("changed"),
       take: () => {},
     },
   },
@@ -93,7 +98,10 @@ import {
   useHostedRecoveryPoint,
 } from "../DocumentActionsContext";
 import { useDocumentRestore } from "../DocumentRestoreContext";
-import { DocumentSaveIndicator } from "../DocumentSurfaceControls";
+import {
+  DocumentPrimaryAction,
+  DocumentSaveIndicator,
+} from "../DocumentSurfaceControls";
 import { EntryForm } from "../EntryForm";
 import { useDocumentStatus } from "../EntryFormContext";
 import {
@@ -678,14 +686,21 @@ describe("EntryForm with a document view", () => {
   });
 
   it("makes the offer in the save chip of a view that draws one, and draws no banner", async () => {
-    // One save state: the chip says "Unsaved changes" and makes the offer,
-    // so a banner above the editor would say it a second time.
+    // One save state: with edits made since, the chip says "Unsaved changes"
+    // and makes the offer, so a banner above the editor would say it a
+    // second time.
     const CHIP_VIEW = "@acme/pb/admin#Chip";
     function ChipView(): ReactElement {
       useEffect(() => {
         mounted();
       }, []);
-      return <DocumentSaveIndicator />;
+      const { register } = useFormContext();
+      return (
+        <>
+          <input aria-label="Page heading" {...register("title")} />
+          <DocumentSaveIndicator />
+        </>
+      );
     }
     registerComponent(CHIP_VIEW, ChipView);
     const take = vi.fn();
@@ -697,6 +712,7 @@ describe("EntryForm with a document view", () => {
       take,
     };
     renderView({ documentView: { component: CHIP_VIEW, onExit } });
+    await userEvent.type(screen.getByLabelText("Page heading"), "!");
 
     expect(screen.queryByRole("status", { name: /recovery/i })).toBeNull();
     expect(screen.queryByText(/you have unsaved changes from/i)).toBeNull();
@@ -718,7 +734,15 @@ describe("EntryForm with a document view", () => {
 
   it("keeps the offer when the chip says Not now, and offers nothing more this session", async () => {
     const CHIP_VIEW = "@acme/pb/admin#ChipDismiss";
-    registerComponent(CHIP_VIEW, () => <DocumentSaveIndicator />);
+    registerComponent(CHIP_VIEW, function ChipDismissView() {
+      const { register } = useFormContext();
+      return (
+        <>
+          <input aria-label="Page heading" {...register("title")} />
+          <DocumentSaveIndicator />
+        </>
+      );
+    });
     const dismiss = vi.fn();
     const restore = vi.fn();
     recovery.current = {
@@ -728,6 +752,7 @@ describe("EntryForm with a document view", () => {
       restore,
     };
     renderView({ documentView: { component: CHIP_VIEW, onExit } });
+    await userEvent.type(screen.getByLabelText("Page heading"), "!");
 
     await userEvent.click(
       screen.getByRole("button", { name: "Unsaved changes: restore options" })
@@ -737,6 +762,433 @@ describe("EntryForm with a document view", () => {
     );
     expect(dismiss).toHaveBeenCalledTimes(1);
     expect(restore).not.toHaveBeenCalled();
+  });
+
+  describe("changes from the last visit, in a view whose chip makes the offer", () => {
+    /*
+     * A published page with a pending recovery point and nothing else
+     * changed: the case that read "Unsaved changes" beside a Save that did
+     * nothing. Drafts are on, so Save is ordinarily held while nothing has
+     * changed; here the changes on offer are something to save.
+     */
+    const LAST_VISIT_VIEW = "@acme/pb/admin#LastVisit";
+    const SNAPSHOT = { title: "Recovered" };
+    /** The form, so the recovery's take can do what the real one does. */
+    const formOf: { reset?: (values: unknown, options: object) => void } = {};
+
+    function LastVisitView(): ReactElement {
+      const { register, reset } = useFormContext();
+      formOf.reset = reset as never;
+      return (
+        <>
+          <input aria-label="Page heading" {...register("title")} />
+          <DocumentSaveIndicator />
+          <DocumentPrimaryAction />
+        </>
+      );
+    }
+
+    /** A recovery point on offer whose checked restore answers `outcome`. */
+    function offerFromLastVisit(outcome: RestoreOutcome) {
+      const answer = { outcome };
+      const dismiss = vi.fn();
+      const discard = vi.fn();
+      // As the recovery's own take does: the snapshot into the form, kept
+      // dirty against the stored defaults.
+      const take = vi.fn(() => {
+        formOf.reset?.(SNAPSHOT, { keepDefaultValues: true });
+      });
+      const restoreChecked = vi.fn(async (apply?: () => void) => {
+        if (answer.outcome === "restored") (apply ?? take)();
+        return answer.outcome;
+      });
+      recovery.current = {
+        ...recovery.current,
+        offer: { savedAt: new Date(), snapshot: SNAPSHOT },
+        dismiss,
+        discard,
+        restore: vi.fn(),
+        restoreChecked,
+        take,
+      };
+      return { answer, dismiss, discard, restoreChecked, take };
+    }
+
+    function open() {
+      registerComponent(LAST_VISIT_VIEW, LastVisitView);
+      return renderView({
+        ...withDrafts,
+        documentView: { component: LAST_VISIT_VIEW, onExit },
+      });
+    }
+
+    /** The bar's Save, not the chip's (whose popover is closed). */
+    const barSave = (): HTMLButtonElement =>
+      screen.getByRole("button", { name: "Save" });
+    /** The Save the page shows, in a view's bar or the entry's own. */
+    const barSaveAnywhere = (): HTMLElement =>
+      screen.getAllByRole("button", { name: "Save" })[0] as HTMLElement;
+
+    it("says so in the chip, with Save enabled, and draws no banner", async () => {
+      offerFromLastVisit("restored");
+      open();
+
+      // The bar's one short status, beside an enabled Save, and the offer's
+      // words in its popover.
+      const chip = screen.getByRole("button", {
+        name: "Unsaved changes: Save or Discard",
+      });
+      expect(barSave().disabled).toBe(false);
+      expect(screen.queryByText(/you have unsaved changes from/i)).toBeNull();
+      await userEvent.click(chip);
+      expect(
+        await screen.findByText(
+          "Changes from your last visit aren't saved yet."
+        )
+      ).toBeInTheDocument();
+    });
+
+    it("keeps them on Save: restores them, then saves what was restored", async () => {
+      const { restoreChecked } = offerFromLastVisit("restored");
+      open();
+
+      await userEvent.click(barSave());
+
+      expect(restoreChecked).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      expect(update.mock.calls[0]?.[0]).toMatchObject({ title: "Recovered" });
+    });
+
+    it("keeps them from the chip's own Save too", async () => {
+      offerFromLastVisit("restored");
+      open();
+
+      await userEvent.click(
+        screen.getByRole("button", {
+          name: "Unsaved changes: Save or Discard",
+        })
+      );
+      const popover = await screen.findByRole("dialog");
+      await userEvent.click(
+        within(popover).getByRole("button", { name: "Save" })
+      );
+
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      expect(update.mock.calls[0]?.[0]).toMatchObject({ title: "Recovered" });
+    });
+
+    it("saves nothing when the page changed after them, closes the offer and says why", async () => {
+      const { dismiss } = offerFromLastVisit("changed");
+      open();
+
+      await userEvent.click(barSave());
+
+      expect(
+        await screen.findByText(
+          "Your earlier changes weren't saved because this page changed after them."
+        )
+      ).toBeInTheDocument();
+      expect(screen.getByText("Not saved")).toBeInTheDocument();
+      expect(dismiss).toHaveBeenCalledTimes(1);
+      expect(update).not.toHaveBeenCalled();
+      // Nothing to try again: the offer is closed.
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    });
+
+    it("saves nothing when they couldn't be checked, keeps the offer, and Retry tries again", async () => {
+      const { answer, dismiss, restoreChecked } =
+        offerFromLastVisit("unchecked");
+      open();
+
+      await userEvent.click(barSave());
+
+      expect(
+        await screen.findByText(
+          "Couldn't check your earlier changes, so nothing was saved. Try again."
+        )
+      ).toBeInTheDocument();
+      expect(dismiss).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+
+      // The read answers this time: Retry keeps them.
+      answer.outcome = "restored";
+      await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+      expect(restoreChecked).toHaveBeenCalledTimes(2);
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      expect(update.mock.calls[0]?.[0]).toMatchObject({ title: "Recovered" });
+    });
+
+    it("drops them on Discard for good, saving nothing", async () => {
+      const { dismiss, discard, restoreChecked } =
+        offerFromLastVisit("restored");
+      // The real recovery stops offering on discard.
+      discard.mockImplementation(() => {
+        recovery.current = { ...recovery.current, offer: null };
+      });
+      open();
+
+      await userEvent.click(
+        screen.getByRole("button", {
+          name: "Unsaved changes: Save or Discard",
+        })
+      );
+      const popover = await screen.findByRole("dialog");
+      await userEvent.click(
+        within(popover).getByRole("button", { name: "Discard" })
+      );
+
+      // The lasting Discard, not the session-only Not now.
+      expect(discard).toHaveBeenCalledTimes(1);
+      expect(dismiss).not.toHaveBeenCalled();
+      expect(restoreChecked).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it("saves what a view holding its own copy holds, once the restore has reached it", async () => {
+      /*
+       * The page builder keeps the page in its own state, takes a restore as
+       * an edit there, and hands its copy to the form just before each save.
+       * A save run as soon as the restore is confirmed would hand over the
+       * copy from before it, and store the page without the changes it was
+       * pressed to keep.
+       */
+      const HELD_VIEW = "@acme/pb/admin#HeldCopy";
+      const layoutPage = {
+        collection: {
+          name: "pages",
+          status: true,
+          draftsEnabled: true,
+          fields: [{ name: "layout", type: "blocks" }],
+        } as never,
+        entry: {
+          id: "e1",
+          status: "published",
+          layout: { nodes: ["stored"] },
+        } as never,
+      };
+      const recovered = { nodes: ["recovered"] };
+      function HeldCopyView(): ReactElement {
+        const { getValues, setValue } = useFormContext();
+        const [copy, setCopy] = useState<unknown>(() => getValues("layout"));
+        useDocumentRestore(value => {
+          setCopy(value);
+          return true;
+        });
+        useBeforeDocumentAction(() => {
+          setValue("layout", copy, { shouldDirty: true });
+        });
+        return (
+          <>
+            <DocumentSaveIndicator />
+            <DocumentPrimaryAction />
+          </>
+        );
+      }
+      registerComponent(HELD_VIEW, HeldCopyView);
+      // As the real one does, the point is read again before it is applied,
+      // so the restore lands on a later task than the press.
+      const restoreChecked = vi.fn(async (apply?: () => void) => {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        apply?.();
+        return "restored" as const;
+      });
+      recovery.current = {
+        ...recovery.current,
+        offer: { savedAt: new Date(), snapshot: { layout: recovered } },
+        dismiss: vi.fn(),
+        restore: vi.fn(),
+        restoreChecked,
+        take: vi.fn(),
+      };
+      renderView({
+        ...layoutPage,
+        documentView: { component: HELD_VIEW, onExit, fieldType: "blocks" },
+      });
+
+      // Pressed outside `act`, as in a browser: the restore's updates then
+      // render on a later task, not between the awaits that follow it, so a
+      // save that does not wait for that render would run against the
+      // view's copy from before the restore.
+      const environment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+      const wasActEnvironment = environment.IS_REACT_ACT_ENVIRONMENT;
+      environment.IS_REACT_ACT_ENVIRONMENT = false;
+      try {
+        barSave().click();
+        // Long enough for the restore, its renders and the save to settle.
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } finally {
+        environment.IS_REACT_ACT_ENVIRONMENT = wasActEnvironment;
+      }
+
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(update.mock.calls[0]?.[0]).toMatchObject({ layout: recovered });
+    });
+
+    /** A checked restore that answers only when `answer` is called. */
+    function offerAnsweredLater() {
+      const offered = offerFromLastVisit("restored");
+      let answer: () => void = () => undefined;
+      const answered = new Promise<void>(resolve => {
+        answer = resolve;
+      });
+      offered.restoreChecked.mockImplementation(async (apply?: () => void) => {
+        await answered;
+        (apply ?? offered.take)();
+        return "restored";
+      });
+      return { ...offered, answer: () => act(async () => answer()) };
+    }
+
+    it("keeps them on Mod+S too, as the bar's Save does", async () => {
+      const { restoreChecked } = offerFromLastVisit("restored");
+      open();
+
+      pressSave(document.body);
+
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      expect(restoreChecked).toHaveBeenCalledTimes(1);
+      expect(update.mock.calls[0]?.[0]).toMatchObject({ title: "Recovered" });
+    });
+
+    it("restores nothing over an edit made while they were checked, and saves that edit", async () => {
+      const { answer, take } = offerAnsweredLater();
+      open();
+
+      await userEvent.click(barSave());
+      await userEvent.type(screen.getByLabelText("Page heading"), " world");
+      await answer();
+
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      expect(update.mock.calls[0]?.[0]).toMatchObject({
+        title: "Hello world",
+      });
+      expect(take).not.toHaveBeenCalled();
+    });
+
+    it("stops saving, saving nothing, when the view goes while they are checked", async () => {
+      const { answer, take } = offerAnsweredLater();
+      const view = open();
+
+      await userEvent.click(barSave());
+      // The author leaves the builder for the entry's own page meanwhile.
+      view.rerender(
+        <EntryForm {...withDrafts} mode="edit" onCancel={onCancel} />
+      );
+      await answer();
+
+      // Not stuck on a save that can never land: the page's Save is held
+      // for what it always was, not for "Saving…".
+      await waitFor(() =>
+        expect(barSaveAnywhere().getAttribute("title")).toBe(
+          "Nothing has changed yet."
+        )
+      );
+      expect(take).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it("stops saying why nothing was saved once a later store lands", async () => {
+      // A draft page, whose Save is offered with nothing changed: the
+      // refusal is about the earlier changes, and a store that lands
+      // afterwards answers it.
+      const { dismiss } = offerFromLastVisit("changed");
+      // The real recovery stops offering on dismiss, and the editor draws
+      // again without the offer.
+      dismiss.mockImplementation(() => {
+        recovery.current = { ...recovery.current, offer: null };
+      });
+      registerComponent(LAST_VISIT_VIEW, LastVisitView);
+      const props = {
+        collection: withDrafts.collection,
+        entry: { id: "e1", title: "Hello", status: "draft" } as never,
+        documentView: { component: LAST_VISIT_VIEW, onExit },
+      };
+      const view = renderView(props);
+      const message =
+        "Your earlier changes weren't saved because this page changed after them.";
+
+      pressSave(document.body);
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      view.rerender(<EntryForm {...props} mode="edit" onCancel={onCancel} />);
+      expect(screen.getByText(message)).toBeInTheDocument();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /^Save( draft)?$/ })
+      );
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.queryByText(message)).toBeNull());
+    });
+
+    it("holds Save in a view that leaves the offer to the banner", async () => {
+      // No save chip, so the offer is the banner's, and Save waits for an
+      // edit as the entry page's does.
+      const BANNER_VIEW = "@acme/pb/admin#BannerOnly";
+      registerComponent(BANNER_VIEW, () => <DocumentPrimaryAction />);
+      const { restoreChecked } = offerFromLastVisit("restored");
+      renderView({
+        ...withDrafts,
+        documentView: { component: BANNER_VIEW, onExit },
+      });
+
+      expect(
+        screen.getByText(/you have unsaved changes from/i)
+      ).toBeInTheDocument();
+      expect(barSave().disabled).toBe(true);
+      expect(barSave().getAttribute("title")).toBe("Nothing has changed yet.");
+      pressSave(document.body);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(restoreChecked).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it("saves an edit made since, never putting the page back to them", async () => {
+      const { restoreChecked } = offerFromLastVisit("restored");
+      open();
+
+      await userEvent.type(screen.getByLabelText("Page heading"), " world");
+      await userEvent.click(barSave());
+
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      expect(update.mock.calls[0]?.[0]).toMatchObject({
+        title: "Hello world",
+      });
+      expect(restoreChecked).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("the entry page, whose banner makes the offer", () => {
+    it("keeps its banner, its chip's words and a Save held until an edit", () => {
+      // The page without a view: nothing here hands the offer to Save, so
+      // the entry page behaves as it did before Save could keep an offer.
+      const restoreChecked = vi.fn(
+        async (): Promise<RestoreOutcome> => "restored"
+      );
+      recovery.current = {
+        ...recovery.current,
+        offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+        restoreChecked,
+      };
+      render(<EntryForm {...withDrafts} mode="edit" onCancel={onCancel} />, {
+        wrapper: Providers,
+      });
+
+      expect(
+        screen.getByText(/you have unsaved changes from/i)
+      ).toBeInTheDocument();
+      expect(screen.getAllByText("Unsaved changes").length).toBeGreaterThan(0);
+      expect(
+        screen.queryByRole("button", {
+          name: "Unsaved changes: Save or Discard",
+        })
+      ).toBeNull();
+      const save = screen.getByRole("button", { name: "Save" });
+      expect((save as HTMLButtonElement).disabled).toBe(true);
+      expect(save.getAttribute("title")).toBe("Nothing has changed yet.");
+      expect(restoreChecked).not.toHaveBeenCalled();
+    });
   });
 
   describe("a view that restores its own field", () => {

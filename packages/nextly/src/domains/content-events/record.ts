@@ -6,7 +6,6 @@
  * and commit or roll back with it.
  *
  * @module domains/content-events/record
- * @experimental
  */
 
 import { NextlyError } from "../../errors";
@@ -16,6 +15,7 @@ import {
   SHARED_PART,
   type ContentEventSubjectKind,
 } from "../../schemas/content-events";
+import { CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH } from "../../schemas/content-events/widths";
 import { toJsonColumnValue } from "../../shared/lib/json-column-value";
 import { isJsonValue } from "../../shared/lib/json-value";
 import { uuidV7 } from "../../utils/uuid-v7";
@@ -41,8 +41,6 @@ export type ContentEventSubject =
 
 /**
  * One event to record.
- *
- * @experimental
  */
 export interface ContentEventInput {
   subject: ContentEventSubject;
@@ -68,8 +66,6 @@ export interface ContentEventInput {
 
 /**
  * What a write reads besides its transaction.
- *
- * @experimental
  */
 export interface RecordContentEventOptions {
   /**
@@ -111,7 +107,7 @@ const FIELD_LIMITS = {
   subjectId: 255,
   actorId: 255,
   actorName: 255,
-  actorPrincipalKind: 64,
+  actorPrincipalKind: CONTENT_EVENT_ACTOR_PRINCIPAL_KIND_LENGTH,
   fromState: 64,
   toState: 64,
   definitionHash: 64,
@@ -290,8 +286,6 @@ async function intoRecord<T>(
 /**
  * Record one event and its parts on `tx`, the transaction of the change it
  * records. Returns the event's id, which is time-ordered.
- *
- * @experimental
  */
 export async function recordContentEvent(
   tx: VersionsDbApi,

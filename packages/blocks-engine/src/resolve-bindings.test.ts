@@ -6,7 +6,7 @@
  * And the language and zone a render formats in, which the editor's previews
  * ask of the same rule.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BindingSchemaSource } from "./binding-rules";
 import {
@@ -21,6 +21,11 @@ import {
   createBindingRun,
   resolveNodeBindings,
 } from "./resolve-bindings";
+import {
+  SITE_SETTING_FIELD_SHAPES,
+  SITE_SETTING_LABELS,
+  siteComputedValues,
+} from "./site-setting-fields";
 
 /** A bound heading under `depth` nested boxes, built without recursion. */
 function nestedUnder(depth: number): BlockDocument {
@@ -262,5 +267,84 @@ describe("the language and time zone a render formats in", () => {
     });
     expect(run.env).toEqual({ locale: "ar-EG", timeZone: "UTC" });
     expect(run.timeZoneValid).toBe(false);
+  });
+});
+
+describe("the site's current year", () => {
+  const textProps = {
+    get: (type: string) =>
+      type === "core/text" ? { props: { text: { type: "text" } } } : undefined,
+  } as const;
+  const schema: BindingSchemaSource = {
+    fieldsOf: ref => ("site" in ref ? SITE_SETTING_FIELD_SHAPES : undefined),
+  };
+  const bound = (field: string): BlockNode =>
+    ({
+      id: field,
+      type: "core/text",
+      version: 1,
+      props: { text: "" },
+      bindings: { text: { $bind: field, source: "site" } },
+    }) as unknown as BlockNode;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("is read from the site values the host hands in, and the engine never reads the clock", () => {
+    // Any read of the time here would throw: a prerender under Cache
+    // Components refuses it outside a cached read, and the engine has none.
+    const RealDate = Date;
+    vi.stubGlobal(
+      "Date",
+      new Proxy(RealDate, {
+        construct() {
+          throw new Error("the engine read the clock");
+        },
+        get(target, property, receiver) {
+          if (property === "now") {
+            return () => {
+              throw new Error("the engine read the clock");
+            };
+          }
+          return Reflect.get(target, property, receiver) as unknown;
+        },
+      })
+    );
+    const run = createBindingRun({
+      sources: { site: { applicationName: "Acme", currentYear: "2031" } },
+      schema,
+      timeZone: "Asia/Tokyo",
+      props: textProps,
+    });
+    const year = resolveNodeBindings(bound("currentYear"), run, {
+      phase: "page",
+    });
+    expect(year.issues).toEqual([]);
+    expect(year.props.text).toBe("2031");
+    expect(
+      resolveNodeBindings(bound("applicationName"), run, { phase: "page" })
+        .props.text
+    ).toBe("Acme");
+  });
+
+  it("is worked out from a given time in a given zone, without reading the clock", () => {
+    // Late on New Year's Eve in UTC is already the next year in Tokyo.
+    const eve = new Date("2026-12-31T20:00:00Z");
+    expect(siteComputedValues(eve, "UTC")).toEqual({ currentYear: "2026" });
+    expect(siteComputedValues(eve, "Asia/Tokyo")).toEqual({
+      currentYear: "2027",
+    });
+    expect(siteComputedValues(eve, "America/New_York").currentYear).toBe(
+      "2026"
+    );
+  });
+
+  it("can be bound wherever the site's settings can, under its own words", () => {
+    expect(SITE_SETTING_FIELD_SHAPES).toContainEqual({
+      name: "currentYear",
+      type: "text",
+    });
+    expect(SITE_SETTING_LABELS.currentYear).toBe("Current year");
   });
 });

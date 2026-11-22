@@ -22,6 +22,8 @@ import { cn } from "@admin/lib/utils";
 
 import { useFieldElementId } from "../field-id-scope";
 
+import { choiceIsClearable } from "./SelectInput";
+
 // ============================================================
 // Types
 // ============================================================
@@ -151,37 +153,59 @@ export function RadioInput<TFieldValues extends FieldValues = FieldValues>({
   const layout = field.admin?.layout || "horizontal";
   const isHorizontal = layout === "horizontal";
 
+  // A radio group has no "nothing" among its options, so an optional one
+  // picked by mistake could not be emptied again. It offers to clear by the
+  // select's own rule (`choiceIsClearable`), beside the options rather than as
+  // one of them, so the group's options stay exactly the field's.
+  const showClear =
+    choiceIsClearable(field) &&
+    !disabled &&
+    !readOnly &&
+    value !== "" &&
+    value != null;
+
   return (
-    <RadioGroup
-      value={value || ""}
-      onValueChange={onChange}
-      disabled={disabled || readOnly}
-      className={cn(
-        isHorizontal ? "flex flex-wrap gap-4" : "flex flex-col gap-3",
-        readOnly && "opacity-60 cursor-not-allowed",
-        className
+    <div className="space-y-2">
+      <RadioGroup
+        value={value || ""}
+        onValueChange={onChange}
+        disabled={disabled || readOnly}
+        className={cn(
+          isHorizontal ? "flex flex-wrap gap-4" : "flex flex-col gap-3",
+          readOnly && "opacity-60 cursor-not-allowed",
+          className
+        )}
+        aria-invalid={invalid || undefined}
+      >
+        {field.options?.map(option => (
+          <div key={option.value} className="flex items-center space-x-2">
+            <RadioGroupItem
+              value={option.value}
+              id={`${elementId}-${option.value}`}
+              disabled={disabled || readOnly}
+            />
+            <Label
+              htmlFor={`${elementId}-${option.value}`}
+              className={cn(
+                "cursor-pointer",
+                (disabled || readOnly) && "cursor-not-allowed opacity-60"
+              )}
+            >
+              {option.label}
+            </Label>
+          </div>
+        ))}
+      </RadioGroup>
+      {showClear && (
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+        >
+          Clear selection
+        </button>
       )}
-      aria-invalid={invalid || undefined}
-    >
-      {field.options?.map(option => (
-        <div key={option.value} className="flex items-center space-x-2">
-          <RadioGroupItem
-            value={option.value}
-            id={`${elementId}-${option.value}`}
-            disabled={disabled || readOnly}
-          />
-          <Label
-            htmlFor={`${elementId}-${option.value}`}
-            className={cn(
-              "cursor-pointer",
-              (disabled || readOnly) && "cursor-not-allowed opacity-60"
-            )}
-          >
-            {option.label}
-          </Label>
-        </div>
-      ))}
-    </RadioGroup>
+    </div>
   );
 }
 

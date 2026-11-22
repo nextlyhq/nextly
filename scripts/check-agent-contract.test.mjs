@@ -649,7 +649,14 @@ describe("reaching Claude Code", () => {
 
   it("finds a copy of every instruction file in this repository where Claude Code reads it", () => {
     const repo = fileURLToPath(new URL("..", import.meta.url));
-    const tracked = execFileSync("git", ["ls-files"], { cwd: repo, encoding: "utf8" }).split("\n").filter(Boolean);
+    // Room for a listing past the 1 MiB a spawn may print by default.
+    const tracked = execFileSync("git", ["ls-files"], {
+      cwd: repo,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    })
+      .split("\n")
+      .filter(Boolean);
     expect(instructionCopyFindings(repo, tracked)).toEqual([]);
   });
 });

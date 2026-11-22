@@ -29,6 +29,7 @@ import type {
   TimeseriesArgs,
   TimeseriesResult,
   CreateArgs,
+  CreateFromSourceArgs,
   RowFromCollectionSlug,
   DeleteArgs,
   DeleteResult,
@@ -103,6 +104,9 @@ export async function find<TSlug extends CollectionSlug>(
     // i18n M4: forward the content locale + fallback so localized fields resolve.
     locale: config.locale,
     fallbackLocale: config.fallbackLocale,
+    sourceLocales: args.sourceLocales,
+    translations: args.translations,
+    ...(args.reviewState === true ? { reviewState: true } : {}),
     context: config.context,
   });
 
@@ -132,6 +136,10 @@ export async function find<TSlug extends CollectionSlug>(
       totalPages,
       hasNext: legacy.hasNextPage ?? page < totalPages,
       hasPrev: legacy.hasPrevPage ?? page > 1,
+      // A total counted no further than it had to, or a filter that read no further than it
+      // may: a floor, said as REST says it. Carried only when set, so an exact total's meta is
+      // unchanged.
+      ...(legacy.totalCapped ? { totalCapped: true as const } : {}),
     },
   };
 }
@@ -163,6 +171,9 @@ export async function findByID<TSlug extends CollectionSlug>(
       // i18n M4: forward the content locale + fallback so localized fields resolve.
       locale: config.locale,
       fallbackLocale: config.fallbackLocale,
+      sourceLocales: args.sourceLocales,
+      translations: args.translations,
+      wholeDocumentFallback: args.wholeDocumentFallback,
       context: config.context,
     });
 
@@ -215,13 +226,26 @@ export async function create<TSlug extends CollectionSlug>(
       args.data
     )
   );
+  return createdEnvelope<TSlug>(args.collection, result, warnings);
+}
 
+/**
+ * A create's answer as the wire's `respondMutation` envelope: its row, and
+ * the side-effect warnings collected around it; a refused create thrown as
+ * its error. One shape for `create` and `createFromSource`.
+ */
+function createdEnvelope<TSlug extends CollectionSlug>(
+  collection: TSlug,
+  result: Awaited<
+    ReturnType<NextlyContext["collectionsHandler"]["createEntry"]>
+  >,
+  warnings: MutationResult<unknown>["warnings"]
+): MutationResult<RowFromCollectionSlug<TSlug>> {
   if (!result.success) {
     throw createErrorFromResult(result);
   }
-
   return {
-    message: buildMutationMessage(args.collection, "created"),
+    message: buildMutationMessage(collection, "created"),
     item: result.data as RowFromCollectionSlug<TSlug>,
     ...(warnings ? { warnings } : {}),
   };
@@ -361,6 +385,9 @@ async function moveParts(
         context: config.context,
         disableRevalidate: config.disableRevalidate,
         data: args.data,
+        ...(args.withoutReview === undefined
+          ? {}
+          : { withoutReview: args.withoutReview }),
       },
       {
         direction,
@@ -710,6 +737,41 @@ export async function duplicate<TSlug extends CollectionSlug>(
     item: result.data as RowFromCollectionSlug<TSlug>,
     ...(warnings ? { warnings } : {}),
   };
+}
+
+/**
+ * @experimental Create a document that copies a stored one: the source is
+ * read as the caller first, and refused as that read refuses it, before
+ * anything is created; the new document's field validators are then told
+ * what it copies (`PluginFieldWrite.copiedFrom`). Intended to become stable.
+ * Returns the `respondMutation` envelope.
+ */
+export async function createFromSource<TSlug extends CollectionSlug>(
+  ctx: NextlyContext,
+  args: CreateFromSourceArgs<TSlug>
+): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
+  const config = mergeConfig(ctx.defaultConfig, args);
+
+  const { result, warnings } = await collectingWarnings(() =>
+    ctx.collectionsHandler.createEntryFromSource({
+      collectionName: args.collection,
+      // Copied field by field, so nothing else of the caller's object rides
+      // along with the entry it names.
+      source: {
+        collection: args.source.collection,
+        id: args.source.id,
+        ...(args.source.field === undefined
+          ? {}
+          : { field: args.source.field }),
+      },
+      data: args.data,
+      ...accessOptions(config),
+      locale: config.locale,
+      context: config.context,
+      disableRevalidate: config.disableRevalidate,
+    })
+  );
+  return createdEnvelope<TSlug>(args.collection, result, warnings);
 }
 
 /**

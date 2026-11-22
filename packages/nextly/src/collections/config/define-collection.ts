@@ -37,20 +37,24 @@ import type { CollectionAccessControl } from "../../domains/auth/services/access
 import type { CollectionDbOptions } from "../../domains/collections/services/collection-db-options";
 import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
 import { ownAddressOf } from "../../domains/public-addresses/public-address-template";
-import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { WebhookEventType } from "../../domains/webhooks/types";
 import type { Workflow } from "../../domains/workflows/types";
 import type { RevalidateConfig } from "../../revalidation/types";
 import type { VersionsConfig } from "../../schemas/versions/types";
+import { markDeclaredByDefine } from "../../shared/lib/config-problems";
 import { simplePluralize } from "../../shared/lib/pluralization";
 import type { CollectionFilterRuleInput } from "../../shared/types/rule-filter";
 import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
 import type { TextFieldConfig } from "../fields/types/text";
 
-import { asDeclaredFields, toTitleCase } from "./declared-config";
+import {
+  asDeclaredFields,
+  toTitleCase,
+  systemFieldsBeside,
+} from "./declared-config";
 // Import validation conditionally - only in server environments
 // This prevents client-side bundlers from including the validation code
-import { assertValidCollectionConfig } from "./validate-config";
+import { validateCollectionConfig } from "./validate-config";
 
 // ============================================================
 // Collection Labels
@@ -385,6 +389,31 @@ export interface CollectionAdminOptions {
    * @default false
    */
   disableDelete?: boolean;
+
+  /**
+   * @experimental Where the admin opens this collection's entries: `"form"`,
+   * or the path of a full-screen document view the collection has (a plugin's
+   * view on this collection, or one offered on a field type this collection
+   * holds at its top level).
+   *
+   * Every admin link meant to open an entry follows it: a list row, a
+   * dashboard card's row. The form keeps its own address whatever this says,
+   * and the admin opens the form instead for a reader who may not update the
+   * entry, and for an entry opened in a language other than the default.
+   *
+   * Without it, an entry opens in a view that asks to open first for the
+   * collection's main field (the first top-level field that is not hidden,
+   * not the title and not `slug`), and in the form otherwise.
+   *
+   * A path no view answers, or a field-type view whose field type is not
+   * among the collection's top-level fields, stops the boot.
+   *
+   * @example
+   * ```typescript
+   * admin: { opensIn: "form" }
+   * ```
+   */
+  opensIn?: string;
 
   /**
    * Icon identifier for the collection.
@@ -1282,86 +1311,74 @@ export function defineCollection<
   // - Access function type validation
   // Validated as declared; the fields are narrowed to the shared union only
   // after, which is what makes the narrowing safe to make at all.
-  assertValidCollectionConfig({
+  // Judged, not thrown: a configuration's load and the start judge every entity in it by the
+  // same rules (`configurationProblems`) and report every problem, where a throw here would stop
+  // at the first one, during the import. The entity is normalized all the same, since a plugin's
+  // setup may repair the problem and must leave what a valid declaration gives; only where the
+  // problem makes normalizing itself throw is the entry returned as declared. Either way it is
+  // marked (`markDeclaredByDefine`), which tells the start to refuse it rather than warn.
+  const accepted = validateCollectionConfig({
     ...config,
     fields: asDeclaredFields(config.fields),
-  });
+  }).valid;
+  try {
+    // ============================================================
+    // Auto-inject system fields (title, slug)
+    // ============================================================
+    // Every collection has title and slug as system-level fields,
+    // matching the Schema Builder behavior. If the user already defined
+    // fields with these names, their definitions take priority.
 
-  // ============================================================
-  // Auto-inject system fields (title, slug)
-  // ============================================================
-  // Every collection has title and slug as system-level fields,
-  // matching the Schema Builder behavior. If the user already defined
-  // fields with these names, their definitions take priority.
+    const systemFields = systemFieldsBeside(config.fields);
 
-  // Keyed by the COLUMN each field becomes, not by its declared name. A field named `Title` owns
-  // the `title` column, so injecting the system one beside it declares that column twice and the
-  // table cannot be created — the injection has to ask the same question the generators do.
-  const userFieldColumns = columnsDeclaredBy(config.fields);
+    // Prepend system fields so they appear first in the form
+    const fieldsWithSystem = withOwnAddressRule(
+      [...systemFields, ...asDeclaredFields(config.fields)],
+      config.publicAddressField
+    );
 
-  const systemFields: FieldConfig[] = [];
+    // ============================================================
+    // Apply Defaults
+    // ============================================================
 
-  if (!userFieldColumns.has("title")) {
-    systemFields.push({
-      type: "text",
-      name: "title",
-      label: "Title",
-      required: true,
-      // i18n: auto-injected system title is SHARED by default (spec §9a — localizing
-      // title/slug is a deliberate opt-in via a user-defined localized field, not a
-      // side effect of text fields localizing by default).
-      localized: false,
-    });
-  }
+    // Generate labels from slug if not provided
+    const singularLabel = config.labels?.singular ?? toTitleCase(config.slug);
+    const pluralLabel = config.labels?.plural ?? simplePluralize(singularLabel);
 
-  if (!userFieldColumns.has("slug")) {
-    systemFields.push({
-      type: "text",
-      name: "slug",
-      label: "Slug",
-      required: true,
-      unique: true,
-      // i18n: auto-injected system slug is SHARED by default (see title above).
-      localized: false,
-    });
-  }
-
-  // Prepend system fields so they appear first in the form
-  const fieldsWithSystem = withOwnAddressRule(
-    [...systemFields, ...asDeclaredFields(config.fields)],
-    config.publicAddressField
-  );
-
-  // ============================================================
-  // Apply Defaults
-  // ============================================================
-
-  // Generate labels from slug if not provided
-  const singularLabel = config.labels?.singular ?? toTitleCase(config.slug);
-  const pluralLabel = config.labels?.plural ?? simplePluralize(singularLabel);
-
-  // Build normalized config with defaults
-  const normalized: CollectionConfig = {
-    ...config,
-    fields: fieldsWithSystem,
-    labels: {
-      singular: singularLabel,
-      plural: pluralLabel,
-    },
-    timestamps: config.timestamps ?? true,
-    admin: {
-      ...config.admin,
-      // `internal: true` implies hidden-from-nav (D30); explicit admin.hidden
-      // still wins if set. The collection remains fully functional otherwise.
-      hidden: config.internal === true ? true : config.admin?.hidden,
-      pagination: {
-        defaultLimit: config.admin?.pagination?.defaultLimit ?? 10,
-        limits: config.admin?.pagination?.limits ?? [10, 25, 50, 100],
+    // Build normalized config with defaults
+    const normalized: CollectionConfig = {
+      ...config,
+      fields: fieldsWithSystem,
+      labels: {
+        singular: singularLabel,
+        plural: pluralLabel,
       },
-    },
-  };
+      timestamps: config.timestamps ?? true,
+      admin: {
+        ...config.admin,
+        // `internal: true` implies hidden-from-nav (D30); explicit admin.hidden
+        // still wins if set. The collection remains fully functional otherwise.
+        hidden: config.internal === true ? true : config.admin?.hidden,
+        pagination: {
+          defaultLimit: config.admin?.pagination?.defaultLimit ?? 10,
+          limits: config.admin?.pagination?.limits ?? [10, 25, 50, 100],
+        },
+      },
+    };
 
-  return normalized;
+    // Marked as declared through this function, so a start refuses it should the configuration's
+    // load find a problem this call could not, such as a field type nothing registers.
+    // Recorded as they leave normalization: the address rule may have wrapped the system `slug`
+    // (`withOwnAddressRule`), and that wrapped field is the one the collection carries. They
+    // come first, in the order added.
+    return markDeclaredByDefine(
+      normalized,
+      fieldsWithSystem.slice(0, systemFields.length)
+    );
+  } catch (error) {
+    if (accepted) throw error;
+    return markDeclaredByDefine({ ...config }) as unknown as CollectionConfig;
+  }
 }
 
 // ============================================================

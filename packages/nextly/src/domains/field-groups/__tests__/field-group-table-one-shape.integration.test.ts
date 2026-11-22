@@ -199,7 +199,13 @@ for (const entry of DIALECTS) {
       return builderTable();
     }
 
-    async function builderSave(): Promise<TableDefinition> {
+    /**
+     * The Builder's save adding a field, confirming `acknowledgedConversions`: the conversions
+     * the save's review names, which the person confirms before it is written.
+     */
+    async function builderSave(
+      acknowledgedConversions?: string[]
+    ): Promise<TableDefinition> {
       // The version the registry holds, as the Builder sends the one it loaded: a create whose
       // save writes its migration records the row again once applied, so it is not always 1.
       const { schemaVersion } = await (t as TestNextly)
@@ -208,7 +214,14 @@ for (const entry of DIALECTS) {
       await dispatchComponents(
         "applyComponentSchemaChanges",
         { slug: "card" },
-        { fields: WITH_EXTRA, confirmed: true, schemaVersion }
+        {
+          fields: WITH_EXTRA,
+          confirmed: true,
+          schemaVersion,
+          ...(acknowledgedConversions === undefined
+            ? {}
+            : { acknowledgedConversions }),
+        }
       );
       return withoutColumn(await builderTable(), "extra");
     }
@@ -218,6 +231,21 @@ for (const entry of DIALECTS) {
      * no `created_at` index; on PostgreSQL the parent and type columns `varchar(255)`; on MySQL a
      * text field's column `text`.
      */
+    /**
+     * Forgets the history today's create records, as a table an older Builder made, before its
+     * saves wrote migrations, has none: the migration files and snapshots, and their applies. The
+     * next save adopts the table as it stands.
+     */
+    async function withNoHistory(): Promise<void> {
+      await rm(join((t as TestNextly).basePath, "src", "db", "migrations"), {
+        recursive: true,
+        force: true,
+      });
+      await builderExec(
+        `DELETE FROM ${q("nextly_schema_events")} WHERE ${q("event_type")} = 'file_apply'`
+      );
+    }
+
     async function asCreatedBefore(): Promise<void> {
       const indexed = (await builderTable()).indexes.some(
         index => index.name === CREATED_AT_INDEX
@@ -335,17 +363,39 @@ for (const entry of DIALECTS) {
     it("keeps every column of a table the Builder made before, through a save, adding only the created_at index", async () => {
       await builderCreate();
       await asCreatedBefore();
+      await withNoHistory();
       const before = await builderTable();
       expect(before.indexes.map(index => index.name)).not.toContain(
         CREATED_AT_INDEX
       );
+      // The conversions the save names, which the review shows and the person confirms.
+      const named = await builderSave().then(
+        () => [],
+        (refusal: unknown) =>
+          ((refusal as { logContext?: { columns?: string[] } }).logContext
+            ?.columns ?? []) as string[]
+      );
+      expect(named).toContain(TABLE);
 
-      const after = await builderSave();
+      const after = await builderSave(named);
 
       expect(withoutIndex(after, CREATED_AT_INDEX)).toEqual(before);
       expect(after.indexes.map(index => index.name)).toContain(
         CREATED_AT_INDEX
       );
+    });
+
+    it("refuses a save of a table the Builder made before until its conversions are confirmed, changing nothing", async () => {
+      await builderCreate();
+      await asCreatedBefore();
+      await withNoHistory();
+      const before = await builderTable();
+
+      await expect(builderSave()).rejects.toMatchObject({
+        code: "NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED",
+      });
+
+      expect(await builderTable()).toEqual(before);
     });
 
     it("keeps every column of a table a migration made before, through its next migration, adding only the column defaults", async () => {

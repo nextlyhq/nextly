@@ -11,12 +11,19 @@ import { configDeclarationError } from "../../errors/areas/config";
 import { PROJECT, type ErrorCases } from "./types";
 
 /** An esbuild build failure, as the bundler rethrows it: an Error carrying esbuild's messages. */
-function buildFailure(text: string, line: number, column: number): Error {
+function buildFailure(
+  text: string,
+  line: number,
+  column: number,
+  lineText: string
+): Error {
   const failure = new Error(
     `Build failed with 1 error:\nnextly.config.ts:${line}:${column}: ERROR: ${text}`
   );
   return Object.assign(failure, {
-    errors: [{ text, location: { file: "nextly.config.ts", line, column } }],
+    errors: [
+      { text, location: { file: "nextly.config.ts", line, column, lineText } },
+    ],
   });
 }
 
@@ -37,6 +44,24 @@ function loadError(cause: Error): NextlyError {
 }
 
 export const CONFIG_CASES = {
+  CONFIG_MISSING: () =>
+    new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage: "Failed to load Nextly configuration.",
+      statusCode: 400,
+      logMessage: "Config loader error",
+      logContext: {
+        projectRoot: PROJECT,
+        names: [
+          "nextly.config.ts",
+          "nextly.config.mts",
+          "nextly.config.js",
+          "nextly.config.mjs",
+        ],
+        folders: [".", "./src", "./config"],
+        reason: "config-missing",
+      },
+    }),
   CONFIG_NOT_FOUND: () =>
     new NextlyError({
       code: "INVALID_INPUT",
@@ -50,9 +75,23 @@ export const CONFIG_CASES = {
       },
     }),
   CONFIG_SYNTAX_ERROR: () =>
-    loadError(buildFailure('Expected "}" but found "fields"', 3, 20)),
+    loadError(
+      buildFailure(
+        'Expected "}" but found "fields"',
+        3,
+        20,
+        '    { slug: "posts" fields: [] },'
+      )
+    ),
   CONFIG_IMPORT_NOT_FOUND: () =>
-    loadError(buildFailure('Could not resolve "./collections/posts"', 2, 22)),
+    loadError(
+      buildFailure(
+        'Could not resolve "./collections/posts"',
+        2,
+        22,
+        'import { posts } from "./collections/posts";'
+      )
+    ),
   CONFIG_LOAD_FAILED: () =>
     loadError(
       new TypeError("Cannot read properties of undefined (reading 'slug')")

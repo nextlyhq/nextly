@@ -126,7 +126,8 @@ const HERO = heroPatternDocument("media-1");
 const CARD = featureCardDocument();
 const WELCOME = welcomePageDocument(
   { id: "pattern-1", document: HERO },
-  "card-1"
+  "card-1",
+  NESTING
 );
 
 const DOCUMENTS: ReadonlyArray<readonly [string, BlockDocument]> = [
@@ -260,7 +261,7 @@ function memoryStore(
   return { store, created, rows };
 }
 
-const noImage = { heroImage: async () => null };
+const noImage = { heroImage: async () => null, nesting: NESTING };
 
 describe("seeding the welcome page", () => {
   it("copies the hero from the stored pattern when the pattern is already there", async () => {

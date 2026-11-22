@@ -93,7 +93,7 @@ export {
  * has to measure, and the one they get wrong: documenting the recipe as
  * `clientLeft`/`clientTop` left three call sites short by the padding.
  */
-export { frameInsetOf } from "./geometry-dom";
+export { frameInsetOf } from "./canvas/geometry-dom";
 
 /**
  * @experimental Node kinds and focus, read the same way in every realm.
@@ -103,7 +103,7 @@ export { frameInsetOf } from "./geometry-dom";
  * `instanceof HTMLElement` check fails for the frame's nodes, and the host
  * document's `activeElement` names the iframe rather than what is focused in it.
  */
-export { deepActiveElement, isHTMLElement } from "./dom-kind";
+export { deepActiveElement, isHTMLElement } from "./canvas/dom-kind";
 
 /**
  * @experimental The op store: the vocabulary every edit is expressed in, and
@@ -138,7 +138,14 @@ export {
  *
  * A type costs nothing at runtime, so it can be described from here.
  */
-export type { BuilderShellProps, PanelView } from "./builder-shell";
+export type { BuilderShellProps, PanelView } from "./shell/builder-shell";
+
+/**
+ * @experimental What a host lends the inspector for a block's own custom CSS
+ * (`InspectorPanelProps.customCss`): its checker, given only to a person who
+ * may change the site's code. A type, so it costs this entry nothing.
+ */
+export type { BlockCustomCssAccess } from "./inspector/custom-css";
 
 /**
  * @experimental The shell's own decisions: which panels the rail offers, the
@@ -183,7 +190,10 @@ export { browserStore } from "./shell-state";
  * A type costs nothing at runtime, so a host can describe its command list
  * without reaching for the client entry.
  */
-export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
+export type {
+  BuilderCommand,
+  CommandPaletteProps,
+} from "./shell/command-palette";
 
 /**
  * @experimental The drop rules: where a dragged block can land, and which of
@@ -216,7 +226,7 @@ export {
   type DropResolution,
   type DropTarget,
   type RectSource,
-} from "./drop-targets";
+} from "./canvas/drop-targets";
 export {
   blockAllowedAt,
   registryBlockSource,
@@ -240,7 +250,7 @@ export {
   // after, so the host filling `components` never has to infer it.
   type SavedComponent,
   type SlotSource,
-} from "./inserter";
+} from "./panels/add/inserter";
 
 /**
  * @experimental When a drag is allowed to change the target it has committed
@@ -257,7 +267,7 @@ export {
   type PendingTarget,
   type TargetId,
   type TargetSwitchState,
-} from "./target-switch";
+} from "./canvas/target-switch";
 
 /**
  * @experimental The document as a structure: the layers tree, the path to a
@@ -278,22 +288,22 @@ export {
   type ComponentTitleOf,
   type LayerNode,
   type LayerSearch,
-} from "./layers";
-export { blockLabel } from "./inserter";
+} from "./panels/layers/layers";
+export { blockLabel } from "./panels/add/inserter";
 
 /**
  * @experimental Bring one block into view by its id, inside the canvas root a
  * caller names. The one way the editor scrolls to a block it was asked to
  * show, whichever surface asked.
  */
-export { revealNode } from "./reveal-node";
+export { revealNode } from "./canvas/reveal-node";
 /**
  * A binding as a person reads it on this platform ("⌘K" on a Mac, "Ctrl+K"
  * elsewhere), for a host drawing a shortcut hint beside its own control.
  *
  * @experimental
  */
-export { keyHint } from "./key-hint";
+export { keyHint } from "./shell/key-hint";
 
 /**
  * @experimental Whether the editor may move or delete a block the author has
@@ -314,7 +324,7 @@ export { isLocked, lockBlockingDelete, lockBlockingMove } from "./locking";
  * inspector uses. A surface that collapsed "some of these" into on or off would
  * tell an author something false about half of what they selected.
  */
-export { lockStateOf, type LockState } from "./inspector";
+export { lockStateOf, type LockState } from "./inspector/inspector";
 
 /**
  * @experimental What a selected component instance exposes for editing, and
@@ -337,7 +347,7 @@ export {
   type ExposedRow,
   type InstanceInspection,
   type OrphanedOverride,
-} from "./instance-inspector";
+} from "./inspector/instance-inspector";
 
 /**
  * @experimental Duplicating a block: the copy, and where it goes.
@@ -351,7 +361,7 @@ export {
   blockDuplication,
   COPY_SUFFIX,
   type BlockDuplication,
-} from "./duplicate-block";
+} from "./canvas/duplicate-block";
 
 /**
  * @experimental Delete, duplicate and lock across a whole selection.
@@ -373,7 +383,7 @@ export {
   type SelectionMovePlan,
   type SelectionPlan,
   type SelectionRefusal,
-} from "./selection-ops";
+} from "./canvas/selection-ops";
 
 /**
  * @experimental What "the selection" is once it can hold more than one block.
@@ -392,7 +402,7 @@ export {
   rangeBetween,
   type BlockSelection,
   type SelectionMode,
-} from "./selection";
+} from "./canvas/selection";
 
 /**
  * @experimental The palette's command list, as a plain function over state.
@@ -417,7 +427,7 @@ export {
   steppedZoom,
   writeZoom,
   type CanvasZoom,
-} from "./canvas-zoom";
+} from "./canvas/canvas-zoom";
 
 /**
  * @experimental The device an author edits at once the device they chose is
@@ -426,7 +436,7 @@ export {
  * Pure, so it is on this entry beside the zoom model: a host keeps the set it
  * last drew with and asks this when a new one arrives.
  */
-export { fallbackBreakpoint } from "./canvas-width";
+export { fallbackBreakpoint } from "./canvas/canvas-width";
 
 export {
   BLOCK_GROUP,
@@ -436,7 +446,7 @@ export {
   builderCommands,
   type BuilderCommandsInput,
   type CommandVerbs,
-} from "./builder-commands";
+} from "./shell/builder-commands";
 
 /**
  * @experimental Why a composition verb refused, in words an author can act on.
@@ -447,7 +457,10 @@ export {
  * phrasing of one cause is how an author is told two different things about one
  * refusal.
  */
-export { compositionRefusalReason, isPlanProblem } from "./composition-refusal";
+export {
+  compositionRefusalReason,
+  isPlanProblem,
+} from "./canvas/composition-refusal";
 
 /**
  * @experimental Who owns Escape while the editor is on screen.
@@ -463,7 +476,7 @@ export {
   isTextEntry,
   modalIsOpen,
   type EscapeOutcome,
-} from "./canvas-escape";
+} from "./canvas/canvas-escape";
 
 /**
  * @experimental What the floating toolbar offers, and where it sits.
@@ -483,7 +496,7 @@ export {
   type ToolbarActionId,
   type ToolbarPlacement,
   type ToolbarSize,
-} from "./toolbar-actions";
+} from "./canvas/toolbar-actions";
 
 /**
  * @experimental The style controls SDK: what a property offers, and how a
@@ -506,7 +519,7 @@ export {
   type StyleControlOptions,
   type StyleControlSet,
   type StyleControlVariants,
-} from "./style-controls";
+} from "./styles/style-controls";
 
 /**
  * @experimental Addressing one control's value inside a node's style envelope.
@@ -526,7 +539,7 @@ export {
   type StylePolicy,
   type StyleWrite,
   type StyleWriteRequest,
-} from "./style-values";
+} from "./styles/style-values";
 
 /**
  * @experimental Whether a control's value was authored here, inherited, or
@@ -541,7 +554,7 @@ export {
   styleProvenance,
   type StyleProvenance,
   type StyleProvenanceQuery,
-} from "./style-provenance";
+} from "./styles/style-provenance";
 
 /**
  * @experimental Previewing a value mid-drag, and committing it once.
@@ -557,7 +570,7 @@ export {
   scrubStateFragments,
   type ScrubPreview,
   type ScrubTarget,
-} from "./style-scrub";
+} from "./styles/style-scrub";
 
 /**
  * @experimental Where a control's custom behaviour lives, referenced by name.
@@ -574,7 +587,7 @@ export {
   styleControlBehaviourKey,
   type StyleControlBehaviour,
   type StyleControlBehaviours,
-} from "./style-control-behaviour";
+} from "./styles/style-control-behaviour";
 
 /**
  * @experimental What the selected block offers on the Style tab.
@@ -591,7 +604,7 @@ export {
   type StyleInspection,
   type StyleInspectionOptions,
   type StyleSection,
-} from "./style-inspector";
+} from "./inspector/style-inspector/style-inspector";
 
 /**
  * What a SELECTION of blocks shares at one style address, and what changes it.
@@ -613,4 +626,40 @@ export {
   batchStyleClearOps,
   type SharedValue,
   type BatchStyleWrite,
-} from "./batch-style";
+} from "./styles/batch-style";
+
+/**
+ * Page checks: the check contract, the findings with the setting that fixes
+ * each, the groups, and the builder's own checks, run over a document.
+ *
+ * From this entry because the checks are plain functions over a document and
+ * the registry: a script, a route or an agent asking what a stored page needs
+ * gets the findings the editor lists for its draft. The list itself is
+ * behind the client banner in `./shell`.
+ *
+ * @experimental
+ */
+export {
+  pageCheckGroups,
+  runPageChecks,
+  type CheckedPage,
+  type PageCheck,
+  type PageCheckGroup,
+  type PageCheckGroupView,
+  type PageCheckNote,
+  type PageCheckReport,
+  type PageCheckResult,
+  type PageFinding,
+  type PageRegionDocument,
+  type ResolvedPage,
+} from "./page-checks/page-checks";
+export { CORE_PAGE_CHECKS } from "./page-checks/core-checks";
+// What a caller knows of the page beyond its document, for the content,
+// data and publishing checks: a script hands in the same facts the editor does.
+export type {
+  BindingToFix,
+  DoubledRegionFact,
+  PageDataFact,
+  PageFacts,
+  UnpublishedPart,
+} from "./page-checks/page-facts";

@@ -264,6 +264,20 @@ function* tableNameRefusals(
   }
 }
 
+/**
+ * Whether `value` is spelled as an address may be: a string the slug grammar
+ * takes, no longer than the product accepts. Only the spelling: an address the
+ * rule keeps for Nextly itself (`users`, say) is still spelled as one, so a
+ * reference to an existing entity may name it.
+ */
+export function isAddressSpelling(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    SLUG_PATTERN.test(value) &&
+    value.length <= MAX_SLUG_LENGTH
+  );
+}
+
 /** The rule's verdict on a new or changed address: its first refusal, or `null`. */
 export function judgeAddress(
   kind: AddressKind,
@@ -426,6 +440,39 @@ export function assertAddressAllowed(
 type Slugged = ReadonlyArray<{ slug: string; dbName?: string }>;
 type Registered = ReadonlyArray<{ slug: string; tableName?: string }>;
 
+/**
+ * Each kind's entities configured in code beside its registry rows, in the order a start judges
+ * them, and the tables some registry row owns: a table a row owns is that entity's, so finding it
+ * says nothing about a configured entity having been made.
+ */
+export function configuredBesideRows<C, R extends { tableName?: string }>(
+  config: {
+    collections?: readonly C[];
+    singles?: readonly C[];
+    fieldGroups?: readonly C[];
+  },
+  registered: {
+    collections: readonly R[];
+    singles: readonly R[];
+    components: readonly R[];
+  }
+): {
+  configured: Array<[AddressKind, readonly C[], readonly R[]]>;
+  ownedTables: Set<string>;
+} {
+  const configured: Array<[AddressKind, readonly C[], readonly R[]]> = [
+    ["collection", config.collections ?? [], registered.collections],
+    ["single", config.singles ?? [], registered.singles],
+    ["fieldGroup", config.fieldGroups ?? [], registered.components],
+  ];
+  const ownedTables = new Set(
+    configured.flatMap(([, , rows]) =>
+      rows.flatMap(row => (row.tableName === undefined ? [] : [row.tableName]))
+    )
+  );
+  return { configured, ownedTables };
+}
+
 /** The table a configured entity is stored in, as each kind's resolver names it. */
 export function configuredTable(
   kind: AddressKind,
@@ -466,18 +513,9 @@ export async function refusedConfiguredAddresses(
   },
   tableExists: (table: string) => Promise<boolean>
 ): Promise<JudgedAddress[]> {
-  const configured: Array<[AddressKind, Slugged, Registered]> = [
-    ["collection", config.collections ?? [], registered.collections],
-    ["single", config.singles ?? [], registered.singles],
-    ["fieldGroup", config.fieldGroups ?? [], registered.components],
-  ];
   // A table a registry row owns is that entity's, so finding it says nothing about a
   // configured entity of another address having been made (a same-form twin names it too).
-  const ownedTables = new Set(
-    configured.flatMap(([, , rows]) =>
-      rows.flatMap(row => (row.tableName === undefined ? [] : [row.tableName]))
-    )
-  );
+  const { configured, ownedTables } = configuredBesideRows(config, registered);
   const entities: AddressedEntity[] = [];
   const tables = new Map<AddressedEntity, string>();
   const used: UsedAddress[] = [];

@@ -75,6 +75,7 @@ export function reads(
     mayPerform: async (_user, _scope, _action, entryIds) => new Set(entryIds),
     existing: async refs => new Set(refs.map(documentRefKey)),
     declaresLifecycle: async () => true,
+    removedFromCode: async () => false,
     publishProblems: perEntry(() => []),
     heldDraftLocales: perEntry(() => []),
     companionLacksLifecycle: async () => false,

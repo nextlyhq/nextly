@@ -22,6 +22,9 @@ function bootContext(
       email: { onQueuedEmailChange: vi.fn() },
     },
     logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    // `init` also declares the email template-references filter. Stubbed:
+    // this file is about what init RECORDS, not what it declares.
+    filters: { add: vi.fn() },
     // `init` also subscribes the submission-notification hook. Stubbed
     // because this file is about what it RECORDS, not what it subscribes.
     hooks: { on: vi.fn(), off: vi.fn(), onInTransaction: vi.fn() },

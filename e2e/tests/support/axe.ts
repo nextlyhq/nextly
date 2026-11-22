@@ -42,9 +42,23 @@ export async function expectNoAxeViolations(
   if (scope) {
     // At least one of them drawn: a screen can hold a hidden copy of a part
     // (a table and its narrow-screen cards), which axe rightly skips.
-    await expect(
-      page.locator(scope.include).filter({ visible: true }).first()
-    ).toBeVisible();
+    const shown = page.locator(scope.include).filter({ visible: true }).first();
+    await expect(shown).toBeVisible();
+    // Its opening animation finished first: a popover fades in from
+    // transparent, and axe skips text it reads as transparent, so a scan
+    // taken as it appears, on a busy machine, measures nothing. An endless
+    // animation (a spinner) has no end to wait for, and is left running.
+    await shown.evaluate(async element => {
+      await Promise.all(
+        element
+          .getAnimations({ subtree: true })
+          .filter(
+            animation =>
+              animation.effect?.getComputedTiming().iterations !== Infinity
+          )
+          .map(animation => animation.finished.catch(() => undefined))
+      );
+    });
   }
   const { results, findings } = await scanAxe(page, scope);
   expectScannedSomething(results, scope);

@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   componentPageReach,
+  readPageLayoutRows,
   type PageLayoutRow,
   type PageReachSources,
 } from "./component-page-reach";
@@ -249,5 +250,101 @@ describe("the pages a change reaches", () => {
         sources({ placements: { hero: { pages: ["p1", null] } } })
       )
     ).resolves.toEqual({ documents: 2, complete: true });
+  });
+});
+
+describe("the stored pages' choices, read for a count", () => {
+  /** A `find` double answering `rows` a page at a time, recording each ask. */
+  function finder(rows: unknown[]) {
+    const asked: Record<string, unknown>[] = [];
+    return {
+      asked,
+      find: async (args: Record<string, unknown>) => {
+        asked.push(args);
+        const limit = args.limit as number;
+        const page = args.page as number;
+        const items = rows.slice((page - 1) * limit, page * limit);
+        return { items, meta: { hasNext: page * limit < rows.length } };
+      },
+    };
+  }
+  type Find = Parameters<typeof readPageLayoutRows>[0]["find"];
+
+  it("are every page's main row, as the system, with only the columns the rule reads", async () => {
+    const site = finder([
+      { id: "a", layout: "main", noHeaderFooter: false },
+      { id: "b", layout: { id: "landing" }, noHeaderFooter: true },
+      { id: "c", layout: null, noHeaderFooter: null },
+    ]);
+
+    const read = await readPageLayoutRows(
+      { find: site.find as unknown as Find },
+      "pages",
+      { naming: null }
+    );
+
+    expect(read).toEqual({
+      pages: [
+        { id: "a", layout: "main", noHeaderFooter: false },
+        { id: "b", layout: "landing", noHeaderFooter: true },
+        { id: "c", layout: null, noHeaderFooter: null },
+      ],
+      complete: true,
+    });
+    expect(site.asked).toEqual([
+      {
+        collection: "pages",
+        status: "all",
+        sort: "id",
+        depth: 0,
+        select: { id: true, layout: true, noHeaderFooter: true },
+        limit: 500,
+        page: 1,
+        overrideAccess: true,
+      },
+    ]);
+  });
+
+  it("narrow to the pages naming the sets asked about", async () => {
+    const site = finder([]);
+
+    await readPageLayoutRows({ find: site.find as unknown as Find }, "pages", {
+      naming: ["main"],
+    });
+
+    expect(site.asked[0]?.where).toEqual({ layout: { in: ["main"] } });
+  });
+
+  it("stop at the bound and say the answer is not every page", async () => {
+    const site = finder(
+      Array.from({ length: 5 }, (_, i) => ({ id: `p${i}`, layout: null }))
+    );
+
+    const read = await readPageLayoutRows(
+      { find: site.find as unknown as Find },
+      "pages",
+      { naming: null, bound: { rowsPerRead: 2, mostReads: 2 } }
+    );
+
+    expect(read.pages.map(row => row.id)).toEqual(["p0", "p1", "p2", "p3"]);
+    expect(read.complete).toBe(false);
+    expect(site.asked.map(args => [args.page, args.limit])).toEqual([
+      [1, 2],
+      [2, 2],
+    ]);
+  });
+
+  it("are whole when the last read allowed was the last page", async () => {
+    const site = finder(
+      Array.from({ length: 4 }, (_, i) => ({ id: `p${i}`, layout: null }))
+    );
+
+    const read = await readPageLayoutRows(
+      { find: site.find as unknown as Find },
+      "pages",
+      { naming: null, bound: { rowsPerRead: 2, mostReads: 2 } }
+    );
+
+    expect(read.complete).toBe(true);
   });
 });

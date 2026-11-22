@@ -43,6 +43,10 @@
  * refusal, error or, for a command, an interrupt — it releases every lock it holds before the
  * process exits.
  *
+ * On SQLite, a database another connection holds for a write of its own is busy, not a held lock:
+ * the run waits for it in the busy-table tries, a command through all of them and a save through
+ * one, and then stops with `NEXTLY_TABLE_BUSY` (`waitingForBusyDatabase`).
+ *
  * @module domains/schema/pipeline/schema-lock
  */
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -81,6 +85,12 @@ import {
   withMigrationSession,
   type MigrationSession,
 } from "../../field-groups/migration/session";
+import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
+import { endedWaiting } from "../busy-table/ended-waiting";
+import { readHolders } from "../busy-table/holder";
+import { tableBusyError, tryNotice } from "../busy-table/report";
+import { boundSqliteWait } from "../busy-table/sqlite-wait";
+import { withBusyTableTries } from "../busy-table/tries";
 
 import {
   UNIT_COMMENT_CLOSE,
@@ -231,6 +241,13 @@ export interface SchemaLockOptions {
    * and process out of an API response.
    */
   refusal?: "command" | "editor";
+  /**
+   * The bounds a busy SQLite database is waited for with while the lock is taken, where the
+   * caller has its own: a command's `--lock-timeout` and `--lock-timeout-total` over the
+   * environment. Absent, the environment's, or the defaults. PostgreSQL and MySQL wait for the
+   * lock's row and read none of them.
+   */
+  busyBounds?: BusyTableBounds;
   logger?: {
     warn?: (message: string, meta?: Record<string, unknown>) => void;
     info?: (message: string, meta?: Record<string, unknown>) => void;
@@ -524,10 +541,368 @@ async function ensureRow(
     });
   } catch (error) {
     if (!mayCreateTables && isMissingTable(error, dialect)) return false;
+    // SQLite's busy answer is another connection holding the whole database: it is waited for
+    // in tries (`waitingForBusyDatabase`), never taken for a seed the claim can settle.
+    if (dialect === "sqlite" && endedWaiting(error, dialect, false)) {
+      throw error;
+    }
     // Any other failure, a lost seed race among them, leaves the claim below to decide: it reads
     // the row, and refuses when there is none.
   }
   return true;
+}
+
+/**
+ * `step`, a part of taking the lock, waited for on a busy SQLite database as a schema change
+ * waits for a busy table.
+ *
+ * On SQLite the lock's row is seeded and claimed inside a `BEGIN IMMEDIATE` transaction, and a
+ * connection with a write transaction open holds the whole database, so the transaction cannot
+ * begin and SQLite answers that it is busy. The step then runs in the busy-table tries, with
+ * their bounds ({@link busyBoundsOf}) and their pauses: a holder that ends within the total lets
+ * the step run, and one that does not ends the run with `NEXTLY_TABLE_BUSY`, naming the lock's
+ * table and why SQLite names no holder. SQLite's own answer never reaches the caller as the
+ * error; it is the stop's cause.
+ *
+ * A run that refuses a held lock at once (a Schema Builder save, a request) makes one try, with
+ * the wait its connection is set to and none of the bounds: its caller is not kept waiting
+ * through the pauses, nor through a try an operator set long for a command. A command that
+ * waits for a held lock makes every try, and all its steps share the one total.
+ *
+ * A try that ended this way began no transaction, so nothing of the step is left and it runs
+ * again whole. No lock is held yet, so there is none to show held between tries, and no lease to
+ * end them by. PostgreSQL and MySQL wait for the row itself and run the step as it is.
+ */
+async function waitingForBusyDatabase<T>(
+  options: SchemaLockOptions,
+  dialect: SupportedDialect,
+  waited: BusyWait,
+  step: () => Promise<T>
+): Promise<BusyOutcome<T>> {
+  if (dialect !== "sqlite") return { kind: "ran", value: await step() };
+  // A run that refuses a held lock at once asks once, waiting as its connection is set to and no
+  // longer: the bounds are a command's, and a request must not wait an operator's long try.
+  if (options.whenHeld === "refuse") {
+    return oneTryForBusyDatabase(options, dialect, waited, step);
+  }
+  return inBusyDatabaseTries(options, dialect, waited, step, {
+    holder: true,
+  });
+}
+
+/**
+ * When one run began waiting for a busy SQLite database: every step that waits for it counts from
+ * here, so their waits share the one total and never add up.
+ */
+interface BusyWait {
+  startedAt: number;
+  /**
+   * Set once the lock's row could not be read beside the writer (a journal mode that makes a
+   * reader wait): reading it again would only wait again, so the run asks no more.
+   */
+  holderUnreadable?: boolean;
+}
+
+/**
+ * What a step of taking the lock came to on SQLite: it ran, or the database was busy and the
+ * lock's row names a live holder, another Nextly run at work, which is then a held lock like any
+ * other and is waited for, or refused, as one.
+ */
+type BusyOutcome<T> =
+  | { kind: "ran"; value: T }
+  | { kind: "held"; holder: SchemaLockHolder };
+
+/**
+ * The run that holds the schema lock, read while the database is busy: the row is read without
+ * a transaction, which SQLite allows beside another connection's open write in its default
+ * journal mode. Null where no live holder is named, the row could not be read (and is then
+ * not asked for again in this run, `BusyWait.holderUnreadable`), or the holder is this
+ * context's own run: the database is then busy for a reason that is not a run to wait for.
+ */
+async function liveHolderOf(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  waited: BusyWait
+): Promise<SchemaLockHolder | null> {
+  if (waited.holderUnreadable === true) return null;
+  let holder: SchemaLockHolder | null;
+  try {
+    holder = await readSchemaRowHolder(adapter, dialect);
+  } catch {
+    waited.holderUnreadable = true;
+    return null;
+  }
+  // The lock this very context holds, through another adapter on the same database, is not a
+  // run to wait for: the database is busy with this process's own write, which the busy stop's
+  // cause lets its caller say (`ownWriteLockError`).
+  const own = (heldHere.getStore() ?? []).some(
+    held =>
+      !held.released && holder?.kind === "schema" && held.claim === holder.owner
+  );
+  return own ? null : holder;
+}
+
+/**
+ * `step` on SQLite for a run that refuses a held lock at once. The lock's row is read first:
+ * where a Nextly run holds it, that is the answer at once, whether or not the database is busy
+ * with that run's write, and nothing is waited for. Otherwise the step is asked once, waiting as
+ * the connection itself is set to, and a busy answer ends it with `NEXTLY_TABLE_BUSY`, or with
+ * the holder where one has appeared meanwhile.
+ */
+async function oneTryForBusyDatabase<T>(
+  options: SchemaLockOptions,
+  dialect: SupportedDialect,
+  waited: BusyWait,
+  step: () => Promise<T>
+): Promise<BusyOutcome<T>> {
+  const { adapter } = options;
+  const holder = await liveHolderOf(adapter, dialect, waited);
+  if (holder !== null) return { kind: "held", holder };
+  const startedAt = Date.now();
+  try {
+    return { kind: "ran", value: await step() };
+  } catch (error) {
+    if (!endedWaiting(error, dialect, false)) throw error;
+    const later = await liveHolderOf(adapter, dialect, waited);
+    if (later !== null) return { kind: "held", holder: later };
+    throw await busyAfterOneTry(options, dialect, error, startedAt);
+  }
+}
+
+/** The busy stop of a step asked once, with SQLite's own answer as its cause. */
+async function busyAfterOneTry(
+  options: SchemaLockOptions,
+  dialect: SupportedDialect,
+  busy: unknown,
+  startedAt: number
+): Promise<NextlyError> {
+  const stopped = tableBusyError({
+    change: options.command,
+    ended: {
+      table: SCHEMA_LOCK_TABLE,
+      holder: await readHolders(options.adapter, dialect, undefined),
+    },
+    tries: 1,
+    elapsedMs: Date.now() - startedAt,
+    appliedBefore: [],
+    outcome: { kind: "nothing-changed" },
+    cause: "table-busy",
+    endedAtLease: false,
+  });
+  return withCause(stopped, busy);
+}
+
+/** `stopped` with SQLite's own answer as its cause, where there is one to keep. */
+function withCause(stopped: NextlyError, busy: unknown): NextlyError {
+  if (!(busy instanceof Error)) return stopped;
+  return new NextlyError({
+    code: stopped.code,
+    publicMessage: stopped.publicMessage,
+    logContext: stopped.logContext,
+    cause: busy,
+  });
+}
+
+/**
+ * `step` in the busy-table tries on SQLite. With `holder`, a busy answer first asks whether a
+ * Nextly run holds the lock (`liveHolderOf`), and ends the tries with that holder where one
+ * does; without it, every busy answer is tried again. With `leaseDeadline`, for a step taken
+ * while the lock is held, no try starts that would end past the moment the lock can still be
+ * shown held: a busy database keeps it from being renewed.
+ */
+async function inBusyDatabaseTries<T>(
+  options: SchemaLockOptions,
+  dialect: SupportedDialect,
+  waited: BusyWait,
+  step: () => Promise<T>,
+  how: { holder: boolean; leaseDeadline?: () => number | undefined }
+): Promise<BusyOutcome<T>> {
+  const { adapter } = options;
+  const bounds = busyBoundsOf(options, waited);
+  if (bounds.kind === "invalid") {
+    // The bounds matter only to a database found busy: an idle one is not refused for them.
+    try {
+      return { kind: "ran", value: await step() };
+    } catch (error) {
+      throw endedWaiting(error, dialect, false) ? bounds.error : error;
+    }
+  }
+  // SQLite's own answer to the last try, kept as the stop's cause: a caller that holds the
+  // database's write lock itself, on another connection of this process, reads it there and
+  // reports its own lock, never a table another party holds.
+  let busy: unknown;
+  try {
+    return await withBusyTableTries<BusyOutcome<T>>(
+      {
+        bounds: bounds.value,
+        // The run, as the operator knows it: the command that asked for the lock.
+        change: options.command,
+        appliedBefore: [],
+        // One line at each try after the first: to the caller's logger, or, for a caller with
+        // none, to standard error, so no run waits through its tries in silence.
+        notify: line => {
+          if (options.logger?.warn !== undefined) options.logger.warn(line);
+          else process.stderr.write(`${line}\n`);
+        },
+        notice: tryNotice,
+        assertHeld: () => Promise.resolve(),
+        stopped: tableBusyError,
+        ...(how.leaseDeadline === undefined
+          ? {}
+          : { leaseDeadline: how.leaseDeadline }),
+      },
+      (_tryNumber, tryMs) =>
+        boundedSqliteTry(adapter, tryMs, async () => {
+          try {
+            return {
+              kind: "done",
+              value: { kind: "ran", value: await step() },
+            };
+          } catch (error) {
+            if (!endedWaiting(error, dialect, false)) throw error;
+            busy = error;
+            const holder = how.holder
+              ? await liveHolderOf(adapter, dialect, waited)
+              : null;
+            // Busy because a Nextly run is at work: a held lock, not a busy table.
+            if (holder !== null) {
+              return { kind: "done", value: { kind: "held", holder } };
+            }
+            return {
+              kind: "ended",
+              ended: {
+                table: SCHEMA_LOCK_TABLE,
+                holder: await readHolders(adapter, dialect, undefined),
+              },
+              // The transaction never began, so nothing was written or is left to undo.
+              undone: true,
+              committed: [],
+            };
+          }
+        })
+    );
+  } catch (error) {
+    if (!NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) throw error;
+    throw withCause(error, busy);
+  }
+}
+
+/**
+ * A step of the lock after it is taken (the field-group claim, the check at the work's end, a
+ * release), waited for on a busy SQLite database in the busy-table tries: a busy answer is the
+ * database's, never a sign the lock was lost. The tries end where the lock can still be shown
+ * held (`leaseDeadline`). A run that refuses at once asks once. PostgreSQL and MySQL run the
+ * step as it is.
+ */
+async function whileBusy<T>(
+  options: SchemaLockOptions,
+  dialect: SupportedDialect,
+  waited: BusyWait,
+  leaseDeadline: () => number | undefined,
+  step: () => Promise<T>
+): Promise<T> {
+  if (dialect !== "sqlite") return step();
+  if (options.whenHeld === "refuse") {
+    // Asked once, waiting as the connection is set to: a request reads none of a command's bounds.
+    const startedAt = Date.now();
+    try {
+      return await step();
+    } catch (error) {
+      if (!endedWaiting(error, dialect, false)) throw error;
+      throw await busyAfterOneTry(options, dialect, error, startedAt);
+    }
+  }
+  const outcome = await inBusyDatabaseTries(options, dialect, waited, step, {
+    holder: false,
+    leaseDeadline,
+  });
+  // No holder is asked for here, so the step ran.
+  if (outcome.kind !== "ran") {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "a lock step ended with a holder it never asked for",
+      },
+    });
+  }
+  return outcome.value;
+}
+
+/**
+ * The bounds a run waits for a busy SQLite database with: its caller's (`busyBounds`), else the
+ * environment's, else the defaults; or, where the environment's are out of range, the refusal
+ * that says so.
+ *
+ * The total is counted from when the run began waiting (`waited`), so every step shares it, and
+ * with the lock's own wait for a held lock, which counts from the same moment, the longest a run
+ * waits is the larger of the two, not their sum. Never less than one try.
+ */
+function busyBoundsOf(
+  options: SchemaLockOptions,
+  waited: BusyWait
+):
+  | { kind: "valid"; value: BusyTableBounds }
+  | { kind: "invalid"; error: unknown } {
+  let bounds: BusyTableBounds;
+  try {
+    bounds = options.busyBounds ?? busyTableBounds({ env: process.env });
+  } catch (error) {
+    return { kind: "invalid", error };
+  }
+  return {
+    kind: "valid",
+    value: {
+      tryMs: bounds.tryMs,
+      totalMs: Math.max(
+        bounds.tryMs,
+        bounds.totalMs - (Date.now() - waited.startedAt)
+      ),
+    },
+  };
+}
+
+/** Each adapter's bounded tries for the lock, in turn: see {@link boundedSqliteTry}. */
+const boundedTries = new WeakMap<object, Promise<unknown>>();
+
+/**
+ * `attempt` with SQLite's busy timeout, which bounds its wait for the database, at `tryMs`.
+ *
+ * The timeout is the connection's, and a server's requests share one connection, so two runs
+ * taking the lock at once would each read the other's bound as the connection's own and one
+ * would leave it changed for good. So the tries of one adapter run in turn, and the timeout is
+ * written only where it differs from the try's bound: with the default bounds it already is the
+ * bound, and nothing is written at all.
+ */
+function boundedSqliteTry<T>(
+  adapter: DrizzleAdapter,
+  tryMs: number,
+  attempt: () => Promise<T>
+): Promise<T> {
+  const bounded = async (): Promise<T> => {
+    const [row] = await adapter.executeQuery<Record<string, unknown>>(
+      "PRAGMA busy_timeout"
+    );
+    if (Number(Object.values(row ?? {})[0]) === Math.round(tryMs)) {
+      return attempt();
+    }
+    const restore = await boundSqliteWait(adapter, tryMs);
+    try {
+      return await attempt();
+    } finally {
+      await restore();
+    }
+  };
+  const turn = (boundedTries.get(adapter) ?? Promise.resolve()).then(
+    bounded,
+    bounded
+  );
+  boundedTries.set(
+    adapter,
+    turn.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return turn;
 }
 
 type RowAttempt =
@@ -1087,6 +1462,22 @@ class SchemaLockHold {
   }
   /** Whether the field-group claim's table has an expiry for the renewal to extend. */
   fieldGroupRenewable = false;
+  /** When this run began taking the lock: its waits for a busy SQLite database count from here. */
+  readonly busyWait: BusyWait = { startedAt: Date.now() };
+  /** Whether the work has ended: the lock's steps after it share a wait of their own. */
+  workEnded = false;
+  /** Whether the work ended by failing: its own error is then the run's, and nothing delays it. */
+  workFailed = false;
+  /** The holder the row's seeding already found on a busy SQLite database, for the first wait. */
+  heldAtStart: SchemaLockHolder | undefined;
+  private endWait: BusyWait | undefined;
+
+  /** The wait a step that meets a busy SQLite database counts against, now. */
+  busyBudget(): BusyWait {
+    if (!this.workEnded) return this.busyWait;
+    this.endWait ??= { startedAt: Date.now() };
+    return this.endWait;
+  }
   private renewal: ReturnType<typeof setInterval> | undefined;
   private outstandingRenewal: Promise<unknown> = Promise.resolve();
   /** A connection opened for renewals alone, on a pool that cannot spare one. */
@@ -1125,13 +1516,25 @@ class SchemaLockHold {
     if (!taken.ok) return this.heldByEarlierLock(taken.holder);
     this.earlier = taken.held;
     if (this.rowReady) {
-      const row = await claimRow(
-        this.adapter,
+      const claimed = await waitingForBusyDatabase(
+        this.options,
         this.dialect,
-        this.claim,
-        this.options.command,
-        this.timings
+        this.busyWait,
+        () =>
+          claimRow(
+            this.adapter,
+            this.dialect,
+            this.claim,
+            this.options.command,
+            this.timings
+          )
       );
+      // SQLite, busy because a Nextly run holds the lock and is writing: held, as by its row.
+      if (claimed.kind === "held") {
+        await this.releaseAll();
+        return { kind: "held", holder: claimed.holder };
+      }
+      const row = claimed.value;
       if (!row.ok) {
         await this.releaseAll();
         return this.heldByRow(row.state);
@@ -1353,6 +1756,23 @@ class SchemaLockHold {
     ]);
   }
 
+  /**
+   * One release, waiting for a busy SQLite database: a release given up on leaves the claim
+   * standing for its whole lease, and the next run refused for it. Not once the work has failed:
+   * its error is the run's, and nothing waits before it.
+   */
+  private releasing(release: () => Promise<void>): Promise<void> {
+    if (this.workFailed) return release();
+    // Nothing is renewed any more: the release is tried for as long as the wait allows.
+    return whileBusy(
+      this.options,
+      this.dialect,
+      this.busyBudget(),
+      () => undefined,
+      release
+    );
+  }
+
   /** Give back whatever is held, the field-group claim first and this lock's row last. */
   async releaseAll(): Promise<void> {
     const releases: Array<() => Promise<void>> = [];
@@ -1380,7 +1800,7 @@ class SchemaLockHold {
 
     let failed = false;
     for (const release of releases) {
-      await release().catch(() => {
+      await this.releasing(release).catch(() => {
         failed = true;
       });
     }
@@ -1531,6 +1951,12 @@ async function acquire(
 > {
   for (;;) {
     if (hold.interrupted) throw interruptedBeforeStart(hold.options.command);
+    const known = hold.heldAtStart;
+    hold.heldAtStart = undefined;
+    if (known !== undefined) {
+      if ((await wait.after(known)) === "settled") return { kind: "settled" };
+      continue;
+    }
     const attempt = hold.acquireOnce();
     hold.pending = attempt;
     const outcome = await attempt;
@@ -1594,6 +2020,19 @@ async function runHeld<T>(
         // Where the session says it fell back to an owner-only claim on a table that predates
         // its expiry column, which an operator should hear about.
         logger: sessionLogger(hold.options.logger),
+        // The session's own claim and release wait for a busy SQLite database as the lock's do.
+        // Not once the work has failed: its error is the run's, and a release that waited and
+        // then stopped for a busy database would be thrown in its place.
+        whileBusy: step =>
+          hold.workFailed
+            ? step()
+            : whileBusy(
+                hold.options,
+                hold.dialect,
+                hold.busyBudget(),
+                () => hold.confirmedUntil(),
+                step
+              ),
       },
       async session => {
         if (session.lock.kind === "held") {
@@ -1624,8 +2063,13 @@ async function runHeld<T>(
             finished = { value };
             return value;
           })
+          .catch((error: unknown) => {
+            hold.workFailed = true;
+            throw error;
+          })
           .finally(() => {
             held.released = true;
+            hold.workEnded = true;
           });
         running = result;
         return await result;
@@ -1642,6 +2086,12 @@ async function runHeld<T>(
     await Promise.allSettled([running]);
     if (hold.interrupted && finished !== undefined) {
       return { kind: "ran", value: finished.value };
+    }
+    // The work ran to its end, and the session's own release then waited for a busy SQLite
+    // database past its bounds: the same ending as a lock that could not be confirmed.
+    if (finished !== undefined) {
+      const unconfirmed = finishedUnconfirmed(hold, error);
+      if (unconfirmed !== undefined) throw unconfirmed;
     }
     throw error;
   } finally {
@@ -1694,11 +2144,16 @@ export async function withSchemaLock<T>(
   const wait = new LockWait(options);
   const removeSignals = hold.installSignals();
   try {
-    hold.rowReady = await ensureRow(
-      hold.adapter,
+    const ready = await waitingForBusyDatabase(
+      options,
       hold.dialect,
-      hold.mayCreateTables
+      hold.busyWait,
+      () => ensureRow(hold.adapter, hold.dialect, hold.mayCreateTables)
     );
+    // A live holder was read from the row, so the row is there to contend for; and the holder
+    // is the wait's first answer, with no second attempt spent finding it again.
+    hold.rowReady = ready.kind === "held" ? true : ready.value;
+    if (ready.kind === "held") hold.heldAtStart = ready.holder;
     const outcome = await runWhenHeld(hold, wait, work);
     if (!outcome.ran) return outcome;
     await assertHeldToTheEnd(hold);
@@ -1930,15 +2385,70 @@ async function runWhenHeld<T>(
 async function assertHeldToTheEnd(hold: SchemaLockHold): Promise<void> {
   if (hold.interrupted) return;
   await hold.stopRenewal();
-  if (!(await hold.stillOwned().catch(() => false))) hold.lost = true;
-  if (!hold.lost) return;
+  hold.workEnded = true;
   const { command } = hold.options;
+  // A renewal that found the row taken has already settled it: nothing is read for that.
+  let owned = false;
+  try {
+    owned =
+      !hold.lost &&
+      (await whileBusy(
+        hold.options,
+        hold.dialect,
+        hold.busyBudget(),
+        () => hold.confirmedUntil(),
+        () => hold.stillOwned()
+      ));
+  } catch (error) {
+    const unconfirmed = finishedUnconfirmed(hold, error);
+    if (unconfirmed !== undefined) throw unconfirmed;
+    owned = false;
+  }
+  if (!owned) hold.lost = true;
+  if (!hold.lost) return;
   throw NextlyError.serviceUnavailable({
     publicMessage:
       `${command} finished, but could not keep the schema lock to the end: another run took ` +
       "it while the work ran. Check the database before running it again.",
     logContext: { reason: SCHEMA_LOCK_LOST_REASON, command },
   });
+}
+
+/**
+ * The ending of a run whose work finished while a step of the lock after it (the check that no
+ * other run took it, or a release) waited for a busy SQLite database past its bounds; undefined
+ * for any other error. A database still busy says nothing of who holds the lock: not a lost
+ * lock, and not a success either, since the run cannot show it was the only one throughout.
+ */
+function finishedUnconfirmed(
+  hold: SchemaLockHold,
+  error: unknown
+): NextlyError | undefined {
+  if (hold.dialect !== "sqlite") return undefined;
+  if (!NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) return undefined;
+  const { command } = hold.options;
+  return new NextlyError({
+    code: "NEXTLY_TABLE_BUSY",
+    publicMessage: [
+      `\`${command}\` finished, but its schema lock could not be confirmed: table busy.`,
+      `The work ran to its end; the last reading of the lock, which shows no other run took it meanwhile, waited for the database past its bounds. ${describeBusyHolder(error)}`,
+      "Check the database before running it again.",
+    ].join("\n"),
+    // Not the lock step's own stop: that one says nothing changed, of a step, and this run's
+    // work did run. A reader of a busy stop's outcome finds none here.
+    logContext: { reason: "table busy", command, unconfirmed: true },
+    ...(error.cause === undefined ? {} : { cause: error.cause }),
+  });
+}
+
+/** Why SQLite names no holder for a busy database, as the busy stop `error` says it. */
+function describeBusyHolder(error: NextlyError): string {
+  const holder = (
+    error.logContext as
+      | { stop?: { ended?: { holder?: { reason?: unknown } } } }
+      | undefined
+  )?.stop?.ended?.holder;
+  return typeof holder?.reason === "string" ? holder.reason : "";
 }
 
 /** The caller's two-method logger, widened to the session's `Logger`. */

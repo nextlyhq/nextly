@@ -510,7 +510,8 @@ describe.each(getConfiguredTestDialects())(
         scopeKind: "collection",
         slug: "posts",
         entryId: id,
-        user: superAdmin,
+        // Stored, so the read gate the comparison asks finds its role.
+        user: await storedSuperAdmin(current),
         from: published.versionNo!,
         to: recorded.versionNo!,
       });

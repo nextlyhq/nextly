@@ -31,7 +31,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
-import { gotoAdmin } from "./support/admin";
+import { gotoAdmin, type Theme } from "./support/admin";
 import { LOCK } from "./support/locks";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
@@ -103,12 +103,65 @@ async function scanEditor(page: Page): Promise<Finding[]> {
  * because this suite is deliberately black box and imports no product code;
  * the source of both strings is `PageBuilderCard`.
  */
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 
-/** Open a document and put its page builder on screen. */
-async function openEditor(page: Page): Promise<void> {
-  await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+const HOMEPAGE = "/admin/api/singles/homepage";
+
+/**
+ * Give the homepage one block before the editor opens.
+ *
+ * An editor that opens on a page with no blocks opens Add by itself, so a
+ * press on Add would close it again. The tests that open Add from the rail
+ * set the page they open, rather than inherit what the last spec holding
+ * the homepage left, so the press is the one that opens the panel.
+ */
+async function homepageWithABlock(page: Page): Promise<void> {
+  const stored = await page.request.patch(HOMEPAGE, {
+    data: {
+      layout: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "a11y-heading",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Scanned with Add open", level: "h2" },
+          },
+        ],
+      },
+      _overwrite: true,
+    },
+  });
+  expect(stored.ok(), `seeding the homepage: ${stored.status()}`).toBe(true);
+}
+
+/** Open the Add panel from the rail, as an author does. */
+async function openAddPanel(page: Page): Promise<void> {
+  const add = page
+    .getByRole("navigation", { name: "Editor panels" })
+    .getByRole("button", { name: "Add", exact: true });
+  // Closed until pressed: the page has a block, so nothing opened it.
+  await expect(add).toHaveAttribute("aria-pressed", "false");
+  await add.click();
+  await expect(add).toHaveAttribute("aria-pressed", "true");
+}
+
+/**
+ * Open a document and put its page builder on screen, in `theme`: the admin
+ * is waited for in that theme, so a dark scan reads the dark palette.
+ */
+async function openEditor(page: Page, theme: Theme = "light"): Promise<void> {
+  await gotoAdmin(page, "/singles/homepage", theme);
+  await page
+    .locator(PAGE_BUILDER_CARD)
+    .getByRole("link", { name: OPEN_BUILDER_ACTION })
+    .click();
   // POPULATION BEFORE VERDICT. "No violations" is satisfied perfectly by an
   // editor that never opened, so the scan must not run until it has.
   await expect(page.locator(EDITOR_READY_ANCHOR)).toBeVisible({
@@ -131,11 +184,9 @@ test.describe("the page builder meets WCAG 2.2 AA", () => {
   test("has no violations with a panel open", async ({ page }) => {
     // The inserter is a different tree from the canvas — a list of options with
     // its own roles — and a scan of the closed editor never reaches it.
+    await homepageWithABlock(page);
     await openEditor(page);
-    await page
-      .getByRole("navigation", { name: "Editor panels" })
-      .getByRole("button", { name: "Add", exact: true })
-      .click();
+    await openAddPanel(page);
     await expect(page.getByRole("option").first()).toBeVisible({
       timeout: 15_000,
     });
@@ -153,15 +204,9 @@ test.describe("the page builder meets WCAG 2.2 AA", () => {
   }) => {
     // The panel's greyed tiles, its placement line and the popover each set
     // a colour of their own, so each theme is scanned with them on screen.
-    await page.addInitScript(
-      ([key, value]) => window.localStorage.setItem(key, value),
-      ["nextly-theme", "dark"] as const
-    );
-    await openEditor(page);
-    await page
-      .getByRole("navigation", { name: "Editor panels" })
-      .getByRole("button", { name: "Add", exact: true })
-      .click();
+    await homepageWithABlock(page);
+    await openEditor(page, "dark");
+    await openAddPanel(page);
     await expect(page.getByRole("option").first()).toBeVisible({
       timeout: 15_000,
     });
@@ -183,11 +228,7 @@ test.describe("the page builder meets WCAG 2.2 AA", () => {
      * assertion in the component suites is really an assertion about a class
      * name. A palette that fails only in dark mode passes every one of them.
      */
-    await page.addInitScript(
-      ([key, value]) => window.localStorage.setItem(key, value),
-      ["nextly-theme", "dark"] as const
-    );
-    await openEditor(page);
+    await openEditor(page, "dark");
 
     const findings = await scanEditor(page);
 

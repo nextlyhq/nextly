@@ -79,7 +79,7 @@ describe("the Email hub's tabs", () => {
   it("shows every tab while the grants are loading, as the rail does", () => {
     holding([], false);
     renderHub();
-    expect(tabs()).toEqual(["Messages", "Design", "Sending"]);
+    expect(tabs()).toEqual(["Messages", "Design", "Sending", "Activity"]);
   });
 
   it("navigates to a tab's route when it's chosen", () => {

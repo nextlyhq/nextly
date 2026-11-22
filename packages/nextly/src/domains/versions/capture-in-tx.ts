@@ -22,6 +22,7 @@ import {
   assembleDocument,
   type AssembleDocumentParts,
 } from "./assemble-document";
+import type { ChangedParts } from "./changed-parts";
 import type { VersionsDbApi } from "./db-api";
 import { sameContent } from "./draft-save";
 import { recordedStatus } from "./recorded-status";
@@ -73,6 +74,12 @@ export interface CaptureInTxArgs {
    * version only for the fields it holds with the value that version holds.
    */
   restoredFrom?: FieldSources;
+  /**
+   * The parts of the document this write changed: on a publish, those it put
+   * live; on a save, those it wrote (see `changed-parts`). Required, so every
+   * write path decides it rather than leaving it unknown.
+   */
+  changedParts: ChangedParts;
   /**
    * A human-readable marker for this version, when one is meaningful — e.g. the
    * pre-restore snapshot a restore takes of the content it is about to replace,
@@ -180,6 +187,7 @@ export async function captureInTx(
     locale: args.locale ?? null,
     sourceVersionNo: args.sourceVersionNo ?? null,
     fieldSources: fieldSources ?? null,
+    changedParts: args.changedParts,
     label: args.label ?? null,
     maxPerDoc: args.maxPerDoc,
     lifecycle: args.lifecycle,

@@ -39,7 +39,7 @@ import {
   type EntitySettingsRecord,
   type RecordedEntitySettings,
 } from "../migrate-create/entity-settings";
-import { loadUiSchema } from "../ui-schema/loader";
+import { readUiSchema } from "../ui-schema/loader";
 
 import {
   resolveRepairEntities,
@@ -49,7 +49,11 @@ import {
   type SnapshotEntity,
   type UserFieldSources,
 } from "./resolve-entities";
+import type { TableWaits } from "./table-wait";
 import type { RepairEntity } from "./types";
+
+/** What the entity reads wait for, as a lock's facts would name it. */
+const REGISTRY_READ = "nextly_schema_events";
 
 type RecordedKind = ConfiguredEntity["kind"];
 
@@ -172,24 +176,29 @@ const MANIFEST_LISTS = {
  *
  * An absent manifest is the ordinary code-first project and declares none; one that exists and
  * cannot be read stops the run, since dropping it would drop every Builder declaration.
+ *
+ * Also whether a manifest is checked out, which the loader's empty manifest for an absent file
+ * cannot say: an empty manifest removes every Builder entity the registry holds, while no manifest
+ * at all leaves the registry rows to say what each would be. The file is read once, and the
+ * entities, their `localized` and its presence all come from that read, so a file written while
+ * the run starts cannot make them disagree.
  */
 async function builderEntities(
   args: ConfigurationArgs,
   ownerOf: (kind: RecordedKind, slug: string) => string | undefined
-): Promise<ConfiguredEntity[]> {
-  const [declared, manifest] = await Promise.all([
-    resolveDeclaredSchema({
-      projectRoot: args.projectRoot,
-      config: args.config,
-      ...(args.deferredExtends !== undefined
-        ? { deferredExtends: args.deferredExtends }
-        : {}),
-    }),
-    loadUiSchema({
-      projectRoot: args.projectRoot,
-      uiSchemaFile: args.config.db.uiSchemaFile,
-    }),
-  ]);
+): Promise<{ entities: ConfiguredEntity[]; hasManifest: boolean }> {
+  const { manifest, exists } = await readUiSchema({
+    projectRoot: args.projectRoot,
+    uiSchemaFile: args.config.db.uiSchemaFile,
+  });
+  const declared = await resolveDeclaredSchema({
+    projectRoot: args.projectRoot,
+    config: args.config,
+    manifest,
+    ...(args.deferredExtends !== undefined
+      ? { deferredExtends: args.deferredExtends }
+      : {}),
+  });
   const localized = new Set(
     (Object.keys(MANIFEST_LISTS) as RecordedKind[]).flatMap(kind =>
       (manifest[MANIFEST_LISTS[kind]] ?? [])
@@ -197,7 +206,7 @@ async function builderEntities(
         .map(entity => entityKey(kind, entity.slug))
     )
   );
-  return declared.entities
+  const entities = declared.entities
     .filter(entity => entity.builtBy !== "codeFirst")
     .map((entity): ConfiguredEntity => {
       const plugin = ownerOf(entity.kind, entity.slug);
@@ -211,6 +220,7 @@ async function builderEntities(
         ...(plugin !== undefined ? { plugin } : {}),
       };
     });
+  return { entities, hasManifest: exists };
 }
 
 /** What the configured side is read from. */
@@ -222,17 +232,21 @@ interface ConfigurationArgs {
   deferredExtends?: readonly unknown[];
 }
 
-/** Every entity the next migration would apply: code-first, then the Builder's. */
+/**
+ * Every entity the next migration would apply, code-first then the Builder's, and whether a
+ * Builder manifest is checked out to declare the Builder's.
+ */
 async function configuredEntities(
   args: ConfigurationArgs
-): Promise<ConfiguredEntity[]> {
+): Promise<{ entities: ConfiguredEntity[]; hasManifest: boolean }> {
   const owners = pluginOwners(args.config.plugins);
   const ownerOf = (kind: RecordedKind, slug: string) =>
     owners.get(entityKey(kind, slug));
-  return [
-    ...codeFirstEntities(args.config, ownerOf),
-    ...(await builderEntities(args, ownerOf)),
-  ];
+  const builder = await builderEntities(args, ownerOf);
+  return {
+    entities: [...codeFirstEntities(args.config, ownerOf), ...builder.entities],
+    hasManifest: builder.hasManifest,
+  };
 }
 
 /**
@@ -243,6 +257,16 @@ const REGISTRY_TABLES: Record<RecordedKind, readonly string[]> = {
   collection: ["dynamic_collections"],
   single: ["dynamic_singles"],
   fieldGroup: [STORAGE_FORMAT.registryTable, MIGRATION_TARGET.registryTable],
+};
+
+/** The registry status of an entity whose tables were changed while its row was not. */
+const DIVERGED_STATUS = "diverged";
+
+/** Each kind of entity as a message about its registry row names it. */
+const REGISTRY_ROW_LABEL: Record<RecordedKind, string> = {
+  collection: "collection",
+  single: "Single",
+  fieldGroup: "field group",
 };
 
 /** How each registry's rows are read, through the service that owns that registry. */
@@ -272,6 +296,14 @@ async function hasRegistry(
 /**
  * One registry's rows. A registry the database does not have has none: a database can hold one
  * registry and not another, such as one created before Singles had a registry.
+ *
+ * A row that names no table stops the run: where its columns are cannot be known, and leaving the
+ * row out would report its entity as never applied, or not report it at all.
+ *
+ * So does a row marked as diverged, whatever else records its entity: its tables were changed and
+ * its stored definition was not, so neither the row nor an older snapshot says what the database
+ * holds. Reading it as never applied would send the owner to repeat the change the state forbids,
+ * and judging its columns against an older record would convert them back.
  */
 async function registryRows(
   adapter: DrizzleAdapter,
@@ -281,8 +313,26 @@ async function registryRows(
   if (!(await hasRegistry(adapter, kind))) return [];
   const rows = await REGISTRY_READERS[kind](adapter, logger);
   return rows.flatMap(raw => {
-    const row = raw as Omit<RegistryEntity, "kind">;
-    return typeof row.slug === "string" ? [{ ...row, kind }] : [];
+    // A row as its service returns it; its slug and table are checked before either is trusted.
+    const row = raw as Omit<RegistryEntity, "kind" | "slug" | "tableName"> & {
+      slug?: unknown;
+      tableName?: unknown;
+    };
+    const { slug, tableName } = row;
+    if (typeof slug !== "string") return [];
+    if (typeof tableName !== "string" || tableName === "") {
+      throw NextlyError.configuration({
+        logMessage: `The ${REGISTRY_ROW_LABEL[kind]} registry row "${slug}" names no table, so where its columns are cannot be known. Restore the row's table name, then run \`nextly repair-columns\` again.`,
+        logContext: { kind, slug },
+      });
+    }
+    if (row.migrationStatus === DIVERGED_STATUS) {
+      throw NextlyError.configuration({
+        logMessage: `The ${REGISTRY_ROW_LABEL[kind]} registry row "${slug}" is marked as diverged: its tables were changed and its stored definition still describes the previous shape, so what the database last had applied cannot be known. Reconcile the definition against the tables, then run \`nextly repair-columns\` again.`,
+        logContext: { kind, slug, migrationStatus: row.migrationStatus },
+      });
+    }
+    return [{ ...row, kind, slug, tableName }];
   });
 }
 
@@ -558,19 +608,46 @@ export async function readRepairEntities(args: {
   deferredExtends?: readonly unknown[];
   migrationsDir: string;
   logger: Logger;
+  /**
+   * The run's waits for a table another session is using. On SQLite, where another connection can
+   * hold the whole database, the database's reads run in its tries; where they run out, only the
+   * configuration is read, and every column it names is reported as one whose definition could
+   * not be read (the run's later reads take the same, spent, tries).
+   */
+  waits?: TableWaits;
   /** The app's column overrides, as the configuration declares them. */
   overrides?: RepairOverrides;
 }): Promise<RepairEntity[]> {
   const { adapter, dialect, logger } = args;
+  const codeFields = args.config.users?.fields ?? [];
   // Independent reads, so none waits on another.
-  const [configured, registry, snapshots, userFields] = await Promise.all([
+  const fromDatabase = () =>
+    Promise.all([
+      registryEntities(adapter, logger),
+      snapshotEntities(adapter, dialect, args.migrationsDir),
+      userFieldSources(adapter, dialect, logger, codeFields),
+    ]);
+  const [{ entities: configured, hasManifest }, read] = await Promise.all([
     configuredEntities(args),
-    registryEntities(adapter, logger),
-    snapshotEntities(adapter, dialect, args.migrationsDir),
-    userFieldSources(adapter, dialect, logger, args.config.users?.fields ?? []),
+    args.waits === undefined || dialect !== "sqlite"
+      ? fromDatabase().then(value => ({ kind: "done" as const, value }))
+      : // SQLite's tries are the whole database's, whichever table names them.
+        args.waits.read(REGISTRY_READ, fromDatabase),
   ]);
+  if (read.kind === "ran-out") {
+    return resolveRepairEntities({
+      configured,
+      hasManifest,
+      registry: [],
+      snapshots: [],
+      userFields: { stored: null, configured: codeFields },
+      ...(args.overrides !== undefined ? { overrides: args.overrides } : {}),
+    });
+  }
+  const [registry, snapshots, userFields] = read.value;
   return resolveRepairEntities({
     configured,
+    hasManifest,
     registry,
     snapshots,
     userFields,

@@ -15,12 +15,13 @@
  *   them kept and the change logged; declared again by a later migration,
  *   each mark is cleared as that migration applies, with the grants as they
  *   were.
- * - A plugin whose permissions no snapshot declared (added by a run with no
- *   migration of its release, as an install adds them) is spoken for once a
- *   migration records it: its next release's migration orphans the permission
- *   that release dropped, grants kept.
+ * - A plugin whose permissions no snapshot declared (added by its install,
+ *   with no migration of its release) is spoken for once a migration records
+ *   it: its next release's migration orphans the permission that release
+ *   dropped, grants kept.
  * - A migration written before a plugin joined the build, applied after its
- *   install, leaves the plugin's permissions as they were.
+ *   install in the same run as the one recording it, leaves the plugin's
+ *   permissions as they were.
  * - The first migration after a registry baseline leaves every core
  *   permission, and every permission of a plugin installed before it that
  *   its snapshot still declares, unorphaned; a plugin the baseline held and
@@ -47,6 +48,7 @@ import { createAdapter } from "../../../database/factory";
 import { loadDialectTables } from "../../../database/dialect-tables";
 import { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
+import { seedAccessOnCommandConnection } from "../../../domains/schema/migrate/command-access";
 import { collectCustomPermissions } from "../../../plugins/permissions/collect-permissions";
 import {
   definePlugin,
@@ -58,14 +60,14 @@ import {
 } from "../../../plugins/test-nextly";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
-import type { mergeSetupResultIntoConfig as MergeSetupResultIntoConfig } from "../../utils/config-loader";
+import { mergeSetupResultIntoConfig } from "../../utils/config-loader";
 import { withCommandServicesLent } from "../../utils/lend-command-services";
 import { createLogger } from "../../utils/logger";
 import { installRegistryResolver } from "../../utils/registry-resolver";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
 
-type LoadedConfig = Parameters<typeof MergeSetupResultIntoConfig>[0];
+type LoadedConfig = Parameters<typeof mergeSetupResultIntoConfig>[0];
 
 /** The config the commands load, set before each run. */
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
@@ -276,6 +278,25 @@ describe.each(getConfiguredTestDialects())(
       }
     }
 
+    /**
+     * The access `nextly plugins install` of `installing` writes, with no
+     * migration: its permissions and every preset role's grants, through the
+     * write the install makes, over the config naming that plugin alone.
+     */
+    async function installAccess(installing: PluginDefinition): Promise<void> {
+      const given = config({ plugins: [installing] }) as LoadedConfig;
+      await on(adapter => {
+        // Its table names resolved, as a command's connection has them.
+        installRegistryResolver(adapter);
+        return seedAccessOnCommandConnection(
+          adapter,
+          { config: mergeSetupResultIntoConfig(given, given, [installing]) },
+          createLogger({ quiet: true }),
+          { pluginsAsGiven: true }
+        );
+      });
+    }
+
     /** Every permission's slug, by whether it is marked orphaned. */
     async function marks(): Promise<Record<string, boolean>> {
       return on(async adapter => {
@@ -389,13 +410,11 @@ describe.each(getConfiguredTestDialects())(
       await migrateCreate(config({}));
       await migrate(config({}));
 
-      // The plugin joins after the newest snapshot: a run with no migration
-      // of it adds its permissions, as its install adds them, and the presets
-      // grant them. No snapshot declares them.
-      const installed = config({
-        plugins: [feeds(["sync", "mop-feeds"], ["purge", "mop-feeds"])],
-      });
-      await migrate(installed);
+      // The plugin joins after the newest snapshot: its install adds its
+      // permissions with no migration of it, and the presets grant them. No
+      // snapshot declares them. (`nextly migrate` with it configured is
+      // refused until a migration records it.)
+      await installAccess(feeds(["sync", "mop-feeds"], ["purge", "mop-feeds"]));
       expect(await grantsOf("admin")).toEqual(
         expect.arrayContaining(["purge-mop-feeds", "sync-mop-feeds"])
       );
@@ -431,12 +450,15 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(await marks()).toMatchObject({ "export-mop-logs": false });
 
-      const said = await migrate(
-        config({ collections: [POSTS, NOTES], plugins: [logs] })
-      );
+      // With the plugin configured, the next migration records it, and one
+      // run applies both: first the one written without it.
+      const joined = config({ collections: [POSTS, NOTES], plugins: [logs] });
+      await migrateCreate(joined);
+      const said = await migrate(joined);
 
       expect(await orphaned()).toEqual([]);
-      // Never marked, rather than marked and cleared again by the run's later
+      // Never marked, rather than marked by the migration written without it
+      // and cleared again by the one recording it or by the run's later
       // phases: no line says the permission's mark changed.
       expect(
         markLines(said).filter(line => line.includes("export-mop-logs"))
@@ -526,8 +548,8 @@ describe.each(getConfiguredTestDialects())(
       expect(await grants()).toEqual(granted);
 
       // The control that the comparison sees a run that writes: with the
-      // newer build's files back, the same configuration's run goes ahead,
-      // and its permission phase adds back what it declares.
+      // newer build's files back and a migration recording the same
+      // configuration written, its run goes ahead and declares both again.
       for (const name of readdirSync(aside)) {
         renameSync(
           join(aside, name),
@@ -536,6 +558,7 @@ describe.each(getConfiguredTestDialects())(
             : join(dir, "migrations", "meta", name)
         );
       }
+      await migrateCreate(older);
       await migrate(older);
       expect(await marks()).not.toEqual(migrated);
     }, 240_000);

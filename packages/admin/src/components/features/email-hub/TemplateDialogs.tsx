@@ -14,7 +14,10 @@ import { useEffect, useState } from "react";
 
 import { Loader2 } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
-import { usePreviewEmailTemplate } from "@admin/hooks/queries/useEmailTemplates";
+import {
+  usePreviewEmailTemplate,
+  useTemplateSenders,
+} from "@admin/hooks/queries/useEmailTemplates";
 
 /** An email or layout a dialog acts on. */
 export interface TemplateRef {
@@ -51,22 +54,69 @@ export function TemplateDeleteDialog({
   onConfirm: () => void;
   isLoading: boolean;
 }): JSX.Element | null {
+  const {
+    data: senders,
+    isPending,
+    isFetching,
+    isError,
+  } = useTemplateSenders(open && template ? template.id : null);
+
   if (!template) return null;
+
+  const affected = [
+    ...(senders?.referenced ?? []),
+    ...(senders?.declared ?? []),
+  ];
+  // The check decides what the person is about to destroy, so deletion waits
+  // for it — loading, a background refetch of a cached answer, and a failed
+  // request alike: a silent failure must not read as permission to proceed.
+  // An answer a plugin failed to contribute to is the same failure wearing
+  // a successful request, so it holds too.
+  const checking = isPending || isFetching || isError;
+  const incomplete = senders !== undefined && senders.complete === false;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="sm:max-w-md"
-        aria-describedby="delete-template-description"
-        role="alertdialog"
-      >
+      <DialogContent className="sm:max-w-md" role="alertdialog">
         <DialogHeader>
           <DialogTitle>Delete this email?</DialogTitle>
-          <DialogDescription id="delete-template-description">
+          <DialogDescription>
             Are you sure you want to delete <strong>{template.name}</strong>?
             This action cannot be undone.
           </DialogDescription>
         </DialogHeader>
+
+        {isPending ? (
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Checking what sends this email...
+          </p>
+        ) : isError ? (
+          <p className="text-xs text-destructive">
+            Couldn&apos;t check what sends this email. Close and try again
+            before deleting.
+          </p>
+        ) : affected.length > 0 ? (
+          <div className="rounded-md border border-border bg-muted/60 p-3 text-xs space-y-1.5 text-foreground">
+            <p className="font-medium">
+              Deleting this template will affect what sends it:
+            </p>
+            <ul className="list-disc pl-4 space-y-0.5 text-muted-foreground">
+              {affected.map((item, index) => (
+                <li key={index}>{item}</li>
+              ))}
+            </ul>
+            <p className="text-muted-foreground">
+              These will stop sending emails once the template is deleted.
+            </p>
+          </div>
+        ) : null}
+        {incomplete ? (
+          <p className="text-xs text-muted-foreground">
+            Some references couldn&apos;t be checked, so deletion waits until
+            every check answers.
+          </p>
+        ) : null}
         <DialogFooter>
           <Button
             variant="outline"
@@ -78,7 +128,7 @@ export function TemplateDeleteDialog({
           <Button
             variant="destructive"
             onClick={onConfirm}
-            disabled={isLoading}
+            disabled={isLoading || checking || incomplete}
           >
             {isLoading ? (
               <>

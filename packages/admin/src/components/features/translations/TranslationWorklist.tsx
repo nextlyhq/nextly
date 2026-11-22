@@ -21,7 +21,7 @@
  */
 
 import type { JSX } from "react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import {
   Alert,
@@ -51,10 +51,14 @@ function rowHref(
   target: string,
   source: string
 ): string {
-  const path = buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-    slug: row.collection,
-    id: row.id,
-  });
+  // A Single is one document, opened at its own route; an entry at its collection's.
+  const path =
+    row.kind === "single"
+      ? buildRoute(ROUTES.SINGLE_EDIT, { slug: row.collection })
+      : buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
+          slug: row.collection,
+          id: row.id,
+        });
   // BOTH params, because the destination needs both facts: which language is
   // being edited, and which one is on display beside it. Sending only the
   // locale opens the ordinary editor in that language with no source — which
@@ -449,7 +453,13 @@ export function TranslationWorklist({
     locale,
     targets.map(t => t.code)
   );
-  const query = useTranslationWorklist({ locale: active, state });
+  // The page of the list, from 1. Back to the first whenever the language or
+  // the tab changes: another list starts at its beginning.
+  const [page, setPage] = useState(1);
+  useEffect(() => {
+    setPage(1);
+  }, [active, state]);
+  const query = useTranslationWorklist({ locale: active, state, page });
 
   // Put the URL back in step when it asked for a language this worklist cannot
   // answer for, so the address bar keeps describing what is on screen and a
@@ -536,6 +546,37 @@ export function TranslationWorklist({
           )}
         </p>
       )}
+
+      {/* The server's own paging: a page past this one exists when it says so. */}
+      {query.data !== undefined &&
+        (query.data.meta.hasPrev || query.data.meta.hasNext) && (
+          <nav
+            aria-label="Worklist pages"
+            className="flex items-center justify-end gap-2"
+          >
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!query.data.meta.hasPrev}
+              onClick={() => setPage(current => Math.max(1, current - 1))}
+            >
+              Previous page
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Page {query.data.meta.page} of {query.data.meta.totalPages}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!query.data.meta.hasNext}
+              onClick={() => setPage(current => current + 1)}
+            >
+              Next page
+            </Button>
+          </nav>
+        )}
     </div>
   );
 }

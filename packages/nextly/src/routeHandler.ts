@@ -80,6 +80,7 @@ import {
 } from "./api/general-settings";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
+import { withLanguageCodeDeprecation } from "./api/language-code-deprecation";
 import { changeLanguages, getLanguages } from "./api/languages";
 import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
 import { getPluginPanelNumbers } from "./api/plugin-panel-numbers";
@@ -111,6 +112,7 @@ import {
 } from "./api/widget-layout";
 import { getWidgetPreviews } from "./api/widget-previews";
 import { postWidgetQuery } from "./api/widget-query";
+import { handleWorkflowRequest } from "./api/workflows";
 import { runWithAccessMemo } from "./auth/access/request-memo";
 import { apiKeyScopeFrom } from "./auth/authenticated-scope";
 import {
@@ -120,6 +122,7 @@ import {
 } from "./auth/caller-scope";
 import { COLLECTION_DEFINITION_PERMISSIONS } from "./auth/collection-definition-policy";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
+import { isUnsafeMethod, validateOrigin } from "./auth/csrf/validate";
 import { hasAuthRateLimit } from "./auth/handlers/router";
 import { LIST_READ_GATES, requireListRead } from "./auth/list-read-gates";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
@@ -129,6 +132,7 @@ import {
 } from "./database/seeders/sample-content";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
+import { handleEmailDeliveryRequest } from "./dispatcher/handlers/email-dispatcher";
 import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
@@ -139,11 +143,13 @@ import {
   SYSTEM_WRITE_POLICY,
   type RouteGrant,
 } from "./domains/auth/system-write-policy";
+import { collectionTableName } from "./domains/collections/services/collection-utils";
 import { recordIfServerError } from "./domains/health/server-errors";
 import {
   appLocalization,
   withCurrentLanguages,
 } from "./domains/i18n/configured-locales";
+import { resolveSingleTableName } from "./domains/singles/services/resolve-single-table-name";
 import { hasLifecycle } from "./domains/versions/recorded-status";
 import { collectionDefaultForReader } from "./domains/widgets/collection-cards";
 import { visibilityToken } from "./domains/widgets/layout";
@@ -170,6 +176,7 @@ import {
   SKIP_TIMEZONE_FORMAT_HEADER,
   withTimezoneFormatting,
 } from "./lib/date-formatting";
+import { env } from "./lib/env";
 import { writeGateFor } from "./lib/immutable-system-fields";
 import { createCorsMiddleware } from "./middleware/cors";
 import { defaultRestCallerReaders } from "./middleware/rest-callers";
@@ -428,6 +435,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
   "webhooks",
   "releases",
+  "workflows",
   "notices",
   "jobs",
   "generalSettings",
@@ -440,6 +448,8 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "schema",
   "contentEvents",
   "rolesScreen",
+  // The Email hub's Activity reads (`/api/email-deliveries`).
+  "email",
 ]);
 
 /** Delegate a languages request to its handler, which manages its own auth and body. */
@@ -808,6 +818,10 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   // What publishing every language would do, without doing it. A read, but
   // admitted on the publish grant as the publish is (LIFECYCLE_ROUTE_ACTIONS).
   "previewPublishAllSingleLocales",
+  // Publishing or unpublishing chosen parts of the Single: admitted on the grant of that action,
+  // as a collection entry's are (LIFECYCLE_ROUTE_ACTIONS), never on a definition's.
+  "publishSingleParts",
+  "unpublishSingleParts",
   // Discarding the working draft reverts the document to its live row. Left out
   // of the read branch below so it resolves to `update-{slug}`: a caller who may
   // not update the document may not throw away its pending edits either.
@@ -929,6 +943,17 @@ const STATUS_WRITE_METHODS: ReadonlySet<string> = new Set([
   "updateSingleDocument",
 ]);
 
+/** The table a Single's document is stored in, as its record names it. */
+function singleTableNameOf(record: unknown, slug: string): string {
+  const stored =
+    typeof record === "object" && record !== null
+      ? (record as { tableName?: unknown }).tableName
+      : undefined;
+  return typeof stored === "string" && stored.length > 0
+    ? stored
+    : resolveSingleTableName({ slug });
+}
+
 /**
  * The action a status write route's request asks, read only once every
  * action has refused it, so the refusal names that action: the gate the
@@ -953,25 +978,27 @@ function actionAskedBy(
       if (typeof write !== "object" || write === null || Array.isArray(write)) {
         return "update";
       }
-      // The entity's lifecycle, from the record the services read it from.
-      const lifecycle = async () =>
-        hasLifecycle(
-          entity === "single"
-            ? await container
-                .get<{
-                  getSingleBySlug(slug: string): Promise<unknown>;
-                }>("singleRegistryService")
-                .getSingleBySlug(slug)
-            : await container
-                .get<{
-                  getCollectionBySlug(slug: string): Promise<unknown>;
-                }>("collectionRegistryService")
-                .getCollectionBySlug(slug)
-        );
+      // The entity's record, as the services read it: its lifecycle, and the table whose
+      // contributed columns the write may name, which the gate leaves out as the write does.
+      const record =
+        entity === "single"
+          ? await container
+              .get<{
+                getSingleBySlug(slug: string): Promise<unknown>;
+              }>("singleRegistryService")
+              .getSingleBySlug(slug)
+          : await container
+              .get<{
+                getCollectionBySlug(slug: string): Promise<unknown>;
+              }>("collectionRegistryService")
+              .getCollectionBySlug(slug);
       return await writeGateFor(
         write as Record<string, unknown>,
         entity,
-        lifecycle
+        entity === "single"
+          ? singleTableNameOf(record, slug)
+          : collectionTableName(record, slug),
+        () => hasLifecycle(record)
       );
     } catch {
       return "update";
@@ -993,6 +1020,8 @@ const LIFECYCLE_ROUTE_ACTIONS: Readonly<
   unpublishParts: "unpublish",
   publishAllSingleLocales: "publish",
   previewPublishAllSingleLocales: "publish",
+  publishSingleParts: "publish",
+  unpublishSingleParts: "unpublish",
   previewPublishAllLocales: "publish",
 };
 
@@ -1342,6 +1371,20 @@ async function resolveAuthorization(
     return requireListRead(req, LIST_READ_GATES.users);
   }
 
+  // --- A user's external identities: the user-management gates ---
+  // Listed with the user read every other per-user view takes; unlinked
+  // with the user update the role-assignment routes take, for the same
+  // reason they do — an identity is managed from the user's own edit
+  // surface, a user-management workflow, not a deletion of the user.
+  if (service === "identities") {
+    if (method === "listUserIdentities") {
+      return requirePermission(req, "read", "users");
+    }
+    if (method === "unlinkUserIdentity") {
+      return requirePermission(req, "update", "users");
+    }
+  }
+
   // --- Default: {action}-{service} (e.g., read-users, create-users) ---
   const action = getActionFromMethod(httpMethod);
   return requirePermission(req, action, service);
@@ -1660,6 +1703,14 @@ async function serveServiceRequest(
     return handleReleaseRequest(req, method, routeParams);
   }
 
+  // ==================== WORKFLOWS DIRECT DISPATCH ====================
+  // Review state, steps, assignments and a workflow's settings. Beside releases and for the same
+  // reason: the handler owns its auth and parses its own JSON, so it stays above the shared body
+  // read below. The route's params carry the workflow a settings route names.
+  if (service === "workflows") {
+    return handleWorkflowRequest(req, method, routeParams);
+  }
+
   // ==================== CONTENT EVENTS BY SUBJECT ====================
   // A subject's events read by subject (a release's, or a deleted
   // document's). The handler owns its authorization.
@@ -1684,6 +1735,13 @@ async function serveServiceRequest(
       message: `Unknown jobs operation: ${method}`,
       logContext: { service: "jobs", method },
     });
+  }
+
+  // ==================== EMAIL DELIVERIES DIRECT DISPATCH ====================
+  // The Email hub's Activity reads. The handler asks `read-email-deliveries`
+  // itself, from the system read policy, and reads its filters from the URL.
+  if (service === "email") {
+    return handleEmailDeliveryRequest(req, method, routeParams);
   }
 
   // ==================== PREVIEW LINKS DIRECT DISPATCH ====================
@@ -1785,6 +1843,13 @@ async function serveServiceRequest(
       if (routeParams) {
         routeParams.userId = authResult.userId;
       }
+      const keyRefusal = await refuseKeyWithoutIdentityGrant(
+        req,
+        service,
+        method,
+        authResult
+      );
+      if (keyRefusal) return keyRefusal;
       authorizedUser = authResult;
     }
     // Check if endpoint requires auth only (no specific permission)
@@ -1827,6 +1892,14 @@ async function serveServiceRequest(
       authorizedUser = authResult ?? undefined;
     }
   }
+
+  const crossSite = refuseCrossSiteIdentityWrite(
+    req,
+    service,
+    httpMethod,
+    authorizedUser
+  );
+  if (crossSite) return crossSite;
 
   // ==================== PARSE REQUEST BODY ====================
   let body: unknown = undefined;
@@ -2385,6 +2458,63 @@ function gateRuleCouldNotRun(req: Request, error: unknown): Response {
   );
 }
 
+/**
+ * The grant an API key needs for its own account's identities at
+ * `/api/me/identities`: the user read to list, the user update to unlink —
+ * the gates `/api/users/:id/identities` asks. Only a session's own person
+ * manages their identities with no permission; a key is a credential its
+ * holder scoped, and acting on its maker's account does not lift that
+ * scope, as it does not for any other route a key reaches.
+ *
+ * The caller the `/api/me` gate already authenticated is judged as it is,
+ * so the key is authenticated, and its rate limit spent, once.
+ */
+async function refuseKeyWithoutIdentityGrant(
+  req: Request,
+  service: string,
+  method: string,
+  caller: AuthContext
+): Promise<Response | null> {
+  if (service !== "identities" || caller.authMethod !== "api-key") {
+    return null;
+  }
+  const action = method === "listUserIdentities" ? "read" : "update";
+  const granted = await authorizeCaller(caller, action, "users");
+  return isErrorResponse(granted) ? refuseRequest(req, method, granted) : null;
+}
+
+/**
+ * The cross-site check an identity's unlink takes: a write the session
+ * cookie authenticated is refused unless it came from the app's own origin,
+ * or one the app allows — the origin half of the check the plugin route
+ * dispatcher gives an authenticated route's cookie writes. A `SameSite=Lax`
+ * cookie already stays off a cross-site write from another site; this holds
+ * where the cookie does travel, from a sibling subdomain or a browser that
+ * ignores the attribute. An API key carries no ambient cookie and sends no
+ * browser origin, so it is exempt, as everywhere else.
+ */
+function refuseCrossSiteIdentityWrite(
+  req: Request,
+  service: string,
+  httpMethod: string,
+  caller: AuthContext | undefined
+): Response | null {
+  if (
+    service !== "identities" ||
+    !isUnsafeMethod(httpMethod) ||
+    caller?.authMethod !== "session" ||
+    validateOrigin(req, env.NEXTLY_ALLOWED_ORIGINS_PARSED ?? [])
+  ) {
+    return null;
+  }
+  return buildErrorResponse(
+    NextlyError.csrfFailed({
+      logContext: { reason: "identity-write-cross-site", httpMethod },
+    }),
+    { requestId: readOrGenerateRequestId(req) }
+  );
+}
+
 function refuseRequest(
   req: Request,
   method: string,
@@ -2437,6 +2567,10 @@ const SESSION_PRIVATE_METHODS = new Set([
   // may publish, naming only the fields they may read.
   "previewPublishAllSingleLocales",
   "previewPublishAllLocales",
+  // An account's linked identities are told to that account's person, or to
+  // someone allowed to manage it, so neither the list nor its refusal is
+  // shared between callers.
+  "listUserIdentities",
 ]);
 
 // Re-exported from its neutral home so the dispatchers that import it from
@@ -2948,9 +3082,10 @@ export function createDynamicHandlers(options?: {
     // which is the join the diagnostics exist for.
     const effectiveRequestId =
       response.headers.get("x-request-id") ?? readOrGenerateRequestId(req);
-    const identifiedResponse = withRequestIdHeader(
-      response,
-      effectiveRequestId
+    const identifiedResponse = withLanguageCodeDeprecation(
+      req,
+      withRequestIdHeader(response, effectiveRequestId),
+      appLocalization()
     );
     // Every verb's server error, counted toward System health's "errors in
     // the last 24 hours"; once per request, however many boundaries it passed.

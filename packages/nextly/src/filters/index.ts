@@ -19,4 +19,6 @@ export {
   type ListQueryWhere,
   type ListQueryFilterContext,
   type PublicAddressTemplateContext,
+  type EmailTemplateReference,
+  type EmailTemplateReferencesContext,
 } from "./seams";

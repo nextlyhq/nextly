@@ -20,6 +20,7 @@ import type { MetaService } from "../../meta/services/meta-service";
 
 import type { MigrationSession } from "./session";
 import { advanceStep } from "./state";
+import { runStepInTries, type StepBusyTable } from "./step-tries";
 
 /**
  * One unit of migration work.
@@ -49,6 +50,12 @@ export interface MigrationStep {
    * refuses such a plan rather than discovering it one crash later.
    */
   readonly recordsProgress?: boolean;
+  /**
+   * Whether the step changes a table's structure (a rename of a table or a column), and so waits
+   * for a table another database session is using in tries for a busy table. A step that only
+   * rewrites rows leaves it unset: a wait for rows another session has locked is not bounded.
+   */
+  readonly changesStructure?: boolean;
 }
 
 /**
@@ -63,8 +70,16 @@ export async function runMigrationSteps(args: {
   migrationId: string;
   steps: readonly MigrationStep[];
   fromStep: number;
+  /**
+   * How each step waits for a table another database session is using: in tries, then a stop
+   * with `NEXTLY_TABLE_BUSY` (`runStepInTries`). Absent, a step runs once with no bound of its
+   * own, as a test's stand-in session does.
+   */
+  busyTable?: StepBusyTable;
 }): Promise<void> {
-  const { session, meta, migrationId, steps, fromStep } = args;
+  const { session, meta, migrationId, steps, fromStep, busyTable } = args;
+  // The steps this run applied, in order, as a busy-table report names them.
+  const applied: string[] = [];
 
   if (!Number.isSafeInteger(fromStep) || fromStep < 1) {
     throw NextlyError.internal({
@@ -120,7 +135,13 @@ export async function runMigrationSteps(args: {
       });
     }
 
-    await step.run(session);
+    // A step is named by its position and what it renames, never by a stored value.
+    const change = `${busyTable?.command ?? ""}: step ${String(position)} of ${String(steps.length)} (${step.id})`;
+    if (busyTable === undefined || step.changesStructure !== true) {
+      await step.run(session);
+    } else {
+      await runStepInTries(step, session, busyTable, change, [...applied]);
+    }
 
     const verified = await step.verify(session);
     if (!verified) {
@@ -137,6 +158,8 @@ export async function runMigrationSteps(args: {
         },
       });
     }
+
+    applied.push(change);
 
     // A gate is re-entered by every invocation, so its position is deliberately
     // never written. Recording it would let the next run step over the check.

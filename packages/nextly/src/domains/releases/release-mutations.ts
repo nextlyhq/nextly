@@ -72,6 +72,7 @@ import type { JobContentSource } from "../jobs/job-content-api";
 import { runAsReleaseRun } from "../versions/stale-version";
 
 import type { ReleaseMutations, ReleaseWrite } from "./apply-due-releases";
+import { RELEASE_PUBLISHED_STATUS } from "./release-scope";
 import {
   forgetMemberApplied,
   recordMemberApplied,
@@ -165,7 +166,7 @@ export function createReleaseMutations(deps: {
   };
 
   return {
-    publish: input => write(input, "published"),
+    publish: input => write(input, RELEASE_PUBLISHED_STATUS),
     unpublish: input => write(input, WITHDRAWN_STATUS),
   };
 }

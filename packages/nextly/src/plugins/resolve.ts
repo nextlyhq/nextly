@@ -48,6 +48,7 @@ import { assertSettingsPermissionsGuardSettings } from "./settings-permission";
 import { topoSortPlugins } from "./topo-sort";
 import { assertClientConfigs } from "./validate-client-config";
 import { assertDocumentViews } from "./validate-document-views";
+import { assertEmailTemplates } from "./validate-email-templates";
 import { validatePluginMenus } from "./validate-menus";
 import { validatePluginNames } from "./validate-names";
 import { validatePluginSlugs } from "./validate-slugs";
@@ -194,6 +195,10 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // Whether the permission is the plugin's own is asked once the entities
   // are known: `assertSettingsPermissionsOwned`, at boot.
   assertSettingsPermissionsGuardSettings(plugins);
+  // An email template with both HTML and blocks, or neither, would be refused
+  // by the owner registry with only a log line, and its sends would fail
+  // later. Refused here, the boot names the plugin and the template.
+  assertEmailTemplates(plugins);
   // Admin places, checked as hook points are: a place in another plugin's
   // namespace or core's, or one declared twice, would otherwise surface as a
   // contribution rendered in the wrong place or nowhere. Last, so two plugins

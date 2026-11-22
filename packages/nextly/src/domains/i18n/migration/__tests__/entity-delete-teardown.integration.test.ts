@@ -164,7 +164,12 @@ describe("teardownEntityI18n (real SQLite)", () => {
       tableName: "dc_plain",
     });
 
-    expect(result).toEqual({ companionDropped: false, archiveRowsPurged: 0 });
+    expect(result).toEqual({
+      companionDropped: false,
+      archiveRowsPurged: 0,
+      provenanceRowsPurged: 0,
+      transitionRecordsPurged: 0,
+    });
   });
 
   it("succeeds when the archive table was never created", async () => {
@@ -180,7 +185,12 @@ describe("teardownEntityI18n (real SQLite)", () => {
       kind: "collection",
     });
 
-    expect(result).toEqual({ companionDropped: true, archiveRowsPurged: 0 });
+    expect(result).toEqual({
+      companionDropped: true,
+      archiveRowsPurged: 0,
+      provenanceRowsPurged: 0,
+      transitionRecordsPurged: 0,
+    });
     expect(await tableNames()).not.toContain("dc_pages_locales");
   });
 

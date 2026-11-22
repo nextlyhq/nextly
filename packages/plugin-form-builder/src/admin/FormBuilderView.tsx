@@ -15,8 +15,13 @@
 import type {
   DocumentLockGates,
   FieldPickerChoice,
+  NumericRule,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useReportUnsavedWork } from "@nextlyhq/plugin-sdk/admin";
+import {
+  boundProblem,
+  NUMERIC_BOUND_RULES,
+  useReportUnsavedWork,
+} from "@nextlyhq/plugin-sdk/admin";
 import {
   Alert,
   AlertDescription,
@@ -43,6 +48,7 @@ import {
 import { FORM_PAGES, formPageOf, type FormPageId } from "../form-pages";
 import type { AnyFormField, FormField, FormFieldTypeId } from "../types";
 import { blankConsentFields, CONSENT_TEXT_REQUIRED } from "../utils/consent";
+import { enforcedValidationRules } from "../utils/enforced-validation";
 
 import { FieldCards } from "./components/builder/FieldCards";
 import { FieldInspector } from "./components/builder/FieldInspector";
@@ -833,13 +839,67 @@ function editorTab(
 }
 
 /**
+ * A field's numeric bounds as `boundProblem` reads them: nested under
+ * `validation`, by the same names the panel and the rule share. A form field
+ * has no row bounds of its own, so those are simply never set and never
+ * asked anything.
+ */
+function boundValuesOf(
+  field: AnyFormField
+): Partial<Record<NumericRule, number>> {
+  const validation = (field as { validation?: Record<string, unknown> })
+    .validation;
+  const values: Partial<Record<NumericRule, number>> = {};
+  if (validation === undefined) return values;
+  for (const rule of NUMERIC_BOUND_RULES) {
+    const bound = validation[rule];
+    if (typeof bound === "number") values[rule] = bound;
+  }
+  return values;
+}
+
+/**
+ * The first field whose numeric bounds cannot stand, said the way its own
+ * settings panel says it (`boundProblem`, the rule the Schema Builder's save
+ * refuses by too). Without this the panel's red words were a warning this
+ * save ignored: a max length of 0 was stored, and the schema the form builds
+ * from it applied `.max(0)`, failing every nonempty submission.
+ *
+ * Asked only of the rules the form's checks ENFORCE for the field's type
+ * (`enforcedValidationRules`, the same answer the panel narrows its controls
+ * by): a bound a field arrived with that nothing enforces — an email's
+ * length, say, whose schema reads neither — is not this save's to judge, and
+ * refusing it would strand a form whose panel offers no control to fix.
+ */
+function unsoundBoundRefusal(
+  fields: readonly AnyFormField[]
+): SaveRefusal | undefined {
+  for (const field of fields) {
+    const enforced = enforcedValidationRules(field.type);
+    for (const rule of NUMERIC_BOUND_RULES) {
+      if (!enforced.includes(rule)) continue;
+      const problem = boundProblem(rule, boundValuesOf(field));
+      if (problem) {
+        return {
+          message: `${field.label || field.name}: ${problem}`,
+          page: "builder",
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * What stops a save before it is sent, and where it is fixed: a form needs a
- * field, a consent needs its text, and a notification needs a name and good
- * addresses. A notification is
+ * field, a consent needs its text, a field's bounds must stand as typed, and
+ * a notification needs a name and good addresses. A notification is
  * written to the form as it is typed, so nothing between the editor and here
  * refuses one; both preconditions are answered by the module the editor asks.
+ *
+ * Exported for the save gate's test, as `saveErrorMessage` is.
  */
-function blockedBeforeSave(
+export function blockedBeforeSave(
   fields: readonly AnyFormField[],
   notifications: readonly FormNotification[]
 ): SaveRefusal | undefined {
@@ -852,6 +912,10 @@ function blockedBeforeSave(
       message: `${blank.label || blank.name}: ${CONSENT_TEXT_REQUIRED}`,
       page: "builder",
     };
+  }
+  const badBound = unsoundBoundRefusal(fields);
+  if (badBound !== undefined) {
+    return badBound;
   }
   const blocked = notificationsBlockingSave(notifications);
   return blocked ? { message: blocked, page: "notifications" } : undefined;

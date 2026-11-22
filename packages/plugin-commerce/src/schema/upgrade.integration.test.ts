@@ -127,6 +127,23 @@ async function asProduction<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * The app's migration for the products collection commerce contributes, written as a shop
+ * commits it before it deploys. Commerce's own modules carry its tables, but a collection a
+ * plugin contributes is the app's, created by the app's migrations, and `nextly migrate` refuses
+ * a configuration whose collections no migration records.
+ */
+async function appMigrationWritten(
+  nextly: ReturnType<typeof sqliteProject>["nextly"]
+): Promise<void> {
+  await nextly(
+    "migrate:create",
+    "--name",
+    "commerce_products",
+    "--non-interactive"
+  );
+}
+
 describe("commerce's migrations on an existing install", () => {
   it("apply the previous set, then the current one, and a production boot serves the cart stored before", async () => {
     expect(migrations.length).toBeGreaterThanOrEqual(2);
@@ -135,6 +152,7 @@ describe("commerce's migrations on an existing install", () => {
 
     let booted: Awaited<ReturnType<typeof createTestNextly>> | undefined;
     try {
+      await appMigrationWritten(nextly);
       // The install as it was: commerce's first module applied, and only it.
       const first = await nextly("migrate", "--step", "1");
       expect(first.stdout).toContain("Plugin migrations: 1 applied");
@@ -227,6 +245,7 @@ describe("commerce's migrations on an existing install", () => {
     const project = sqliteProject();
     try {
       // A deployment's order: the migrations, then the install.
+      await appMigrationWritten(project.nextly);
       await project.nextly("migrate");
       await project.nextly("plugins", "install", PLUGIN);
       // The newest module undone: commerce is installed, and its schema is

@@ -34,21 +34,16 @@ export function seoTabParts(setup: {
   pagePermissions: boolean;
 }): Pick<PluginContributions, "admin"> & {
   routes: NonNullable<PluginContributions["routes"]>;
-  /** The collections whose pages the tab edits: none where it edits no group. */
-  tabCollections: string[];
-  /** Whether the tab edits the group on every type that has it. */
-  tabEveryType: boolean;
 } {
   const { types, fields, baseUrl } = setup;
   const names = fields.flatMap(field =>
     typeof field.name === "string" ? [field.name] : []
   );
   const edits = tabEditsGroup(fields);
+  // Where else the tab is drawn, as in the Page Builder's Settings, it asks
+  // the admin whether the edit page draws it for that page's type, so no
+  // list of the tab's types is handed anywhere to go stale.
   return {
-    // Named only where the site names its types; where SEO is on every
-    // type, the Page Builder's tab is told so instead (`tabEveryType`).
-    tabCollections: edits && types.named ? [...types.collections] : [],
-    tabEveryType: edits && !types.named,
     // A group of fields the tab does not edit stays among the page's own
     // fields instead.
     ...(edits

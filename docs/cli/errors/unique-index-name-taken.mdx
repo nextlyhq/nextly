@@ -1,0 +1,25 @@
+---
+title: UNIQUE_INDEX_NAME_TAKEN
+description: "`nextly migrate` would make a one-to-one relationship unique under an index name another object already holds."
+---
+
+## Cause
+
+`nextly migrate` would make a one-to-one relationship unique under an index name another object already holds.
+
+`nextly migrate` makes each one-to-one relationship that an earlier release left without its uniqueness unique, with an index of a set name. Where another index, or another kind of object, already has that name, the uniqueness would not be made, so the step is refused before any index is created. The Why line names each field, the index name it needs, and what already holds it.
+
+Nothing of the step was applied.
+
+## Fix
+
+Rename or drop what holds the name, then run `nextly migrate` again.
+
+## Example
+
+```text
+✗ Making one-to-one relationships unique was not applied.
+  Why:  profiles.person (its index uq_dc_profiles_person is the name of the index on dc_people).
+  Next: Rename or drop what holds the name, then run `nextly migrate` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/unique-index-name-taken  (UNIQUE_INDEX_NAME_TAKEN)
+```

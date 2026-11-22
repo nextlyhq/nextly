@@ -54,6 +54,32 @@ assertType<
   >
 >(true);
 
+// A written template's review (`@experimental`): a change to blocks is named
+// as such, says what the owner did to them, and each side reads in words.
+assertType<
+  Exact<
+    OwnerChange["field"],
+    keyof EmailTemplateVersion | "blocks" | "template"
+  >
+>(true);
+assertType<
+  Exact<
+    OwnerChange["kind"],
+    "insert" | "delete" | "change" | "move" | undefined
+  >
+>(true);
+assertType<
+  Exact<
+    EmailTemplateComparison["inWords"],
+    | {
+        base: string[] | null;
+        theirs: string[] | null;
+        mine: string[] | null;
+      }
+    | undefined
+  >
+>(true);
+
 /** A review, written the way code calling these methods writes it. */
 export async function reviewTheOwnersUpdate(
   templates: Templates,

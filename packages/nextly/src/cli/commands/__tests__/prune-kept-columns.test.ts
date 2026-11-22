@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { text } from "../../../config";
-import { writeSnapshot } from "../../../domains/schema/migrate-create/snapshot-io";
+import { recordedSnapshot } from "../../../domains/schema/migrate-create/__tests__/helpers/recorded-snapshot";
 import {
   publishWithheldScopeFields,
   scopedTypeKey,
@@ -139,7 +139,7 @@ describe("keptColumnsFor", () => {
   });
 
   it("reads the latest snapshot when the site keeps migration files, and drops nothing itself", async () => {
-    await writeSnapshot(
+    await recordedSnapshot(
       join(dir, "migrations", "meta"),
       "20261110_000000_000_create",
       {
@@ -189,7 +189,7 @@ describe("currentTypes and a plugin clause still naming the type", () => {
 
 describe("keptColumnsFor and a translated kept column", () => {
   it("lists none a migration never drops, on a site that keeps migration files", async () => {
-    await writeSnapshot(
+    await recordedSnapshot(
       join(dir, "migrations", "meta"),
       "20261110_000000_000_create",
       {

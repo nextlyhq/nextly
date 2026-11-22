@@ -17,13 +17,17 @@ import {
   useDocumentPreview,
 } from "../EntryFormContext";
 
-function inProvider(openPreview?: () => Promise<void>) {
+function inProvider(
+  openPreview?: () => Promise<void>,
+  openPreviewBeside?: () => void
+) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <EntryFormContextProvider
         collectionSlug="pages"
         entryId="p1"
         {...(openPreview === undefined ? {} : { openPreview })}
+        {...(openPreviewBeside === undefined ? {} : { openPreviewBeside })}
       >
         {children}
       </EntryFormContextProvider>
@@ -55,6 +59,38 @@ describe("useDocumentPreview", () => {
 
   it("answers null outside any form", () => {
     const { result } = renderHook(useDocumentPreview);
+
+    expect(result.current).toBeNull();
+  });
+
+  it("opens the preview beside the form through the editor's own opener", () => {
+    const openPreview = vi.fn(async () => {});
+    const openPreviewBeside = vi.fn();
+    const { result } = renderHook(useDocumentPreview, {
+      wrapper: inProvider(openPreview, openPreviewBeside),
+    });
+
+    result.current?.openBeside?.();
+
+    expect(openPreviewBeside).toHaveBeenCalledTimes(1);
+    expect(openPreview).not.toHaveBeenCalled();
+  });
+
+  it("offers nothing beside the form where the editor has no pane", () => {
+    // The preview itself stands: a caller opens it in a tab instead.
+    const { result } = renderHook(useDocumentPreview, {
+      wrapper: inProvider(vi.fn(async () => {})),
+    });
+
+    expect(typeof result.current?.open).toBe("function");
+    expect(result.current?.openBeside).toBeUndefined();
+  });
+
+  it("offers nothing beside the form without a preview", () => {
+    // A pane with no preview to show would open onto nothing.
+    const { result } = renderHook(useDocumentPreview, {
+      wrapper: inProvider(undefined, vi.fn()),
+    });
 
     expect(result.current).toBeNull();
   });

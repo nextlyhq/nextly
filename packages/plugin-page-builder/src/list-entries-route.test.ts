@@ -128,6 +128,37 @@ describe("a canvas list's read", () => {
     expect(NextlyError.isCode(ordinary, "VALIDATION_ERROR")).toBe(false);
   });
 
+  it("takes a named run's allowance past the default limit, for a site that raised it", async () => {
+    const ctx = { caller: null } as unknown as PluginRouteContext;
+    const request = (allowance: number) =>
+      new Request(`http://nextly.test/x${LIST_ENTRIES_ROUTE_PATH}`, {
+        method: "POST",
+        body: JSON.stringify({
+          named: { name: "events.upcoming", limit: 6, offset: 0, allowance },
+        }),
+      });
+    const outcome = async (allowance: number) =>
+      await listEntriesRoute(() => undefined)
+        .handler(request(allowance), ctx)
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        );
+    // `pageBuilder({ maxQueries: 2000 })`: the editor's count asks a run
+    // with what the page has left of it, past 500.
+    expect(NextlyError.isCode(await outcome(1500), "VALIDATION_ERROR")).toBe(
+      false
+    );
+    // A site with no limit: the count sends `null`, which JSON carries.
+    expect(
+      NextlyError.isCode(await outcome(null as never), "VALIDATION_ERROR")
+    ).toBe(false);
+    // CONTROL: an allowance no page has is still refused at the boundary.
+    expect(
+      NextlyError.isCode(await outcome(10_000_000), "VALIDATION_ERROR")
+    ).toBe(true);
+  });
+
   it("takes any sort a list may store, and nothing past its bounds", async () => {
     const ctx = { caller: null } as unknown as PluginRouteContext;
     const request = (sort: unknown) =>

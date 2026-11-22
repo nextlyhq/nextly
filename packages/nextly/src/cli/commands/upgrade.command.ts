@@ -2,42 +2,34 @@
  * The declaration of `nextly upgrade`: its options and help, with the action
  * loaded from `./upgrade` only when the command runs.
  */
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 
 import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
+
+/** A flag of the database work the command used to do: accepted, hidden, and no longer read. */
+const retired = (flags: string) =>
+  new Option(
+    flags,
+    "No longer does anything: `nextly migrate` does the work it belonged to"
+  ).hideHelp();
 
 export function registerUpgradeCommand(program: Command): void {
   // `--dry-run` carries the one meaning and help line it has everywhere.
   withDryRun(
     program
-      .command("upgrade")
+      .command("upgrade [version]")
       .description(
-        "Bring an existing database up to date: move the migration records into nextly_schema_events, hash passwords stored before this release, and remove passwords kept in version history"
+        "Move every Nextly package of the project to one release: the one given, or the newest of the installed release's channel"
       )
   )
-    .option(
-      "--confirm-backed-up",
-      "Confirm a backup exists (required in CI/non-TTY)",
-      false
-    )
-    .option("-f, --force", "Skip the interactive backup prompt", false)
-    .option(
-      "--target-table-name <name>",
-      "Override the events table name on a collision"
-    )
-    .option(
-      "--reconcile-core",
-      "Reconcile drifted core schema (dev-loose, confirms each destructive op). Use only if `nextly migrate` reports core drift.",
-      false
-    )
-    // Both upgrade paths take the shared migrate lock, and the lock-busy
-    // error tells operators to re-run with this flag — so every lock-taking
-    // command must register it. Same escape hatch as `nextly migrate`.
-    .option(
-      "--force-unlock",
-      "Clear a stale migrate lock before running",
-      false
-    )
+    // Each still parses, so a run with one ends naming `nextly migrate`
+    // rather than as an unknown option.
+    .addOption(retired("--confirm-backed-up"))
+    .addOption(retired("-f, --force"))
+    .addOption(retired("--target-table-name <name>"))
+    .addOption(retired("--reconcile-core"))
+    .addOption(retired("--accept-data-loss [targets]"))
+    .addOption(retired("--force-unlock"))
     .action(lazyAction(async () => (await import("./upgrade")).upgradeAction));
 }

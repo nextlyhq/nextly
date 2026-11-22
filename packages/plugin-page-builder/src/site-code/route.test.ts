@@ -9,6 +9,7 @@
 import type { PluginRoute } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
+import { PAGE_CODE_BODY_BOOTSTRAP, SITE_CODE_BOOTSTRAP } from "./bootstrap";
 import { cspHash } from "./csp";
 import {
   SITE_CODE_SAVED_AUDIT,
@@ -176,6 +177,47 @@ describe("saving site code", () => {
     expect(addition?.directive).toBe("script-src-elem");
     expect(addition?.sources).toContain("'self'");
     expect(addition?.sources).toContain(`'${await cspHash("a()")}'`);
+  });
+
+  it("checks a page's own code with its own end-of-body loader, naming that loader's hash", async () => {
+    const { nextly, updates } = store();
+    const { ctx } = contextFor("session");
+    const route = routeOf("POST", nextly, "script-src 'self'");
+    const check = async (scope?: "page") =>
+      (await (
+        await call(
+          route,
+          post({
+            head: "",
+            body: "<script>a()</script>",
+            dryRun: true,
+            ...(scope === undefined ? {} : { scope }),
+          }),
+          ctx
+        )
+      ).json()) as {
+        item: {
+          csp: {
+            check: { findings: { message: string }[] };
+            additions: { sources: string[] }[];
+          }[];
+        };
+      };
+    const pageHash = await cspHash(PAGE_CODE_BODY_BOOTSTRAP);
+    const siteHash = await cspHash(SITE_CODE_BOOTSTRAP);
+    const page = (await check("page")).item.csp[0];
+    expect(
+      page?.check.findings.some(finding =>
+        finding.message.includes(`'${pageHash}'`)
+      )
+    ).toBe(true);
+    expect(page?.additions[0]?.sources).toContain(`'${pageHash}'`);
+    expect(page?.additions[0]?.sources).not.toContain(`'${siteHash}'`);
+    // The site's own code keeps the site loader's hash.
+    const site = (await check()).item.csp[0];
+    expect(site?.additions[0]?.sources).toContain(`'${siteHash}'`);
+    expect(site?.additions[0]?.sources).not.toContain(`'${pageHash}'`);
+    expect(updates).toHaveLength(0);
   });
 
   it("adds nothing to a policy that blocks nothing", async () => {

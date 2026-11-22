@@ -47,7 +47,7 @@ import {
 
 /** What a delete or unpublish inside a caller's transaction is told. */
 const BATCH_REFUSAL =
-  "To keep the site's default protected, delete or unpublish Layouts one at a time, not in a batch.";
+  "To keep the site's default protected, delete or unpublish header & footer sets one at a time, not in a batch.";
 
 /** The plugin context this needs, named structurally. */
 export interface DefaultLayoutGuardContext {

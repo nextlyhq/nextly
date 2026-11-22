@@ -19,6 +19,11 @@ process.env.NEXTLY_SECRET =
 import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
+  dtcgToTokens,
+  NEXTLY_EXTENSION,
+  resolverToTokens,
+  tokensToDtcg,
+  tokensToResolver,
 } from "@nextlyhq/blocks-engine";
 import { getCachedNextly, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import {
@@ -92,6 +97,32 @@ const pageUsing = (identity?: string) => ({
         : { styles: { base: { base: { color: { $token: identity } } } } }),
     },
   ],
+});
+
+/** A page whose one box's shadow names `property` through `var()`. */
+const pageWithShadow = (property: string) => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "page",
+  nodes: [
+    {
+      id: "a",
+      type: "core/box",
+      version: 1,
+      props: {},
+      styles: {
+        base: { base: { boxShadow: `0 1px 2px var(${property})` } },
+      },
+    },
+  ],
+});
+
+/** A shadow variable whose value names `property` through `var()`. */
+const lift = (property: string) => ({
+  id: "t-lift",
+  name: "shadow.lift",
+  label: "Lift",
+  kind: "shadow",
+  values: { light: `0 1px 2px var(${property})` },
 });
 
 /**
@@ -805,6 +836,420 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("cleans up unused colours, keeping one a page started using since the list was read, naming where", async () => {
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      // CONTROL: the panel lists both as unused when the clean-up opens.
+      const listed = await call(
+        "GET",
+        `${route("usage")}?id=t-spare&id=t-accent`,
+        designer
+      );
+      expect(listed.body).toMatchObject({
+        variables: {
+          "t-spare": { documents: 0 },
+          "t-accent": { documents: 0 },
+        },
+      });
+      // Then a page starts using Accent, before the author confirms.
+      await t.nextly.create({
+        collection: "pages",
+        data: { title: "Home", slug: "home", content: pageUsing("t-accent") },
+        overrideAccess: true,
+      });
+
+      const cleaned = await call("POST", route("clean-up"), designer, {
+        ids: ["t-spare", "t-accent"],
+      });
+      expect(cleaned.status).toBe(200);
+      // Counted first in the request, as no scheduler counted the page.
+      expect(cleaned.body).toMatchObject({
+        item: {
+          removed: ["t-spare"],
+          kept: [
+            {
+              id: "t-accent",
+              name: "Accent",
+              reason: "Accent is used on 1 document.",
+            },
+          ],
+        },
+      });
+      // What went, as stored, for the editor's Undo to put back exactly.
+      expect(cleaned.body).toMatchObject({
+        item: {
+          taken: [{ id: "t-spare", entry: spare, at: 2, orderAt: null }],
+          section: { tokens: [accent, styled] },
+        },
+      });
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled"]);
+    });
+
+    it("never leaves a page using a colour the clean-up removed, when the two race", async () => {
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const [cleaned, page] = await Promise.allSettled([
+        call("POST", route("clean-up"), designer, {
+          ids: ["t-spare", "t-accent"],
+        }),
+        t.nextly.create({
+          collection: "pages",
+          data: { title: "Home", slug: "home", content: pageUsing("t-accent") },
+          overrideAccess: true,
+        }),
+      ]);
+      expect(cleaned.status).toBe("fulfilled");
+      const answer =
+        cleaned.status === "fulfilled"
+          ? cleaned.value
+          : { status: 0, body: {} };
+      expect(answer.status).toBe(200);
+      const stored = await storedIds(t);
+      // Spare goes whichever wins: Accent's refusal never rolls it back.
+      expect(stored).not.toContain("t-spare");
+      if (page.status === "fulfilled") {
+        // The page first: Accent is kept, named as in use.
+        expect(stored).toContain("t-accent");
+        expect(answer.body).toMatchObject({
+          item: { removed: ["t-spare"], kept: [{ id: "t-accent" }] },
+        });
+      } else {
+        // The clean-up first: the page is refused its use of what is gone.
+        expect(page.reason).toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(stored).not.toContain("t-accent");
+        expect(answer.body).toMatchObject({
+          item: { removed: ["t-spare", "t-accent"], kept: [] },
+        });
+      }
+    });
+
+    it("hides the built-in colours for a Design manager, and refuses it to a role that may read Design but not change it", async () => {
+      const { t } = await boot();
+      const reader = await holding(t, "read-site-style");
+      const designer = await holding(t, ...DESIGN);
+      const tokens = [accent, styled, spare];
+      const hidden = {
+        tokens: { tokens, builtInColoursShown: false },
+        _overwrite: true,
+      };
+      const before = await storedSection(t);
+      const refused = await call("PATCH", SINGLE, reader, hidden);
+      expect(refused.status).toBe(403);
+      expect(await storedSection(t)).toBe(before);
+      // CONTROL: the same save by a Design manager is stored, so the refusal
+      // above is about who asked and not about the setting.
+      const accepted = await call("PATCH", SINGLE, designer, hidden);
+      expect(accepted.status).toBe(200);
+      expect(JSON.parse(await storedSection(t))).toEqual({
+        tokens,
+        builtInColoursShown: false,
+      });
+      // Shown again: the reader is refused that too.
+      const shown = { tokens: { tokens }, _overwrite: true };
+      const shownRefused = await call("PATCH", SINGLE, reader, shown);
+      expect(shownRefused.status).toBe(403);
+      expect(JSON.parse(await storedSection(t))).toMatchObject({
+        builtInColoursShown: false,
+      });
+      // Anything but true or false is refused, and nothing is stored.
+      const settled = await storedSection(t);
+      const malformed = await call("PATCH", SINGLE, designer, {
+        tokens: { tokens, builtInColoursShown: "no" },
+        _overwrite: true,
+      });
+      expect(malformed.status).toBe(400);
+      expect(JSON.stringify(malformed.body)).toContain(
+        "Whether the built-in colours are shown must be true or false."
+      );
+      expect(await storedSection(t)).toBe(settled);
+      // Read by every author who may read Design, so all of them see it.
+      const read = await call("GET", SINGLE, reader);
+      expect(read.status).toBe(200);
+      expect(JSON.stringify(read.body)).toMatch(
+        /\\?"builtInColoursShown\\?":false/
+      );
+    });
+
+    it("stores an import's variables, text styles and Site text in that order, and takes them back in the reverse", async () => {
+      // The order the editor's import writes in, against the site's own
+      // guards: a text style naming a variable the site doesn't hold is
+      // refused, and so is removing a text style a row still follows.
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const fresh = {
+        id: "t-fresh",
+        name: "font-size.fresh",
+        kind: "dimension",
+        values: { light: "1.25rem" },
+      };
+      const eyebrow = {
+        id: "ts-eyebrow",
+        slug: "eyebrow",
+        label: "Eyebrow",
+        orderIndex: 0,
+        role: "text",
+        styles: { base: { base: { fontSize: { $token: "t-fresh" } } } },
+      };
+      const rows = { h3: { textStyle: "ts-eyebrow" } };
+      // The site as booted, which every write keeps beside the import's.
+      const doc = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as Record<string, unknown> | null;
+      const read = (raw: unknown): unknown =>
+        typeof raw === "string" ? JSON.parse(raw) : raw;
+      const site = (read(doc?.tokens) ?? { tokens: [] }) as {
+        tokens: unknown[];
+      };
+      const classes = (read(doc?.classes) ?? []) as unknown[];
+      const variables = { ...site, tokens: [...site.tokens, fresh] };
+      const write = async (body: Record<string, unknown>) =>
+        (await call("PATCH", SINGLE, designer, { ...body, _overwrite: true }))
+          .status;
+      // Text styles first would be refused: their variable isn't stored yet.
+      expect(await write({ classes: [...classes, eyebrow] })).toBe(400);
+      expect(await write({ tokens: variables })).toBe(200);
+      expect(await write({ classes: [...classes, eyebrow] })).toBe(200);
+      expect(await write({ tokens: { ...variables, siteText: rows } })).toBe(
+        200
+      );
+      // Undo, newest first. The text style can't go while a row follows it.
+      expect(await write({ classes })).toBe(400);
+      expect(await write({ tokens: variables })).toBe(200);
+      expect(await write({ classes })).toBe(200);
+      expect(await write({ tokens: site })).toBe(200);
+    });
+
+    it("stores a shadow another tool's file aliases whole, its layer colour an alias too", async () => {
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const px = (value: number) => ({ value, unit: "px" });
+      const read = dtcgToTokens({
+        color: {
+          brand: {
+            $type: "color",
+            $value: {
+              colorSpace: "srgb",
+              components: [0.2, 0.4, 0.6],
+              hex: "#336699",
+            },
+          },
+        },
+        shadow: {
+          card: {
+            $type: "shadow",
+            $value: {
+              color: "{color.brand}",
+              offsetX: px(0),
+              offsetY: px(1),
+              blur: px(2),
+              spread: px(0),
+            },
+          },
+          raised: { $type: "shadow", $value: "{shadow.card}" },
+        },
+      });
+      expect(read.issues).toEqual([]);
+      const doc = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as Record<string, unknown> | null;
+      const raw = doc?.tokens;
+      const site = ((typeof raw === "string" ? JSON.parse(raw) : raw) ?? {
+        tokens: [],
+      }) as { tokens: unknown[] };
+      const written = await call("PATCH", SINGLE, designer, {
+        tokens: { ...site, tokens: [...site.tokens, ...read.tokens] },
+        _overwrite: true,
+      });
+      expect(written.status).toBe(200);
+      const stored = JSON.parse(await storedSection(t)) as {
+        tokens: { name: string; values: { light: string } }[];
+      };
+      expect(
+        stored.tokens.find(token => token.name === "shadow.raised")?.values
+      ).toEqual({ light: "0px 1px 2px 0px #336699" });
+    });
+
+    it("stores the usable text styles of a file whose other text style holds a value the site refuses", async () => {
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const style = (id: string, size: string) => ({
+        id,
+        slug: id,
+        label: id,
+        orderIndex: 0,
+        role: "text",
+        styles: { base: { base: { fontSize: size } } },
+      });
+      const file = tokensToDtcg(
+        { tokens: [] },
+        { textStyles: [style("good", "1.25rem"), style("odd", "2rem")] }
+      ).document;
+      // The file as another copy left it: one style's size is no size.
+      const own = (file.$extensions as Record<string, Record<string, unknown>>)[
+        NEXTLY_EXTENSION
+      ] as { textStyles: { styles: unknown }[] };
+      (own.textStyles[1] as { styles: unknown }).styles = {
+        base: { base: { fontSize: "none" } },
+      };
+      const read = dtcgToTokens(JSON.parse(JSON.stringify(file)));
+      const doc = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as Record<string, unknown> | null;
+      const raw = doc?.classes;
+      const classes = ((typeof raw === "string" ? JSON.parse(raw) : raw) ??
+        []) as unknown[];
+      const written = await call("PATCH", SINGLE, designer, {
+        classes: [...classes, ...(read.textStyles ?? [])],
+        _overwrite: true,
+      });
+      expect(written.status).toBe(200);
+      const after = await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      });
+      const stored = (after as Record<string, unknown> | null)?.classes;
+      const ids = (
+        (typeof stored === "string" ? JSON.parse(stored) : stored) as {
+          id: string;
+        }[]
+      ).map(entry => entry.id);
+      expect(ids).toContain("good");
+      expect(ids).not.toContain("odd");
+    });
+
+    it("stores dark shadows naming colour variables exactly as exported, through their theme file", async () => {
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const variables = [
+        {
+          name: "color.brand",
+          kind: "color",
+          values: { light: "#336699", dark: "#99bbdd" },
+        },
+        {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#111111", dark: "#eeeeee" },
+        },
+        {
+          name: "shadow.raised",
+          kind: "shadow",
+          values: {
+            light:
+              "0 1px 2px var(--site-color-brand), inset 0 4px 8px 1px var(--site-color-ink)",
+            dark: "0 2px 4px var(--site-color-ink), 0 8px 16px var(--site-color-brand)",
+          },
+        },
+      ];
+      const doc = (await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      })) as Record<string, unknown> | null;
+      const raw = doc?.tokens;
+      const site = ((typeof raw === "string" ? JSON.parse(raw) : raw) ?? {
+        tokens: [],
+      }) as { tokens: unknown[] };
+      // Exported as the editor exports, then read back as an import reads.
+      const set = { tokens: variables } as Parameters<typeof tokensToDtcg>[0];
+      const file = tokensToDtcg(set).document;
+      const { resolver } = tokensToResolver(set, "site.tokens.json");
+      const read = resolverToTokens(
+        JSON.parse(JSON.stringify(resolver)),
+        new Map([["site.tokens.json", JSON.parse(JSON.stringify(file))]])
+      );
+      expect(read.issues).toEqual([]);
+      const written = await call("PATCH", SINGLE, designer, {
+        tokens: { ...site, tokens: [...site.tokens, ...read.tokens] },
+        _overwrite: true,
+      });
+      expect(written.status).toBe(200);
+      const stored = JSON.parse(await storedSection(t)) as {
+        tokens: { name: string; values: unknown }[];
+      };
+      expect(
+        stored.tokens.find(token => token.name === "shadow.raised")?.values
+      ).toEqual(variables[2]?.values);
+    });
+
+    it("refuses a design token import's writes to a role that may read Design but not change it", async () => {
+      const { t } = await boot();
+      const reader = await holding(t, "read-site-style");
+      const designer = await holding(t, ...DESIGN);
+      // The two writes an import makes: the variables merged with the
+      // site's own design data, and the class list with the file's text
+      // styles.
+      const tokens = {
+        tokens: [
+          { ...accent, group: "Brand" },
+          styled,
+          spare,
+          {
+            id: "t-roomy",
+            name: "space.roomy",
+            kind: "dimension",
+            fluid: { small: 16, large: 24 },
+            values: { light: "clamp(1rem, 0.6087rem + 1.7391vw, 1.5rem)" },
+          },
+        ],
+        siteText: { body: { fontSize: "1.0625rem" } },
+        order: ["t-accent"],
+        fluidRange: { min: 320, max: 1440 },
+        builtInColoursShown: false,
+      };
+      const textStyle = {
+        id: "ts-eyebrow",
+        slug: "eyebrow",
+        label: "Eyebrow",
+        orderIndex: 0,
+        role: "text",
+        styles: { base: { base: { fontSize: "0.75rem" } } },
+      };
+      const storedClasses = async () => {
+        const doc = (await t.nextly.findSingle({
+          slug: SITE_STYLE_SLUG,
+          overrideAccess: true,
+        })) as Record<string, unknown> | null;
+        const raw = doc?.classes;
+        return JSON.stringify(typeof raw === "string" ? JSON.parse(raw) : raw);
+      };
+      const writes = [
+        { tokens, _overwrite: true },
+        // Composed against the site's classes, as the class writer does.
+        { classes: [card, textStyle], _overwrite: true },
+      ];
+      for (const body of writes) {
+        const before = [await storedSection(t), await storedClasses()];
+        const refused = await call("PATCH", SINGLE, reader, body);
+        expect(refused.status).toBe(403);
+        expect([await storedSection(t), await storedClasses()]).toEqual(before);
+        // CONTROL: the same write by a Design manager is stored.
+        const accepted = await call("PATCH", SINGLE, designer, body);
+        expect(accepted.status).toBe(200);
+      }
+      expect(JSON.parse(await storedSection(t))).toMatchObject(tokens);
+      expect(JSON.parse(await storedClasses())).toMatchObject([
+        card,
+        textStyle,
+      ]);
+    });
+
+    it("refuses the clean-up to a role that may read Design but not change it", async () => {
+      const { t } = await boot();
+      const reader = await holding(t, "read-site-style");
+      const designer = await holding(t, ...DESIGN);
+      const body = { ids: ["t-spare"] };
+      const refused = await call("POST", route("clean-up"), reader, body);
+      expect(refused.status).toBe(403);
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled", "t-spare"]);
+      // CONTROL: the same clean-up by a Design manager goes ahead.
+      const cleaned = await call("POST", route("clean-up"), designer, body);
+      expect(cleaned.status).toBe(200);
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled"]);
+    });
+
     it("refuses removing a variable a stored page still uses though the index counts none", async () => {
       const { t, tick } = await boot();
       await t.nextly.create({
@@ -956,6 +1401,203 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("counts a colour only a block's shadow names through var(), refusing its removal until the page stops", async () => {
+      const { t, tick } = await boot();
+      const created = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Home",
+          slug: "home",
+          content: pageWithShadow("--site-t-accent"),
+        },
+        overrideAccess: true,
+      });
+      await tick();
+      const designer = await holding(t, ...DESIGN, "read-pages");
+      const usage = await call(
+        "GET",
+        `${route("usage")}?id=t-accent`,
+        designer
+      );
+      expect(usage.body).toMatchObject({
+        whole: true,
+        variables: { "t-accent": { documents: 1, complete: true } },
+      });
+
+      const refused = await call("POST", route("remove"), designer, {
+        ids: ["t-accent"],
+      });
+      expect(refused.status).toBe(400);
+      expect(JSON.stringify(refused.body)).toContain('"code":"IN_USE"');
+      expect(JSON.stringify(refused.body)).toContain(
+        "Accent is used on 1 document."
+      );
+      expect(await storedIds(t)).toContain("t-accent");
+
+      // The page stops naming it; its save updates the index.
+      await t.nextly.update({
+        collection: "pages",
+        id: String(created.item.id),
+        data: { content: pageUsing(), _overwrite: true },
+        overrideAccess: true,
+      });
+      const removed = await call("POST", route("remove"), designer, {
+        ids: ["t-accent"],
+      });
+      expect(removed.status).toBe(200);
+      expect(await storedIds(t)).toEqual(["t-styled", "t-spare"]);
+    });
+
+    it("refuses removing a colour a shadow variable names, and removes the two together", async () => {
+      const { t, tick } = await boot();
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: {
+          tokens: { tokens: [accent, styled, spare, lift("--site-t-accent")] },
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      });
+      await tick();
+      const designer = await holding(t, ...DESIGN, "read-pages");
+
+      const refused = await call("POST", route("remove"), designer, {
+        ids: ["t-accent"],
+      });
+      expect(refused.status).toBe(400);
+      expect(JSON.stringify(refused.body)).toContain(
+        "Accent is used by the variable Lift."
+      );
+      // The whole-section save dropping it alone, likewise.
+      const section = await call("PATCH", SINGLE, designer, {
+        tokens: { tokens: [styled, spare, lift("--site-t-accent")] },
+        _overwrite: true,
+      });
+      expect(section.status).toBe(400);
+      expect(JSON.stringify(section.body)).toContain('"code":"IN_USE"');
+      expect(await storedIds(t)).toEqual([
+        "t-accent",
+        "t-styled",
+        "t-spare",
+        "t-lift",
+      ]);
+
+      const both = await call("POST", route("remove"), designer, {
+        ids: ["t-accent", "t-lift"],
+      });
+      expect(both.status).toBe(200);
+      expect(await storedIds(t)).toEqual(["t-styled", "t-spare"]);
+    });
+
+    it("neither refuses nor counts a var() a page names that is no variable of the site's", async () => {
+      const { t, tick } = await boot();
+      // A `var()` is CSS, never a reference a page's write is refused for,
+      // under the judgement that refuses a `$token` naming no variable (the
+      // last case here).
+      const created = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Home",
+          slug: "home",
+          content: pageWithShadow("--not-a-site-variable"),
+        },
+        overrideAccess: true,
+      });
+      expect(created.item).toMatchObject({ title: "Home" });
+      await tick();
+      // CONTROL: the page was walked, and its property recorded under its
+      // own key, so the zero counts below are not a page left unread.
+      const rows = await t.adapter.select(TOKEN_ROWS, {
+        where: {
+          and: [
+            {
+              column: "tokenId",
+              op: "=" as const,
+              value: "var:--not-a-site-variable",
+            },
+          ],
+        },
+      });
+      expect(rows.length).toBeGreaterThan(0);
+      const designer = await holding(t, ...DESIGN, "read-pages");
+      const usage = await call(
+        "GET",
+        `${route("usage")}?id=t-accent&id=t-styled&id=t-spare`,
+        designer
+      );
+      expect(usage.body).toMatchObject({
+        whole: true,
+        variables: {
+          "t-accent": { documents: 0, complete: true },
+          "t-styled": { documents: 0 },
+          "t-spare": { documents: 0, complete: true },
+        },
+      });
+      const removed = await call("POST", route("remove"), designer, {
+        ids: ["t-spare"],
+      });
+      expect(removed.status).toBe(200);
+    });
+
+    it("walks again a page the index read before it counted var(), so its shadow's colour counts", async () => {
+      const { t, tick } = await boot();
+      await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Home",
+          slug: "home",
+          content: pageWithShadow("--site-t-accent"),
+        },
+        overrideAccess: true,
+      });
+      await tick();
+      // The index as the release before left it: the page walked, its run
+      // finished under the previous revision of the walk, and no row for the
+      // property its shadow names.
+      const propertyRows = {
+        and: [
+          {
+            column: "tokenId",
+            op: "=" as const,
+            value: "var:--site-t-accent",
+          },
+        ],
+      };
+      expect(
+        (await t.adapter.select(TOKEN_ROWS, { where: propertyRows })).length
+      ).toBeGreaterThan(0);
+      await t.adapter.delete(TOKEN_ROWS, propertyRows);
+      const usageRun = {
+        and: [{ column: "name", op: "=" as const, value: "usage" }],
+      };
+      const [run] = (await t.adapter.select(RUNS, { where: usageRun })) as {
+        generation: string;
+      }[];
+      // Stamped with the walk's current revision, whatever it is now; set
+      // back to 2, the last revision that did not count var().
+      expect(run?.generation).toMatch(/^\d+\|/);
+      expect(run?.generation).not.toMatch(/^[12]\|/);
+      await t.adapter.update(
+        RUNS,
+        { generation: (run?.generation ?? "").replace(/^\d+\|/, "2|") },
+        usageRun
+      );
+      const reader = await holding(t, "read-site-style");
+      const usage = `${route("usage")}?id=t-accent`;
+      // CONTROL: the row is gone, and work recorded under the previous
+      // revision is not taken as this walk's.
+      expect((await call("GET", usage, reader)).body).toMatchObject({
+        whole: false,
+        variables: { "t-accent": { documents: 0 } },
+      });
+
+      await tick();
+      expect((await call("GET", usage, reader)).body).toMatchObject({
+        whole: true,
+        variables: { "t-accent": { documents: 1, complete: true } },
+      });
+    });
+
     it("refuses a page that adds a variable the site does not define, and keeps one it already held", async () => {
       const { t } = await boot();
       const added = t.nextly.create({
@@ -994,6 +1636,118 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       expect(kept.item).toMatchObject({ title: "Old, renamed" });
+    });
+
+    /** A type size the site added, with the line height it pairs with. */
+    const display = [
+      {
+        id: "t-display",
+        name: "font-size.display",
+        label: "Display",
+        kind: "dimension",
+        values: { light: "3rem" },
+      },
+      {
+        id: "t-display-line",
+        name: "line-height.display",
+        kind: "number",
+        values: { light: "1.05" },
+      },
+    ];
+    /** Heading 1 pointed at that type size. */
+    const headingOnDisplay = {
+      h1: {
+        fontSize: { $token: "t-display" },
+        lineHeight: { $token: "t-display-line" },
+      },
+    };
+
+    it("refuses a Site text change to a role that may read Design but not change it, and stores it for one that may", async () => {
+      const { t } = await boot();
+      const reader = await holding(t, "read-site-style");
+      const designer = await holding(t, ...DESIGN);
+      const body = {
+        tokens: {
+          tokens: [accent, styled, spare],
+          siteText: { h2: { fontSize: "40px", lineHeight: 1.1 } },
+        },
+        _overwrite: true,
+      };
+      const before = await storedSection(t);
+      const refused = await call("PATCH", SINGLE, reader, body);
+      expect(refused.status).toBe(403);
+      expect(await storedSection(t)).toBe(before);
+      // CONTROL: the same save by a Design manager is stored.
+      const accepted = await call("PATCH", SINGLE, designer, body);
+      expect(accepted.status).toBe(200);
+      expect(JSON.parse(await storedSection(t))).toMatchObject({
+        siteText: { h2: { fontSize: "40px", lineHeight: 1.1 } },
+      });
+    });
+
+    it("refuses a Site text row it cannot store, naming the row", async () => {
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const refused = await call("PATCH", SINGLE, designer, {
+        tokens: {
+          tokens: [accent, styled, spare],
+          siteText: { h1: { fontSize: "huge" } },
+        },
+        _overwrite: true,
+      });
+      expect(refused.status).toBe(400);
+      expect(JSON.stringify(refused.body)).toContain("Heading 1");
+    });
+
+    it("refuses removing a type size a Site text row uses, on the remove route and on a whole-section save, naming the row", async () => {
+      const { t, tick } = await boot();
+      await tick();
+      const designer = await holding(t, ...DESIGN);
+      const withRow = {
+        tokens: {
+          tokens: [accent, styled, spare, ...display],
+          siteText: headingOnDisplay,
+        },
+        _overwrite: true,
+      };
+      expect((await call("PATCH", SINGLE, designer, withRow)).status).toBe(200);
+      const before = await storedSection(t);
+
+      const removed = await call("POST", route("remove"), designer, {
+        ids: ["t-display", "t-display-line"],
+      });
+      expect(removed.status).toBe(409);
+      expect(JSON.stringify(removed.body)).toContain(
+        "Display is used by Site text: Heading 1."
+      );
+      expect(await storedSection(t)).toBe(before);
+
+      const dropped = await call("PATCH", SINGLE, designer, {
+        tokens: { tokens: [accent, styled, spare], siteText: headingOnDisplay },
+        _overwrite: true,
+      });
+      expect(dropped.status).toBe(400);
+      expect(JSON.stringify(dropped.body)).toContain(
+        "Display is used by Site text: Heading 1."
+      );
+      expect(await storedSection(t)).toBe(before);
+
+      // CONTROL: once the row points elsewhere, the same removal goes.
+      expect(
+        (
+          await call("PATCH", SINGLE, designer, {
+            tokens: {
+              tokens: [accent, styled, spare, ...display],
+              siteText: { h1: { fontSize: "40px" } },
+            },
+            _overwrite: true,
+          })
+        ).status
+      ).toBe(200);
+      const gone = await call("POST", route("remove"), designer, {
+        ids: ["t-display", "t-display-line"],
+      });
+      expect(gone.status).toBe(200);
     });
   }
 );

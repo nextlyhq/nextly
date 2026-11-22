@@ -780,6 +780,12 @@ export async function authorizeCallerForAny(
   return authResult;
 }
 
+/**
+ * The operation the published version routes name to the route gate: a read
+ * of one document's history, in the language its request names or in any.
+ */
+export const READ_DOCUMENT_HISTORY = "readDocumentHistory";
+
 /** How a REST operation's languages are worked out from its request. */
 type OperationLanguage =
   | "read"
@@ -788,7 +794,8 @@ type OperationLanguage =
   | "default-write"
   | "query-write"
   | "duplicate"
-  | "filtered-history";
+  | "filtered-history"
+  | "document-history";
 
 /**
  * The REST operations whose languages the request names, and how. Every
@@ -819,6 +826,13 @@ type OperationLanguage =
  *   source shows there, so it is told the default and its fallbacks.
  * - `filtered-history`: a history list, which `?locale=` filters to one
  *   language's versions; unfiltered, it lists every language's.
+ * - `document-history`: a read of one document's history through the
+ *   published version routes, judged in the language `?locale=` names, as a
+ *   filtered list is. Naming none, it is admitted where the rule admits any
+ *   one language, each asked alone ({@link admittingLanguages}): the
+ *   document gate behind it asks the rule in each language the history holds
+ *   and returns those alone, and told every language at once, a rule
+ *   admitting one language would refuse the history it may read.
  */
 const OPERATION_LANGUAGES: ReadonlyMap<string, OperationLanguage> = new Map([
   ["listEntries", "read"],
@@ -842,6 +856,7 @@ const OPERATION_LANGUAGES: ReadonlyMap<string, OperationLanguage> = new Map([
   ["duplicateEntry", "duplicate"],
   ["listEntryVersions", "filtered-history"],
   ["listSingleVersions", "filtered-history"],
+  [READ_DOCUMENT_HISTORY, "document-history"],
 ]);
 
 /** What a request names about its languages, as it is dispatched. */
@@ -872,11 +887,41 @@ const LANGUAGES_OF: Record<
   "query-write": () => registeredQueryWriteLanguages(),
   duplicate: () => registeredReadLanguagesFor(undefined),
   // A history list filters by language and falls back to none.
-  "filtered-history": asked =>
-    asked.locale === undefined
-      ? everyLanguage()
-      : registeredReadLanguagesFor(asked.locale, false),
+  "filtered-history": historyLanguage,
+  // Told as one language where its request names one; naming none, it is
+  // asked in each language alone (`admittingLanguages`).
+  "document-history": historyLanguage,
 };
+
+/** A history read's languages: the one it names, without fallbacks, or every one. */
+function historyLanguage(asked: RequestedLanguage): RuleLanguage {
+  return asked.locale === undefined
+    ? everyLanguage()
+    : registeredReadLanguagesFor(asked.locale, false);
+}
+
+/**
+ * The languages a route is admitted in, any one of which admits it: the one
+ * {@link requestLanguage} works out, or, for a document's history read naming
+ * no language, each configured language alone, as a read in it is told.
+ */
+function admittingLanguages(
+  operation: RouteOperation | undefined
+): readonly [RuleLanguage, ...RuleLanguage[]] {
+  const asked = requestLanguage(operation);
+  if (
+    operation === undefined ||
+    OPERATION_LANGUAGES.get(operation.method) !== "document-history" ||
+    requestedLanguage(operation).locale !== undefined
+  ) {
+    return [asked];
+  }
+  const [first, ...others] = asked.locales.map(locale =>
+    registeredReadLanguagesFor(locale, false)
+  );
+  // A site without languages asks once, as every other read is asked.
+  return first === undefined ? [asked] : [first, ...others];
+}
 
 /**
  * The reads that consume a translation overview or a filter, each read as its
@@ -1055,17 +1100,28 @@ export async function requireCollectionAccess(
   // and worked out earlier a rule would be told none. Inside it, the same
   // question `requirePermission` asks, about the collection or Single the
   // URL names.
-  return withRuleLanguage(requestLanguage(operation), () =>
-    authorizeCaller(
-      authResult,
-      action,
-      collectionSlug,
-      // A route naming one entry is refused about that entry. Named by the
-      // route, never by a parameter: a query can carry an `entryId` too.
-      operation?.namesOne ? "one" : "all",
-      appliesFilterFor(action, operation)
-    )
-  );
+  const ask = (language: RuleLanguage) =>
+    withRuleLanguage(language, () =>
+      authorizeCaller(
+        authResult,
+        action,
+        collectionSlug,
+        // A route naming one entry is refused about that entry. Named by the
+        // route, never by a parameter: a query can carry an `entryId` too.
+        operation?.namesOne ? "one" : "all",
+        appliesFilterFor(action, operation)
+      )
+    );
+  // Admitted in the first language that admits it; refused as the first
+  // language refuses, where none does.
+  const [first, ...others] = admittingLanguages(operation);
+  const answer = await ask(first);
+  if (!isErrorResponse(answer)) return answer;
+  for (const language of others) {
+    const admitted = await ask(language);
+    if (!isErrorResponse(admitted)) return admitted;
+  }
+  return answer;
 }
 
 /**

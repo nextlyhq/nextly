@@ -277,13 +277,30 @@ export interface PluginMetadata {
       path: string;
       component: string;
       label?: string;
+      /**
+       * The words of the way into the view a list row's menu and the
+       * document bar offer, as in "Open in builder". Present when declared.
+       */
+      openLabel?: string;
+      /**
+       * The component "+ New" opens over the list of a collection whose
+       * entries open in this view. Present when declared.
+       */
+      createDialog?: string;
     } & (
       | { slug: string }
       /**
        * Offered on every collection and Single with a TOP-LEVEL field of this
        * type, via `contributes.admin.documentViews`; the document decides.
        */
-      | { fieldType: string }
+      | {
+          fieldType: string;
+          /**
+           * Present when the view asks to open first on a collection whose
+           * main field is of this type, unless the collection says otherwise.
+           */
+          opensFirst?: "mainField";
+        }
     )
   >;
   /**

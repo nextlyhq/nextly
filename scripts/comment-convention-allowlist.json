@@ -186,10 +186,6 @@
       "efb4bab56ba352c7"
     ]
   },
-  "packages/nextly/src/cli/commands/index.ts": {
-    "count": 1,
-    "digests": ["56c5af3c8ee88673"]
-  },
   "packages/nextly/src/cli/commands/migrate-check.test.ts": {
     "count": 1,
     "digests": ["a532c6cee9e6e280"]
@@ -772,10 +768,6 @@
     "count": 1,
     "digests": ["8023c6b29843db9b"]
   },
-  "packages/nextly/src/domains/schema/ui-schema/cross-file.ts": {
-    "count": 1,
-    "digests": ["068e4df8d13f3ab0"]
-  },
   "packages/nextly/src/domains/schema/ui-schema/loader.test.ts": {
     "count": 1,
     "digests": ["e0a3a3d84b80a1c9"]
@@ -787,10 +779,6 @@
   "packages/nextly/src/domains/schema/ui-schema/merge.test.ts": {
     "count": 1,
     "digests": ["ea63757531f0736d"]
-  },
-  "packages/nextly/src/domains/schema/ui-schema/merge.ts": {
-    "count": 1,
-    "digests": ["75f6db39532857ef"]
   },
   "packages/nextly/src/domains/schema/ui-schema/mutate.test.ts": {
     "count": 1,

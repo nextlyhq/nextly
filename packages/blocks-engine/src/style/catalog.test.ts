@@ -206,6 +206,24 @@ describe("supports map onto catalog groups", () => {
     ).toEqual(["linkColor", "linkColorHover"]);
   });
 
+  it("opts a block into the outline alone through its own border flag", () => {
+    // A focus ring without border lines or rounding, and border lines that
+    // do not bring an outline with them.
+    expect(
+      stylePropertiesForSupports({ border: { outline: true } }).map(
+        entry => entry.property
+      )
+    ).toEqual(["outline"]);
+    expect(
+      stylePropertiesForSupports({ border: { line: true } }).map(
+        entry => entry.property
+      )
+    ).toEqual(["border"]);
+    expect(
+      stylePropertiesForSupports({ border: true }).map(entry => entry.property)
+    ).toEqual(["border", "borderRadius", "outline"]);
+  });
+
   it("leaves unflagged properties reachable only through the whole group", () => {
     // boxShadow declares no flag, so an object form cannot name it.
     expect(
@@ -288,6 +306,28 @@ describe("the reference doc and the catalog agree", () => {
         `token kinds of "${property}"`
       ).toEqual([...tokenKindsForProperty(property as string)].sort());
     }
+  });
+
+  it("documents where each property has an effect", () => {
+    // The column a reader trusts to say whether a setting does anything: a
+    // row left at `always` after the catalog narrowed it would mislead.
+    let rows = 0;
+    for (const line of doc.split("\n")) {
+      const cells = /^\|\s*`([a-zA-Z]+)`\s*\|/.test(line)
+        ? line.split("|").map(cell => cell.trim())
+        : undefined;
+      if (cells === undefined) continue;
+      const property = (cells[1] ?? "").replaceAll("`", "");
+      const entry = getStyleProperty(property);
+      const fields = Object.entries(entry?.fieldAppliesWhen ?? {}).map(
+        ([field, answer]) => `\`${field}\`: ${answer.join(", ")}`
+      );
+      expect(cells[6], `applies-when of "${property}"`).toBe(
+        [(entry?.appliesWhen ?? ["always"]).join(", "), ...fields].join("; ")
+      );
+      rows += 1;
+    }
+    expect(rows).toBe(STYLE_CATALOG.length);
   });
 });
 

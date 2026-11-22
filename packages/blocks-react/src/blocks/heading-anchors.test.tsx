@@ -1,6 +1,7 @@
 /**
- * The headings a passage draws and the anchors they are drawn with: the ids
- * `core/rich-text` puts on its headings and `core/table-of-contents` links to.
+ * The headings a passage draws and the slug rules their anchors are made by.
+ * On a page the anchors come from the page outline (`../outline.test.tsx`
+ * holds them unique across the whole page); here one passage is read alone.
  *
  * Read through `passageHeadings`, the walk `RichText` draws a passage with, so
  * these cases hold the outline to the render rather than to a second reading of
@@ -18,7 +19,7 @@ import {
   VIEWS_DRAWING_CHILDREN,
 } from "../rich-text";
 
-import { anchorAllocator, anchorIds, headingRank } from "./heading-anchors";
+import { anchorAllocator, headingRank, rankOfTag } from "./heading-anchors";
 
 const words = (text: string, format = 0): RichTextNode => ({
   type: "text",
@@ -50,9 +51,14 @@ const passage = (...children: RichTextNode[]): RichTextValue => ({
 
 const ids = (value: unknown) => passageHeadings(value).map(anchor => anchor.id);
 
-/** The passage as a page draws it, with its headings anchored. */
+/** The passage drawn with the anchors it would have alone on a page. */
 const drawn = (value: RichTextValue) =>
-  renderToStaticMarkup(<RichText value={value} anchorHeadings={true} />);
+  renderToStaticMarkup(
+    <RichText
+      value={value}
+      anchors={passageHeadings(value).map(anchor => anchor.id)}
+    />
+  );
 
 /** Every id the drawn passage carries. */
 const drawnIds = (html: string) =>
@@ -259,12 +265,36 @@ describe("the headings a passage draws", () => {
     expect(ids(value)).toEqual(["still-here"]);
   });
 
-  it("are keyed by the node drawn, so a renderer finds the id of each heading", () => {
-    const first = heading("h2", words("Alpha"));
-    const second = heading("h2", words("Alpha"));
-    const map = anchorIds(passageHeadings(passage(first, second)));
-    expect(map.get(first)).toBe("alpha");
-    expect(map.get(second)).toBe("alpha-2");
+  it("are drawn with the anchors handed, in the order the passage draws them", () => {
+    // Two headings with the same words: only their place tells the anchors
+    // apart, so an anchor matched by words would draw `a` twice.
+    const value = passage(
+      heading("h2", words("Alpha")),
+      heading("h3", words("Alpha")),
+      heading("h2", words("Beta"))
+    );
+    expect(
+      drawnIds(
+        renderToStaticMarkup(
+          <RichText value={value} anchors={["one", "two", "three"]} />
+        )
+      )
+    ).toEqual(["one", "two", "three"]);
+  });
+
+  it("draw a heading past the anchors handed, and every heading with none, without an id", () => {
+    const value = passage(
+      heading("h2", words("Alpha")),
+      heading("h2", words("Beta"))
+    );
+    expect(
+      drawnIds(
+        renderToStaticMarkup(<RichText value={value} anchors={["one"]} />)
+      )
+    ).toEqual(["one"]);
+    expect(drawnIds(renderToStaticMarkup(<RichText value={value} />))).toEqual(
+      []
+    );
   });
 });
 
@@ -289,5 +319,11 @@ describe("a heading's rank", () => {
     expect(headingRank(heading("h6"))).toBe(6);
     expect(headingRank(heading("h7"))).toBe(2);
     expect(headingRank({ type: "heading" })).toBe(2);
+  });
+
+  it("is read the same from a Heading block's level", () => {
+    expect(["h1", "h4", "h6", "h7", "", undefined, 3].map(rankOfTag)).toEqual([
+      1, 4, 6, 2, 2, 2, 2,
+    ]);
   });
 });

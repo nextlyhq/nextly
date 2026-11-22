@@ -225,4 +225,11 @@ describe("newestInLocale", () => {
     expect(newestInLocale(history, 4)).toBeNull();
     expect(newestInLocale(history, 9)).toBeNull();
   });
+
+  it("names the newest in a language its own read gives, for a version not loaded", () => {
+    // Version 1 is linked to from outside the loaded pages; its read says it
+    // holds English, and the newest English version is loaded.
+    expect(newestInLocale(history, 1, "en")).toBe(4);
+    expect(newestInLocale(history, 1, "fr")).toBeNull();
+  });
 });

@@ -37,7 +37,12 @@ import { openEditorWith, selection, structure } from "./editor-driver";
 // The homepage document and the site's breakpoints are both written here.
 test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 
 // The editor reads `mod` as Control in the Desktop Chrome device this suite
 // runs as, whatever the host; see `editor-acceptance.spec.ts`.
@@ -422,7 +427,10 @@ test.describe("the canvas keeps the site's colours whatever the admin's theme", 
         expect(stored.ok()).toBe(true);
         await page.setViewportSize({ width: 1440, height: 900 });
         await gotoAdmin(page, "/singles/homepage", theme);
-        await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+        await page
+          .locator(PAGE_BUILDER_CARD)
+          .getByRole("link", { name: OPEN_BUILDER_ACTION })
+          .click();
         const lead = canvasBlock(page, "lead");
         await expect(lead).toBeVisible({ timeout: 30_000 });
         // The admin really is in the theme asked for: its own text colour.
@@ -621,8 +629,8 @@ async function box(locator: Locator): Promise<Box> {
 
 /**
  * How far outside a block its selection ring is drawn, in screen pixels at any
- * zoom: the ring and its halo, at the page's edge too, where the canvas's
- * chrome draws past the frame for it.
+ * zoom: the ring and its halo. Where the block meets the page's edge, the ring
+ * keeps to the page, since the canvas region cuts off what is past it.
  */
 const RING_OUTSIDE = 4;
 
@@ -637,13 +645,22 @@ function ringGaps(mark: Box, block: Box): Record<string, number> {
 }
 
 /**
- * Around the block on every edge, by the ring's distance: a ring drawn on the
- * block's own edge, or held back at the page's, would leave a gap of none.
+ * Around the block on every edge by the ring's distance, or by the room left
+ * before the page's edge where that is less: a ring drawn on the block's own
+ * edge with room outside it would leave a gap of none, and one drawn past the
+ * page would be cut off by the region.
  */
-function expectRinged(mark: Box, block: Box, what: string): void {
+function expectRinged(mark: Box, block: Box, pageBox: Box, what: string): void {
+  const room: Record<string, number> = {
+    left: block.x - pageBox.x,
+    top: block.y - pageBox.y,
+    right: pageBox.x + pageBox.width - (block.x + block.width),
+    bottom: pageBox.y + pageBox.height - (block.y + block.height),
+  };
   for (const [edge, gap] of Object.entries(ringGaps(mark, block))) {
-    expect(gap, `${what}: ${edge}`).toBeGreaterThanOrEqual(RING_OUTSIDE - 1);
-    expect(gap, `${what}: ${edge}`).toBeLessThanOrEqual(RING_OUTSIDE + 1);
+    const expected = Math.max(0, Math.min(RING_OUTSIDE, room[edge] ?? 0));
+    expect(gap, `${what}: ${edge}`).toBeGreaterThanOrEqual(expected - 1);
+    expect(gap, `${what}: ${edge}`).toBeLessThanOrEqual(expected + 1);
   }
 }
 
@@ -658,17 +675,18 @@ test.describe("the frame in the canvas region", () => {
     return box.y - region.y;
   }
 
-  test("sits just under the top bar at Fit and at 50%, rather than centred", async ({
+  test("sits right under the top bar at Fit and at 50%, rather than centred", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openEditorWith(page, [text("gap", "A short page")], "gap");
     // At Fit the painted page is shorter than the region, and still starts
-    // at the region's own gutter rather than half way down.
-    expect(Math.abs((await topGap(page)) - 16)).toBeLessThanOrEqual(1);
+    // at the region's top edge, with no gutter, rather than half way down.
+    await expect.poll(() => topGap(page)).toBeLessThanOrEqual(1);
+    expect(await topGap(page)).toBeGreaterThanOrEqual(-1);
     await chooseZoom(page, "50%");
-    await expect.poll(() => topGap(page)).toBeGreaterThan(0);
-    expect(Math.abs((await topGap(page)) - 16)).toBeLessThanOrEqual(1);
+    await expect.poll(() => topGap(page)).toBeLessThanOrEqual(1);
+    expect(await topGap(page)).toBeGreaterThanOrEqual(-1);
   });
 
   test("scrolls from the keyboard when the zoom paints the frame past the region", async ({
@@ -810,7 +828,13 @@ test.describe("chrome drawn over the frame stays on the block", () => {
           return Math.max(...Object.values(gaps).map(gap => Math.abs(gap)));
         })
         .toBeLessThanOrEqual(RING_OUTSIDE + 1);
-      expectRinged(await box(ring), await box(target), what);
+      expectRinged(
+        await box(ring),
+        await box(target),
+        // The page's own box, its scrollbar outside it, which the ring keeps to.
+        await box(canvasFrame(page).locator(".nx-canvas").first()),
+        what
+      );
       // The bar keeps its own size at any zoom, and sits by the block.
       const bar = await box(toolbar);
       expect(bar.height, `${what}: toolbar height`).toBeGreaterThan(24);

@@ -35,6 +35,7 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
+import { typeChangeJudge } from "./classifier/judge-type-change";
 import { relationSwitches } from "./companion-shape-switches";
 import {
   buildDesiredSnapshot,
@@ -44,6 +45,7 @@ import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
 import { withKeptScopeFieldsIn } from "./kept-scope-fields";
+import { withoutUniquesAlreadyEnforced } from "./live-uniques";
 import { operationsToJudge, planCompanionMoves } from "./moved-to-companion";
 import {
   excludeLockedTableOps,
@@ -57,7 +59,7 @@ import type {
 } from "./pushschema-pipeline-interfaces";
 import { withRecordedShapes } from "./recorded-shapes";
 import { RegexRenameDetector } from "./rename-detector";
-import type { ClassifierEvent } from "./resolution/types";
+import type { ClassifierEvent, SafeConversion } from "./resolution/types";
 import type { DesiredSchema } from "./types";
 
 // Result of a preview-mode pipeline run. Mirrors the readable subset of
@@ -84,6 +86,9 @@ export interface PipelinePreviewResult {
   // queries against it without re-introspecting (the legacy translator
   // uses this to count rows on dropped fields).
   liveSnapshot: NextlySchemaSnapshot;
+
+  /** The type changes the conversion rule judged safe, where the preview judged them. */
+  safeConversions?: SafeConversion[];
 }
 
 // Optional deps for testing. Production callers omit and get the real
@@ -106,6 +111,12 @@ export interface PreviewDesiredSchemaArgs {
   dialect: SupportedDialect;
   /** As the apply's own (`PushSchemaPipeline.apply`), so the preview asks what the apply will. */
   defaultLocale?: string;
+  /**
+   * Given by a code-first preview (`db:sync --dry-run`): each type change is judged by the repair
+   * command's rule, as the code-first apply judges it, and a blocked one refused ending with this
+   * step. Absent (the Schema Builder's preview), a type change is listed as a warning, as before.
+   */
+  nextStep?: string;
 }
 
 /**
@@ -179,9 +190,11 @@ export async function previewDesiredSchema(
   // does not show is previewed as the apply plans it (`withRecordedShapes`).
   // A translated relation's switch on its companion joins them, as the apply plans it
   // (`relationSwitches`), so what is confirmed here is what runs.
-  const diffed = diffSnapshots(
-    withRecordedShapes(liveSnapshot, desired),
-    desiredSnapshot
+  // Less the unique indexes a column already has, which SQLite's snapshot cannot show
+  // (`withoutUniquesAlreadyEnforced`), so the preview plans what the apply plans.
+  const diffed = await withoutUniquesAlreadyEnforced(
+    diffSnapshots(withRecordedShapes(liveSnapshot, desired), desiredSnapshot),
+    { db, dialect, live: liveSnapshot }
   );
   const switches = await relationSwitches({
     db,
@@ -228,6 +241,18 @@ export async function previewDesiredSchema(
     countLongerThan: (table, column, length) =>
       countLongerThanHelper(db, dialect, table, column, length),
     dialect,
+    ...(args.nextStep !== undefined
+      ? {
+          judgeConversion: typeChangeJudge({
+            db,
+            dialect,
+            live: liveSnapshot,
+            expected: desiredSnapshot,
+            schema: desired,
+          }),
+          nextStep: args.nextStep,
+        }
+      : {}),
   });
 
   return {
@@ -236,5 +261,8 @@ export async function previewDesiredSchema(
     candidates,
     classification: classificationResult.level,
     liveSnapshot,
+    ...(classificationResult.safeConversions !== undefined
+      ? { safeConversions: classificationResult.safeConversions }
+      : {}),
   };
 }

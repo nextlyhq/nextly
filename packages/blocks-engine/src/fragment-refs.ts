@@ -138,14 +138,30 @@ export function remapFragmentBindings(
   bindings: unknown,
   domIds: Pick<ReadonlyMap<string, string>, "get" | "size">
 ): unknown {
-  if (domIds.size === 0 || !isPlainRecord(bindings)) return bindings;
+  if (domIds.size === 0) return bindings;
+  return remapEachBinding(bindings, (key, binding) =>
+    FRAGMENT_REFERENCE_SET.has(key)
+      ? withRemappedFallback(binding, domIds)
+      : binding
+  );
+}
+
+/**
+ * A node's bindings with each one rewritten by `remap`, keyed by the prop it
+ * fills. The input itself when no binding changed, so an ordinary node is not
+ * reallocated; anything that is not a binding record is passed through. The
+ * one walk every copier's binding rewrite shares.
+ */
+export function remapEachBinding(
+  bindings: unknown,
+  remap: (prop: string, binding: unknown) => unknown
+): unknown {
+  if (!isPlainRecord(bindings)) return bindings;
   let changed = false;
   const next: Record<string, unknown> = {};
   for (const key of ownKeys(bindings)) {
     const binding = ownEntry(bindings, key);
-    const mapped = FRAGMENT_REFERENCE_SET.has(key)
-      ? withRemappedFallback(binding, domIds)
-      : binding;
+    const mapped = remap(key, binding);
     if (mapped !== binding) changed = true;
     defineEntry(next, key, mapped);
   }

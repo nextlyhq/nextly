@@ -30,14 +30,15 @@ import { QUEUED_EMAIL_JOB } from "./queued-email-job";
 export const LATE_QUEUED_EMAIL_MS = 15 * 60_000;
 
 /** The most overdue emails counted; past it the warning says "or more". */
-const COUNTED = 100;
+export const LATE_QUEUED_EMAIL_COUNTED = 100;
 
 /** What the warning is written to. */
 export type LateQueuedEmailLogger = Logger;
 
 /**
  * How many queued emails are more than `LATE_QUEUED_EMAIL_MS` past due, up
- * to `COUNTED`.
+ * to one past `LATE_QUEUED_EMAIL_COUNTED`: a count above the ceiling means
+ * there are more than it, and one at it is exact.
  */
 export async function lateQueuedEmails(
   adapter: DrizzleAdapter,
@@ -47,7 +48,7 @@ export async function lateQueuedEmails(
   const due = await new JobsRepository(adapter).findDue({
     now: since,
     createdBy: since,
-    limit: COUNTED,
+    limit: LATE_QUEUED_EMAIL_COUNTED + 1,
     slug: QUEUED_EMAIL_JOB,
   });
   return due.length;
@@ -71,7 +72,10 @@ export async function warnAboutLateQueuedEmail(
     return;
   }
   if (late === 0) return;
-  const count = late >= COUNTED ? `${COUNTED} or more` : String(late);
+  const count =
+    late > LATE_QUEUED_EMAIL_COUNTED
+      ? `${LATE_QUEUED_EMAIL_COUNTED} or more`
+      : String(late);
   warnQuietly(
     logger,
     `${count} queued email${late === 1 ? " is" : "s are"} more than 15 minutes past due, so the jobs trigger isn't running. Call /api/jobs/run every few minutes (a cron job or a scheduler) so queued email is retried.`,

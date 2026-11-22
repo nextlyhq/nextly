@@ -45,7 +45,9 @@ describe("the editor's outline and its side column", () => {
   it("draws the column by the editor frame's width, not the window's", () => {
     const { container } = render(<EditorOutline />);
     const column = sideColumn(container);
-    expect(column?.className).toContain(`@[${PANEL_FLOATS_BELOW}px]/editor:flex`);
+    expect(column?.className).toContain(
+      `@[${PANEL_FLOATS_BELOW}px]/editor:flex`
+    );
     expect(column?.className.split(/\s+/)).not.toContain("lg:flex");
     expect(container.querySelector(".\\@container\\/editor")).not.toBeNull();
   });

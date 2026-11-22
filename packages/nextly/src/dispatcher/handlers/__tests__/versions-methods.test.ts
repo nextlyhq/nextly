@@ -20,7 +20,10 @@ vi.mock("../../../api/versions-access", () => ({
   // one it names, or the versions in none when it names none.
   assertHistoryLocalesReadable: () => Promise.resolve(),
   historyListLanguages: (...a: unknown[]) =>
-    Promise.resolve(a[5] ? { locale: a[5] } : { locales: [] }),
+    a[0] ? { locale: a[0] } : { locales: [] },
+  // Every language the read asks about is readable.
+  readableHistoryLocales: (...a: unknown[]) =>
+    Promise.resolve(new Set(a[6] as string[])),
   redactSnapshotForUser: (...a: unknown[]) => redactSpy(...a),
   resolveSingleDocumentId: (...a: unknown[]) => resolveSingleIdSpy(...a),
   // A factory mock replaces the whole module, so anything the handler imports
@@ -96,7 +99,10 @@ describe("respondVersionPage", () => {
       "posts",
       "e1",
       expect.objectContaining({ id: "user-1", roles: ["editor"] }),
-      { actorType: "user", permissions: [] }
+      { actorType: "user", permissions: [] },
+      {},
+      // A listing naming no language asks about every one its history holds.
+      []
     );
     expect(listSpy).toHaveBeenCalledWith(
       expect.anything(),
@@ -189,7 +195,9 @@ describe("listVersionsForDocument", () => {
       "posts",
       "e1",
       user,
-      undefined
+      undefined,
+      {},
+      []
     );
   });
 
@@ -216,7 +224,9 @@ describe("listVersionsForDocument", () => {
       "posts",
       "e1",
       user,
-      authenticatedScope
+      authenticatedScope,
+      {},
+      []
     );
   });
 
@@ -322,8 +332,9 @@ describe("getVersionForDocument", () => {
 
     // A stored snapshot must never reveal a field the live read would hide,
     // judged for a key on the key's own grants.
+    // The version itself, so its snapshot is judged in its own language.
     expect(redactSpy).toHaveBeenCalledWith(
-      { title: "x" },
+      expect.objectContaining({ snapshot: { title: "x" } }),
       "collection",
       "posts",
       user,
@@ -350,7 +361,10 @@ describe("getAutosaveForDocument", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("redacts with the key scope the request carries", async () => {
-    getAutosaveSpy.mockResolvedValue({ snapshot: { title: "x" } });
+    getAutosaveSpy.mockResolvedValue({
+      snapshot: { title: "x" },
+      locale: null,
+    });
 
     // The key's scope is not an argument: the route handler pins it for the
     // request, and the read takes it from there.
@@ -368,7 +382,7 @@ describe("getAutosaveForDocument", () => {
     );
 
     expect(redactSpy).toHaveBeenCalledWith(
-      { title: "x" },
+      expect.objectContaining({ snapshot: { title: "x" } }),
       "collection",
       "posts",
       user,

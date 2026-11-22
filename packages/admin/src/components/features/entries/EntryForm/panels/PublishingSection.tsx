@@ -98,10 +98,12 @@ function PublishingBody({
     return (
       <div aria-busy="true" className={NOT_SCHEDULED_LAYOUT}>
         <span className="sr-only">Checking releases</span>
-        <p className="flex items-center text-sm">
+        {/* A div, not a paragraph: the bar is a block element, and a
+            paragraph around it is invalid HTML that React reports. */}
+        <div className="flex items-center text-sm">
           {"\u200b"}
           <Skeleton className="h-4 w-40" />
-        </p>
+        </div>
         <ScheduleButton holdingPlace />
       </div>
     );

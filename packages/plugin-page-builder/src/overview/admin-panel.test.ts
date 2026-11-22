@@ -83,11 +83,12 @@ describe("the Page Builder's rail item", () => {
 });
 
 describe("the Page Builder's panel", () => {
-  it("declares Library, then Checks", () => {
+  it("declares Library, then Checks, then Design", () => {
     const panel = pageBuilder().contributes?.admin?.panel;
     expect(panel?.groups).toEqual([
       { id: "library", label: "Library" },
       { id: "checks", label: "Checks" },
+      { id: "design", label: "Design" },
     ]);
   });
 
@@ -100,10 +101,10 @@ describe("the Page Builder's panel", () => {
     const libraries = menu.filter(item => item.group === "library");
 
     expect(libraries.map(item => item.label)).toEqual([
-      "Patterns",
+      "Saved sections",
       "Components",
-      "Layouts",
-      "Templates",
+      "Header & footer",
+      "Collection templates",
     ]);
     expect(libraries.map(item => item.collection)).toEqual([
       PATTERNS_SLUG,
@@ -141,6 +142,37 @@ describe("the Page Builder's panel", () => {
     expect(bindings?.requiredPermission).toBe("update-pages");
     // Every item is in a group: none is listed above the headings.
     expect(menu.filter(item => item.group === undefined)).toEqual([]);
+  });
+
+  it("lists Fonts last, under Design, for those who may change the site's design", () => {
+    const menu = pageBuilder().contributes?.admin?.menu ?? [];
+    // Appended: every item before it keeps its name and its place.
+    expect(menu.map(item => item.label)).toEqual([
+      "Saved sections",
+      "Components",
+      "Header & footer",
+      "Collection templates",
+      "Bindings to fix",
+      "Fonts",
+    ]);
+    const fonts = menu.at(-1);
+    expect(fonts?.group).toBe("design");
+    expect(fonts?.to).toBe(`${PAGES_PREFIX}/fonts`);
+    // What changing Design asks, as every font route does.
+    expect(fonts?.requiredPermission).toBe("update-site-style");
+    expect(fonts?.count).toBeUndefined();
+    expect(fonts?.badge).toBeUndefined();
+  });
+
+  it("opens the Fonts page, registered under the permission its item asks", () => {
+    const plugin = pageBuilder();
+    const page = (plugin.contributes?.admin?.pages ?? []).find(
+      candidate => candidate.path === "/fonts"
+    );
+    expect(page?.component).toBe(
+      "@nextlyhq/plugin-page-builder/admin#FontsPage"
+    );
+    expect(page?.requiredPermission).toBe("update-site-style");
   });
 
   it("keeps Components on the plugin's own collection where a host keeps its store elsewhere", () => {

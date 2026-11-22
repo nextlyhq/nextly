@@ -13,10 +13,13 @@
  * @module pages-panel
  */
 
+import { GroupToggle } from "@nextlyhq/builder/shell";
 import {
   apiErrorMessage,
   navigateTo,
   readPluginRoute,
+  useCurrentUserId,
+  useDocumentField,
   useDocumentIdentity,
   useDocumentStatus,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -49,16 +52,25 @@ import {
   type PagesSearchResponse,
 } from "../../pages-search-contract";
 import {
-  createPage,
-  deletePage,
-  duplicatePage,
-  renamePage,
-} from "../pages-client";
+  HEADER_FOOTER_IN_CODE_LINE,
+  useHeaderFooterInCode,
+} from "../header-footer-in-code";
+import { useNewPageDialog } from "../new-page/new-page-dialog";
+import { deletePage, duplicatePage, renamePage } from "../pages-client";
 
 import { builderAddress } from "./builder-address";
+import { CollectionTemplatesGroup } from "./collection-templates-group";
+import { SITE_HEADER_FOOTER_DOCS_HREF } from "./double-header-notice";
+import { pagesFoldsStoreFor } from "./editor-preference-stores";
+import { useGroupFolds } from "./group-folds";
+import { HeaderFooterGroup } from "./header-footer-group";
+import { RenameField } from "./rename-field";
 
 /** How long typing must pause before the list is searched. */
 const SEARCH_DEBOUNCE_MS = 150;
+
+/** The Pages group's key in the panel's fold memory. */
+const PAGES_GROUP = "pages";
 
 /** What each state chip says. A plainly published page shows none. */
 const STATE_WORDS: Readonly<Record<NonNullable<PageItem["state"]>, string>> = {
@@ -74,8 +86,15 @@ export interface PagesPanelMount {
   renderPagesPanel: (state: { unsavedWork: boolean }) => React.ReactNode;
   /** Sent to the shell, which opens Settings once per new count. */
   settingsRequest: { readonly count: number } | undefined;
+  /** Asks the shell to open Settings, as a row's "Settings" does. */
+  openSettings: () => void;
   /** The page being edited, or null before it has been saved. */
   currentPage: PageReference | null;
+  /**
+   * Asks the panel to show its Header & footer sets: the group unfolded and
+   * brought into view, as "Manage headers & footers" leads there.
+   */
+  revealSets: () => void;
 }
 
 /**
@@ -85,15 +104,25 @@ export interface PagesPanelMount {
  */
 export function usePagesPanel(
   /** Whether the document being edited is a page, not a component or pattern. */
-  editingPage: boolean
+  editingPage: boolean,
+  /** The header & footer set whose own screen this is, by id, if it is one. */
+  currentSetId?: string
 ): PagesPanelMount {
   const identity = useDocumentIdentity();
-  const currentPage: PageReference | null =
-    editingPage &&
-    identity?.kind === "collection" &&
-    identity.documentId !== undefined
-      ? { collection: identity.slug, id: identity.documentId }
-      : null;
+  const collection =
+    editingPage && identity?.kind === "collection" ? identity.slug : undefined;
+  const documentId =
+    collection === undefined ? undefined : identity?.documentId;
+  // One object while it names the same page: the page checks, the provided
+  // checks and the doubled-header notice are each read again when it changes,
+  // and a new one each render ran every page check on every click and key.
+  const currentPage = React.useMemo(
+    (): PageReference | null =>
+      collection !== undefined && documentId !== undefined
+        ? { collection, id: documentId }
+        : null,
+    [collection, documentId]
+  );
   const [settingsRequest, setSettingsRequest] = React.useState<
     { readonly count: number } | undefined
   >(() => (arrivedForSettings() ? { count: 1 } : undefined));
@@ -101,18 +130,57 @@ export function usePagesPanel(
     () => setSettingsRequest(earlier => ({ count: (earlier?.count ?? 0) + 1 })),
     []
   );
+  // Each request to show the sets, counted; the last one met is kept here,
+  // so a panel opened again later does not take an old request as new.
+  const [revealRequest, setRevealRequest] = React.useState(0);
+  const revealsMet = React.useRef(0);
+  const revealSets = React.useCallback(
+    () => setRevealRequest(count => count + 1),
+    []
+  );
   return {
     currentPage,
     settingsRequest,
+    openSettings,
+    revealSets,
     renderPagesPanel: ({ unsavedWork }) => (
       <PagesPanel
         current={currentPage}
         unsavedWork={unsavedWork}
         onOpenSettings={openSettings}
+        reveal={{ count: revealRequest, met: revealsMet }}
+        {...(currentSetId === undefined ? {} : { currentSetId })}
       />
     ),
   };
 }
+
+/**
+ * Meets a request to show the Header & footer sets once: the group unfolded
+ * (an author's own fold gives way to their asking for it) and scrolled into
+ * view, after the unfold has drawn it.
+ */
+function useRevealSets(
+  reveal: PagesPanelProps["reveal"],
+  folds: ReturnType<typeof useGroupFolds>,
+  sets: React.RefObject<HTMLDivElement | null>
+): void {
+  const count = reveal?.count ?? 0;
+  React.useEffect(() => {
+    if (reveal === undefined || count === 0 || reveal.met.current === count) {
+      return;
+    }
+    reveal.met.current = count;
+    if (folds.folded.has(SETS_GROUP)) folds.onFold(SETS_GROUP, false);
+    // After the unfold is drawn, so the whole group comes into view.
+    requestAnimationFrame(() =>
+      sets.current?.scrollIntoView({ block: "start" })
+    );
+  }, [count, reveal, folds, sets]);
+}
+
+/** The Header & footer group's key in the panel's fold memory. */
+const SETS_GROUP = "header-footer";
 
 /** Whether this page was opened from another page's "Settings". */
 function arrivedForSettings(): boolean {
@@ -127,12 +195,18 @@ interface PagesPanelProps {
   unsavedWork: boolean;
   /** Opens this page's Settings dialog. */
   onOpenSettings: () => void;
+  /** Requests to show the Header & footer sets, and the last one met. */
+  reveal?: { readonly count: number; readonly met: { current: number } };
+  /** The header & footer set whose own screen this is, by id, if any. */
+  currentSetId?: string;
 }
 
 function PagesPanel({
   current,
   unsavedWork,
   onOpenSettings,
+  reveal,
+  currentSetId,
 }: PagesPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const list = usePagesList(query);
@@ -148,51 +222,80 @@ function PagesPanel({
     onOpenSettings,
     report: setProblem,
   });
+  // The groups' folds, kept per author, as the Design panel's are.
+  const userId = useCurrentUserId();
+  const foldStore = React.useMemo(() => pagesFoldsStoreFor(userId), [userId]);
+  const folds = useGroupFolds(foldStore);
+  const pagesOpen = !folds.folded.has(PAGES_GROUP);
+  const setsRef = React.useRef<HTMLDivElement>(null);
+  useRevealSets(reveal, folds, setsRef);
+  // What the document open here is called: said by the New page dialog, and
+  // by Back on a set's own screen opened from here.
+  const onScreenTitle = useOnScreenTitle(list, current);
+  const newPage = useNewPageDialog({ unsavedWork, title: onScreenTitle });
 
   return (
     // In the builder's panel text; the surface is the panel region's own.
-    <div
-      className="text-[color:var(--nx-builder-text)] flex h-full flex-col gap-3 p-3"
-      aria-label="Pages"
-    >
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Pages</h2>
-        <NewPageButton
-          // The page being edited's own collection, else the first one the
-          // unfiltered list showed: never whatever a search happens to rank
-          // first, which would move where a new page goes as the author types.
-          collection={current?.collection ?? list.firstCollection}
-          onCreate={act.create}
-        />
-      </div>
-      <label className="relative block">
-        <span className="sr-only">Search pages</span>
-        <Search
-          aria-hidden="true"
-          className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-        />
-        <Input
-          value={query}
-          onChange={event => setQuery(event.target.value)}
-          placeholder="Search pages"
-          className="h-8 pl-7 text-sm"
-        />
-      </label>
-      {problem === null ? null : (
-        <p role="alert" className="text-sm text-destructive">
-          {problem}
-        </p>
-      )}
-      <div className="min-h-0 flex-1 overflow-auto">
-        <PageList
-          list={list}
-          query={query}
-          current={current}
-          unsavedWork={unsavedWork}
-          liveStatus={liveStatus}
-          actions={{ ...act, remove: setDeleting }}
-        />
-      </div>
+    // The panel scrolls as one, so every group stays reachable however long
+    // the one above it is.
+    <div className="text-[color:var(--nx-builder-text)] flex h-full flex-col gap-4 overflow-auto p-3">
+      <HeaderFooterInCodeLine />
+      <section aria-label="Pages" className="grid gap-3">
+        <div className="flex items-center justify-between">
+          <GroupToggle
+            heading="Pages"
+            count={list.items.length}
+            open={pagesOpen}
+            onToggle={() => folds.onFold(PAGES_GROUP, pagesOpen)}
+          />
+          <NewPageButton
+            // The page being edited's own collection, else the first one the
+            // unfiltered list showed: never whatever a search happens to rank
+            // first, which would move where a new page goes as the author types.
+            collection={current?.collection ?? list.firstCollection}
+            onOpen={newPage.open}
+          />
+        </div>
+        {pagesOpen ? (
+          <>
+            <label className="relative block">
+              <span className="sr-only">Search pages</span>
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                value={query}
+                onChange={event => setQuery(event.target.value)}
+                placeholder="Search pages"
+                className="h-8 pl-7 text-sm"
+              />
+            </label>
+            {problem === null ? null : (
+              <p role="alert" className="text-sm text-destructive">
+                {problem}
+              </p>
+            )}
+            <PageList
+              list={list}
+              query={query}
+              current={current}
+              unsavedWork={unsavedWork}
+              liveStatus={liveStatus}
+              actions={{ ...act, remove: setDeleting }}
+            />
+          </>
+        ) : null}
+      </section>
+      <HeaderFooterSets
+        setsRef={setsRef}
+        folds={folds}
+        currentPageId={current?.id ?? null}
+        here={onScreenTitle}
+        {...(currentSetId === undefined ? {} : { currentSetId })}
+      />
+      <CollectionTemplatesGroup folds={folds} />
+      {newPage.dialog}
       <DeletePageDialog
         page={deleting}
         onCancel={() => setDeleting(null)}
@@ -322,7 +425,6 @@ function useActions({
   onOpenSettings: () => void;
   report: (problem: string | null) => void;
 }): Omit<RowActions, "remove"> & {
-  create: (collection: string, title: string) => Promise<void>;
   remove: (page: PageItem) => Promise<void>;
 } {
   const attempt = async (what: string, work: () => Promise<void>) => {
@@ -348,10 +450,6 @@ function useActions({
       attempt(`duplicate "${page.title}"`, async () => {
         openPage(await duplicatePage(page));
       }),
-    create: (collection, title) =>
-      attempt("add the page", async () => {
-        openPage(await createPage({ collection, title }));
-      }),
     remove: page =>
       attempt(`delete "${page.title}"`, async () => {
         await deletePage(page);
@@ -359,6 +457,24 @@ function useActions({
       }),
   };
 }
+
+/**
+ * The page on screen's title, as its form holds it now: what the question
+ * about its unsaved work names it by. Its row's title where the form has no
+ * text title, and a plain "this page" where neither is known.
+ */
+function useOnScreenTitle(
+  list: PagesList,
+  current: PageReference | null
+): string {
+  const typed = useDocumentField(PAGE_TITLE_FIELD)?.value;
+  if (typeof typed === "string" && typed.trim() !== "") return typed.trim();
+  const listed = list.items.find(item => isCurrent(item, current))?.title;
+  return listed === undefined || listed === "" ? "this page" : listed;
+}
+
+/** The field a page's title is held in on its form. */
+const PAGE_TITLE_FIELD = "title";
 
 /** Whether this row is the page being edited. */
 function isCurrent(
@@ -743,59 +859,24 @@ function NotedItem({
   );
 }
 
-/** The title, edited where it stands: Enter keeps it, Escape leaves it. */
-function RenameField({
-  title,
-  onDone,
-}: {
-  title: string;
-  onDone: (title: string | null) => void;
-}): React.JSX.Element {
-  const [value, setValue] = React.useState(title);
-  const finish = (keep: boolean) => {
-    const next = value.trim();
-    onDone(keep && next !== "" ? next : null);
-  };
-  return (
-    <Input
-      aria-label="Page title"
-      autoFocus
-      value={value}
-      onChange={event => setValue(event.target.value)}
-      onBlur={() => finish(true)}
-      onKeyDown={event => {
-        if (event.key === "Enter") finish(true);
-        if (event.key === "Escape") finish(false);
-      }}
-      className="h-7 min-w-0 flex-1 text-sm"
-    />
-  );
-}
-
-/** Adds a page: a title, then the new draft opens in the editor. */
+/**
+ * "New page": opens the New page dialog, which asks for a title and makes
+ * the page only when its button is pressed.
+ */
 function NewPageButton({
   collection,
-  onCreate,
+  onOpen,
 }: {
   collection: string | undefined;
-  onCreate: (collection: string, title: string) => Promise<void>;
+  onOpen: (collection: string) => void;
 }): React.JSX.Element | null {
-  const [naming, setNaming] = React.useState(false);
   if (collection === undefined) return null;
-  return naming ? (
-    <RenameField
-      title=""
-      onDone={title => {
-        setNaming(false);
-        if (title !== null) void onCreate(collection, title);
-      }}
-    />
-  ) : (
+  return (
     <Button
       type="button"
       size="sm"
       variant="outline"
-      onClick={() => setNaming(true)}
+      onClick={() => onOpen(collection)}
     >
       <Plus aria-hidden="true" className="size-3.5" />
       New page
@@ -844,5 +925,48 @@ function DeletePageDialog({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+/**
+ * The Header & footer group, in its place for a reveal to scroll to. None on a
+ * site that draws its own in code: its sets would change nothing it shows.
+ * They are kept, not removed.
+ */
+function HeaderFooterSets({
+  setsRef,
+  ...group
+}: {
+  setsRef: React.RefObject<HTMLDivElement | null>;
+} & React.ComponentProps<typeof HeaderFooterGroup>): React.JSX.Element | null {
+  if (useHeaderFooterInCode()) return null;
+  return (
+    <div ref={setsRef}>
+      <HeaderFooterGroup {...group} />
+    </div>
+  );
+}
+
+/**
+ * The line at the top of the Pages panel on a site that draws its header and
+ * footer in code, saying why there is no Header & footer group, with the docs.
+ * Nothing on any other site.
+ */
+function HeaderFooterInCodeLine(): React.JSX.Element | null {
+  if (!useHeaderFooterInCode()) return null;
+  return (
+    <p className="nx-inspector__note" data-pages-note="header-footer-in-code">
+      {HEADER_FOOTER_IN_CODE_LINE}{" "}
+      <a
+        href={SITE_HEADER_FOOTER_DOCS_HREF}
+        target="_blank"
+        rel="noreferrer"
+        className="underline underline-offset-2"
+        // The visible word first, so a voice user can say what they see.
+        aria-label="Details about a site that draws its header and footer in code (opens in a new tab)"
+      >
+        Details
+      </a>
+    </p>
   );
 }

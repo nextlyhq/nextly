@@ -93,7 +93,9 @@ export function FieldRow({
   return (
     <div className="py-2.5 border-b border-border last:border-b-0">
       <div className="flex items-center gap-2 mb-1.5">
-        <span className="text-xs font-medium text-muted-foreground">
+        {/* A heading, so a screen reader can move from one changed field to
+            the next as from one section to the next. */}
+        <h3 className="text-xs font-medium text-muted-foreground">
           {place.map(container => (
             <span key={container}>
               {container}
@@ -102,7 +104,7 @@ export function FieldRow({
             </span>
           ))}
           <span className="text-foreground">{name}</span>
-        </span>
+        </h3>
         <StatusBadge status={status} />
       </div>
       <div className="text-sm text-foreground">{children}</div>

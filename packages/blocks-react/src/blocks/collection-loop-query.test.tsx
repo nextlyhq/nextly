@@ -878,8 +878,15 @@ describe("a list's empty state, as an author looks at it", () => {
 
   it("says why it draws its empty state: nothing matched, or the read failed", async () => {
     const { provider } = source({ posts: [] });
+    // Narrowed by a filter, so an empty read means nothing matched rather
+    // than an empty collection, which an author is shown sample items for.
     const none = await drawn(
-      page(list({ collection: "posts" })),
+      page(
+        list({
+          collection: "posts",
+          filters: [{ field: "title", op: "equals", value: "Missing" }],
+        })
+      ),
       context({ data: provider, diagnostics: true })
     );
     expect(

@@ -34,6 +34,8 @@ type Props = {
   onChange: (next: BuilderField) => void;
   /** Whether the field has been saved; a saved field's name no longer follows its label. */
   saved?: boolean;
+  /** Why the field's name cannot be saved, or `null`; shown beside the name. */
+  checkName?: (name: string) => string | null;
   /** The name a label gives a field. */
   deriveName?: (label: string) => string;
   /** Why the surface fixes the name, when it does. */
@@ -95,6 +97,7 @@ export function GeneralTab({
   readOnly = false,
   onChange,
   saved = false,
+  checkName,
   deriveName = toSnakeName,
   nameFixedReason,
   apiPath,
@@ -129,6 +132,7 @@ export function GeneralTab({
         field={field}
         readOnly={readOnly}
         saved={saved}
+        checkName={checkName}
         deriveName={deriveName}
         nameFixedReason={nameFixedReason}
         apiPath={apiPath}
@@ -183,11 +187,33 @@ export function GeneralTab({
   );
 }
 
+/** The ids an input is described by, the ones not shown left out. */
+function idList(ids: readonly (string | false)[]): string {
+  return ids.filter(Boolean).join(" ");
+}
+
+/** Why the name cannot be saved, under it, when it cannot. */
+function NameProblem({
+  id,
+  problem,
+}: {
+  id: string;
+  problem: string | null;
+}): JSX.Element | null {
+  if (problem === null) return null;
+  return (
+    <p id={id} role="alert" className="text-xs text-destructive">
+      {problem}
+    </p>
+  );
+}
+
 /** The label, the name it gives, and the path the API returns the field by. */
 function LabelAndName({
   field,
   readOnly,
   saved,
+  checkName,
   deriveName,
   nameFixedReason,
   apiPath,
@@ -196,6 +222,7 @@ function LabelAndName({
   field: BuilderField;
   readOnly: boolean;
   saved: boolean;
+  checkName?: (name: string) => string | null;
   deriveName: (label: string) => string;
   nameFixedReason?: string;
   apiPath?: string;
@@ -203,10 +230,22 @@ function LabelAndName({
 }): JSX.Element {
   const nameHelpId = useId();
   const pathId = useId();
+  const problemId = useId();
   // System fields (title, slug) keep their name whatever the surface says.
   const nameDisabled =
     readOnly || field.isSystem === true || nameFixedReason !== undefined;
-  const describedBy = apiPath ? `${nameHelpId} ${pathId}` : nameHelpId;
+  // A read-only or built-in field's name is not judged here. Every other name is, typed, followed
+  // from the label, or fixed by the surface: a fixed name the save will refuse where it now sits
+  // (its container renamed, say) still says why, which the surface's check alone decides.
+  const problem =
+    readOnly || field.isSystem === true || !checkName
+      ? null
+      : checkName(field.name);
+  const describedBy = idList([
+    nameHelpId,
+    problem !== null && problemId,
+    Boolean(apiPath) && pathId,
+  ]);
 
   return (
     <>
@@ -229,23 +268,40 @@ function LabelAndName({
               })
             }
           />
+          {/* Optional: the record editor names a field with no label by its
+              name made readable, so a blank label is not a mistake. */}
           <p className="text-xs text-muted-foreground">
-            What content authors see in the record editor.
+            What content authors see in the record editor. Left blank, the name
+            is shown.
           </p>
         </div>
 
         <div className="space-y-1">
-          <Label htmlFor="field-name">Name</Label>
+          <Label htmlFor="field-name">
+            Name
+            {/* Marked where it can be typed: a field cannot be kept without a
+                name, which the problem below says the moment it is empty. In
+                the entry form's own required mark, hidden from the accessible
+                name; the input's `required` says it to assistive technology. */}
+            {!nameDisabled && (
+              <span className="text-danger-text ml-1" aria-hidden="true">
+                *
+              </span>
+            )}
+          </Label>
           <Input
             id="field-name"
+            required={!nameDisabled}
             value={field.name}
             disabled={nameDisabled}
+            aria-invalid={problem !== null}
             aria-describedby={describedBy}
             onChange={e => onChange({ ...field, name: e.target.value })}
           />
           <p id={nameHelpId} className="text-xs text-muted-foreground">
             {nameHelpText(saved, nameFixedReason)}
           </p>
+          <NameProblem id={problemId} problem={problem} />
         </div>
       </div>
 

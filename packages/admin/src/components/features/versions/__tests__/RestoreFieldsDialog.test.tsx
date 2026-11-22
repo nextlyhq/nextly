@@ -119,6 +119,39 @@ describe("RestoreFieldsDialog", () => {
     expect(onConfirm).toHaveBeenCalledWith(["title"]);
   });
 
+  it("keeps the person's choices when the list refreshes while it is open", async () => {
+    const props = {
+      open: true,
+      onOpenChange: vi.fn(),
+      versionNo: 3,
+      onConfirm: vi.fn(),
+    };
+    const { rerender } = render(<RestoreFieldsDialog {...props} rows={rows} />);
+    await userEvent.click(screen.getByRole("checkbox", { name: /Views/ }));
+
+    // The same list read again, with a field it did not list before.
+    rerender(
+      <RestoreFieldsDialog
+        {...props}
+        rows={[
+          ...rows.map(row => ({ ...row })),
+          {
+            name: "body",
+            label: "Body",
+            chosen: true,
+            replacesUnsaved: false,
+            shared: false,
+            value: "Then",
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByRole("checkbox", { name: /Views/ })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Title/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Body/ })).toBeChecked();
+  });
+
   it("offers no restore once every field is unchosen", async () => {
     renderDialog();
 

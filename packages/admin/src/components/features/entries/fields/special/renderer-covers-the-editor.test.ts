@@ -44,11 +44,23 @@ import { RICH_TEXT_NODES } from "@admin/components/features/entries/fields/speci
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 /** Where the published page decides what a stored node draws as. */
-const RENDERER = join(
-  HERE,
-  "../../../../../../..",
-  "blocks-react/src/rich-text.tsx"
-);
+const RENDERER_DIR = join(HERE, "../../../../../../..", "blocks-react/src");
+
+/**
+ * The renderer's source: `rich-text.tsx` and the `rich-text-*` modules it is
+ * split into (formats, content model, media, buttons), read as one text so a
+ * table is found whichever of them holds it.
+ */
+function readRenderer(): string {
+  return readdirSync(RENDERER_DIR)
+    .filter(
+      name =>
+        /^rich-text(-[a-z-]+)?\.tsx?$/.test(name) && !name.includes(".test.")
+    )
+    .sort()
+    .map(name => readFileSync(join(RENDERER_DIR, name), "utf8"))
+    .join("\n");
+}
 
 /**
  * Where the engine decides what a stored inline style may carry.
@@ -233,7 +245,7 @@ describe("the parser this check is built from", () => {
 
 describe("the published renderer covers the editor's node types", () => {
   const editor = editorNodeTypes();
-  const drawn = renderedTypes(readFileSync(RENDERER, "utf8"));
+  const drawn = renderedTypes(readRenderer());
 
   it("reads both sides, so a silent failure cannot pass this", () => {
     /*
@@ -335,7 +347,7 @@ const DECLARED_PHRASING: Readonly<Record<string, string>> = {
 };
 
 describe("what a paragraph may contain", () => {
-  const renderer = readFileSync(RENDERER, "utf8");
+  const renderer = readRenderer();
   const block = new Set(constMembers(renderer, "BLOCK_LEVEL_NODES"));
   const drawn = renderedTypes(renderer);
 
@@ -374,7 +386,7 @@ describe("what a paragraph may contain", () => {
 });
 
 describe("richTextValueVocabulariesAgree", () => {
-  const renderer = readFileSync(RENDERER, "utf8");
+  const renderer = readRenderer();
   const buttonSource = readFileSync(join(HERE, "ButtonLinkNode.tsx"), "utf8");
 
   it("reads both sides, so an empty parse cannot pass this", () => {

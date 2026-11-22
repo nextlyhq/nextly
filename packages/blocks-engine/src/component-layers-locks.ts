@@ -131,13 +131,17 @@ function heldAtLevel(
   return { document: copy, placements };
 }
 
-/** A placement stripped of its own values, its variant and its slot content. */
+/**
+ * A placement stripped of its own values, its variant, its settings' bindings
+ * and its slot content: a binding of a setting is the page's, like a value.
+ */
 function holdAsItsComponent(node: BlockNode): void {
   const own = node as unknown as Record<string, unknown>;
   if (isPlainRecord(own.props)) {
     delete own.props.overrides;
     delete own.props.variant;
   }
+  delete own.bindings;
   delete own.slots;
 }
 

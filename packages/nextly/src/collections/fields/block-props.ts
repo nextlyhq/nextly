@@ -390,7 +390,10 @@ function holdsText(field: WalkableField): boolean {
     field.type === "radio" ||
     field.type === "date" ||
     // An array or a bare string are both legitimate JSON values.
-    field.type === "json"
+    field.type === "json" ||
+    // A one-paragraph textarea prop holds its words as a string, blank ones
+    // included, as well as editor content.
+    field.validate === isTextOrEditorContent
   );
 }
 
@@ -413,6 +416,8 @@ interface WalkableField {
   hasMany?: boolean;
   minRows?: number;
   fields?: readonly WalkableField[];
+  /** The field's own value check, which marks a one-paragraph prop. */
+  validate?: unknown;
 }
 
 function buildFieldConfigs(
@@ -511,7 +516,9 @@ const ALLOWED_OPTIONS: Readonly<
     "minRows",
     "maxRows",
   ],
-  textarea: ["label", "required", "minLength", "maxLength"],
+  // `oneParagraph`: the value may be one paragraph of editor content as well
+  // as its words (the core Text's).
+  textarea: ["label", "required", "minLength", "maxLength", "oneParagraph"],
   richText: ["label", "required"],
   email: ["label", "required"],
   number: ["label", "required", "min", "max", "hasMany", "minRows", "maxRows"],
@@ -613,11 +620,19 @@ const BUILDERS: Readonly<Record<BlockFieldCatalogType, PropBuilder>> = {
       validate: listBoundsValidator(rows.minRows, rows.maxRows),
     };
   },
-  textarea: (name, declaration, path, ctx) => ({
-    ...base(name, declaration, path, ctx),
-    type: "textarea",
-    ...lengthBounds(declaration, path, ctx),
-  }),
+  textarea: (name, declaration, path, ctx) =>
+    // One paragraph of words with bold, italic and links (`oneParagraph`, as
+    // the core Text declares it) holds either the words a string held before,
+    // or editor content restricted to that paragraph, which a renderer reads
+    // as its words. The entry validator would refuse the second as "must be
+    // text", so it is checked as editor content or a string instead.
+    declaration.oneParagraph === true
+      ? oneParagraphConfig(name, declaration, path, ctx)
+      : {
+          ...base(name, declaration, path, ctx),
+          type: "textarea",
+          ...lengthBounds(declaration, path, ctx),
+        },
   richText: (name, declaration, path, ctx) => ({
     ...base(name, declaration, path, ctx),
     type: "richText",
@@ -964,7 +979,48 @@ function countOption(
  * their own), so validating the full tree would encode the editor's node
  * catalog into the field system.
  */
-function isEditorContent(value: unknown): string | true {
+/**
+ * A one-paragraph textarea prop's config: words or editor content, with no
+ * length bound, which editor content has no single length to hold to. A
+ * bound declared beside it is refused rather than left unenforced.
+ */
+function oneParagraphConfig(
+  name: string,
+  declaration: BlockPropDeclaration,
+  path: string,
+  ctx: ConversionContext
+): FieldConfig | null {
+  const bounds = ["minLength", "maxLength"].filter(key =>
+    Object.prototype.hasOwnProperty.call(declaration, key)
+  );
+  for (const key of bounds) {
+    record(
+      ctx,
+      `${path}.${key}`,
+      "UNKNOWN_OPTION",
+      `A one-paragraph textarea prop does not accept \`${key}\`: its value may be editor content, which has no length to bound.`
+    );
+  }
+  if (bounds.length > 0) return null;
+  return {
+    ...base(name, declaration, path, ctx),
+    type: "richText",
+    validate: isTextOrEditorContent,
+  };
+}
+
+/**
+ * Whether a one-paragraph prop's value is one it can hold: the words, as a
+ * string, or {@link isEditorContent editor content}.
+ */
+function isTextOrEditorContent(value: unknown): string | true {
+  if (typeof value === "string") return true;
+  return isEditorContent(value) === true
+    ? true
+    : "must be text, or one paragraph of words with bold, italic and links";
+}
+
+export function isEditorContent(value: unknown): string | true {
   // Plain records, not merely objects: a class instance with the right keys
   // encodes to whatever its own `toJSON` decides, so the renderer would read
   // back something other than the envelope that was validated.

@@ -205,13 +205,17 @@ export function HookConfigForm({
                 <div className="flex flex-wrap gap-2">
                   {options.map((option: string) => {
                     const isChecked = currentValues.includes(option);
+                    // A checked choice's word reads in the text colour: the
+                    // primary token is a fill a brand may set to any colour,
+                    // and small text drawn in it on its own tint can fall
+                    // under AA. Its border keeps the brand.
                     return (
                       <label
                         key={option}
                         className={cn(
                           "flex items-center gap-1.5 px-2 py-1 rounded-sm text-xs cursor-pointer  border border-border",
                           isChecked
-                            ? "bg-primary/5 border-primary text-primary"
+                            ? "bg-primary/5 border-primary text-foreground"
                             : "bg-primary/5 border-transparent text-muted-foreground hover:text-foreground"
                         )}
                       >

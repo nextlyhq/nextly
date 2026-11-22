@@ -8,6 +8,7 @@
  * @module domains/versions/retention
  */
 
+import type { ChangedParts } from "./changed-parts";
 import {
   recordsServedContent,
   type RecordedVersionStatus,
@@ -19,9 +20,10 @@ export interface PrunableVersion {
   versionNo: number | null;
   status: RecordedVersionStatus;
   /**
-   * The language the version holds, or null. On today's rows null means a
-   * document with no languages, a snapshot of every language at once (a
-   * publish of all languages), or the shared part; each is its own key below.
+   * The language the version holds, or null. Null means a document with no
+   * languages, a snapshot of every language at once (a publish of all
+   * languages, or of chosen parts), or the shared part. Retention keys on it
+   * only for a version recorded before versions named their parts.
    */
   locale: string | null;
   /** A name given to the version; a named version is never removed. */
@@ -33,6 +35,13 @@ export interface PrunableVersion {
    * carried restored values; absent or null when it carried none.
    */
   fieldSources?: Readonly<Record<string, number>> | null;
+  /**
+   * The languages, and whether the shared part, the version changed, as the
+   * row records them (see `changed-parts`). Null or absent for a version
+   * recorded before versions named their parts: such a version is kept by its
+   * `locale` instead.
+   */
+  changedParts?: ChangedParts | null;
 }
 
 /**
@@ -41,15 +50,26 @@ export interface PrunableVersion {
  *
  * Kept whatever the cap:
  * - the newest durable version (the document's current history head);
- * - the latest published version of EACH language, and the latest published
- *   version with no language. Keying this on the document instead lets a run
- *   of saves in one language remove another language's only published
- *   snapshot, and with it the only copy of what that language's readers see;
+ * - the latest published version of EACH part: of each language, and of the
+ *   shared part, judged by the parts each version records it changed. A
+ *   publish of chosen parts, or of every language, records no language in
+ *   `locale`, so keying this on `locale` (or on the document) lets a publish
+ *   or a run of saves in one language remove another language's latest
+ *   publish, and with it the only copy of what that language's readers see.
+ *   A version recorded before versions named their parts keeps the rule it
+ *   had: the latest published version of each `locale`, with no language its
+ *   own key. The two kinds never stand in for each other, so retention keeps
+ *   at least what it kept before parts were recorded. A version that changed
+ *   no part (a restore's record of what it replaced) is no part's publish;
+ *   the other rules here still keep it where they apply;
  * - every named version: someone (or a restore, for its undo point) chose to
  *   keep it;
  * - every row that records a restore, and the version it was made from, and
- *   every row whose save carried restored fields, and each field's source, so
- *   "restored from" never points at a version that is gone;
+ *   each field's source a save's restored fields name, so "restored from"
+ *   never points at a version that is gone. The save's own row is not pinned
+ *   for naming sources: a client's save names them (`_restoredFrom`), and
+ *   pinning every such row would let a caller keep each new version past the
+ *   cap by naming the same source again;
  * - every version a feature has pinned (`pinnedVersionNos`): a feature holds
  *   it for as long as it needs it, whatever the limit;
  * - the version numbers the caller names for this pass.
@@ -103,9 +123,7 @@ function protectedVersionIds(
   protectVersionNos: readonly (number | null | undefined)[],
   lifecycle: boolean
 ): Set<string> {
-  const protectedIds = new Set<string>(
-    latestPublishedPerLocale(rows, lifecycle)
-  );
+  const protectedIds = new Set<string>(latestPublishedPerPart(rows, lifecycle));
   // Newest durable version: the history head is always kept, even at cap 0.
   if (rows[0]) protectedIds.add(rows[0].id);
 
@@ -133,25 +151,42 @@ function protectedVersionIds(
 }
 
 /**
- * The id of the latest published row of each language, null (no language)
- * keyed like any code. Rows arrive newest-first, so the first published row
- * seen for a language is its latest. "Published" is content readers were
- * served, which without the lifecycle is every version whatever its status.
+ * The id of the latest published row for each part (see `partKeysOf`). Rows
+ * arrive newest-first, so the first published row seen for a key is its
+ * latest. "Published" is content readers were served, which without the
+ * lifecycle is every version whatever its status.
  */
-function latestPublishedPerLocale(
+function latestPublishedPerPart(
   rows: PrunableVersion[],
   lifecycle: boolean
 ): string[] {
-  const latest = new Map<string | null, string>();
+  const latest = new Map<string, string>();
   for (const row of rows) {
-    if (
-      recordsServedContent(row.status, lifecycle) &&
-      !latest.has(row.locale)
-    ) {
-      latest.set(row.locale, row.id);
+    if (!recordsServedContent(row.status, lifecycle)) continue;
+    for (const key of partKeysOf(row)) {
+      if (!latest.has(key)) latest.set(key, row.id);
     }
   }
   return [...latest.values()];
+}
+
+/**
+ * The keys a published row can be the latest publish for. A row that records
+ * its parts answers one per language it changed, and one for the shared part
+ * when it changed it; none when it changed no part. A row recorded before
+ * versions named their parts answers one: its `locale`, null included.
+ *
+ * Each key is a JSON array whose first item names its kind, so the kinds can
+ * never collide: a row of one kind never takes a key of the other, and a
+ * language code can never spell the shared part's key.
+ */
+function partKeysOf(row: PrunableVersion): string[] {
+  const parts = row.changedParts;
+  if (!parts) return [JSON.stringify(["locale", row.locale])];
+  return [
+    ...parts.locales.map(code => JSON.stringify(["language", code])),
+    ...(parts.shared ? [JSON.stringify(["shared"])] : []),
+  ];
 }
 
 /**
@@ -163,14 +198,12 @@ function isNamed(row: PrunableVersion): boolean {
 }
 
 /**
- * Whether a row records a restore, which names the version it came from, or a
- * save carrying restored fields, which names a version for each.
+ * Whether a row records a restore, which names the version it came from: the
+ * server writes that, never a client's save. A save's restored fields protect
+ * the versions they name, not the row that names them.
  */
 function isRestore(row: PrunableVersion): boolean {
-  return (
-    typeof row.sourceVersionNo === "number" ||
-    Object.keys(sourcesOf(row)).length > 0
-  );
+  return typeof row.sourceVersionNo === "number";
 }
 
 /**

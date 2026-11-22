@@ -24,26 +24,16 @@ import {
   useDocumentLocale,
   usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
+import { Button, Label } from "@nextlyhq/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import {
-  Button,
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  Label,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@nextlyhq/ui";
-import { Check, ChevronDown } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type JSX,
+} from "react";
 import {
   useController,
   useWatch,
@@ -53,6 +43,7 @@ import {
 } from "react-hook-form";
 
 import {
+  LAYOUT_CHOICES_ROUTE_PATH,
   layoutChoicesPath,
   PAGE_COLLECTION_ROUTE_PATH,
   type LayoutChoicesResponse,
@@ -60,15 +51,22 @@ import {
 } from "../layout-choices-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
+import { useBuilderRoute } from "./builder-route-read";
+import { useHeaderFooterInCode } from "./header-footer-in-code";
+import { HeaderFooterMenu, type MenuSearch } from "./header-footer-menu";
+import { useSetPictures } from "./header-footer-pictures";
 import {
   layoutPickerView,
   layoutValue,
+  NO_HEADER_FOOTER_VALUE,
+  SITE_DEFAULT_VALUE,
   storedFor,
   type EffectiveLayout,
   type LayoutChoicesState,
   type LayoutPickerView,
   type PickerOption,
 } from "./layout-choice-view";
+import { useRefreshOnReturn } from "./refresh-on-return";
 
 /** The page's stored Layout reference, as the pages collection names it. */
 const LAYOUT_FIELD = "layout";
@@ -86,7 +84,7 @@ const SWITCH_FIELD = "noHeaderFooter";
 function useLayoutChoices(
   enabled: boolean,
   selected: string | null,
-  search?: string
+  ask: { search?: string; pictures?: boolean } = {}
 ): {
   state: LayoutChoicesState;
   /** Whether `state` is the last answer, held while a new one is asked. */
@@ -95,12 +93,14 @@ function useLayoutChoices(
 } {
   // In the language being edited, so the regions read as the page reads.
   const locale = useDocumentLocale()?.code ?? null;
+  const { search, pictures } = ask;
   const read = usePluginRoute<LayoutChoicesResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: layoutChoicesPath(
-      selected,
-      search === undefined ? { locale } : { locale, search }
-    ),
+    path: layoutChoicesPath(selected, {
+      locale,
+      ...(search === undefined ? {} : { search }),
+      ...(pictures === true ? { pictures } : {}),
+    }),
     enabled,
     // Asked again on every mount, and when the author comes back to the tab
     // (below): a Layout published or made the default in another tab, from
@@ -136,30 +136,32 @@ function useLayoutChoices(
 }
 
 /**
- * Ask again when the author returns to this tab: on window focus, and when
- * the page becomes visible. The admin turns refetch-on-focus off for every
- * read, so this one read asks for it itself.
+ * Whether a cached read is one of this plugin's set choices reads, whatever
+ * it asked, by the key the admin keeps a plugin route's read under:
+ * `["plugin-route", path]`.
  */
-function useRefreshOnReturn(enabled: boolean, refetch: () => void): void {
-  // The newest `refetch`, without re-attaching the listeners on each render:
-  // the read hands out a new function every time.
-  const latest = useRef(refetch);
-  useEffect(() => {
-    latest.current = refetch;
-  });
-  useEffect(() => {
-    if (!enabled) return;
-    const onFocus = () => latest.current();
-    const onVisible = () => {
-      if (document.visibilityState !== "hidden") latest.current();
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [enabled]);
+function isLayoutChoicesRead(key: readonly unknown[]): boolean {
+  const path = key[1];
+  return (
+    key[0] === "plugin-route" &&
+    typeof path === "string" &&
+    path.includes(PAGE_BUILDER_PLUGIN_NAME) &&
+    path.includes(LAYOUT_CHOICES_ROUTE_PATH)
+  );
+}
+
+/**
+ * Ask every set choices read again, the canvas's own among them: after a
+ * write that changes a set, the header and footer the page being edited is
+ * drawn inside may have changed with it.
+ */
+export function useAskChoicesAgain(): () => void {
+  const queryClient = useQueryClient();
+  return useCallback(() => {
+    void queryClient.invalidateQueries({
+      predicate: query => isLayoutChoicesRead(query.queryKey),
+    });
+  }, [queryClient]);
 }
 
 /**
@@ -173,7 +175,7 @@ function useRefreshOnReturn(enabled: boolean, refetch: () => void): void {
 function useIsPageForm(): boolean {
   const identity = useDocumentIdentity();
   const candidate = identity?.kind === "collection";
-  const read = usePluginRoute<PageCollectionResponse>({
+  const read = useBuilderRoute<PageCollectionResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: PAGE_COLLECTION_ROUTE_PATH,
     enabled: candidate,
@@ -191,6 +193,14 @@ function useStoredLayout<T extends FieldValues>(
   control: Control<T>
 ): { layout: unknown; noHeaderFooter: boolean } | undefined {
   const isPage = useIsPageForm();
+  const watched = useWatchedLayout(control);
+  return isPage ? watched : undefined;
+}
+
+/** The two values as `control` holds them, whatever form it is. */
+function useWatchedLayout<T extends FieldValues>(
+  control: Control<T>
+): { layout: unknown; noHeaderFooter: boolean } {
   const layout: unknown = useWatch({
     control,
     name: LAYOUT_FIELD as Path<T>,
@@ -202,9 +212,8 @@ function useStoredLayout<T extends FieldValues>(
   // One object per pair of values, so a reader keyed on it recomputes only
   // when the choice changes.
   return useMemo(
-    () =>
-      isPage ? { layout, noHeaderFooter: noHeaderFooter === true } : undefined,
-    [isPage, layout, noHeaderFooter]
+    () => ({ layout, noHeaderFooter: noHeaderFooter === true }),
+    [layout, noHeaderFooter]
   );
 }
 
@@ -263,7 +272,7 @@ function PageLayoutSection<T extends FieldValues>({
           Header and footer
         </h3>
         <p className="text-xs text-muted-foreground">
-          Which Layout this page is drawn inside.
+          Which header & footer set this page is drawn inside.
         </p>
       </div>
       <PageLayoutPicker control={control} />
@@ -272,11 +281,12 @@ function PageLayoutSection<T extends FieldValues>({
 }
 
 /**
- * The page's Layout picker, or nothing for a form that is not a page's.
+ * The page's "Header & footer" menu, or nothing for a form that is not a
+ * page's.
  *
- * Drawn with the admin's own Select, label and button, so it is one product
- * with the form around it. The "why" line under it says which Layout is in
- * effect and why, and is the picker's description for a screen reader.
+ * Labelled and described as the admin's own fields are, so it is one product
+ * with the form around it. The "why" line under it says which set is in
+ * effect and why, and is the menu's description for a screen reader.
  */
 export function PageLayoutPicker<T extends FieldValues>({
   control,
@@ -287,18 +297,109 @@ export function PageLayoutPicker<T extends FieldValues>({
   disabled?: boolean;
 }): JSX.Element | null {
   const stored = useStoredLayout(control);
-  if (stored === undefined) return null;
+  // A site that draws its header and footer in code: the menu would change
+  // nothing it shows, so there is none. The page's stored choice is kept.
+  const inCode = useHeaderFooterInCode();
+  if (stored === undefined || inCode) return null;
   return <Picker control={control} stored={stored} disabled={disabled} />;
+}
+
+/**
+ * The "Header & footer" menu for a page not made yet: the same picker, over
+ * the New page dialog's own small form, which holds the two values and is
+ * known to make a page. "Manage headers & footers" is left out there, since
+ * it would leave the dialog and what is typed in it.
+ */
+export function NewPageLayoutPicker<T extends FieldValues>({
+  control,
+}: {
+  control: Control<T>;
+}): JSX.Element | null {
+  const stored = useWatchedLayout(control);
+  // None where the site draws its header and footer in code, as on a page.
+  if (useHeaderFooterInCode()) return null;
+  return (
+    <Picker control={control} stored={stored} disabled={false} manage={false} />
+  );
+}
+
+/** Above this many sets the menu is searched rather than scrolled. */
+const SEARCH_ABOVE = 10;
+
+/**
+ * How many sets the site has, as the answer lists them. Counted from the
+ * answer rather than the menu's rows: the menu draws the default set as
+ * "Site default" and drops its named row, so its rows run one short of the
+ * sets whenever the page follows the default. Before an answer, the rows
+ * named are all there is to count.
+ */
+function setCount(state: LayoutChoicesState, view: LayoutPickerView): number {
+  if (state.kind === "ready") return state.choices.items.length;
+  return view.options.filter(
+    option =>
+      option.value !== SITE_DEFAULT_VALUE &&
+      option.value !== NO_HEADER_FOOTER_VALUE
+  ).length;
+}
+
+/**
+ * Each option's picture. Every listed set's definitions are asked for once
+ * the menu first opens, not before, so a page's form opens with the canvas's
+ * own read only; until they arrive, the two sets the page can be drawn inside
+ * (its own and the default) are drawn from that read.
+ */
+function useOptionPictures(
+  opened: boolean,
+  selected: string | null,
+  state: LayoutChoicesState,
+  /** What a search found, past the list: its sets' definitions, once in. */
+  found: LayoutChoicesResponse["meta"]["regionDefinitions"] | undefined
+): (option: PickerOption) => JSX.Element {
+  const [wanted, setWanted] = useState(false);
+  useEffect(() => {
+    if (opened) setWanted(true);
+  }, [opened]);
+  const { state: all } = useLayoutChoices(wanted, selected, {
+    pictures: true,
+  });
+  const listed =
+    all.kind === "ready"
+      ? all.choices.meta.regionDefinitions
+      : state.kind === "ready"
+        ? state.choices.meta.regionDefinitions
+        : NO_DEFINITIONS;
+  // A search's matches can sit past the list, so their definitions come with
+  // the search's own answer, drawn beside the list's.
+  const definitions = useMemo(
+    () => (found === undefined ? listed : { ...listed, ...found }),
+    [listed, found]
+  );
+  // Answered, or failed: a region still without its definition then draws
+  // the broken-picture icon rather than waiting on a read that is done.
+  const settled = all.kind !== "pending";
+  const picture = useSetPictures(definitions, settled);
+  return option => <>{picture(option.picture)}</>;
+}
+
+const NO_DEFINITIONS: LayoutChoicesResponse["meta"]["regionDefinitions"] = {};
+
+/** Where "Manage headers & footers ↗" opens: the admin's list of sets. */
+function manageHrefOf(state: LayoutChoicesState): string | undefined {
+  if (state.kind !== "ready") return undefined;
+  return `/admin/collections/${encodeURIComponent(state.choices.meta.layoutsCollection)}`;
 }
 
 function Picker<T extends FieldValues>({
   control,
   stored,
   disabled,
+  manage = true,
 }: {
   control: Control<T>;
   stored: { layout: unknown; noHeaderFooter: boolean };
   disabled: boolean;
+  /** Whether the menu offers "Manage headers & footers". */
+  manage?: boolean;
 }): JSX.Element {
   // Registered only here, once the form is known to hold both fields.
   const { field: layoutField, fieldState } = useController({
@@ -309,16 +410,17 @@ function Picker<T extends FieldValues>({
     control,
     name: SWITCH_FIELD as Path<T>,
   });
-  const { state, retry } = useLayoutChoices(true, selectedOf(stored));
+  const selected = selectedOf(stored);
+  const { state, retry } = useLayoutChoices(true, selected);
   const view = layoutPickerView(stored, state);
+  const [open, setOpen] = useState(false);
   const id = useId();
   const whyId = `${id}-why`;
   const errorId = `${id}-error`;
-  // A save the server refused for this field, such as a Layout being removed.
-  // The `layout` field is hidden from the form, so this picker is the only
+  // A save the server refused for this field, such as a set being removed.
+  // The `layout` field is hidden from the form, so this menu is the only
   // place the reason can be shown.
   const refused = fieldState.error?.message;
-  const describedBy = describedByOf(whyId, errorId, refused);
 
   const choose = (value: string) => {
     const next = storedFor(value, stored);
@@ -326,90 +428,48 @@ function Picker<T extends FieldValues>({
     switchField.onChange(next.noHeaderFooter);
   };
 
-  // More Layouts than one answer lists: the rest are reached by title, so the
-  // picker searches. Otherwise the plain dropdown, which lists them all.
+  // More sets than ten, or than one answer lists: the menu searches titles on
+  // the server, so every set the author may read can be found and chosen.
   const capped = state.kind === "ready" && state.choices.meta.more;
+  const searchable = capped || setCount(state, view) > SEARCH_ABOVE;
+  const { definitions: foundDefinitions, ...search } = useLayoutSearch(
+    open && searchable,
+    stored,
+    view
+  );
+  const picture = useOptionPictures(open, selected, state, foundDefinitions);
 
   return (
     <div className="flex min-w-0 flex-col gap-1.5" data-slot="page-layout">
-      <Label htmlFor={id}>Layout</Label>
-      {capped ? (
-        <SearchingPicker
-          id={id}
-          whyId={describedBy}
-          view={view}
-          stored={stored}
-          disabled={disabled || view.readOnly}
-          onChoose={choose}
-        />
-      ) : (
-        <Select
-          value={view.value}
-          onValueChange={choose}
-          disabled={disabled || view.readOnly || state.kind === "pending"}
-        >
-          {/* One line, cut with an ellipsis: a long Layout title or the
-            deleted-choice wording must not grow the control, and the line
-            under it says the whole of it. Styled through the trigger, since
-            the value element takes no class of its own. */}
-          <SelectTrigger
-            id={id}
-            aria-describedby={describedBy}
-            aria-invalid={invalidOf(refused)}
-            className="[&>span]:min-w-0 [&>span]:truncate [&>span]:text-left"
-          >
-            <SelectValue
-              placeholder={
-                state.kind === "pending" ? "Loading Layouts…" : undefined
-              }
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {view.options.map(option => (
-              <SelectItem
-                key={option.value}
-                value={option.value}
-                disabled={option.disabled === true}
-                {...optionDescription(option)}
-              >
-                <OptionText option={option} />
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+      <Label htmlFor={id}>Header & footer</Label>
+      <HeaderFooterMenu
+        id={id}
+        describedBy={describedByOf(whyId, errorId, refused)}
+        invalid={refused !== undefined}
+        view={view}
+        pending={state.kind === "pending"}
+        disabled={disabled || view.readOnly}
+        open={open}
+        onOpenChange={setOpen}
+        onChoose={choose}
+        picture={picture}
+        {...(searchable
+          ? { search: { ...search, ...(capped ? { note: CAPPED_NOTE } : {}) } }
+          : {})}
+        {...(manage ? withManage(manageHrefOf(state)) : {})}
+      />
       <WhyLine id={whyId} view={view} state={state} retry={retry} />
       <RefusedLine id={errorId} refused={refused} />
     </div>
   );
 }
 
-/**
- * An option's words: its label, and a short note muted after it when it
- * has one (the default Layout's name, or why a Layout behind Remove Layout's
- * fence is not offered).
- */
-function OptionText({ option }: { option: PickerOption }): JSX.Element {
-  if (option.note === undefined) return <>{option.label}</>;
-  return (
-    <>
-      {option.label}
-      <span className="text-muted-foreground"> · {option.note}</span>
-    </>
-  );
+/** The menu's "Manage headers & footers ↗", where there is a list to open. */
+function withManage(href: string | undefined): { manageHref?: string } {
+  return href === undefined ? {} : { manageHref: href };
 }
 
-/** An option's whole reason, as its tooltip and accessible description. */
-function optionDescription(option: PickerOption): {
-  title?: string;
-  "aria-description"?: string;
-} {
-  return option.description === undefined
-    ? {}
-    : { title: option.description, "aria-description": option.description };
-}
-
-/** The picker's description: why the Layout applies, and a refusal if any. */
+/** The menu's description: why the set applies, and a refusal if any. */
 function describedByOf(
   whyId: string,
   errorId: string,
@@ -418,12 +478,7 @@ function describedByOf(
   return refused === undefined ? whyId : `${whyId} ${errorId}`;
 }
 
-/** `aria-invalid` while a refusal stands. */
-function invalidOf(refused: string | undefined): true | undefined {
-  return refused === undefined ? undefined : true;
-}
-
-/** The server's reason a save was refused for this field, under the picker. */
+/** The server's reason a save was refused for this field, under the menu. */
 function RefusedLine({
   id,
   refused,
@@ -439,26 +494,30 @@ function RefusedLine({
   );
 }
 
-/** How long typing pauses before Layout titles are searched again. */
+/** How long typing pauses before set titles are searched again. */
 const SEARCH_PAUSE_MS = 200;
 
 /** The words under a capped list, saying how to reach the rest. */
 const CAPPED_NOTE = "Showing the first 200; search to find more.";
 
 /**
- * A capped list's search: what is typed, the server's answer for it once the
+ * The menu's search: what is typed, the server's answer for it once the
  * typing pauses, and the options to show.
  *
  * Searching from the first keystroke: what is typed is the query, and until
  * its own answer arrives nothing shown may claim to match it. A search's
  * answer belongs to its own query, so the last one's matches are never shown
- * for the next.
+ * for the next. Titles are matched by the database, by its own collation, so
+ * a search finds what the site's own search would.
  */
 function useLayoutSearch(
   open: boolean,
   stored: { layout: unknown; noHeaderFooter: boolean },
   view: LayoutPickerView
-) {
+): MenuSearch & {
+  /** The answered search's set definitions, for its matches' pictures. */
+  definitions: LayoutChoicesResponse["meta"]["regionDefinitions"] | undefined;
+} {
   const [typed, setTyped] = useState("");
   const [search, setSearch] = useState("");
   useEffect(() => {
@@ -469,7 +528,8 @@ function useLayoutSearch(
   const { state: found, retry } = useLayoutChoices(
     open && search !== "",
     selectedOf(stored),
-    search
+    // With the pictures of what it finds, which may be past the list.
+    { search, pictures: true }
   );
   const current = searching && search === typed.trim();
   const answered = current && found.kind === "ready";
@@ -480,16 +540,29 @@ function useLayoutSearch(
     : found.kind === "ready" && answered
       ? matchingOptions(stored, found)
       : [];
-  return { typed, setTyped, searching, answered, failed, options, retry };
+  const definitions =
+    answered && found.kind === "ready"
+      ? found.choices.meta.regionDefinitions
+      : undefined;
+  return {
+    typed,
+    setTyped,
+    searching,
+    answered,
+    failed,
+    options,
+    retry,
+    definitions,
+  };
 }
 
 /**
  * The options a search found: exactly the rows the server says matched.
  *
  * The answer also carries rows the route adds whatever the query (the page's
- * own Layout and the default), and the view adds the default and "No header
- * or footer" to every list; none of those matched, so none is a result, and
- * "No Layouts match" can say so. Which rows matched is the server's answer
+ * own set and the default), and the view adds the default and "None" to
+ * every list; none of those matched, so none is a result, and "No header &
+ * footer sets match." can say so. Which rows matched is the server's answer
  * alone: the database compares by its own collation ("cafe" finds "Café" on
  * one dialect), which no comparison here could repeat. The current choice
  * stays in the trigger.
@@ -504,139 +577,7 @@ function matchingOptions(
   );
 }
 
-/** What the list says when it shows no Layouts: why, and what to do. */
-function SearchNote({
-  searching,
-  answered,
-  failed,
-  retry,
-}: {
-  searching: boolean;
-  answered: boolean;
-  failed: boolean;
-  retry: () => void;
-}): JSX.Element {
-  if (failed) {
-    return (
-      <span className="flex items-center justify-center gap-2">
-        Couldn&apos;t search Layouts
-        <Button type="button" variant="ghost" size="sm" onClick={retry}>
-          Try again
-        </Button>
-      </span>
-    );
-  }
-  return <>{searching && !answered ? "Searching…" : "No Layouts match."}</>;
-}
-
-/**
- * The picker for a site with more Layouts than one answer lists: the same
- * choices behind a search field, as the admin's other searchable choices are
- * drawn. Titles are searched on the server, so every Layout the author may
- * read can be found and chosen.
- */
-function SearchingPicker({
-  id,
-  whyId,
-  view,
-  stored,
-  disabled,
-  onChoose,
-}: {
-  id: string;
-  whyId: string;
-  view: LayoutPickerView;
-  stored: { layout: unknown; noHeaderFooter: boolean };
-  disabled: boolean;
-  onChoose: (value: string) => void;
-}): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const { typed, setTyped, searching, answered, failed, options, retry } =
-    useLayoutSearch(open, stored, view);
-  const current = view.options.find(option => option.value === view.value);
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          id={id}
-          type="button"
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          aria-describedby={whyId}
-          disabled={disabled}
-          className="w-full justify-between font-normal"
-        >
-          <span className="min-w-0 truncate text-left">
-            {current === undefined ? (
-              "Choose a Layout"
-            ) : (
-              <OptionText option={current} />
-            )}
-          </span>
-          <ChevronDown aria-hidden="true" className="h-4 w-4 opacity-50" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        // As wide as the trigger, whatever the titles: a long one is cut
-        // to its row rather than widening the list.
-        className="w-[var(--radix-popover-trigger-width)] p-0"
-      >
-        {/* Filtered by the server, not here: the list holds only the first
-            answer, and a Layout past it is found only by asking. */}
-        {/* The menu's label names its search field, which the field
-            reads by reference rather than by a label of its own. */}
-        <Command shouldFilter={false} label="Search Layouts">
-          <CommandInput
-            placeholder="Search Layouts"
-            value={typed}
-            onValueChange={setTyped}
-          />
-          <CommandList>
-            <CommandEmpty>
-              <SearchNote
-                searching={searching}
-                answered={answered}
-                failed={failed}
-                retry={retry}
-              />
-            </CommandEmpty>
-            <CommandGroup>
-              {options.map(option => (
-                <CommandItem
-                  key={option.value}
-                  value={option.value}
-                  disabled={option.disabled === true}
-                  {...optionDescription(option)}
-                  onSelect={() => {
-                    onChoose(option.value);
-                    setOpen(false);
-                  }}
-                >
-                  <span className="min-w-0 flex-1 truncate">
-                    <OptionText option={option} />
-                  </span>
-                  {option.value === view.value ? (
-                    <Check aria-hidden="true" className="h-4 w-4" />
-                  ) : null}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-          {searching ? null : (
-            <p className="border-t px-3 py-2 text-xs text-muted-foreground">
-              {CAPPED_NOTE}
-            </p>
-          )}
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/** Which Layout is in effect and why; or the read's own state. */
+/** Which set is in effect and why; or the read's own state. */
 function WhyLine({
   id,
   view,
@@ -654,7 +595,7 @@ function WhyLine({
         id={id}
         className="flex items-center gap-2 text-xs text-muted-foreground"
       >
-        Couldn&apos;t load Layouts
+        Couldn&apos;t load headers & footers
         <Button type="button" variant="ghost" size="sm" onClick={retry}>
           Try again
         </Button>
@@ -663,14 +604,53 @@ function WhyLine({
   }
   return (
     <p id={id} className="text-xs text-muted-foreground" aria-live="polite">
-      {state.kind === "pending" ? "Loading Layouts…" : view.why}
+      {state.kind === "pending" ? "Loading headers & footers…" : view.why}
     </p>
   );
 }
 
-/** The area's name, as a region is called in the editor. */
-function areaName(area: RegionArea): string {
-  return area === "header" ? "Header" : "Footer";
+/**
+ * What the sidebar card for a selected header or footer is drawn from: the
+ * component the region places, the set it comes from, whether it is the
+ * site's untouched starter, and which part has changes a visitor does not
+ * see yet.
+ */
+export interface RegionCardFacts {
+  readonly area: RegionArea;
+  readonly componentId: string;
+  /** The header & footer set the region comes from, by id. */
+  readonly setId: string;
+  /** The title of the header & footer set the region comes from. */
+  readonly setTitle: string;
+  readonly starter: boolean;
+  readonly note?: string;
+}
+
+/**
+ * An area of the site's default set that shows nothing, on a page that
+ * follows the default: where the canvas draws its "No header yet" band.
+ */
+export interface EmptyDefaultArea {
+  readonly area: RegionArea;
+  /** The default set, by id: where a header made or chosen here goes. */
+  readonly setId: string;
+  readonly setTitle: string;
+}
+
+/** The regions drawn around the page, their Layers rows and their cards. */
+export interface PageLayoutRegions {
+  readonly canvas: readonly CanvasRegion[];
+  readonly layers: readonly LayersRegionRow[];
+  readonly cards: readonly RegionCardFacts[];
+  /** The default's empty areas, while the page follows the default. */
+  readonly empty: readonly EmptyDefaultArea[];
+  /** Whether the page follows the site default: names no set, not off. */
+  readonly followsDefault: boolean;
+}
+
+/** What a header or footer is called in the editor. */
+export function siteRegionName(area: RegionArea): string {
+  return area === "header" ? "Site header" : "Site footer";
 }
 
 /**
@@ -683,9 +663,15 @@ function areaName(area: RegionArea): string {
 export function usePageLayoutRegions<T extends FieldValues>(
   control: Control<T>,
   canvasRoot: HTMLElement | null
-): { canvas: readonly CanvasRegion[]; layers: readonly LayersRegionRow[] } {
+): PageLayoutRegions & {
+  /**
+   * Read the regions again: after a header published from the page, the
+   * canvas draws the new published version, and after a draft, its note.
+   */
+  readonly reread: () => void;
+} {
   const stored = useStoredLayout(control);
-  const { state, stale } = useLayoutChoices(
+  const { state, stale, retry } = useLayoutChoices(
     stored !== undefined,
     selectedOf(stored)
   );
@@ -700,27 +686,72 @@ export function usePageLayoutRegions<T extends FieldValues>(
   useEffect(() => {
     if (fresh !== undefined) setShown(fresh);
   }, [fresh]);
-  return fresh ?? shown;
+  // A site that draws its header and footer in code draws them itself: the
+  // canvas shows no regions of a set, whatever the page's stored choice.
+  const inCode = useHeaderFooterInCode();
+  const drawn = inCode ? NOTHING_DRAWN : (fresh ?? shown);
+  return useMemo(
+    () => ({ ...drawn, reread: () => void retry() }),
+    [drawn, retry]
+  );
 }
 
 /** What is drawn before any answer has arrived. */
-const NOTHING_DRAWN: {
-  canvas: readonly CanvasRegion[];
-  layers: readonly LayersRegionRow[];
-} = { canvas: [], layers: [] };
+const NOTHING_DRAWN: PageLayoutRegions = {
+  canvas: [],
+  layers: [],
+  cards: [],
+  empty: [],
+  followsDefault: false,
+};
 
-/** The regions to draw for `stored`, and their Layers rows. */
+/** Whether a page follows the site default: it names no set, and is not off. */
+function followsDefaultOf(stored: {
+  layout: unknown;
+  noHeaderFooter: boolean;
+}): boolean {
+  return layoutRelationId(stored.layout) === null && !stored.noHeaderFooter;
+}
+
+/** The areas a set has, header first. */
+const AREAS: readonly RegionArea[] = ["header", "footer"];
+
+/**
+ * The default's areas that show nothing, for a page that follows the
+ * default: one naming no set and not switched off. Asked of the PUBLISHED
+ * areas the set fills, the ones a visitor gets, so a header still loading is
+ * never taken for none. Nothing for a default that is not published or is
+ * being removed: no page is drawn inside it.
+ */
+function emptyDefaultAreasOf(
+  stored: { layout: unknown; noHeaderFooter: boolean },
+  choices: LayoutChoicesResponse
+): readonly EmptyDefaultArea[] {
+  if (!followsDefaultOf(stored)) return [];
+  const { defaultLayout } = choices.meta;
+  const set = choices.items.find(item => item.id === defaultLayout);
+  if (set === undefined || !set.published || set.removal !== undefined) {
+    return [];
+  }
+  return AREAS.filter(area => !set.areasFilled.includes(area)).map(area => ({
+    area,
+    setId: set.id,
+    setTitle: set.title,
+  }));
+}
+
+/** The regions to draw for `stored`, their Layers rows and their cards. */
 function regionsOf(
   stored: { layout: unknown; noHeaderFooter: boolean } | undefined,
   state: LayoutChoicesState,
   canvasRoot: HTMLElement | null
-): { canvas: readonly CanvasRegion[]; layers: readonly LayersRegionRow[] } {
-  if (stored === undefined || state.kind !== "ready") {
-    return { canvas: NO_REGIONS, layers: NO_ROWS };
-  }
+): PageLayoutRegions {
+  if (stored === undefined || state.kind !== "ready") return NOTHING_DRAWN;
+  const empty = emptyDefaultAreasOf(stored, state.choices);
+  const followsDefault = followsDefaultOf(stored);
   const effective = layoutPickerView(stored, state).effective;
   if (effective === null || effective.regions.length === 0) {
-    return { canvas: NO_REGIONS, layers: NO_ROWS };
+    return { ...NOTHING_DRAWN, empty, followsDefault };
   }
   const { meta } = state.choices;
   const definitions = new Map<string, BlockDocument>(
@@ -731,19 +762,17 @@ function regionsOf(
       area: region.area,
       document: regionDocument([region]),
       definitions,
-      label: `${areaName(region.area)}, from Layout ${effective.title}`,
-      badge: `${areaName(region.area)} · from Layout`,
+      ...regionWords(effective, region, meta),
       ...editOf(effective, meta),
-      ...noteOf(effective, region, meta),
     })
   );
   const layers = effective.regions.map(
     (region): LayersRegionRow => ({
       area: region.area,
-      name: areaName(region.area),
-      origin: `from Layout ${effective.title}`,
+      name: regionWords(effective, region, meta).name,
+      origin: `${effective.title} header & footer`,
       onActivate: () => {
-        // Shown and focused on the canvas, where its tag says the rest.
+        // Shown and focused on the canvas, where it is selected.
         const drawn = canvasRoot?.querySelector<HTMLElement>(
           `[data-nx-region="${region.area}"]`
         );
@@ -752,8 +781,81 @@ function regionsOf(
       },
     })
   );
-  return { canvas, layers };
+  const cards = effective.regions.map(
+    (region): RegionCardFacts => ({
+      area: region.area,
+      componentId: region.componentId,
+      setId: effective.id,
+      setTitle: effective.title,
+      starter: starterOf(region, meta) === region.area,
+      ...noteOf(effective, region, meta),
+    })
+  );
+  return { canvas, layers, cards, empty, followsDefault };
 }
+
+/** The area the region's component is the untouched starter for, if any. */
+function starterOf(
+  region: EffectiveLayout["regions"][number],
+  meta: LayoutChoicesResponse["meta"]
+): RegionArea | undefined {
+  return meta.regionComponents[region.componentId]?.untouchedStarter;
+}
+
+/**
+ * What a region is called on the canvas: where it comes from, or, while it
+ * shows the site's starter header or footer as seeded, that it is the
+ * starter, so an author knows it is theirs to edit or replace.
+ */
+function regionWords(
+  effective: EffectiveLayout,
+  region: EffectiveLayout["regions"][number],
+  meta: LayoutChoicesResponse["meta"]
+): Pick<CanvasRegion, "label" | "badge" | "name"> {
+  return regionNaming(
+    effective.title,
+    region.area,
+    starterOf(region, meta) === region.area
+  );
+}
+
+/**
+ * What a region of set `setTitle` is called on the canvas and in Layers:
+ * where it comes from, or, while it shows the site's starter as seeded, that
+ * it is the starter, so an author knows it is theirs to edit or replace.
+ */
+export function regionNaming(
+  setTitle: string,
+  area: RegionArea,
+  starter: boolean
+): Pick<CanvasRegion, "label" | "badge" | "name"> {
+  const from = `from the ${setTitle} header & footer`;
+  if (starter) {
+    return {
+      label: `${STARTER_NAMES[area]}, ${from}`,
+      badge: STARTER_BADGES[area],
+      name: STARTER_NAMES[area],
+    };
+  }
+  const name = siteRegionName(area);
+  return {
+    label: `${name}, ${from}`,
+    badge: `${name} · ${setTitle}`,
+    name,
+  };
+}
+
+/** The starter's names, as its region is called. */
+const STARTER_NAMES: Readonly<Record<RegionArea, string>> = {
+  header: "Starter header",
+  footer: "Starter footer",
+};
+
+/** The starter's short tags on the canvas. */
+const STARTER_BADGES: Readonly<Record<RegionArea, string>> = {
+  header: "Starter header · edit or replace",
+  footer: "Starter footer",
+};
 
 /** The way to edit the Layout, for an author who may: a new tab. */
 function editOf(
@@ -764,8 +866,8 @@ function editOf(
   return {
     edit: {
       href: `/admin/collections/${encodeURIComponent(meta.layoutsCollection)}/${encodeURIComponent(effective.id)}`,
-      text: "Edit Layout ↗",
-      name: `Edit Layout ${effective.title} (opens in a new tab)`,
+      text: "Edit header & footer set ↗",
+      name: `Edit header & footer set ${effective.title} (opens in a new tab)`,
     },
   };
 }
@@ -775,14 +877,13 @@ function noteOf(
   effective: EffectiveLayout,
   region: EffectiveLayout["regions"][number],
   meta: LayoutChoicesResponse["meta"]
-): Pick<CanvasRegion, "note"> {
+): Pick<RegionCardFacts, "note"> {
   if (effective.draftChangesNotLive) {
-    return { note: `Draft changes not live: Layout ${effective.title}` };
+    return {
+      note: `Draft changes not live: header & footer set ${effective.title}`,
+    };
   }
   return meta.regionComponents[region.componentId]?.draftChangesNotLive === true
     ? { note: `Draft changes not live: ${region.area} component` }
     : {};
 }
-
-const NO_REGIONS: readonly CanvasRegion[] = [];
-const NO_ROWS: readonly LayersRegionRow[] = [];

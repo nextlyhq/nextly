@@ -17,6 +17,27 @@ import type { RepairEntity } from "../types";
 export const f = (field: Record<string, unknown>) =>
   field as unknown as FieldDefinition;
 
+/**
+ * A relationship whose definition is not required, so its column is nullable: the definition
+ * the repair converts towards. Its table is made with the column NOT NULL (`legacyFields`), so a
+ * NOT NULL drop differs between the two on every dialect.
+ */
+export const AUTHOR = f({
+  name: "author",
+  type: "relationship",
+  relationTo: "users",
+});
+
+/**
+ * `fields` as an older version made the table: the author required, which the generator makes a
+ * NOT NULL column, where `AUTHOR` itself declares it nullable.
+ */
+export function legacyFields(fields: FieldDefinition[]): FieldDefinition[] {
+  return fields.map(field =>
+    field === AUTHOR ? f({ ...AUTHOR, required: true }) : field
+  );
+}
+
 /** The generator's SQL as statements a driver runs one at a time. */
 function statements(sql: string): string[] {
   return sql

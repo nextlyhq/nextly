@@ -30,6 +30,11 @@ export type PaginationMeta = {
    * for a capped count.
    */
   totalCapped?: true;
+  /**
+   * For a list walked by cursor: the `before` that reads the next page, when
+   * there is one. Lists paged by number never send it.
+   */
+  nextBefore?: string;
 };
 
 /** Paginated list response. Matches server's `respondList(items, meta)`. */

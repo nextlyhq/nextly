@@ -13,7 +13,9 @@
  * ignore file. A test that only asked "does a scaffold have a .gitignore" passes from a checkout
  * while the published package ships without one, which is the state this replaces.
  */
-import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -65,6 +67,62 @@ describe("the ignore file survives packing", () => {
       // The dotted name is the failure mode, not merely a duplicate: npm would strip it, and its
       // presence would mean someone had restored the arrangement this guards against.
       expect(existsSync(join(templates, template, ".gitignore"))).toBe(false);
+    }
+  );
+
+  // The Schema Builder's definition file (`db.uiSchemaFile`, `ui-schema.json` by default) is part
+  // of the code: `migrate:create` reads the Builder's entities from it, and a clone without it is
+  // refused. Judged by git itself, in a repository holding only the shipped file, so a broad
+  // pattern that happens to match it counts as listing it, and the repository's own ignore file
+  // plays no part. `.env` is the control: the shipped file ignores it, so a git that read nothing
+  // would fail there rather than pass the definition file for the wrong reason.
+  it("lists no Schema Builder definition file in the project's ignore file", () => {
+    const repo = mkdtempSync(join(tmpdir(), "nextly-ignore-"));
+    try {
+      copyFileSync(
+        join(templates, "base", "gitignore"),
+        join(repo, ".gitignore")
+      );
+      const git = (...args: string[]) =>
+        spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+      expect(git("init", "-q").status).toBe(0);
+      const ignored = (path: string) => git("check-ignore", "-q", path).status;
+      // 0: ignored; 1: not ignored; anything else: git could not answer.
+      expect(ignored(".env")).toBe(0);
+      expect(ignored("ui-schema.json")).toBe(1);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  // `.nextly/` holds what the app writes for one machine: its logs, and the record of a Builder
+  // save in progress, which names the host and database it was made on. A plugin project runs its
+  // playground from its own root, so it writes there too. Judged by git as above, with the
+  // migrations folder, which is part of the code, as the control a broad pattern would also catch.
+  it.each(["base", "plugin"])(
+    "templates/%s lists the app's own .nextly folder, and not the migrations, in its ignore file",
+    template => {
+      const repo = mkdtempSync(join(tmpdir(), "nextly-ignore-"));
+      try {
+        copyFileSync(
+          join(templates, template, "gitignore"),
+          join(repo, ".gitignore")
+        );
+        const git = (...args: string[]) =>
+          spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+        expect(git("init", "-q").status).toBe(0);
+        const ignored = (path: string) =>
+          git("check-ignore", "-q", path).status;
+        expect(
+          ignored(".nextly/save-in-progress/collection-posts-3f2a.json")
+        ).toBe(0);
+        expect(ignored(".nextly/logs/migrations.log")).toBe(0);
+        expect(
+          ignored("src/db/migrations/20260101_000000_000_posts_create.sql")
+        ).toBe(1);
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+      }
     }
   );
 

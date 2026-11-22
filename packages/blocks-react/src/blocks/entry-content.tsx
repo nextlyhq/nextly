@@ -42,9 +42,16 @@ import {
 } from "../editor-markers";
 
 import { ENTRY } from "./categories";
-import { CONTAINER_CHILD_GAP, CONTAINER_SUPPORTS } from "./container";
+import {
+  CONTAINER_CHILD_GAP,
+  CONTAINER_SUPPORTS,
+  CONTENT_WIDTH_PROPS,
+  type ContainerProps,
+  withContentWidth,
+} from "./container";
 
-export interface EntryContentProps {
+export interface EntryContentProps
+  extends Pick<ContainerProps, "contained" | "contentWidth"> {
   /** The top-level blocks field of the template's collection it draws. */
   field?: string;
 }
@@ -99,11 +106,14 @@ function Note({ note }: { note: EntryContentNote }): ReactElement {
  * canvas's note on the canvas and nothing at all on a published page.
  */
 function renderEntryContent({
+  props,
   node,
   ctx,
-  className,
+  className: ownClassName,
   renderSlot,
 }: BlockRenderArgs<EntryContentProps>): ReactElement | null {
+  // Boxed or full width, as every container is.
+  const className = withContentWidth(ownClassName, props);
   const canvas = ctx.entryContentCanvas;
   if (holdsContent(node)) {
     return (
@@ -150,9 +160,10 @@ export const entryContent: BlockDefinition<EntryContentProps, PageContext> =
     props: {
       // Which of the collection's top-level blocks fields it draws, chosen
       // from the collection's own in the inspector.
-      field: { label: "Field", type: "entryField" },
+      field: { label: "Show field", section: "Entry", type: "entryField" },
+      ...CONTENT_WIDTH_PROPS,
     },
-    defaultProps: {},
+    defaultProps: { contained: false },
     example: { props: {} },
     slots: {
       // Where the host composes the entry's blocks for drawing. Locked empty,

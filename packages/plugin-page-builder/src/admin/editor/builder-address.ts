@@ -15,11 +15,17 @@ import type {
 import { BUILDER_VIEW_PATH } from "../../builder-view";
 
 /**
- * The builder's address, with what to say about where it leads, or why this
+ * The builder's address, with what to say about where it leads; or that the
+ * entry has never been saved, so it has no address until it is; or why this
  * field has none.
+ *
+ * The unsaved entry is its own answer rather than a sentence, because it has
+ * a remedy the card offers in its place: saving the draft and then opening
+ * the builder, which needs the saved id.
  */
 export type BuilderAddress =
   | { href: string; note?: string }
+  | { unsaved: true }
   | { unavailable: string };
 
 /**
@@ -55,8 +61,8 @@ export function showsAnotherLanguage(
  * names another row once the rows are reordered, so it is never put here: the
  * view refuses an address that names a row by one.
  *
- * Withheld, with the sentence the card shows, where there is no address to
- * open: outside a document, and on an entry that has never been saved.
+ * Withheld where there is no address to open: outside a document, with the
+ * sentence the card shows, and on an entry that has never been saved.
  */
 export function builderAddress(
   identity: DocumentIdentity | null,
@@ -76,9 +82,7 @@ export function builderAddress(
       ...elsewhere,
     };
   }
-  if (identity.documentId === undefined) {
-    return { unavailable: "Save this page to open the Page Builder." };
-  }
+  if (identity.documentId === undefined) return { unsaved: true };
   return {
     href: `${documentBuilderPath(identity.slug, identity.documentId)}${query}`,
     ...elsewhere,
@@ -131,10 +135,10 @@ export function fieldBuilderAddress(
     if (field.throughRow !== true || !showsAnotherLanguage(locale)) {
       return builderAddress(identity, field.address, locale);
     }
-    if ("unavailable" in document) return document;
+    if (!("href" in document)) return document;
     return { unavailable: ROW_IN_ANOTHER_LANGUAGE };
   }
-  if ("unavailable" in document) return document;
+  if (!("href" in document)) return document;
   return { unavailable: ROW_UNAVAILABLE[field.unavailable] };
 }
 
@@ -317,4 +321,74 @@ export function openAtFromSearch(search: string): OpenAt {
 export function sectionFromSearch(search: string): string | undefined {
   const value = new URLSearchParams(search).get(SECTION_PARAM);
   return value === null || value === "" ? undefined : value;
+}
+
+/**
+ * A way into the builder an author asked for on an entry never saved, held
+ * until that entry's first save has landed and its form is drawn again at
+ * the entry's own address, whose field then opens it.
+ *
+ * Held here rather than run where it was asked: the create screen moves to
+ * the entry's address once the save lands, so the card that asked is gone by
+ * then, and a move to the builder made beside that one would race it. The
+ * field drawn at the new address claims it, by the entry's id and the field's
+ * form path, which a first save leaves where it was.
+ */
+interface OpenAfterSave {
+  readonly collection: string;
+  readonly id: string;
+  readonly field: string;
+  /** When the request lapses, in ms since the epoch. */
+  readonly until: number;
+}
+
+let openAfterSave: OpenAfterSave | null = null;
+
+/**
+ * How long a request waits for the entry's form to be drawn again. Long
+ * enough for a slow read of the new entry, short enough that a form opened
+ * much later never moves to the builder on its own.
+ */
+const OPEN_AFTER_SAVE_MS = 60_000;
+
+/**
+ * Ask for the builder to open on `field` of the entry `id` just created in
+ * `collection`, once its form is drawn. One request at a time: a later one
+ * replaces it.
+ */
+export function openBuilderAfterSave(
+  collection: string,
+  id: string,
+  field: string,
+  now: number = Date.now()
+): void {
+  openAfterSave = { collection, id, field, until: now + OPEN_AFTER_SAVE_MS };
+}
+
+/**
+ * Whether the builder was asked to open on `field` of the document the form
+ * now holds; true at most once per request, which this ends. A lapsed
+ * request is ended unanswered.
+ */
+export function claimOpenAfterSave(
+  identity: DocumentIdentity | null,
+  field: string,
+  now: number = Date.now()
+): boolean {
+  const asked = openAfterSave;
+  if (asked === null) return false;
+  if (now > asked.until) {
+    openAfterSave = null;
+    return false;
+  }
+  if (
+    identity?.kind !== "collection" ||
+    identity.slug !== asked.collection ||
+    identity.documentId !== asked.id ||
+    field !== asked.field
+  ) {
+    return false;
+  }
+  openAfterSave = null;
+  return true;
 }

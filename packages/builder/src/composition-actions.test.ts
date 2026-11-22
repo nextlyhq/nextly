@@ -127,6 +127,14 @@ describe("the bind and unbind actions' shapes", () => {
     expect(bind({ $bind: "" })).toBe(false);
   });
 
+  it("takes an item binding naming the enclosing list it reads", () => {
+    expect(bind({ $bind: "name", source: "item", list: "categories" })).toBe(
+      true
+    );
+    // An empty list id is no list.
+    expect(bind({ $bind: "name", source: "item", list: "" })).toBe(false);
+  });
+
   it("keeps the visitor's value, a named entry's or item's, or a value given", () => {
     for (const keep of [
       "visitor",

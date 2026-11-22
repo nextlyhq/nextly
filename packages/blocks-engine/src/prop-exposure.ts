@@ -8,6 +8,7 @@
  */
 import type { PropSchema } from "./block";
 import type { ExposedPropertyType } from "./document";
+import { isPlainRecord } from "./plain-record";
 import { RICH_TEXT_PROP_TYPE } from "./rich-text";
 
 /**
@@ -43,4 +44,40 @@ export function exposureTypeForProp(
     default:
       return undefined;
   }
+}
+
+/**
+ * The values a select prop declares, as stored strings or `{ value }` records.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function choicesOfProp(schema: PropSchema): readonly string[] {
+  const options: unknown = schema.options;
+  if (!Array.isArray(options)) return [];
+  const values: string[] = [];
+  for (const option of options as unknown[]) {
+    if (typeof option === "string") values.push(option);
+    else if (isPlainRecord(option) && typeof option.value === "string") {
+      values.push(option.value);
+    }
+  }
+  return values;
+}
+
+/**
+ * Whether a select prop can render every one of `choices`: each is one it
+ * declares, or it declares none and takes any. A choice it lacks reaches the
+ * block as written, which it can't draw, so a field or a setting offering one
+ * may not fill it.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function choicesFitProp(
+  choices: readonly string[],
+  schema: PropSchema
+): boolean {
+  const allowed = choicesOfProp(schema);
+  return (
+    allowed.length === 0 || choices.every(choice => allowed.includes(choice))
+  );
 }

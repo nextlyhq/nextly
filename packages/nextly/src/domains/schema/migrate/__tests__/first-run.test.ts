@@ -43,13 +43,15 @@ function refusal(
 }
 
 describe("configurationRowsMessage", () => {
-  it("says the rows came from the configuration, how many were written, and that they are the baseline", () => {
+  it("says, in one notice, that the settings and permissions are recorded in the database but in no migration, and that the next migrate:create captures them", () => {
     expect(configurationRowsMessage(3, 5)).toBe(
-      "First run on this release: 3 registry rows written from the configuration (5 declared, the rest already matched), and kept with the database's registry record as its baseline. From now on the registry rows come from the migrations."
+      "First run on this release: the site's current settings and permissions are now recorded in the database (3 registry rows written from the configuration, 5 declared, the rest already matched), but in no migration yet. The next `nextly migrate:create` writes the migration that captures them."
     );
     expect(configurationRowsMessage(1, 1)).toContain(
-      "1 registry row written from the configuration (1 declared"
+      "1 registry row written from the configuration, 1 declared"
     );
+    // One line: a log reader sees it whole.
+    expect(configurationRowsMessage(3, 5)).not.toContain("\n");
   });
 });
 

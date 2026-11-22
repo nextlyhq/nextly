@@ -3,12 +3,10 @@
 import { Fragment } from "react";
 import type React from "react";
 
-import { Clock, Hash } from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { containedContributionEvents } from "@admin/components/shared/target-slot/IsolatedContribution";
 import { PlaceContributionFallback } from "@admin/components/shared/target-slot/PlaceContributionFallback";
 import { Skeleton } from "@admin/components/ui";
-import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import type {
   DocumentPanelSectionProps,
@@ -24,11 +22,20 @@ import type { ReleaseDocumentRef } from "@admin/types/releases";
 
 import { useEntryLocale } from "../../EntryLocaleContext";
 import { DocumentLanguagePanel, hasLanguages } from "../../LanguagePanel";
-import { DocumentIdCopy } from "../DocumentIdCopy";
+import { ReviewSection } from "../../review/ReviewSection";
+import { useLanguageReviewStages } from "../../review/useLanguageReviewStages";
+import type { EntryDetails } from "../entry-details-read";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
+import { DetailsSection } from "./DetailsSection";
 import { PanelSection } from "./PanelSection";
 import { PublishingSection } from "./PublishingSection";
+import {
+  ForDevelopersSection,
+  LastChangedSection,
+  WhatThisIsSection,
+  type SinglePanelFacts,
+} from "./SinglePanelSections";
 import { StatusSection, type PanelDocumentStatus } from "./StatusSection";
 
 // The document panel's sections, in the one order both editors draw them:
@@ -39,14 +46,28 @@ import { StatusSection, type PanelDocumentStatus } from "./StatusSection";
 // A side panel section a plugin declares at an edit page's place is drawn
 // where the server placed it among the built-in four (`panelOrder`, from
 // `placedPanelOrder`), and a built-in it replaces is not drawn.
+//
+// A Single's panel says more about the document, since a Single rarely has
+// a lifecycle or languages to fill it: what this is, first; when it was last
+// changed and by whom, after the lifecycle and language sections and before
+// any plugin's; and Details drawn as "For developers", in Details' own
+// place, so a section anchored to Details stays beside it.
 
 export { pillStateFromForm, PILL_LABEL, type PillState } from "./pill-state";
+export type { SinglePanelFacts } from "./SinglePanelSections";
 
 export interface DocumentPanelProps {
   /** Form mode. Nothing is drawn before the document exists. */
   mode: EntryFormMode;
   /** Entry data with id and timestamps. */
   entry?: EntryData | null;
+  /**
+   * The address "View API response" reads, which Details shows with a copy;
+   * absent, Details draws no API line.
+   */
+  apiAddress?: string;
+  /** Who made and changed the document, where the server says; Details names them. */
+  details?: Pick<EntryDetails, "createdBy" | "updatedBy" | "updatedAt">;
   /** Whether the collection has the Draft/Published feature enabled, which
    *  the Status and Publishing sections and the language panel read. */
   hasStatus: boolean;
@@ -62,6 +83,12 @@ export interface DocumentPanelProps {
   releaseDocument?: ReleaseDocumentRef;
   /** The active editing locale, forwarded to the language panel. */
   locale?: string;
+  /**
+   * Why the Review section's steps wait at this moment, as the editor holds
+   * its header's (`useEditorReview`'s `stepsHold`): unsaved edits, a save on
+   * its way, a past version on screen. Absent, nothing holds them.
+   */
+  reviewHold?: string | undefined;
   /** Switch the editor to a language, forwarded to the language panel. */
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Withholds the panel's mutating actions (reading a past version). */
@@ -93,6 +120,11 @@ export interface DocumentPanelProps {
    * sections are handed `pluginSectionProps`; with neither, none is drawn.
    */
   placedSectionProps?: SidebarSectionProps | DocumentPanelSectionProps;
+  /**
+   * The Single this panel is about, which makes it a Single's panel (what
+   * this is, last changed, For developers). Absent, it is an entry's.
+   */
+  single?: SinglePanelFacts;
 }
 
 /** The built-in sections, in the order drawn when nothing places them. */
@@ -106,10 +138,13 @@ const BUILT_IN_ORDER: readonly PanelOrderEntry[] = [
 export function DocumentPanel({
   mode,
   entry,
+  apiAddress,
+  details,
   hasStatus,
   documentStatus,
   releaseDocument,
   locale,
+  reviewHold,
   onLocaleChange,
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
@@ -118,7 +153,13 @@ export function DocumentPanel({
   pluginSectionProps,
   panelOrder = BUILT_IN_ORDER,
   placedSectionProps = pluginSectionProps,
+  single,
 }: DocumentPanelProps): React.ReactElement | null {
+  // Each language's workflow stage, read before the panel decides whether it
+  // draws anything, as every hook here must be.
+  const reviewStages = useLanguageReviewStages(
+    mode === "create" ? undefined : releaseDocument
+  );
   // Nothing to say until the document exists.
   if (mode === "create") return null;
 
@@ -157,38 +198,66 @@ export function DocumentPanel({
               navigationDisabled={navigationDisabled}
               publishAllDisabled={publishAllDisabled}
               sharedChangesPending={sharedChangesPending}
+              {...(reviewStages === undefined ? {} : { reviewStages })}
             />
           </LanguageSection>
         );
       case "details":
         return (
-          <PanelSection title="Details">
-            <dl className="space-y-3">
-              <IdRow id={entry?.id} />
-              <TimestampRows entry={entry} />
-            </dl>
-          </PanelSection>
+          about.developers ?? (
+            <DetailsSection
+              entry={entry}
+              apiAddress={apiAddress}
+              createdBy={details?.createdBy}
+              updatedBy={details?.updatedBy}
+              changedAt={details?.updatedAt}
+            />
+          )
         );
       default:
         return null;
     }
   };
 
+  // A Single's own sections, and where its last change goes.
+  const about = singleParts({ single, entry, apiAddress, details, panelOrder });
+
+  // The Review section is a part of the panel of its own, not of the Status
+  // section a plugin may replace: it follows Status where Status is drawn,
+  // and leads the panel's sections where the order leaves Status out, so the
+  // workflow's steps stay on offer whoever draws the status. It draws nothing
+  // where no workflow is attached.
+  const review =
+    hasStatus && releaseDocument !== undefined ? (
+      <ReviewSection
+        document={releaseDocument}
+        {...(locale === undefined ? {} : { locale })}
+        hold={reviewHold}
+      />
+    ) : null;
+  const statusPlaced = panelOrder.some(isStatusPart);
+
   return (
     <div className="flex flex-col" data-testid="document-panel-sections">
-      {panelOrder.map(part =>
-        part.kind === "builtIn" ? (
-          <Fragment key={`built-in:${part.name}`}>
-            {builtIn(part.name)}
-          </Fragment>
-        ) : placedSectionProps === undefined ? null : (
-          <PlacedSection
-            key={`placed:${part.id}`}
-            part={part}
-            props={placedSectionProps}
-          />
-        )
-      )}
+      {about.lead}
+      {statusPlaced ? null : review}
+      {panelOrder.map((part, index) => (
+        <Fragment
+          key={
+            part.kind === "builtIn"
+              ? `built-in:${part.name}`
+              : `placed:${part.id}`
+          }
+        >
+          {part.kind === "builtIn" ? (
+            builtIn(part.name)
+          ) : placedSectionProps === undefined ? null : (
+            <PlacedSection part={part} props={placedSectionProps} />
+          )}
+          {isStatusPart(part) ? review : null}
+          {about.after(index)}
+        </Fragment>
+      ))}
       {pluginSectionProps === undefined
         ? null
         : pluginSections.map(section => (
@@ -218,6 +287,106 @@ export function DocumentPanel({
           ))}
     </div>
   );
+}
+
+/** Whether a part of the panel's order is the built-in Status section. */
+function isStatusPart(part: PanelOrderEntry): boolean {
+  return part.kind === "builtIn" && part.name === "status";
+}
+
+/** A Single's own sections, or none of them for an entry's panel. */
+interface SingleParts {
+  /**
+   * Drawn before the placed sections: what this is, and Last changed where
+   * none of the sections about the document is placed.
+   */
+  lead: React.ReactNode;
+  /** Drawn straight after the placed section at `index`. */
+  after: (index: number) => React.ReactNode;
+  /** For developers, drawn in Details' place; null keeps Details. */
+  developers: React.ReactNode;
+}
+
+const NO_SINGLE: SingleParts = {
+  lead: null,
+  after: () => null,
+  developers: null,
+};
+
+/**
+ * When a Single was last changed: its last recorded change, else its row's
+ * own time.
+ */
+function changedAtOf(
+  details: DocumentPanelProps["details"],
+  entry: DocumentPanelProps["entry"]
+): string | undefined {
+  return (
+    details?.updatedAt ??
+    entry?.updatedAt ??
+    (entry?.updated_at as string | undefined) ??
+    undefined
+  );
+}
+
+/**
+ * What a Single's panel draws besides the shared sections: what this is,
+ * its last change after the last of its lifecycle and language sections (so
+ * every section a plugin adds comes after it), and "For developers" in
+ * Details' place.
+ */
+function singleParts({
+  single,
+  entry,
+  apiAddress,
+  details,
+  panelOrder,
+}: Pick<DocumentPanelProps, "single" | "entry" | "apiAddress" | "details"> & {
+  panelOrder: readonly PanelOrderEntry[];
+}): SingleParts {
+  if (!single) return NO_SINGLE;
+  const lastChanged = (
+    <LastChangedSection
+      at={changedAtOf(details, entry)}
+      by={details?.updatedBy}
+      onOpenHistory={single.onOpenHistory}
+    />
+  );
+  const lastChangedAfter = lastAboutTheDocument(panelOrder);
+  return {
+    lead: (
+      <>
+        <WhatThisIsSection
+          label={single.label}
+          description={single.description}
+        />
+        {lastChangedAfter === -1 ? lastChanged : null}
+      </>
+    ),
+    after: index => (index === lastChangedAfter ? lastChanged : null),
+    developers: <ForDevelopersSection apiAddress={apiAddress} id={entry?.id} />,
+  };
+}
+
+/** The built-in sections about the document itself, before any plugin's. */
+const ABOUT_THE_DOCUMENT: ReadonlySet<string> = new Set([
+  "status",
+  "publishing",
+  "language",
+]);
+
+/**
+ * Where in `order` the last of the sections about the document itself
+ * stands (Status, Publishing, Language), or -1 where none is there.
+ */
+function lastAboutTheDocument(order: readonly PanelOrderEntry[]): number {
+  let last = -1;
+  order.forEach((part, index) => {
+    if (part.kind === "builtIn" && ABOUT_THE_DOCUMENT.has(part.name)) {
+      last = index;
+    }
+  });
+  return last;
 }
 
 /**
@@ -311,67 +480,5 @@ function LanguageSection({ children }: { children: React.ReactNode }) {
     <PanelSection title="Language" titleHidden>
       {children}
     </PanelSection>
-  );
-}
-
-function RowIcon({ icon: Icon }: { icon: typeof Hash }) {
-  return (
-    <Icon
-      className="h-3.5 w-3.5 text-muted-foreground shrink-0"
-      aria-hidden="true"
-    />
-  );
-}
-
-function IdRow({ id }: { id?: string | null }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <dt className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
-        <RowIcon icon={Hash} />
-        <span>ID</span>
-      </dt>
-      <dd className="flex items-center gap-1 min-w-0">
-        <DocumentIdCopy id={id} />
-      </dd>
-    </div>
-  );
-}
-
-function TimestampRows({ entry }: { entry?: EntryData | null }) {
-  const { formatDate } = useAdminDateFormatter();
-
-  const createdAt =
-    entry?.createdAt ?? (entry?.created_at as string | undefined) ?? undefined;
-  const updatedAt =
-    entry?.updatedAt ?? (entry?.updated_at as string | undefined) ?? undefined;
-
-  const formatRowDate = (dateString: string | undefined) => {
-    if (!dateString) return "—";
-    return formatDate(
-      dateString,
-      { dateStyle: "medium", timeStyle: "short" },
-      dateString
-    );
-  };
-
-  return (
-    <>
-      <TimestampRow label="Created" value={formatRowDate(createdAt)} />
-      <TimestampRow label="Updated" value={formatRowDate(updatedAt)} />
-    </>
-  );
-}
-
-function TimestampRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <dt className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
-        <RowIcon icon={Clock} />
-        <span>{label}</span>
-      </dt>
-      <dd className="text-xs text-foreground" title={value}>
-        {value}
-      </dd>
-    </div>
   );
 }

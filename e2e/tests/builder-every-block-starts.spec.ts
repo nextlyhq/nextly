@@ -1,0 +1,275 @@
+/**
+ * Every core block starts visible and real.
+ *
+ * Each block the Add panel offers is added, in turn, to an empty page with its
+ * defaults, and:
+ *
+ * - it draws at a visible size, never a 0px line;
+ * - where the blocks spec gives it real-looking content, it shows it (a
+ *   Heading's "A section title", a Text's "A paragraph of text.", a List's
+ *   "First" and "Second"); a block that starts empty says what to do next
+ *   instead, or asks on the canvas (the Columns and Collection list pickers);
+ * - adding it fails no request, so no block asks for a missing file.
+ *
+ * Its own page, named uniquely, so no lock is needed.
+ *
+ * @module tests/builder-every-block-starts.spec
+ */
+import { expect, type Page, type Request } from "@playwright/test";
+
+import { selection } from "./canvas/editor-driver";
+import { gotoAdmin } from "./support/admin";
+import { canvasBlock } from "./support/canvas-frame";
+import { test } from "./support/test";
+
+const ENTRIES = "/admin/api/collections/pages/entries";
+
+/** The words a block's defaults must show, where the blocks spec names them. */
+const STARTS_WITH: Readonly<Record<string, readonly string[]>> = {
+  Heading: ["A section title"],
+  Text: ["A paragraph of text."],
+  List: ["First", "Second"],
+};
+
+/**
+ * Every core block a page's Add panel offers, by its tile's name. Entry
+ * content is left out: it is offered only while a collection's template is
+ * open.
+ */
+const CORE_TILES = [
+  "Section",
+  "Box",
+  "Columns",
+  "Column",
+  "Card",
+  "Accordion",
+  "Question",
+  "Spacer",
+  "Heading",
+  "Text",
+  "Rich text",
+  "Table of contents",
+  "List",
+  "Image",
+  "Button",
+  "Form",
+  "Gallery",
+  "Divider",
+  "Quote",
+  "Embed",
+  "Icon",
+  "Collection list",
+] as const;
+
+/**
+ * The blocks that start empty, each by the next step the canvas shows over
+ * it: a picker, or the empty state with its own words.
+ */
+const NEXT_STEP: Readonly<Record<string, string>> = {
+  Columns: "Choose a layout",
+  "Collection list": "Show entries from",
+  Image: "Add an image",
+  Gallery: "Add images",
+  Embed: "Paste a YouTube, Vimeo or other link",
+};
+
+/** The fields a new Form starts with, by their labels. */
+const FORM_STARTS_WITH = ["Name", "Email", "Message"] as const;
+
+/** An empty draft page, and its id. */
+async function createPage(page: Page): Promise<string> {
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const created = await page.request.post(ENTRIES, {
+    data: {
+      title: `Every block ${stamp}`,
+      slug: `every-block-${stamp}`,
+      status: "draft",
+      noHeaderFooter: true,
+      content: { formatVersion: 1, kind: "page", nodes: [] },
+    },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  return ((await created.json()) as { item: { id: string } }).item.id;
+}
+
+function railButton(page: Page, name: string) {
+  return page
+    .getByRole("navigation", { name: "Editor panels" })
+    .getByRole("button", { name, exact: true });
+}
+
+/** The Add panel's block tiles, by name, in the order it offers them. */
+async function blockTiles(page: Page): Promise<string[]> {
+  const add = railButton(page, "Add");
+  if ((await add.getAttribute("aria-pressed")) !== "true") await add.click();
+  await expect(
+    page.getByRole("combobox", { name: "Insert a block" })
+  ).toBeVisible();
+  const names = await page
+    .getByRole("listbox")
+    .first()
+    .getByRole("option")
+    .evaluateAll(options =>
+      // A tile's first line is its name, as the panel draws it.
+      options.map(
+        option => (option as HTMLElement).innerText.split("\n")[0]?.trim() ?? ""
+      )
+    );
+  // The suite's own fixture blocks, which only a test setup registers, are
+  // not core blocks.
+  return names.filter(name => name !== "" && !name.startsWith("Test fixture"));
+}
+
+test("every core block starts at a visible size, real or with its next step, and fails no request", async ({
+  page,
+}) => {
+  test.setTimeout(420_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Each request is held against the tile whose adding started it, from the
+  // moment it starts, so a failure that answers late is still that tile's,
+  // never the next one's, and a tile that adds nothing is checked too.
+  let adding = "";
+  const startedBy = new Map<Request, string>();
+  const failed: string[] = [];
+  page.on("request", request => {
+    startedBy.set(request, adding);
+  });
+  page.on("requestfinished", request => {
+    const tile = startedBy.get(request) ?? "";
+    // Held as pending until its status is read, so the last wait below
+    // cannot end before the failure is counted.
+    void request.response().then(response => {
+      startedBy.delete(request);
+      if (response !== null && response.status() >= 400 && tile !== "") {
+        failed.push(`${tile}: ${response.status()} ${request.url()}`);
+      }
+    });
+  });
+  page.on("requestfailed", request => {
+    const tile = startedBy.get(request) ?? "";
+    startedBy.delete(request);
+    // A read the editor stopped itself, as a newer one replaces it, is not a
+    // missing file.
+    if (request.failure()?.errorText.includes("ERR_ABORTED") === true) return;
+    if (tile === "") return;
+    failed.push(
+      `${tile}: failed ${request.url()} ${request.failure()?.errorText ?? ""}`
+    );
+  });
+  /** The requests a tile started that have not answered yet. */
+  const pendingFor = (tile: string) =>
+    [...startedBy.values()].filter(by => by === tile).length;
+  /**
+   * Waits, a bounded while, for the tile's requests to answer. One still open
+   * after it (a stream) is left: its failure, if it comes, is still counted
+   * against this tile.
+   */
+  const settleRequests = (tile: string) =>
+    expect
+      .poll(() => pendingFor(tile), { timeout: 5_000 })
+      .toBe(0)
+      .catch(() => undefined);
+
+  const id = await createPage(page);
+  await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
+  await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+    timeout: 60_000,
+  });
+  const tiles = await blockTiles(page);
+  expect(tiles, "the Add panel offers every core block").toEqual(
+    expect.arrayContaining([...CORE_TILES])
+  );
+
+  const problems: string[] = [];
+  for (const name of tiles) {
+    // Nothing selected, so each block is added at the end of the page.
+    for (
+      let press = 0;
+      press < 4 && (await selection(page)).length > 0;
+      press++
+    ) {
+      await page.keyboard.press("Escape");
+    }
+    const tile = page.getByRole("option", { name, exact: true }).first();
+    adding = name;
+    await tile.click();
+    // A block that only goes inside another (a Column, an accordion's item)
+    // adds nothing on its own; its tile says where it goes instead.
+    const added = await expect
+      .poll(async () => (await selection(page))[0], { timeout: 3_000 })
+      .not.toBeUndefined()
+      .then(async () => (await selection(page))[0])
+      .catch(() => undefined);
+    if (added === undefined) {
+      // Its tile says where it goes: in its accessible description (the
+      // tooltip it is described by) or its own words.
+      const describedWhere = await expect(tile)
+        .toHaveAccessibleDescription(/goes inside/i, { timeout: 1_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!describedWhere && !/goes inside/i.test(await tile.innerText())) {
+        problems.push(
+          `${name}: nothing was added, and the tile says nothing of where it goes`
+        );
+      }
+      await settleRequests(name);
+      continue;
+    }
+    const block = canvasBlock(page, added).first();
+    await expect(block).toBeVisible();
+    const box = await block.boundingBox();
+    // Visible: never 0px either way. A Divider is rightly a 1px line.
+    if (box === null || box.height < 1 || box.width < 1) {
+      problems.push(
+        `${name}: drawn at ${Math.round(box?.width ?? 0)}x${Math.round(box?.height ?? 0)}px`
+      );
+    }
+    // An Accordion starts with three questions.
+    if (name === "Accordion") {
+      const found = await block.locator("summary").count();
+      if (found < 3) {
+        problems.push(`Accordion: starts with ${found} questions, not 3`);
+      }
+    }
+    // A Form starts with its three fields, each found by its label. Asked by
+    // role, so the hidden spam trap (aria-hidden) is never one of them.
+    for (const field of name === "Form" ? FORM_STARTS_WITH : []) {
+      // The label's start: a required field's label may end with a mark.
+      const control = block.getByRole("textbox", {
+        name: new RegExp(`^${field}\\b`),
+      });
+      if (!(await control.isVisible())) {
+        problems.push(`Form: does not start with a visible "${field}" field`);
+      }
+    }
+    if (name === "Quote" && (await block.innerText()).trim() === "") {
+      problems.push("Quote: starts with no words");
+    }
+    for (const words of STARTS_WITH[name] ?? []) {
+      if (!(await block.innerText()).includes(words)) {
+        problems.push(`${name}: does not start with "${words}"`);
+      }
+    }
+    // A block that starts empty shows its next step, in its own words.
+    const next = NEXT_STEP[name];
+    if (
+      next !== undefined &&
+      // Drawn over the canvas, in the editor's own page, once the block is.
+      !(await expect(page.getByText(next).first())
+        .toBeVisible({ timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false))
+    ) {
+      problems.push(`${name}: starts empty without "${next}"`);
+    }
+    // A picker the block asks with on the canvas is its next step; leave it.
+    await page.keyboard.press("Escape");
+    await settleRequests(name);
+  }
+  // Every request answered, so a late failure is counted, against its tile.
+  await expect
+    .poll(() => startedBy.size, { timeout: 15_000 })
+    .toBe(0)
+    .catch(() => undefined);
+  expect([...problems, ...failed]).toEqual([]);
+});

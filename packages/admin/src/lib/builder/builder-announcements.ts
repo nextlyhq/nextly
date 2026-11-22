@@ -1,10 +1,11 @@
 /**
  * What a drag in the Builder's outline says.
  *
- * A field drags by its own id and moves among its siblings, so a sentence
- * names the field by its label and places it among the fields of its own
- * container. Whether a drop is a move is decided by the rule the drop handler
- * applies (`builderDropAccepted`), so a refused drop is said to be refused.
+ * A field drags by its own id, so a sentence names the field by its label and
+ * places it among the fields of its own container; a place that is no field
+ * says what it is called through its drop data. What a drop on a row did
+ * is said by the outline, which judges it by the move rule with the sideways
+ * offset this context's sentences never see; here only a drop over nothing.
  *
  * @module lib/builder/builder-announcements
  */
@@ -17,7 +18,7 @@ import {
 } from "@admin/components/features/entries/fields/structured/field-array-helpers";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
-import { builderDropAccepted, placeAmongSiblings } from "./builder-rows";
+import { placeAmongSiblings } from "./builder-rows";
 import { findFieldById } from "./field-transformers";
 
 /**
@@ -36,9 +37,13 @@ function fieldSubject(field: BuilderField): string {
 export function builderAnnouncements(
   fields: readonly BuilderField[]
 ): Announcements {
-  const describe = ({ id }: AnnouncedItem): string | undefined => {
+  // A field is named by its label; a place that is no field (a breadcrumb crumb) carries what it
+  // is called aloud in its drop data.
+  const describe = ({ id, data }: AnnouncedItem): string | undefined => {
     const field = findFieldById([...fields], String(id));
-    return field ? fieldSubject(field) : undefined;
+    if (field) return fieldSubject(field);
+    const spoken: unknown = data.current?.spoken;
+    return typeof spoken === "string" ? spoken : undefined;
   };
 
   const place = ({ id }: AnnouncedItem): string | undefined => {
@@ -49,17 +54,9 @@ export function builderAnnouncements(
   const shared = sortableAnnouncements({ describe, place });
   return {
     ...shared,
-    // The landing is spoken only for a drop the handler ACCEPTS, decided by
-    // the same predicate the handler decides with.
-    onDragEnd: ({ active, over }) => {
-      if (
-        over !== null &&
-        over.id !== active.id &&
-        !builderDropAccepted(fields, String(active.id), String(over.id))
-      ) {
-        return `${describe(active) ?? "The item"} cannot move there. Nothing moved.`;
-      }
-      return shared.onDragEnd({ active, over });
-    },
+    // A drop on a row is announced by the outline, from the move rule's
+    // answer, so it is never said twice or differently here.
+    onDragEnd: ({ active, over }) =>
+      over === null ? shared.onDragEnd({ active, over }) : undefined,
   };
 }

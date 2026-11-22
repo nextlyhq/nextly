@@ -10,7 +10,6 @@
  * email, and nothing for a person with no name or no account any more.
  *
  * @module domains/content-events/named-event-people
- * @experimental
  */
 
 import { peopleById } from "../versions/author-hydration";
@@ -60,8 +59,6 @@ function keptPerson(event: NamedEvent): { id: string; nameKey: string } | null {
  * or the lookup failed. Every other event is returned as it was. One lookup
  * for the page; a failed one names nobody rather than failing the read, since
  * the name decorates a history the caller may already read.
- *
- * @experimental
  */
 export async function nameEventPeople<T extends NamedEvent>(
   events: T[]

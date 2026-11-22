@@ -196,6 +196,29 @@ async function migrate(
   return { code, said };
 }
 
+/**
+ * `nextly migrate` over `config`, which must be refused: the error's code and
+ * its lines, one for each change it names. Thrown rather than exited, so the
+ * lines are read from the error itself.
+ */
+async function refused(
+  config: unknown
+): Promise<{ code: string; why: string }> {
+  loaded.config = config;
+  tick();
+  const { context } = command();
+  const error = await runMigrate(
+    { cwd: dir, throwOnFailure: true },
+    context
+  ).then(
+    () => undefined,
+    (thrown: unknown) => thrown
+  );
+  expect(error, "the run was not refused").toBeDefined();
+  const { code, why } = error as { code?: unknown; why?: unknown };
+  return { code: String(code), why: String(why) };
+}
+
 /** `nextly migrate`, which must succeed. */
 async function migrated(
   config: unknown,
@@ -526,6 +549,64 @@ describe.each(getConfiguredTestDialects())(
       ).toBe("Things that happen");
     });
 
+    // The run that applies the edit judges the one-to-ones' uniqueness on the definition it
+    // records, so it never makes the column unique again after the file dropped its index.
+    it("lets a Builder one-to-one edited into a many-to-one take a repeat after the run that applies the edit", async () => {
+      const builderOnly = defineConfig({
+        collections: [],
+        db: { migrationsDir: "./migrations" },
+      });
+      const withPerson = (relationType: "oneToOne" | "manyToOne") =>
+        writeManifest(
+          uiSchemaManifest.parse({
+            collections: [
+              {
+                slug: "rr_people",
+                fields: [{ name: "name", type: "text" }],
+              },
+              {
+                slug: "rr_profiles",
+                fields: [
+                  { name: "title", type: "text" },
+                  {
+                    name: "person",
+                    type: "relationship",
+                    options: { target: "rr_people", relationType },
+                  },
+                ],
+              },
+            ],
+          })
+        );
+      const run = (statement: string) =>
+        (
+          instance!.adapter as unknown as {
+            executeQuery(sql: string): Promise<unknown>;
+          }
+        ).executeQuery(statement);
+      const profile = (id: string) =>
+        run(
+          `INSERT INTO ${q}dc_rr_profiles${q} (${q}id${q}, ${q}title${q}, ${q}slug${q}, ${q}person${q}) VALUES ('${id}', '${id}', '${id}', 'ada')`
+        );
+      await withPerson("oneToOne");
+      await migrateCreate(builderOnly, "create_profiles");
+      await migrated(builderOnly);
+      await run(
+        `INSERT INTO ${q}dc_rr_people${q} (${q}id${q}, ${q}title${q}, ${q}name${q}, ${q}slug${q}) VALUES ('ada', 'Ada', 'Ada', 'ada')`
+      );
+      await profile("p1");
+      // Positive control: while it is one-to-one, a second profile of Ada is refused.
+      await expect(profile("p2")).rejects.toThrow();
+
+      await withPerson("manyToOne");
+      const edit = await migrateCreate(builderOnly, "person_many_to_one");
+      await migrated(builderOnly);
+
+      await expect(profile("p2")).resolves.toBeDefined();
+      // Kept for the reader: what the edit's file carries.
+      void edit;
+    });
+
     it("writes a field added in code to a Single's and a field group's rows", async () => {
       const declared = (...extra: ReturnType<typeof text>[]) =>
         defineConfig({
@@ -830,7 +911,12 @@ describe.each(getConfiguredTestDialects())(
           .sort();
       expect(named().indexOf(parallel)).toBe(1);
       vi.setSystemTime(new Date(Date.UTC(2026, 10, 10, 12, 0, clock, 0)));
-      await inDevelopment(() => migrated(merged));
+      // The newest snapshot is still `describe_posts`'s, so the merged
+      // configuration is refused until a migration records the merge; a run
+      // over the configuration that snapshot records applies `add_color`.
+      const ahead = await inDevelopment(() => refused(merged));
+      expect(ahead.why).toMatch(/^\+ add_column dc_rr_tags\.color \(/m);
+      await inDevelopment(() => migrated(declared("Articles")));
       expect(
         fieldNames(await collectionRow(instance!, dialect, "rr_tags"))
       ).not.toContain("color");
@@ -999,7 +1085,11 @@ describe.each(getConfiguredTestDialects())(
       await migrateCreate(withBody, "create_posts");
       await migrated(withBody);
 
-      await migrated(posts("Posts"));
+      // A configuration without the field is refused, naming the column it
+      // would drop, and the row keeps the field the migrations record.
+      const behind = await refused(posts("Posts"));
+      expect(behind.code).toBe("SCHEMA_DRIFT");
+      expect(behind.why).toMatch(/^- drop_column dc_rr_posts\.body$/m);
       expect(
         fieldNames(await collectionRow(instance!, dialect, "rr_posts"))
       ).toEqual(expect.arrayContaining(["title", "body"]));
@@ -1026,8 +1116,8 @@ describe.each(getConfiguredTestDialects())(
       const tags = await collectionRow(instance!, dialect, "rr_tags");
       expect(tags).toBeDefined();
 
-      // A later snapshot that records no `rr_tags`, beside a migration that
-      // drops nothing.
+      // A later snapshot that records no `rr_tags`, neither its table nor its
+      // settings, beside a migration that drops nothing.
       const later = await migrateCreate(
         defineConfig({
           ...both,
@@ -1054,9 +1144,25 @@ describe.each(getConfiguredTestDialects())(
       );
       const snapshot = JSON.parse(await readFile(snapshotPath, "utf-8"));
       delete snapshot.entities.collections.rr_tags;
+      snapshot.snapshot.tables = snapshot.snapshot.tables.filter(
+        (table: { name: string }) => table.name !== "dc_rr_tags"
+      );
       await writeFile(snapshotPath, JSON.stringify(snapshot));
 
-      await migrated(both);
+      // Run with the configuration that snapshot records: one declaring
+      // `rr_tags` is refused, as a change no migration records.
+      await migrated(
+        defineConfig({
+          ...both,
+          collections: [
+            defineCollection({
+              slug: "rr_posts",
+              description: "All posts",
+              fields: [text({ name: "title" })],
+            }),
+          ],
+        })
+      );
       expect(await collectionRow(instance!, dialect, "rr_tags")).toEqual(tags);
       expect(
         (await collectionRow(instance!, dialect, "rr_posts"))?.description
@@ -1118,8 +1224,15 @@ describe.each(getConfiguredTestDialects())(
         )
       ).toBe("number");
 
-      // Nothing pending, and a configuration that still says text.
-      await migrated(asText);
+      // Nothing pending, and a configuration that still says text: refused,
+      // naming the type change, and the row keeps the type applied.
+      const behind = await refused(asText);
+      expect(behind.code).toBe("SCHEMA_DRIFT");
+      expect(behind.why).toMatch(
+        /^~ change_column_type dc_rr_scores\.points \(/m
+      );
+      // And a run that applies nothing over the configuration it records.
+      await migrated(asNumber);
       expect(
         fieldType(
           await collectionRow(instance!, dialect, "rr_scores"),
@@ -1735,9 +1848,24 @@ describe.each(getConfiguredTestDialects())(
           (await collectionRow(instance!, dialect, "rr_posts"))?.description
         ).toBe("Posts");
 
-        // A configuration without the description: nothing of it is read here,
-        // and the newest applied snapshot says nothing of the description.
-        await migrated(undescribed(text({ name: "body" })));
+        // A configuration without the description is refused once the record
+        // exists: the row it would rewrite records one, and no migration
+        // records clearing it.
+        const undescribedRun = await refused(
+          undescribed(text({ name: "body" }))
+        );
+        expect(undescribedRun.code).toBe("SETTINGS_CHANGE_WITHOUT_MIGRATION");
+        expect(undescribedRun.why).toContain(
+          "~ settings rr_posts: differs from the settings the database recorded"
+        );
+        expect(
+          (await collectionRow(instance!, dialect, "rr_posts"))?.description
+        ).toBe("Posts");
+
+        // A later run with the configuration unchanged: the newest applied
+        // snapshot says nothing of the description, and nothing is cleared
+        // because of it.
+        await migrated(withBody);
         expect(
           (await collectionRow(instance!, dialect, "rr_posts"))?.description
         ).toBe("Posts");

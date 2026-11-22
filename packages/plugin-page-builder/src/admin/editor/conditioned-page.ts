@@ -4,8 +4,8 @@
  * The page as the editor's canvas draws it, and which of its blocks carry
  * visibility conditions: a template's with the previewed entry's own blocks
  * composed into its Entry content, so the entry's conditioned blocks are
- * badged, judged and counted with the template's, and the switch that
- * applies conditions is offered where only they are conditioned. The one
+ * badged, judged and counted with the template's, and "Preview as
+ * visitor" can be turned on where only they are conditioned. The one
  * composition the canvas draws.
  *
  * @module conditioned-page
@@ -63,7 +63,7 @@ export function useConditionedPage(
     ...(definitions === undefined ? {} : { definitions }),
   });
   // The placed components' own blocks too, so a page whose only conditions
-  // are inside a component offers the switch that judges them.
+  // are inside a component can be previewed as a visitor gets it.
   const held = useMemo(
     () => conditionedBlocksIn(composed, limits, definitions),
     [composed, limits, definitions]

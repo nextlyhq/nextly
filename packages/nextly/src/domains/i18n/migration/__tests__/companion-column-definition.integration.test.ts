@@ -21,6 +21,8 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
 import type { ColumnSpec } from "../../../schema/pipeline/diff/types";
+import { deriveCompanionSpec } from "../derive-companion-spec";
+import { buildCompanionCreateOnlySql } from "../generate-up";
 import {
   buildCompanionReconcileStatements,
   type CompanionFieldLike,
@@ -107,6 +109,28 @@ describeEachDialect(
       return Number(row?.version ?? 1);
     }
 
+    /**
+     * The collection's settings save, which its push applies against the live tables, so a
+     * companion column already there is judged as the field's; the refusal, or undefined. The
+     * schema dialog runs its migration file instead, planned from the history, where such a column
+     * is drift (below).
+     */
+    async function saveInSettings(
+      slug: string,
+      fields: Field[],
+      localized = true
+    ): Promise<unknown> {
+      return dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: slug },
+        { fields, localized }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+    }
+
     /** The schema dialog's apply, answered as the admin confirms it; the refusal, or undefined. */
     async function saveInDialog(
       slug: string,
@@ -190,7 +214,7 @@ describeEachDialect(
         companion: await columnsOf("dc_cdef_posts_locales"),
       };
 
-      const refusal = await saveInDialog("cdef_posts", [
+      const refusal = await saveInSettings("cdef_posts", [
         translated(HEADING),
         translated(CODE),
       ]);
@@ -223,7 +247,7 @@ describeEachDialect(
         `${transitionAdd("cdef_posts", CODE)} NOT NULL${dialect === "sqlite" ? " DEFAULT ''" : ""}`
       );
 
-      const refusal = await saveInDialog("cdef_posts", [
+      const refusal = await saveInSettings("cdef_posts", [
         translated(HEADING),
         translated(CODE),
       ]);
@@ -246,7 +270,7 @@ describeEachDialect(
         `ALTER TABLE ${q("dc_cdef_posts_locales")} ADD COLUMN ${q("code")} INTEGER`
       );
 
-      const refusal = await saveInDialog("cdef_posts", [
+      const refusal = await saveInSettings("cdef_posts", [
         translated(HEADING),
         translated({ ...CODE, unique: true }),
       ]);
@@ -264,7 +288,7 @@ describeEachDialect(
       await addAsTheTransitionDoes("cdef_posts", CODE);
 
       expect(
-        await saveInDialog("cdef_posts", [
+        await saveInSettings("cdef_posts", [
           translated(HEADING),
           translated(CODE),
         ])
@@ -273,6 +297,37 @@ describeEachDialect(
         "heading",
         "code",
       ]);
+    });
+
+    // The schema dialog runs its migration file, planned from the history, which records no such
+    // column: the translations table is not what it says, so the save is refused as `nextly
+    // migrate` refuses drift, before anything changes, naming the column and the ways to recover.
+    it("refuses the same save through the schema dialog as drift, with the ways to recover, and changes nothing", async () => {
+      await create("cdef_posts", true, [translated(HEADING)]);
+      await addAsTheTransitionDoes("cdef_posts", CODE);
+      const before = {
+        main: await columnsOf("dc_cdef_posts"),
+        companion: await columnsOf("dc_cdef_posts_locales"),
+      };
+
+      const refusal = await saveInDialog("cdef_posts", [
+        translated(HEADING),
+        translated(CODE),
+      ]);
+
+      expect(refusal).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      const said = (refusal as { publicMessage?: string }).publicMessage ?? "";
+      expect(said).toContain("dc_cdef_posts_locales.code");
+      // A Builder save's drift refusal: the one way on that works for a save, the table put back by hand.
+      expect(said).toContain("The save was refused: schema drift detected");
+      expect(said).toContain("put the table back as the history records it");
+      expect((await recordedFields("cdef_posts")).map(f => f.name)).toEqual([
+        "heading",
+      ]);
+      expect(await columnsOf("dc_cdef_posts")).toEqual(before.main);
+      expect(await columnsOf("dc_cdef_posts_locales")).toEqual(
+        before.companion
+      );
     });
 
     // A text column holds any bounded string: PostgreSQL's text has no limit, MySQL's holds what any
@@ -285,7 +340,7 @@ describeEachDialect(
       const column = await columnOf("dc_cdef_posts_locales", "code");
 
       expect(
-        await saveInDialog("cdef_posts", [
+        await saveInSettings("cdef_posts", [
           translated(HEADING),
           translated(CODE),
         ])
@@ -302,7 +357,7 @@ describeEachDialect(
       await create("cdef_posts", true, [translated(HEADING)]);
       await addAsTheTransitionDoes("cdef_posts", price(8, 2));
 
-      const refusal = await saveInDialog("cdef_posts", [
+      const refusal = await saveInSettings("cdef_posts", [
         translated(HEADING),
         translated(price(10, 2)),
       ]);
@@ -329,14 +384,14 @@ describeEachDialect(
       const wider = await columnOf("dc_cdef_posts_locales", "price");
 
       expect(
-        await saveInDialog("cdef_posts", [
+        await saveInSettings("cdef_posts", [
           translated(HEADING),
           translated(price(10, 2)),
         ])
       ).toBeUndefined();
       // The next save, of another change, plans nothing for the column: it is not narrowed.
       expect(
-        await saveInDialog("cdef_posts", [
+        await saveInSettings("cdef_posts", [
           translated(HEADING),
           translated(price(10, 2)),
           { name: "extra", type: "text", localized: false },
@@ -369,7 +424,7 @@ describeEachDialect(
       });
       await query(createCompanion);
 
-      const refusal = await saveInDialog(
+      const refusal = await saveInSettings(
         "cdef_plain",
         [translated(HEADING), translated({ name: "code", type: "number" })],
         true
@@ -399,7 +454,7 @@ describeEachDialect(
       const moved = await joinMovedPartWay();
 
       expect(
-        await saveInDialog("cdef_posts", [
+        await saveInSettings("cdef_posts", [
           translated(HEADING),
           translated(price(10, 2)),
         ])
@@ -418,7 +473,7 @@ describeEachDialect(
     it("refuses that retry when the change narrows the field, saying how to finish it", async () => {
       const moved = await joinMovedPartWay();
 
-      const refusal = await saveInDialog("cdef_posts", [
+      const refusal = await saveInSettings("cdef_posts", [
         translated(HEADING),
         translated(price(8, 2)),
       ]);
@@ -464,7 +519,7 @@ describeEachDialect(
       const moved = await columnOf("dc_cdef_posts_locales", "summary");
 
       expect(
-        await saveInDialog("cdef_posts", [
+        await saveInSettings("cdef_posts", [
           translated(HEADING),
           translated(summary("long")),
         ])
@@ -475,5 +530,99 @@ describeEachDialect(
       ).toMatchObject({ localized: true });
       expect(await columnOf("dc_cdef_posts_locales", "summary")).toEqual(moved);
     });
+
+    it("refuses turning translation off where the move would lose the companion column's comment or collation", async () => {
+      await create("cdef_posts", true, [translated(HEADING)]);
+      // The companion column as a database may have it: with a comment, or on SQLite, where a
+      // collation lives only in the table's statement, beside a column that names one.
+      if (dialect === "sqlite") {
+        await query(
+          `ALTER TABLE ${q("dc_cdef_posts_locales")} ADD COLUMN ${q("note")} TEXT COLLATE NOCASE`
+        );
+      } else if (dialect === "mysql") {
+        await query(
+          `ALTER TABLE ${q("dc_cdef_posts_locales")} MODIFY COLUMN ${q("heading")} TEXT NULL COMMENT 'kept'`
+        );
+      } else {
+        await query(
+          `COMMENT ON COLUMN ${q("dc_cdef_posts_locales")}.${q("heading")} IS 'kept'`
+        );
+      }
+
+      const refusal = await saveInSettings("cdef_posts", [HEADING], false);
+
+      if (dialect === "sqlite") {
+        // The settings save's push judges the move before anything runs: the field's companion
+        // column has a collation of its own, which the new column would not have.
+        expect(errorsOf(refusal)).toEqual([
+          expect.objectContaining({
+            path: "fields.heading",
+            code: "TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION",
+            message: expect.stringMatching(/own collation/),
+          }),
+        ]);
+      } else {
+        expect(errorsOf(refusal)).toEqual([
+          expect.objectContaining({
+            path: "fields.heading",
+            code: "TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION",
+            message: expect.stringMatching(/own comment/),
+          }),
+        ]);
+      }
+      // Nothing changed: the companion keeps the column, and the main table has none.
+      expect(
+        (await columnsOf("dc_cdef_posts_locales")).map(c => c.name)
+      ).toContain("heading");
+      expect((await columnsOf("dc_cdef_posts")).map(c => c.name)).not.toContain(
+        "heading"
+      );
+    });
+
+    // SQLite adds a column only with a constant default, so turning translation off cannot restore
+    // one like CURRENT_TIMESTAMP; it is refused before anything changes. Other dialects take it.
+    it.skipIf(dialect !== "sqlite")(
+      "refuses turning translation off on SQLite where the companion column has a default it cannot restore",
+      async () => {
+        await create("cdef_posts", true, [translated(HEADING)]);
+        // The companion as a database may have it, its column given a non-constant default,
+        // created the way the companion transition creates it.
+        const spec = deriveCompanionSpec({
+          slug: "cdef_posts",
+          dbName: "dc_cdef_posts",
+          fields: [translated(HEADING) as unknown as CompanionFieldLike],
+          dialect,
+          builtBy: "collection",
+          defaultLocale: "en",
+          collectionLocalized: true,
+          status: false,
+        });
+        if (!spec) throw new Error("the collection has no companion spec");
+        await query(`DROP TABLE ${q("dc_cdef_posts_locales")}`);
+        await query(
+          buildCompanionCreateOnlySql({
+            ...spec,
+            columns: spec.columns.map(c =>
+              c.name === "heading"
+                ? { ...c, carried: { default: "CURRENT_TIMESTAMP" } }
+                : c
+            ),
+          })
+        );
+
+        const refusal = await saveInSettings("cdef_posts", [HEADING], false);
+
+        expect(errorsOf(refusal)).toEqual([
+          expect.objectContaining({
+            path: "fields.heading",
+            code: "TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION",
+            message: expect.stringMatching(/own default/),
+          }),
+        ]);
+        expect(
+          (await columnsOf("dc_cdef_posts_locales")).map(c => c.name)
+        ).toContain("heading");
+      }
+    );
   }
 );

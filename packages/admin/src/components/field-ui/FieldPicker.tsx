@@ -8,7 +8,8 @@
  * (developer and older Nextly names included). Arrow keys move, Enter picks,
  * Escape closes. Picking a type asks only for a label, with the name derived
  * and shown; picking the field-group type first asks which existing field
- * group. "Add field" and "Add and add another" hand the choice to the host,
+ * group, or, where the surface can make one, for a new one the host makes.
+ * "Add field" and "Add and add another" hand the choice to the host,
  * which decides where the field goes and how it is stored: the picker writes
  * nothing.
  *
@@ -29,7 +30,14 @@ import {
 } from "@nextlyhq/ui";
 import type { FieldSurface, FieldTypeDescription } from "nextly/field-catalog";
 import type React from "react";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Type } from "@admin/components/icons";
@@ -64,11 +72,27 @@ export interface FieldPickerConfig {
   mostUsed?: readonly string[];
   /** The name a label gives a new field; empty when it gives none. */
   deriveName: (label: string) => string;
+  /**
+   * Why a derived name cannot be saved, in words for the person, or `null` when it can. While it
+   * says why, the field cannot be added, by button or by Enter. Told the type the field is picked
+   * as, since what a name may be can depend on it (a field that makes no column is not held to a
+   * column's length).
+   */
+  nameProblem?: (name: string, type: string) => string | null;
   /** The type that embeds a field group, and the groups it may embed. */
   fieldGroups?: {
     type: string;
     options: readonly FieldGroupOption[];
     loading?: boolean;
+    /**
+     * Makes a new field group, where the surface can: the chooser offers "New field group", and
+     * the group this resolves with is chosen, as if picked from the list. `null` when the person
+     * makes none, which leaves the chooser as it was. The host makes the group, so the picker
+     * still writes nothing.
+     *
+     * @experimental
+     */
+    onNew?: () => Promise<FieldGroupOption | null>;
   };
 }
 
@@ -227,6 +251,7 @@ function PickerBody({
       <FieldGroupStep
         options={config.fieldGroups?.options ?? []}
         loading={config.fieldGroups?.loading === true}
+        onNew={config.fieldGroups?.onNew}
         onBack={back}
         onPick={fieldGroup =>
           setStep({ kind: "label", type: step.type, fieldGroup })
@@ -242,6 +267,7 @@ function PickerBody({
       initialLabel={initialLabel}
       offerAddAnother={offerAddAnother !== false}
       deriveName={config.deriveName}
+      nameProblem={config.nameProblem}
       onBack={() =>
         setStep(
           step.fieldGroup
@@ -396,19 +422,52 @@ function TypeStep({
   );
 }
 
+/**
+ * Asks the host for a new field group and picks the one it makes. While it is being made, a second
+ * click would ask for a second one; one made after the chooser was left (Back, or another step)
+ * is not this chooser's to pick.
+ */
+function useMakeNewGroup(
+  onNew: (() => Promise<FieldGroupOption | null>) | undefined,
+  onPick: (option: FieldGroupOption) => void
+): { making: boolean; makeNew: () => Promise<void> } {
+  const [making, setMaking] = useState(false);
+  const present = useRef(true);
+  useEffect(() => {
+    present.current = true;
+    return () => {
+      present.current = false;
+    };
+  }, []);
+  const makeNew = async () => {
+    if (!onNew) return;
+    setMaking(true);
+    try {
+      const made = await onNew();
+      if (made && present.current) onPick(made);
+    } finally {
+      if (present.current) setMaking(false);
+    }
+  };
+  return { making, makeNew };
+}
+
 function FieldGroupStep({
   options,
   loading,
+  onNew,
   onBack,
   onPick,
 }: {
   options: readonly FieldGroupOption[];
   loading: boolean;
+  onNew?: () => Promise<FieldGroupOption | null>;
   onBack: () => void;
   onPick: (option: FieldGroupOption) => void;
 }) {
   const listId = useId();
   const [query, setQuery] = useState("");
+  const { making, makeNew } = useMakeNewGroup(onNew, onPick);
   const q = query.trim().toLowerCase();
   const matches = options.filter(option =>
     option.text.toLowerCase().includes(q)
@@ -481,7 +540,58 @@ function FieldGroupStep({
         <Button variant="outline" onClick={onBack}>
           Back
         </Button>
+        {onNew && (
+          <Button
+            variant="outline"
+            disabled={making}
+            // The host's dialog settles it; nothing here waits on the click.
+            onClick={() => void makeNew()}
+          >
+            New field group
+          </Button>
+        )}
       </DialogFooter>
+    </>
+  );
+}
+
+/**
+ * The name a label gives a new field, and whether it can be added: a label is needed, and the
+ * name it derives must be one the surface can save. Only a name the label gave is judged; with no
+ * label there is nothing to judge yet.
+ */
+function labelledName(
+  label: string,
+  type: string,
+  deriveName: (label: string) => string,
+  nameProblem: ((name: string, type: string) => string | null) | undefined
+): { trimmed: string; name: string; problem: string | null; addable: boolean } {
+  const trimmed = label.trim();
+  const name = trimmed ? deriveName(trimmed) : "";
+  const problem = name && nameProblem ? nameProblem(name, type) : null;
+  return { trimmed, name, problem, addable: name !== "" && problem === null };
+}
+
+/** The name the label gives, and why it cannot be saved when it cannot. */
+function DerivedName({
+  name,
+  problem,
+  problemId,
+}: {
+  name: string;
+  problem: string | null;
+  problemId: string;
+}): React.JSX.Element {
+  return (
+    <>
+      <p className="text-xs text-muted-foreground">
+        Name: <code>{name || "—"}</code>
+      </p>
+      {problem !== null && (
+        <p id={problemId} role="alert" className="text-xs text-destructive">
+          {problem}
+        </p>
+      )}
     </>
   );
 }
@@ -492,6 +602,7 @@ function LabelStep({
   initialLabel,
   offerAddAnother,
   deriveName,
+  nameProblem,
   onBack,
   onAdd,
 }: {
@@ -500,15 +611,21 @@ function LabelStep({
   initialLabel?: string;
   offerAddAnother: boolean;
   deriveName: (label: string) => string;
+  nameProblem?: (name: string, type: string) => string | null;
   onBack: () => void;
   onAdd: (label: string, name: string, addAnother: boolean) => void;
 }) {
   const inputId = useId();
   const [label, setLabel] = useState(fieldGroup?.label ?? initialLabel ?? "");
-  const trimmed = label.trim();
-  const name = trimmed ? deriveName(trimmed) : "";
+  const { trimmed, name, problem, addable } = labelledName(
+    label,
+    type.type,
+    deriveName,
+    nameProblem
+  );
+  const problemId = useId();
   const add = (addAnother: boolean) => {
-    if (name) onAdd(trimmed, name, addAnother);
+    if (addable) onAdd(trimmed, name, addAnother);
   };
 
   return (
@@ -527,6 +644,8 @@ function LabelStep({
           id={inputId}
           value={label}
           autoFocus
+          aria-invalid={problem !== null}
+          aria-describedby={problem !== null ? problemId : undefined}
           onChange={event => setLabel(event.target.value)}
           onKeyDown={event => {
             if (event.key === "Enter") {
@@ -535,20 +654,22 @@ function LabelStep({
             }
           }}
         />
-        <p className="text-xs text-muted-foreground">
-          Name: <code>{name || "—"}</code>
-        </p>
+        <DerivedName name={name} problem={problem} problemId={problemId} />
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onBack}>
           Back
         </Button>
         {offerAddAnother && (
-          <Button variant="outline" disabled={!name} onClick={() => add(true)}>
+          <Button
+            variant="outline"
+            disabled={!addable}
+            onClick={() => add(true)}
+          >
             Add and add another
           </Button>
         )}
-        <Button disabled={!name} onClick={() => add(false)}>
+        <Button disabled={!addable} onClick={() => add(false)}>
           Add field
         </Button>
       </DialogFooter>

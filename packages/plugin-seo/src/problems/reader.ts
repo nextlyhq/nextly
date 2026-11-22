@@ -8,10 +8,17 @@
  *
  * @module problems/reader
  */
-import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import {
+  readableContent,
+  type PluginContext,
+  type PluginRouteContext,
+} from "@nextlyhq/plugin-sdk";
 
-import { pageRefKey, type Reader } from "./check";
-import { pageTypeOf } from "./page-types";
+import { pageRefKey, type ProblemChecks, type Reader } from "./check";
+import { pageTypeOf, singleKey } from "./page-types";
+
+/** The person core is asked about, by id and, where known, their roles. */
+type ReadableContentCaller = Parameters<typeof readableContent>[0];
 
 /** The reads a reader is judged by, each made as the person. */
 export interface ReadsAs {
@@ -82,24 +89,22 @@ export async function inChunks(
 /** How many ids one read of a type asks about. */
 const ID_CHUNK = 100;
 
+/** The collections' reads, and the access each is made with. */
+type Collections = PluginContext["services"]["collections"];
+type ReadAccess = NonNullable<Parameters<Collections["listEntries"]>[2]>;
+
 /**
- * The reads a plugin route's caller is judged by, each made as them through
- * the collections' own reads, so their row rules decide as they do anywhere:
- * in `locale` where one is named, as a rule may read a translated field.
+ * The reads a person is judged by, each made with `asPerson` through the
+ * collections' own reads, so their row rules decide as they do anywhere.
  */
-export function callerReads(ctx: PluginRouteContext, locale?: string): ReadsAs {
-  const asCaller = {
-    as: "user" as const,
-    user: ctx.user ?? undefined,
-    ...(ctx.authenticatedScope === undefined
-      ? {}
-      : { authenticatedScope: ctx.authenticatedScope }),
-    ...(locale === undefined ? {} : { locale }),
-  };
+export function readsAs(
+  collections: Collections,
+  asPerson: ReadAccess
+): ReadsAs {
   return {
     readable: (type, ids) =>
       inChunks(ids, ID_CHUNK, async chunk => {
-        const { data } = await ctx.services.collections.listEntries(
+        const { data } = await collections.listEntries(
           type,
           {
             where: { id: { in: chunk } },
@@ -107,11 +112,54 @@ export function callerReads(ctx: PluginRouteContext, locale?: string): ReadsAs {
             depth: 0,
             pagination: { limit: chunk.length, page: 1 },
           },
-          asCaller
+          asPerson
         );
         return (data as { id?: unknown }[]).map(entry => String(entry.id));
       }),
-    // Counted as the caller, so a rule admitting only some entries decides.
-    count: type => ctx.services.collections.count(type, {}, asCaller),
+    // Counted as the person, so a rule admitting only some entries decides.
+    count: type => collections.count(type, {}, asPerson),
   };
+}
+
+/**
+ * The reads a plugin route's caller is judged by, each made as them: in
+ * `locale` where one is named, as a rule may read a translated field.
+ */
+export function callerReads(ctx: PluginRouteContext, locale?: string): ReadsAs {
+  return readsAs(ctx.services.collections, {
+    as: "user" as const,
+    user: ctx.user ?? undefined,
+    ...(ctx.authenticatedScope === undefined
+      ? {}
+      : { authenticatedScope: ctx.authenticatedScope }),
+    ...(locale === undefined ? {} : { locale }),
+  });
+}
+
+/**
+ * The types of `checks` that `caller` may read, by the key their pages are
+ * kept under, as core decides it for them (`readableContent`): for a reader
+ * that is handed a person rather than a route's caller. An API key's scope
+ * goes with it, so its grants decide rather than its owner's.
+ */
+export async function readableTypesOf(
+  caller: ReadableContentCaller,
+  checks: Pick<ProblemChecks, "targets" | "singles">
+): Promise<Set<string>> {
+  const { user, authenticatedScope } = caller;
+  const { entities } = await readableContent({
+    user: {
+      id: user.id,
+      ...(user.roles === undefined ? {} : { roles: user.roles }),
+    },
+    ...(authenticatedScope === undefined ? {} : { authenticatedScope }),
+  });
+  const collections = new Set(checks.targets);
+  const singles = new Set(checks.singles);
+  const readable = new Set<string>();
+  for (const { slug, kind } of entities) {
+    if (kind === "collection" && collections.has(slug)) readable.add(slug);
+    if (kind === "single" && singles.has(slug)) readable.add(singleKey(slug));
+  }
+  return readable;
 }

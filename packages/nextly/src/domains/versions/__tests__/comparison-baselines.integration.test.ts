@@ -7,6 +7,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import { getVersionDiffForDocument } from "../../../dispatcher/handlers/versions-methods";
 import { NextlyError } from "../../../errors";
@@ -28,6 +29,19 @@ afterEach(async () => {
 
 const superAdmin = { id: "tester", roles: ["super-admin"] };
 
+/**
+ * The harness, with superAdmin seeded as a super-admin the read gate can look up:
+ * a history read asks the document's read gate as its caller, and role names
+ * on the user handed in grant nothing.
+ */
+async function createTestNextlyAsSuperAdmin(
+  options: Parameters<typeof createTestNextly>[0]
+): Promise<TestNextly> {
+  const booted = await createTestNextly(options);
+  await superAdminUser(booted, superAdmin.id);
+  return booted;
+}
+
 type Seed = {
   status: "draft" | "published";
   locale: string | null;
@@ -46,7 +60,7 @@ async function documentWithHistory(
   seeds: Seed[],
   { live = true }: { live?: boolean } = {}
 ) {
-  current = await createTestNextly({
+  current = await createTestNextlyAsSuperAdmin({
     dialect,
     collections: [
       defineCollection({
@@ -282,7 +296,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("has no published baseline once the document is withdrawn", async () => {
       // Real writes, so the live row is what a reader is actually served.
-      current = await createTestNextly({
+      current = await createTestNextlyAsSuperAdmin({
         dialect,
         collections: [
           defineCollection({
@@ -324,7 +338,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("judges what is published per language", async () => {
-      current = await createTestNextly({
+      current = await createTestNextlyAsSuperAdmin({
         dialect,
         collections: [
           defineCollection({
@@ -389,7 +403,7 @@ describe.each(getConfiguredTestDialects())(
     it("has no published baseline for a translation while the document is a draft", async () => {
       // German is published while the document itself never was: a public
       // reader is served nothing, so nothing is published in German either.
-      current = await createTestNextly({
+      current = await createTestNextlyAsSuperAdmin({
         dialect,
         collections: [
           defineCollection({

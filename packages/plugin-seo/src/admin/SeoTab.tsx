@@ -227,7 +227,7 @@ function contentOpener(elsewhere: SeoTabElsewhere): () => void {
  * (a title, an excerpt, a pattern's field, its address). With a value the
  * form does not hold yet put at its path.
  */
-function useTypedDocument(
+export function useTypedDocument(
   control: DocumentTabProps["control"],
   unsaved: SeoTabElsewhere["unsaved"]
 ): Record<string, unknown> {

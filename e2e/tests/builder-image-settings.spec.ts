@@ -138,6 +138,12 @@ test.describe("an image's settings", () => {
     await openImage(page, id);
 
     const content = page.getByRole("tabpanel", { name: "Content" });
+    // The link's settings show once a click is set to follow a link.
+    await content.getByRole("button", { name: /^When clicked/ }).click();
+    await content
+      .getByRole("radiogroup", { name: "When clicked" })
+      .getByRole("radio", { name: "Link" })
+      .click();
     await content.getByRole("button", { name: /^Link:/ }).click();
     const search = page.getByRole("combobox", {
       name: "Search pages or paste a URL for link",
@@ -159,7 +165,7 @@ test.describe("an image's settings", () => {
       .poll(async () => (await storedImage(page, id))?.props, {
         timeout: 15_000,
       })
-      .toMatchObject({ href: "/about" });
+      .toMatchObject({ href: "/about", whenClicked: "link" });
   });
 
   test("a long caption does not widen a small picture", async ({ page }) => {

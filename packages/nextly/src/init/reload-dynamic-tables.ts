@@ -61,8 +61,8 @@ export interface ReloadOptions {
    * Defaults to whether this process may define structure: not in production
    * (`isProductionStart`), where a reload serves the tables `nextly migrate`
    * made, and an entity without its translation table answers that it is not
-   * ready. The migrations at start pass true: that step is `nextly migrate`'s,
-   * the one step of a production start that defines structure.
+   * ready. The migrations at start reload nothing: they run before the start
+   * reads the registry, and make translation tables as `nextly migrate` does.
    */
   createMissingCompanions?: boolean;
 }

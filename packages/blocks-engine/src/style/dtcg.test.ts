@@ -21,10 +21,32 @@ import { isTokenName } from "./declarations";
 import {
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
+  defaultSiteTokens,
   renameSiteToken,
 } from "./site-tokens";
 
 const tokens = (list: SiteToken[]) => ({ tokens: list });
+
+/** The names of the DTCG tokens a document holds, its own extensions aside. */
+function typedNames(node: DtcgNode, at: readonly string[] = []): string[] {
+  return Object.entries(node).flatMap(([key, child]) => {
+    if (key.startsWith("$") || typeof child !== "object" || child === null) {
+      return [];
+    }
+    const entry = child as DtcgNode;
+    return "$value" in entry
+      ? [[...at, key].join(".")]
+      : typedNames(entry, [...at, key]);
+  });
+}
+
+/** The names this system carried in the document's own extension. */
+function carriedNames(document: DtcgNode): string[] {
+  const own = (document.$extensions as DtcgNode | undefined)?.[
+    NEXTLY_EXTENSION
+  ] as DtcgNode | undefined;
+  return Object.keys((own?.variables as DtcgNode | undefined) ?? {});
+}
 
 describe("export", () => {
   it("nests a dot path into groups, because DTCG forbids a dot in a name", () => {
@@ -63,23 +85,21 @@ describe("export", () => {
     expect((value.components as number[]).length).toBe(3);
   });
 
-  it("reports a value the format cannot express instead of inventing one", () => {
+  it("writes a fluid width as its largest px value, keeping the clamp() beside it", () => {
     // A dimension may only be `px` or `rem`, so a `clamp()` has no conformant
-    // shape at all. Emitting it under a type that does not fit would be a lie
-    // about what the token holds.
+    // shape of its own. Its largest value is the one other tools can use; the
+    // exact CSS rides in this system's extension and in the description.
+    const css = "clamp(20rem, 80vw, 72rem)";
     const { document, issues } = tokensToDtcg(
       tokens([
-        {
-          name: "content.width",
-          kind: "dimension",
-          values: { light: "clamp(20rem, 80vw, 72rem)" },
-        },
+        { name: "content.width", kind: "dimension", values: { light: css } },
       ])
     );
-    expect(document).toEqual({});
-    expect(issues[0]?.message).toContain("cannot express");
-    // And it says the value is not lost, because the author still has it here.
-    expect(issues[0]?.message).toContain("still here in Nextly");
+    expect(issues).toEqual([]);
+    const token = (document.content as Record<string, DtcgNode>).width;
+    expect(token?.$type).toBe("dimension");
+    expect(token?.$value).toEqual({ value: 1152, unit: "px" });
+    expect(token?.$description).toContain(css);
   });
 
   it("reads rgb() percentages as the colour they are", () => {
@@ -145,7 +165,7 @@ describe("export", () => {
       const { document } = tokensToDtcg(
         tokens([{ name: "n", kind: "number", values: { light: css } }])
       );
-      expect(document, css).toEqual({});
+      expect(typedNames(document), css).toEqual([]);
     }
   });
 
@@ -185,7 +205,7 @@ describe("export", () => {
     ]);
   });
 
-  it("reports a family list holding a substitution instead of naming a font", () => {
+  it("carries a family list holding a substitution instead of naming a font", () => {
     // DTCG stores family NAMES. Exporting the text would describe a font
     // literally called `var(--brand-font)` to every tool that reads the
     // standard value rather than this vendor's extension.
@@ -198,8 +218,11 @@ describe("export", () => {
         },
       ])
     );
-    expect(document).toEqual({});
-    expect(issues[0]?.message).toContain("cannot express");
+    // No token claims a value it does not hold: the variable is carried in this
+    // system's extension, exact, rather than dropped.
+    expect(typedNames(document)).toEqual([]);
+    expect(carriedNames(document)).toEqual(["f"]);
+    expect(issues).toEqual([]);
   });
 
   it("keeps a quoted family that merely looks like one", () => {
@@ -219,7 +242,7 @@ describe("export", () => {
     ]);
   });
 
-  it("reports a family list CSS itself would drop", () => {
+  it("carries a family list CSS itself would drop", () => {
     // `<family-name>` is one string OR a run of identifiers. `"Bad" "Name"` is
     // neither, so a browser drops the declaration; joining them would export a
     // font stack the site never rendered.
@@ -232,21 +255,27 @@ describe("export", () => {
         },
       ])
     );
-    expect(document).toEqual({});
-    expect(issues[0]?.message).toContain("cannot express");
+    // No token claims a value it does not hold: the variable is carried in this
+    // system's extension, exact, rather than dropped.
+    expect(typedNames(document)).toEqual([]);
+    expect(carriedNames(document)).toEqual(["f"]);
+    expect(issues).toEqual([]);
   });
 
-  it("reports a family list that is a bare CSS-wide keyword", () => {
+  it("carries a family list that is a bare CSS-wide keyword", () => {
     // `font-family: inherit` takes the parent's font. Exported as a `$value` it
     // would describe a font actually named "inherit".
     const { document, issues } = tokensToDtcg(
       tokens([{ name: "f", kind: "fontFamily", values: { light: "inherit" } }])
     );
-    expect(document).toEqual({});
-    expect(issues[0]?.message).toContain("cannot express");
+    // No token claims a value it does not hold: the variable is carried in this
+    // system's extension, exact, rather than dropped.
+    expect(typedNames(document)).toEqual([]);
+    expect(carriedNames(document)).toEqual(["f"]);
+    expect(issues).toEqual([]);
   });
 
-  it("reports a family list whose bare item is not an identifier run", () => {
+  it("carries a family list whose bare item is not an identifier run", () => {
     // `10px` tokenizes as a dimension, so a browser drops any declaration
     // reading the token — exporting it shows a stack the site never used.
     const { document } = tokensToDtcg(
@@ -254,10 +283,11 @@ describe("export", () => {
         { name: "f", kind: "fontFamily", values: { light: "10px, serif" } },
       ])
     );
-    expect(document).toEqual({});
+    expect(typedNames(document)).toEqual([]);
+    expect(carriedNames(document)).toEqual(["f"]);
   });
 
-  it("reports a family run separated by whitespace only JavaScript knows", () => {
+  it("carries a family run separated by whitespace only JavaScript knows", () => {
     // A vertical tab is whitespace to `\s` and a delimiter to CSS, so `My\vFont`
     // is not a run of identifiers and the browser drops the declaration reading
     // it. Judged by the JavaScript set it exports as a font stack the site
@@ -271,7 +301,8 @@ describe("export", () => {
         },
       ])
     );
-    expect(document).toEqual({});
+    expect(typedNames(document)).toEqual([]);
+    expect(carriedNames(document)).toEqual(["f"]);
   });
 
   it("exports a family run separated by CSS whitespace under its ONE name", () => {
@@ -2232,3 +2263,248 @@ describe("aliases, resolved on import", () => {
     expect(JSON.stringify(document)).toBe(before);
   });
 });
+
+/**
+ * Every variable leaves in the file, whatever the format can type.
+ *
+ * DTCG has no type for a custom value, and no conformant value for a shadow
+ * this site keeps as CSS, an `em` size, a percentage or a fluid `clamp()`.
+ * Those used to be dropped, which lost most of a default site's spacing.
+ */
+describe("every variable, whatever the format can type", () => {
+  const ONE_OF_EACH: SiteToken[] = [
+    { name: "brand.ink", kind: "color", values: { light: "#123456" } },
+    { name: "gap.small", kind: "dimension", values: { light: "4px" } },
+    { name: "gap.em", kind: "dimension", values: { light: "0.75em" } },
+    { name: "gap.half", kind: "dimension", values: { light: "50%" } },
+    {
+      name: "gap.hero",
+      label: "Hero gap",
+      kind: "dimension",
+      values: {
+        light: "clamp(1rem, 0.5rem + 2vw, 2rem)",
+        dark: "clamp(1rem, 0.5rem + 3vw, 3rem)",
+      },
+      description: "Space above a hero.",
+    },
+    { name: "type.serif", kind: "fontFamily", values: { light: "Georgia" } },
+    { name: "type.heavy", kind: "fontWeight", values: { light: "800" } },
+    { name: "type.ratio", kind: "number", values: { light: "1.25" } },
+    { name: "motion.slow", kind: "duration", values: { light: "400ms" } },
+    {
+      id: "shadow.raised",
+      name: "shadow.card",
+      label: "Card",
+      kind: "shadow",
+      values: {
+        light: "0 1px 2px rgb(0 0 0 / 0.1)",
+        dark: "0 1px 2px rgb(0 0 0 / 0.6)",
+      },
+      description: "Under a card.",
+      extensions: { "com.example": { keep: true } },
+    },
+    { name: "misc.ratio", kind: "custom", values: { light: "16 / 9" } },
+  ];
+  const ALL: SiteToken[] = [...defaultSiteTokens(), ...ONE_OF_EACH];
+  const byName = (list: readonly SiteToken[]) =>
+    [...list].sort((a, b) => a.name.localeCompare(b.name));
+
+  /** The exported file as another tool receives it: plain JSON. */
+  const exported = () => {
+    const { document, issues } = tokensToDtcg(tokens(ALL));
+    return {
+      file: JSON.parse(JSON.stringify(document)) as DtcgNode,
+      issues,
+    };
+  };
+
+  it("exports every variable and reads each back exactly", () => {
+    const { file, issues } = exported();
+    expect(issues).toEqual([]);
+    const read = dtcgToTokens(file);
+    expect(read.issues).toEqual([]);
+    // Every field, a colour's display group included.
+    expect(byName(read.tokens)).toEqual(byName(ALL));
+  });
+
+  it("keeps a default site's spacing, fluid and em sizes included", () => {
+    const { file } = exported();
+    const names = dtcgToTokens(file).tokens.map(token => token.name);
+    for (const name of [
+      "space.stack",
+      "space.section-y",
+      "space.gutter",
+      "space.columns",
+      "space.card",
+      "space.paragraph",
+    ]) {
+      expect(names).toContain(name);
+    }
+  });
+
+  it("writes a fluid size as its largest px value, with its clamp() in the description", () => {
+    const { file } = exported();
+    const stack = (file.space as Record<string, DtcgNode>).stack;
+    // `clamp(1rem, 0.875rem + 0.5vw, 1.25rem)`: 1.25rem is 20px.
+    expect(stack?.$value).toEqual({ value: 20, unit: "px" });
+    expect(stack?.$description).toContain(
+      "clamp(1rem, 0.875rem + 0.5vw, 1.25rem)"
+    );
+    // A fluid size with its own description keeps it, and the import gives
+    // back only the description the author wrote.
+    const hero = (file.gap as Record<string, DtcgNode>).hero;
+    expect(hero?.$description).toContain("Space above a hero.");
+    expect(hero?.$description).toContain("clamp(1rem, 0.5rem + 2vw, 2rem)");
+  });
+
+  it("carries what the format cannot type in this system's extension, not as a token", () => {
+    const { file } = exported();
+    const carried = (
+      (file.$extensions as DtcgNode)[NEXTLY_EXTENSION] as DtcgNode
+    ).variables as DtcgNode;
+    expect(Object.keys(carried).sort()).toEqual(
+      ["gap.em", "gap.half", "misc.ratio", "space.paragraph"].sort()
+    );
+    // A shadow whose CSS reads as fields is a DTCG shadow token.
+    expect(((file.shadow as DtcgNode).card as DtcgNode).$type).toBe("shadow");
+    // None of them is also written as a token with a type of its own making.
+    expect((file.gap as DtcgNode).em).toBeUndefined();
+    expect((file.misc as DtcgNode | undefined)?.ratio).toBeUndefined();
+  });
+
+  it("says a carried variable's stored data could not be read, not that it has no type", () => {
+    const read = dtcgToTokens({
+      $extensions: {
+        [NEXTLY_EXTENSION]: {
+          variables: {
+            "gap.odd": {
+              $extensions: { [NEXTLY_EXTENSION]: { kind: "bogus" } },
+            },
+          },
+        },
+      },
+    });
+    expect(read.tokens).toEqual([]);
+    const said = read.issues.map(i => i.message).join(" ");
+    expect(said).toContain("gap.odd");
+    expect(said).toContain("could not be read");
+    expect(said).not.toContain('the type "none"');
+  });
+
+  it("takes a fluid size's description edited by another tool", () => {
+    const { file } = exported();
+    const stack = (file.space as Record<string, DtcgNode>).stack as DtcgNode;
+    stack.$description = "Edited in a design tool.";
+    const read = dtcgToTokens(file);
+    expect(
+      read.tokens.find(token => token.name === "space.stack")?.description
+    ).toBe("Edited in a design tool.");
+  });
+
+  it("writes a file that is valid DTCG", () => {
+    expect(dtcgProblems(exported().file)).toEqual([]);
+  });
+
+  it("CONTROL: the validity check finds an invented type and a bad dimension", () => {
+    expect(
+      dtcgProblems({
+        a: { $type: "custom", $value: "x" },
+        b: { $type: "dimension", $value: { value: 1, unit: "em" } },
+      })
+    ).toHaveLength(2);
+  });
+});
+
+/** The DTCG 2025.10 types, which a token's `$type` must be one of. */
+const DTCG_TYPES = new Set([
+  "color",
+  "dimension",
+  "fontFamily",
+  "fontWeight",
+  "duration",
+  "cubicBezier",
+  "number",
+  "strokeStyle",
+  "border",
+  "transition",
+  "shadow",
+  "gradient",
+  "typography",
+]);
+
+/**
+ * What makes a document not valid DTCG, for the shapes this system writes:
+ * names, token fields, every token's `$type`, and the value each type takes.
+ * The root may carry `$extensions`, as any group may.
+ */
+function dtcgProblems(node: DtcgNode, at = ""): string[] {
+  return Object.entries(node).flatMap(([key, child]) => {
+    const here = at === "" ? key : `${at}.${key}`;
+    if (key.startsWith("$")) {
+      return GROUP_FIELDS.has(key)
+        ? []
+        : [`${here}: a group field the format does not define`];
+    }
+    const named = /[.{}]/.test(key) ? [`${here}: a name with . { or }`] : [];
+    if (typeof child !== "object" || child === null) {
+      return [...named, `${here}: neither a token nor a group`];
+    }
+    const entry = child as DtcgNode;
+    return [
+      ...named,
+      ...("$value" in entry
+        ? tokenProblems(entry, here)
+        : dtcgProblems(entry, here)),
+    ];
+  });
+}
+
+const GROUP_FIELDS = new Set(["$extensions", "$description", "$type"]);
+const TOKEN_FIELDS = new Set([
+  "$type",
+  "$value",
+  "$description",
+  "$extensions",
+]);
+
+/** What makes one token invalid: an unknown field, no type, or a bad value. */
+function tokenProblems(entry: DtcgNode, here: string): string[] {
+  const fields = Object.keys(entry)
+    .filter(field => !TOKEN_FIELDS.has(field))
+    .map(() => `${here}: a token field the format does not define`);
+  const type = entry.$type;
+  if (typeof type !== "string" || !DTCG_TYPES.has(type)) {
+    return [...fields, `${here}: no DTCG type`];
+  }
+  const value = valueProblem(type, entry.$value);
+  return value === undefined ? fields : [...fields, `${here}: ${value}`];
+}
+
+/** A measure the format allows: a number with one of `units`. */
+const measureIn =
+  (units: readonly string[], type: string) =>
+  (value: unknown): string | undefined => {
+    const object = (value ?? {}) as DtcgNode;
+    return typeof object.value === "number" &&
+      units.includes(object.unit as string)
+      ? undefined
+      : `a ${type} value the format does not allow`;
+  };
+
+/** What is wrong with a value, per type, for the types this system writes. */
+const VALUE_CHECKS: Readonly<
+  Record<string, (value: unknown) => string | undefined>
+> = {
+  dimension: measureIn(["px", "rem"], "dimension"),
+  duration: measureIn(["ms", "s"], "duration"),
+  color: value =>
+    Array.isArray(((value ?? {}) as DtcgNode).components)
+      ? undefined
+      : "a colour without components",
+  number: value =>
+    typeof value === "number" ? undefined : "a number that is not a number",
+};
+
+function valueProblem(type: string, value: unknown): string | undefined {
+  return VALUE_CHECKS[type]?.(value);
+}

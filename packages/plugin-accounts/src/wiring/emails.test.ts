@@ -46,6 +46,18 @@ const SAMPLES: {
   },
   "account-deleted": { ...base, kind: "account-deleted" },
   "password-changed": { ...base, kind: "password-changed" },
+  invitation: {
+    kind: "invitation",
+    accountId: null,
+    to: "dana@example.com",
+    link: "L",
+  },
+  "invitation-has-account": {
+    ...base,
+    kind: "invitation-has-account",
+    signInLink: "S",
+    resetLink: "R",
+  },
 };
 
 describe("the accounts email templates", () => {
@@ -76,6 +88,23 @@ describe("the accounts email templates", () => {
     }
   });
 
+  it("say what sends each template", () => {
+    const templates = accountsEmailTemplates();
+    expect(templates).toHaveLength(Object.keys(SAMPLES).length);
+    for (const template of templates) {
+      expect(template.sentBy?.length, template.slug).toBeGreaterThan(0);
+      for (const line of template.sentBy ?? []) {
+        expect(line.trim(), template.slug).toBeTruthy();
+      }
+    }
+
+    const bySlug = new Map(templates.map(t => [t.slug, t.sentBy]));
+    expect(bySlug.get(templateSlug("verify-address"))).toEqual([
+      "Someone signs up",
+      "Someone asks for a new verification link",
+    ]);
+  });
+
   it("mark as carrying a secret every email with a link or code that acts for whoever holds it, and no other", () => {
     // A link that verifies, resets, confirms or cancels for whoever opens it,
     // or a code that does the same. The sign-in and reset links of
@@ -86,6 +115,7 @@ describe("the accounts email templates", () => {
       "reset-required",
       "address-change-asked",
       "confirm-new-address",
+      "invitation",
     ];
     const marked = accountsEmailTemplates()
       .filter(template => template.carriesSecret === true)

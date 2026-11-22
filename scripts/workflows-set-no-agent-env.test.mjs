@@ -44,7 +44,12 @@ const { names: AGENT_VARIABLES, unnamed } = readsOf(detector);
 // list of what CI reaches stays complete. Binary files aside, and this file,
 // which names them.
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const files = execFileSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8" })
+// Room for a listing past the 1 MiB a spawn may print by default.
+const files = execFileSync("git", ["ls-files", "-z"], {
+  cwd: ROOT,
+  encoding: "utf8",
+  maxBuffer: 64 * 1024 * 1024,
+})
   .split("\0")
   .filter(path => path && path !== "scripts/workflows-set-no-agent-env.test.mjs");
 

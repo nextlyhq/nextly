@@ -256,8 +256,10 @@ describe("the edit page's place in the Single editor", () => {
     renderEditor();
 
     const notes = screen.getByRole("region", { name: "Notes" });
+    // After Details' place, which a Single's panel fills with "For
+    // developers".
     expect(notes.previousElementSibling).toBe(
-      screen.getByRole("region", { name: "Details" })
+      screen.getByRole("region", { name: "For developers" })
     );
     expect(
       JSON.parse(screen.getByTestId("plugin-section").textContent ?? "")

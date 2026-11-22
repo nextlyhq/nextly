@@ -81,6 +81,7 @@ describe.each(getConfiguredTestDialects())(
         { name: "nextlyhq-plugin-accounts.account.deleted" },
         { name: "nextlyhq-plugin-accounts.account.deactivated" },
         { name: "nextlyhq-plugin-accounts.account.reactivated" },
+        { name: "nextlyhq-plugin-accounts.invitation.accepted" },
       ]);
       expect(plugin.contributes?.emailTemplates?.length).toBeGreaterThan(0);
     });
@@ -212,6 +213,57 @@ describe.each(getConfiguredTestDialects())(
           now: new Date(),
         } as Parameters<typeof job.handler>[1]);
       expect(seen).toEqual(["job-7", "job-7"]);
+    });
+
+    it("sends an invitation queued for an address with no account, naming no person, and refuses a nameless email of any other kind", async () => {
+      const booted = await bootAccounts(dialect);
+      current = booted.nextly;
+      const people: unknown[] = [];
+      const ctx = {
+        db: booted.ctx.db,
+        dialect: booted.ctx.dialect,
+        services: {
+          email: {
+            sendWithTemplate: async (
+              _slug: string,
+              _to: string,
+              _variables: Record<string, unknown>,
+              options?: { person?: unknown }
+            ) => {
+              people.push(options?.person);
+              return { success: true };
+            },
+          },
+        },
+      };
+      const job = sendEmailJob((email, attempt) =>
+        sendQueuedEmail(ctx, email, attempt)
+      );
+      const run = (email: Record<string, unknown>, jobId: string) =>
+        job.handler({ email }, {
+          jobId,
+          attempt: 1,
+          now: new Date(),
+        } as Parameters<typeof job.handler>[1]);
+
+      await run(
+        {
+          kind: "invitation",
+          accountId: null,
+          to: "dana@example.com",
+          link: "https://shop.example.com/account/invitation?token=t",
+        },
+        "job-invite"
+      );
+      expect(people).toEqual([undefined]);
+
+      await expect(
+        run(
+          { kind: "account-deleted", accountId: null, to: "dana@example.com" },
+          "job-nameless"
+        )
+      ).rejects.toThrow("malformed");
+      expect(people).toHaveLength(1);
     });
 
     it("sweeps what has run out in one pass, and keeps everything live", async () => {

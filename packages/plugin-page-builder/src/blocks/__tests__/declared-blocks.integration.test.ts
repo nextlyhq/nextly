@@ -11,7 +11,6 @@
  * attributes it to the plugin that declared it, and does so for a plugin with
  * no `init` of its own at all.
  */
-import { getBlock, getBlockSource, clearBlocks } from "@nextlyhq/blocks-engine";
 import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
 import { createTestNextly, type TestNextly } from "nextly/testing";
 import { definePlugin } from "@nextlyhq/plugin-sdk";
@@ -20,14 +19,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PAGE_BUILDER_PLUGIN } from "../registration-service";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 
-import { pageBuilder } from "../../plugin";
+import { blocksOf, pageBuilder } from "../../plugin";
 
 let current: TestNextly | undefined;
 
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
-  clearBlocks();
 });
 
 const pricingTable = defineBlock({
@@ -57,11 +55,12 @@ describe("the core library at boot", () => {
     // The unit test around `registerCoreBlocks` proves the function works; only
     // a real boot proves it is CALLED. Removing the call from the plugin's
     // `init` passes every other test in this package.
-    current = await createTestNextly({ plugins: [pageBuilder()] });
+    const plugin = pageBuilder();
+    current = await createTestNextly({ plugins: [plugin] });
 
     for (const block of coreBlocks) {
       expect(
-        getBlock(block.name),
+        blocksOf(plugin).get(block.name),
         `${block.name} missing after boot`
       ).toBeDefined();
     }
@@ -70,43 +69,47 @@ describe("the core library at boot", () => {
   it("survives a boot where another plugin also contributes", async () => {
     // Core is registered first and the declared pass runs after it, so this
     // fails if the second pass clears what the first added.
+    const plugin = pageBuilder();
     current = await createTestNextly({
-      plugins: [pageBuilder(), declaring()],
+      plugins: [plugin, declaring()],
     });
 
-    expect(getBlock("core/box")).toBeDefined();
-    expect(getBlock("acme/declared-pricing")).toBeDefined();
+    expect(blocksOf(plugin).get("core/box")).toBeDefined();
+    expect(blocksOf(plugin).get("acme/declared-pricing")).toBeDefined();
   });
 });
 
 describe("a plugin declares blocks statically", () => {
   it("registers them at boot with no init of its own", async () => {
+    const plugin = pageBuilder();
     current = await createTestNextly({
-      plugins: [pageBuilder(), declaring()],
+      plugins: [plugin, declaring()],
     });
 
-    expect(getBlock("acme/declared-pricing")).toBeDefined();
+    expect(blocksOf(plugin).get("acme/declared-pricing")).toBeDefined();
   });
 
   it("attributes the block to the plugin that declared it", async () => {
     // Registered on the declarer's behalf by the page builder, so the naive
     // attribution would be the page builder itself and a collision would send
     // a reader to the wrong package.
+    const plugin = pageBuilder();
     current = await createTestNextly({
-      plugins: [pageBuilder(), declaring()],
+      plugins: [plugin, declaring()],
     });
 
-    expect(getBlockSource("acme/declared-pricing")).toBe(
+    expect(blocksOf(plugin).sourceOf("acme/declared-pricing")).toBe(
       "@acme/declared-blocks"
     );
   });
 
   it("registers whichever order the plugins are listed in", async () => {
+    const plugin = pageBuilder();
     current = await createTestNextly({
-      plugins: [declaring(), pageBuilder()],
+      plugins: [declaring(), plugin],
     });
 
-    expect(getBlock("acme/declared-pricing")).toBeDefined();
+    expect(blocksOf(plugin).get("acme/declared-pricing")).toBeDefined();
   });
 
   it("refuses a declaration whose blocks are not an array", async () => {
@@ -151,10 +154,13 @@ describe("a declared support is registered before the blocks that use it", () =>
       },
     } as never);
 
+    const plugin = pageBuilder();
     current = await createTestNextly({
-      plugins: [pageBuilder(), contributor],
+      plugins: [plugin, contributor],
     });
 
-    expect(getBlock("acme/animated")?.supports).toEqual({ animation: true });
+    expect(blocksOf(plugin).get("acme/animated")?.supports).toEqual({
+      animation: true,
+    });
   });
 });

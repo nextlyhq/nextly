@@ -11,7 +11,11 @@
  */
 import type { ContentModel } from "./content-model";
 import type { BlockNode, BlockPart, NodeStyles, TokenRef } from "./document";
-import type { MigrationMap } from "./migration";
+import type {
+  MigrationDrops,
+  MigrationMap,
+  MigrationRenames,
+} from "./migration";
 import type { BoundValue } from "./resolve-bindings";
 
 /** Why a block needs JavaScript in the browser. */
@@ -104,7 +108,150 @@ export interface PropSchema {
    * names no `url` prop of the block.
    */
   addressProp?: string;
+  /**
+   * Which tab of the block's settings the prop is edited in: `"content"`
+   * (what the block says, shows or links to), `"style"` (how it looks) or
+   * `"advanced"`. Left out, the prop is in Content, so a block that declares
+   * none keeps every prop where it always was.
+   *
+   * Registration refuses a prop that is what the block says
+   * (`role: "content"`) anywhere but Content, any other tab name, and, in
+   * Style, a prop holding text, media, an address, a relation or a list.
+   *
+   * @experimental
+   */
+  group?: PropGroup;
+  /**
+   * The section inside the tab the prop is drawn in, in plain words: "Link",
+   * "Behaviour". Left out, a Content prop is in a section named after the
+   * block and an Advanced prop in "HTML". A Style prop names one of the Style
+   * tab's sections ({@link STYLE_SECTION_KEYS}), and must.
+   *
+   * @experimental
+   */
+  section?: string;
+  /**
+   * What the prop writes to the page, for an author who reads HTML or CSS:
+   * one string for the prop, or one per option value of a select
+   * (`{ section: "section" }`), shown beside the plain words.
+   *
+   * @experimental
+   */
+  code?: string | Readonly<Record<string, string>>;
   [option: string]: unknown;
+}
+
+/**
+ * The tabs a block's setting can be edited in. A prop names one as its
+ * `group`; Content is the default.
+ *
+ * @experimental
+ */
+export const PROP_GROUPS = ["content", "style", "advanced"] as const;
+
+/** One of {@link PROP_GROUPS}. @experimental */
+export type PropGroup = (typeof PROP_GROUPS)[number];
+
+/**
+ * The Style tab's sections, by key: what a `"style"` prop's `section` names.
+ * The editor draws its Style sections under the same keys.
+ *
+ * @experimental
+ */
+export const STYLE_SECTION_KEYS = [
+  "icon",
+  "layout",
+  "spacing",
+  "size",
+  "position",
+  "typography",
+  "background",
+  "border",
+  "effects",
+] as const;
+
+/** One of {@link STYLE_SECTION_KEYS}. @experimental */
+export type StyleSectionKey = (typeof STYLE_SECTION_KEYS)[number];
+
+/**
+ * The prop types that hold what a block says (text, media, an address, a
+ * relation, a list of items), which are never how it looks, so never Style.
+ */
+const SAID_TYPES: ReadonlySet<string> = new Set([
+  "text",
+  "textarea",
+  "richText",
+  "media",
+  "upload",
+  "url",
+  "relation",
+  "entryField",
+  "array",
+]);
+
+/** Where a prop is edited: its tab, and the section inside it. */
+export interface PropPlace {
+  readonly tab: PropGroup;
+  /**
+   * The section's name: the prop's own, the block's label on Content, "HTML"
+   * on Advanced, or a Style section's key.
+   */
+  readonly section: string;
+}
+
+/** Whether a value names one of the tabs a prop can be edited in. */
+function isPropGroup(value: unknown): value is PropGroup {
+  return PROP_GROUPS.some(group => group === value);
+}
+
+/**
+ * Where a prop is edited, with its defaults applied: Content and a section
+ * named `blockLabel` where it declares neither. Read from a schema a
+ * registered block was accepted with, so the tab is one of the three.
+ *
+ * @experimental
+ */
+export function propPlace(schema: PropSchema, blockLabel: string): PropPlace {
+  const tab = isPropGroup(schema.group) ? schema.group : "content";
+  const own =
+    typeof schema.section === "string" && schema.section.trim() !== ""
+      ? schema.section
+      : undefined;
+  if (own !== undefined) return { tab, section: own };
+  return { tab, section: tab === "advanced" ? "HTML" : blockLabel };
+}
+
+/**
+ * Why a prop cannot be placed where it says, in plain words naming the block
+ * and the prop, or `undefined` where it can. What registration refuses.
+ *
+ * @experimental
+ */
+export function propPlacementRefusal(
+  blockName: string,
+  propName: string,
+  schema: Readonly<Record<string, unknown>>
+): string | undefined {
+  const where = `block "${blockName}" setting "${propName}"`;
+  const { group, section, role, type } = schema;
+  if (group !== undefined && !isPropGroup(group)) {
+    return `${where} names the tab ${JSON.stringify(group)}, which is not one of content, style or advanced.`;
+  }
+  if (section !== undefined && typeof section !== "string") {
+    return `${where} names its section with something other than words.`;
+  }
+  if (group === undefined || group === "content") return undefined;
+  if (role === "content") {
+    return `${where} is what the block says (role "content"), so it belongs in the content tab, not ${group}.`;
+  }
+  if (group !== "style") return undefined;
+  if (typeof type === "string" && SAID_TYPES.has(type)) {
+    return `${where} holds ${type} content, which belongs in the content tab, not style.`;
+  }
+  if (!STYLE_SECTION_KEYS.some(key => key === section)) {
+    return `${where} is in the style tab, so its section must be one of ${STYLE_SECTION_KEYS.join(", ")}.`;
+  }
+  return undefined;
 }
 
 /**
@@ -549,6 +696,23 @@ export interface BlockDefinition<
    * covering every version below it; registration refuses an uncovered bump.
    */
   migrate?: MigrationMap;
+  /**
+   * Props each upgrade step renames, keyed by from-version
+   * (`{ 1: { citeUrl: "href" } }`): applied to a node's props and its bindings
+   * before that step runs, so a bound value moves with the prop.
+   *
+   * @experimental
+   */
+  renames?: MigrationRenames;
+  /**
+   * Props each upgrade step drops, keyed by from-version
+   * (`{ 1: ["content"] }`): removed once that step has run, with any value
+   * bound to them and any component exposure into them, so an upgrade leaves
+   * nothing addressing a prop the block no longer has.
+   *
+   * @experimental
+   */
+  drops?: MigrationDrops;
   /** Required: what the block is, for docs, the palette, and agents. */
   description: string;
   /** Required: a worked instance, for previews and few-shot prompting. */
@@ -736,9 +900,79 @@ export interface BlockDefinition<
    * API question rather than a walk question.
    */
   conditionalSlots?: readonly string[];
+  /**
+   * The block types this block can be turned into, each with how: keyed by
+   * the target's name (`"core/heading"`), so the editor offers "Turn into" for
+   * exactly these and the engine's `turnInto` operation carries out the one
+   * chosen (see `turn-into`).
+   *
+   * Declared by the block being turned, because only it knows what its props
+   * mean: a passage of rich text becomes a heading's words, a heading's level
+   * a heading inside a passage. What every block keeps whatever its type (its
+   * name, styles, classes, visibility and conditions) is the operation's to
+   * carry, not each converter's.
+   *
+   * @experimental Settles with the editor's "Turn into".
+   */
+  converters?: Readonly<Record<string, BlockConverter<P>>>;
   /** Editor-only metadata; never serialized. */
   editor?: BlockEditorMeta<P>;
 }
+
+/**
+ * How one block turns into another type: the target's props from this
+ * block's, and where each of this block's bound props lands.
+ *
+ * @experimental Settles with the editor's "Turn into".
+ */
+export interface BlockConverter<P extends object = Record<string, unknown>> {
+  /**
+   * Which target prop each of this block's props becomes, by name: `{ text:
+   * "content" }`. A binding on a prop named here moves to that target prop
+   * when the target prop can show what the binding fills (the same kind of
+   * value); any other binding is removed.
+   */
+  readonly carries?: Readonly<Record<string, string>>;
+  /**
+   * The target's props for these props, with what is lost said in a short
+   * sentence for the author ("Bold and links are removed"), or why this block
+   * cannot be turned as it stands. Pure and synchronous: it runs when a menu
+   * opens, to say what each choice would do.
+   *
+   * `context.bound` names this block's props a field fills: their stored
+   * value is only what shows when the field is empty, which matters to a
+   * converter that would put something around it.
+   */
+  convert(
+    this: void,
+    props: P,
+    context?: BlockConversionContext
+  ): BlockConversion;
+}
+
+/**
+ * What a converter is told beyond the props.
+ *
+ * @experimental Settles with the editor's "Turn into".
+ */
+export interface BlockConversionContext {
+  /** This block's props a binding fills. */
+  readonly bound: readonly string[];
+}
+
+/**
+ * What a converter answers: the target's props and what is lost, or a refusal
+ * in words an author reads.
+ *
+ * @experimental Settles with the editor's "Turn into".
+ */
+export type BlockConversion =
+  | {
+      readonly props: Record<string, unknown>;
+      /** What the target cannot hold and is removed, said for the author. */
+      readonly dropped?: string;
+    }
+  | { readonly refused: string };
 
 /**
  * What a block's `seo` is told about the props it is asked with.
@@ -867,6 +1101,7 @@ export interface AnyBlockDefinition
     | "rendersNothing"
     | "contentModel"
     | "seo"
+    | "converters"
   > {
   example: { props: object; slots?: Record<string, BlockNode[]> };
   defaultProps?: object;
@@ -890,4 +1125,6 @@ export interface AnyBlockDefinition
    * `registerBlocks` whether or not it contributed any SEO at all.
    */
   seo?(props: object, read?: BlockSeoRead): BlockSeoContribution | undefined;
+  /** Widened for the reason `rendersNothing` is: converted from stored props. */
+  converters?: Readonly<Record<string, BlockConverter<object>>>;
 }

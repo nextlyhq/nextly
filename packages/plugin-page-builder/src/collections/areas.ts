@@ -33,6 +33,12 @@ export const LAYOUT_AREAS = ["header", "footer"] as const;
 /** One of the positions a Layout wraps a page with. */
 export type LayoutArea = (typeof LAYOUT_AREAS)[number];
 
+/** What an author calls each area: the stored value stays lower case. */
+const AREA_LABELS: Readonly<Record<LayoutArea, string>> = {
+  header: "Header",
+  footer: "Footer",
+};
+
 /**
  * The area list as select options.
  *
@@ -42,5 +48,5 @@ export type LayoutArea = (typeof LAYOUT_AREAS)[number];
  * one level down.
  */
 export function layoutAreaOptions(): { label: string; value: LayoutArea }[] {
-  return LAYOUT_AREAS.map(value => ({ label: value, value }));
+  return LAYOUT_AREAS.map(value => ({ label: AREA_LABELS[value], value }));
 }

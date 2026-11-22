@@ -8,6 +8,7 @@ import { ADMIN_ROBOTS } from "nextly/config";
 import type React from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
 
+import { AllPinsHost } from "../components/features/dashboard/AllPinsHost";
 import { SessionStallNotice } from "../components/guards/AdminPending";
 import { BuilderGuard } from "../components/guards/BuilderGuard";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
@@ -202,6 +203,8 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
       </Suspense>
       {/* Toaster uses default position (bottom-right) per component spec */}
       <Toaster richColors />
+      {/* "View all pins", which a pin toast on any screen can open in place. */}
+      <AllPinsHost />
       {/* Portal root for dialogs, dropdowns, etc. Synchronized with theme class. */}
       <div
         id="nextly-admin-portal-root"

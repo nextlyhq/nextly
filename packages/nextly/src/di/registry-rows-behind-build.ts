@@ -19,6 +19,7 @@
  *
  * @module di/registry-rows-behind-build
  */
+import { topLevelFieldNames } from "../domains/schema/migrate/top-level-field-names";
 import type { Logger } from "../shared/types";
 
 import type { StartRegistry } from "./start-reads";
@@ -55,14 +56,7 @@ function fieldNames(fields: unknown): string[] {
       return [];
     }
   }
-  if (!Array.isArray(list)) return [];
-  return list.flatMap(field => {
-    const name =
-      typeof field === "object" && field !== null
-        ? (field as { name?: unknown }).name
-        : undefined;
-    return typeof name === "string" && name !== "" ? [name] : [];
-  });
+  return topLevelFieldNames(list);
 }
 
 /**

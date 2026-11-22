@@ -5,10 +5,16 @@
  * 1. What a person typed for this page.
  * 2. What the route's code supplies: a title, a description and the social
  *    card's values, and whether it hides the page; never the canonical.
- * 3. The rule of the Page Builder design drawing the page.
+ * 3. The rule of the Page Builder design drawing the page, for every value
+ *    but the title.
  * 4. The content type's pattern, such as `{Title} | {Site name}`.
  * 5. A value taken from the page's own content.
  * 6. The site's defaults.
+ *
+ * The title never comes from the design: not from a heading on the page, nor
+ * from a title the design states for itself. A page's title is the one typed
+ * for it, else its title in the content type's pattern ("Pricing · Ridgeline"),
+ * so the pattern ranks above anything the design could offer.
  *
  * How results may show the page (its image preview size, the text under its
  * link and the rest of Google's display controls) is the page's own choice,
@@ -172,7 +178,10 @@ function at(
   return { value: text(value.value), from, ...detail };
 }
 
-/** Each level's text for one of the page's values, in the order. */
+/**
+ * Each level's text for one of the page's values, in the order. The design
+ * level is asked for the description only: it never supplies the title.
+ */
 function textValue(
   levels: Levels,
   key: "title" | "description"
@@ -180,7 +189,7 @@ function textValue(
   return first([
     at("page", levels.page[key]),
     at("code", levels.code[key]),
-    at("template", levels.template[key]),
+    ...(key === "title" ? [] : [at("template", levels.template[key])]),
     at("pattern", levels.pattern[key]),
     at("content", levels.content[key]),
     at("site", levels.site[key]),

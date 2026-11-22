@@ -8,6 +8,7 @@
 import type {
   BlockDocument,
   BuilderOp,
+  DocumentCode,
   DocumentKind,
   DocumentSeo,
 } from "@nextlyhq/blocks-engine";
@@ -38,6 +39,27 @@ export interface SettingsPlace {
    * one made; null where none was made.
    */
   flushHeld: () => BlockDocument | null;
+  /**
+   * The code the document adds to its own page (`settings.code`), and how
+   * to change it: one edit of the document, undone with the editor's Undo
+   * and saved with the page, as `seo` is. The editor's own, never handed to
+   * another plugin's tab.
+   */
+  pageCode: {
+    value: DocumentCode | undefined;
+    /** Answers whether the edit was made. */
+    set: (next: DocumentCode | null) => boolean;
+  };
+  /**
+   * The document's own CSS (`settings.customCss`), and how to change it:
+   * one edit of the document, as `pageCode` is. The editor's own, never
+   * handed to another plugin's tab.
+   */
+  pageCss: {
+    value: string | undefined;
+    /** Answers whether the edit was made; `null` removes the CSS. */
+    set: (next: string | null) => boolean;
+  };
 }
 
 /** The editor, as far as the place reads and edits it. */
@@ -123,8 +145,35 @@ export function useSettingsPlace<TFieldValues extends FieldValues>(
     }),
     [value, apply, editor.document, control, held, field]
   );
-  if (document === null) return null;
-  return { context, tabProps, flushHeld: held.flush };
+  const code = editor.document.settings?.code;
+  const pageCode = useMemo(
+    () => ({
+      value: code,
+      set: (next: DocumentCode | null) =>
+        apply({ kind: "code", code: next }) !== null,
+    }),
+    [code, apply]
+  );
+  const css = editor.document.settings?.customCss;
+  const pageCss = useMemo(
+    () => ({
+      value: css,
+      set: (next: string | null) =>
+        apply({ kind: "customCss", customCss: next }) !== null,
+    }),
+    [css, apply]
+  );
+  // One value while each part is the same, so Page settings, which is handed
+  // the place and memoised, is not drawn again for a render that changed
+  // none of it, such as a block selected.
+  const flushHeld = held.flush;
+  return useMemo(
+    () =>
+      document === null
+        ? null
+        : { context, tabProps, flushHeld, pageCode, pageCss },
+    [document, context, tabProps, flushHeld, pageCode, pageCss]
+  );
 }
 
 /**

@@ -494,7 +494,7 @@ for (const theme of ["light", "dark"] as const) {
       // The empty section's prompt: its words on its own ground, which is
       // drawn over the page's.
       const prompt = page.getByRole("button", {
-        name: /Drop a block here, or click to add one, in /,
+        name: /^Add a block, or drop one here, in /,
       });
       await expect(prompt).toBeVisible();
       const words = prompt.locator(".nx-empty-container-appenders__words");
@@ -531,10 +531,9 @@ for (const theme of ["light", "dark"] as const) {
         `the empty section's prompt: ${wordsColour} on ${behindWords.own ?? behindWords.page} over ${behindWords.page}`
       ).toBeGreaterThanOrEqual(4.5);
 
-      // The + in a gap the pointer is near.
-      // The first gap's +, named after the block above it.
+      // The + in a gap the pointer is near: the first, between two blocks.
       const add = page
-        .getByRole("button", { name: /^Add a section after / })
+        .getByRole("button", { name: /^Add a block between / })
         .first();
       const spot = await add.boundingBox();
       if (spot === null) throw new Error("the + is not laid out");
@@ -603,7 +602,7 @@ test.describe("the empty section's prompt in a narrow box", () => {
       const id = ((await created.json()) as { item: { id: string } }).item.id;
       await open(page, id, "light");
       const prompt = page.getByRole("button", {
-        name: /Drop a block here, or click to add one, in /,
+        name: /^Add a block, or drop one here, in /,
       });
       await expect(prompt).toBeVisible();
       const boxes = await prompt.evaluate(button => {

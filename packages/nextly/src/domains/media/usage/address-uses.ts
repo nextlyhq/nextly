@@ -35,6 +35,7 @@ import {
   type StoredFileRemover,
 } from "../remove-stored-files";
 import { StoredFileSearchReader } from "../stored-file-search";
+import { singleStoredFile } from "../stored-files";
 
 import { keptAddressKey } from "./kept-addresses";
 
@@ -286,7 +287,7 @@ async function removeRecordedFiles(
     if (
       !(await removeStoredFiles(
         storage,
-        { filename: file.path, url: file.url },
+        singleStoredFile(file.path, file.url),
         mediaId,
         kept
       ))

@@ -6,14 +6,22 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { setLabelSpy, getSpy, readableSpy, canReadSpy, updatableSpy } =
-  vi.hoisted(() => ({
-    setLabelSpy: vi.fn(),
-    getSpy: vi.fn(),
-    readableSpy: vi.fn(),
-    canReadSpy: vi.fn(),
-    updatableSpy: vi.fn(),
-  }));
+const {
+  setLabelSpy,
+  getSpy,
+  readableSpy,
+  canReadSpy,
+  updatableSpy,
+  sourcesSpy,
+} = vi.hoisted(() => ({
+  setLabelSpy: vi.fn(),
+  getSpy: vi.fn(),
+  readableSpy: vi.fn(),
+  canReadSpy: vi.fn(),
+  updatableSpy: vi.fn(),
+  // The rows as read, unless a case says otherwise.
+  sourcesSpy: vi.fn((rows: unknown) => Promise.resolve(rows)),
+}));
 
 vi.mock("../../../di", () => ({
   // A version in no language, so the language half of the gate asks nothing.
@@ -33,7 +41,7 @@ vi.mock("../../../api/versions-access", () => ({
   resolveSingleDocumentId: vi.fn(),
   // The rows as read: these cases judge the label, not which restored fields
   // a reader may be told about, which has its own tests.
-  readableFieldSources: (rows: unknown) => Promise.resolve(rows),
+  readableFieldSources: (rows: unknown) => sourcesSpy(rows),
 }));
 
 // DERIVED from the real module rather than a closed literal: the handler
@@ -79,6 +87,8 @@ describe("setVersionLabelForDocument — normalization", () => {
     canReadSpy.mockResolvedValue(true);
     readableSpy.mockResolvedValue(undefined);
     setLabelSpy.mockResolvedValue({ versionNo: 3, label: "x", snapshot: {} });
+    // The version as stored, read before the rename is written.
+    getSpy.mockResolvedValue({ versionNo: 3, label: null, snapshot: {} });
   });
 
   it("stores a trimmed label", async () => {
@@ -150,6 +160,19 @@ describe("setVersionLabelForDocument — access", () => {
     canReadSpy.mockResolvedValue(true);
     readableSpy.mockResolvedValue(undefined);
     setLabelSpy.mockResolvedValue({ versionNo: 3, label: "x", snapshot: {} });
+    // The version as stored, read before the rename is written.
+    getSpy.mockResolvedValue({ versionNo: 3, label: null, snapshot: {} });
+  });
+
+  it("names nothing when the answer cannot be made readable for the caller", async () => {
+    // The restored fields the answer names are judged by the caller's read
+    // rules; when that judgment fails, the rename is refused before it is
+    // written, rather than written and then answered with an error.
+    getSpy.mockResolvedValue({ versionNo: 3, label: null, snapshot: {} });
+    sourcesSpy.mockRejectedValueOnce(new Error("read rules unavailable"));
+
+    await expect(setVersionLabelForDocument(args("name"))).rejects.toThrow();
+    expect(setLabelSpy).not.toHaveBeenCalled();
   });
 
   it("refuses a caller who may not read the entity's history", async () => {

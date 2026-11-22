@@ -240,10 +240,15 @@ function contexts(): PageContext[] {
       noteFor: () => ({ tone: "muted", words: "The post’s Body shows here." }),
     },
   };
+  // The editor's canvas, where the author is looking: a block with nothing
+  // to draw for a visitor (a Table of contents on a page with no headings)
+  // keeps its frame and says what to add.
+  const authorLooking = { ...empty, diagnostics: true };
   return [
     empty,
     answering,
     templateCanvas,
+    authorLooking,
     noProvider,
     failing,
     rejecting,

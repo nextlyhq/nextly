@@ -14,6 +14,7 @@
 
 import { join } from "node:path";
 
+import { processGlobal } from "../../shared/process-global";
 import { consoleLogger } from "../../shared/types";
 
 import { NDJSONChannel } from "./channels/ndjson";
@@ -21,15 +22,17 @@ import { TerminalChannel } from "./channels/terminal";
 import { createNotifier } from "./dispatcher";
 import type { Notifier } from "./types";
 
-/**
- * The folder the log is kept below, as `registerServices` resolved it: the
- * app's root, which is the working directory unless a `basePath` is given.
- * Unset before any registration, when the working directory stands in.
- */
-let logRoot: string | undefined;
-
-/** One notifier per log file, so a channel's state persists between applies. */
-const cached = new Map<string, Notifier>();
+/** What the production notifier keeps, one per process: see {@link processGlobal}. */
+const state = processGlobal("migrationNotifier", () => ({
+  /**
+   * The folder the log is kept below, as `registerServices` resolved it: the
+   * app's root, which is the working directory unless a `basePath` is given.
+   * Unset before any registration, when the working directory stands in.
+   */
+  logRoot: undefined as string | undefined,
+  /** One notifier per log file, so a channel's state persists between applies. */
+  cached: new Map<string, Notifier>(),
+}));
 
 /**
  * Keep the migration log below `root` from now on: the `basePath` services
@@ -37,17 +40,17 @@ const cached = new Map<string, Notifier>();
  * so its log never lands in the package under test.
  */
 export function setMigrationLogRoot(root: string | undefined): void {
-  logRoot = root;
+  state.logRoot = root;
 }
 
 export function getProductionNotifier(): Notifier {
   const filePath = join(
-    logRoot ?? process.cwd(),
+    state.logRoot ?? process.cwd(),
     ".nextly",
     "logs",
     "migrations.log"
   );
-  const known = cached.get(filePath);
+  const known = state.cached.get(filePath);
   if (known) return known;
   const made = createNotifier({
     channels: [new TerminalChannel(), new NDJSONChannel({ filePath })],
@@ -55,13 +58,13 @@ export function getProductionNotifier(): Notifier {
       warn: msg => consoleLogger.warn(msg),
     },
   });
-  cached.set(filePath, made);
+  state.cached.set(filePath, made);
   return made;
 }
 
 // Test seam — only used by tests that need to reset cached state
 // between scenarios. Production code should never call this.
 export function _resetProductionNotifierForTests(): void {
-  cached.clear();
-  logRoot = undefined;
+  state.cached.clear();
+  state.logRoot = undefined;
 }

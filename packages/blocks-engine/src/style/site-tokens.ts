@@ -51,15 +51,14 @@ import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
 import type { TokenKind } from "./catalog-types";
-import { parseColor } from "./contrast";
 import {
   asciiLower,
   checkCssValue,
   checkUrlValue,
   decodeIdentifier,
-  isCssWideKeyword,
-  unitCategory,
+  referencesCustomProperty,
 } from "./css-value";
+import { darkModeSheet } from "./dark-mode-sheet";
 import {
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
@@ -69,6 +68,12 @@ import {
   safeTokenPrefix,
   tokenCustomProperty,
 } from "./declarations";
+import type { SiteTextMap } from "./site-text";
+import { checkTokenKind, tokenKindExample } from "./site-token-kind";
+import { typeSizeDefaultTokens } from "./type-size-defaults";
+
+/** The marker a host sets to choose a mode, written with the dark sheet. */
+export { DARK_MODE_ATTRIBUTE } from "./dark-mode-sheet";
 
 /** The modes a token may carry a value for. */
 export type TokenMode = "light" | "dark";
@@ -132,6 +137,20 @@ export interface SiteToken {
    */
   extensions?: Readonly<Record<string, unknown>>;
   /**
+   * The two sizes a fluid size was made from, in px: on the smallest screen
+   * of the site's fluid range and on its largest. Kept beside the value it
+   * gave, so the size can be made again when the range changes; a value
+   * typed by hand has none, and a range change leaves it as it is. Never
+   * read by the emitter: the value is what reaches the page.
+   */
+  fluid?: { readonly small: number; readonly large: number };
+  /**
+   * The named group a colour is listed under in the Design panel ("Brand",
+   * "Text and surfaces"). Display-only, as `label` is: never emitted, and a
+   * group never changes the code name, so moving a colour moves no CSS.
+   */
+  group?: string;
+  /**
    * Fields found under THIS system's own extension key that this build does not
    * read, kept so it can write them back out.
    *
@@ -168,6 +187,40 @@ export interface SiteTokenSet {
    * {@link DarkModeStrategy}.
    */
   darkMode?: DarkModeStrategy;
+  /**
+   * The page widths a size made with "Fluid…" grows across, in px: the
+   * smallest screen and the largest. 360 to 1280 where unset. Never
+   * emitted: each fluid size's value already holds it, and a change of it
+   * remakes those values.
+   */
+  fluidRange?: { readonly min: number; readonly max: number };
+  /**
+   * The site's text: Body, the six heading levels, Links, Buttons and
+   * Captions, each a font, size and line height (and for links a colour and
+   * an underline) set once for every page. A row left out keeps its built-in
+   * value (`resolveSiteText`). Never emitted here: the element tier writes
+   * it. Kept with the variables because a row points at them, so the two
+   * save, merge and undo as one.
+   *
+   * @experimental
+   */
+  siteText?: SiteTextMap;
+  /**
+   * The site's colours in the order its authors put them, by identity.
+   * Colours it does not name follow in the set's own order, so a site that
+   * never reorders stores nothing. Display-only: the Design panel and every
+   * colour picker list colours in this order, and nothing is emitted from it.
+   */
+  order?: readonly string[];
+  /**
+   * Whether the Design panel and every colour picker list the built-in
+   * colours the site does not use. Shown where unset. Display-only, like
+   * `order`: every built-in colour is still a token, and still
+   * written, whatever this says, because core blocks read them.
+   *
+   * @experimental
+   */
+  builtInColoursShown?: boolean;
 }
 
 /**
@@ -284,9 +337,14 @@ const GROUP_WORDS: ReadonlySet<string> = new Set([
 export function tokenDisplayLabel(token: {
   name: string;
   label?: string;
+  id?: string;
 }): string {
   const own = token.label?.trim();
   if (own !== undefined && own !== "") return own;
+  // A built-in's plain name, by the identity a rename leaves alone: a site
+  // overriding its value keeps the name, since the override stores no label.
+  const builtIn = BUILT_IN_LABELS.get(token.id ?? token.name);
+  if (builtIn !== undefined) return builtIn;
   const parts = token.name.split(".");
   const rest = parts.slice(1);
   const dropGroup =
@@ -348,102 +406,6 @@ export interface FontFaceDef {
 }
 
 /**
- * The marker a host sets to choose a mode: `"dark"` or `"light"`.
- *
- * Without it the visitor's device decides. With it the marker wins both ways:
- * `"dark"` shows dark values on a light device and `"light"` keeps light values
- * on a dark one.
- *
- * Named rather than themed: it says what it selects and belongs to no design
- * system, so a host wiring its own toggle to it is not adopting anything else.
- */
-export const DARK_MODE_ATTRIBUTE = "data-nx-theme";
-
-/** The selector root-scoped tokens are declared under. */
-const ROOT_TOKEN_SELECTOR = ":root";
-
-/**
- * The dark block, written for whichever element can actually carry the switch.
- *
- * **Root-scoped tokens are declared on the attribute-bearing element itself,
- * not on the root.** Custom properties inherit, so declaring them wherever the
- * host put the attribute cascades to everything below — which is the only shape
- * that works for all three placements a host chooses between. Measured, with
- * the attribute moved between `<html>`, `<body>` and a wrapper: this form
- * applies in every one. A form anchored to `:root` applies only when the
- * attribute is on `<html>`, because `:root` IS that element and cannot be
- * reached by a rule describing an ancestor.
- *
- * Its specificity equals the light block's `:root`, and it is emitted after it,
- * so order decides and dark wins where both match.
- *
- * **A scoped selector keeps the ancestor form**, because a bare attribute
- * selector would declare these tokens for the whole document and a scoped
- * sheet exists precisely so it does not. There the host has somewhere above the
- * element to put the switch, so the ancestor form is both available and
- * correct.
- */
-function darkSelectorFor(selector: string, dark: readonly string[]): string {
-  return markerBlockFor(selector, "dark", dark);
-}
-
-/**
- * Declarations under the marker for one mode, on whichever element carries it.
- *
- * The light block is the same shape as the dark one, for the same reason: the
- * device block above is guarded only against a marker on the root itself, so a
- * `data-nx-theme="light"` on `<body>` or a wrapper would otherwise inherit the
- * dark values from the root. Declaring the light values on the marked element
- * puts them nearer than anything inherited.
- */
-function markerBlockFor(
-  selector: string,
-  mode: TokenMode,
-  declarations: readonly string[]
-): string {
-  const body = `{${declarations.join(";")}}`;
-  const marker = `[${DARK_MODE_ATTRIBUTE}="${mode}"]`;
-  if (selector === ROOT_TOKEN_SELECTOR) {
-    return `${marker}${body}`;
-  }
-  // `:is()` around the whole selector, because this one may be a LIST. Appending
-  // the attribute to `.preview-a,.preview-b` yields `.preview-a` bare and only
-  // `.preview-b[...]` qualified, so the first member would take the dark values
-  // unconditionally and a scoped preview would render dark for good. `:is()`
-  // takes the specificity of its most specific argument, so a list of single
-  // classes weighs exactly what one of them did.
-  const scoped = `:is(${selector})`;
-  // The NEAREST marker decides. A light and a dark block would otherwise
-  // match with equal weight under nested markers, and whichever was written
-  // last would win however the markers nest. So a block that applies through
-  // an ancestor's marker stands down where the other mode's marker is on the
-  // scope itself, or sits between that ancestor and the scope.
-  const other = `[${DARK_MODE_ATTRIBUTE}="${mode === "dark" ? "light" : "dark"}"]`;
-  return `${scoped}${marker},${marker} ${scoped}:not(${other},${marker} ${other} *)${body}`;
-}
-
-/**
- * The dark block written for the visitor's device preference.
- *
- * Guarded by a `not` on the light marker, so a host (or the editor's preview)
- * can keep light values on a device that prefers dark. On `:root` the guard
- * reads the root element alone, because nothing sits above it; a scoped
- * selector is guarded against the marker on itself or on any ancestor, which
- * is where a host puts the switch for a scoped sheet.
- *
- * Wrapped in `:is()` for the same reason as the attribute form: the selector
- * may be a list, and `:not()` appended to it would guard only its last member.
- */
-function deviceDarkBlockFor(selector: string, dark: readonly string[]): string {
-  const light = `[${DARK_MODE_ATTRIBUTE}="light"]`;
-  const guarded =
-    selector === ROOT_TOKEN_SELECTOR
-      ? `${ROOT_TOKEN_SELECTOR}:not(${light})`
-      : `:is(${selector}):not(${light},${light} *)`;
-  return `@media (prefers-color-scheme:dark){${guarded}{${dark.join(";")}}}`;
-}
-
-/**
  * The longest font format this engine will write.
  *
  * The grammar below constrains the alphabet and not the length, and a format is
@@ -482,18 +444,47 @@ const FONT_FORMAT = /^[a-z0-9-]+$/i;
 export function resolveTokenPrefix(prefix: string | undefined): {
   prefix: string;
   issue?: ValidationIssue;
+  /**
+   * Why the requested prefix was refused, in words for the person choosing
+   * one (the site's settings), where `issue` reports to a compile. Both come
+   * from the one verdict, so a prefix a person is told is fine is the one the
+   * sheet is written under.
+   */
+  refusal?: string;
 } {
   const safe = safeTokenPrefix(prefix);
   return safe.warning === undefined
     ? { prefix: safe.prefix }
-    : { prefix: safe.prefix, issue: tokenIssue(safe.warning) };
+    : {
+        prefix: safe.prefix,
+        issue: tokenIssue(safe.warning),
+        refusal: PREFIX_REFUSALS[safe.reserved ?? "shape"],
+      };
 }
+
+/**
+ * The plain reason for each way a prefix is refused: each reserved prefix by
+ * whose it is, and a prefix the wrong shape by what a prefix looks like.
+ */
+const PREFIX_REFUSALS = {
+  "--nx-": "--nx- is kept for the admin's own styles. Choose another prefix.",
+  "--tw-": "--tw- is used by Tailwind. Choose another prefix.",
+  shape:
+    "A prefix starts with two dashes, uses only lowercase letters, numbers and dashes, and ends with a dash, like --brand-.",
+} as const;
 
 function tokenIssue(
   message: string,
-  severity: ValidationIssue["severity"] = "warning"
+  severity: ValidationIssue["severity"] = "warning",
+  suggestion?: string
 ): ValidationIssue {
-  return { path: "siteTokens", code: "invalid-style-value", severity, message };
+  return {
+    path: "siteTokens",
+    code: "invalid-style-value",
+    severity,
+    message,
+    ...(suggestion === undefined ? {} : { suggestion }),
+  };
 }
 
 /**
@@ -621,159 +612,14 @@ export function tokenValueFetches(value: string): boolean {
  */
 const REMOTE_REFERENCE = /\/\/|(?:^|[\s"'(,])[a-z][a-z0-9+.-]*:/;
 
-/**
- * A value whose kind nothing can judge from the text alone.
- *
- * `var()` resolves elsewhere, `calc()` and its relatives compute, and
- * `color-mix()` produces a colour from arguments this is not going to evaluate.
- * A guess about any of them would be a guess, so they are passed.
- */
-const OPAQUE_VALUE =
-  /^(?:var|calc|clamp|min|max|env|attr|color-mix|light-dark|round|abs)\(/i;
+// The kind check lives in its own module; re-exported here, where a reader
+// of the token table looks for it.
+export { checkTokenKind, tokenKindExample } from "./site-token-kind";
 
-/**
- * A bare number, with the unit it carries — the shape most kinds disagree over.
- *
- * The exponent branch is not decoration: without it `1e3px` does not match at
- * all, so the check reaches no verdict and stays silent about a duration token
- * that will be dropped by the browser. The rest of the token code accepts that
- * spelling, and a grammar narrower here than there is a check that quietly
- * stops covering the values the other side lets through.
- */
-/** The only words `font-weight` takes; every other value is a number. */
-const FONT_WEIGHT_KEYWORDS = new Set(["normal", "bold", "bolder", "lighter"]);
-
-/** Text that begins the way a number does, whether or not it finishes like one. */
-const NUMERIC_LOOKING = /^[+-]?[.\d]/;
-
-const MEASUREMENT =
-  /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(%|(?:[a-zA-Z]|\\[0-9a-fA-F]{1,6}\s?|\\.)*)$/;
-
-/**
- * Why a value cannot be what its token says it is, when that is knowable.
- *
- * The kind is not decoration: it decides which properties may reference the
- * token, so a `dimension` holding `red` compiles into `padding:var(--site-…)`
- * and the browser drops the declaration at use time. Nothing on the page says
- * why, and the author is left looking at a padding that does not apply.
- *
- * Deliberately one-sided. It reports only what it is CERTAIN of — a length
- * where a colour belongs, a colour where a length belongs — and stays quiet
- * about everything it merely cannot parse, because `oklch()`, a named colour
- * and next year's colour function are all valid CSS this has no business
- * refusing. And it is a warning rather than a refusal for the same reason: a
- * wrong verdict then costs a message, not the token.
- */
-export function checkTokenKind(
-  kind: TokenKind,
-  value: string
-): string | undefined {
-  const text = value.trim();
-  if (text === "" || OPAQUE_VALUE.test(text)) return undefined;
-  if (isCssWideKeyword(asciiLower(text))) return undefined;
-
-  const measured = MEASUREMENT.exec(text);
-  // Text plainly trying to be a number but failing to be one — `1.px`, `1..2` —
-  // reaches no verdict below, because nothing matches and every branch reads
-  // `undefined` as "cannot judge". For the kinds that ARE numbers, failing to
-  // parse is itself the answer.
-  if (
-    measured === null &&
-    NUMERIC_LOOKING.test(text) &&
-    (kind === "dimension" ||
-      kind === "duration" ||
-      kind === "number" ||
-      kind === "fontWeight" ||
-      // A colour too. Tightening the measurement pattern moved `1.px` out of
-      // the colour branch below without putting it anywhere else, so it stopped
-      // being reported at all — the silence this branch exists to end.
-      kind === "color")
-  ) {
-    return kind === "color"
-      ? "opens like a number and is not one, so it is not a colour"
-      : "is not a number CSS can read";
-  }
-  // A unit is an identifier, so `1m\\73` IS `1ms`. Read raw, the check reaches
-  // no verdict and stays silent about a value the browser drops.
-  const rawUnit = measured === null ? undefined : (measured[1] ?? "");
-  const unit =
-    rawUnit === undefined ? undefined : asciiLower(decodeIdentifier(rawUnit));
-  // A percentage is its own token and cannot be spelled with an escape: `1\\%`
-  // and `1\\25` decode to a unit reading `%`, but CSS sees an invalid dimension
-  // and drops the declaration. Only the literal counts.
-  const isPercentage = rawUnit === "%";
-  // `unitCategory` resolves the spelling itself, so it is handed the unit as
-  // written. Decoding first and passing the result resolves the escape twice,
-  // and `1\\5c s` — a dimension whose unit decodes to the two characters `\s`,
-  // which measures nothing — comes back reading `s` and passes as a duration
-  // the browser drops.
-  const measures = rawUnit === undefined ? undefined : unitCategory(rawUnit);
-  const amount = measured === null ? undefined : Number.parseFloat(text);
-  const isColor = parseColor(text) !== undefined;
-
-  switch (kind) {
-    case "color":
-      // A number is never a colour, whatever unit it wears.
-      return measured
-        ? `is a ${unit === "" ? "number" : "measurement"}, not a colour`
-        : undefined;
-    case "dimension": {
-      if (isColor) return "is a colour, not a length";
-      if (unit === undefined) return undefined;
-      // Only zero may go without a unit; `16` is not `16px` to CSS.
-      if (unit === "") {
-        return amount === 0
-          ? undefined
-          : "is a number with no unit, so it is not a length";
-      }
-      // A percentage stands in for a length wherever a length token is used.
-      // Anything else that measures something — `150ms`, `20deg` — measures the
-      // wrong quantity, and the browser drops the declaration that reads it.
-      // Judged by what the unit MEASURES rather than by a second list of length
-      // units kept beside the one the value checker already has.
-      if (isPercentage) return undefined;
-      return measures === "length"
-        ? undefined
-        : `is measured in ${unit}, which is ${measures ?? "not a unit CSS knows"}, not a length`;
-    }
-    case "duration": {
-      if (isColor) return "is a colour, not a duration";
-      if (unit === undefined) return undefined;
-      // CSS allows a unitless zero for a time, and only a unitless one: `0px`
-      // is still a length, and `animation-duration: var(--site-time)` reading
-      // it is a declaration the browser drops.
-      if (unit === "" && amount === 0) return undefined;
-      return measures === "time"
-        ? undefined
-        : `is measured in ${unit === "" ? "no unit" : unit}, not seconds or milliseconds`;
-    }
-    case "number":
-      if (isColor) return "is a colour, not a number";
-      return unit !== undefined && unit !== ""
-        ? `carries the unit "${unit}", so it is not a plain number`
-        : undefined;
-    case "fontWeight":
-      if (unit !== undefined && unit !== "") {
-        return `carries the unit "${unit}", so it is not a font weight`;
-      }
-      if (amount !== undefined) {
-        return amount < 1 || amount > 1000
-          ? "is outside the 1 to 1000 a font weight may take"
-          : undefined;
-      }
-      // Not a number, so it has to be one of the four words the property
-      // takes. Accepting every other word meant a weight of `heavy` was
-      // emitted with nothing said about it and dropped where it was used.
-      return FONT_WEIGHT_KEYWORDS.has(asciiLower(text))
-        ? undefined
-        : `is not a font weight; the words are ${[...FONT_WEIGHT_KEYWORDS].join(", ")}`;
-    // A family is any text, a shadow is a list this does not parse, and
-    // `custom` exists precisely so a site can hold something with no rules.
-    case "fontFamily":
-    case "shadow":
-    case "custom":
-      return undefined;
-  }
+/** " Type …." for a kind with an example, else nothing. */
+function typeInstead(kind: TokenKind): string {
+  const example = tokenKindExample(kind);
+  return example === undefined ? "" : ` Type ${example}.`;
 }
 
 /**
@@ -785,6 +631,25 @@ export function checkTokenKind(
  * one token re-widths every container on the site. A default set that tried to
  * be a design system would be a set most sites delete.
  */
+/**
+ * A site's own token over the one it replaces, keeping the replaced token's
+ * group and label where the site's says neither: a built-in colour the site
+ * gave its own value to before colours had groups and these names is still
+ * listed where, and as, the built-in one is. Display only, as both are.
+ */
+function withDefaultWords(
+  token: SiteToken,
+  replaced: SiteToken | undefined
+): SiteToken {
+  const group = token.group ?? replaced?.group;
+  const label = token.label ?? replaced?.label;
+  return {
+    ...token,
+    ...(group === undefined ? {} : { group }),
+    ...(label === undefined ? {} : { label }),
+  };
+}
+
 /**
  * The token set a site actually renders with: the defaults, with a site's own
  * definitions layered over them by NAME.
@@ -810,7 +675,7 @@ export function checkTokenKind(
  * that agree today drift, and the drift is invisible because a missing token
  * looks exactly like a token whose value did not apply.
  *
- * `prefix` and `darkMode` come from the override when it states them, because
+ * `prefix`, `darkMode` and `fluidRange` come from the override when it states them, because
  * they are site-wide decisions rather than per-token values. A site that sets a
  * prefix must set it in ONE place: `compileSiteSheet` derives the prefix used
  * for declaring and for referencing from a single value for exactly this
@@ -834,7 +699,8 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
   // imported DTCG file can carry one, and taking the first would apply a value
   // the author replaced.
   for (const token of override?.tokens ?? []) {
-    byIdentity.set(tokenIdentity(token), token);
+    const identity = tokenIdentity(token);
+    byIdentity.set(identity, withDefaultWords(token, byIdentity.get(identity)));
   }
   return {
     tokens: [...byIdentity.values()],
@@ -842,6 +708,20 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
     ...(override?.darkMode === undefined
       ? {}
       : { darkMode: override.darkMode }),
+    // Site-wide too: the widths the sizes made with Fluid… grow between.
+    ...(override?.fluidRange === undefined
+      ? {}
+      : { fluidRange: override.fluidRange }),
+    // And the site's text, which the element tier reads beside the tokens.
+    ...(override?.siteText === undefined
+      ? {}
+      : { siteText: override.siteText }),
+    // Site-wide as well: the order the site's colours are listed in.
+    ...(override?.order === undefined ? {} : { order: override.order }),
+    // And whether the built-in colours it does not use are listed.
+    ...(override?.builtInColoursShown === undefined
+      ? {}
+      : { builtInColoursShown: override.builtInColoursShown }),
   };
 }
 
@@ -853,20 +733,25 @@ export function defaultSiteTokens(): SiteToken[] {
       values: { light: "72rem" },
       description: "How wide a centred container may grow.",
     },
+    // The brand colour first: the Design panel lists the site's colours in
+    // this order, and "Brand" comes before "Text and surfaces".
+    {
+      name: "color.primary",
+      kind: "color",
+      group: "Brand",
+      values: { light: "#2563eb", dark: "#60a5fa" },
+    },
     {
       name: "color.text",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#111827", dark: "#f9fafb" },
     },
     {
       name: "color.background",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#ffffff", dark: "#0b0f19" },
-    },
-    {
-      name: "color.primary",
-      kind: "color",
-      values: { light: "#2563eb", dark: "#60a5fa" },
     },
     /**
      * A raised surface: a card, a panel, a table header. DISTINCT from
@@ -888,6 +773,7 @@ export function defaultSiteTokens(): SiteToken[] {
     {
       name: "color.surface",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#f9fafb", dark: "#151b2b" },
     },
     /**
@@ -909,6 +795,7 @@ export function defaultSiteTokens(): SiteToken[] {
     {
       name: "color.border",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#e5e7eb", dark: "#1f2937" },
     },
     /**
@@ -937,7 +824,10 @@ export function defaultSiteTokens(): SiteToken[] {
      */
     {
       name: "color.border-strong",
+      // Named as an author reads it; the code name stays as it was.
+      label: "Strong border",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#6b7280", dark: "#9ca3af" },
     },
     /**
@@ -950,10 +840,22 @@ export function defaultSiteTokens(): SiteToken[] {
      */
     {
       name: "color.muted",
+      // Named as an author reads it; the code name stays as it was.
+      label: "Muted text",
       kind: "color",
+      group: "Text and surfaces",
       values: { light: "#6b7280", dark: "#9ca3af" },
     },
     { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },
+    // The font the site's headings are set in once an author picks one. No
+    // rule reads it until then: the heading rows hold no font, so headings
+    // take the body text's, the site's own or the one picked for Body.
+    {
+      name: "font.heading",
+      kind: "fontFamily",
+      values: { light: "system-ui" },
+    },
+    ...typeSizeDefaultTokens(),
     { name: "space.4", kind: "dimension", values: { light: "1rem" } },
     ...SPACING_DEFAULTS.map(
       ({ name, value, description }): SiteToken => ({
@@ -977,6 +879,8 @@ type SpacingValue =
 /** One row of {@link SPACING_DEFAULTS}. */
 interface SpacingDefault {
   readonly name: string;
+  /** What it is called where an author meets it, in plain words. */
+  readonly label: string;
   readonly value: SpacingValue;
   readonly description: string;
 }
@@ -998,45 +902,91 @@ interface SpacingDefault {
 const SPACING_DEFAULTS: readonly SpacingDefault[] = [
   {
     name: "space.stack",
+    label: "Space between blocks",
     value: { min: "1rem", preferred: "0.875rem + 0.5vw", max: "1.25rem" },
     description: "The space a container puts between the blocks it holds.",
   },
   {
     name: "space.section-y",
+    label: "Section padding (top and bottom)",
     value: { min: "3rem", preferred: "2rem + 4vw", max: "5rem" },
     description: "A section's padding above and below its content.",
   },
   {
     name: "space.gutter",
+    label: "Section padding (sides)",
     value: { min: "1rem", preferred: "4vw", max: "2rem" },
     description: "A section's padding beside its content.",
   },
+  // A Section's Compact and Roomy padding (`padding-preset.ts`), each a pair
+  // like the two above, which are Normal's. Tighter and airier above and
+  // below; beside the content they start as Normal's.
+  {
+    name: "space.section-y-compact",
+    label: "Section padding, compact (top and bottom)",
+    value: { min: "1.5rem", preferred: "1rem + 2vw", max: "2.5rem" },
+    description: "A Compact section's padding above and below its content.",
+  },
+  {
+    name: "space.gutter-compact",
+    label: "Section padding, compact (sides)",
+    value: { min: "1rem", preferred: "4vw", max: "2rem" },
+    description: "A Compact section's padding beside its content.",
+  },
+  {
+    name: "space.section-y-roomy",
+    label: "Section padding, roomy (top and bottom)",
+    value: { min: "4.5rem", preferred: "3rem + 6vw", max: "7.5rem" },
+    description: "A Roomy section's padding above and below its content.",
+  },
+  {
+    name: "space.gutter-roomy",
+    label: "Section padding, roomy (sides)",
+    value: { min: "1rem", preferred: "4vw", max: "2rem" },
+    description: "A Roomy section's padding beside its content.",
+  },
   {
     name: "space.columns",
+    label: "Space between columns",
     value: { min: "1rem", preferred: "0.5rem + 2vw", max: "2rem" },
     description: "The space between columns, and between gallery images.",
   },
   {
     name: "space.card",
+    label: "Card padding",
     value: { min: "1rem", preferred: "0.75rem + 1vw", max: "1.5rem" },
     description: "A card's padding around its content.",
   },
   {
     name: "space.paragraph",
+    label: "Space between paragraphs",
     value: "1em",
     description: "The space between the paragraphs of rich text.",
   },
   {
     name: "button.padding-y",
+    label: "Button padding (top and bottom)",
     value: "0.75rem",
     description: "A button's padding above and below its label.",
   },
   {
     name: "button.padding-x",
+    label: "Button padding (sides)",
     value: "1.25rem",
     description: "A button's padding beside its label.",
   },
 ];
+
+/**
+ * The plain names of the built-in variables that have one, by identity:
+ * the spacing table's, and the content width. Read by
+ * {@link tokenDisplayLabel}, so every surface that names a variable says
+ * the same words, and a stored override, which carries no label, keeps them.
+ */
+const BUILT_IN_LABELS: ReadonlyMap<string, string> = new Map([
+  ["content.width", "Content width"],
+  ...SPACING_DEFAULTS.map(row => [row.name, row.label] as const),
+]);
 
 /** A spacing default as the CSS a token stores. */
 function spacingValue(value: SpacingValue): string {
@@ -1298,6 +1248,25 @@ export function tokenNamingProblem(token: {
   return identityProblem(token.name, "name");
 }
 
+/** `0`, `-0`, `0.0`, `.0` and the like: a zero with no unit. */
+const UNITLESS_ZERO = /^[+-]?(?:0+(?:\.0*)?|\.0+)$/;
+
+/**
+ * A token's value as it is written into its custom property.
+ *
+ * A length token's unitless zero is written as `0px`. On its own a bare `0` is
+ * a length wherever a property takes one, but a token is also read inside
+ * `max()` (a contained block's padding is one), where it is a number, and a
+ * number beside a length makes the whole declaration invalid. Every other
+ * value, and every other kind, is written as given: a number or a duration
+ * takes a unitless zero, and a `0px` there would be the wrong quantity.
+ */
+function writtenTokenValue(kind: TokenKind, value: string): string {
+  return kind === "dimension" && UNITLESS_ZERO.test(value.trim())
+    ? "0px"
+    : value;
+}
+
 /** The emitter's wording for {@link tokenNamingProblem}. */
 function tokenNamingRefusal(token: SiteToken): string | undefined {
   const problem = tokenNamingProblem(token);
@@ -1325,6 +1294,13 @@ export function emitTokenBlocks(
   // The light values of the variables that have a dark one: what a light
   // marker has to restore, and nothing else.
   const undoDark: string[] = [];
+  // The light declarations of the variables with no dark value of their own
+  // that read another variable, such as a shadow coloured by a colour
+  // variable. A custom property's `var()` is resolved where it is declared
+  // and inherited as the result, so one declared only on the root keeps the
+  // light colour under a dark marker on <body> or a wrapper. Declared again in
+  // every mode block, it resolves on the same element as what it reads.
+  const reread: string[] = [];
   const seen = new Map<string, string>();
   /*
    * The tokens this call actually WROTE.
@@ -1425,16 +1401,26 @@ export function emitTokenBlocks(
       if (mismatch !== undefined) {
         issues.push(
           tokenIssue(
-            `"${token.name}" is a ${token.kind} token, but its ${mode} value "${modeValue}" ${mismatch}. It was written as given, and will do nothing where the token is used.`
+            `"${token.name}" is a ${token.kind} token, but its ${mode} value "${modeValue}" ${mismatch}.${typeInstead(token.kind)}`,
+            "warning",
+            // What a render does with it, kept out of the message: a save
+            // that refuses on this report stores nothing, and the message
+            // must stay true there.
+            "It was written as given, and will do nothing where the token is used."
           )
         );
       }
     }
 
-    light.push(`${property}:${token.values.light}`);
+    const lightValue = writtenTokenValue(token.kind, token.values.light);
+    light.push(`${property}:${lightValue}`);
     if (token.values.dark !== undefined) {
-      dark.push(`${property}:${token.values.dark}`);
-      undoDark.push(`${property}:${token.values.light}`);
+      dark.push(
+        `${property}:${writtenTokenValue(token.kind, token.values.dark)}`
+      );
+      undoDark.push(`${property}:${lightValue}`);
+    } else if (referencesCustomProperty(lightValue)) {
+      reread.push(`${property}:${lightValue}`);
     }
   }
 
@@ -1456,18 +1442,19 @@ export function emitTokenBlocks(
   }
   if (light.length === 0) return { css: "", issues, emitted: [] };
 
-  let css = `${selector}{${light.join(";")}}`;
-  // Both forms, always, and in this order. The device block makes dark values
-  // work with no setup; the marker block after it lets a host choose dark on a
-  // light device. `set.darkMode` is deliberately not read: it once picked one
-  // of the two, and its default picked the form nothing set.
-  // The light marker block comes last, so where a light marker sits inside a
-  // dark one the nearer marker decides.
-  if (dark.length > 0) {
-    css +=
-      deviceDarkBlockFor(selector, dark) +
-      darkSelectorFor(selector, dark) +
-      markerBlockFor(selector, "light", undoDark);
+  // A site with no dark values writes its one block as it always has: there
+  // is no second scheme to state.
+  if (dark.length === 0) {
+    return { css: `${selector}{${light.join(";")}}`, issues, emitted };
   }
-  return { css, issues, emitted };
+  return {
+    css: darkModeSheet(
+      selector,
+      light,
+      [...dark, ...reread],
+      [...undoDark, ...reread]
+    ),
+    issues,
+    emitted,
+  };
 }

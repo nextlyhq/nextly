@@ -19,6 +19,7 @@ import { LEDGER_RETENTION_MS, TAG_EXPIRY_GRACE_MS } from "../tag-expiry-ledger";
 import {
   expireTags,
   isEntryExpired,
+  LEDGER_CALL_TIMEOUT_MS,
   localNow,
   publishTagExpiryLedger,
   refreshTagExpiries,
@@ -55,6 +56,33 @@ function memoryLedger(skewMs = 0) {
   const recordElsewhere = (tag: string, atLedgerTime = now()) =>
     rows.set(tag, atLedgerTime);
   return { ledger, expiriesOf, recordElsewhere };
+}
+
+/**
+ * A ledger kept in memory that records as the real one does: the database's
+ * time graced by {@link TAG_EXPIRY_GRACE_MS}, a row keeping the later of its
+ * time and the new one, and the record answering the time it wrote.
+ */
+function gracedLedger() {
+  const rows = new Map<string, number>();
+  const ledger: TagExpiryLedger = {
+    record: async tags => {
+      const at = Date.now() + TAG_EXPIRY_GRACE_MS;
+      for (const tag of tags) rows.set(tag, Math.max(rows.get(tag) ?? 0, at));
+      return new Map(tags.map(tag => [tag, at] as const));
+    },
+    expiriesOf: async tags => ({
+      now: Date.now(),
+      expired: new Map(
+        tags.flatMap(tag => {
+          const at = rows.get(tag);
+          return at === undefined ? [] : [[tag, at] as const];
+        })
+      ),
+    }),
+    prune: async () => 0,
+  };
+  return { ledger, rows };
 }
 
 const page = (n: number) => ({ kind: "FETCH", data: { n } });
@@ -164,6 +192,8 @@ describe("the incremental cache handler", () => {
     const { ledger, recordElsewhere } = memoryLedger(60_000);
     publishTagExpiryLedger(ledger);
     const handler = new IncrementalHandler();
+    // A miss, then its fill: the read dates the fill.
+    expect(await handler.get("k")).toBeNull();
     await handler.set("k", page(1), { tags: ["posts"] });
 
     // Thirty seconds BEFORE the entry was stored, on the ledger's clock; on
@@ -316,6 +346,8 @@ describe("the incremental cache handler", () => {
     vi.advanceTimersByTime(1);
     recordElsewhere("posts");
     vi.advanceTimersByTime(1);
+    // A miss after the expiry, then its fill, which the read dates after it.
+    expect(await handler.get("new")).toBeNull();
     await handler.set("new", page(2), { tags: ["posts"] });
     // Learned here: posts expired after "old" was stored.
     expect(await handler.get("new")).not.toBeNull();
@@ -656,6 +688,58 @@ describe("the writer's own expiry", () => {
     expect(isEntryExpired(["t"], begunAt)).toBe(false);
   });
 
+  it("is not judged by the grace of an earlier record a lookup still holds, once it writes the tag again", async () => {
+    // A document created, a page reading it rendered at once, and the
+    // document published: the page's read asked the ledger after the first
+    // record, and that answer is kept for the lookup's TTL while the second
+    // record moved this process's latest time on.
+    const { ledger } = gracedLedger();
+    publishTagExpiryLedger(ledger);
+
+    await expireTags(["t"]);
+    await vi.advanceTimersByTimeAsync(50);
+    await refreshTagExpiries(["t"]);
+    await vi.advanceTimersByTimeAsync(300);
+    const begunBetween = localNow();
+    await vi.advanceTimersByTimeAsync(10);
+    await expireTags(["t"]);
+    await vi.advanceTimersByTimeAsync(10);
+    const begunAfter = localNow();
+
+    // Still within the TTL of the answer that holds the first record.
+    await refreshTagExpiries(["t"]);
+    // Begun before the second write: refused by this process's own expiry.
+    expect(isEntryExpired(["t"], begunBetween)).toBe(true);
+    // Begun after both writes, within the grace of the first record: served.
+    expect(isEntryExpired(["t"], begunAfter)).toBe(false);
+  });
+
+  it("still graces another instance's record a lookup holds, though its time falls between two of this process's", async () => {
+    const { ledger, rows } = gracedLedger();
+    publishTagExpiryLedger(ledger);
+
+    await expireTags(["t"]);
+    await vi.advanceTimersByTimeAsync(100);
+    // Another instance records the tag after this process's first record.
+    const elsewhere = Date.now() + TAG_EXPIRY_GRACE_MS;
+    rows.set("t", Math.max(rows.get("t") ?? 0, elsewhere));
+    await vi.advanceTimersByTimeAsync(50);
+    await refreshTagExpiries(["t"]);
+    await vi.advanceTimersByTimeAsync(100);
+    // This process records again, later than the other instance did.
+    await expireTags(["t"]);
+    await vi.advanceTimersByTimeAsync(10);
+    const begunAt = localNow();
+
+    await refreshTagExpiries(["t"]);
+    expect(viewState()?.lookups.get("t")).toMatchObject({
+      expiredAt: elsewhere,
+    });
+    // Begun after this process's writes but within the other instance's
+    // grace: refused, as another instance's expiry is.
+    expect(isEntryExpired(["t"], begunAt)).toBe(true);
+  });
+
   it("refuses an entry begun before its record read the time, which another instance may have recorded in the same millisecond", async () => {
     // The record checks its table for 10 ms before it reads the time. Another
     // instance that read the same millisecond, after its own write committed,
@@ -737,6 +821,30 @@ describe("the expiries kept in memory", () => {
 
     vi.advanceTimersByTime(LEDGER_RETENTION_MS + TAG_LOOKUP_TTL_MS);
     expect(await useCacheHandler.getExpiration(["posts"])).toBe(0);
+  });
+
+  it("keep a bounded number of superseded own records, and forget them once no lookup can still hold one", async () => {
+    publishTagExpiryLedger(gracedLedger().ledger);
+    const superseded = () =>
+      (
+        viewState() as
+          | { mineSuperseded?: Map<string, readonly unknown[]> }
+          | undefined
+      )?.mineSuperseded;
+
+    for (let i = 0; i < 20; i += 1) {
+      await expireTags(["t"]);
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    // Every record but the latest is superseded; only the newest few are kept.
+    expect(superseded()?.get("t")?.length).toBe(8);
+
+    // Past a lookup's call timeout and its TTL, a sweep forgets them all.
+    await vi.advanceTimersByTimeAsync(
+      LEDGER_CALL_TIMEOUT_MS + TAG_LOOKUP_TTL_MS
+    );
+    await refreshTagExpiries(["other"]);
+    expect(superseded()?.has("t")).toBe(false);
   });
 
   it("drop the ledger's answers once they are past their lifetime", async () => {

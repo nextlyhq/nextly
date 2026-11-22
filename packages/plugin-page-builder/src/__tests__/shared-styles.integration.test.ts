@@ -3,6 +3,7 @@
  * holds for every Design manager without the lock permission, a lock moves and
  * a style leaves only through their own routes, usage counts gated content and
  * says when it is a floor, where-used names only what the caller may read,
+ * a removal's in-use refusal names only what the caller may read too,
  * removal reads the stored pages again rather than trusting an index zero,
  * and a page may not add a reference to a style the site does not define.
  */
@@ -25,7 +26,12 @@ import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
+import { BLOCKS_TYPE } from "../fields/blocksField";
+import {
+  PAGE_BUILDER_PLUGIN_NAME,
+  sharedStyleUsagePath,
+  type SharedStyleUsageHere,
+} from "../library-contract";
 import { pageBuilder } from "../plugin";
 import {
   lockSharedStyle,
@@ -138,13 +144,30 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    /** A site storing `card` (locked), `hero` and `spare`, set as the system. */
-    async function boot() {
+    /**
+     * A site storing `card` (locked), `hero` and `spare`, set as the system;
+     * with a Single, `landing`, holding two blocks fields when asked.
+     */
+    async function boot(withLanding = false) {
       const plugin = pageBuilder();
       current = await createTestNextly({
         dialect,
         plugins: [plugin],
         seedPublic: true,
+        ...(withLanding
+          ? {
+              singles: [
+                {
+                  slug: "landing",
+                  fields: [
+                    { name: "title", type: "text" },
+                    { name: "content", type: BLOCKS_TYPE },
+                    { name: "aside", type: BLOCKS_TYPE },
+                  ],
+                } as never,
+              ],
+            }
+          : {}),
       });
       const t = current;
       // The site's first user is its owner, granted everything. Made first, so
@@ -427,6 +450,216 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    /** The usage read for `c-hero`, naming what the editor has open. */
+    const usageAsked = (here: SharedStyleUsageHere) =>
+      `plugins/${PAGE_BUILDER_PLUGIN_NAME}${sharedStyleUsagePath(["c-hero"], here)}`;
+
+    it("counts the blocks wearing a style on the pages, and the open page's share apart", async () => {
+      const { t, tick } = await boot();
+      const styled = (id: string) => text(id, { classes: ["c-hero"] });
+      const home = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Home",
+          slug: "home",
+          content: pageOf([styled("a"), styled("b")]),
+        },
+        overrideAccess: true,
+      });
+      await t.nextly.create({
+        collection: "pages",
+        data: { title: "About", slug: "about", content: pageOf([styled("c")]) },
+        overrideAccess: true,
+      });
+      await tick();
+      const reader = await holding(t, "read-site-style", "read-pages");
+      const homeId = String(home.item.id);
+      const ask = async () =>
+        (
+          await call(
+            "GET",
+            usageAsked({
+              document: { collection: "pages", id: homeId },
+              field: "content",
+              variant: "published",
+            }),
+            reader
+          )
+        ).body;
+      expect(await ask()).toMatchObject({
+        whole: true,
+        styles: {
+          "c-hero": {
+            documents: 2,
+            byKind: { pages: 2, components: 0, patterns: 0, layouts: 0 },
+            blocks: 3,
+            here: { saved: 2, alongside: 0, elsewhere: 0, kind: "pages" },
+            complete: true,
+          },
+        },
+      });
+
+      // A save brings the count up to date at once, with no rebuild.
+      await t.nextly.update({
+        collection: "pages",
+        id: homeId,
+        data: { content: pageOf([styled("a"), text("b")]), _overwrite: true },
+        overrideAccess: true,
+      });
+      await t.events.settle();
+      expect(await ask()).toMatchObject({
+        styles: {
+          "c-hero": {
+            documents: 2,
+            blocks: 2,
+            here: { saved: 1, alongside: 0, elsewhere: 0, kind: "pages" },
+            complete: true,
+          },
+        },
+      });
+    });
+
+    it("tells the open page's share only to a caller who may read that page", async () => {
+      const { t, tick } = await boot();
+      const home = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Home",
+          slug: "home",
+          content: pageOf([text("a", { classes: ["c-hero"] })]),
+        },
+        overrideAccess: true,
+      });
+      await tick();
+      const path = usageAsked({
+        document: { collection: "pages", id: String(home.item.id) },
+        field: "content",
+        variant: "published",
+      });
+      // Site styles alone: the counts, and nothing of the page it named,
+      // its parts answered as unknown.
+      const styleReader = await holding(t, "read-site-style");
+      const hidden = await call("GET", path, styleReader);
+      expect(hidden.status).toBe(200);
+      expect(hidden.body).toMatchObject({
+        styles: {
+          "c-hero": {
+            documents: 1,
+            blocks: 1,
+            here: {
+              saved: null,
+              alongside: null,
+              elsewhere: null,
+              kind: "pages",
+            },
+          },
+        },
+      });
+      const pageReader = await holding(t, "read-site-style", "read-pages");
+      const told = await call("GET", path, pageReader);
+      expect(told.body).toMatchObject({
+        styles: {
+          "c-hero": {
+            here: { saved: 1, alongside: 0, elsewhere: 0, kind: "pages" },
+          },
+        },
+      });
+    });
+
+    it("counts a published page and its pending draft as one page, its largest copy", async () => {
+      const { t, tick } = await boot();
+      const styled = (id: string) => text(id, { classes: ["c-hero"] });
+      const live = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Live",
+          slug: "live",
+          status: "published",
+          content: pageOf([styled("a"), styled("b"), styled("c")]),
+        },
+        overrideAccess: true,
+      });
+      const id = String(live.item.id);
+      await tick();
+      const reader = await holding(t, "read-site-style", "read-pages");
+      const ask = async (here: Omit<SharedStyleUsageHere, "document">) =>
+        (
+          await call(
+            "GET",
+            usageAsked({ document: { collection: "pages", id }, ...here }),
+            reader
+          )
+        ).body;
+      // Published, no draft yet: the live page keeps its 3 beside the edit.
+      expect(
+        await ask({ field: "content", variant: "published", keepsSaved: true })
+      ).toMatchObject({
+        styles: {
+          "c-hero": {
+            blocks: 3,
+            here: { saved: 3, alongside: 0, elsewhere: 3, kind: "pages" },
+          },
+        },
+      });
+      // An edit saved without publishing: a pending draft over the live row.
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: { content: pageOf([styled("a"), text("b")]), _overwrite: true },
+        overrideAccess: true,
+      });
+      await t.events.settle();
+      // The draft open: whatever it holds live, the published page keeps 3.
+      expect(await ask({ field: "content", variant: "draft" })).toMatchObject({
+        styles: {
+          "c-hero": {
+            documents: 1,
+            blocks: 3,
+            here: { saved: 3, alongside: 0, elsewhere: 3, kind: "pages" },
+            complete: true,
+          },
+        },
+      });
+    });
+
+    it("keeps the open document's other blocks field apart from the one open", async () => {
+      const { t, tick } = await boot(true);
+      const styled = (id: string) => text(id, { classes: ["c-hero"] });
+      await t.nextly.updateSingle({
+        slug: "landing",
+        data: {
+          title: "Landing",
+          content: pageOf([styled("a"), styled("b")]),
+          aside: pageOf([styled("c")]),
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      });
+      await t.events.settle();
+      await tick();
+      const reader = await holding(t, "read-site-style", "read-landing");
+      const answer = await call(
+        "GET",
+        usageAsked({
+          document: { single: "landing" },
+          field: "content",
+          variant: "published",
+        }),
+        reader
+      );
+      // 3 blocks on the one page; with `content` open, `aside`'s 1 stays.
+      expect(answer.body).toMatchObject({
+        styles: {
+          "c-hero": {
+            documents: 1,
+            blocks: 3,
+            here: { saved: 3, alongside: 1, elsewhere: 0, kind: "pages" },
+            complete: true,
+          },
+        },
+      });
+    });
+
     it("names where a style is used only to a caller who may read the page", async () => {
       const { t } = await boot();
       await t.nextly.create({
@@ -491,6 +724,66 @@ describe.each(getConfiguredTestDialects())(
         "c-card",
         "c-hero",
       ]);
+    });
+
+    it("names where a used style is in its removal's refusal, only as far as the caller may read", async () => {
+      const { t, tick } = await boot();
+      for (const [title, slug] of [
+        ["Home", "home"],
+        ["About", "about"],
+      ]) {
+        await t.nextly.create({
+          collection: "pages",
+          data: { title, slug, content: gatedUse("c-hero") },
+          overrideAccess: true,
+        });
+      }
+      await t.nextly.create({
+        collection: "patterns",
+        data: {
+          title: "Banner",
+          slug: "banner",
+          granularity: "section",
+          content: {
+            ...pageOf([text("banner", { classes: ["c-hero"] })]),
+            kind: "pattern",
+          },
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+      await tick();
+      const refusalOf = async (cookie: string): Promise<string> => {
+        const answer = await call("POST", route("remove"), cookie, {
+          ids: ["c-hero"],
+        });
+        expect(answer.status).toBe(400);
+        const body = JSON.stringify(answer.body);
+        expect(body).toContain('"code":"IN_USE"');
+        return body;
+      };
+
+      // CONTROL: a Design manager who may open none of them is told how many.
+      const counted = await refusalOf(await holding(t, ...DESIGN));
+      expect(counted).toContain("hero is used on 3 documents.");
+
+      // One who may read pages but not saved sections: the pages by title,
+      // the section counted.
+      const pages = await refusalOf(await holding(t, ...DESIGN, "read-pages"));
+      expect(pages).toMatch(
+        /hero is used on 3 documents: (Home, About|About, Home) and 1 more\./
+      );
+      expect(pages).not.toContain("Banner");
+
+      // One who may read both: all three by title, the pages first, as the
+      // where-used list orders them by collection.
+      const both = await refusalOf(
+        await holding(t, ...DESIGN, "read-pages", "read-patterns")
+      );
+      expect(both).toMatch(
+        /hero is used on 3 documents: (Home, About|About, Home) and Banner\./
+      );
+      expect(await stored(t)).toHaveLength(3);
     });
 
     it("counts the pages now for a Design manager, with no scheduler, and refuses a reader", async () => {
@@ -760,6 +1053,145 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       expect(kept.item).toMatchObject({ title: "Old, renamed" });
+    });
+
+    describe("text styles", () => {
+      const eyebrow = {
+        id: "t-eyebrow",
+        slug: "eyebrow",
+        label: "Eyebrow",
+        orderIndex: 3,
+        role: "text",
+        styles: {
+          base: { base: { fontSize: "12px", textTransform: "uppercase" } },
+        },
+      };
+      const following = {
+        tokens: [],
+        siteText: { h1: { fontSize: "40px", textStyle: "t-eyebrow" } },
+      };
+
+      /** The site above, plus "Eyebrow" with Heading 1 following it. */
+      async function bootWithEyebrow() {
+        const booted = await boot();
+        await booted.t.nextly.updateSingle({
+          slug: SITE_STYLE_SLUG,
+          data: {
+            classes: [lockedCard, hero, spare, eyebrow],
+            tokens: following,
+            _overwrite: true,
+          },
+          overrideAccess: true,
+        });
+        return booted;
+      }
+
+      it("refuses removing a text style a Site text row follows, by the route and by a save, naming the row", async () => {
+        const { t, tick } = await bootWithEyebrow();
+        await tick();
+        const designer = await holding(t, ...DESIGN);
+        const byRoute = await call("POST", route("remove"), designer, {
+          ids: ["t-eyebrow"],
+        });
+        expect(byRoute.status).toBe(400);
+        expect(JSON.stringify(byRoute.body)).toContain('"code":"IN_USE"');
+        expect(JSON.stringify(byRoute.body)).toContain(
+          "Eyebrow is used by Site text: Heading 1."
+        );
+        const bySave = await call("PATCH", SINGLE, designer, {
+          classes: [lockedCard, hero, spare],
+          _overwrite: true,
+        });
+        expect(bySave.status).toBe(400);
+        expect(JSON.stringify(bySave.body)).toContain(
+          "Eyebrow is used by Site text: Heading 1."
+        );
+        expect((await stored(t)).map(entry => entry.id)).toContain("t-eyebrow");
+
+        // Pointing the row elsewhere in the same save lets it go.
+        const moved = await call("PATCH", SINGLE, designer, {
+          classes: [lockedCard, hero, spare],
+          tokens: { tokens: [], siteText: { h1: { fontSize: "40px" } } },
+          _overwrite: true,
+        });
+        expect(moved.status).toBe(200);
+        expect((await stored(t)).map(entry => entry.id)).not.toContain(
+          "t-eyebrow"
+        );
+      });
+
+      it("locks a text style as a shared style, and the lock holds it against removal", async () => {
+        const { t, tick } = await bootWithEyebrow();
+        await tick();
+        const keeper = await holding(
+          t,
+          ...DESIGN,
+          "lock-page-builder-shared-styles"
+        );
+        const lock = await call("POST", route("lock"), keeper, {
+          classId: "t-eyebrow",
+          locked: true,
+        });
+        expect(lock.status).toBe(200);
+        const removal = await call("POST", route("remove"), keeper, {
+          ids: ["t-eyebrow"],
+        });
+        expect(removal.status).toBe(409);
+        expect(JSON.stringify(removal.body)).toContain("Eyebrow is locked.");
+      });
+
+      it("refuses a role that may not manage the site's design", async () => {
+        const { t } = await bootWithEyebrow();
+        const reader = await holding(t, "read-site-style");
+        const removal = await call("POST", route("remove"), reader, {
+          ids: ["t-eyebrow"],
+        });
+        expect(removal.status).toBe(403);
+        const change = await call("PATCH", SINGLE, reader, {
+          classes: [lockedCard, hero, spare, { ...eyebrow, label: "Kicker" }],
+          _overwrite: true,
+        });
+        expect(change.status).toBe(403);
+        expect(
+          (await stored(t)).find(entry => entry.id === "t-eyebrow")
+        ).toMatchObject({
+          label: "Eyebrow",
+        });
+      });
+
+      it("keeps a text style through a save, and refuses one holding a colour", async () => {
+        const { t } = await bootWithEyebrow();
+        const designer = await holding(t, ...DESIGN);
+        const renamed = await call("PATCH", SINGLE, designer, {
+          classes: [lockedCard, hero, spare, { ...eyebrow, label: "Kicker" }],
+          _overwrite: true,
+        });
+        expect(renamed.status).toBe(200);
+        expect(
+          (await stored(t)).find(entry => entry.id === "t-eyebrow")
+        ).toMatchObject({
+          label: "Kicker",
+          role: "text",
+        });
+        const coloured = await call("PATCH", SINGLE, designer, {
+          classes: [
+            lockedCard,
+            hero,
+            spare,
+            {
+              ...eyebrow,
+              styles: {
+                base: { base: { fontSize: "12px", color: "#ff0000" } },
+              },
+            },
+          ],
+          _overwrite: true,
+        });
+        expect(coloured.status).toBe(400);
+        expect(JSON.stringify(coloured.body)).toContain(
+          '"color\\" is not typography'
+        );
+      });
     });
   }
 );

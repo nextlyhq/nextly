@@ -112,6 +112,9 @@ describe.each(getConfiguredTestDialects())(
         join(migrationsDir, "meta", `${name}.snapshot.json`),
         content
       );
+      // Its migration file beside it: a snapshot is read only once its
+      // migration was written.
+      writeFileSync(join(migrationsDir, `${name}.sql`), "");
       if (!applied) return;
       const events = new SchemaEventsRepository(
         adapter().getDrizzle(),

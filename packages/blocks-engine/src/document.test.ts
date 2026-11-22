@@ -30,7 +30,6 @@ describe("document constants", () => {
       "page",
       "pattern",
       "component",
-      "region",
       "template",
     ]);
   });

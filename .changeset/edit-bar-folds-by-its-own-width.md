@@ -29,7 +29,6 @@
 "nextly": patch
 ---
 
-
 An open document's bar folds History, the preview and the panel toggle into its More menu by the admin bar's own width, never by how long the page's trail is: from a bar wide enough for every control, the controls keep 32rem and the trail truncates first. The width is measured before the first paint, so the bar is no longer drawn unfolded for a frame and then folded, and the editor's outline folds by the same rule, so More stands where the outline drew it.
 
 The editor's outline draws its side column only where the editor docks its panel (1000 px of editor, by the editor's frame rather than the window), and not where the reader folded the panel away; the editor reads that choice before its first paint too.

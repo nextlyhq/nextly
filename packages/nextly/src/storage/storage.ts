@@ -45,6 +45,7 @@
 
 import { LocalStorageAdapter } from "./adapters/local-adapter";
 import { assertClientUploadClaim } from "./client-upload-claim";
+import { keepsCopies } from "./keeps-copies";
 import {
   recordStorageWriteFailure,
   recordStorageWriteSuccess,
@@ -323,6 +324,15 @@ export class MediaStorage {
 
     // Fall back to local storage adapter (always available)
     return this.localAdapter;
+  }
+
+  /**
+   * Whether the storage a collection's files go to can keep resized copies
+   * beside them. A delete removes copies only from a storage that can have
+   * them, so one that cannot is asked to remove nothing it never held.
+   */
+  keepsCopies(collection?: string): boolean {
+    return keepsCopies(this.getAdapterForCollection(collection));
   }
 
   /**

@@ -43,12 +43,20 @@ import {
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
 import type { CollectionRegistryService } from "../../../services/collections/collection-registry-service";
 import {
+  databaseState,
+  LOCK_TABLES,
+} from "../../__tests__/helpers/database-state";
+import {
   NEXTLY_RUN_TIMEOUT,
   runNextly,
 } from "../../__tests__/helpers/run-nextly";
 import { createLogger } from "../../utils/logger";
 import { collectionRegistryOn } from "../db-sync-registry";
 import { migrateCore } from "../migrate";
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+
+// `nextly db:sync` as every installation runs it: per-language storage (`storage-layout`).
+perLanguageStorageSuite();
 
 /** A collection in code throughout; the second configuration adds a column to it. */
 const POSTS = "dsd_posts";
@@ -81,40 +89,7 @@ const CONFIG_V2 = `export default {
 };
 `;
 
-/** The tables the schema lock keeps its row in; the process holding it writes them. */
-const LOCK_TABLES = new Set([
-  "nextly_schema_lock",
-  "nextly_field_group_lock",
-  "nextly_migrate_lock",
-]);
-
 const logger = createLogger({ quiet: true });
-
-const quote = (dialect: SupportedDialect, name: string) =>
-  dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-
-/** Every table but the lock's, with its columns as the pipeline reads them and all its rows. */
-async function databaseState(
-  adapter: DrizzleAdapter,
-  dialect: SupportedDialect
-): Promise<{ shape: unknown; rows: Record<string, string[]> }> {
-  const tables = (await adapter.listTables())
-    .filter(name => !LOCK_TABLES.has(name))
-    .sort();
-  const shape = await introspectLiveSnapshot(
-    adapter.getDrizzle(),
-    dialect,
-    tables
-  );
-  const rows: Record<string, string[]> = {};
-  for (const table of tables) {
-    const read = await adapter.executeQuery<Record<string, unknown>>(
-      `SELECT * FROM ${quote(dialect, table)}`
-    );
-    rows[table] = read.map(row => JSON.stringify(row)).sort();
-  }
-  return { shape, rows };
-}
 
 /** Each table's columns, by name, from the same reading. */
 async function columnsByTable(
@@ -427,9 +402,10 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
       const config = readFileSync(configFile(), "utf8");
 
       const plain = await dryRun("plain", []);
-      expect(plain).toMatch(
-        /^ℹ Would run add_column dc_dsd_posts\.summary \(/m
-      );
+      // A new text field is kept per language: its column is added by the translation table's
+      // reconcile, which the plan's note names among what it does not show.
+      expect(plain).not.toMatch(/add_column dc_dsd_posts\.summary/);
+      expect(plain).toContain("translation (_locales)");
       expect(plain).toMatch(/^ℹ Would run add_table dc_dsd_moved$/m);
       expect(plain).toMatch(/^ℹ Would run add_table dc_dsd_built$/m);
       // The orphan is left out of the push, as the real run leaves it.
@@ -440,9 +416,10 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
 
       const orphans = await dryRun("remove-orphaned", ["--remove-orphaned"]);
       expect(orphans).toMatch(/^ℹ Would remove table dc_dsd_old\b/m);
-      expect(orphans).toMatch(
-        /^ℹ Would run add_column dc_dsd_posts\.summary \(/m
-      );
+      // A new text field is kept per language: its column is added by the translation table's
+      // reconcile, which the plan's note names among what it does not show.
+      expect(orphans).not.toMatch(/add_column dc_dsd_posts\.summary/);
+      expect(orphans).toContain("translation (_locales)");
 
       const promote = await dryRun("promote", ["--promote", BUILT]);
       expect(promote).toContain(`Would edit ${configFile()}`);
@@ -474,10 +451,14 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
       );
       expect(promoteCoded).not.toMatch(/^ℹ Would /m);
       const demoteCoded = await dryRun("demote coded", ["--demote", POSTS]);
+      // A collection the sync registered and locked: the demote hands it to the Schema Builder,
+      // and says so as the record it would set.
       expect(demoteCoded).toContain(
-        "A real run would refuse: This collection is defined in code, so it can't be changed here."
+        `Would set the registry record of collection '${POSTS}' in the collection registry to:`
       );
-      expect(demoteCoded).not.toMatch(/^ℹ Would /m);
+      expect(demoteCoded).toContain(`"source": "ui"`);
+      expect(demoteCoded).toContain(`"locked": false`);
+      expect(demoteCoded).not.toContain("A real run would refuse");
       const demoteMissing = await dryRun("demote missing", [
         "--demote",
         "dsd_nowhere",
@@ -499,21 +480,18 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
   );
 
   it(
-    "names the production refusal a real sync makes on collections it would change, exit 0",
+    "names the refusal a real sync makes in production, exit 0",
     async () => {
       const before = await databaseState(adapter, dialect);
       const out = await dryRun("production", [], { NODE_ENV: "production" });
-      // The registry step creates dsd_moved and rewrites dsd_posts' fields.
+      // A real run refuses before it opens the database, whatever the configuration changed.
       expect(out).toContain(
-        "A real run would refuse: Cannot auto-sync schema in production mode. `NODE_ENV` is `production`, and 2 collections would change: dsd_moved, dsd_posts."
+        "A real run would refuse: db:sync does not run in production. `NODE_ENV` is `production`, and db:sync changes the database directly, without a migration. Nothing was changed."
       );
-      expect(out).not.toMatch(/^ℹ Would run /m);
-      // A real production run still creates and updates Single and field-group tables, so the
-      // note must not claim it changes no schema.
+      expect(out).not.toMatch(/^ℹ Would /m);
       expect(out).toContain(
-        "NODE_ENV is production: a real run pushes no collection schema change, but still creates or updates Single and field-group tables, which are not shown here (use nextly migrate:create and nextly migrate for collections)."
+        "NODE_ENV is production: a real run refuses before it reads or changes anything (use nextly migrate:create and nextly migrate)."
       );
-      expect(out).not.toContain("a real run applies no schema change");
       expect(await databaseState(adapter, dialect)).toEqual(before);
     },
     2 * NEXTLY_RUN_TIMEOUT
@@ -567,8 +545,11 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
       );
       const planned = plannedSchemaChanges(printed.plain);
       expect(planned.addedTables.length).toBeGreaterThan(0);
-      expect(changed.addedTables).toEqual(planned.addedTables);
-      expect(changed.addedColumns).toEqual(planned.addedColumns);
+      // The translation (_locales) tables the sync creates or reconciles are what the plan's note
+      // says it does not show; every other change is named.
+      const inPlan = (name: string) => !/_locales(\.|$)/.test(name);
+      expect(changed.addedTables.filter(inPlan)).toEqual(planned.addedTables);
+      expect(changed.addedColumns.filter(inPlan)).toEqual(planned.addedColumns);
       expect(plannedSchemaChanges(printed["remove-orphaned"])).toEqual(planned);
       expect(changed.droppedTables).toEqual(
         plannedDrops(printed["remove-orphaned"])

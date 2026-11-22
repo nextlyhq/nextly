@@ -181,7 +181,16 @@ export async function publishExtensionSchema(
     "../../domains/schema/extension/publish"
   );
   const capabilities = (adapter as unknown as DrizzleAdapter).getCapabilities();
+  // Each field group under its stored table, so a contribution to a group attaches to the table
+  // it is in: `fg_<slug>` on a site whose field-group storage was migrated.
+  const fieldGroups = await storedFieldGroupsOf(adapter, configResult.config);
   await compileAndPublishExtensionSchema({
+    ...(fieldGroups === undefined
+      ? {}
+      : {
+          fieldGroupTables: fieldGroups.tables,
+          fieldGroupTypeColumns: fieldGroups.typeColumns,
+        }),
     dialect: capabilities.dialect,
     plugins: configResult.config.plugins ?? [],
     config: configResult.config,
@@ -970,7 +979,7 @@ async function detectRemovedSingles(
 }
 
 /**
- * Delete orphaned singles: remove registry entry and drop data table.
+ * Delete orphaned singles: drop the data table, then remove the registry entry.
  * Uses raw delete to avoid re-fetch issues with getSingle/updateSingle.
  */
 async function handleRemovedSingles(
@@ -995,6 +1004,23 @@ async function handleRemovedSingles(
       await teardownEntityComponentData({ adapter, parentTable: tableName });
       await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
 
+      // Drop the data table, waiting for it in tries where another session is using it. Before
+      // the registry delete: a drop that stops leaves the entry, so the next sync still finds
+      // the orphan and drops it then.
+      const sql =
+        dialect === "postgresql"
+          ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
+          : `DROP TABLE IF EXISTS ${q}${tableName}${q}`;
+      applied.push(
+        ...(await runSyncStatements(adapter, [sql], {
+          change,
+          bounds,
+          logger,
+          appliedBefore: applied,
+          name: () => `the drop of table ${JSON.stringify(tableName)}`,
+        }))
+      );
+
       // Delete the registry entry directly, then the Single's autosaves and
       // version pins, in one transaction and in that order, as the
       // registry's own delete does: see `deleteEntityRegistryRow`.
@@ -1008,21 +1034,6 @@ async function handleRemovedSingles(
       );
       applied.push(
         `${change}: the registry entry of single ${JSON.stringify(slug)}`
-      );
-
-      // Drop the data table, waiting for it in tries where another session is using it.
-      const sql =
-        dialect === "postgresql"
-          ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
-          : `DROP TABLE IF EXISTS ${q}${tableName}${q}`;
-      applied.push(
-        ...(await runSyncStatements(adapter, [sql], {
-          change,
-          bounds,
-          logger,
-          appliedBefore: applied,
-          name: () => `the drop of table ${JSON.stringify(tableName)}`,
-        }))
       );
 
       logger.success(`Deleted orphaned single: ${slug} (table: ${tableName})`);
@@ -1053,7 +1064,7 @@ async function detectRemovedComponents(
 }
 
 /**
- * Delete orphaned components: remove registry entry and drop data table.
+ * Delete orphaned components: drop the data table, then remove the registry entry.
  * Uses raw delete to avoid re-fetch issues with getComponent/updateComponent.
  */
 /**
@@ -1122,18 +1133,9 @@ async function deleteOrphanedComponents(
         kind: "fieldGroup",
       });
 
-      // Delete registry entry directly
-      // Resolved: this delete runs AFTER the nested instances and localized
-      // data are torn down, so addressing a registry that is not there fails
-      // once the dependent content is already gone.
-      await adapter.delete(await resolveFieldGroupRegistryName(adapter), {
-        and: [{ column: "slug", op: "=", value: slug }],
-      });
-      applied.push(
-        `${change}: the registry entry of field group ${JSON.stringify(slug)}`
-      );
-
-      // Drop the data table, waiting for it in tries where another session is using it.
+      // Drop the data table, waiting for it in tries where another session is using it. Before
+      // the registry delete: a drop that stops leaves the entry, so the next sync still finds
+      // the orphan and drops it then.
       const sql =
         dialect === "postgresql"
           ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
@@ -1146,6 +1148,17 @@ async function deleteOrphanedComponents(
           appliedBefore: applied,
           name: () => `the drop of table ${JSON.stringify(tableName)}`,
         }))
+      );
+
+      // Delete registry entry directly
+      // Resolved: this delete runs AFTER the nested instances and localized
+      // data are torn down, so addressing a registry that is not there fails
+      // once the dependent content is already gone.
+      await adapter.delete(await resolveFieldGroupRegistryName(adapter), {
+        and: [{ column: "slug", op: "=", value: slug }],
+      });
+      applied.push(
+        `${change}: the registry entry of field group ${JSON.stringify(slug)}`
       );
 
       logger.success(
@@ -1180,6 +1193,33 @@ async function deleteOrphanedComponents(
  * `ensureCompanionTable` returns early when the table is already there — so
  * running it on every sync costs one probe per localized entity.
  */
+/**
+ * Each configured field group's stored table, read from the registry, or undefined where the
+ * configuration declares none or the registry cannot be read, in which case names are derived as
+ * before (`field-group-stored-tables`).
+ */
+async function storedFieldGroupTableOf(
+  adapter: unknown,
+  config: { fieldGroups?: readonly unknown[] }
+): Promise<((slug: string) => string) | undefined> {
+  const storage = await storedFieldGroupsOf(adapter, config);
+  return storage === undefined ? undefined : slug => storage.tables.get(slug)!;
+}
+
+/** Where each declared field group is stored, as the extension compile takes it. */
+async function storedFieldGroupsOf(
+  adapter: unknown,
+  config: { fieldGroups?: readonly unknown[] }
+) {
+  const { declaredFieldGroupStorage } = await import(
+    "../../domains/field-groups/services/field-group-stored-tables"
+  );
+  return declaredFieldGroupStorage(
+    adapter as Parameters<typeof declaredFieldGroupStorage>[0],
+    config.fieldGroups
+  );
+}
+
 export async function ensureLocalizedCompanions(
   config: LoadConfigResult["config"],
   adapter: CLIDatabaseAdapter,
@@ -1254,11 +1294,15 @@ export async function ensureLocalizedCompanions(
     transitionStore,
     await transitionDefaultLocale(adapter as unknown as DrizzleAdapter, config)
   );
-  // Each kind's entities and how its table is named, as the boot reads them too.
-  const { localizableConfigEntities } = await import(
-    "../../domains/i18n/runtime/localizable-config-entities"
-  );
-  const groups = localizableConfigEntities(config);
+  // Each kind's entities and how its table is named, as the boot reads them too. A field group's
+  // table is the one its registry row names: on a site whose field-group storage was migrated that
+  // is `fg_<slug>`, which no slug rule derives, and a derived name would provision a translation
+  // table beside a main table that is not there.
+  const [{ localizableConfigEntities }, fieldGroupTable] = await Promise.all([
+    import("../../domains/i18n/runtime/localizable-config-entities"),
+    storedFieldGroupTableOf(adapter, config),
+  ]);
+  const groups = localizableConfigEntities(config, fieldGroupTable);
 
   const failures: string[] = [];
   for (const [kind, group, resolveTableName] of groups) {
@@ -1490,6 +1534,22 @@ export async function ensureLocalizedCompanions(
         cause: "companion-provisioning-failed",
         entities: failures,
       },
+    });
+  }
+  // Each translated date column an earlier release made with a time zone, of every entity the
+  // registry holds, Builder-made ones included, once nothing above was refused. The development
+  // sync converts it, no earlier instance writing beside it. `nextly migrate` (`supervised`) runs
+  // while instances of the earlier release may still write, which would store a date in a
+  // non-default language shifted into a converted column, so it only names each, and `nextly
+  // upgrade`, which converts them once the release serves every instance.
+  if (phase === "afterApply") {
+    const { convertZonedDateCompanions } = await import(
+      "../../domains/i18n/runtime/zoned-date-companions"
+    );
+    await convertZonedDateCompanions(adapter as unknown as DrizzleAdapter, {
+      convert: options.supervised !== true,
+      onNotice: message => logger.info(message),
+      onWarning: message => logger.warn(message),
     });
   }
 }

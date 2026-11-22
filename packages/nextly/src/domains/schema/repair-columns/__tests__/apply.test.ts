@@ -6,7 +6,6 @@
 import { describe, expect, it } from "vitest";
 
 import { restatedColumn } from "../../pipeline/sql-templates/mysql-live-restate";
-import { TABLE_TRY_MS } from "../apply";
 import {
   NO_RUN_FACTS,
   type ColumnRunFacts,
@@ -168,9 +167,5 @@ describe("a conversion's steps", () => {
       "not started",
       "converted",
     ]);
-  });
-
-  it("waits about five seconds for a table in use, one try", () => {
-    expect(TABLE_TRY_MS).toBe(5_000);
   });
 });

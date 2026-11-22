@@ -1,0 +1,1388 @@
+/**
+ * What developers read and change of a workflow's settings, through REST and the Direct API: the
+ * registered workflows and where each is attached, and for one workflow its stages' default
+ * reviewers, labels and colours, which notifications also send an email, and which roles hold each
+ * step's own permission.
+ *
+ * The definition (stages, steps and their rules) is the code's: a write naming any part of it is
+ * refused, never stored or ignored. A write is a compare-and-set on the settings' revision, and a
+ * change of grants commits in the same transaction as the settings, so the two never disagree.
+ * Default reviewers written with grants are judged by the grants about to be stored, and a refused
+ * reviewer refuses the whole write, grants included. Each committed change is recorded in the
+ * activity log with the other settings changes ({@link WORKFLOW_SETTINGS_ACTIVITY_COLLECTION}).
+ *
+ * Who may read or write is asked by the door, before anything here runs.
+ *
+ * @module domains/workflows/workflow-settings-api
+ * @experimental
+ */
+import { isAbsolute, relative, sep } from "node:path";
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { and, countDistinct, eq, inArray, or } from "drizzle-orm";
+
+import type { RequestActor } from "../../auth/request-actor";
+import { container } from "../../di/container";
+import { NextlyError } from "../../errors";
+import { getNextlyLogger } from "../../observability/logger";
+import {
+  REVIEW_STATES_TABLE,
+  reviewStatesTables,
+} from "../../schemas/review-states";
+import { SUPER_ADMIN_SLUG } from "../../services/access/super-admin";
+import type { Logger } from "../../services/shared";
+import { consoleLogger } from "../../shared/types";
+import { recordSettingsActivity } from "../audit/record-settings-activity";
+import { entityPermissionSpelling } from "../auth/services/entity-permission-spelling";
+import { PermissionService } from "../auth/services/permission-service";
+import { isAssignableRole } from "../auth/services/public-role";
+import {
+  afterGrantsChanged,
+  afterRoleGrantsChanged,
+  changingRoleGrants,
+} from "../auth/services/role-grants-changed";
+import { RolePermissionService } from "../auth/services/role-permission-service";
+import { RoleService } from "../auth/services/role-service";
+import { PLUGIN_SETTINGS_ACTIVITY_COLLECTION } from "../plugins/settings-activity";
+
+import { isReviewStage, primaryStep } from "./define-workflow";
+import {
+  holderAnswer,
+  holderAnswerOnceGranted,
+  namesOf,
+  rolesHolding,
+  type HolderAnswer,
+} from "./holders";
+import { BUILT_IN_ACTIONS, WORKFLOW_PERMISSION_GROUP } from "./permissions";
+import {
+  registeredWorkflows,
+  workflowAttachedTo,
+  type RegisteredWorkflow,
+} from "./registry";
+import type { ReviewAssignee, ReviewStatesDb } from "./review-state-repository";
+import { readStagePresentation } from "./stage-presentation";
+import { primaryAction, stepAction } from "./steps";
+import type { Workflow, WorkflowStepKind } from "./types";
+import {
+  readWorkflowSettings,
+  writeWorkflowSettings,
+  type WorkflowSettings,
+} from "./workflow-settings-repository";
+
+/**
+ * The activity-log `collection` a workflow's settings changes are filed under: the settings one a
+ * plugin's settings use, which the feed shows to a reader holding `read-settings`. Each entry is
+ * the workflow's {@link workflowActivityEntry}.
+ *
+ * @experimental
+ */
+export const WORKFLOW_SETTINGS_ACTIVITY_COLLECTION =
+  PLUGIN_SETTINGS_ACTIVITY_COLLECTION;
+
+/**
+ * The activity-log entry a workflow's settings changes are filed as: prefixed, so a workflow and a
+ * plugin of the same name never share one in the settings namespace.
+ *
+ * @experimental
+ */
+export const workflowActivityEntry = (slug: string): string =>
+  `workflow:${slug}`;
+
+/** Error codes a settings write refuses with, each a validation problem's own code. @experimental */
+export const WORKFLOW_SETTINGS_ERROR_CODES = {
+  /** A write named a part of the definition, which only the code changes. */
+  definitionReadOnly: "WORKFLOW_DEFINITION_READ_ONLY",
+  /** A default reviewer who cannot take the stage's primary step on every attachment. */
+  ineligibleReviewer: "WORKFLOW_INELIGIBLE_REVIEWER",
+  unknownStage: "WORKFLOW_UNKNOWN_STAGE",
+  unknownStep: "WORKFLOW_UNKNOWN_STEP",
+  /** A step that needs only the collection's own permissions has none of its own to grant. */
+  stepNotGrantable: "WORKFLOW_STEP_NOT_GRANTABLE",
+  /** Two steps sharing one permission were given different roles. */
+  conflictingGrants: "WORKFLOW_CONFLICTING_GRANTS",
+  unknownRole: "WORKFLOW_UNKNOWN_ROLE",
+} as const;
+
+/**
+ * The keys that name a part of a workflow's definition. A settings write naming one, at its top
+ * level or inside a stage's label entry, is refused.
+ *
+ * @experimental
+ */
+export const WORKFLOW_DEFINITION_KEYS: readonly string[] = [
+  "stages",
+  "steps",
+  "from",
+  "to",
+  "kind",
+  "permission",
+  "allowsPublish",
+  "afterPublish",
+  "onEdit",
+];
+
+/**
+ * A registered workflow, as a reader of its settings is told it: everything a diagram of it
+ * draws, and how many documents are recorded in each stage.
+ *
+ * @experimental
+ */
+export interface WorkflowSummary {
+  slug: string;
+  label: string;
+  /**
+   * The configuration file that registers it, relative to the project root; null where none was
+   * found, or where it lies outside the root, whose layout is the server's own.
+   */
+  configPath: string | null;
+  stages: {
+    name: string;
+    label: string;
+    allowsPublish: boolean;
+    /** The step its default reviewer must hold: its only step out, or the one marked primary. */
+    primaryStep: string | null;
+    /** Whether it is a review stage: one with a step of kind approve out of it. */
+    review: boolean;
+    /** Its label as every surface shows it: the one saved in Settings, else `label`. */
+    shownLabel: string;
+    /** Its colour as saved in Settings, a hex value; null where none is. */
+    colour: string | null;
+  }[];
+  steps: {
+    name: string;
+    label: string;
+    kind: WorkflowStepKind;
+    from: string[];
+    to: string;
+    primary: boolean;
+    /** Whether which roles hold it is a setting: a step naming a permission of its own. */
+    grantable: boolean;
+    /**
+     * The action taking it needs on each attachment: its own, or the collection's `publish` into
+     * a stage that allows publishing and `update` otherwise.
+     */
+    permission: string;
+    commentRequired: boolean;
+  }[];
+  /** Where an edit to approved content moves it, and the fields whose edits keep the approval. */
+  onEdit: { to: string; exemptFields: string[] };
+  /** The stage a part's next draft starts at once it is published. */
+  afterPublish: string;
+  /**
+   * How many documents are recorded in each stage, by stage name: a document with several parts
+   * in one stage counts once there. A part recorded in a stage the workflow no longer has counts
+   * in the first stage, where every step reads it. A document none of whose parts has moved yet
+   * has no record, and is not counted.
+   */
+  stageCounts: Record<string, number>;
+  collections: string[];
+  singles: string[];
+}
+
+/** Whether each notification also sends an email. @experimental */
+export interface WorkflowEmailSettings {
+  assigned: boolean;
+  approved: boolean;
+  changesRequested: boolean;
+}
+
+/** A stage's label and colour shown over the code's. @experimental */
+export interface WorkflowStageLabel {
+  label?: string;
+  colour?: string;
+}
+
+/** A workflow's settings, as they read now. @experimental */
+export interface WorkflowSettingsView {
+  workflow: string;
+  /** What a write says it read; 0 for a workflow whose settings were never changed. */
+  revision: number;
+  /** Each stage's default reviewer, by stage name. */
+  defaultReviewers: Record<string, ReviewAssignee>;
+  /** Each stage's label and colour overrides, by stage name. */
+  labels: Record<string, WorkflowStageLabel>;
+  emails: WorkflowEmailSettings;
+  /**
+   * The roles granted each grantable step's permission directly on every collection and Single
+   * the workflow is attached to, by step name: what a write's `grants` sets. The super-admin role
+   * holds every step and is not listed.
+   */
+  grants: Record<string, string[]>;
+  /** What else an editor of `grants` needs to see of each grantable step, by step name. */
+  grantableSteps: Record<string, GrantableStepView>;
+  /**
+   * Whether each stage's default reviewer still holds the stage's primary step on every
+   * collection and Single the workflow is attached to, by stage name: `holds`, or why not (a
+   * person deactivated or gone, or a person or role lacking it somewhere).
+   */
+  defaultReviewerHolds: Record<string, HolderAnswer>;
+  /**
+   * The roles holding each review stage's primary step on every collection and Single the
+   * workflow is attached to, by stage name, each sorted: those granted it, those inheriting it and
+   * the super-admin role. Whom the stage's default reviewer may be chosen from, a person through any
+   * of them; a role holding it on some attachments only, or one that cannot be given to anyone (the
+   * Public role), is not listed.
+   */
+  reviewerRoles: Record<string, string[]>;
+}
+
+/**
+ * A grantable step's permission as it stands, beyond the roles holding it everywhere.
+ *
+ * @experimental
+ */
+export interface GrantableStepView {
+  /** The action it needs, held as `<permission>-<slug>` on each attachment. */
+  permission: string;
+  /**
+   * The roles granted it directly on some attachments but not all, which `grants` does not list:
+   * a write naming the step without them takes it from them everywhere.
+   */
+  partialRoles: { id: string; name: string | null }[];
+  /** The other grantable steps needing the same permission, which hold whatever this one holds. */
+  sharesPermissionWith: string[];
+}
+
+/**
+ * A change to a workflow's settings, made over the revision the caller read. Each part is merged
+ * into what is stored: a stage named with `null` loses its default reviewer or labels, and a
+ * step named in `grants` is held by exactly the roles listed.
+ *
+ * @experimental
+ */
+export interface WorkflowSettingsChange {
+  revision: number;
+  defaultReviewers?: Record<string, ReviewAssignee | null>;
+  labels?: Record<
+    string,
+    { label?: string | null; colour?: string | null } | null
+  >;
+  emails?: Partial<WorkflowEmailSettings>;
+  grants?: Record<string, string[]>;
+}
+
+type Problem = { path: string; code: string; message: string };
+
+const refused = (problems: Problem[]): NextlyError =>
+  NextlyError.validation({ errors: problems });
+
+function logger(): Logger {
+  return container.has("logger")
+    ? container.get<Logger>("logger")
+    : consoleLogger;
+}
+
+/** The step names whose permission is the workflow's own, each with that action. */
+function grantableActions(workflow: Workflow): Map<string, string> {
+  const grantable = new Map<string, string>();
+  for (const step of workflow.steps) {
+    if (step.permission !== null && !BUILT_IN_ACTIONS.has(step.permission)) {
+      grantable.set(step.name, step.permission);
+    }
+  }
+  return grantable;
+}
+
+const attachedTo = (registered: RegisteredWorkflow): string[] => [
+  ...registered.collections,
+  ...registered.singles,
+];
+
+/**
+ * A workflow's stages as the code defines them: what every reader of a collection or Single using
+ * it is told, and what its summary adds to.
+ */
+function definedStages(workflow: Workflow) {
+  return workflow.stages.map(stage => ({
+    name: stage.name,
+    label: stage.label,
+    allowsPublish: stage.allowsPublish,
+  }));
+}
+
+/** A workflow's steps as the code defines them, likewise. */
+function definedSteps(workflow: Workflow) {
+  return workflow.steps.map(step => ({
+    name: step.name,
+    label: step.label,
+    kind: step.kind,
+    from: [...step.from],
+    to: step.to,
+    primary: step.primary,
+  }));
+}
+
+/**
+ * A configuration file's path relative to the project root (the working directory), or null
+ * where there is none or it lies outside the root: a reader is told where in the project to look,
+ * never the server's own layout.
+ */
+function projectPath(path: string | null): string | null {
+  if (path === null) return null;
+  const within = relative(process.cwd(), path);
+  if (within === "" || isAbsolute(within)) return null;
+  if (within === ".." || within.startsWith(`..${sep}`)) return null;
+  return within;
+}
+
+/** The columns that name one document of a review state, which a count of documents counts once. */
+const DOCUMENT_COLUMNS = ["scopeKind", "scopeSlug", "entryId"];
+
+/** The Drizzle query builder the grouped count reads with, in the form all three dialects share. */
+interface StageCountsDb {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        groupBy(...columns: unknown[]): Promise<Record<string, unknown>[]>;
+      };
+    };
+  };
+}
+
+/** A grouped count's key: one stage of one collection or Single. */
+const stageKey = (kind: string, slug: string, stage: string): string =>
+  `${kind}\u0000${slug}\u0000${stage}`;
+
+/**
+ * How many documents are recorded in each stage of each collection and Single every registered
+ * workflow is attached to, but each workflow's first stage, in ONE grouped read keyed by
+ * {@link stageKey}. It filters and groups by `scopeKind`, `scopeSlug` and `stage`, the review
+ * states' own index for counts per stage, and counts each document once however many of its parts
+ * are there (one document is one `entryId` within one collection or Single). A first stage is
+ * counted on its own ({@link firstStageCount}): a part in a stage the workflow no longer has joins
+ * it, and a document with parts in both must still count once.
+ */
+async function groupedStageCounts(
+  adapter: DrizzleAdapter,
+  workflows: readonly RegisteredWorkflow[]
+): Promise<Map<string, number>> {
+  const stages = new Set(
+    workflows.flatMap(({ workflow }) =>
+      workflow.stages
+        .map(stage => stage.name)
+        .filter(name => name !== workflow.firstStage)
+    )
+  );
+  const byKind = [
+    ["collection", workflows.flatMap(each => [...each.collections])],
+    ["single", workflows.flatMap(each => [...each.singles])],
+  ] as const;
+  const scopes = byKind.filter(([, slugs]) => slugs.length > 0);
+  const counts = new Map<string, number>();
+  if (stages.size === 0 || scopes.length === 0) return counts;
+  const { nextlyReviewStates: t } = reviewStatesTables(
+    adapter.getCapabilities().dialect
+  );
+  const rows = await adapter
+    .getDrizzle<StageCountsDb>()
+    .select({
+      kind: t.scopeKind,
+      slug: t.scopeSlug,
+      stage: t.stage,
+      documents: countDistinct(t.entryId),
+    })
+    .from(t)
+    .where(
+      or(
+        ...scopes.map(([kind, slugs]) =>
+          and(
+            eq(t.scopeKind, kind),
+            inArray(t.scopeSlug, [...slugs]),
+            inArray(t.stage, [...stages])
+          )
+        )
+      )
+    )
+    .groupBy(t.scopeKind, t.scopeSlug, t.stage);
+  for (const row of rows) {
+    // A count answers a string or a bigint on some drivers.
+    const documents = Number(row.documents);
+    if (!Number.isFinite(documents)) continue;
+    counts.set(
+      stageKey(String(row.kind), String(row.slug), String(row.stage)),
+      documents
+    );
+  }
+  return counts;
+}
+
+/**
+ * How many documents are recorded in the first stage of `registered`: those in it, and those with
+ * a part in a stage the workflow no longer has, which reads as its first stage
+ * (`implicit-stage`); each once.
+ */
+async function firstStageCount(
+  adapter: DrizzleAdapter,
+  registered: RegisteredWorkflow
+): Promise<number> {
+  const { workflow } = registered;
+  const slugs = attachedTo(registered);
+  if (slugs.length === 0) return 0;
+  return adapter.count(REVIEW_STATES_TABLE, {
+    // Collections and Singles share one namespace of slugs, so the slug alone names each.
+    where: {
+      and: [
+        { column: "scopeSlug", op: "IN", value: [...slugs] },
+        {
+          or: [
+            { column: "stage", op: "=", value: workflow.firstStage },
+            {
+              column: "stage",
+              op: "NOT IN",
+              value: workflow.stages.map(stage => stage.name),
+            },
+          ],
+        },
+      ],
+    },
+    distinctOn: DOCUMENT_COLUMNS,
+  });
+}
+
+/**
+ * How many documents are recorded in each stage of `registered`: its first stage read on its own,
+ * every other from `grouped` ({@link groupedStageCounts}), summed over its collections and Singles,
+ * each a different document.
+ */
+async function stageCountsOf(
+  adapter: DrizzleAdapter,
+  registered: RegisteredWorkflow,
+  grouped: ReadonlyMap<string, number>
+): Promise<Record<string, number>> {
+  const { workflow } = registered;
+  const scopes = [
+    ...registered.collections.map(slug => ["collection", slug] as const),
+    ...registered.singles.map(slug => ["single", slug] as const),
+  ];
+  const counts: Record<string, number> = {};
+  for (const { name } of workflow.stages) {
+    counts[name] =
+      name === workflow.firstStage
+        ? await firstStageCount(adapter, registered)
+        : scopes.reduce(
+            (sum, [kind, slug]) =>
+              sum + (grouped.get(stageKey(kind, slug, name)) ?? 0),
+            0
+          );
+  }
+  return counts;
+}
+
+/**
+ * Every registered workflow: its stages and steps as a diagram draws them, where it is
+ * registered, its attachments, and how many documents are recorded in each stage.
+ *
+ * @experimental
+ */
+export async function listWorkflowSummaries(
+  adapter: DrizzleAdapter
+): Promise<WorkflowSummary[]> {
+  const summaries: WorkflowSummary[] = [];
+  const workflows = registeredWorkflows();
+  // Every workflow's stages but the first, counted in one read.
+  const grouped = await groupedStageCounts(adapter, workflows);
+  for (const registered of workflows) {
+    const { workflow, collections, singles } = registered;
+    const grantable = grantableActions(workflow);
+    const shown = await readStagePresentation(adapter, workflow);
+    summaries.push({
+      slug: workflow.slug,
+      label: workflow.label,
+      configPath: projectPath(registered.configPath),
+      stages: definedStages(workflow).map(stage => ({
+        ...stage,
+        primaryStep: primaryStep(workflow, stage.name)?.name ?? null,
+        review: isReviewStage(workflow, stage.name),
+        shownLabel: shown(stage.name).label,
+        colour: shown(stage.name).colour,
+      })),
+      steps: workflow.steps.map((step, index) => ({
+        ...definedSteps(workflow)[index],
+        grantable: grantable.has(step.name),
+        permission: stepAction(workflow, step),
+        commentRequired: step.commentRequired,
+      })),
+      onEdit: {
+        to: workflow.onEdit.to,
+        exemptFields: [...workflow.onEdit.exemptFields],
+      },
+      afterPublish: workflow.afterPublish,
+      stageCounts: await stageCountsOf(adapter, registered, grouped),
+      collections: [...collections],
+      singles: [...singles],
+    });
+  }
+  return summaries;
+}
+
+/**
+ * A workflow as a reader of one collection or Single is told it: its name, stages and steps as
+ * the code defines them. Not its settings (who holds a step, default reviewers, label overrides,
+ * emails) and not the other collections and Singles it is attached to, which a reader of this one
+ * may not be allowed to know of.
+ *
+ * @experimental
+ */
+export interface WorkflowDefinition {
+  slug: string;
+  label: string;
+  stages: ReturnType<typeof definedStages>;
+  steps: ReturnType<typeof definedSteps>;
+}
+
+/**
+ * The definition of the workflow attached to the collection or Single `slug`, or null where none
+ * is: the stages and steps its summary is built on (`definedStages`, `definedSteps`), so the two
+ * tell one definition alike. Whether the caller may read the collection or Single is the caller's
+ * door to ask first.
+ *
+ * @experimental
+ */
+export function workflowDefinitionOf(
+  kind: "collection" | "single",
+  slug: string
+): WorkflowDefinition | null {
+  const registered = workflowAttachedTo(kind, slug);
+  if (!registered) return null;
+  const { workflow } = registered;
+  return {
+    slug: workflow.slug,
+    label: workflow.label,
+    stages: definedStages(workflow),
+    steps: definedSteps(workflow),
+  };
+}
+
+/** The registered workflow `slug`, or not found. */
+function registeredWorkflow(slug: string): RegisteredWorkflow {
+  const registered = registeredWorkflows().find(
+    entry => entry.workflow.slug === slug
+  );
+  if (!registered) {
+    throw NextlyError.notFound({
+      logContext: { reason: "workflow-not-registered", workflow: slug },
+    });
+  }
+  return registered;
+}
+
+/**
+ * Refuses `input` when it names a part of the definition: at its top level, or inside a stage's
+ * label entry. Asked of the raw input, before it is parsed, so a definition key is named as one
+ * rather than as an unknown key.
+ *
+ * @experimental
+ */
+export function refuseDefinitionKeys(input: unknown): void {
+  if (!isObject(input)) return;
+  const named: string[] = Object.keys(input).filter(key =>
+    WORKFLOW_DEFINITION_KEYS.includes(key)
+  );
+  const labels = input.labels;
+  if (isObject(labels)) {
+    for (const [stage, entry] of Object.entries(labels)) {
+      if (!isObject(entry)) continue;
+      for (const key of Object.keys(entry)) {
+        if (WORKFLOW_DEFINITION_KEYS.includes(key)) {
+          named.push(`labels.${stage}.${key}`);
+        }
+      }
+    }
+  }
+  if (named.length === 0) return;
+  throw refused(
+    named.map(path => ({
+      path,
+      code: WORKFLOW_SETTINGS_ERROR_CODES.definitionReadOnly,
+      message: `\`${path}\` is part of the workflow's definition, which only its code changes.`,
+    }))
+  );
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The super-admin role's id, which holds every step whatever it is granted. */
+async function superAdminRoleId(
+  adapter: DrizzleAdapter
+): Promise<string | null> {
+  return (
+    (
+      await new RoleService(adapter, logger()).findRoleIdBySlug(
+        SUPER_ADMIN_SLUG
+      )
+    )?.id ?? null
+  );
+}
+
+/** The stored permission ids of `action` on each of `slugs`, by slug; a missing one is absent. */
+async function permissionIdsOf(
+  adapter: DrizzleAdapter,
+  action: string,
+  slugs: readonly string[]
+): Promise<Map<string, string>> {
+  const rows = await adapter.select<{ id: unknown; resource: unknown }>(
+    "permissions",
+    {
+      columns: ["id", "resource"],
+      where: {
+        and: [
+          { column: "action", op: "=", value: action },
+          { column: "resource", op: "IN", value: [...slugs] },
+        ],
+      },
+    }
+  );
+  return new Map(rows.map(row => [String(row.resource), String(row.id)]));
+}
+
+/** The role ids holding each of `permissionIds` directly, by permission id. */
+async function directHolders(
+  db: Pick<TransactionContext, "select">,
+  permissionIds: readonly string[]
+): Promise<Map<string, Set<string>>> {
+  const held = new Map<string, Set<string>>();
+  if (permissionIds.length === 0) return held;
+  const rows = await db.select<{ roleId: unknown; permissionId: unknown }>(
+    "role_permissions",
+    {
+      columns: ["roleId", "permissionId"],
+      where: {
+        and: [{ column: "permissionId", op: "IN", value: [...permissionIds] }],
+      },
+    }
+  );
+  for (const row of rows) {
+    const roleId = String(row.roleId);
+    const set = held.get(roleId) ?? new Set<string>();
+    set.add(String(row.permissionId));
+    held.set(roleId, set);
+  }
+  return held;
+}
+
+/**
+ * The roles granted `action` directly on `slugs`, each sorted, super-admin left out: those holding
+ * it on every one, and those holding it on some but not all.
+ */
+async function rolesGranted(
+  adapter: DrizzleAdapter,
+  action: string,
+  slugs: readonly string[],
+  superAdmin: string | null
+): Promise<{ everywhere: string[]; partly: string[] }> {
+  const ids = await permissionIdsOf(adapter, action, slugs);
+  const holders = await directHolders(adapter, [...ids.values()]);
+  const everywhere: string[] = [];
+  const partly: string[] = [];
+  for (const [roleId, held] of holders) {
+    if (roleId === superAdmin) continue;
+    // A slug with no permission row yet is one no role holds it on.
+    if (held.size === slugs.length) everywhere.push(roleId);
+    else partly.push(roleId);
+  }
+  return { everywhere: everywhere.sort(), partly: partly.sort() };
+}
+
+/**
+ * Whether `reviewer` holds `stage`'s primary step on every collection and Single the workflow is
+ * attached to, by the grants in force: `holds`, or the first attachment where they do not and
+ * why. A stage with no step out of it is one nobody holds. The one answer both the settings read
+ * (`defaultReviewerHolds`) and a write's check of a reviewer give.
+ */
+async function reviewerStanding(
+  adapter: DrizzleAdapter,
+  registered: RegisteredWorkflow,
+  stage: string,
+  reviewer: ReviewAssignee
+): Promise<{ answer: HolderAnswer; slug: string | null }> {
+  const action = primaryAction(registered.workflow, stage);
+  if (action === null) return { answer: "lacks", slug: null };
+  // A role that cannot be given to anyone (the Public role) is nobody to review, whatever it holds.
+  if (await isUnassignableRole(adapter, reviewer)) {
+    return { answer: "lacks", slug: null };
+  }
+  for (const slug of attachedTo(registered)) {
+    const answer = await holderAnswer(adapter, reviewer, action, slug);
+    if (answer !== "holds") return { answer, slug };
+  }
+  return { answer: "holds", slug: null };
+}
+
+/**
+ * The roles among `ids` that cannot be given to anyone (`isAssignableRole`): the Public role, which
+ * stands for visitors. Work assigned to it would wait in no one's list, so it is never a default
+ * reviewer.
+ */
+async function unassignableRoles(
+  adapter: DrizzleAdapter,
+  ids: readonly string[]
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const rows = await adapter.select<{ id: unknown; slug: unknown }>("roles", {
+    columns: ["id", "slug"],
+    where: { and: [{ column: "id", op: "IN", value: [...ids] }] },
+  });
+  return new Set(
+    rows
+      .filter(row => !isAssignableRole({ slug: String(row.slug) }))
+      .map(row => String(row.id))
+  );
+}
+
+/** Whether `reviewer` is a role that cannot be given to anyone. */
+async function isUnassignableRole(
+  adapter: DrizzleAdapter,
+  reviewer: ReviewAssignee
+): Promise<boolean> {
+  return (
+    reviewer.kind === "role" &&
+    (await unassignableRoles(adapter, [reviewer.id])).has(reviewer.id)
+  );
+}
+
+/**
+ * The roles holding `action` on every one of `slugs`, sorted, as {@link rolesHolding} answers each
+ * attachment: what a role reviewer's {@link reviewerStanding} would answer `holds` for. With no
+ * attachments every role holds it, as that check finds no attachment refusing them.
+ */
+async function rolesHoldingEverywhere(
+  adapter: DrizzleAdapter,
+  action: string,
+  slugs: readonly string[]
+): Promise<string[]> {
+  if (slugs.length === 0) {
+    const rows = await adapter.select<{ id: unknown }>("roles", {
+      columns: ["id"],
+    });
+    return rows.map(row => String(row.id)).sort();
+  }
+  // Start from the first attachment's holders, then keep only those every other attachment
+  // agrees on.
+  const [first, ...rest] = slugs;
+  let holding = await rolesHolding(adapter, action, first ?? "");
+  for (const slug of rest) {
+    // No role left to keep, so no later attachment can add one.
+    if (holding.length === 0) break;
+    const here = new Set(await rolesHolding(adapter, action, slug));
+    holding = holding.filter(id => here.has(id));
+  }
+  return [...new Set(holding)].sort();
+}
+
+/**
+ * Each review stage's possible default reviewers as roles, by stage name. Stages sharing a primary
+ * action are read once.
+ */
+async function reviewerRolesOf(
+  adapter: DrizzleAdapter,
+  registered: RegisteredWorkflow
+): Promise<Record<string, string[]>> {
+  const { workflow } = registered;
+  const slugs = attachedTo(registered);
+  const byAction = new Map<string, string[]>();
+  const reviewerRoles: Record<string, string[]> = {};
+  for (const stage of workflow.stages) {
+    if (!isReviewStage(workflow, stage.name)) continue;
+    const action = primaryAction(workflow, stage.name);
+    // A stage no step leads out of is one nobody holds, as reviewerStanding answers it.
+    if (action === null) {
+      reviewerRoles[stage.name] = [];
+      continue;
+    }
+    if (!byAction.has(action)) {
+      const holding = await rolesHoldingEverywhere(adapter, action, slugs);
+      // Only roles that can be given to someone may be chosen.
+      const unassignable = await unassignableRoles(adapter, holding);
+      byAction.set(
+        action,
+        holding.filter(id => !unassignable.has(id))
+      );
+    }
+    reviewerRoles[stage.name] = [...(byAction.get(action) ?? [])];
+  }
+  return reviewerRoles;
+}
+
+const DEFAULT_EMAILS: WorkflowEmailSettings = {
+  assigned: true,
+  approved: true,
+  changesRequested: true,
+};
+
+/** The settings as a reader is told them, from what is stored and the grants in force. */
+async function viewOf(
+  adapter: DrizzleAdapter,
+  registered: RegisteredWorkflow,
+  stored: { settings: WorkflowSettings; revision: number } | null
+): Promise<WorkflowSettingsView> {
+  const settings = stored?.settings ?? {};
+  const slugs = attachedTo(registered);
+  const superAdmin = await superAdminRoleId(adapter);
+  const grantable = grantableActions(registered.workflow);
+  const byAction = new Map<
+    string,
+    { everywhere: string[]; partly: string[] }
+  >();
+  for (const action of new Set(grantable.values())) {
+    byAction.set(
+      action,
+      await rolesGranted(adapter, action, slugs, superAdmin)
+    );
+  }
+  // Every partial holder named in one read.
+  const { roles: names } = await namesOf(adapter, {
+    users: [],
+    roles: [...byAction.values()].flatMap(each => each.partly),
+  });
+  const grants: Record<string, string[]> = {};
+  const grantableSteps: Record<string, GrantableStepView> = {};
+  for (const [step, action] of grantable) {
+    const held = byAction.get(action) ?? { everywhere: [], partly: [] };
+    grants[step] = [...held.everywhere];
+    grantableSteps[step] = {
+      permission: action,
+      partialRoles: held.partly.map(id => ({
+        id,
+        name: names.get(id) ?? null,
+      })),
+      sharesPermissionWith: [...grantable]
+        .filter(
+          ([other, otherAction]) => other !== step && otherAction === action
+        )
+        .map(([other]) => other),
+    };
+  }
+  // Each stage's reviewer is checked as a write checks it, so the read never says one holds the step
+  // that a save would refuse.
+  const defaultReviewerHolds: Record<string, HolderAnswer> = {};
+  for (const [stage, reviewer] of Object.entries(
+    settings.defaultReviewers ?? {}
+  )) {
+    if (!hasStage(registered.workflow, stage)) continue;
+    defaultReviewerHolds[stage] = (
+      await reviewerStanding(adapter, registered, stage, reviewer)
+    ).answer;
+  }
+  return {
+    workflow: registered.workflow.slug,
+    revision: stored?.revision ?? 0,
+    defaultReviewers: { ...settings.defaultReviewers },
+    labels: { ...settings.stages },
+    emails: { ...DEFAULT_EMAILS, ...settings.emails },
+    grants,
+    grantableSteps,
+    defaultReviewerHolds,
+    reviewerRoles: await reviewerRolesOf(adapter, registered),
+  };
+}
+
+/** A workflow's settings, as they read now. @experimental */
+export async function readWorkflowSettingsView(
+  adapter: DrizzleAdapter,
+  slug: string
+): Promise<WorkflowSettingsView> {
+  const registered = registeredWorkflow(slug);
+  return viewOf(
+    adapter,
+    registered,
+    await readWorkflowSettings(adapter, registered.workflow.slug)
+  );
+}
+
+const stageLabel = (workflow: Workflow, name: string): string =>
+  workflow.stages.find(stage => stage.name === name)?.label ?? name;
+
+const hasStage = (workflow: Workflow, name: string): boolean =>
+  workflow.stages.some(stage => stage.name === name);
+
+const unknownStage = (path: string, stage: string): Problem => ({
+  path,
+  code: WORKFLOW_SETTINGS_ERROR_CODES.unknownStage,
+  message: `The workflow has no stage named \`${stage}\`.`,
+});
+
+/**
+ * Why each default reviewer named may not be one: a stage the workflow lacks, or a reviewer who
+ * cannot take the stage's primary step on every collection and Single the workflow is attached to.
+ * A step whose permission the same write grants is judged by the roles it is about to be granted
+ * to (`granting`, by action), the grants the write stores on every attachment alike; any other by
+ * the grants in force.
+ */
+async function reviewerProblems(
+  adapter: DrizzleAdapter,
+  registered: RegisteredWorkflow,
+  reviewers: NonNullable<WorkflowSettingsChange["defaultReviewers"]>,
+  granting: ReadonlyMap<string, ReadonlySet<string>>
+): Promise<Problem[]> {
+  const { workflow } = registered;
+  const problems: Problem[] = [];
+  for (const [stage, reviewer] of Object.entries(reviewers)) {
+    const path = `defaultReviewers.${stage}`;
+    if (!hasStage(workflow, stage)) {
+      problems.push(unknownStage(path, stage));
+      continue;
+    }
+    if (reviewer === null) continue;
+    const action = primaryAction(workflow, stage);
+    let lacking: string | null = null;
+    if (action === null) {
+      lacking = "it has no step out of it";
+    } else if (await isUnassignableRole(adapter, reviewer)) {
+      // Asked before the grants: a role standing for visitors is refused whatever it holds.
+      lacking =
+        "it is a role that cannot be given to anyone, such as the Public role, which stands for visitors";
+    } else if (granting.has(action)) {
+      const answer = await holderAnswerOnceGranted(adapter, reviewer, [
+        ...(granting.get(action) ?? []),
+      ]);
+      if (answer !== "holds") {
+        lacking = `they would not hold its primary step once this write's grants are stored (${answer})`;
+      }
+    } else {
+      const standing = await reviewerStanding(
+        adapter,
+        registered,
+        stage,
+        reviewer
+      );
+      if (standing.answer !== "holds") {
+        lacking = `they cannot take its primary step on \`${standing.slug ?? "?"}\` (${standing.answer})`;
+      }
+    }
+    if (lacking !== null) {
+      problems.push({
+        path,
+        code: WORKFLOW_SETTINGS_ERROR_CODES.ineligibleReviewer,
+        message: `This ${reviewer.kind} cannot be the default reviewer of the stage "${stageLabel(workflow, stage)}" (\`${stage}\`): ${lacking}.`,
+      });
+    }
+  }
+  return problems;
+}
+
+/** The roles each grant names, by action, once each; or the problems with them. */
+async function plannedGrants(
+  adapter: DrizzleAdapter,
+  registered: RegisteredWorkflow,
+  grants: NonNullable<WorkflowSettingsChange["grants"]>
+): Promise<{ byAction: Map<string, Set<string>>; problems: Problem[] }> {
+  const grantable = grantableActions(registered.workflow);
+  const byAction = new Map<string, Set<string>>();
+  const problems: Problem[] = [];
+  for (const [step, roles] of Object.entries(grants)) {
+    const path = `grants.${step}`;
+    if (!registered.workflow.steps.some(each => each.name === step)) {
+      problems.push({
+        path,
+        code: WORKFLOW_SETTINGS_ERROR_CODES.unknownStep,
+        message: `The workflow has no step named \`${step}\`.`,
+      });
+      continue;
+    }
+    const action = grantable.get(step);
+    if (action === undefined) {
+      problems.push({
+        path,
+        code: WORKFLOW_SETTINGS_ERROR_CODES.stepNotGrantable,
+        message: `The step \`${step}\` needs only the collection's own permissions, granted on its roles: it has none of its own.`,
+      });
+      continue;
+    }
+    const wanted = new Set(roles);
+    const earlier = byAction.get(action);
+    if (
+      earlier &&
+      (earlier.size !== wanted.size || [...wanted].some(r => !earlier.has(r)))
+    ) {
+      problems.push({
+        path,
+        code: WORKFLOW_SETTINGS_ERROR_CODES.conflictingGrants,
+        message: `The step \`${step}\` shares the permission \`${action}\` with another step named here, given other roles.`,
+      });
+      continue;
+    }
+    byAction.set(action, wanted);
+  }
+  const roles = new RoleService(adapter, logger());
+  const named = new Set([...byAction.values()].flatMap(set => [...set]));
+  for (const roleId of named) {
+    try {
+      await roles.getRoleById(roleId);
+    } catch (error) {
+      if (!NextlyError.isNotFound(error) && !NextlyError.isValidation(error)) {
+        throw error;
+      }
+      problems.push({
+        path: "grants",
+        code: WORKFLOW_SETTINGS_ERROR_CODES.unknownRole,
+        message: `No role has the id \`${roleId}\`.`,
+      });
+    }
+  }
+  return { byAction, problems };
+}
+
+/** Problems with the labels named: a stage the workflow lacks. */
+function labelProblems(
+  workflow: Workflow,
+  labels: NonNullable<WorkflowSettingsChange["labels"]>
+): Problem[] {
+  return Object.keys(labels)
+    .filter(stage => !hasStage(workflow, stage))
+    .map(stage => unknownStage(`labels.${stage}`, stage));
+}
+
+/** The stored settings with `change` merged in. */
+function merged(
+  stored: WorkflowSettings,
+  change: WorkflowSettingsChange
+): WorkflowSettings {
+  const defaultReviewers = { ...stored.defaultReviewers };
+  for (const [stage, reviewer] of Object.entries(
+    change.defaultReviewers ?? {}
+  )) {
+    if (reviewer === null) delete defaultReviewers[stage];
+    else defaultReviewers[stage] = { kind: reviewer.kind, id: reviewer.id };
+  }
+  const stages = { ...stored.stages };
+  for (const [stage, entry] of Object.entries(change.labels ?? {})) {
+    const next: WorkflowStageLabel = entry === null ? {} : { ...stages[stage] };
+    if (entry !== null) {
+      for (const key of ["label", "colour"] as const) {
+        const value = entry[key];
+        if (value === null) delete next[key];
+        else if (value !== undefined) next[key] = value;
+      }
+    }
+    if (Object.keys(next).length === 0) delete stages[stage];
+    else stages[stage] = next;
+  }
+  const emails = { ...stored.emails, ...change.emails };
+  return {
+    ...(Object.keys(defaultReviewers).length > 0 ? { defaultReviewers } : {}),
+    ...(Object.keys(stages).length > 0 ? { stages } : {}),
+    ...(Object.keys(emails).length > 0 ? { emails } : {}),
+  };
+}
+
+/** The setting names a change moved: `defaultReviewers.<stage>`, `labels.<stage>`, `emails.<name>`. */
+function changedSettings(
+  before: WorkflowSettings,
+  after: WorkflowSettings
+): string[] {
+  const changed: string[] = [];
+  const compare = (
+    prefix: string,
+    a: Record<string, unknown>,
+    b: Record<string, unknown>
+  ) => {
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      if (JSON.stringify(a[key]) !== JSON.stringify(b[key])) {
+        changed.push(`${prefix}.${key}`);
+      }
+    }
+  };
+  compare(
+    "defaultReviewers",
+    before.defaultReviewers ?? {},
+    after.defaultReviewers ?? {}
+  );
+  compare("labels", before.stages ?? {}, after.stages ?? {});
+  // Compared as they read, so an email switched on where it was on by default moved nothing.
+  compare(
+    "emails",
+    { ...DEFAULT_EMAILS, ...before.emails },
+    { ...DEFAULT_EMAILS, ...after.emails }
+  );
+  return changed;
+}
+
+/** For each action being set, the permission ids on every attachment, made where missing. */
+async function permissionsToSet(
+  adapter: DrizzleAdapter,
+  registered: RegisteredWorkflow,
+  actions: readonly string[]
+): Promise<Map<string, string[]>> {
+  const slugs = attachedTo(registered);
+  const permissions = new PermissionService(adapter, logger());
+  const ids = new Map<string, string[]>();
+  for (const action of actions) {
+    const found = await permissionIdsOf(adapter, action, slugs);
+    for (const slug of slugs) {
+      if (found.has(slug)) continue;
+      // Made as the workflow's own seeding makes it, so it reads as one wherever it is shown.
+      const spelling = entityPermissionSpelling(action, slug);
+      const made = await permissions.ensurePermission(
+        action,
+        slug,
+        spelling.name,
+        spelling.slug,
+        spelling.description,
+        { group: WORKFLOW_PERMISSION_GROUP }
+      );
+      found.set(slug, made.id);
+    }
+    ids.set(action, [...found.values()]);
+  }
+  return ids;
+}
+
+/** Who gained and who lost a step's permission, by role id. */
+interface GrantMoves {
+  granted: string[];
+  revoked: string[];
+}
+
+/**
+ * Locks, on transaction `tx`, every role a change of `permissionIds` may touch: each role wanted,
+ * and each holding one of them, super-admin left out. A holder found once the locks are taken (one
+ * granted by a writer that committed meanwhile) is locked in turn, until none is left unlocked.
+ * Returns the roles locked.
+ */
+async function lockGrantedRoles(
+  tx: TransactionContext,
+  wanted: Map<string, Set<string>>,
+  permissionIds: readonly string[],
+  superAdmin: string | null
+): Promise<Set<string>> {
+  const wantedRoles = [...wanted.values()].flatMap(set => [...set]);
+  const locked = new Set<string>();
+  for (;;) {
+    const holders = await directHolders(tx, permissionIds);
+    const unlocked = [...new Set([...holders.keys(), ...wantedRoles])]
+      .filter(roleId => roleId !== superAdmin && !locked.has(roleId))
+      .sort();
+    if (unlocked.length === 0) return locked;
+    // In one order, as every writer of a role's grants locks it, so two writers wait rather than
+    // deadlock.
+    for (const roleId of unlocked) {
+      await tx.lockRow("roles", roleId);
+      locked.add(roleId);
+    }
+  }
+}
+
+/**
+ * Sets, on transaction `tx`, which roles hold each action's permissions: exactly those wanted,
+ * super-admin left as it is. Each role's own other grants are kept. Returns the roles changed and
+ * the moves of each action.
+ *
+ * Every role it may change is locked before any role's grants are read, and each role's grants
+ * are read under that lock: a role's grants read unlocked could be changed by another writer (a
+ * second workflow's grants, or the role's own screen) before they are written back here, and that
+ * writer's change would be lost.
+ */
+async function setGrantsOn(
+  tx: TransactionContext,
+  adapter: DrizzleAdapter,
+  wanted: Map<string, Set<string>>,
+  permissionIds: Map<string, string[]>,
+  superAdmin: string | null
+): Promise<{ changed: Set<string>; moves: Map<string, GrantMoves> }> {
+  const roles = await lockGrantedRoles(
+    tx,
+    wanted,
+    [...permissionIds.values()].flat(),
+    superAdmin
+  );
+  const moves = new Map<string, GrantMoves>();
+  const service = new RolePermissionService(adapter, logger());
+  const changed = new Set<string>();
+  for (const roleId of [...roles].sort()) {
+    const held = new Set(
+      (
+        await tx.select<{ permissionId: unknown }>("role_permissions", {
+          columns: ["permissionId"],
+          where: { and: [{ column: "roleId", op: "=", value: roleId }] },
+        })
+      ).map(row => String(row.permissionId))
+    );
+    const desired = new Set(held);
+    for (const [action, ids] of permissionIds) {
+      const wants = wanted.get(action)?.has(roleId) === true;
+      const heldAll = ids.every(id => held.has(id));
+      const heldAny = ids.some(id => held.has(id));
+      const move = moves.get(action) ?? { granted: [], revoked: [] };
+      if (wants && !heldAll) move.granted.push(roleId);
+      if (!wants && heldAny) move.revoked.push(roleId);
+      moves.set(action, move);
+      for (const id of ids) {
+        if (wants) desired.add(id);
+        else desired.delete(id);
+      }
+    }
+    if (desired.size !== held.size || [...desired].some(id => !held.has(id))) {
+      await service.replaceRolePermissionsOn(tx, roleId, [...desired]);
+      changed.add(roleId);
+    }
+  }
+  return { changed, moves };
+}
+
+const staleSettings = (workflow: string): NextlyError =>
+  NextlyError.conflict({
+    reason: "version",
+    logContext: { refusal: "workflow-settings-stale", workflow },
+  });
+
+/**
+ * Changes a workflow's settings over the revision the caller read, and answers them as they then
+ * read. Refuses, changing nothing: a stage or step the workflow lacks, a default reviewer who
+ * cannot take the stage's primary step on every attachment, a role that does not exist, and a
+ * revision that is no longer the stored one. The settings and the grants commit together.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming each problem; `CONFLICT` for a stale revision;
+ *   `NOT_FOUND` for a workflow no one registered
+ * @experimental
+ */
+export async function updateWorkflowSettings(
+  adapter: DrizzleAdapter,
+  slug: string,
+  change: WorkflowSettingsChange,
+  actor: RequestActor | null
+): Promise<WorkflowSettingsView> {
+  const registered = registeredWorkflow(slug);
+  const { workflow } = registered;
+  const planned = change.grants
+    ? await plannedGrants(adapter, registered, change.grants)
+    : null;
+  // Judged before anything is written, from the grants planned here: a refused reviewer leaves
+  // every grant and setting as it was.
+  const problems = [
+    ...(change.defaultReviewers
+      ? await reviewerProblems(
+          adapter,
+          registered,
+          change.defaultReviewers,
+          planned?.byAction ?? new Map()
+        )
+      : []),
+    ...(change.labels ? labelProblems(workflow, change.labels) : []),
+    ...(planned?.problems ?? []),
+  ];
+  if (problems.length > 0) throw refused(problems);
+
+  const stored = await readWorkflowSettings(adapter, workflow.slug);
+  // Refused before any grant is touched; the write below asks again, atomically.
+  if ((stored?.revision ?? 0) !== change.revision) {
+    throw staleSettings(workflow.slug);
+  }
+  const before = stored?.settings ?? {};
+  const after = merged(before, change);
+  const expected = change.revision === 0 ? null : change.revision;
+  const updatedBy = actor?.type === "user" ? (actor.id ?? null) : null;
+
+  const writeSettings = async (tx: TransactionContext) => {
+    // The transaction is the repository's database: its reads and writes are the same calls.
+    const db = tx as unknown as ReviewStatesDb;
+    if (
+      !(await writeWorkflowSettings(
+        db,
+        workflow.slug,
+        after,
+        expected,
+        updatedBy
+      ))
+    ) {
+      throw staleSettings(workflow.slug);
+    }
+  };
+
+  let moves = new Map<string, GrantMoves>();
+  try {
+    if (planned && planned.byAction.size > 0) {
+      const superAdmin = await superAdminRoleId(adapter);
+      const permissionIds = await permissionsToSet(adapter, registered, [
+        ...planned.byAction.keys(),
+      ]);
+      moves = await changingRoleGrants(async () => {
+        let outcome = {
+          changed: new Set<string>(),
+          moves: new Map<string, GrantMoves>(),
+        };
+        await adapter.transaction(async tx => {
+          await writeSettings(tx);
+          outcome = await setGrantsOn(
+            tx,
+            adapter,
+            planned.byAction,
+            permissionIds,
+            superAdmin
+          );
+        });
+        // Announced once committed: each changed role's cached answers retired, then the
+        // scheduled releases checked once.
+        for (const roleId of outcome.changed) {
+          await afterRoleGrantsChanged(roleId, { recheckReleases: false });
+        }
+        if (outcome.changed.size > 0) await afterGrantsChanged();
+        return outcome.moves;
+      });
+    } else {
+      await adapter.transaction(writeSettings);
+    }
+  } catch (error) {
+    // A concurrent first write is refused by the unique index rather than the revision: read
+    // again, and a revision that moved is the stale write it is.
+    if (!NextlyError.is(error)) {
+      const now = await readWorkflowSettings(adapter, workflow.slug);
+      if ((now?.revision ?? 0) !== change.revision) {
+        throw staleSettings(workflow.slug);
+      }
+    }
+    throw error;
+  }
+
+  await recordChange(registered, change, before, after, moves, actor);
+  return readWorkflowSettingsView(adapter, workflow.slug);
+}
+
+/**
+ * Records a committed change in the activity log: the settings it moved, by name, and for each
+ * step named in `grants` the roles that gained and lost its permission. Never throws: the change
+ * has happened, and a trail that could not be written is logged instead.
+ */
+async function recordChange(
+  registered: RegisteredWorkflow,
+  change: WorkflowSettingsChange,
+  before: WorkflowSettings,
+  after: WorkflowSettings,
+  moves: Map<string, GrantMoves>,
+  actor: RequestActor | null
+): Promise<void> {
+  const grantable = grantableActions(registered.workflow);
+  const grants: Record<string, GrantMoves> = {};
+  for (const step of Object.keys(change.grants ?? {})) {
+    const move = moves.get(grantable.get(step) ?? "");
+    if (move && (move.granted.length > 0 || move.revoked.length > 0)) {
+      grants[step] = { granted: [...move.granted], revoked: [...move.revoked] };
+    }
+  }
+  const changedFields = [
+    ...changedSettings(before, after),
+    ...Object.keys(grants).map(step => `grants.${step}`),
+  ];
+  try {
+    await recordSettingsActivity({
+      action: "update",
+      collection: WORKFLOW_SETTINGS_ACTIVITY_COLLECTION,
+      entityId: workflowActivityEntry(registered.workflow.slug),
+      entityTitle: `Workflow: ${registered.workflow.label}`,
+      changedFields,
+      metadata: {
+        workflow: registered.workflow.slug,
+        ...(Object.keys(grants).length > 0 ? { grants } : {}),
+      },
+      actor,
+    });
+  } catch (error) {
+    getNextlyLogger().warn({
+      kind: "workflow-settings-activity-failed",
+      workflow: registered.workflow.slug,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}

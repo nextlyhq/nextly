@@ -21,6 +21,7 @@ import {
   runWithCallerScope,
 } from "../../auth/caller-scope";
 import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
+import type { MediaCopy } from "../../domains/media/copies/media-copies";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
   MediaFile,
@@ -37,6 +38,8 @@ import type {
   FindMediaByIDsArgs,
   ListFoldersArgs,
   ListResult,
+  MediaCopyArgs,
+  MediaCopiesArgs,
   MutationResult,
   UpdateMediaArgs,
   UploadMediaArgs,
@@ -62,6 +65,21 @@ import {
  * rather than reaching the query as `undefined`.
  */
 const MEDIA_IDS = z.array(z.string()).max(MEDIA_IDS_PER_READ);
+
+/**
+ * What `media.copyOf` takes: an id, or else an address, and a width. Its type
+ * names one or the other; given both, the id is read.
+ */
+const MEDIA_COPY_ARGS = z.union([
+  z.object({ id: z.string().min(1), width: z.number().positive().finite() }),
+  z.object({ url: z.string(), width: z.number().positive().finite() }),
+]);
+
+/** What `media.copiesOf` takes: an id, or else an address, and the widest copy. */
+const MEDIA_COPIES_ARGS = z.union([
+  z.object({ id: z.string().min(1), upTo: z.number().positive().finite() }),
+  z.object({ url: z.string(), upTo: z.number().positive().finite() }),
+]);
 
 /**
  * Media MIME type enum accepted by `MediaService.listMedia()`.
@@ -95,6 +113,24 @@ export interface MediaNamespace {
    * @experimental
    */
   findByIDs(args: FindMediaByIDsArgs): Promise<MediaFile[]>;
+  /**
+   * A resized copy of an image at the allowed width nearest `width`, by the
+   * address it is served at, or `null` when no copy can be had and the image
+   * is to be used as it is. Checked as `findByID` is, since a copy shows
+   * exactly what its original does.
+   *
+   * @experimental
+   */
+  copyOf(args: MediaCopyArgs): Promise<MediaCopy | null>;
+  /**
+   * Every resized copy of an image up to `upTo` wide, narrowest first, by the
+   * addresses they are served at, or `[]` where no copy can be had. The item
+   * is read and checked once, as `findByID` checks it, and nothing is resized:
+   * each copy is made the first time its address is fetched.
+   *
+   * @experimental
+   */
+  copiesOf(args: MediaCopiesArgs): Promise<MediaCopy[]>;
   update(args: UpdateMediaArgs): Promise<MutationResult<MediaFile>>;
   delete(args: DeleteMediaArgs): Promise<MutationResult<{ id: string }>>;
   bulkDelete(args: BulkDeleteMediaArgs): Promise<BulkOperationResult>;
@@ -252,6 +288,46 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
           }
           throw error;
         }
+      });
+    },
+
+    async copyOf(args: MediaCopyArgs): Promise<MediaCopy | null> {
+      return asChecked(args, async () => {
+        // Refused before anything is read, as `findByID` refuses.
+        await checkMediaRead(ctx.defaultConfig, args);
+        const parsed = MEDIA_COPY_ARGS.safeParse(args);
+        if (!parsed.success) {
+          throw NextlyError.invalidInput({
+            message:
+              "media.copyOf() takes an 'id' or a 'url', and a 'width' in pixels above zero",
+          });
+        }
+        const { width, ...source } = parsed.data;
+        return await ctx.mediaService.copyOf(
+          "id" in source ? { id: source.id } : { url: source.url },
+          width,
+          createRequestContext(args)
+        );
+      });
+    },
+
+    async copiesOf(args: MediaCopiesArgs): Promise<MediaCopy[]> {
+      return asChecked(args, async () => {
+        // Refused before anything is read, as `copyOf` refuses.
+        await checkMediaRead(ctx.defaultConfig, args);
+        const parsed = MEDIA_COPIES_ARGS.safeParse(args);
+        if (!parsed.success) {
+          throw NextlyError.invalidInput({
+            message:
+              "media.copiesOf() takes an 'id' or a 'url', and an 'upTo' width in pixels above zero",
+          });
+        }
+        const { upTo, ...source } = parsed.data;
+        return await ctx.mediaService.copiesOf(
+          "id" in source ? { id: source.id } : { url: source.url },
+          upTo,
+          createRequestContext(args)
+        );
       });
     },
 

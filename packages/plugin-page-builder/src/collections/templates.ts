@@ -86,7 +86,7 @@ export const TEMPLATE_COLLECTION_FIELD_COMPONENT =
 export function templatesCollection(): CollectionConfig {
   return defineCollection({
     slug: TEMPLATES_SLUG,
-    labels: { singular: "Template", plural: "Templates" },
+    labels: { singular: "Collection template", plural: "Collection templates" },
     fields: [
       // Bounded on every write path, so a long title is refused alike on every
       // dialect rather than fitting one database's column and not another's.
@@ -176,7 +176,7 @@ export function templatesCollection(): CollectionConfig {
       }),
       blocks({
         name: TEMPLATE_CONTENT_FIELD,
-        label: "Template",
+        label: "Collection template",
         blocks: { kinds: ["template"] },
       }),
     ],

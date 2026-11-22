@@ -1,7 +1,10 @@
 /**
  * What the design drawing an entry's page says about the page, offered to
- * other plugins as a service: the title, description and share image a Page
- * Builder route hands a page-metadata provider as the page's design level.
+ * other plugins as a service: the description, share text and share image a
+ * Page Builder route hands a page-metadata provider as the page's design
+ * level. Never a title: a page's title is its SEO title, else its title in
+ * the content type's pattern, not a heading on it nor a title the design
+ * states for itself.
  *
  * A page-metadata provider is told these by the route only while a page is
  * served. A check or an admin screen that asks about a page outside a request
@@ -87,6 +90,12 @@ export interface DesignSeoDeps {
   readonly derive: DeriveDesignValues;
 }
 
+/** What the design says about a page, less the title it never offers. */
+function withoutTitle(values: PageMetadataValues): PageMetadataValues {
+  const { title: _title, ...offered } = values;
+  return offered;
+}
+
 /** The entry's id as stored, or nothing for one never saved. */
 function idOf(entry: Readonly<Record<string, unknown>>): string | undefined {
   const { id } = entry;
@@ -141,8 +150,16 @@ export function designSeoService(deps: DesignSeoDeps): DesignSeoService {
       drawnBy: design.own ? "design" : "template",
     };
   };
+  const offered = async (
+    request: DesignSeoRequest
+  ): Promise<DesignSeoAnswer | undefined> => {
+    const answer = await designFor(request);
+    return answer === undefined
+      ? undefined
+      : { ...answer, values: withoutTitle(answer.values) };
+  };
   return {
-    designFor,
-    valuesFor: async request => (await designFor(request))?.values,
+    designFor: offered,
+    valuesFor: async request => (await offered(request))?.values,
   };
 }

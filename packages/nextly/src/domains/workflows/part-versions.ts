@@ -26,9 +26,12 @@ import type { FieldGroupDataService } from "../field-groups/services/field-group
 import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { appLocalization } from "../i18n/configured-locales";
 import { liveColumnNames } from "../schema/pipeline/diff/introspect-live";
+import type { SingleRegistryService } from "../singles/services/single-registry-service";
+import type { VersionsDbApi } from "../versions/db-api";
 import { documentVersionOn } from "../versions/document-revision";
 import {
   VersionsRepository,
+  type VersionRef,
   type VersionRow,
 } from "../versions/versions-repository";
 
@@ -48,31 +51,37 @@ export interface DocumentTable {
 }
 
 /**
- * The table a document lives in, from the collection registry. Read before a step's transaction
- * opens: the registry reads on the pool. A Single is refused: its steps are not offered yet.
+ * The table a document lives in, a collection's or a Single's, from its registry. Read before a
+ * step's transaction opens: the registry reads on the pool.
  */
-export async function documentTableOf(
+export function documentTableOf(
   document: ReviewDocument
 ): Promise<DocumentTable> {
-  if (document.scopeKind !== "collection") {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "document",
-          code: "WORKFLOW_SINGLES_NOT_SUPPORTED",
-          message: "Workflow steps on a Single are not available yet.",
-        },
-      ],
-    });
-  }
-  const registry = container.get<CollectionRegistryService>(
-    "collectionRegistryService"
-  );
-  const record = await registry.getCollectionBySlug(document.scopeSlug);
+  return documentTableOn(document);
+}
+
+/**
+ * The table a collection's or a Single's document lives in, from its registry, read on
+ * `executor` when given (a transaction's Drizzle handle), so a reader inside a transaction takes
+ * no second connection.
+ */
+export async function documentTableOn(
+  document: Pick<ReviewDocument, "scopeKind" | "scopeSlug">,
+  executor?: unknown
+): Promise<DocumentTable> {
+  const record =
+    document.scopeKind === "single"
+      ? await container
+          .get<SingleRegistryService>("singleRegistryService")
+          .getSingleBySlug(document.scopeSlug, executor)
+      : await container
+          .get<CollectionRegistryService>("collectionRegistryService")
+          .getCollectionBySlug(document.scopeSlug, executor);
   if (!record) {
     throw NextlyError.notFound({
       logContext: {
-        reason: "workflow-step-collection",
+        reason: "workflow-document-table",
+        kind: document.scopeKind,
         slug: document.scopeSlug,
       },
     });
@@ -145,14 +154,57 @@ export async function partVersionOn(
 }
 
 /**
- * The newest recorded version of one part, snapshot included, read on `tx`: in the part's
- * language, or for the shared part, in any (each language's snapshot carries the shared fields).
+ * How the history is read: on a step's or a publish's transaction, where the newest version of any
+ * part is a locking read, so a write waiting on the document's lock compares with the newest; or
+ * on the pool, by a check that writes nothing (a release's) and is judged again under the lock of
+ * the publish it leads to, which may take no lock.
+ */
+export type HistoryRead = "locked" | "pool";
+
+/**
+ * The newest recorded version of any part of `ref`, read as `read` says. One read either way,
+ * of every stored version whatever its language, so the pool's answer is the locked one's: a
+ * version recorded in a language the site has since stopped offering is still the newest.
+ */
+function newestOfAnyPart(
+  repo: VersionsRepository,
+  ref: VersionRef,
+  read: HistoryRead
+): Promise<VersionRow | undefined> {
+  return repo.findNewest(ref, { lock: read === "locked" });
+}
+
+/**
+ * The number of a part's version under review, from each language's newest recorded version
+ * number (null for the versions recorded without one): a language's own newest, or for the shared
+ * part the newest of any language, since each language's snapshot carries the shared fields.
+ * Undefined for a part never saved. The one statement of which version a review shows and an
+ * approval names: the review state and {@link shownVersionOn} both derive their number here.
+ */
+export function versionUnderReview(
+  newestByLocale: ReadonlyMap<string | null, number>,
+  part: string | null
+): number | undefined {
+  if (part !== null) return newestByLocale.get(part);
+  let newest: number | undefined;
+  for (const versionNo of newestByLocale.values()) {
+    if (newest === undefined || versionNo > newest) newest = versionNo;
+  }
+  return newest;
+}
+
+/**
+ * The newest recorded version of one part, snapshot included, read on `tx`: the version
+ * {@link versionUnderReview} names. The shared part's comes from the newest version of any part,
+ * read as `read` says, so a locked read sees the latest committed version; a language's from its
+ * own newest version number.
  * Undefined for a part never saved.
  */
 export async function shownVersionOn(
-  tx: TransactionContext,
+  tx: VersionsDbApi,
   document: ReviewDocument,
-  part: string | null
+  part: string | null,
+  read: HistoryRead = "locked"
 ): Promise<VersionRow | undefined> {
   const repo = new VersionsRepository(tx);
   const ref = {
@@ -160,9 +212,27 @@ export async function shownVersionOn(
     scopeSlug: document.scopeSlug,
     entryId: document.entryId,
   };
-  if (part === null) return repo.findNewest(ref);
-  const newest = (await repo.newestVersionNoByLocale(ref, [part])).get(part);
-  return newest === undefined ? undefined : repo.findByVersionNo(ref, newest);
+  const newestOfAny =
+    part === null ? await newestOfAnyPart(repo, ref, read) : undefined;
+  const newestByLocale =
+    part === null
+      ? newestByLocaleOf(newestOfAny)
+      : await repo.newestVersionNoByLocale(ref, [part]);
+  const versionNo = versionUnderReview(newestByLocale, part);
+  if (versionNo === undefined) return undefined;
+  // The newest of any part is already in hand when it is the one named: no second read.
+  return newestOfAny?.versionNo === versionNo
+    ? newestOfAny
+    : repo.findByVersionNo(ref, versionNo);
+}
+
+/** The newest version of any part as the one-language map {@link versionUnderReview} reads. */
+function newestByLocaleOf(
+  newest: VersionRow | undefined
+): Map<string | null, number> {
+  return newest?.versionNo == null
+    ? new Map()
+    : new Map([[newest.locale ?? null, newest.versionNo]]);
 }
 
 /**
@@ -172,14 +242,19 @@ export async function shownVersionOn(
  * own: an approval names the version its language was saved as.
  */
 export async function shownContentOn(
-  tx: TransactionContext,
+  tx: VersionsDbApi,
   document: ReviewDocument,
   table: DocumentTable,
-  part: string | null
+  part: string | null,
+  read: HistoryRead = "locked"
 ): Promise<VersionRow | undefined> {
-  const shown = await shownVersionOn(tx, document, part);
+  const shown = await shownVersionOn(tx, document, part, read);
   if (!shown || part === null || table.translated === null) return shown;
-  const newest = await new VersionsRepository(tx).findNewest(document);
+  const newest = await newestOfAnyPart(
+    new VersionsRepository(tx),
+    document,
+    read
+  );
   if (!laterThan(newest, shown)) return shown;
   return {
     ...shown,

@@ -114,7 +114,7 @@ const SURFACES: ReadonlyArray<{
       await expect(page.getByRole("tree", { name: "Layers" })).toBeVisible();
     },
   },
-  ...["Variables", "Shared styles", "Fonts"].map(tab => ({
+  ...["Colours", "Type", "Spacing", "Styles"].map(tab => ({
     name: `Design, ${tab}`,
     open: async (page: Page) => {
       await railButton(page, "Design").click();
@@ -125,32 +125,28 @@ const SURFACES: ReadonlyArray<{
     },
   })),
   {
-    name: "the Variables add menu",
+    name: "the Add value menu",
     open: async page => {
       await railButton(page, "Design").click();
-      await page.getByRole("tab", { name: "Variables", exact: true }).click();
-      await page
-        .getByRole("button", { name: "Add spacing, radius or shadow" })
-        .click();
+      await page.getByRole("tab", { name: "Spacing", exact: true }).click();
+      await page.getByRole("button", { name: "Add value" }).click();
       await expect(page.getByRole("menu")).toBeVisible();
     },
   },
   {
-    name: "the Style tab's More menu",
+    name: "the Style tab's Add CSS property list",
     open: async page => {
       await selectHeading(page);
       await page.getByRole("tab", { name: "Style", exact: true }).click();
-      // The section's "More" button shows once the section is open.
-      const typography = page.locator(
-        '.nx-style-inspector [data-section="typography"]'
+      // "+ Add CSS property" shows once its section is open.
+      const css = page.locator(
+        '.nx-style-inspector [data-section="css-properties"]'
       );
-      if ((await typography.getAttribute("data-state")) !== "open") {
-        await typography.locator("button").first().click();
+      if ((await css.getAttribute("data-state")) !== "open") {
+        await css.locator("button").first().click();
       }
-      await page
-        .getByRole("button", { name: "More typography properties" })
-        .click();
-      await expect(page.getByRole("menu")).toBeVisible();
+      await page.getByRole("button", { name: "+ Add CSS property" }).click();
+      await expect(page.getByRole("listbox")).toBeVisible();
     },
   },
   {
@@ -208,7 +204,12 @@ const SURFACES: ReadonlyArray<{
     name: "a block's toolbar menu",
     open: async page => {
       await selectHeading(page);
-      await page.getByRole("button", { name: "More actions" }).click();
+      // The block toolbar's, on the canvas: the top bar has a "More actions"
+      // of its own, for the editor, which opens a different menu.
+      await page
+        .getByTestId("canvas")
+        .getByRole("button", { name: "More actions" })
+        .click();
       await expect(page.getByRole("menu")).toBeVisible();
     },
   },

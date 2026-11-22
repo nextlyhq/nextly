@@ -35,6 +35,7 @@ import {
 import type { FieldSources } from "../domains/versions/restored-from";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
+import { shownWorkflowSummary } from "../domains/workflows/stage-presentation";
 import type {
   RichTextOutputFormat,
   RichTextStyles,
@@ -87,6 +88,8 @@ type EveryLanguageLifecycleHandlerParams = {
   authenticatedScope?: AuthenticatedScope;
   /** Acting identity from the transport, forwarded to the recorded event. */
   actor?: RequestActor;
+  /** A publish made without review, with the caller's reason, told to the publish gate. */
+  withoutReview?: { reason: string };
   /**
    * Skip cache revalidation for this move (the outbox drain still runs), for a caller that owns
    * its cache strategy.
@@ -738,6 +741,14 @@ export class CollectionsHandler {
         localized: data.localized === true,
       });
       Object.assign(data, draftSplitResponseFields(draftSplit));
+      // The workflow that holds the collection's publishing, so the editor
+      // knows before a document exists that it cannot be created as
+      // published, and leads a new one with Save draft. `null` where none is
+      // attached.
+      data.workflow = await shownWorkflowSummary(
+        "collection",
+        typeof data.slug === "string" ? data.slug : ""
+      );
     }
 
     return result;
@@ -854,6 +865,10 @@ export class CollectionsHandler {
      * super-admin-owned key gets no session bypass.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** The API key behind `authenticatedScope`, by id, passed through for `_waitingForMe`. */
+    apiKeyId?: string;
+    /** Give each row its review state under `_review` (a list read only). */
+    reviewState?: boolean;
     /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Public callers default to 'published'; trusted callers can
@@ -866,6 +881,10 @@ export class CollectionsHandler {
     fallbackLocale?: string | false;
     /** i18n M7: attach a per-locale `_translations` overview map to each row. */
     translationStatus?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -989,6 +1008,10 @@ export class CollectionsHandler {
     fallbackLocale?: string | false;
     /** i18n M7: attach a per-locale `_translations` overview map to the entry. */
     translationStatus?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -1004,6 +1027,10 @@ export class CollectionsHandler {
      * read grant, so a super-admin-owned key gets no session bypass.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** Whole-document fallback; see `CollectionEntryService.getEntry`. */
+    wholeDocumentFallback?: boolean;
+    /** Attach `_details`; see `CollectionQueryService.getEntry`. */
+    details?: boolean;
   }) {
     return this.entryService.getEntry(params);
   }
@@ -1069,6 +1096,8 @@ export class CollectionsHandler {
      * count matches the rows it can list.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** The API key behind `authenticatedScope`, by id, passed through for `_waitingForMe`. */
+    apiKeyId?: string;
     /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Same semantics as listEntries.
@@ -1166,8 +1195,6 @@ export class CollectionsHandler {
       /**
        * The fields this write restored, and the version each came from,
        * recorded per field on the version it captures (see `restored-from`).
-       *
-       * @experimental
        */
       restoredFrom?: FieldSources;
       /**
@@ -1510,6 +1537,50 @@ export class CollectionsHandler {
       ...this.resolveUserParam(params),
       // Named explicitly so the API-key scope survives the field-by-field
       // rebuild rather than only via resolveUserParam's rest.
+      authenticatedScope: params.authenticatedScope,
+      disableRevalidate: params.disableRevalidate,
+    });
+  }
+
+  /**
+   * @experimental Create an entry that copies a stored one, reading the
+   * source as the caller first; see `CollectionService.createEntryFromSource`.
+   * Server-only: the REST dispatcher has no route to it.
+   */
+  async createEntryFromSource(params: {
+    collectionName: string;
+    /** The entry the new one copies, and the field its value came from. */
+    source: { collection: string; id: string; field?: string };
+    /** What to create. */
+    data: Record<string, unknown>;
+    userId?: string;
+    userName?: string;
+    userEmail?: string;
+    /** Authenticated role set, forwarded to role-based access rules. */
+    userRoles?: string[];
+    /** User context for access control */
+    user?: UserContext;
+    /** When true, bypass all access control checks */
+    overrideAccess?: boolean;
+    /** See {@link duplicateEntry}'s `trusted`. */
+    trusted?: TrustBound;
+    /** Write locale: the copy is written, and its source read, in it. */
+    locale?: string;
+    /** Arbitrary data passed to hooks via context */
+    context?: Record<string, unknown>;
+    /** The HTTP request behind this operation, when one produced it. */
+    request?: Request;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
+    /** The caller's authenticated scope, judging the read and the create. */
+    authenticatedScope?: AuthenticatedScope;
+    /** Skip cache revalidation for this write (the outbox drain still runs). */
+    disableRevalidate?: boolean;
+  }) {
+    return this.entryService.createEntryFromSource({
+      ...this.resolveUserParam(params),
+      // Named explicitly, as on the duplicate, so the API-key scope survives
+      // the field-by-field rebuild rather than only via resolveUserParam's rest.
       authenticatedScope: params.authenticatedScope,
       disableRevalidate: params.disableRevalidate,
     });

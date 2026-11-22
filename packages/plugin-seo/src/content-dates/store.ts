@@ -71,6 +71,32 @@ export async function readContentDates(
   return found;
 }
 
+/** The fingerprint each page's row holds, by its key, where it has a row. */
+export type KeptFingerprints = ReadonlyMap<string, string>;
+
+/**
+ * The fingerprint the rows of `pages` hold, each in its language, by key:
+ * one read for each {@link PAGE} of them. A page with no row is missing.
+ */
+export async function keptFingerprints(
+  ctx: PluginContext,
+  pages: readonly { holder: AddressHolder; locale: string }[]
+): Promise<KeptFingerprints> {
+  const found = new Map<string, string>();
+  const columns = ctx.db.table(contentDates);
+  const keys = pages.map(page => pageDateKey(page.holder, page.locale));
+  for (let at = 0; at < keys.length; at += PAGE) {
+    const rows = await ctx.db
+      .select(contentDates)
+      .where(inArray(columns.pageKey, keys.slice(at, at + PAGE)))
+      .all();
+    for (const row of rows as unknown as Record<string, unknown>[]) {
+      found.set(String(row.pageKey), String(row.fingerprint));
+    }
+  }
+  return found;
+}
+
 /** What a save found for one version of a page. */
 export interface ContentDate {
   holder: AddressHolder;
@@ -98,7 +124,8 @@ export interface ContentDate {
  */
 export async function recordContentDate(
   ctx: PluginContext,
-  date: ContentDate
+  date: ContentDate,
+  kept?: KeptFingerprints
 ): Promise<void> {
   const columns = ctx.db.table(contentDates);
   const key = pageDateKey(date.holder, date.locale);
@@ -132,13 +159,23 @@ export async function recordContentDate(
     }
     await moveIfChanged();
   };
-  const existing = await ctx.db
-    .select(contentDates)
-    .where(eq(columns.pageKey, key))
-    .first();
-  if (existing !== null) {
-    await settle();
-    return;
+  if (kept !== undefined) {
+    const fingerprint = kept.get(key);
+    // A row already holding this content's fingerprint changes nothing.
+    if (fingerprint === date.fingerprint) return;
+    if (fingerprint !== undefined) {
+      await settle();
+      return;
+    }
+  } else {
+    const existing = await ctx.db
+      .select(contentDates)
+      .where(eq(columns.pageKey, key))
+      .first();
+    if (existing !== null) {
+      await settle();
+      return;
+    }
   }
   try {
     await ctx.db.insert(contentDates, {

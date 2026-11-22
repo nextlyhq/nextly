@@ -15,10 +15,12 @@
  *
  * @module domains/schema/services/collection-schema-apply
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
+import { registryInFileTransaction } from "../../../dispatcher/helpers/applied-fields-row";
 import {
-  isLeavingSettingsRefusal,
+  companionReconcileFailure,
   leavingSettingsStep,
 } from "../../../dispatcher/helpers/builder-schema-push";
 import { buildFullDesiredSchema } from "../../../dispatcher/helpers/desired-schema";
@@ -28,10 +30,12 @@ import {
   getLoggerFromDI,
   getMigrationJournalFromDI,
 } from "../../../dispatcher/helpers/di";
-import { NextlyError } from "../../../errors";
+import { NextlyError, type ValidationPublicData } from "../../../errors";
+import { reservedSystemFieldNames } from "../../../lib/system-columns";
 import { getProductionNotifier } from "../../../runtime/notifications/index";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { consoleLogger } from "../../../shared/types";
+import { withSystemTextFields } from "../../collections/system-text-fields";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
   appLanguageOrder,
@@ -58,6 +62,13 @@ import {
   liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
+import {
+  FirstQuestionWatch,
+  landingPush,
+  type PushWatch,
+} from "../builder-save/landing-push";
+import { pushCarriesValues } from "../builder-save/push-carries-values";
+import { renamedFieldsOf } from "../builder-save/schema-change-save";
 import { runStatement } from "../pipeline/_internal/run-statement";
 import {
   createApplyDesiredSchema,
@@ -92,10 +103,22 @@ import { RegexRenameDetector } from "../pipeline/rename-detector";
 import type { Resolution } from "../pipeline/resolution/types";
 import { recoverInterruptedSqliteRebuilds } from "../pipeline/sqlite-rebuild-recovery";
 import type { DesiredCollection, DesiredSchema } from "../pipeline/types";
+import {
+  entityLabel,
+  perLanguageAfter,
+  perLanguageBefore,
+  refuseFieldTypeChanges,
+} from "../value-conversion/type-change/field-type-changes";
 
 import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
-import { toSnakeCase } from "./field-column-descriptor";
+import { withStoredRelationshipOptions } from "./editor-relationship-fields";
+import {
+  fieldsStoredOnRow,
+  getColumnDescriptor,
+  toSnakeCase,
+} from "./field-column-descriptor";
 import { withSchemaChangeExcluded } from "./schema-change-exclusion";
+import { unconfirmedTranslatedDrops } from "./translated-drops";
 
 /**
  * The fields the registry records for a collection before a Schema Builder change, as it records
@@ -218,35 +241,35 @@ class AnsweringDispatcher implements PromptDispatcher {
       this.legacyResolutions
     ).dispatch(args);
     if (!result.proceed && this.ownTable !== undefined) {
-      refuseLeftoverColumns(
-        this.slug,
+      const leftover = leftoverColumns(
         this.ownTable,
         args,
         result,
         resolutions
       );
+      if (leftover.length > 0) {
+        throw columnsNotDescribed(this.slug, this.ownTable, leftover);
+      }
     }
     return result;
   }
 }
 
 /**
- * Refuse a save that would drop a column of its own table that no field describes and the save
- * never removed, such as one an install from before removed fields dropped their columns kept,
- * with its data. The push offers it as a drop, or as the old side of a rename, and nothing the
- * save decides answers it, so the push would stop as cancelled; this says which column and how
- * to go on instead, before anything is dropped. Another table's drift is left to the push's own
- * refusal.
- *
- * @throws NextlyError `VALIDATION_ERROR` naming each such column (`COLUMN_NOT_DESCRIBED`)
+ * The columns of the save's own table that a dispatch of its questions left unanswered, once the
+ * answers are applied: each offered as a drop not confirmed exactly once, or as the old side of a
+ * rename neither answered nor taken. Read where the dispatch did not proceed. Such a column, one
+ * the save never removed, such as one an install from before removed fields dropped their columns
+ * kept, would otherwise stop the save as cancelled; the push refuses it naming each
+ * (`columnsNotDescribed`), and a save running its own file reads the same decision. Another table's
+ * drift is left to the push's own refusal.
  */
-function refuseLeftoverColumns(
-  slug: string,
+export function leftoverColumns(
   ownTable: string,
-  args: Parameters<PromptDispatcher["dispatch"]>[0],
+  args: Pick<Parameters<PromptDispatcher["dispatch"]>[0], "candidates" | "events">,
   result: Awaited<ReturnType<PromptDispatcher["dispatch"]>>,
   resolutions: readonly BrowserRenameResolution[]
-): void {
+): string[] {
   // Acknowledged as the browser dispatcher acknowledges a drop: exactly one confirm_drop.
   const confirmations = new Map<string, number>();
   for (const r of result.resolutions) {
@@ -279,9 +302,21 @@ function refuseLeftoverColumns(
       leftover.add(c.fromColumn);
     }
   }
-  if (leftover.size === 0) return;
-  throw NextlyError.validation({
-    errors: [...leftover].map(column => ({
+  return [...leftover];
+}
+
+/**
+ * The refusal of a save over columns of the collection's own table that no field describes:
+ * saving would remove each with its data, so the person drops it by hand or describes it with a
+ * field first. One wording, given by the push and by a save that runs its own file alike.
+ */
+export function columnsNotDescribed(
+  slug: string,
+  tableName: string,
+  columns: readonly string[]
+): NextlyError {
+  return NextlyError.validation({
+    errors: columns.map(column => ({
       path: `columns.${column}`,
       code: "COLUMN_NOT_DESCRIBED",
       message:
@@ -289,7 +324,7 @@ function refuseLeftoverColumns(
         `saving would remove it with its data. Drop the column by hand, or add a field that ` +
         `describes it, then save again.`,
     })),
-    logContext: { slug, tableName: ownTable, columns: [...leftover] },
+    logContext: { slug, tableName, columns: [...columns] },
   });
 }
 
@@ -311,6 +346,13 @@ export interface CollectionSchemaChange {
   eventResolutions: Resolution[];
   legacyResolutions?: LegacyResolutionsBundle;
   /**
+   * The answers that confirm, by field name, the values the change drops beside the push (a
+   * translated field's column in the translations table, `unconfirmedTranslatedDrops`), where they
+   * differ from `legacyResolutions`: the dialog's counted deletions confirm them too, as on its
+   * file road. Absent, `legacyResolutions` answers them.
+   */
+  confirmedBeside?: LegacyResolutionsBundle;
+  /**
    * Whether every pair on the collection's own table not answered above, from a column the change
    * confirms dropping, is a drop and an add: the Builder save's rule, which detects its own
    * renames. The dialog asks the admin.
@@ -322,6 +364,13 @@ export interface CollectionSchemaChange {
    * would run before the column it fills exists.
    */
   fills?: ReadonlyArray<{ field: string; value: unknown; required: boolean }>;
+  /**
+   * Called once a push this change runs may have changed the database (`landingPush`): one that
+   * succeeded, or outside PostgreSQL one that failed, whose earlier statements may have stayed.
+   * A caller writing the change's migration keeps its files when the change fails after this,
+   * and withdraws them when it fails before, as a refusal before the push leaves nothing.
+   */
+  onLanded?: () => void;
 }
 
 /**
@@ -335,8 +384,9 @@ export interface CollectionSchemaChange {
  * refused at once, with nothing written.
  *
  * @throws {NextlyError} `NEXTLY_MIGRATION_APPLY_FAILED` with the pipeline's own words when the
- *   push is refused, the refusal of a leaving field's settings as it is, and `INTERNAL_ERROR` when
- *   the push landed and the companion could not be brought in step
+ *   push is refused, the refusal of a leaving field's settings as it is, `NEXTLY_TABLE_BUSY` as it
+ *   is when the companion's change stopped on a busy table, and `INTERNAL_ERROR` when the push
+ *   landed and the companion could not be brought in step otherwise
  */
 export async function applyCollectionSchemaChange(
   change: CollectionSchemaChange
@@ -351,6 +401,203 @@ export async function applyCollectionSchemaChange(
     },
     () => applyHoldingSchemaLock(change)
   );
+}
+
+/**
+ * The fields a schema save sends, as it writes them: each relationship the editor read from an
+ * earlier-shaped one written back in its stored shape (`withStoredRelationshipOptions`), matched
+ * through the renames the save accepted; and, where asked, each stored built-in field the save
+ * left out, kept as stored (`storedBuiltInsLeftOut`).
+ *
+ * @param sent the field list the save sends
+ * @param entity the collection's or Single's row the save is checked and written against
+ * @param renames the dialog's answers to the renames its preview paired, when it has any
+ * @param options.keepBuiltIns keep each stored built-in field the save left out: a collection's,
+ *   which can hold one a demote stored. A Single never stores one (a demote moves collections
+ *   only, the admin's Singles store none, and a code-first Single is read-only here).
+ */
+export function fieldsAsStored<F>(
+  sent: readonly F[],
+  entity: { tableName: string; fields?: readonly unknown[] | null },
+  renames: readonly BrowserRenameResolution[] = [],
+  options: { keepBuiltIns?: boolean } = {}
+): F[] {
+  const stored = (entity.fields ?? []) as unknown as FieldDefinition[];
+  const kept = options.keepBuiltIns ? storedBuiltInsLeftOut(stored, sent) : [];
+  return [
+    ...(kept as unknown as F[]),
+    ...withStoredRelationshipOptions(
+      sent,
+      stored,
+      acceptedFieldRenames(
+        renames,
+        entity.tableName,
+        stored,
+        sent as unknown as FieldDefinition[]
+      )
+    ),
+  ];
+}
+
+/**
+ * The stored top-level fields named as a built-in (`reservedSystemFieldNames("builder")`: a
+ * collection's and a Single's `title`, `slug` and the rest) that `sent` leaves out. The admin
+ * shows these as built-in rows and never sends them, so a save leaving one out has not removed
+ * it: a `title` a code-first config declared and `nextly db:sync --demote` stored, translated as a
+ * text field is on a translated collection, would otherwise read as leaving translation, offered
+ * as renamed into a field the save adds or dropped with its translations.
+ */
+function storedBuiltInsLeftOut(
+  stored: readonly FieldDefinition[],
+  sent: readonly unknown[]
+): FieldDefinition[] {
+  const builtIn = new Set(reservedSystemFieldNames("builder"));
+  const sentNames = new Set(
+    sent.map(field => (field as { name?: unknown } | null)?.name)
+  );
+  return stored.filter(
+    field => builtIn.has(field.name) && !sentNames.has(field.name)
+  );
+}
+
+/**
+ * Each rename the admin accepted on `tableName`, as the fields it pairs: the stored field and the
+ * field the save renames it to, matched by their columns. A rename naming a column neither list
+ * holds pairs nothing.
+ */
+function acceptedFieldRenames<F extends { name: string }>(
+  renames: readonly {
+    tableName: string;
+    fromColumn: string;
+    toColumn: string;
+    choice: string;
+  }[],
+  tableName: string,
+  oldFields: readonly F[],
+  newFields: readonly F[]
+): { from: F; to: F }[] {
+  const byColumn = (fields: readonly F[], column: string) =>
+    fields.find(field => toSnakeCase(field.name) === column);
+  return renames.flatMap(rename => {
+    if (rename.tableName !== tableName || rename.choice !== "rename") {
+      return [];
+    }
+    const from = byColumn(oldFields, rename.fromColumn);
+    const to = byColumn(newFields, rename.toColumn);
+    return from && to ? [{ from, to }] : [];
+  });
+}
+
+/**
+ * Refuse a change that makes a main-table column unique, by its Unique mark or by a relationship
+ * becoming one-to-one, while the column's entries already repeat a value.
+ *
+ * The database refuses the unique index part-way through the apply, and MySQL keeps every schema
+ * statement that ran before it. So the question is asked first, by the precondition the service's
+ * save asks (`refusalsForCollectionSave`, uniqueness only), and the two roads refuse alike. The
+ * schema dialog asks it before its save writer too, which runs no push. A
+ * translated field's column is its companion's, whose per-language uniqueness is judged where the
+ * companion's unique indexes are made.
+ */
+export async function refuseUniqueOverRepeats(args: {
+  adapter: DrizzleAdapter;
+  tableName: string;
+  /** The stored fields; none when the row records none. */
+  oldFields: FieldDefinition[] | undefined;
+  newFields: FieldDefinition[];
+  wasLocalized: boolean;
+  isLocalized: boolean;
+  /** The renames the admin accepted: a renamed field's values are checked under its old column. */
+  renames?: readonly {
+    tableName: string;
+    fromColumn: string;
+    toColumn: string;
+    choice: string;
+  }[];
+  /** The one value an added Required field gives every existing entry; the dialog sends none. */
+  fills?: readonly { field: string; value: unknown }[];
+}): Promise<void> {
+  const { adapter, tableName } = args;
+  // A table still to be made holds no entries, so nothing can repeat yet.
+  if (!(await adapter.tableExists(tableName))) return;
+  const [
+    { refusalsForCollectionSave },
+    { introspectLiveSnapshot },
+    { readUniqueColumns },
+  ] = await Promise.all([
+    import("../../dynamic-collections/services/save-preconditions"),
+    import("../pipeline/diff/introspect-live"),
+    import("../pipeline/live-table-facts"),
+  ]);
+  const onMain = (fields: FieldDefinition[], localized: boolean) => {
+    const translated = new Set(resolveLocalizedFieldNames(fields, localized));
+    return fields.filter(field => !translated.has(field.name));
+  };
+  const live = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [tableName]
+  );
+  // The stored fields leave out the `title` and `slug` every table is built with, so they are added
+  // back: a title made unique is then a column the table holds, whose repeats are counted, not a
+  // field the save adds, which every entry would hold as NULL. One the author declared stays theirs.
+  // The two added back are columns of the shared row, so they stay shared on a translated
+  // collection, where a text field without a `localized` setting would read as translated.
+  const stored = args.oldFields ?? [];
+  const oldFields = onMain(
+    withSystemTextFields(stored).map(field =>
+      stored.includes(field) ? field : { ...field, localized: false }
+    ),
+    args.wasLocalized
+  );
+  const newFields = onMain(args.newFields, args.isLocalized);
+  const refusals = await refusalsForCollectionSave({
+    adapter,
+    dialect: adapter.dialect,
+    tableName,
+    oldFields,
+    newFields,
+    renames: acceptedFieldRenames(
+      args.renames ?? [],
+      tableName,
+      oldFields,
+      newFields
+    ),
+    // A column this apply adds takes NULL in every existing entry, which never repeats, unless
+    // the change fills it with one value, which every entry then shares.
+    addedColumnBackfill: field => {
+      const fill = args.fills?.find(each => each.field === field.name);
+      return fill === undefined || fill.value === null
+        ? null
+        : JSON.stringify(fill.value);
+    },
+    presentColumns: new Set(
+      live.tables[0]?.columns.map(column => column.name) ?? []
+    ),
+    // Unique as the live table holds it, not as the previous definition says.
+    liveUniqueColumns: new Set(
+      (
+        await readUniqueColumns(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          tableName
+        )
+      ).keys()
+    ),
+    only: "uniqueness",
+  });
+  if (refusals.length > 0) {
+    throw NextlyError.validation({
+      errors: refusals.map(refusal => refusal.error),
+      logContext: {
+        tableName,
+        fields: refusals.map(refusal => refusal.error.path),
+        details: refusals.flatMap(refusal =>
+          refusal.logContext ? [refusal.logContext] : []
+        ),
+      },
+    });
+  }
 }
 
 /** The registry and the adapter, which a schema change cannot run without. */
@@ -406,26 +653,57 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         .map(resolution => resolution.eventId)
     )
   );
+  // Notes a push refused at its first question, which ran no statement, and one whose pipeline
+  // completed its apply, which a failure after it (the version read below) does not undo
+  // (`landingPush`).
+  const firstQuestion = new FirstQuestionWatch();
+  let completed = false;
+  const watch: PushWatch = {
+    starting: () => {
+      firstQuestion.starting();
+      completed = false;
+    },
+    stopped: () => firstQuestion.stopped(),
+    completed: () => completed,
+  };
   const apply = createApplyDesiredSchema({
-    applyPipeline: (desiredArg, sourceArg, channelArg) => {
+    applyPipeline: async (desiredArg, sourceArg, channelArg) => {
       const pipeline = new PushSchemaPipeline({
         executor: new DrizzleStatementExecutor(dialect, db),
         renameDetector: new RegexRenameDetector(),
         classifier: new RealClassifier(),
-        promptDispatcher,
+        promptDispatcher: firstQuestion.watching(promptDispatcher),
         preRenameExecutor: noopPreRenameExecutor,
         preCleanupExecutor: new RealPreCleanupExecutor(),
         // The real journal from DI, with a noop fallback for callers that bypass DI.
         migrationJournal: getMigrationJournalFromDI() ?? noopMigrationJournal,
         notifier: getProductionNotifier(),
       });
-      return pipeline.apply({
+      const result = await pipeline.apply({
         desired: desiredArg,
         db,
         dialect,
         source: sourceArg,
         promptChannel: channelArg,
         databaseName,
+        // A translated field's values the companion's step after the push drops, asked of the push
+        // by field name, as the save's own file road asks them.
+        unconfirmedDropsBeside: async () => {
+          const legacy = change.confirmedBeside ?? change.legacyResolutions;
+          const unconfirmed = await unconfirmedTranslatedDrops({
+            tableName,
+            builtBy: "collection",
+            dialect,
+            oldFields: (change.collection.fields ??
+              []) as unknown as FieldDefinition[],
+            newFields: change.fields,
+            wasLocalized: change.wasLocalized,
+            isLocalized: change.isLocalized,
+            renameResolutions: change.renameResolutions,
+            ...(legacy === undefined ? {} : { legacy }),
+          });
+          return unconfirmed.map(field => field.name);
+        },
         // Tagged with the collection, so the notifications name what changed.
         uiTargetSlug: slug,
         uiTargetKind: "collection" as const,
@@ -433,6 +711,8 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         // after its prompts and refusals, before it drops the main column.
         defaultLocale,
       });
+      if (result.success) completed = true;
+      return result;
     },
     // Neither caller asks the pipeline for its optimistic check: the dialog checks the version
     // before calling, and the save runs under the schema lock.
@@ -447,18 +727,21 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
       return out;
     },
   });
-  return { apply, promptDispatcher, defaultLocale };
+  return { apply, promptDispatcher, defaultLocale, watch };
 }
 
 /**
  * The refusal of an apply the pipeline did not complete: another table's drift named, with the
- * way on, or else the push's own words, under the code its status already was.
+ * way on, or else the push's own words, under the code its status already was. A precondition the
+ * push refused carries each refusal by field and code, which the admin reads to say which field
+ * and why; those are passed on.
  */
 function refusedApply(
   slug: string,
   drifted: readonly string[],
-  message: string
+  error: { code: string; message: string; details?: unknown }
 ): NextlyError {
+  const { message } = error;
   // Another table stopped it: named, with what differs and the way on, so the change is not
   // taken for the one refused.
   if (drifted.length > 0) {
@@ -475,7 +758,32 @@ function refusedApply(
   return new NextlyError({
     code: "NEXTLY_MIGRATION_APPLY_FAILED",
     publicMessage: message,
+    ...(error.code === "PRECONDITION_FAILED" && isValidationData(error.details)
+      ? { publicData: error.details }
+      : {}),
   });
+}
+
+/** Whether a refused precondition's payload is the validation errors, each by path and code. */
+function isValidationData(data: unknown): data is ValidationPublicData {
+  if (data === null || typeof data !== "object" || !("errors" in data)) {
+    return false;
+  }
+  const { errors } = data;
+  return (
+    Array.isArray(errors) &&
+    errors.every(
+      (e: unknown) =>
+        e !== null &&
+        typeof e === "object" &&
+        "path" in e &&
+        typeof e.path === "string" &&
+        "code" in e &&
+        typeof e.code === "string" &&
+        "message" in e &&
+        typeof e.message === "string"
+    )
+  );
 }
 
 /** `desired` with this collection's fields replaced, as a new schema the pipeline has not seen. */
@@ -614,45 +922,38 @@ async function applyHoldingSchemaLock(
   const { tableName } = collection;
   const deps = requireSchemaChangeDeps(slug);
   const { adapter } = deps;
-  const dialect = adapter.dialect;
-  // A precondition, so before anything changes: turning translation off drops each language's
-  // own publish state, which loses nothing only where it is the entry's.
-  if (layoutOf(change).languagesMustAgreeWithEntry) {
-    await assertLanguageStatesAgreeWithEntry(adapter, {
-      kind: "collection",
-      slug,
-      tableName,
-    });
-  }
+  const companionRename = await checkCollectionTranslationChange(change);
 
   // The FULL desired schema (collections, singles and field groups), so drizzle-kit sees every
   // managed table: without the others, tables of other entity types in the live database are
   // absent from the desired snapshot and are offered as rename candidates for this collection.
   const desired = await buildFullDesiredSchema();
-  const { apply, promptDispatcher, defaultLocale } = changeApply(change, deps);
+  const changed = changeApply(change, deps);
+  const { promptDispatcher, defaultLocale } = changed;
+  // Every push below, the settings push and the companion's included, tells the caller once it
+  // may have changed the database; the checks before them change nothing. A failed one changed
+  // nothing where it stopped at its first question, asked before any statement.
+  const landing = landingPush(changed.apply, adapter.dialect, changed.watch);
+  const apply: ApplyDesired = async (...args) => {
+    try {
+      return await landing.push(...args);
+    } finally {
+      if (landing.landed()) change.onLanded?.();
+    }
+  };
 
   const oldFields = (collection.fields ?? []) as unknown as FieldDefinition[];
-  // The answer on a translated field's rename, refused when it does not say, before anything
-  // changes.
-  const companionRename = await resolveCompanionRename(
-    change.renameResolutions,
-    {
-      tableName,
-      oldFields,
-      newFields: fields,
-      wasLocalized,
-      isLocalized,
-      dialect,
-      builtBy: "collection",
-    }
-  );
-  // A translated relation renamed and switched at once is refused: the companion's rename
-  // carries its values as they are.
-  refuseCompanionRenameSwitch({
-    rename: companionRename,
+  // A column made unique over entries that already repeat a value is refused before anything
+  // runs, naming the field and how many values repeat.
+  await refuseUniqueOverRepeats({
+    adapter,
+    tableName,
     oldFields,
     newFields: fields,
-    subject: `Collection '${slug}'`,
+    wasLocalized,
+    isLocalized,
+    renames: change.renameResolutions,
+    fills: change.fills ?? [],
   });
   // A Required or Unique field leaving translation is pushed without its setting first, and the
   // setting is pushed once the companion transition has copied its values in, before its companion
@@ -693,28 +994,11 @@ async function applyHoldingSchemaLock(
   // anything changes, naming it.
   await refuseIndexNamesTaken(adapter, desired.collections[slug]);
 
-  // A field leaving translation has preconditions of its own, asked before the push alters
-  // anything.
-  await archiveFieldsLeavingTranslation({
-    builtBy: "collection",
-    renamed: companionRename,
-    tableName,
-    defaultLocale,
-    languageOrder: appLanguageOrder(),
-    adapter,
-    entity: slug,
-    kind: "collection",
-    oldFields,
-    newFields: fields,
-    wasLocalized,
-    isLocalized,
-    // The push refuses a main-table column drop its answers did not confirm.
-    mainDropsConfirmed: true,
-  });
+  await archiveCollectionFieldsLeavingTranslation(change, companionRename);
 
   const result = await apply(desired, "ui", { promptChannel: "auto" });
   if (!result.success) {
-    throw refusedApply(slug, promptDispatcher.drifted, result.error.message);
+    throw refusedApply(slug, promptDispatcher.drifted, result.error);
   }
   const filled = await fillAddedFields({
     adapter,
@@ -726,7 +1010,7 @@ async function applyHoldingSchemaLock(
       }),
   });
   if (filled !== undefined && !filled.success) {
-    throw refusedApply(slug, promptDispatcher.drifted, filled.error.message);
+    throw refusedApply(slug, promptDispatcher.drifted, filled.error);
   }
 
   // The push excludes companion `_locales` tables from its diff: the localization layer owns
@@ -735,13 +1019,30 @@ async function applyHoldingSchemaLock(
     await reconcileCompanion({
       change,
       adapter,
-      desired,
-      apply,
-      result,
       oldFields,
       companionRename,
-      settingsDeferred,
       defaultLocale,
+      // Added to the companion, with their values, by the apply before its drop.
+      joinedBefore: movedOnto(result, tableName),
+      // The settings the first push left off, once the shared columns hold the default language's
+      // values, and only then the leaving fields' companion columns dropped. A new desired schema
+      // rather than an edit of the first: the pipeline keeps the last one it applied, by
+      // reference, to skip a push that changes nothing.
+      settleLeaving: settingsDeferred
+        ? leavingSettingsStep({
+            adapter,
+            entity: slug,
+            tableName,
+            builtBy: "collection",
+            oldFields,
+            newFields: fields,
+            renamed: companionRename,
+            push: () =>
+              apply(withFields(desired, slug, fields), "ui", {
+                promptChannel: "auto",
+              }),
+          })
+        : undefined,
     });
   }
   // The unique index a field that stops being unique still has under a name the push does not
@@ -751,27 +1052,192 @@ async function applyHoldingSchemaLock(
     adapter,
     desired.collections[slug],
     oldFields,
-    fields
+    fields,
+    renamedFieldsOf(change.renameResolutions)
   );
   return result;
 }
 
+/** The answer on a translated field's rename (`resolveCompanionRename`), or that there is none. */
+type CollectionCompanionRename = Awaited<
+  ReturnType<typeof resolveCompanionRename>
+>;
+
 /**
- * The companion brought in step with the main table the push left, and the leaving fields'
- * settings pushed once their values are shared.
+ * The checks a collection's change makes over its translations before anything changes, on either
+ * road it takes, its push or its own migration file: turning translation off drops each language's
+ * own publish state, which loses nothing only where it is the entry's; the answer on a translated
+ * field's rename, refused where it does not say; and a translated field renamed and switched, or
+ * retyped, at once. The rename answered is returned, which the road carries the companion's values
+ * under.
+ */
+async function checkCollectionTranslationChange(
+  change: CollectionSchemaChange
+): Promise<CollectionCompanionRename> {
+  const { slug, collection, fields } = change;
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
+  const { tableName } = collection;
+  const { adapter } = requireSchemaChangeDeps(slug);
+  const dialect = adapter.dialect;
+  if (layoutOf(change).languagesMustAgreeWithEntry) {
+    await assertLanguageStatesAgreeWithEntry(adapter, {
+      kind: "collection",
+      slug,
+      tableName,
+    });
+  }
+  const oldFields = (collection.fields ?? []) as unknown as FieldDefinition[];
+  const companionRename = await resolveCompanionRename(
+    change.renameResolutions,
+    {
+      tableName,
+      oldFields,
+      newFields: fields,
+      wasLocalized,
+      isLocalized,
+      dialect,
+      builtBy: "collection",
+    }
+  );
+  // A translated relation renamed and switched at once is refused: the companion's rename
+  // carries its values as they are.
+  refuseCompanionRenameSwitch({
+    rename: companionRename,
+    oldFields,
+    newFields: fields,
+    subject: `Collection '${slug}'`,
+  });
+  // A translated field renamed and retyped at once: the companion's rename carries each language's
+  // value to the new name, which neither road pairs on its own. A rename is offered only between
+  // fields of one type and one storage today, so none carries a type change; were one offered
+  // across a type change, it is judged here, over the companion's values, before anything runs.
+  if (companionRename) {
+    await refuseFieldTypeChanges(adapter.getDrizzle(), dialect, {
+      label: entityLabel("collection", slug),
+      table: tableName,
+      translationsTable: `${tableName}_locales`,
+      ...perLanguageBefore({ localized: wasLocalized }, tableName, oldFields),
+      ...perLanguageAfter({ localized: isLocalized }, fields),
+      previous: fieldsStoredOnRow(oldFields).filter(
+        field => field.name === companionRename.from
+      ),
+      next: fieldsStoredOnRow(fields).filter(
+        field => field.name === companionRename.to
+      ),
+      renamed: new Map([[companionRename.from, companionRename.to]]),
+      builtBy: builtByFor("collection", true),
+    });
+  }
+  return companionRename;
+}
+
+/**
+ * A field leaving translation's own preconditions, and its values kept in the archive, before
+ * either road alters anything (`archiveFieldsLeavingTranslation`).
+ */
+async function archiveCollectionFieldsLeavingTranslation(
+  change: CollectionSchemaChange,
+  companionRename: CollectionCompanionRename,
+  /** `judgeOnly`: every refusal asked, nothing archived (`archiveFieldsLeavingTranslation`). */
+  options: { judgeOnly?: boolean } = {}
+): Promise<void> {
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
+  const { adapter } = requireSchemaChangeDeps(change.slug);
+  await archiveFieldsLeavingTranslation({
+    builtBy: "collection",
+    renamed: companionRename,
+    tableName: change.collection.tableName,
+    defaultLocale: appLocalization()?.defaultLocale ?? "en",
+    languageOrder: appLanguageOrder(),
+    adapter,
+    entity: change.slug,
+    kind: "collection",
+    oldFields: (change.collection.fields ?? []) as unknown as FieldDefinition[],
+    newFields: change.fields,
+    wasLocalized,
+    isLocalized,
+    // Each road refuses a main-table column drop its answers did not confirm.
+    mainDropsConfirmed: true,
+    ...(options.judgeOnly === true ? { judgeOnly: true } : {}),
+  });
+}
+
+/**
+ * Whether a collection's change is one only its push applies, rather than the migration file its
+ * save writes: the rule a Single's and a field group's saves ask (`pushCarriesValues`), over the
+ * collection's own table, where its translatable values are stored, and the rename answers. A
+ * change that fills the rows already there with a value (`fills`: a Required field added over
+ * rows, or one with a stated default) carries that value, so it keeps the push, which adds the
+ * column optional, fills it, and only then makes it Required (`fillAddedFields`).
+ */
+async function collectionChangeCarriesValues(
+  change: CollectionSchemaChange,
+  companionRename: CollectionCompanionRename
+): Promise<boolean> {
+  if ((change.fills?.length ?? 0) > 0) return true;
+  const { adapter } = requireSchemaChangeDeps(change.slug);
+  const dialect = adapter.dialect;
+  const { tableName } = change.collection;
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
+  const { introspectLiveSnapshot } = await import(
+    "../pipeline/diff/introspect-live"
+  );
+  return pushCarriesValues({
+    oldFields: (change.collection.fields ?? []) as unknown as FieldDefinition[],
+    newFields: change.fields,
+    wasStored: wasLocalized,
+    isStored: isLocalized,
+    renamed: companionRename,
+    liveTable: async () =>
+      (await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [tableName]))
+        .tables[0],
+    columnOf: field => getColumnDescriptor(field, dialect, "collection"),
+    renames: renamedFieldsOf(change.renameResolutions),
+  });
+}
+
+/**
+ * The companion brought in step after the collection's own migration file ran, where its
+ * translatable values are stored per language before or after the change: the file changes the
+ * main table, and the translations table is planned from what the database then holds, as the
+ * push road plans it after its push. A setting a field leaving translation takes is not settled
+ * here: such a change keeps the push (`collectionChangeCarriesValues`).
+ */
+async function reconcileCollectionCompanionAfterFile(
+  change: CollectionSchemaChange,
+  companionRename: CollectionCompanionRename
+): Promise<void> {
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
+  if (!wasLocalized && !isLocalized) return;
+  const { adapter } = requireSchemaChangeDeps(change.slug);
+  await reconcileCompanion({
+    change,
+    adapter,
+    oldFields: (change.collection.fields ?? []) as unknown as FieldDefinition[],
+    companionRename,
+    defaultLocale: appLocalization()?.defaultLocale ?? "en",
+    joinedBefore: [],
+    settleLeaving: undefined,
+  });
+}
+
+/**
+ * The companion brought in step with the main table the road left, and the leaving fields'
+ * settings pushed once their values are shared (`settleLeaving`).
  */
 async function reconcileCompanion(args: {
   change: CollectionSchemaChange;
   adapter: SchemaChangeDeps["adapter"];
-  desired: DesiredSchema;
-  apply: ApplyDesired;
-  result: Extract<ApplyResult, { success: true }>;
   oldFields: FieldDefinition[];
-  companionRename: Awaited<ReturnType<typeof resolveCompanionRename>>;
-  settingsDeferred: ReturnType<typeof fieldsWithLeavingSettingsDeferred>;
+  companionRename: CollectionCompanionRename;
   defaultLocale: string;
+  /** The fields the road added to the companion, with their values, before its drop. */
+  joinedBefore: string[];
+  settleLeaving: Parameters<
+    typeof applyCompanionTransition
+  >[0]["settleLeaving"];
 }): Promise<void> {
-  const { change, adapter, desired, apply, oldFields } = args;
+  const { change, adapter, oldFields } = args;
   const { slug, fields } = change;
   const { wasLocalized, isLocalized } = storedPerLanguage(change);
   const { tableName } = change.collection;
@@ -803,10 +1269,9 @@ async function reconcileCompanion(args: {
       newFields: fields,
       companionExists,
       companionHasStatus,
-      // Added to the companion, with their values, by the apply before its drop.
-      joinedBefore: movedOnto(args.result, tableName),
+      joinedBefore: args.joinedBefore,
       renamed: args.companionRename ?? undefined,
-      holdLeavingDrops: args.settingsDeferred !== undefined,
+      holdLeavingDrops: args.settleLeaving !== undefined,
       // What this database holds now, so a re-apply after a part-applied one finishes it.
       ...(await liveCompanionShape(adapter, {
         tableName,
@@ -816,46 +1281,23 @@ async function reconcileCompanion(args: {
         companionExists,
       })),
     });
-    // The settings the first push left off, once the shared columns hold the default language's
-    // values, and only then the leaving fields' companion columns dropped. A new desired schema
-    // rather than an edit of the first: the pipeline keeps the last one it applied, by
-    // reference, to skip a push that changes nothing.
     await applyCompanionTransition({
       adapter,
       plan,
-      settleLeaving: args.settingsDeferred
-        ? leavingSettingsStep({
-            adapter,
-            entity: slug,
-            tableName,
-            builtBy: "collection",
-            oldFields,
-            newFields: fields,
-            renamed: args.companionRename,
-            push: () =>
-              apply(withFields(desired, slug, fields), "ui", {
-                promptChannel: "auto",
-              }),
-          })
-        : undefined,
+      settleLeaving: args.settleLeaving,
       kind: "collection",
       slug,
       tableName,
+      renamed: args.companionRename,
     });
   } catch (err) {
-    // A refused setting names the field, and nothing has been dropped by then, so it is passed
-    // on as it is rather than as a companion out of step.
-    if (isLeavingSettingsRefusal(err)) throw err;
-    // The main-table apply already committed, so this is surfaced loudly rather than leaving
-    // the collection half-migrated in silence.
-    throw NextlyError.internal({
-      cause: err instanceof Error ? err : undefined,
-      logContext: {
-        op: "companionReconcile",
-        collection: slug,
-        detail: err instanceof Error ? err.message : String(err),
-        note: "main table updated but localized companion out of sync; re-apply to retry",
-      },
+    // A refused setting and a busy-table stop are passed on as they are. Anything else: the
+    // main-table apply already committed, so this is surfaced loudly rather than leaving the
+    // collection half-migrated in silence.
+    throw companionReconcileFailure(err, {
+      op: "companionReconcile",
+      slug,
+      note: "main table updated but localized companion out of sync; re-apply to retry",
     });
   }
 }
@@ -877,6 +1319,127 @@ function expectedCollectionColumns(
       ] as const;
     })
   );
+}
+
+/**
+ * This collection as a change that runs its own migration file leaves it, as the push states it
+ * for its own checks (`desired.collections[slug]`): its fields as the file writes them, its
+ * Draft/Published state and its translation.
+ */
+function collectionAsFileLeavesIt(
+  change: CollectionSchemaChange
+): DesiredCollection {
+  const { isLocalized } = storedPerLanguage(change);
+  return {
+    slug: change.slug,
+    tableName: change.collection.tableName,
+    fields: change.fields as DesiredCollection["fields"],
+    status: change.status,
+    localized: isLocalized,
+    // Authored in the Schema Builder.
+    builderOwned: true,
+    recordedFields: recordedFieldsOf(change.collection),
+  };
+}
+
+/**
+ * The push's index-name precondition (`refuseIndexNamesTaken`), asked of a change that runs its
+ * own migration file before anything is written: the file's `CREATE ... INDEX IF NOT EXISTS` skips
+ * a name another index already holds, so the field would be recorded unique, or indexed, while
+ * nothing enforces it.
+ */
+async function refuseCollectionIndexNamesTaken(
+  change: CollectionSchemaChange
+): Promise<void> {
+  const { adapter } = requireSchemaChangeDeps(change.slug);
+  await refuseIndexNamesTaken(adapter, collectionAsFileLeavesIt(change));
+}
+
+/**
+ * Which road a collection's change takes in development, and what it does around its own
+ * migration file where that file rather than the push carries it: one answer for every save of a
+ * collection's fields, the schema dialog's and a collection update's alike, so the two roads
+ * cannot come to differ by caller.
+ */
+export interface CollectionFileRoad {
+  /**
+   * The checks the change makes over its translations (`checkCollectionTranslationChange`), asked
+   * once: the rename they answer carries the companion's values on either road.
+   */
+  companionRename: () => Promise<CollectionCompanionRename>;
+  /** Whether only the push applies the change (`collectionChangeCarriesValues`). */
+  pushCarriesValues: () => Promise<boolean>;
+  /**
+   * Whether a collection update's change runs its own file rather than the push: only where the
+   * collection stores nothing per language before or after (`registryInFile`), no field stops
+   * being unique, and the push carries no values. A translated collection's update keeps the push,
+   * whose companion steps the file road does not yet match. So does one turning a field's Unique
+   * off: the push drops a unique index the field still has under a name it did not declare, which
+   * the file does not carry.
+   */
+  updateRunsFile: () => Promise<boolean>;
+  /**
+   * Whether the caller's registry write joins the file's own transaction (`inLastTransaction`):
+   * not where the translations table is brought in step after the file (`after`), as the row would
+   * then record the change before that step holds it (`registryInFileTransaction`).
+   */
+  registryInFile: boolean;
+  /**
+   * The preconditions the push asks before it changes anything, asked before anything is
+   * written: an index name the change declares that another index holds, and a field leaving
+   * translation's own.
+   */
+  judge: () => Promise<void>;
+  /** What is written ahead of the file, once every check has passed: a field leaving translation's archive. */
+  before: () => Promise<void>;
+  /**
+   * What the file does not reach, done as the push does it once it has run: the translations table
+   * brought in step. A unique index a field that stops being unique still has under a name the file
+   * did not declare is not dropped here: the file does not carry that drop, so a database the file
+   * is replayed on keeps the index, and this one keeps it too.
+   */
+  after: () => Promise<void>;
+}
+
+/** The road of `change` (`CollectionFileRoad`). */
+export function collectionFileRoad(
+  change: CollectionSchemaChange
+): CollectionFileRoad {
+  let checked: Promise<CollectionCompanionRename> | undefined;
+  const companionRename = () =>
+    (checked ??= checkCollectionTranslationChange(change));
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
+  const pushCarriesValues = async () =>
+    collectionChangeCarriesValues(change, await companionRename());
+  const registryInFile = registryInFileTransaction({
+    wasStored: wasLocalized,
+    isStored: isLocalized,
+  });
+  return {
+    companionRename,
+    pushCarriesValues,
+    updateRunsFile: async () =>
+      registryInFile &&
+      fieldsStoppingUnique(
+        (change.collection.fields ?? []) as unknown as FieldDefinition[],
+        change.fields,
+        renamedFieldsOf(change.renameResolutions)
+      ).length === 0 &&
+      !(await pushCarriesValues()),
+    registryInFile,
+    judge: async () => {
+      await refuseCollectionIndexNamesTaken(change);
+      await archiveCollectionFieldsLeavingTranslation(
+        change,
+        await companionRename(),
+        { judgeOnly: true }
+      );
+    },
+    before: async () =>
+      archiveCollectionFieldsLeavingTranslation(change, await companionRename()),
+    after: async () =>
+      reconcileCollectionCompanionAfterFile(change, await companionRename()),
+  };
 }
 
 /**
@@ -1049,18 +1612,39 @@ async function companionUniqueNamesHeld(
  * an earlier save took on as the field's, is the column's other uniqueness. A composite index is
  * never touched: it is not the field's.
  */
+/**
+ * The fields a change keeps, by name or under a rename it makes (`renames`, by column), that stop
+ * being unique: a field renamed in the same save keeps whatever unique index its column had, which
+ * follows the column to its new name. Asked of the fields stored on the row (`fieldsStoredOnRow`):
+ * a group with no name has no column and no name of its own, and the fields it holds are the
+ * row's.
+ */
+function fieldsStoppingUnique(
+  oldFields: readonly FieldDefinition[],
+  newFields: readonly FieldDefinition[],
+  renames: ReadonlyArray<{ from: string; to: string }>
+): FieldDefinition[] {
+  const before = fieldsStoredOnRow(oldFields);
+  return fieldsStoredOnRow(newFields).filter(field => {
+    if (field.unique === true) return false;
+    const column = toSnakeCase(field.name);
+    const from = renames.find(rename => rename.to === column)?.from ?? column;
+    return before.some(
+      old => old.unique === true && toSnakeCase(old.name) === from
+    );
+  });
+}
+
 async function dropUniquenessLeftOn(
   adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>,
   collection: DesiredCollection,
   oldFields: readonly FieldDefinition[],
-  newFields: readonly FieldDefinition[]
+  newFields: readonly FieldDefinition[],
+  /** The renames the change makes, by column, under which a field keeps its column's index. */
+  renames: ReadonlyArray<{ from: string; to: string }>
 ): Promise<void> {
   const { tableName } = collection;
-  const stopped = newFields.filter(
-    field =>
-      field.unique !== true &&
-      oldFields.some(old => old.name === field.name && old.unique === true)
-  );
+  const stopped = fieldsStoppingUnique(oldFields, newFields, renames);
   if (stopped.length === 0) return;
   const db = adapter.getDrizzle();
   const dialect = adapter.dialect;

@@ -837,7 +837,7 @@ export function repairingLookup(
  * never seen.
  *
  * The KIND is deliberately not checked. The engine's resolver asks
- * `isComponentDocument` and reports a page or a region filed under a
+ * `isComponentDocument` and reports a page or a pattern filed under a
  * component's id as unreadable, so asking again would be a second answer to
  * one question — and a second answer is the one that goes stale.
  */

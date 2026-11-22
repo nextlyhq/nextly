@@ -11,7 +11,10 @@
  * - The route is contributed, signed-in only (not public, no permission),
  *   reads the allow-list from its query, and answers the list envelope.
  */
-import type { AnyBlockDefinition } from "@nextlyhq/blocks-engine";
+import {
+  createBlockRegistry,
+  type AnyBlockDefinition,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { BLOCKS_LIST_ROUTE_PATH } from "./blocks-list-contract";
@@ -128,6 +131,24 @@ describe("what it says of each block", () => {
     });
   });
 
+  it("says which props hold one paragraph of editor content, as a Text's does", () => {
+    const [text] = listAcceptedBlocks(
+      ["core/text"],
+      reads(
+        block("core/text", {
+          props: {
+            text: { type: "textarea", label: "Text", oneParagraph: true },
+            note: { type: "textarea", label: "Note" },
+          },
+        })
+      )
+    );
+    expect(text?.props).toEqual([
+      { name: "text", label: "Text", type: "textarea", oneParagraph: true },
+      { name: "note", label: "Note", type: "textarea" },
+    ]);
+  });
+
   it("reads a label from the name when the block declares none, and no source when none was recorded", () => {
     const [banner] = listAcceptedBlocks(["coreevil/banner"], registry);
     expect(banner).toMatchObject({
@@ -156,7 +177,8 @@ describe("agreeing with the blocks field's validator", () => {
       },
       "content",
       "Content",
-      { allow }
+      { allow },
+      createBlockRegistry()
     ).some(issue => issue.code === "DISALLOWED_BLOCK_TYPE");
 
   // Every type here is namespaced, as a registered block's name must be: a

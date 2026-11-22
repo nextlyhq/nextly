@@ -16,12 +16,11 @@
  * @module host-rewrite/service
  * @experimental
  */
-import {
-  registryBlockSource,
-  registryNestingSource,
-  type BlockDocument,
-  type DefinitionsById,
-  type DocumentLimits,
+import type {
+  BlockDocument,
+  BlockRegistryReader,
+  DefinitionsById,
+  DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
@@ -185,6 +184,8 @@ export interface RewriteInstall {
   /** Where component definitions are stored. */
   readonly store: { readonly collection: string; readonly field: string };
   readonly limits: () => DocumentLimits;
+  /** The site's block registry, whose nesting rules and slots a copy follows. */
+  readonly blocks: BlockRegistryReader;
   /**
    * The plugin's own field rewrite, which names the Page Builder in each
    * document's history. Absent, a document with a pending draft has its
@@ -440,8 +441,8 @@ function rewriteAsCaller(
         componentId: args.componentId,
         definitions: (ids, form) =>
           definitionsFor(installed, args.componentId, ids, form),
-        nesting: registryNestingSource(),
-        blocks: registryBlockSource(),
+        nesting: installed.blocks.nestingSource(),
+        blocks: installed.blocks.blockSource(),
         limits,
       }),
       ...(args.maxDocuments === undefined

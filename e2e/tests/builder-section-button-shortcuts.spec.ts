@@ -46,6 +46,9 @@ async function createPage(
     data: {
       title: `Shortcuts ${stamp}`,
       slug,
+      // Without the site's header and footer, whose regions on the canvas
+      // would take the clicks meant for the page's blocks.
+      noHeaderFooter: true,
       status,
       content: { formatVersion: 1, kind: "page", nodes },
     },
@@ -108,14 +111,18 @@ async function openStyle(
     timeout: 60_000,
   });
   await canvasFrame(page)
-    .locator(`.nx-canvas [data-nx-node="${node}"]`)
+    .locator(`[data-nx-node="${node}"]`)
     .first()
     .click({ position: { x: 6, y: 6 } });
   await expect(page.locator("[data-block-card]")).toBeVisible();
   await page.getByRole("tab", { name: "Style" }).click();
-  const heading = page.getByRole("button", {
-    name: new RegExp(`^${sectionName}`),
-  });
+  // The section's heading is the button that folds; a control inside may be
+  // named after the section too ("Background position as CSS").
+  const heading = page
+    .locator('[role="tabpanel"]:not([hidden]) button[aria-expanded]', {
+      hasText: new RegExp(`^${sectionName}`),
+    })
+    .first();
   if ((await heading.getAttribute("aria-expanded")) !== "true") {
     await heading.click();
   }
@@ -162,9 +169,7 @@ test.describe("a Section's overlay and Height, a Button's Size", () => {
     );
     await openStyle(page, id, OUTER, "Size");
     await page.getByRole("radio", { name: "Full screen" }).click();
-    const drawn = canvasFrame(page).locator(
-      `.nx-canvas [data-nx-node="${OUTER}"]`
-    );
+    const drawn = canvasFrame(page).locator(`[data-nx-node="${OUTER}"]`);
     await expect
       .poll(async () =>
         drawn.evaluate(element => {
@@ -204,9 +209,7 @@ test.describe("a Section's overlay and Height, a Button's Size", () => {
       "draft"
     );
     await openStyle(page, id, BUTTON, "Size");
-    const drawn = canvasFrame(page).locator(
-      `.nx-canvas [data-nx-node="${BUTTON}"]`
-    );
+    const drawn = canvasFrame(page).locator(`[data-nx-node="${BUTTON}"]`);
     const paddingTop = () =>
       drawn.evaluate(element =>
         Number.parseFloat(getComputedStyle(element).paddingTop)

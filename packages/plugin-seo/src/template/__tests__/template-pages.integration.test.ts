@@ -2,7 +2,9 @@
  * On every configured dialect, with the Page Builder and the SEO plugin both
  * installed: a template's rule is what every page it draws is served, a
  * change to the rule changes two pages that use it, and the template panel's
- * preview for each page is the head the page is served.
+ * preview for each page is the head the page is served. A title the rule
+ * states is never served: a page's title is its own SEO title, else its title
+ * in the content type's pattern.
  *
  * The page's head is asked of the site's one content route
  * (`createContentPage`, with the Page Builder's own provider), which hands
@@ -33,6 +35,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PRODUCTION_ADDRESSES_ENV } from "../../canonical";
 import { seoPlugin } from "../../plugin";
 import { resolveOrder } from "../../resolver/order";
+import { DEFAULT_TITLE_PATTERN } from "../../settings/patterns";
 import type { TemplateContext } from "../contract";
 
 /**
@@ -93,7 +96,10 @@ function design(rule: Record<string, unknown>) {
   };
 }
 
-const FIRST_RULE = { title: [{ $bind: "title" }, " | Field Notes"] };
+const FIRST_RULE = {
+  title: [{ $bind: "title" }, " | Field Notes"],
+  description: ["Notes on ", { $bind: "title" }, "."],
+};
 const SECOND_RULE = {
   title: ["Read: ", { $bind: "title" }],
   description: ["A post called ", { $bind: "title" }, "."],
@@ -284,15 +290,24 @@ describe.each(getConfiguredTestDialects())(
       );
       const key = await readerKey(t);
 
-      expect((await served(t, "hello")).title).toBe(
-        "Hello world | Field Notes"
-      );
-      expect((await served(t, "second")).title).toBe(
-        "Second post | Field Notes"
-      );
+      // The rule's description is served; its title is not: the page's
+      // title in the type's pattern (the site's default, with no site name
+      // set) is.
+      expect(await served(t, "hello")).toEqual({
+        title: "Hello world",
+        description: "Notes on Hello world.",
+      });
+      expect(await served(t, "second")).toEqual({
+        title: "Second post",
+        description: "Notes on Second post.",
+      });
       expect(await previewed(key, ids[0]!, design(FIRST_RULE))).toMatchObject(
         await served(t, "hello")
       );
+      // The panel is told the pattern that gives the title, to say so.
+      expect(
+        (await panelContext(key, ids[0]!, design(FIRST_RULE))).titlePattern
+      ).toBe(DEFAULT_TITLE_PATTERN);
 
       // The panel's preview of a changed rule, before it is saved, is what
       // each page is served once it is.
@@ -313,14 +328,56 @@ describe.each(getConfiguredTestDialects())(
       const hello = await served(t, "hello");
       const second = await served(t, "second");
       expect(hello).toEqual({
-        title: "Read: Hello world",
+        title: "Hello world",
         description: "A post called Hello world.",
       });
       expect(second).toEqual({
-        title: "Read: Second post",
+        title: "Second post",
         description: "A post called Second post.",
       });
       expect(before).toEqual({ hello, second });
+    });
+
+    it("titles a page opening with an H1 by its SEO title, else its title in the pattern, never by the heading", async () => {
+      const t = await boot(dialect);
+      await t.nextly.create({
+        collection: "templates",
+        data: {
+          title: "Posts",
+          collection: "posts",
+          content: {
+            formatVersion: 1,
+            kind: "template",
+            nodes: [
+              {
+                id: "h",
+                type: "core/heading",
+                version: 1,
+                props: { text: "Plans for every team", level: "h1" },
+              },
+            ],
+          },
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+      const created = await t.nextly.create({
+        collection: "posts",
+        data: { title: "Pricing", slug: "pricing", status: "published" },
+      });
+      const id = String((created as { item: { id: unknown } }).item.id);
+
+      // No SEO title: the page's title in the pattern (the site's default,
+      // with no site name set), not the heading the design opens with.
+      expect((await served(t, "pricing")).title).toBe("Pricing");
+
+      await t.nextly.update({
+        collection: "posts",
+        id,
+        data: { seo: { metaTitle: "Pricing and plans" }, _overwrite: true },
+        overrideAccess: true,
+      });
+      expect((await served(t, "pricing")).title).toBe("Pricing and plans");
     });
 
     it("offers only fields a variable fills as text and reads as their own, and previews the page's content image under its own", async () => {

@@ -46,6 +46,12 @@ vi.mock("../template-preview-client", () => ({
 
 // The canvas's bindings read, through the plugin route writer.
 const writePluginRoute = vi.hoisted(() => vi.fn());
+// The change check has its own tests; here it would share the mocked route
+// with the read under test.
+vi.mock("./canvas-source-check", async importOriginal => ({
+  ...(await importOriginal<typeof import("./canvas-source-check")>()),
+  useCanvasSourceCheck: () => undefined,
+}));
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useCurrentUserId: () => "u1",
   useDocumentIdentity: () => ({

@@ -125,6 +125,36 @@ describe("repair-columns output and exit code", () => {
     expect(declared?.description()).toMatch(/--apply/);
   });
 
+  it("declares --lock-timeout and --lock-timeout-total, the bounds of the wait for a busy table", () => {
+    const program = new CommanderCommand();
+    registerRepairColumnsCommand(program, createContext);
+    const declared = program.commands.find(c => c.name() === "repair-columns");
+    const longs = declared?.options.map(o => o.long) ?? [];
+    expect(longs).toContain("--lock-timeout");
+    expect(longs).toContain("--lock-timeout-total");
+  });
+
+  it("refuses a --lock-timeout outside its range before anything runs, as a run that could not run", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "repair-columns-bounds-"));
+    process.env.DATABASE_URL = `file:${join(dir, "site.db")}`;
+    process.env.DB_DIALECT = "sqlite";
+    try {
+      await repairColumnsAction(createContext)(
+        { json: true, lockTimeout: "0" },
+        command({ cwd: dir })
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(stdout).toHaveLength(1);
+    const document = JSON.parse(stdout[0]) as {
+      exitCode: number;
+      errors: Array<{ message: string }>;
+    };
+    expect(document.exitCode).toBe(1);
+    expect(document.errors[0]?.message).toMatch(/--lock-timeout/);
+  });
+
   it("without --json, prints the error shape to standard error and nothing to standard output", async () => {
     await repairColumnsAction(createContext)(
       {},

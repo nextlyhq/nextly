@@ -28,6 +28,7 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { getService } from "../../di";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
+import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 import type { UserContext } from "../singles/types";
@@ -84,6 +85,13 @@ export interface DiscardWorkingDraftArgs {
    * choice (`_overwrite`): a discard is judged as a save of the change is.
    */
   version?: Readonly<Record<string, unknown>>;
+  /**
+   * Discard the shared part's pending change alone, leaving each language's. Collections only,
+   * where the shared part keeps a draft of its own.
+   *
+   * @experimental
+   */
+  shared?: boolean;
 }
 
 /**
@@ -117,8 +125,12 @@ export async function discardWorkingDraft(
   // reporting a failure the admin treats as a no-op (which would keep the stale
   // draft on screen and let a later Publish push its values straight to live).
   //
-  // Read and update were established by the caller, so both reads skip only the
-  // redundant coarse RBAC re-check while the document's own rules still run. The
+  // Neither read is attested by the route (`routeAuthorized: false`): the
+  // caller established read and update of the document, but the values handed
+  // back are the document in the language being discarded, so the read rule is
+  // asked in that language here, before anything is removed. A route's allow
+  // judged the request's language at most, and attesting it admitted a
+  // language the read rule refuses this caller. The
   // language being discarded is named, so the values handed back are the ones the
   // editor resets to: reading another language's would reset the form to text
   // belonging to a language the author is not looking at.
@@ -127,6 +139,20 @@ export async function discardWorkingDraft(
   // access here too, but only because undefined is falsy — so the call site reads
   // as though it might be trusted, and this is the document a caller receives.
   // The live-document read gate beside this one states it for the same reason.
+  // A Single's shared part keeps no draft of its own to discard alone yet: refused, rather than
+  // read as a discard of a language's pending change.
+  if (args.shared === true && args.scopeKind === "single") {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "part",
+          code: "NO_SHARED_DRAFT",
+          message:
+            "A Single's shared part keeps no draft of its own: discard a language's pending change instead.",
+        },
+      ],
+    });
+  }
   const locale = args.locale ? { locale: args.locale } : {};
   // The live-document read runs the read hooks, so they see what the caller's
   // own read would.
@@ -139,7 +165,7 @@ export async function discardWorkingDraft(
       ? await getService("singleEntryService").get(args.slug, {
           user: args.user,
           overrideAccess: false,
-          routeAuthorized: true,
+          routeAuthorized: false,
           authenticatedScope: args.authenticatedScope,
           status: "all",
           ...locale,
@@ -150,7 +176,7 @@ export async function discardWorkingDraft(
           entryId: args.entryId,
           user: args.user,
           overrideAccess: false,
-          routeAuthorized: true,
+          routeAuthorized: false,
           authenticatedScope: args.authenticatedScope,
           status: "all",
           ...locale,
@@ -198,6 +224,7 @@ export async function discardWorkingDraft(
           collectionName: args.slug,
           entryId: args.entryId,
           locale: args.locale ?? null,
+          ...(args.shared === true ? { shared: true } : {}),
           actor: args.actor,
           user: args.user,
           // The update this discard was authorized for, asked again under the

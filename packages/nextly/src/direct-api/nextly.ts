@@ -57,10 +57,13 @@ import { isServicesRegistered } from "../di/service-access";
 import { buildAuditLogWriter } from "../domains/audit/audit-log-writer";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { AuthService } from "../domains/auth/services/auth-service";
+import type { IdentityService } from "../domains/auth/services/identity-service";
 import { PermissionService } from "../domains/auth/services/permission-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
+import { EmailDeliveryActivity } from "../domains/email/delivery-activity";
+import type { EmailDeliveryService } from "../domains/email/services/email-delivery-service";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import type { FieldRewriteResult } from "../domains/versions/field-rewrite";
 import { NextlyError } from "../errors/nextly-error";
@@ -101,8 +104,10 @@ import {
   createJobsNamespace,
   createNoticesNamespace,
   createVersionsNamespace,
+  createWorkflowsNamespace,
   createReleasesNamespace,
   createFieldGroupsNamespace,
+  createEmailDeliveriesNamespace,
   createEmailNamespace,
   createEmailProvidersNamespace,
   createEmailTemplatesNamespace,
@@ -118,8 +123,10 @@ import {
   type JobsNamespace,
   type NoticesNamespace,
   type VersionsNamespace,
+  type WorkflowsNamespace,
   type ReleasesNamespace,
   type FieldGroupsNamespace,
+  type EmailDeliveriesNamespace,
   type EmailNamespace,
   type EmailProvidersNamespace,
   type EmailTemplatesNamespace,
@@ -152,6 +159,7 @@ import type {
   TimeseriesArgs,
   TimeseriesResult,
   CreateArgs,
+  CreateFromSourceArgs,
   RowFromCollectionSlug,
   RowFromSingleSlug,
   DeleteArgs,
@@ -207,11 +215,18 @@ import type {
   FindEmailTemplateByIDArgs,
   FindEmailTemplateBySlugArgs,
   FindEmailTemplatesArgs,
+  FindEmailActivityArgs,
+  FindEmailDeliveriesArgs,
+  FindQueuedEmailsArgs,
+  EmailLastSentArgs,
+  EmailOverdueArgs,
   FindFormBySlugArgs,
   FindFormsArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
   FindMediaByIDsArgs,
+  MediaCopyArgs,
+  MediaCopiesArgs,
   FindOneUserArgs,
   FindPermissionByIDArgs,
   FindPermissionsArgs,
@@ -225,6 +240,7 @@ import type {
   GetRolePermissionsArgs,
   ListApiKeysArgs,
   ListFoldersArgs,
+  ListUserIdentitiesArgs,
   BulkDeleteMediaArgs,
   PreviewEmailTemplateArgs,
   ReorderUserFieldsArgs,
@@ -237,6 +253,7 @@ import type {
   SetRolePermissionsArgs,
   SubmitFormArgs,
   TestEmailProviderArgs,
+  UnlinkIdentityArgs,
   UpdateApiKeyArgs,
   UpdateFieldGroupArgs,
   UpdateEmailProviderArgs,
@@ -292,6 +309,8 @@ export class Nextly implements NextlyContext {
   public readonly email: EmailNamespace;
   public readonly emailProviders: EmailProvidersNamespace;
   public readonly emailTemplates: EmailTemplatesNamespace;
+  /** @experimental The delivery log and queued email, read as the Email hub's Activity reads them. */
+  public readonly emailDeliveries: EmailDeliveriesNamespace;
   public readonly userFields: UserFieldsNamespace;
   public readonly roles: RolesNamespace;
   public readonly permissions: PermissionsNamespace;
@@ -301,10 +320,12 @@ export class Nextly implements NextlyContext {
   public readonly releases: ReleasesNamespace;
   /** A person's own notices. */
   public readonly notices: NoticesNamespace;
-  /** @experimental A document's history: list, read, compare, name, restore. */
+  /** A document's history: list, read, compare, name, restore. */
   public readonly versions: VersionsNamespace;
-  /** @experimental A subject's content events: a document's or a release's. */
+  /** A subject's content events: a document's or a release's. */
   public readonly contentEvents: ContentEventsNamespace;
+  /** @experimental Review state under a workflow: read it, take steps, assign, what waits. */
+  public readonly workflows: WorkflowsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;
 
@@ -320,25 +341,37 @@ export class Nextly implements NextlyContext {
       ...config,
     };
 
-    this.users = createUsersNamespace(this);
-    this.media = createMediaNamespace(this);
+    this.users = withLanguagesPinned(createUsersNamespace(this));
+    this.media = withLanguagesPinned(createMediaNamespace(this));
     // One language list per call, as the collection and Single methods have through
     // `runAsCaller`: a submission writes an entry, and a field group's change seeds its rows.
+    // Every namespace runs each call that way, with the stored schema version checked first, as a
+    // request does, so no namespace is a door around either.
     this.forms = withLanguagesPinned(createFormsNamespace(this));
     this.fieldGroups = withLanguagesPinned(createFieldGroupsNamespace(this));
-    this.email = createEmailNamespace(this);
-    this.emailProviders = createEmailProvidersNamespace(this);
-    this.emailTemplates = createEmailTemplatesNamespace(this);
-    this.userFields = createUserFieldsNamespace(this);
-    this.roles = createRolesNamespace(this);
-    this.permissions = createPermissionsNamespace(this);
-    this.access = createAccessNamespace(this);
-    this.apiKeys = createApiKeysNamespace(this);
-    this.jobs = createJobsNamespace();
-    this.releases = createReleasesNamespace(this);
-    this.notices = createNoticesNamespace();
-    this.versions = createVersionsNamespace(this);
-    this.contentEvents = createContentEventsNamespace(this);
+    this.email = withLanguagesPinned(createEmailNamespace(this));
+    this.emailProviders = withLanguagesPinned(
+      createEmailProvidersNamespace(this)
+    );
+    this.emailTemplates = withLanguagesPinned(
+      createEmailTemplatesNamespace(this)
+    );
+    this.emailDeliveries = withLanguagesPinned(
+      createEmailDeliveriesNamespace(this)
+    );
+    this.userFields = withLanguagesPinned(createUserFieldsNamespace(this));
+    this.roles = withLanguagesPinned(createRolesNamespace(this));
+    this.permissions = withLanguagesPinned(createPermissionsNamespace(this));
+    this.access = withLanguagesPinned(createAccessNamespace(this));
+    this.apiKeys = withLanguagesPinned(createApiKeysNamespace(this));
+    this.jobs = withLanguagesPinned(createJobsNamespace());
+    this.releases = withLanguagesPinned(createReleasesNamespace(this));
+    this.notices = withLanguagesPinned(createNoticesNamespace());
+    this.versions = withLanguagesPinned(createVersionsNamespace(this));
+    this.contentEvents = withLanguagesPinned(
+      createContentEventsNamespace(this)
+    );
+    this.workflows = withLanguagesPinned(createWorkflowsNamespace(this));
     this.principals = createNextlyPrincipals();
 
     // The instance its callers reach: only the collection and Single
@@ -503,6 +536,14 @@ export class Nextly implements NextlyContext {
     return container.get<EmailService>("emailService");
   }
 
+  /** @internal The Activity reads, over the adapter registered when called. */
+  public get emailDeliveryActivity(): EmailDeliveryActivity {
+    return new EmailDeliveryActivity(
+      container.get<DrizzleAdapter>("adapter"),
+      container.get<EmailDeliveryService>("emailDeliveryService")
+    );
+  }
+
   /** Cached RoleService — not registered in the DI container. */
   private _rbacRoleService: RoleService | null = null;
 
@@ -559,6 +600,11 @@ export class Nextly implements NextlyContext {
   /** @internal */
   public get apiKeyService(): ApiKeyService {
     return container.get<ApiKeyService>("apiKeyService");
+  }
+
+  /** @internal */
+  public get identityService(): IdentityService {
+    return container.get<IdentityService>("identityService");
   }
 
   /**
@@ -699,6 +745,21 @@ export class Nextly implements NextlyContext {
   bulkDelete(args: BulkDeleteArgs): Promise<BulkOperationResult> {
     return runAsCaller(this.defaultConfig, args, callArgs =>
       collectionsNs.bulkDelete(this, callArgs)
+    );
+  }
+
+  /**
+   * @experimental Create a document that copies a stored one, reading the
+   * source as the caller first; nothing is created where that read is
+   * refused. The new document's field validators are told what it copies,
+   * so a value the source already holds may count as no change. Intended to
+   * become stable, since plugins call it. Not reachable over REST.
+   */
+  createFromSource<TSlug extends CollectionSlug>(
+    args: CreateFromSourceArgs<TSlug>
+  ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.createFromSource(this, callArgs)
     );
   }
 
@@ -1057,6 +1118,10 @@ export const nextly = {
     (await requireNextlyOnceStarted()).bulkDelete(args),
   duplicate: async <TSlug extends CollectionSlug>(args: DuplicateArgs<TSlug>) =>
     (await requireNextlyOnceStarted()).duplicate(args),
+  /** Create a document that copies a stored one, read as the caller first. @experimental */
+  createFromSource: async <TSlug extends CollectionSlug>(
+    args: CreateFromSourceArgs<TSlug>
+  ) => (await requireNextlyOnceStarted()).createFromSource(args),
 
   // Generic in `TCreate` as the method is, so this delegate answers the same
   // type for the same call. The answer type and the inner call's type
@@ -1184,6 +1249,30 @@ export const nextly = {
       (await requireNextlyOnceStarted()).releases.delete(args),
   } satisfies ReleasesNamespace,
 
+  workflows: {
+    reviewState: async args =>
+      (await requireNextlyOnceStarted()).workflows.reviewState(args),
+    takeStep: async args =>
+      (await requireNextlyOnceStarted()).workflows.takeStep(args),
+    assign: async args =>
+      (await requireNextlyOnceStarted()).workflows.assign(args),
+    stepMany: async args =>
+      (await requireNextlyOnceStarted()).workflows.stepMany(args),
+    assignMany: async args =>
+      (await requireNextlyOnceStarted()).workflows.assignMany(args),
+    waiting: async args =>
+      (await requireNextlyOnceStarted()).workflows.waiting(args),
+    // Optional, as the namespace declares it (see `releases` above).
+    list: async (args?) =>
+      (await requireNextlyOnceStarted()).workflows.list(args),
+    settings: {
+      read: async args =>
+        (await requireNextlyOnceStarted()).workflows.settings.read(args),
+      update: async args =>
+        (await requireNextlyOnceStarted()).workflows.settings.update(args),
+    },
+  } satisfies WorkflowsNamespace,
+
   users: {
     find: async (args?: FindUsersArgs) =>
       (await requireNextlyOnceStarted()).users.find(args),
@@ -1197,7 +1286,11 @@ export const nextly = {
       (await requireNextlyOnceStarted()).users.update(args),
     delete: async (args: DeleteUserArgs) =>
       (await requireNextlyOnceStarted()).users.delete(args),
-  },
+    listIdentities: async (args: ListUserIdentitiesArgs) =>
+      (await requireNextlyOnceStarted()).users.listIdentities(args),
+    unlinkIdentity: async (args: UnlinkIdentityArgs) =>
+      (await requireNextlyOnceStarted()).users.unlinkIdentity(args),
+  } satisfies UsersNamespace,
 
   media: {
     upload: async (args: UploadMediaArgs) =>
@@ -1208,6 +1301,22 @@ export const nextly = {
       (await requireNextlyOnceStarted()).media.findByID(args),
     findByIDs: async (args: FindMediaByIDsArgs) =>
       (await requireNextlyOnceStarted()).media.findByIDs(args),
+    /**
+     * A resized copy of an image, or `null` where the image is used as it is,
+     * as the instance's `media.copyOf` answers it.
+     *
+     * @experimental
+     */
+    copyOf: async (args: MediaCopyArgs) =>
+      (await requireNextlyOnceStarted()).media.copyOf(args),
+    /**
+     * Every resized copy of an image up to a width, or `[]`, as the
+     * instance's `media.copiesOf` answers it.
+     *
+     * @experimental
+     */
+    copiesOf: async (args: MediaCopiesArgs) =>
+      (await requireNextlyOnceStarted()).media.copiesOf(args),
     update: async (args: UpdateMediaArgs) =>
       (await requireNextlyOnceStarted()).media.update(args),
     delete: async (args: DeleteMediaArgs) =>
@@ -1305,6 +1414,28 @@ export const nextly = {
     undoUpdate: async (args: UndoEmailTemplateUpdateArgs) =>
       (await requireNextlyOnceStarted()).emailTemplates.undoUpdate(args),
   },
+
+  /** @experimental */
+  emailDeliveries: {
+    // Optional, as the namespace declares them: `satisfies` alone would
+    // infer required parameters that merely accept undefined.
+    activity: async (args?: FindEmailActivityArgs) =>
+      (await requireNextlyOnceStarted()).emailDeliveries.activity(args),
+    search: async args =>
+      (await requireNextlyOnceStarted()).emailDeliveries.search(args),
+    find: async (args?: FindEmailDeliveriesArgs) =>
+      (await requireNextlyOnceStarted()).emailDeliveries.find(args),
+    findQueued: async (args?: FindQueuedEmailsArgs) =>
+      (await requireNextlyOnceStarted()).emailDeliveries.findQueued(args),
+    lastSent: async (args?: EmailLastSentArgs) =>
+      (await requireNextlyOnceStarted()).emailDeliveries.lastSent(args),
+    overdue: async (args?: EmailOverdueArgs) =>
+      (await requireNextlyOnceStarted()).emailDeliveries.overdue(args),
+    findByID: async args =>
+      (await requireNextlyOnceStarted()).emailDeliveries.findByID(args),
+    findQueuedByID: async args =>
+      (await requireNextlyOnceStarted()).emailDeliveries.findQueuedByID(args),
+  } satisfies EmailDeliveriesNamespace,
 
   userFields: {
     find: async (args?: FindUserFieldsArgs) =>

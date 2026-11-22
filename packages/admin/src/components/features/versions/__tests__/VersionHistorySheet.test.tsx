@@ -222,7 +222,13 @@ function fakeEditor() {
   const undo = vi.fn();
   const apply = vi.fn(() => ({ undo }));
   const editor: EditorRestoreSurface = {
-    restore: { apply, restoredFromForSave: vi.fn(), saved: vi.fn() },
+    restore: {
+      apply,
+      restoredFromForSave: vi.fn(),
+      saved: vi.fn(),
+      formReset: vi.fn(),
+      holds: vi.fn(() => false),
+    },
     fields: [{ name: "title", type: "text", label: "Title" } as FieldConfig],
     currentValues: () => ({ title: "Now" }),
     dirtyFields: () => new Set<string>(),
@@ -739,6 +745,44 @@ describe("VersionHistorySheet", () => {
     );
   });
 
+  it("hands the document the newest in a linked version's language, though its row is not loaded", async () => {
+    // A link names version 1, beyond the loaded rows; its own read says it
+    // holds English, and the newest English version is loaded.
+    window.history.pushState(
+      {},
+      "",
+      "/admin/collections/posts/e1?history=1&version=1"
+    );
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            {
+              items: [
+                { ...version(6), locale: "es" },
+                { ...version(5), locale: "en" },
+              ],
+              meta: { hasNext: true },
+            },
+          ],
+        },
+        hasNextPage: true,
+      })
+    );
+    useVersionMock.mockReturnValue(
+      detailState({ data: { ...version(1), locale: "en", snapshot: {} } })
+    );
+    const { setViewing } = renderPublishing();
+
+    await waitFor(() =>
+      expect(setViewing.mock.calls.at(-1)?.[0]).toMatchObject({
+        versionNo: 1,
+        newestInLocale: 5,
+      })
+    );
+    window.history.pushState({}, "", "/");
+  });
+
   it("hands the document the version before, once it is loaded", async () => {
     useVersionsMock.mockReturnValue(
       listState({
@@ -861,6 +905,33 @@ describe("VersionHistorySheet", () => {
     expect(screen.getByRole("checkbox", { name: /Title/ })).toBeChecked();
   });
 
+  it("opens the restore list for the version an address hands it from the comparison page", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/admin/collections/posts/e1?history=1&version=3&restore=1"
+    );
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
+      })
+    );
+    useVersionMock.mockReturnValue(
+      detailState({ data: { snapshot: { title: "Then" } } })
+    );
+    const { editor, apply } = fakeEditor();
+
+    renderPublishing({ canRestore: true }, editor);
+
+    expect(
+      await screen.findByText(/Restore from version 3/)
+    ).toBeInTheDocument();
+    // Asked once: the address no longer says to restore.
+    expect(window.location.search).not.toContain("restore=");
+    expect(apply).not.toHaveBeenCalled();
+    window.history.pushState({}, "", "/");
+  });
+
   it("puts the chosen values into the editor, never writing, and offers Undo", async () => {
     useVersionsMock.mockReturnValue(
       listState({
@@ -880,7 +951,12 @@ describe("VersionHistorySheet", () => {
       await screen.findByRole("button", { name: /Restore 1 field/ })
     );
 
-    expect(apply).toHaveBeenCalledWith({ title: "Then" }, 3);
+    // With each field's type, which the restore compares the field by.
+    expect(apply).toHaveBeenCalledWith(
+      { title: "Then" },
+      3,
+      expect.any(Function)
+    );
     // Nothing goes to the server: the person's save is the only write.
     expect(mutateMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).toHaveBeenCalledWith(

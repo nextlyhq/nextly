@@ -32,6 +32,14 @@ vi.mock("../../schema-version", () => ({
 let dir: string;
 
 /**
+ * The migration file `name`'s snapshot sits beside: a snapshot is read only
+ * once its migration was written.
+ */
+function migrationFile(name: string): void {
+  writeFileSync(join(dir, `${name}.sql`), "");
+}
+
+/**
  * A snapshot paired with the migration file whose name the ledger records.
  *
  * `fields` is a parameter because the shape is what distinguishes one snapshot
@@ -39,6 +47,7 @@ let dir: string;
  * which of them registration wrote.
  */
 function snapshot(name: string, slug: string, fields: unknown[] = []): void {
+  migrationFile(name);
   writeFileSync(
     join(dir, "meta", `${name}.snapshot.json`),
     JSON.stringify({
@@ -253,6 +262,7 @@ describe("registerFromMigrations honours the applied ledger", () => {
     // The control for the case above: the per-file guard is still there, and
     // still does its own job. Without this, moving the ledger read out of it
     // could have removed the guard entirely and nothing would say so.
+    migrationFile("0001_broken");
     writeFileSync(join(dir, "meta", "0001_broken.snapshot.json"), "{ not json");
     snapshot("0002_ok", "notes");
     const { adapter, inserted } = adapterStub();
@@ -301,6 +311,7 @@ describe("registration skips a reserved name and survives a failed row", () => {
   it("skips a slug reserved by Nextly, for collections AND singles", async () => {
     // "users" is a system resource; registering it would recreate the
     // permission collision the create and rename paths refuse.
+    migrationFile("0001_reserved");
     writeFileSync(
       join(dir, "meta", "0001_reserved.snapshot.json"),
       JSON.stringify({
@@ -328,6 +339,7 @@ describe("registration skips a reserved name and survives a failed row", () => {
   });
 
   it("keeps registering after one entity fails to insert", async () => {
+    migrationFile("0001_two");
     writeFileSync(
       join(dir, "meta", "0001_two.snapshot.json"),
       JSON.stringify({

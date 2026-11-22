@@ -17,6 +17,7 @@
 import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { redactSnapshotForUser } from "../../../api/versions-access";
 import { defineCollection, text } from "../../../config";
 import { getVersionForDocument } from "../../../dispatcher/handlers/versions-methods";
@@ -82,6 +83,9 @@ async function versionedDocument(
     { collectionName: POSTS, entryId: id, overrideAccess: true },
     { title: "T2", guarded: "G-2" }
   );
+  // The reader may read the document: a version read asks the document's read
+  // gate as its caller, which a reader without the permission does not pass.
+  await userWhoMay(current, READER.id, "read", [POSTS]);
   return id;
 }
 
@@ -112,7 +116,8 @@ describe.each(getConfiguredTestDialects())(
 
       probe.armed = true;
       const redacted = await redactSnapshotForUser(
-        { title: "T1", guarded: "G-1" },
+        // A version of a document without languages.
+        { snapshot: { title: "T1", guarded: "G-1" }, locale: null },
         "collection",
         POSTS,
         READER

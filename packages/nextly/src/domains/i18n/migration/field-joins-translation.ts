@@ -12,7 +12,7 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import type { TableSpec } from "../../schema/pipeline/diff/types";
+import type { ColumnSpec, TableSpec } from "../../schema/pipeline/diff/types";
 import type { ColumnMovedToCompanion } from "../../schema/pipeline/moved-to-companion";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
@@ -21,7 +21,11 @@ import {
   storesPerLanguage,
 } from "../per-language-storage";
 
-import { ddlType, q } from "./ddl-types";
+import {
+  carriedDefinition,
+  receivingColumnDefinition,
+} from "./carried-definition";
+import { q } from "./ddl-types";
 import { deriveCompanionSpec } from "./derive-companion-spec";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
@@ -34,7 +38,7 @@ import {
   planFieldLeavesTranslationMigration,
 } from "./plan-field-leaves-migration";
 import type { CompanionFieldLike } from "./reconcile-companion";
-import type { CompanionMigrationSpec } from "./types";
+import type { CompanionMigrationSpec, LocalizedColumnSpec } from "./types";
 
 /**
  * The fields of a translated entity that become translated in this change, having been shared
@@ -113,6 +117,12 @@ export function buildFieldsJoiningTranslationStatements(args: {
   companionExists: boolean;
   /** The companion's columns as they are now, when the caller has asked; omitted, every column is added. */
   companionColumns?: ReadonlySet<string>;
+  /**
+   * The main table's columns as the database has them, when the caller has read them: each column
+   * moved into the companion is created with what its main column carries (`carriedDefinition`).
+   * Omitted, as a migration file is written, each is the field's own.
+   */
+  liveMain?: readonly ColumnSpec[];
 }): FieldsJoiningTranslationPlan {
   const joining = new Set(
     fieldsJoiningTranslation(args.oldFields, args.newFields)
@@ -126,11 +136,19 @@ export function buildFieldsJoiningTranslationStatements(args: {
   if (joining.size === 0) return none;
 
   const companionTable = `${args.tableName}_locales`;
+  const carry = (column: LocalizedColumnSpec): LocalizedColumnSpec => {
+    const carried = carriedDefinition(
+      args.liveMain?.find(main => main.name === column.name),
+      column,
+      args.dialect
+    );
+    return carried ? { ...column, carried } : column;
+  };
   const columns = args.newFields
     .filter(f => joining.has(f.name))
     .flatMap(f => {
       const column = fieldToLocalizedColumnSpec(f, args.dialect, args.builtBy);
-      return column ? [column] : [];
+      return column ? [carry(column)] : [];
     });
   if (columns.length === 0) return none;
 
@@ -170,10 +188,10 @@ export function buildFieldsJoiningTranslationStatements(args: {
       statements: [
         // The file form, which a run that stopped part-way can repeat: the reconcile that follows
         // treats the companion as existing and does not create it again.
-        buildCompanionCreateOnlySql(spec, { emittedToFile: true }).replace(
-          /;\s*$/,
-          ""
-        ),
+        buildCompanionCreateOnlySql(
+          { ...spec, columns: spec.columns.map(carry) },
+          { emittedToFile: true }
+        ).replace(/;\s*$/, ""),
         ...copy,
       ],
     };
@@ -188,7 +206,7 @@ export function buildFieldsJoiningTranslationStatements(args: {
         .filter(c => !args.companionColumns?.has(c.name))
         .map(
           c =>
-            `ALTER TABLE ${q(companionTable, args.dialect)} ADD COLUMN ${q(c.name, args.dialect)} ${ddlType(c, args.dialect)}`
+            `ALTER TABLE ${q(companionTable, args.dialect)} ADD COLUMN ${q(c.name, args.dialect)} ${receivingColumnDefinition(c, args.dialect)}`
         ),
       ...copy,
     ],
@@ -348,6 +366,7 @@ export async function planJoiningMovesForApply(args: {
     });
     if (joining.length === 0) continue;
     await refuseReshapedJoins(e, builtBy, "rowColumns" in entry, joining, args);
+    await refuseMovesLosingDefinition(e, builtBy, joining, args);
     const plan = await planEntityMove(e, builtBy, joining, args);
     if (plan.statements.length === 0) continue;
     result.statements.push(...plan.statements);
@@ -473,6 +492,49 @@ export async function joinsReshapedAgainst(
     .map(j => j.field);
 }
 
+/**
+ * Refuses, before anything runs, a field whose main column has part of a definition the companion
+ * column receiving its values would not (`lostOnMove`): a comment, or a character set or collation
+ * other than the companion's. The push drops the main column after the move, so the move is the
+ * last moment the column's definition can be kept.
+ */
+async function refuseMovesLosingDefinition(
+  e: ApplyEntity,
+  builtBy: ColumnOrigin,
+  joining: readonly { field: string; column: string }[],
+  args: { db: unknown; dialect: SupportedDialect }
+): Promise<void> {
+  const [{ lossesOnMove, refusalsForMovesLosingDefinition }, { NextlyError }] =
+    await Promise.all([
+      import("./move-keeps-definition"),
+      import("../../../errors/nextly-error"),
+    ]);
+  // Each moved field's column, which decides the type its companion column is created with.
+  const moved = joining.map(j => {
+    const field = e.fields.find(f => f.name === j.field);
+    const spec = field
+      ? fieldToLocalizedColumnSpec(field, args.dialect, builtBy)
+      : null;
+    return spec ? { ...j, spec } : j;
+  });
+  const losses = await lossesOnMove(args.db, args.dialect, {
+    moved,
+    from: e.tableName,
+    to: `${e.tableName}_locales`,
+  });
+  if (losses.length === 0) return;
+  const refusals = refusalsForMovesLosingDefinition({
+    losses,
+    table: e.tableName,
+    translation: "on",
+    surface: builtBy === "codeFirst" ? "code" : "builder",
+  });
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: { entity: e.slug, fields: refusals.map(r => r.path) },
+  });
+}
+
 /** One entity's move, planned against its companion as it is now. */
 async function planEntityMove(
   e: ApplyEntity,
@@ -542,5 +604,7 @@ async function planEntityMove(
     companionStatus: publishesPerLanguage(e),
     companionExists: companionColumns !== undefined,
     companionColumns: onCompanion,
+    // The live main table, read above, so each moved column takes what its main column carries.
+    liveMain: snapshot.tables.find(t => t.name === e.tableName)?.columns,
   });
 }

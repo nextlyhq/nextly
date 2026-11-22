@@ -40,7 +40,12 @@ export const BUTTON_VARIANT_MAP = {
     secondary:
       "bg-background border border-border text-foreground hover:bg-primary/5",
     ghost: "text-foreground border border-transparent hover-unified",
-    link: "text-primary border border-transparent underline-offset-4 hover:underline",
+    // The words in the text colour, underlined at rest: the primary token is
+    // a fill a brand may set to any colour, and small text drawn in it can
+    // fall under AA's 4.5:1 (an indigo brand reads 4.22:1 on a dark popover,
+    // 3.80:1 on a dark warning alert). The underline says "link" without the
+    // brand's colour; hover thickens it.
+    link: "text-foreground border border-transparent underline underline-offset-4 hover:decoration-2",
   },
   size: {
     default: "h-[var(--nx-control-height)] px-6 py-2",
@@ -86,7 +91,7 @@ const BUTTON_FOCUS_RING =
  * - destructive: Destructive action button (red background)
  * - outline: Outlined button (transparent background, border)
  * - ghost: Minimal button (transparent, no border)
- * - link: Link-style button (underlined text)
+ * - link: Link-style button (text colour, underlined at rest)
  *
  * Note: 'primary' is a semantic alias for 'default' variant for better code readability
  * @experimental

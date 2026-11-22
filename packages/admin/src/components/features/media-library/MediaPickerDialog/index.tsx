@@ -488,6 +488,17 @@ export function MediaPickerDialog({
     [initialSelectedIds, onOpenChange]
   );
 
+  // A single pick made at once, from a double-clicked tile: that one item,
+  // handed over as Select hands over the chosen one, then the dialog closes
+  // as it does on Cancel, its selection set back.
+  const handlePickNow = useCallback(
+    (item: Media) => {
+      onSelect([item]);
+      handleOpenChange(false);
+    },
+    [onSelect, handleOpenChange]
+  );
+
   // Selected count for footer display
   const selectedCount = selectedIds.size;
 
@@ -634,6 +645,14 @@ export function MediaPickerDialog({
                 error={error}
                 selectedIds={selectedIds}
                 onSelectionChange={handleSelectionChange}
+                // A click anywhere on a tile chooses it, as its checkbox
+                // does: the picture is what a person aims at.
+                onItemClick={item => handleSelectionChange(item.id)}
+                // In a single pick, a double-click picks the tile and
+                // closes, as choosing it and pressing Select would.
+                {...(mode === "single"
+                  ? { onItemDoubleClick: handlePickNow }
+                  : {})}
                 onRetry={() => void refetch()}
                 emptyStateMessage={
                   allowCreate ? (
@@ -641,7 +660,9 @@ export function MediaPickerDialog({
                       No media available. Please upload media via the{" "}
                       <a
                         href="/admin/media"
-                        className="text-primary hover:underline"
+                        // In the text colour, underlined: a brand's primary is a fill and
+                        // can fall under AA as small text.
+                        className="font-medium text-foreground underline underline-offset-2"
                         target="_blank"
                         rel="noopener noreferrer"
                       >
@@ -654,7 +675,9 @@ export function MediaPickerDialog({
                       No media available. Please upload media via the{" "}
                       <a
                         href="/admin/media"
-                        className="text-primary hover:underline"
+                        // In the text colour, underlined: a brand's primary is a fill and
+                        // can fall under AA as small text.
+                        className="font-medium text-foreground underline underline-offset-2"
                         target="_blank"
                         rel="noopener noreferrer"
                       >

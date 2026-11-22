@@ -5433,6 +5433,20 @@ service     key-read-only-super-admin   delete     providers   none             
 service     key-role-based-super-admin  delete     providers   none                  A     .       .        A      A    .        .       .       .           .       A       .     .             .
 service     user-partial                delete     providers   none                  403   .       .        403    R    .        .       .       .           .       R       .     .             .
 service     key-partial                 delete     providers   none                  403   .       .        403    R    .        .       .       .           .       R       .     .             .
+service     visitor                     read       deliveries  none                  401   401     .        .      .    .        .       .       .           .       .       .     .             .
+service     user-with                   read       deliveries  none                  A     A       .        A      A    .        .       .       .           .       A       .     .             .
+service     user-without                read       deliveries  none                  403   403     .        403    R    .        .       .       .           .       R       .     .             .
+service     custom-role                 read       deliveries  none                  A     A       .        A      A    .        .       .       .           .       A       .     .             .
+service     super-admin                 read       deliveries  none                  A     A       .        A      A    .        .       .       .           .       A       .     .             .
+service     super-admin-inherited       read       deliveries  none                  A     A       .        A      A    .        .       .       .           .       A       .     .             .
+service     key-read-only               read       deliveries  none                  A     A       .        A      A    .        .       .       .           .       A       .     .             .
+service     key-full-access             read       deliveries  none                  A     A       .        A      A    .        .       .       .           .       A       .     .             .
+service     key-role-based              read       deliveries  none                  A     A       .        A      A    .        .       .       .           .       A       .     .             .
+service     key-super-admin             read       deliveries  none                  A     A       .        A      A    .        .       .       .           .       A       .     .             .
+service     key-read-only-super-admin   read       deliveries  none                  A     A       .        A      A    .        .       .       .           .       A       .     .             .
+service     key-role-based-super-admin  read       deliveries  none                  A     A       .        A      A    .        .       .       .           .       A       .     .             .
+service     user-partial                read       deliveries  none                  A     A       .        A      A    .        .       .       .           .       A       .     .             .
+service     key-partial                 read       deliveries  none                  A     A       .        A      A    .        .       .       .           .       A       .     .             .
 no-service  visitor                     read       collection  none                  .     401     .        .      .    .        .       .       .           .       .       .     .             .
 no-service  user-with                   read       collection  none                  A     A       .        .      R    .        R       .       .           .       R       .     =absent       .
 no-service  user-without                read       collection  none                  404   403     .        .      R    .        R       .       .           .       R       .     =absent       .
@@ -6272,3 +6286,4 @@ public      visitor                     read       providers   none             
 public      visitor                     create     providers   none                  401   .       .        .      .    .        .       .       .           .       .       .     .             .
 public      visitor                     update     providers   none                  401   .       .        .      .    .        .       .       .           .       .       .     .             .
 public      visitor                     delete     providers   none                  401   .       .        .      .    .        .       .       .           .       .       .     .             .
+public      visitor                     read       deliveries  none                  401   401     .        .      .    .        .       .       .           .       .       .     .             .

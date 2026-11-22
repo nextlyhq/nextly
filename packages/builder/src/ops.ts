@@ -91,14 +91,18 @@ export {
   type UnbindKeep,
 } from "./composition-actions";
 
-export { bindOp, unbindOp, type KeptProps } from "./binding-ops";
+export { bindOp, unbindOp, type KeptProps } from "./bindings/binding-ops";
 export type {
   BindingFieldChoice,
   BindingFieldSource,
   UnbindAsk,
   UnbindPlanAnswer,
-} from "./binding-services";
-export { conditionsOp } from "./condition-ops";
+} from "./bindings/binding-services";
+export { conditionsOp } from "./conditions/condition-ops";
+export type {
+  ComponentSettingAnswer,
+  ComponentSettingAsk,
+} from "./make-component-setting";
 
 export {
   TEMPLATE_ACTION_KINDS,

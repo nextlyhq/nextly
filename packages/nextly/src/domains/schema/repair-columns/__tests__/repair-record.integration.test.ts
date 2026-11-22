@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { migrateCore } from "../../../../cli/commands/migrate";
-import { runUpgrade } from "../../../../cli/commands/upgrade";
+import { runMigrateDataSteps } from "../../../../cli/commands/__tests__/helpers/run-migrate-data-steps";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -40,12 +40,14 @@ const LINKS = f({
   type: "repeater",
   fields: [{ name: "url", type: "text" }],
 });
-const AUTHOR = f({
-  name: "author",
-  type: "relationship",
-  relationTo: "users",
-  required: true,
-});
+/** A relationship, as configured now (optional) or as it was when the table was made (required). */
+const author = (required: boolean) =>
+  f({
+    name: "author",
+    type: "relationship",
+    relationTo: "users",
+    required,
+  });
 
 /** A logger that prints nothing. */
 const silent = {
@@ -70,14 +72,20 @@ describe.each(getConfiguredTestDialects())("a column repair on %s", dialect => {
   const tools = tableTools(() => handle.adapter, dialect);
   const { q, run } = tools;
 
-  const fields =
-    dialect === "sqlite" ? [TITLE, AUTHOR] : [TITLE, LINKS, AUTHOR];
+  const fieldsWith = (required: boolean) =>
+    dialect === "sqlite"
+      ? [TITLE, author(required)]
+      : [TITLE, LINKS, author(required)];
+  // The table was made while the relationship was required, so `author` is NOT NULL under a
+  // relationship that is now optional: the legacy shape every dialect holds. Elsewhere `links` is
+  // also held as text, as before 0.0.2-alpha.67.
+  const fields = fieldsWith(false);
   const columns = dialect === "sqlite" ? ["author"] : ["links", "author"];
   const entity = () => collection(TABLE, fields);
 
   beforeEach(async () => {
     handle = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
-    await tools.createTable(TABLE, fields);
+    await tools.createTable(TABLE, fieldsWith(true));
     if (dialect !== "sqlite") await tools.retype(TABLE, "links", "text");
     await tools.insert(TABLE, [
       {
@@ -141,14 +149,8 @@ describe.each(getConfiguredTestDialects())("a column repair on %s", dialect => {
     }
     expect(await legacyState(), "after nextly migrate").toEqual(before);
 
-    await runUpgrade(
-      { confirmBackedUp: true },
-      {
-        adapter: handle.adapter as never,
-        logger: { info: () => {}, warn: () => {} },
-      }
-    );
-    expect(await legacyState(), "after nextly upgrade").toEqual(before);
+    await runMigrateDataSteps(handle.adapter);
+    expect(await legacyState(), "after the data steps").toEqual(before);
 
     // A production start migrates through this same `migrateCore` when migrations run at boot, and
     // otherwise changes no schema; a second run of it is the start against an up-to-date database.

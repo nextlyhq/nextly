@@ -434,3 +434,50 @@ describe("the route", () => {
     expect(route?.public).not.toBe(true);
   });
 });
+
+describe("what a new list's item is built from", () => {
+  const ARTICLES = {
+    slug: "articles",
+    label: "Article",
+    admin: { useAsTitle: "headline" },
+    fields: [
+      { name: "headline", type: "text" },
+      { name: "hero", type: "upload", relationTo: "media", mimeTypes: "image/*" },
+      { name: "brief", type: "upload", relationTo: "media", mimeTypes: "application/pdf" },
+      { name: "any", type: "upload", relationTo: "media" },
+      { name: "content", type: "blocks" },
+    ],
+  };
+
+  it("names the title field the admin titles entries by, and which uploads take images", async () => {
+    const answer = await readLoopCollections(readsOf([ARTICLES]));
+    const [articles] = answer.items;
+    expect(articles?.titleField).toBe("headline");
+    // It holds a Page Builder field, so its entries are pages.
+    expect(articles?.entriesHavePages).toBe(true);
+    const takes = Object.fromEntries(
+      (articles?.readable ?? []).map(field => [field.name, field.takesImages])
+    );
+    expect(takes).toMatchObject({ hero: true, brief: false, any: true });
+    // A field that is not an upload says nothing about images.
+    expect(takes.headline).toBeUndefined();
+  });
+
+  it("leaves out a title field visitors cannot read", async () => {
+    const answer = await readLoopCollections(
+      readsOf([ARTICLES], { protectedFields: ["headline"] })
+    );
+    expect(answer.items[0]).not.toHaveProperty("titleField");
+  });
+
+  it("says entries have pages for a collection served at an address its code declares", async () => {
+    const served = {
+      ...readsOf([CATEGORIES]),
+      servedInCode: (slug: string) => slug === "categories",
+    };
+    expect((await readLoopCollections(served)).items[0]?.entriesHavePages).toBe(true);
+    expect(
+      (await readLoopCollections(readsOf([CATEGORIES]))).items[0]?.entriesHavePages
+    ).toBe(false);
+  });
+});

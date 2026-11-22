@@ -21,11 +21,19 @@ import { test } from "./support/test";
 test.describe.configure({ lock: [LOCK.homepage] });
 
 /** The control that opens the page builder, in either of its wordings. */
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 
 async function openEditor(page: Page): Promise<void> {
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+  await page
+    .locator(PAGE_BUILDER_CARD)
+    .getByRole("link", { name: OPEN_BUILDER_ACTION })
+    .click();
   await expect(
     page.getByRole("navigation", { name: "Editor panels" })
   ).toBeVisible({ timeout: 30_000 });

@@ -15,6 +15,7 @@ import {
   groupLevel,
   levelRows,
   offeredLevels,
+  ownWithAction,
   ownWithLevel,
   pluginGroups,
   rowLevel,
@@ -255,6 +256,92 @@ describe("ownWithLevel", () => {
         "read-posts",
       ])
     ).toEqual(["export-posts"]);
+  });
+});
+
+describe("ownWithAction", () => {
+  it("turns on read with an action that needs it", () => {
+    const { posts } = rows();
+    for (const action of ["update", "delete", "publish", "unpublish"]) {
+      expect(ownWithAction([], posts, `${action}-posts`, true)).toEqual([
+        `${action}-posts`,
+        "read-posts",
+      ]);
+    }
+  });
+
+  it("turns on create alone, as the Public role creates what it never sees", () => {
+    const { posts } = rows();
+    expect(ownWithAction([], posts, "create-posts", true)).toEqual([
+      "create-posts",
+    ]);
+    // CONTROL: an action outside every level needs no read either.
+    expect(ownWithAction([], posts, "export-posts", true)).toEqual([
+      "export-posts",
+    ]);
+  });
+
+  it("copies no read onto the role where it is held or a base gives it", () => {
+    const { posts } = rows();
+    expect(ownWithAction(["read-posts"], posts, "update-posts", true)).toEqual([
+      "read-posts",
+      "update-posts",
+    ]);
+    expect(
+      ownWithAction([], posts, "update-posts", true, ["read-posts"])
+    ).toEqual(["update-posts"]);
+  });
+
+  it("turns off the role's own actions that need read with it, keeping create and other rows'", () => {
+    const { posts } = rows();
+    expect(
+      ownWithAction(
+        [
+          "read-posts",
+          "create-posts",
+          "update-posts",
+          "publish-posts",
+          "export-posts",
+          "update-homepage",
+        ],
+        posts,
+        "read-posts",
+        false
+      )
+    ).toEqual(["create-posts", "export-posts", "update-homepage"]);
+  });
+
+  it("keeps the actions needing read where a base still gives it", () => {
+    const { posts } = rows();
+    expect(
+      ownWithAction(
+        ["read-posts", "update-posts"],
+        posts,
+        "read-posts",
+        false,
+        ["read-posts"]
+      )
+    ).toEqual(["update-posts"]);
+  });
+
+  it("turns off an action needing read alone, leaving read on", () => {
+    const { posts } = rows();
+    expect(
+      ownWithAction(
+        ["read-posts", "update-posts"],
+        posts,
+        "update-posts",
+        false
+      )
+    ).toEqual(["read-posts"]);
+  });
+
+  it("links a Single's update to its read the same way", () => {
+    const { homepage } = rows();
+    expect(ownWithAction([], homepage, "update-homepage", true)).toEqual([
+      "update-homepage",
+      "read-homepage",
+    ]);
   });
 });
 

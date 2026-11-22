@@ -131,3 +131,72 @@ describe("ValidationTab -- PR E1 layout + copy", () => {
     expect(screen.getByText(/regex the value must match/i)).toBeInTheDocument();
   });
 });
+
+// The panel has no Apply: an edit is in the draft the moment it is made. So a
+// bound that cannot be kept is said beside it as it is typed, rather than
+// first at the collection's save (min above max, refused only there) or never
+// (a max length of 0, read downstream as "no limit").
+describe("ValidationTab — a bound that cannot be kept", () => {
+  it("says nothing of bounds that can be kept", async () => {
+    const user = userEvent.setup();
+    render(<Controlled initial={text} />);
+    await user.type(screen.getByLabelText(/min length/i), "0");
+    await user.type(screen.getByLabelText(/max length/i), "5");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByLabelText(/max length/i)).toHaveAttribute(
+      "aria-invalid",
+      "false"
+    );
+  });
+
+  it("says a max length of 0 is not a limit, as soon as it is typed", async () => {
+    const user = userEvent.setup();
+    render(<Controlled initial={text} />);
+    const max = screen.getByLabelText(/max length/i);
+    await user.type(max, "0");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Max length must be at least 1."
+    );
+    expect(max).toHaveAttribute("aria-invalid", "true");
+    expect(max).toHaveAccessibleDescription(
+      "Max length must be at least 1. Most characters allowed."
+    );
+
+    await user.clear(max);
+    await user.type(max, "10");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("says a min length above the max length, beside the min", async () => {
+    const user = userEvent.setup();
+    render(<Controlled initial={text} />);
+    await user.type(screen.getByLabelText(/min length/i), "10");
+    await user.type(screen.getByLabelText(/max length/i), "5");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Min length can't be more than max length."
+    );
+    expect(screen.getByLabelText(/min length/i)).toHaveAttribute(
+      "aria-invalid",
+      "true"
+    );
+  });
+
+  it("says a min above the max on a number field", async () => {
+    const user = userEvent.setup();
+    render(<Controlled initial={num} />);
+    await user.type(screen.getByLabelText(/^min$/i), "10");
+    await user.type(screen.getByLabelText(/^max$/i), "-5");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Min can't be more than max."
+    );
+  });
+
+  it("says a length must be a whole number", async () => {
+    const user = userEvent.setup();
+    render(<Controlled initial={text} />);
+    await user.type(screen.getByLabelText(/max length/i), "2.5");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Use a whole number, 0 or more."
+    );
+  });
+});

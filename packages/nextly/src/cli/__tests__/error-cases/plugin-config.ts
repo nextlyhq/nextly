@@ -7,8 +7,11 @@
  *
  * @module cli/__tests__/error-cases/plugin-config
  */
-import type { CrossFileIssue } from "../../../domains/schema/ui-schema/cross-file";
 import { collectPluginAuditKinds } from "../../../domains/audit/plugin-audit";
+import {
+  assertBuilderDefinitionsKept,
+  assertRelationTargetsDeclared,
+} from "../../../domains/schema/ui-schema/builder-definitions";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   adminWidgetError,
@@ -42,9 +45,10 @@ import { validatePluginMenus } from "../../../plugins/validate-menus";
 import { validatePluginNames } from "../../../plugins/validate-names";
 import { validatePluginSlugs } from "../../../plugins/validate-slugs";
 import { validatePluginVersions } from "../../../plugins/validate-versions";
-import { builderSchemaConflict } from "../../errors/areas/plugin-config";
 
+import { uiSchemaManifest } from "../../../schemas/_zod/ui-schema";
 import type { CliErrorCode } from "../../errors";
+import { CliError } from "../../errors/cli-error";
 
 import type { ErrorCase, ErrorCases } from "./types";
 
@@ -150,22 +154,46 @@ export const PLUGIN_CONFIG_CASES = {
   // `plugins/schema/validate-relations.ts`.
   NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION: () =>
     crossPluginRelationError("reviews", "commerce", "products"),
-  // `cli/commands/migrate-check.ts` reads these issues from `validateCrossFile`.
+  // Retired: nothing raises it now, so the case is the error as its last release printed it, which
+  // the code's docs page keeps as its example.
   BUILDER_SLUG_COLLISION: () =>
-    builderSchemaConflict([
-      {
-        code: "NEXTLY_SCHEMA_SLUG_COLLISION",
-        message:
-          "slug 'posts' is defined in both nextly.config.ts and ui-schema.json",
-      },
-    ] satisfies CrossFileIssue[]),
+    new CliError("BUILDER_SLUG_COLLISION", {
+      what: "An entity is defined in both `nextly.config.ts` and `ui-schema.json`.",
+      why: "slug 'posts' is defined in both nextly.config.ts and ui-schema.json",
+      next: "Remove each slug listed from one of the two files, or rename it in one of them, then run the command again.",
+    }),
+  // `domains/schema/ui-schema/builder-definitions.ts`, for `migrate:check` and `migrate:create`.
   BUILDER_RELATION_TARGET_UNKNOWN: () =>
-    builderSchemaConflict([
-      {
-        code: "NEXTLY_SCHEMA_RELATION_TARGET_MISSING",
-        message: "articles.author relates to unknown target 'authors'",
-      },
-    ] satisfies CrossFileIssue[]),
+    thrown(() =>
+      assertRelationTargetsDeclared({
+        codeCollectionSlugs: [],
+        manifest: uiSchemaManifest.parse({
+          collections: [
+            {
+              slug: "articles",
+              fields: [
+                { name: "author", type: "relationship", relationTo: "authors" },
+              ],
+            },
+          ],
+        }),
+        definitionFile: "./ui-schema.json",
+      })
+    ),
+  BUILDER_DEFINITION_MISSING: () =>
+    thrown(() =>
+      assertBuilderDefinitionsKept({
+        recorded: {
+          collections: {
+            articles: { source: "builder", settings: { slug: "articles" } },
+          },
+          singles: {},
+          fieldGroups: {},
+        },
+        merged: { collections: [], singles: [], components: [] },
+        definitionFile: "./ui-schema.json",
+      })
+    ),
 
   // `plugins/permissions/collect-permissions.ts`.
   NEXTLY_PERMISSION_COLLISION: () =>

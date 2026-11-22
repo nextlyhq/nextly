@@ -4,6 +4,7 @@
  * decision's, made against the document the editor sends.
  */
 import {
+  createBlockRegistry,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
 } from "@nextlyhq/blocks-engine";
@@ -15,6 +16,9 @@ import {
   unbindPlanRequestOf,
   type UnbindPlanReads,
 } from "./unbind-plan-route";
+
+/** The site's block registry these tests read: it holds none. */
+const blocks = createBlockRegistry();
 
 const document = {
   formatVersion: DOCUMENT_FORMAT_VERSION,
@@ -53,6 +57,7 @@ function reads(page: Record<string, unknown> | null): UnbindPlanReads & {
     readPage: vi.fn(async () => page),
     plan: vi.fn<typeof planUnbind>(async () => PLANNED),
     templates: "templates",
+    blocks,
   };
 }
 
@@ -62,7 +67,7 @@ describe("the editor's unbind plan", () => {
     const answer = await answerUnbindPlan(unbindPlanRequestOf(body()), r);
     expect(answer).toEqual(PLANNED);
     expect(r.plan).toHaveBeenCalledWith(
-      { collection: "pages", id: "p1", locale: "en" },
+      { collection: "pages", id: "p1", locale: "en", blocks },
       document,
       "h",
       "text",
@@ -103,7 +108,7 @@ describe("the editor's unbind plan", () => {
       r
     );
     expect(r.plan).toHaveBeenCalledWith(
-      { collection: "events", id: "e1" },
+      { collection: "events", id: "e1", blocks },
       document,
       "h",
       "text",
@@ -119,7 +124,13 @@ describe("the editor's unbind plan", () => {
     );
     expect(r.readPage).toHaveBeenCalledWith({ single: "home", locale: "en" });
     expect(r.plan).toHaveBeenCalledWith(
-      { collection: "home", id: "home", kind: "single", locale: "en" },
+      {
+        collection: "home",
+        id: "home",
+        kind: "single",
+        locale: "en",
+        blocks,
+      },
       document,
       "h",
       "text",

@@ -172,6 +172,28 @@ describe("a named run on the canvas", () => {
     });
   });
 
+  it("runs without a limit where the site sets none, and under the default where none is sent", async () => {
+    // A query that reads 600 times: past the default 500.
+    const heavy: NamedQueryDefinition = {
+      ...upcoming,
+      async run({ reader }) {
+        for (let read = 0; read < 600; read += 1) {
+          await reader.count({ collection: "venues" });
+        }
+        return { total: 0, rows: [] };
+      },
+    };
+    const made = () => reads({ definitionOf: () => heavy });
+    const unlimited = await readNamedListEntries(
+      { named: { ...asked().named, allowance: null } },
+      made()
+    );
+    expect(unlimited.meta.named?.failure).toBeUndefined();
+    // CONTROL: with no allowance sent, the default bounds the run.
+    const bounded = await readNamedListEntries(asked(), made());
+    expect(bounded.meta.named).toMatchObject({ failure: { code: "budget" } });
+  });
+
   it("spends no more reads than the canvas's draw has left", async () => {
     // The query reads twice and today once; the draw has one read left.
     const answer = await readNamedListEntries(

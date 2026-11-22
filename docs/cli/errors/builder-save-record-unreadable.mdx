@@ -1,0 +1,23 @@
+---
+title: BUILDER_SAVE_RECORD_UNREADABLE
+description: "A Builder save was refused, because the record that an earlier save of the same entity was in progress cannot be read."
+---
+
+## Cause
+
+A Builder save was refused, because the record that an earlier save of the same entity was in progress cannot be read.
+
+A Schema Builder save records that it is in progress, as a row in the database's `nextly_meta` table, and clears it once its outcome is recorded. A record left by an earlier save of the same collection, Single or field group that cannot be read gives no way to tell what that save left. So the save refuses rather than write over it.
+
+## Fix
+
+First check that no Builder save is running. Then remove the one row the message names from the `nextly_meta` table, and save again. The save records its own record afresh.
+
+## Example
+
+```text
+✗ A Builder save of this collection was left part-way, and its record cannot be read.
+  Why:  Each Builder save records that it is in progress until its outcome is recorded, and what an earlier save left cannot be told from a record that cannot be read.
+  Next: To clear it, first check that no Builder save is running, then remove the one row "builder-save-in-progress:collection:posts" from the nextly_meta table; the next save then records its own.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-save-record-unreadable  (BUILDER_SAVE_RECORD_UNREADABLE)
+```

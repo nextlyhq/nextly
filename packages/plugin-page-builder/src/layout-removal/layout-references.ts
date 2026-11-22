@@ -305,7 +305,7 @@ export async function scanLayoutReferences(args: {
 
   // The rows naming it, published or not.
   const rowsDone = await walkPages({
-    describe: `the pages naming Layout ${layoutId}`,
+    describe: `the pages naming header & footer set ${layoutId}`,
     maxPages,
     fetchPage: byIdCursor(
       where =>

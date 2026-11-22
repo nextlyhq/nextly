@@ -3,10 +3,14 @@
  * refuses by its shape is refused when the save brings it, and kept when the
  * stored page already held it, so an unrelated edit to that page still saves.
  */
+import { createBlockRegistry } from "@nextlyhq/blocks-engine";
 import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
 import { blocksFieldType } from "./blocksField";
+
+/** The site's block registry these tests judge against: it holds none. */
+const blocks = createBlockRegistry();
 
 function page(conditions: unknown, title = "Hello") {
   return {
@@ -46,7 +50,7 @@ function write(stored: unknown): PluginFieldWrite {
 }
 
 async function validate(value: unknown, stored: unknown) {
-  const field = blocksFieldType();
+  const field = blocksFieldType(undefined, undefined, blocks);
   return field.validate?.(value, {
     path: "content",
     field: { name: "content", type: "blocks" },

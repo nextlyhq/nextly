@@ -1,6 +1,47 @@
 import { describe, it, expect } from "vitest";
 
-import { sensitiveFieldPaths } from "../sensitive-fields";
+import { componentRowPaths, sensitiveFieldPaths } from "../sensitive-fields";
+
+describe("componentRowPaths", () => {
+  it("names the paths whose values are component rows, and nothing else", () => {
+    const paths = componentRowPaths([
+      { name: "metadata", type: "json" },
+      { name: "title", type: "text" },
+      {
+        name: "settings",
+        type: "group",
+        fields: [
+          {
+            name: "seo",
+            type: "component",
+            fields: [{ name: "cta", type: "component" }],
+          },
+        ],
+      },
+      { type: "group", fields: [{ name: "hero", type: "component" }] },
+      {
+        name: "zone",
+        type: "component",
+        fields: [
+          {
+            name: "#banner",
+            type: "group",
+            fields: [{ name: "cta", type: "component" }],
+          },
+        ],
+      },
+    ]);
+    expect(paths.sort()).toEqual(
+      [
+        "hero",
+        "settings.seo",
+        "settings.seo.cta",
+        "zone",
+        "zone.#banner.cta",
+      ].sort()
+    );
+  });
+});
 
 describe("sensitiveFieldPaths", () => {
   it("collects password fields and hidden fields, skips the rest", () => {

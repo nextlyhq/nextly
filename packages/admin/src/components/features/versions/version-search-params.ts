@@ -9,11 +9,14 @@
  * @module components/features/versions/version-search-params
  */
 
+import { isComparisonBaselineName } from "nextly/comparison-baseline-name";
+
 import {
   defaultPair,
   pairEndingAt,
   type PairableVersion,
   type PairResolution,
+  type ServerBaseline,
 } from "./version-pairing";
 
 /**
@@ -23,18 +26,42 @@ import {
  */
 export const PREVIOUS_VERSION = "previous";
 
-/** A comparison's start: a version number, or the one before `to`. */
-export type ComparisonFrom = number | typeof PREVIOUS_VERSION;
+/**
+ * A comparison's start: a version number, the one before `to`
+ * (`PREVIOUS_VERSION`), or a baseline the server resolves (what is published,
+ * the current draft, the version this person last looked at, or one another
+ * feature registers), named as the server names it. Any baseline name is a
+ * string, so the word for the one before `to` is one of them by type, and
+ * told apart by `namesServerBaseline`.
+ */
+export type ComparisonFrom = number | ServerBaseline;
+
+/**
+ * Whether a comparison's start is a baseline only the server resolves, which
+ * it can pair with a version of its own choosing when the address names none.
+ *
+ * A plain answer rather than a type guard: every baseline name is a string,
+ * the word for the version before `to` included, so a guard would claim that
+ * word impossible wherever it answered false.
+ */
+export function namesServerBaseline(from: ComparisonFrom): boolean {
+  return typeof from === "string" && from !== PREVIOUS_VERSION;
+}
 
 /**
  * A comparison's `from`: a version number, as `readVersionParam` reads one, or
- * the named baseline `previous`. A repeated parameter takes its first value.
+ * a named baseline. A repeated parameter takes its first value.
  */
 export function readFromParam(
   value: string | string[] | undefined
 ): ComparisonFrom | undefined {
   const raw = Array.isArray(value) ? value[0] : value;
-  return raw === PREVIOUS_VERSION ? PREVIOUS_VERSION : readVersionParam(raw);
+  if (raw === PREVIOUS_VERSION) return PREVIOUS_VERSION;
+  // Read by the server's own grammar for a baseline's name, so a name the
+  // registry could hold goes to it. WHICH names exist is the server's to say:
+  // one it does not know is refused there with the names it does.
+  if (raw !== undefined && isComparisonBaselineName(raw)) return raw;
+  return readVersionParam(raw);
 }
 
 /**
@@ -96,6 +123,12 @@ export function resolvePair(
   to: number | undefined,
   hasMore: boolean
 ): PairResolution {
+  // Only the server knows what is published, drafted or last looked at.
+  if (typeof from === "string" && namesServerBaseline(from)) {
+    return to === undefined
+      ? { kind: "baseline", baseline: from }
+      : { kind: "baseline", baseline: from, to };
+  }
   if (from === PREVIOUS_VERSION && to !== undefined) {
     // The change `to` made: compared with the version before it in its own
     // language, as choosing it in the history does.
@@ -109,4 +142,15 @@ export function resolvePair(
   // and the server rejects a cross-locale pair — so a page opened with no
   // parameters would render an API error instead of the most recent change.
   return defaultPair(versions, hasMore);
+}
+
+/**
+ * How the address asks a comparison to be drawn: inline, or side by side.
+ * Anything else leaves the reader's own remembered choice in place.
+ */
+export function readViewParam(
+  value: string | string[] | undefined
+): "inline" | "side" | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return raw === "inline" || raw === "side" ? raw : undefined;
 }

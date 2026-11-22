@@ -16,9 +16,9 @@
 import type { CoreListWidgetData } from "nextly/core-widget-data";
 
 import type { StatusTone } from "@admin/components/features/widgets/frame/row-parts";
-import { buildRoute, ROUTES } from "@admin/constants/routes";
 import type { PinTarget } from "@admin/hooks/queries/useDashboardPins";
 import { describeActivityActor } from "@admin/lib/dashboard";
+import type { DocumentAddressOf } from "@admin/lib/navigation/useDocumentAddress";
 
 /** The rows the card's `load` read, the one shape this card is drawn from. */
 type ListResult = CoreListWidgetData;
@@ -49,8 +49,28 @@ export interface ContinueRow {
   status?: string;
   /** Whether the reader has pinned it, which decides its menu's verb. */
   pinned: boolean;
+  /**
+   * Which of Mine's groups it is drawn in: one of the reader's pins, or one of
+   * their recent saves. Absent on Team, which has no groups, and from a server
+   * that predates them.
+   */
+  group?: "pinned" | "recent";
+  /** On a pinned row, how many pins the reader may read in all. */
+  pinCount?: number;
   /** What a pin of it names. */
   target: PinTarget;
+}
+
+/**
+ * Mine drawn in its two groups: the pins the card shows, the recent saves
+ * after them, and how many pins the reader has in all, for "View all pins
+ * (N)" while that is more than it shows.
+ */
+export interface ContinueSections {
+  pinned: ContinueRow[];
+  recent: ContinueRow[];
+  /** How many pins the reader may read in all. */
+  pinTotal: number;
 }
 
 /**
@@ -95,21 +115,28 @@ function statusLabel(row: Record<string, unknown>): string | undefined {
 }
 
 /**
- * Where a row links: a collection's entry, or a Single, which has one page.
- * The language it was saved in rides along as `?locale=`, the parameter the
- * edit page reads, so the link opens the version that was saved.
+ * Where a row links, by the admin's one rule for opening a document: a
+ * collection's entry where its collection opens entries, or a Single, which
+ * has one page. The language it was saved in rides along as `?locale=`, the
+ * parameter the edit page reads, so the link opens the version that was
+ * saved; a language other than the default opens the form.
  */
-function editHref(target: PinTarget, locale: string | undefined): string {
-  const path =
-    target.targetType === "single"
-      ? buildRoute(ROUTES.SINGLE_EDIT, { slug: target.targetSlug })
-      : buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
+function editHref(
+  target: PinTarget,
+  locale: string | undefined,
+  addressOf: DocumentAddressOf
+): string {
+  const options = locale === undefined ? {} : { locale };
+  return target.targetType === "single"
+    ? addressOf({ kind: "single", slug: target.targetSlug }, options)
+    : addressOf(
+        {
+          kind: "collection",
           slug: target.targetSlug,
           id: target.entryId,
-        });
-  return locale === undefined
-    ? path
-    : `${path}?${new URLSearchParams({ locale }).toString()}`;
+        },
+        options
+      );
 }
 
 /** The document a row names, or `undefined` when it names an entry without its id. */
@@ -149,7 +176,8 @@ function saverOf(row: Record<string, unknown>): string | undefined {
  * one to show.
  */
 export function continueRowFrom(
-  row: Record<string, unknown>
+  row: Record<string, unknown>,
+  addressOf: DocumentAddressOf
 ): ContinueRow | undefined {
   const key = text(row.id);
   const title = text(row.entryTitle);
@@ -159,6 +187,12 @@ export function continueRowFrom(
   const savedBy = saverOf(row);
   const editedAt = text(row.editedAt);
   const status = statusLabel(row);
+  const group =
+    row.group === "pinned" || row.group === "recent" ? row.group : undefined;
+  const pinCount =
+    typeof row.pinCount === "number" && Number.isInteger(row.pinCount)
+      ? row.pinCount
+      : undefined;
   return {
     key,
     title,
@@ -166,21 +200,47 @@ export function continueRowFrom(
       ? { collection: target.targetSlug }
       : {}),
     ...(icon === undefined ? {} : { icon }),
-    href: editHref(target, text(row.locale)),
+    href: editHref(target, text(row.locale), addressOf),
     ...(savedBy === undefined ? {} : { savedBy }),
     ...(editedAt === undefined ? {} : { editedAt }),
     ...(status === undefined ? {} : { status }),
     pinned: row.pinned === true,
+    ...(group === undefined ? {} : { group }),
+    ...(pinCount === undefined ? {} : { pinCount }),
     target,
   };
 }
 
 /** The rows of a list answer this build can read, in the order the source sent them. */
-export function continueRows(result: ListResult): ContinueRow[] {
+export function continueRows(
+  result: ListResult,
+  addressOf: DocumentAddressOf
+): ContinueRow[] {
   return result.items.flatMap(row => {
-    const read = continueRowFrom(row);
+    const read = continueRowFrom(row, addressOf);
     return read ? [read] : [];
   });
+}
+
+/**
+ * Mine's rows in their groups, as the card draws them: its pins, in the order
+ * the source sent them (newest first, as many as it gave them), then its
+ * recent saves, together no more than the `drawn` rows. `undefined` when the
+ * rows hold no pin, which the card draws as one plain list.
+ */
+export function continueSections(
+  rows: readonly ContinueRow[],
+  drawn: number
+): ContinueSections | undefined {
+  const pins = rows.filter(row => row.group === "pinned");
+  if (pins.length === 0) return undefined;
+  const pinned = pins.slice(0, drawn);
+  const recent = rows
+    .filter(row => row.group === "recent")
+    .slice(0, Math.max(0, drawn - pinned.length));
+  // The source's count where it sent one: never fewer than the pins shown.
+  const pinTotal = Math.max(pinned[0]?.pinCount ?? 0, pinned.length);
+  return { pinned, recent, pinTotal };
 }
 
 /** How far back an answer looked, as its empty text ends. */

@@ -22,8 +22,7 @@ process.env.NEXTLY_SECRET =
 
 import {
   COMPONENT_INSTANCE_TYPE,
-  hasBlock,
-  registerBlocks,
+  type BlockDocument,
   type BlockNode,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
@@ -36,11 +35,16 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  BLOCK_SERVICE,
+  PAGE_BUILDER_PLUGIN,
+} from "../blocks/registration-service";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PATTERNS_SLUG } from "../collections/patterns";
 import { readLayoutSettings } from "../default-layout/store";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
+import { blocksOf } from "../index";
 import { pageBuilder } from "../plugin";
 import { TRANSFER_JUDGEMENT_CONTEXT } from "../transfer/transfer-contract";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
@@ -90,9 +94,23 @@ const WIDGET = "acme/transfer-widget";
 /** A block whose only slot is locked `all` around two headings. */
 const SEALED = "acme/transfer-sealed";
 
-function registerSealed(): void {
-  if (hasBlock(SEALED)) return;
-  registerBlocks(
+/** The page builder of the site booted last, whose blocks a case reads. */
+let builder: ReturnType<typeof pageBuilder>;
+
+/**
+ * The site's block registration, through the page builder's own service, as
+ * a plugin registering blocks reaches it: what a case registers after the
+ * boot, into the site's registry.
+ */
+function siteRegistration(t: TestNextly): {
+  register(definitions: unknown, source: string): void;
+} {
+  return t.nextly.plugins[PAGE_BUILDER_PLUGIN]?.[BLOCK_SERVICE] as never;
+}
+
+function registerSealed(t: TestNextly): void {
+  if (blocksOf(builder).has(SEALED)) return;
+  siteRegistration(t).register(
     [
       {
         name: SEALED,
@@ -111,13 +129,13 @@ function registerSealed(): void {
         },
       },
     ] as never,
-    { source: "acme" }
+    "acme"
   );
 }
 
-function registerWidget(): void {
-  if (hasBlock(WIDGET)) return;
-  registerBlocks(
+function registerWidget(t: TestNextly): void {
+  if (blocksOf(builder).has(WIDGET)) return;
+  siteRegistration(t).register(
     [
       {
         name: WIDGET,
@@ -127,7 +145,7 @@ function registerWidget(): void {
         render: () => null,
       },
     ] as never,
-    { source: "acme" }
+    "acme"
   );
 }
 
@@ -233,9 +251,10 @@ describe.each(getConfiguredTestDialects())(
 
     async function boot(): Promise<TestNextly> {
       await current?.destroy();
+      builder = pageBuilder();
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder(), recorder],
+        plugins: [builder, recorder],
         seedPublic: true,
       });
       judged.length = 0;
@@ -653,7 +672,7 @@ describe.each(getConfiguredTestDialects())(
     it("refuses a file that breaks a lock, writing nothing", async () => {
       const t = await boot();
       // Registered after the boot, which registers the site's blocks afresh.
-      registerSealed();
+      registerSealed(t);
       const { cookie } = await holding(t, WRITES_EVERYTHING);
       // The slot locked `all` holds one heading where it starts with two.
       const broken: BlockNode = {
@@ -687,7 +706,7 @@ describe.each(getConfiguredTestDialects())(
         { id: "w", nodes: [{ id: "x", type: WIDGET, version: 1, props: {} }] },
       ]);
 
-      const missing = hasBlock(WIDGET) ? [] : [WIDGET];
+      const missing = blocksOf(builder).has(WIDGET) ? [] : [WIDGET];
       const seen = await preview(cookie, file);
       expect(seen.missingBlockTypes).toEqual(missing);
       if (missing.length > 0) {
@@ -701,7 +720,7 @@ describe.each(getConfiguredTestDialects())(
       }
 
       // The plugin providing it is installed.
-      registerWidget();
+      registerWidget(t);
       const answer = await apply(cookie, file);
       expect(answer.status).toBe(201);
       expect((await rows(t, COMPONENTS_SLUG)).length).toBe(1);
@@ -1250,6 +1269,122 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual({
         base: { base: { color: { $token: "brand-there" } } },
       });
+    });
+
+    it("points every var() a component reads at the importing site's prefix, round trip between two prefixes", async () => {
+      const colour = (name: string, light: string) => ({
+        name,
+        kind: "color",
+        values: { light },
+      });
+      // The source writes its variables under `--acme-`.
+      const source = await boot();
+      await source.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: {
+          tokens: {
+            prefix: "--acme-",
+            tokens: [
+              colour("color.ink", "#111111"),
+              colour("color.edge", "#222222"),
+              colour("color.glow", "#333333"),
+              {
+                name: "shadow.lift",
+                kind: "shadow",
+                values: { light: "0 2px 4px var(--acme-color-glow)" },
+              },
+            ],
+          },
+          classes: [
+            {
+              id: "c-raised",
+              slug: "raised",
+              orderIndex: 0,
+              styles: {
+                base: {
+                  base: { boxShadow: "0 1px 2px var(--acme-color-edge)" },
+                },
+              },
+            },
+          ],
+          _overwrite: true,
+        },
+      });
+      const card = await created(source, COMPONENTS_SLUG, {
+        title: "Lifted card",
+        slug: unique("lifted"),
+        status: "published",
+        content: {
+          formatVersion: 1,
+          kind: "component",
+          settings: { customCss: ".mark { color: var(--acme-color-ink); }" },
+          nodes: [
+            {
+              ...heading("h"),
+              classes: ["c-raised"],
+              styles: {
+                base: { base: { boxShadow: "var(--acme-shadow-lift)" } },
+              },
+              customCss: "selector { border-color: var(--acme-color-ink); }",
+            },
+          ],
+        },
+      });
+      const reader = await holding(source, READS_EVERYTHING);
+      const exportedFile = await post(reader.cookie, [
+        "transfer",
+        "components",
+        card,
+        "export",
+      ]);
+      expect(exportedFile.status).toBe(200);
+      const file = exportedFile.body as unknown as TransferFile;
+
+      // The destination writes under the default, and holds another ink, so
+      // the file's is added as `color.ink-2`.
+      const t = await boot();
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: {
+          tokens: { tokens: [colour("color.ink", "#999999")] },
+          _overwrite: true,
+        },
+      });
+      // Custom CSS is written only by someone who may change site settings.
+      const { cookie } = await holding(t, [
+        ...WRITES_EVERYTHING,
+        "manage-page-builder-site",
+      ]);
+
+      const answer = await apply(cookie, file);
+
+      expect(answer.status).toBe(201);
+      const stored = (await row(t, COMPONENTS_SLUG, answer.result.rootId ?? ""))
+        .content as BlockDocument;
+      expect(stored.settings?.customCss).toBe(
+        ".mark { color: var(--site-color-ink-2); }"
+      );
+      expect(stored.nodes[0]?.styles).toEqual({
+        base: { base: { boxShadow: "var(--site-shadow-lift)" } },
+      });
+      expect(stored.nodes[0]?.customCss).toBe(
+        "selector { border-color: var(--site-color-ink-2); }"
+      );
+      const style = await siteStyle(t);
+      expect(
+        style.classes?.find(entry => entry.slug === "raised")?.styles
+      ).toEqual({
+        base: { base: { boxShadow: "0 1px 2px var(--site-color-edge)" } },
+      });
+      expect(
+        style.tokens?.tokens.map(token => [token.name, token.values.light])
+      ).toEqual([
+        ["color.ink", "#999999"],
+        ["color.ink-2", "#111111"],
+        ["color.edge", "#222222"],
+        ["color.glow", "#333333"],
+        ["shadow.lift", "0 2px 4px var(--site-color-glow)"],
+      ]);
     });
 
     it("sets an imported image's caption only for a caller who may update media", async () => {

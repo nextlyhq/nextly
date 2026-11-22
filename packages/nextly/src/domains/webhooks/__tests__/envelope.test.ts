@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 
-import { buildEnvelope, type BuildEnvelopeInput } from "../envelope";
+import {
+  buildEnvelope,
+  computeChangedFields,
+  type BuildEnvelopeInput,
+} from "../envelope";
 
 // A fixed Date fixture so every timestamp assertion is deterministic.
 const base: BuildEnvelopeInput = {
@@ -227,5 +231,100 @@ describe("buildEnvelope", () => {
       statusChange: { from: null, to: "published" },
     });
     expect(env.statusChange).toEqual({ from: null, to: "published" });
+  });
+});
+
+// A component row's system timestamps are rewritten with the row, so they say
+// nothing about whether its content changed. Only the rows at the component
+// paths the schema names are passed over, and only their own physical stamp
+// columns: a key of the same name inside a JSON or group value is content.
+describe("computeChangedFields", () => {
+  const rows = ["profile"];
+
+  it("does not name a component whose row was only stamped anew", () => {
+    expect(
+      computeChangedFields(
+        { profile: { id: "p1", updated_at: "t1", heading: "B" } },
+        { profile: { id: "p1", updated_at: "t2", heading: "B" } },
+        rows
+      )
+    ).toEqual([]);
+  });
+
+  it("names a component whose own field changed", () => {
+    expect(
+      computeChangedFields(
+        { profile: { id: "p1", updated_at: "t1", heading: "A" } },
+        { profile: { id: "p1", updated_at: "t2", heading: "B" } },
+        rows
+      )
+    ).toEqual(["profile"]);
+  });
+
+  it("names a user field called updatedAt inside a component", () => {
+    expect(
+      computeChangedFields(
+        { profile: { id: "p1", meta: { updatedAt: "a" } } },
+        { profile: { id: "p1", meta: { updatedAt: "b" } } },
+        rows
+      )
+    ).toEqual(["profile"]);
+  });
+
+  it("still names the document's own top-level stamp", () => {
+    expect(
+      computeChangedFields(
+        { title: "A", updatedAt: "t1" },
+        { title: "A", updatedAt: "t2" },
+        rows
+      )
+    ).toEqual(["updatedAt"]);
+  });
+
+  it("names a JSON field whose own updated_at key changed", () => {
+    expect(
+      computeChangedFields(
+        { metadata: { updated_at: "a" }, profile: { id: "p1" } },
+        { metadata: { updated_at: "b" }, profile: { id: "p1" } },
+        rows
+      )
+    ).toEqual(["metadata"]);
+  });
+
+  it("names a component whose JSON value's created_at key changed", () => {
+    expect(
+      computeChangedFields(
+        { profile: { id: "p1", updated_at: "t1", data: { created_at: "a" } } },
+        { profile: { id: "p1", updated_at: "t2", data: { created_at: "b" } } },
+        rows
+      )
+    ).toEqual(["profile"]);
+  });
+
+  it("names every field by its stamps where the schema names no component", () => {
+    expect(
+      computeChangedFields(
+        { profile: { id: "p1", updated_at: "t1" } },
+        { profile: { id: "p1", updated_at: "t2" } }
+      )
+    ).toEqual(["profile"]);
+  });
+
+  it("passes over the stamps of repeated and nested component rows", () => {
+    expect(
+      computeChangedFields(
+        {
+          slides: [
+            { id: "s1", updated_at: "t1", cta: { id: "c1", updated_at: "t1" } },
+          ],
+        },
+        {
+          slides: [
+            { id: "s1", updated_at: "t2", cta: { id: "c1", updated_at: "t2" } },
+          ],
+        },
+        ["slides", "slides.cta"]
+      )
+    ).toEqual([]);
   });
 });

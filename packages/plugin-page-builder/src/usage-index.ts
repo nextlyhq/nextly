@@ -132,6 +132,12 @@ export interface UsageDerivation {
    * permits deleting something a page still renders.
    */
   complete: boolean;
+  /**
+   * How many blocks hold each id, where an index counts them: the class
+   * index does, so a shared style can say how many blocks it is on. A block
+   * counts once however often its list repeats an id.
+   */
+  blocks?: ReadonlyMap<string, number>;
 }
 
 /**
@@ -174,8 +180,16 @@ export interface UsageIndex<TRow extends UsageSubject> {
    */
   reconcileKeyOf(row: TRow): string;
 
-  /** A row recording that `subject` references `referenceId`. */
-  rowFor(subject: UsageSubject, referenceId: string): TRow;
+  /**
+   * A row recording that `subject` references `referenceId`, from the
+   * derivation that found it: an index that stores more than the reference
+   * (the class index's block count) reads it there.
+   */
+  rowFor(
+    subject: UsageSubject,
+    referenceId: string,
+    derived: UsageDerivation
+  ): TRow;
 
   /**
    * Which stored rows record a reference to `referenceId`.
@@ -244,6 +258,13 @@ export interface UsageIndex<TRow extends UsageSubject> {
 
   /** What the stored document references, under the bounds it is drawn with. */
   derive(document: unknown, limits: DocumentLimits): UsageDerivation;
+
+  /**
+   * How many blocks a stored row says its document has referencing it, for an
+   * index that counts them, `null` when the row holds no count. Absent from an
+   * index that counts no blocks.
+   */
+  blocksOf?(own: Omit<TRow, keyof UsageSubject>): number | null;
 }
 
 /**

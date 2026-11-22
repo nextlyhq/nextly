@@ -46,25 +46,43 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { DeclaredNames } from "../../../cli/utils/migration-discovery";
+import {
+  addressesCreatedInMilliseconds,
+  repairSqliteRegistryTimestamps,
+} from "../../../database/repair-sqlite-registry-timestamps";
+import { rearmRegistryTimestampRepair } from "../../../database/repair-sqlite-timestamps";
 import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
 import type { Logger } from "../../../shared/types";
 import type { SupportedDialect } from "../../../types/database";
 import { CollectionRegistryService } from "../../collections/services/collection-registry-service";
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
+import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
+import { ARCHIVE_TABLE } from "../../i18n/migration/entity-translation-rows";
+import {
+  holdsUnknownArchiveRows,
+  holdsUnresolvedArchiveRowsOf,
+  labelLegacyArchiveRows,
+} from "../../i18n/migration/label-legacy-archive-rows";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type {
   EntitySettingsRecord,
   SettingsEntityKind,
 } from "../migrate-create/entity-settings";
+import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 import {
   inRegistryStep,
   newestAppliedAppMigration,
   readSchemaVersion,
+  registryWriteOpen,
   writeRegistryRows,
 } from "../schema-version";
 
 import { outstandingEntityChanges } from "./applied-entity-changes";
+import {
+  everyEntityRegistered,
+  removeDroppedEntityLeftovers,
+} from "./dropped-entity-leftovers";
 import { registerFromMigrations } from "./metadata-register";
 import {
   isAwaitingMigration,
@@ -74,6 +92,7 @@ import {
 } from "./pending-entities";
 import { readRegistrySource, type RegistrySource } from "./registry-source";
 import { writeRegistryFromSource } from "./registry-writer";
+import { endsTheRun, reachStopPoint } from "./stop-points";
 
 /**
  * The logging surface a CALLER supplies, structural so the CLI's own context
@@ -133,6 +152,18 @@ export interface ReconcileMetadataDeps {
    * registry source uses, in place of any snapshot.
    */
   configurationRows?: EntitySettingsRecord;
+  /**
+   * Makes every field group's table addressable before a deleted entity's
+   * leftovers are removed (`removeDroppedEntityLeftovers`): given by the
+   * `nextly migrate` command, whose adapter resolves Nextly's own tables
+   * alone. A booted app's adapter already resolves them, and gives none.
+   */
+  prepareLeftoverTables?: () => Promise<void>;
+  /**
+   * The translations tables deleted entities left standing that the run's
+   * consent covered, dropped as their entity's rows go; none otherwise.
+   */
+  dropLeftoverTranslations?: ReadonlySet<string>;
   /** Each plugin-contributed collection's origin (`RegistryWriteDeps.collectionSources`). */
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
   /**
@@ -156,6 +187,18 @@ export interface ReconcileMetadataResult {
   rowsNotWritten: string[];
   /** Rows of entities an applied migration dropped, removed this run, as `<kind> <slug>`. */
   rowsRemoved: string[];
+  /**
+   * What dropped entities left in the tables every entity shares, removed this
+   * run once their rows were gone: one line each, naming the entity and what
+   * went (`removeDroppedEntityLeftovers`).
+   */
+  leftoversRemoved: string[];
+  /**
+   * The dropped entities whose leftovers this run could not remove, each named
+   * as `<kind> "<slug>"` (`removeDroppedEntityLeftovers`'s `left`): owed to the
+   * next run, so the run does not report the database up to date.
+   */
+  leftoversLeft?: string[];
   /** Rows moved from `pending`/`generated` to `applied`. */
   marked: number;
   /**
@@ -366,6 +409,11 @@ export async function reconcileMigrationMetadata(
    * behind keeps the version where it was, and the next run, which writes it,
    * moves the version too.
    */
+  // First, on SQLite, the registries' timestamps: the labelling next reads them, and is left out
+  // of a run whose repair failed and went on.
+  if (await repairRegistryTimestampsFirst(deps)) {
+    await labelArchiveWhileRegistered(deps);
+  }
   const swept = await writeRegistryRows(
     adapter,
     async tx => {
@@ -435,7 +483,188 @@ export async function reconcileMigrationMetadata(
         complete ? appliedMigration : undefined,
     }
   );
-  return swept.result;
+  // The registry write has committed (`stop-points.ts`).
+  await reachStopPoint("registry written");
+  const leftovers = await leftoversOfDroppedEntities(deps);
+  return {
+    ...swept.result,
+    leftoversRemoved: leftovers.removed,
+    leftoversLeft: leftovers.left,
+  };
+}
+
+/**
+ * Repairs, on SQLite, the registries' timestamps a migration file of an earlier release wrote in
+ * milliseconds (`repairSqliteRegistryTimestamps`), before anything in this pass reads them. Every
+ * such row is there already: the run's files have been applied, and this pass's own registry
+ * write stores seconds. Answers whether the times can be relied on: true on any other dialect.
+ *
+ * It runs on the connection the run holds, so inside a registry write a caller holds open too,
+ * and only while the run still holds the schema lock, as every write of this pass.
+ *
+ * A repair that fails is said once, and the start's mark is told the registries' repair is owed
+ * again (`rearmRegistryTimestampRepair`), so a start before the next run repairs too. Where this
+ * pass would label archived translations (`labellingOwed`), it then stops before the labelling
+ * and the registry write, as a labelling that fails does, and for the same reason: labelled by a
+ * time that is still wrong, an entity's archived rows would be settled as unresolved for good,
+ * and left unlabelled while the write removed the row of an entity this run dropped, they could
+ * never be labelled. Nothing of the registry changes, and the next run repairs, labels and
+ * writes. Where it would label nothing, the run goes on without the labelling.
+ */
+async function repairRegistryTimestampsFirst(
+  deps: ReconcileMetadataDeps
+): Promise<boolean> {
+  const { adapter, dialect, logger } = deps;
+  if (dialect !== "sqlite") return true;
+  await assertSchemaLockHeld();
+  try {
+    await repairSqliteRegistryTimestamps(adapter);
+    return true;
+  } catch (error) {
+    // A run that lost the schema lock, or a test's stop at a point (`stop-points.ts`), stops with
+    // that, as everywhere else in this pass.
+    if (endsTheRun(error)) throw error;
+    const stops = await labellingOwed(deps);
+    const reason = error instanceof Error ? error.message : String(error);
+    logger.warn(
+      stops
+        ? `The registries' timestamps could not be checked for values in milliseconds, so the registry rows were not written and archived translations were not labelled: ${reason}. The next run repairs them, labels and writes.`
+        : `The registries' timestamps could not be checked for values in milliseconds: ${reason}. The next run repairs them.`
+    );
+    // Best effort: a database that cannot be written now is repaired by the next run anyway,
+    // and a start before that run is told nothing, which is said.
+    await rearmRegistryTimestampRepair(adapter).catch((rearmError: unknown) => {
+      logger.warn(
+        `The next start was not told to repair the registries' timestamps: ${
+          rearmError instanceof Error ? rearmError.message : String(rearmError)
+        }.`
+      );
+    });
+    if (stops) throw error;
+    return false;
+  }
+}
+
+/**
+ * Whether this pass, its repair working, would label archived translations: outside a registry
+ * write a caller holds open (where `labelArchiveWhileRegistered` never labels), with rows of
+ * unknown kind in the archive, or unresolved rows the repair would hand back to the labelling
+ * (those of an address whose creation date is still in milliseconds). An archive or a registry
+ * that cannot be read is taken to hold them, so a failed repair stops the pass rather than let
+ * the registry write go ahead of rows still to label.
+ */
+async function labellingOwed(deps: ReconcileMetadataDeps): Promise<boolean> {
+  if (registryWriteOpen()) return false;
+  const { adapter } = deps;
+  try {
+    return (
+      (await holdsUnknownArchiveRows(adapter)) ||
+      (await holdsUnresolvedArchiveRowsOf(
+        adapter,
+        await addressesCreatedInMilliseconds(adapter)
+      ))
+    );
+  } catch (error) {
+    if (endsTheRun(error)) throw error;
+    return true;
+  }
+}
+
+/**
+ * Gives archive rows written before the archive recorded an entity's kind
+ * that kind (`labelLegacyArchiveRows`), before the registry write below
+ * removes the rows of entities this run's migrations dropped: labelling reads
+ * the registries, and a row whose entity is no longer registered can only be
+ * kept, unresolved, so the leftovers removal after the write could never take
+ * it. Not inside a registry write a caller holds open, whose transaction the
+ * archive's DDL would commit on MySQL; nothing when there is no archive.
+ *
+ * A failure stops the pass before the registry write: written anyway, the
+ * write would remove the rows that name the dropped entities, and their older
+ * archived translations could then never be labelled, nor removed. The run
+ * fails with nothing of the registry changed, and the next run labels them.
+ */
+async function labelArchiveWhileRegistered(
+  deps: ReconcileMetadataDeps
+): Promise<void> {
+  if (registryWriteOpen()) return;
+  const { adapter, dialect } = deps;
+  if (!(await adapter.tableExists(ARCHIVE_TABLE))) return;
+  // A holder the registry write below adds back (an entity the applied record lists that has no
+  // registry row) is not there to label its rows yet: labelled now, they would be settled as
+  // unresolved for good. So the rows wait for the next run, after that write.
+  if (!(await holdersInPlace(deps))) return;
+  await assertSchemaLockHeld();
+  await ensureI18nArchive(adapter, dialect);
+  await labelLegacyArchiveRows(adapter);
+}
+
+/**
+ * Whether the registries already hold every entity the registry write below writes from: the
+ * configuration's on a first run, the newest applied snapshot's otherwise. False where that record
+ * cannot be read, so the labelling waits rather than run before a holder it may add.
+ */
+async function holdersInPlace(deps: ReconcileMetadataDeps): Promise<boolean> {
+  const { adapter, dialect, migrationsDir } = deps;
+  if (deps.configurationRows !== undefined) {
+    return everyEntityRegistered(adapter, deps.configurationRows);
+  }
+  const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+  const source = await readRegistrySource({
+    migrationsDir,
+    isApplied: filename => events.isFileApplied(filename),
+  });
+  return (
+    source.kind === "snapshot" &&
+    (await everyEntityRegistered(adapter, source.entities))
+  );
+}
+
+/**
+ * Removes what the entities the applied migrations dropped left in the tables
+ * every entity shares, once the registry write above has committed their
+ * rows' removal (`removeDroppedEntityLeftovers`). Not inside a registry write
+ * a caller holds open (a first run's), whose transaction each entity's
+ * removal would join: the next run, finding the entity still gone, removes
+ * them. A pass that cannot read the applied records removes nothing, and says
+ * why.
+ */
+async function leftoversOfDroppedEntities(
+  deps: ReconcileMetadataDeps
+): Promise<{ removed: string[]; left: string[] }> {
+  const none = { removed: [], left: [] };
+  if (registryWriteOpen()) return none;
+  const { adapter, dialect, migrationsDir, logger } = deps;
+  try {
+    const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+    const source = await readRegistrySource({
+      migrationsDir,
+      isApplied: filename => events.isFileApplied(filename),
+    });
+    if (source.kind !== "snapshot") return none;
+    return await removeDroppedEntityLeftovers({
+      adapter,
+      chain: source.chain ?? [source.entities],
+      logger: asServiceLogger(logger),
+      ...(deps.prepareLeftoverTables === undefined
+        ? {}
+        : { prepareTables: deps.prepareLeftoverTables }),
+      ...(deps.dropLeftoverTranslations === undefined
+        ? {}
+        : { dropTranslations: deps.dropLeftoverTranslations }),
+    });
+  } catch (error) {
+    // A run that lost the schema lock stops, as does a test's stop at a point
+    // (`stop-points.ts`); anything else costs only this removal, which the
+    // next run tries again, and is owed to it.
+    if (endsTheRun(error)) throw error;
+    logger.warn(
+      `Could not remove what deleted entities left: ${
+        error instanceof Error ? error.message : String(error)
+      }. The next \`nextly migrate\` tries again.`
+    );
+    return { removed: [], left: ["deleted entities"] };
+  }
 }
 
 /**
@@ -542,6 +771,8 @@ async function registerAndSweep(
       awaitingMigration,
       unscopedMigrations: awaiting.unscoped,
       unreadable,
+      // Removed after the registry write commits, by the caller.
+      leftoversRemoved: [],
     },
     complete: registered.complete && unreadable.length === 0,
   };

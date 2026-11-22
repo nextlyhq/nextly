@@ -166,6 +166,7 @@ describe("promoting a pending change", () => {
       slug: "landing",
       inTransaction: true,
       readStored: async () => ({ kind: "absent" }),
+      readStoredOf: async () => new Map(),
     };
     const fields = [{ name: "body", type: "document", localized: true }];
 

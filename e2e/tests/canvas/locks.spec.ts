@@ -200,10 +200,10 @@ test.describe("the editor inside locked areas", () => {
     expect(typeof placed[2]).toBe("string");
     expect(placed.slice(3)).toEqual(PLACED.slice(2));
 
-    // The control: after a free block, a tile goes where the line says, with
-    // nothing to add about it.
+    // The control: after a free block, a tile goes where the line says, right
+    // after the block, and says so.
     await clickBlock(page, "lk-free-text");
-    await expect(heading).not.toHaveAccessibleDescription(/Goes/);
+    await expect(heading).toHaveAccessibleDescription(/^Goes after Text\./);
   });
 
   test("shows a block's design read-only inside contentOnly, its content editable", async ({
@@ -230,17 +230,17 @@ test.describe("the editor inside locked areas", () => {
     await expect.poll(() => undoDepth(page)).toBe(1);
 
     // The Style tab is shown, every control that edits held. A section's
-    // toggle, the state switcher and the edit-target chips only choose what
-    // is shown; a shared style's chip is held with the design, which the
+    // toggle, the state menu and the target chip's menu only choose what is
+    // shown; a shared style is held in that menu with the design, which the
     // builder's own tests cover, as this harness has no shared styles.
     await page.getByRole("tab", { name: "Style" }).click();
     await expect(
-      page.getByRole("button", { name: "This block", exact: true })
-    ).toHaveAttribute("aria-pressed", "true");
+      page.getByRole("button", { name: "Editing: This block" })
+    ).toBeVisible();
     const controls = page
       .getByRole("tabpanel")
       .locator(
-        'input, button:not([aria-expanded]):not([role="radio"]):not([data-target-chip]), select, textarea'
+        'input, button:not([aria-expanded]):not([role="radio"]), select, textarea'
       );
     expect(await controls.count()).toBeGreaterThan(0);
     for (const control of await controls.all()) {

@@ -44,13 +44,13 @@ type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 const instance = () => getNextly({ config: nextlyConfig });
 
 /**
- * Just the media lookup the route helpers probe for.
+ * Just the media reads the route helpers probe for: a file, and its copies.
  *
  * Narrower than the instance's whole `media` namespace on purpose: this reader
  * exists to be READ from, and forwarding `upload`/`update`/`delete` would offer
  * a public page route a write surface it has no reason to hold.
  */
-type MediaLookup = Pick<NextlyInstance["media"], "findByID">;
+type MediaLookup = Pick<NextlyInstance["media"], "findByID" | "copiesOf">;
 
 /**
  * The reader every public content route on this site resolves through.
@@ -78,6 +78,9 @@ export const siteReader: NextlyContentReader &
   findSingle: async args => (await instance()).findSingle(args),
   media: {
     findByID: async args => (await instance()).media.findByID(args),
+    // The resized copies a page's images are drawn from, asked of the same
+    // instance (see `pageBuilderImageCopies`).
+    copiesOf: async args => (await instance()).media.copiesOf(args),
   },
 };
 
@@ -136,13 +139,41 @@ export const SITE_STYLES = {
 };
 
 /**
+ * Whether this site runs the SEO plugin, read from the config the site boots
+ * with, so the routes and the plugin list never disagree about it.
+ */
+const seoPluginRuns = (nextlyConfig.plugins ?? []).some(
+  plugin => plugin.name === "@nextlyhq/plugin-seo"
+);
+
+/**
+ * The title a route states for a page's browser tab: the page's own title,
+ * never a heading or other text its blocks offer, since a page's first heading
+ * is often a section title rather than what the page is called.
+ *
+ * Nothing where the SEO plugin runs. A title a route states outranks the
+ * plugin's title pattern, so stating the page's title there would keep the
+ * site's pattern ("Pricing · Site name") off every page. The plugin works the
+ * title out itself from the page's SEO title, its pattern and the page's own
+ * title. Without the plugin, the page's title is stated so the tab is never
+ * empty.
+ *
+ * Shared by every route on this site that serves a page, so each answers the
+ * tab the same way.
+ */
+export function pageTitle(
+  document: Record<string, unknown>
+): string | undefined {
+  if (seoPluginRuns) return undefined;
+  return typeof document.title === "string" ? document.title : undefined;
+}
+
+/**
  * The metadata a Single-backed page derives from its document.
  *
- * Shared by the two single-page routes, which had the same nine lines each. The
- * SEO derivation wins over the stored field where it has an answer, because it
- * reads the page's own first heading and opening paragraph — a title an author
- * changed in the layout should not be contradicted by a `title` field they
- * forgot.
+ * Shared by the two single-page routes, which had the same nine lines each.
+ * The title is the page's own ({@link pageTitle}); the description and share
+ * image are what its blocks offer.
  *
  * Not shared with the collection route, whose version also states `canonical`:
  * an entry has a path within its collection and a Single does not.
@@ -161,7 +192,7 @@ export function singleMetadata(
   openGraph?: { images: { url: string }[] };
 } {
   return {
-    title: derived.title ?? (document.title as string | undefined),
+    title: pageTitle(document),
     description: derived.description,
     ...(derived.image
       ? { openGraph: { images: [{ url: derived.image }] } }

@@ -404,4 +404,25 @@ describe("classOverrideOf", () => {
     expect(classOverrideOf([configured], [named])).toEqual([named]);
     expect(classOverrideOf([configured], [locked])).toEqual([locked]);
   });
+
+  it("keeps an override that only records the sizes a fluid size was made from", () => {
+    // A configured text style whose size already is the clamp "Fluid…" makes:
+    // the sizes are the whole edit, and without them the size can't follow
+    // a change of the site's fluid range.
+    const text = {
+      ...configured,
+      role: "text" as const,
+      styles: {
+        base: { base: { fontSize: "clamp(1rem, 0.6087rem + 1.7391vw, 2rem)" } },
+      },
+    };
+    const sized = { ...text, fluidSizes: { base: { small: 16, large: 32 } } };
+    expect(classOverrideOf([text], [sized])).toEqual([sized]);
+    // The same sizes in another key order are no change.
+    const reordered = {
+      ...sized,
+      fluidSizes: { base: { large: 32, small: 16 } },
+    };
+    expect(classOverrideOf([sized], [reordered])).toEqual([]);
+  });
 });

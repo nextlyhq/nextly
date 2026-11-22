@@ -112,11 +112,17 @@ interface SiteState {
 
 const site: SiteState = { asked: [], blockLinkedIn: false };
 
-/** What the design drawing the post `designed` says about it. */
+/**
+ * What the design drawing the post `designed` says about it. Its title is
+ * never used: a page's title is its own, as the order gives it.
+ */
 const DESIGNED = {
   title: "Designed post | Acme",
   description: "Written by the post's design.",
 };
+
+/** The post `designed`'s own title, which its head is served with. */
+const DESIGNED_PAGE_TITLE = "Designed";
 
 /**
  * The Page Builder, stood in for by a plugin of its name offering only its
@@ -146,7 +152,7 @@ const pageBuilder: PluginDefinition = {
 function designedHtml(origin: string): string {
   return [
     "<!DOCTYPE html><html><head>",
-    `<title>${DESIGNED.title}</title>`,
+    `<title>${DESIGNED_PAGE_TITLE}</title>`,
     `<meta name="description" content="${DESIGNED.description}"/>`,
     `<link rel="canonical" href="${origin}/blog/designed"/>`,
     "</head><body><h1>Designed</h1></body></html>",
@@ -262,7 +268,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.create({
         collection: "posts",
         data: {
-          title: "Designed",
+          title: DESIGNED_PAGE_TITLE,
           slug: "designed",
           team: "open",
           status: "published",
@@ -406,10 +412,11 @@ describe.each(getConfiguredTestDialects())(
 
     it("holds what a page's design sets, and finds the page holds it too", async () => {
       const answer = await check(reader, `${origin}/blog/designed`);
+      // The design's description; the page's own title, never the design's.
       expect(answer).toMatchObject({
         kind: "checked",
         stored: {
-          title: DESIGNED.title,
+          title: DESIGNED_PAGE_TITLE,
           description: DESIGNED.description,
         },
       });

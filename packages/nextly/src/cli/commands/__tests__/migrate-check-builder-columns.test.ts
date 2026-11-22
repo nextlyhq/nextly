@@ -293,7 +293,7 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
     });
 
     it.runIf(dialect === "mysql")(
-      "refuses to widen an indexed one an earlier file made varchar(255), writing nothing",
+      "widens an indexed one an earlier file made varchar(255), lifting its index and making it again by prefix",
       async () => {
         const manifest = manifestWith({
           name: "tag",
@@ -303,13 +303,33 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         expect((await create(manifest)).code).toBeUndefined();
         await recordedAs("tag", "varchar(255)");
 
-        const refused = await create(manifest);
+        const widened = await create(manifest, consentFor("tag"));
 
-        expect(refused.code).toBe(1);
-        const said = refused.said.join("\n");
-        for (const table of TABLES) expect(said).toContain(`${table}.tag`);
-        expect(said).toContain("maxLength");
-        expect(sqlFiles()).toHaveLength(1);
+        expect(widened.code, widened.said.join("\n")).toBeUndefined();
+        const files = sqlFiles();
+        expect(files).toHaveLength(2);
+        const { upSql } = parseSqlSections(
+          await readFile(join(dir, "migrations", files[1]), "utf-8")
+        );
+        for (const table of TABLES) {
+          const at = (pattern: string) =>
+            upSql.search(new RegExp(pattern, "i"));
+          const dropped = at(`DROP INDEX \`idx_${table}_tag\``);
+          const modified = at(
+            `ALTER TABLE \`${table}\` MODIFY COLUMN \`tag\` text`
+          );
+          const made = at(
+            `CREATE INDEX \`idx_${table}_tag\` ON \`${table}\` ?\\(\`tag\`\\(191\\)\\)`
+          );
+          // MySQL refuses the MODIFY while the whole-column index stands, so it goes first, and
+          // comes back after keyed by a prefix, as a TEXT column is.
+          expect([
+            table,
+            dropped >= 0,
+            modified > dropped,
+            made > modified,
+          ]).toEqual([table, true, true, true]);
+        }
       }
     );
 
@@ -460,12 +480,27 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       expect((await create(true, [note])).code).toBeUndefined();
       const before = sqlFiles();
 
-      // `code` was never in the companion, so it does not leave translation: it is a new column
-      // on the main table, which the main table's diff adds.
-      const disabled = await create(false, [note, code]);
+      // `code` was never in the companion, so it does not leave translation and its width is not
+      // judged. The edit is refused for adding a field beside the disable, which one run cannot
+      // apply, before any file is written.
+      const together = await create(false, [note, code]);
 
+      expect(together.code).toBe(1);
+      const said = together.said.join("\n");
+      expect(said).toContain("Turn translation off on its own");
+      expect(said).not.toContain("states no width");
+      expect(sqlFiles()).toEqual(before);
+
+      // Made in two runs, the disable is written, then `code` as a new column on the main table,
+      // which the main table's diff adds.
+      const disabled = await create(false, [note]);
       expect(disabled.code, disabled.said.join("\n")).toBeUndefined();
-      expect(sqlFiles().length).toBeGreaterThan(before.length);
+      const afterDisable = sqlFiles();
+      expect(afterDisable.length).toBeGreaterThan(before.length);
+
+      const added = await create(false, [note, code]);
+      expect(added.code, added.said.join("\n")).toBeUndefined();
+      expect(sqlFiles().length).toBeGreaterThan(afterDisable.length);
     });
   }
 );

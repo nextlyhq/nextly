@@ -107,15 +107,23 @@ export { useSuppressAdminChrome } from "../components/layout/ChromeSuppression";
 
 export { useFoldedPanel } from "../components/layout/PanelFold";
 
-export { PlaceTabs, TargetSlot } from "../components/shared/target-slot";
+export {
+  PlaceTabs,
+  TargetSlot,
+  useContributionApplies,
+  usePlaceTabs,
+} from "../components/shared/target-slot";
 
 export type {
+  ContributionDocument,
   PlaceContributionProps,
   PlaceProps,
   PlaceTabBadge,
+  PlaceTabEntry,
   PlaceTabProps,
   PlaceTabsProps,
   TargetSlotProps,
+  UsePlaceTabsOptions,
 } from "../components/shared/target-slot";
 
 export type { AdminChromeLayer } from "../components/layout/lib/chrome-suppression";
@@ -127,3 +135,14 @@ export type {
   PageContainerProps,
   PageContainerRef,
 } from "../types/layout/page-container";
+
+// Templates for a new collection, Single or field group: the declaration and
+// the registry a plugin's admin module offers its own through, re-exported by
+// `@nextlyhq/plugin-sdk/admin` as the table's registries are.
+export { registerSchemaTemplates } from "../lib/builder/schema-templates";
+
+export type {
+  SchemaTemplate,
+  SchemaTemplateField,
+  SchemaTemplateKind,
+} from "../lib/builder/schema-templates";

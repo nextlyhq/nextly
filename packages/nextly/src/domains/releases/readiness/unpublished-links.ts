@@ -48,6 +48,7 @@ import {
 
 import {
   defineReleaseCheckSource,
+  membersInDeclaredScopes,
   type ReleaseCheckContext,
   type ReleaseCheckFinding,
   type ReleaseCheckScope,
@@ -361,7 +362,11 @@ export function unpublishedLinksSource(deps: {
     async check(batch, ctx) {
       // A document coming down is never offered its links: what it pointed at
       // stops mattering once it is not live itself.
-      const going = batch.filter(member => member.action === "publish");
+      // A removed entity's documents are named by `core.removed-from-code`
+      // alone: their tables may be gone, so their links are not read.
+      const going = (await membersInDeclaredScopes(batch, ctx)).filter(
+        member => member.action === "publish"
+      );
       if (going.length === 0) return [];
       const links = await linksOfMembers(
         deps.reads,

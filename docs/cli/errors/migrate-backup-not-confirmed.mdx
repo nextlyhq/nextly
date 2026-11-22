@@ -1,0 +1,24 @@
+---
+title: MIGRATE_BACKUP_NOT_CONFIRMED
+description: "`nextly migrate` found the migration records of an earlier Nextly release, and no backup was confirmed, with no terminal attached to ask."
+---
+
+## Cause
+
+`nextly migrate` found the migration records of an earlier Nextly release, and no backup was confirmed, with no terminal attached to ask.
+
+Earlier releases recorded migrations in `nextly_migrations` and `nextly_migration_journal`. `nextly migrate` moves those records into `nextly_schema_events` and drops both tables, under the schema lock, before it reads which migrations have applied. It does that only once a backup is confirmed. With no terminal attached, as in CI, it cannot ask, and `--backup-confirmed` was not passed. Nothing was changed.
+
+## Fix
+
+- Back up the database.
+- Run `nextly migrate --backup-confirmed`. The flag is ignored on a database that has no such records, so a deploy script can always pass it.
+
+## Example
+
+```text
+✗ This database keeps its migration records the way an earlier Nextly release did, and `nextly migrate` moves them only once a backup is confirmed.
+  Why:  No terminal is attached to ask whether the database is backed up, and `--backup-confirmed` was not passed. Nothing was changed.
+  Next: Back up the database, then run `nextly migrate --backup-confirmed`.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-backup-not-confirmed  (MIGRATE_BACKUP_NOT_CONFIRMED)
+```

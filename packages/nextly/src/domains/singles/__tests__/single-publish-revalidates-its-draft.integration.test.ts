@@ -647,6 +647,9 @@ describe("a Single's publish re-judges the draft it promotes", () => {
     const singles = current.getService<"singleEntryService">(
       "singleEntryService"
     ) as unknown as SingleEntryService;
+    // May publish: the save below writes the live row of a Single with
+    // drafts, which is a publish, and the field rule is what is tested.
+    await userWhoMay(current, BOSS.id, "publish", [SLUG]);
 
     await singles.update(
       SLUG,

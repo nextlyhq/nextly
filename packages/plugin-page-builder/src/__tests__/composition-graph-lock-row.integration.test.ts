@@ -97,7 +97,7 @@ describe.each(getConfiguredTestDialects())(
 
       // The install, holding the row where the dialect takes a row lock, as
       // the plugin's migration leaves it, and every option its first start
-      // records (the site's spacing model) recorded before it stops.
+      // records (the address claims' start pass) recorded before it stops.
       const installing = await adapterOn(database);
       const first = await openStatementLog(installing, dialect);
       try {

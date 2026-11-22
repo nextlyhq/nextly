@@ -48,6 +48,7 @@ import {
 import type { DetailSource } from "../structured-data/rules";
 import { fitSummary, textFit } from "../tab/problems";
 
+import { useAddressParam } from "./address";
 import { AdminLink } from "./section";
 import {
   FROM_THE_PAGE,
@@ -918,6 +919,16 @@ type SwitchFilter = "all" | "on" | "off";
 /** How many types bring the search and the filter. */
 const SEARCH_FROM = 11;
 
+/**
+ * The type whose row is open, one at a time: at first the one a link names
+ * (`?type=posts`), as a design's SEO panel links to the title pattern that
+ * gives its pages' titles, else none.
+ */
+function useOpenType() {
+  const asked = useAddressParam("type");
+  return useState<string | null>(asked);
+}
+
 /** A group of rows (Collections or Singles) under its heading. */
 function TypeGroup({
   heading,
@@ -964,7 +975,7 @@ export function ContentTypesTab({
   /** Whether the reader may change the settings, and so the switches. */
   canChange?: boolean;
 }): JSX.Element {
-  const [open, setOpen] = useState<string | null>(null);
+  const [open, setOpen] = useOpenType();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<SwitchFilter>("all");
   const total = types.length + switchedOff.length;

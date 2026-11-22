@@ -2,13 +2,13 @@
 
 /**
  * The tree itself: the rows to draw, with the places a field can be added
- * among them, inside the drag context that lets a field move within its own
- * container and nowhere else.
+ * among them, inside the drag context. Every row makes way while a field is
+ * dragged, since a field may be dropped beside any of them; where it may go
+ * is the move rule's to say.
  */
 import {
   SortableContext,
   verticalListSortingStrategy,
-  type SortingStrategy,
 } from "@dnd-kit/sortable";
 import type { FocusEvent, JSX, KeyboardEvent } from "react";
 import { useMemo } from "react";
@@ -31,19 +31,6 @@ function positionOf(place: AddPlaceItem): FieldInsertPosition {
   };
 }
 
-/**
- * While dragging, only rows in the dragged row's own container make way: a
- * field moves within its container, and nowhere else.
- */
-function sameContainerStrategy(rows: readonly VisibleRow[]): SortingStrategy {
-  const parentOf = (i: number) => rows[i]?.node.parentId ?? null;
-  return args =>
-    parentOf(args.index) === parentOf(args.activeIndex) &&
-    parentOf(args.overIndex) === parentOf(args.activeIndex)
-      ? verticalListSortingStrategy(args)
-      : null;
-}
-
 export function OutlineTree({
   rows,
   addable,
@@ -59,6 +46,7 @@ export function OutlineTree({
   onAddAt,
   onKeyDown,
   onFocus,
+  movesDescribedBy,
 }: {
   rows: readonly VisibleRow[];
   /** Whether the places a field can be added are offered. */
@@ -75,12 +63,13 @@ export function OutlineTree({
   onAddAt: (position: FieldInsertPosition) => void;
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   onFocus: (event: FocusEvent<HTMLDivElement>) => void;
+  /** The element naming the keys that move a field. */
+  movesDescribedBy: string;
 }): JSX.Element {
   const ids = useMemo(() => rows.map(row => row.node.id), [rows]);
-  const strategy = useMemo(() => sameContainerStrategy(rows), [rows]);
 
   return (
-    <SortableContext items={ids} strategy={strategy}>
+    <SortableContext items={ids} strategy={verticalListSortingStrategy}>
       <div
         role="tree"
         aria-label="Fields"
@@ -113,6 +102,7 @@ export function OutlineTree({
                 node.readOnly === null &&
                 !isPendingDelete(node)
               }
+              movesDescribedBy={movesDescribedBy}
               onSelect={actions.select}
               onToggle={onToggle}
               registerRow={registerRow}

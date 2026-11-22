@@ -22,6 +22,7 @@ export const passwordResetTemplate: OwnerTemplate = {
     "Sent when someone asks to reset their password, with the link that sets a new one.",
   // The link sets a new password for whoever opens it.
   carriesSecret: true,
+  sentBy: ["Someone asks to reset their password"],
   subject: "Reset your {{appName}} password",
   htmlContent: `<h1 style="margin: 0; padding: 0 0 16px; font-size: 24px; font-weight: 600; color: #18181b; line-height: 32px;">Password Reset</h1>
 <p style="margin: 0; padding: 0 0 8px; font-size: 16px; color: #3f3f46; line-height: 24px;">Hi {{userName}},</p>

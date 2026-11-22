@@ -110,8 +110,48 @@ export interface SnapshotSaveResult {
  */
 const recordingsInFlight = new Map<string, Set<Promise<unknown>>>();
 
-/** Note a recording on its way, and take it off once it has landed. */
-function trackRecording(document: string, saving: Promise<unknown>): void {
+/**
+ * Each document's recordings in the order this tab sent them, from every
+ * recorder: how many were sent, and the number of the latest one, in that
+ * order, that the server stored.
+ */
+const recordingLog = new Map<string, { sent: number; stored: number }>();
+
+/**
+ * How many recordings of `document` this tab has sent so far, every recorder's
+ * together. Each recording's number is the count once it was sent.
+ */
+export function recordingsSent(document: string): number {
+  return recordingLog.get(document)?.sent ?? 0;
+}
+
+/**
+ * The number of the latest recording of `document`, in the order this tab
+ * sent them, that the server stored; 0 when none was. It says whose snapshot
+ * the author's recovery point holds now, as far as this tab knows: a recorder
+ * whose own recording is that one wrote what is there. One that failed did
+ * not, and is never taken for having done so.
+ */
+export function lastStoredRecording(document: string): number {
+  return recordingLog.get(document)?.stored ?? 0;
+}
+
+/**
+ * Note a recording on its way, and take it off once it has landed.
+ *
+ * @returns the recording's number: see `recordingsSent`
+ */
+function trackRecording(document: string, saving: Promise<unknown>): number {
+  const log = recordingLog.get(document) ?? { sent: 0, stored: 0 };
+  log.sent += 1;
+  const number = log.sent;
+  recordingLog.set(document, log);
+  void saving.then(
+    () => {
+      log.stored = Math.max(log.stored, number);
+    },
+    () => {}
+  );
   const inFlight = recordingsInFlight.get(document) ?? new Set();
   inFlight.add(saving);
   recordingsInFlight.set(document, inFlight);
@@ -122,6 +162,7 @@ function trackRecording(document: string, saving: Promise<unknown>): void {
     }
   };
   void saving.then(landed, landed);
+  return number;
 }
 
 /** How long a save waits for recordings in flight: see `recordingsSettled`. */
@@ -273,6 +314,39 @@ function outcomeOfFailure(error: unknown): {
     : { refused: false, status: "error" };
 }
 
+/**
+ * The parts of one pending recording: asking for it, dropping it once the
+ * work it would record is no longer at risk, and making it at once.
+ */
+function pendingRecording(
+  refs: {
+    timerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>;
+    pendingRef: MutableRefObject<boolean>;
+    heldRef: MutableRefObject<string | null>;
+  },
+  flush: () => Promise<void>,
+  debounceMs: number
+): Pick<UseSnapshotAutosaveResult, "schedule" | "cancel" | "flushPending"> {
+  const { timerRef, pendingRef, heldRef } = refs;
+  return {
+    schedule: () => {
+      clearTimer(timerRef);
+      timerRef.current = setTimeout(() => {
+        void flush();
+      }, debounceMs);
+    },
+    cancel: () => {
+      dropRecording(timerRef, pendingRef);
+      heldRef.current = null;
+    },
+    flushPending: () => {
+      if (timerRef.current === null) return;
+      clearTimer(timerRef);
+      void flush();
+    },
+  };
+}
+
 export interface UseSnapshotAutosaveOptions {
   /**
    * What this recording is keyed by, or `null` when recording must stay off.
@@ -334,6 +408,20 @@ export interface UseSnapshotAutosaveResult {
    * would record has been saved, or undone, since.
    */
   cancel: () => void;
+  /**
+   * Make a recording asked for and not yet made now, rather than once the
+   * debounce has elapsed: for a recorder going away with work it was asked
+   * to record, whose timer would otherwise be cleared with it. Nothing is
+   * made when none was asked for, and the same rules apply as at the end of
+   * the wait.
+   */
+  flushPending: () => void;
+  /**
+   * The number of this recorder's own latest recording (see
+   * `recordingsSent`), or null before it has sent one: with
+   * `lastStoredRecording`, whether the point holds what it recorded.
+   */
+  lastSent: () => number | null;
 }
 
 /**
@@ -352,6 +440,8 @@ export function useSnapshotAutosave({
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // This recorder's own latest recording: see `lastSent`.
+  const lastSentRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
   /*
    * Set when a change arrives while a recording is still in flight. Those
@@ -416,7 +506,9 @@ export function useSnapshotAutosave({
     if (mountedRef.current) setStatus("saving");
 
     const saving = latest.save();
-    if (latest.document != null) trackRecording(latest.document, saving);
+    if (latest.document != null) {
+      lastSentRef.current = trackRecording(latest.document, saving);
+    }
     try {
       const result = await saving;
       if (mountedRef.current) {
@@ -457,21 +549,11 @@ export function useSnapshotAutosave({
    * recording one of them had already allowed. Scheduling a timer that flush
    * then declines costs a cleared timeout.
    */
-  // Built together, as the two halves of one pending recording: asking for
-  // it, and dropping it once the work it would record is no longer at risk.
-  const { schedule, cancel } = useMemo(
-    () => ({
-      schedule: () => {
-        clearTimer(timerRef);
-        timerRef.current = setTimeout(() => {
-          void flush();
-        }, debounceMs);
-      },
-      cancel: () => {
-        dropRecording(timerRef, pendingRef);
-        heldRef.current = null;
-      },
-    }),
+  // Built together, as the parts of one pending recording: see
+  // `pendingRecording`.
+  const { schedule, cancel, flushPending } = useMemo(
+    () =>
+      pendingRecording({ timerRef, pendingRef, heldRef }, flush, debounceMs),
     [flush, debounceMs]
   );
 
@@ -499,5 +581,6 @@ export function useSnapshotAutosave({
     return () => clearTimer(timerRef);
   }, [identity]);
 
-  return { status, lastSavedAt, schedule, cancel };
+  const lastSent = useCallback(() => lastSentRef.current, []);
+  return { status, lastSavedAt, schedule, cancel, flushPending, lastSent };
 }

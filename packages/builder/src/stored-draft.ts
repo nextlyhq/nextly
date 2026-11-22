@@ -19,16 +19,22 @@
 
 import * as React from "react";
 
+import { useFieldEdit } from "./field-edit";
+
 /**
  * @param stored - the value the document holds, as the field shows it
  * @returns the draft and its setter, the draft reset whenever `stored` moves
+ *
+ * A draft that differs from `stored` is an edit in progress, which Escape in
+ * the field puts back (`field-edit.ts`).
  */
 export function useStoredDraft(
   stored: string
 ): [string, (next: string) => void] {
-  const [draft, setDraft] = React.useState(stored);
+  const [draft, setDraftState] = React.useState(stored);
   React.useEffect(() => {
-    setDraft(stored);
+    setDraftState(stored);
   }, [stored]);
+  const setDraft = useFieldEdit(stored, setDraftState);
   return [draft, setDraft];
 }

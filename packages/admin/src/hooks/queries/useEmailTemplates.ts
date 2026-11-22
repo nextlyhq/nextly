@@ -40,6 +40,7 @@ import {
   sendTestEmail,
   getSendTestTarget,
   getTemplateEngine,
+  getTemplateSenders,
   readAsLiquid,
   overrideTemplate,
   resetTemplate,
@@ -49,6 +50,7 @@ import {
   type DraftPreviewResult,
   type DraftPreviewTemplate,
   type EmailTemplateRecord,
+  type TemplateSenders,
   type CreateEmailTemplatePayload,
   type UpdateEmailTemplatePayload,
   type EmailTemplatePreviewResult,
@@ -115,6 +117,9 @@ export const emailTemplateKeys = {
   /** Whether the template is kept on its first engine, and why. */
   engine: (id: string): readonly ["emailTemplates", "engine", string] =>
     [...emailTemplateKeys.all(), "engine", id] as const,
+  /** What sends a template, read fresh for the delete guard. */
+  senders: (id: string): readonly ["emailTemplates", "senders", string] =>
+    [...emailTemplateKeys.all(), "senders", id] as const,
 };
 
 // ============================================================
@@ -156,6 +161,31 @@ export function useEmailTemplate(
       return getTemplate(id);
     },
     enabled: !!id,
+    ...options,
+  });
+}
+
+/**
+ * useTemplateSenders — Fetch what sends a template, read fresh for the
+ * delete guard. Stale the moment it lands: the answer decides what a
+ * deletion destroys, so the default five-minute freshness must not serve a
+ * cached check over a referencing rule added moments ago.
+ */
+export function useTemplateSenders(
+  id?: string | null,
+  options?: Omit<
+    UseQueryOptions<TemplateSenders, Error>,
+    "queryKey" | "queryFn" | "enabled"
+  >
+): UseQueryResult<TemplateSenders, Error> {
+  return useQuery<TemplateSenders, Error>({
+    queryKey: emailTemplateKeys.senders(id ?? ""),
+    queryFn: () => {
+      if (!id) throw new Error("Template ID is required");
+      return getTemplateSenders(id);
+    },
+    enabled: Boolean(id),
+    staleTime: 0,
     ...options,
   });
 }

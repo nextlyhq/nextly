@@ -35,57 +35,23 @@ import { Input, Label } from "@nextlyhq/ui";
 import type { FieldValidationRule } from "nextly/field-catalog";
 import { useId, type JSX } from "react";
 
-import { ValidationNumberField } from "./ValidationNumberField";
+import {
+  boundProblem,
+  NUMERIC_RULES,
+  type NumericRule,
+} from "@admin/lib/validation-bounds";
 
-/**
- * The rules this editor draws, and what each admits.
- *
- * `counts` is the whole of the difference between a bound on a QUANTITY and a
- * bound on a VALUE: a length or a row count is a whole number of zero or more,
- * while a bound on a value may legitimately be fractional or negative.
- * `ValidationNumberField` turns that one flag into the input's constraints, so
- * every surface applies the same answer rather than restating it.
- *
- * `required` is deliberately absent: every surface offers it through its own
- * control outside this set, so drawing it here would draw it twice.
- */
-const NUMERIC_RULES = {
-  minLength: {
-    label: "Min length",
-    description: "Fewest characters allowed.",
-    counts: true,
-  },
-  maxLength: {
-    label: "Max length",
-    description: "Most characters allowed.",
-    counts: true,
-  },
-  minRows: {
-    label: "Min rows",
-    description: "Fewest entries allowed.",
-    counts: true,
-  },
-  maxRows: {
-    label: "Max rows",
-    description: "Most entries allowed.",
-    counts: true,
-  },
-  min: { label: "Min", description: "Lowest value allowed.", counts: false },
-  max: { label: "Max", description: "Highest value allowed.", counts: false },
-} as const satisfies Partial<
-  Record<
-    FieldValidationRule,
-    { label: string; description: string; counts: boolean }
-  >
->;
-
-type NumericRule = keyof typeof NUMERIC_RULES;
+import { ValidationBoundField } from "./ValidationNumberField";
 
 /**
  * Numeric rules drawn side by side, in the order presented.
  *
  * Rendering order is this component's own concern rather than the order core
  * happens to list them in, so the layout stays stable as the vocabulary grows.
+ *
+ * Whether a bound as it stands can be kept is not drawn from here: the rule
+ * lives in `lib/validation-bounds`, shared with the save that holds a field
+ * its panel already flagged, so the two can never disagree.
  */
 const NUMERIC_PAIRS: readonly (readonly [NumericRule, NumericRule])[] = [
   ["minLength", "maxLength"],
@@ -200,12 +166,13 @@ export function ValidationRulesEditor({
           {[lo, hi]
             .filter(rule => permits.has(rule))
             .map(rule => (
-              <ValidationNumberField
+              <ValidationBoundField
                 key={rule}
                 label={NUMERIC_RULES[rule].label}
                 description={NUMERIC_RULES[rule].description}
                 counts={NUMERIC_RULES[rule].counts}
                 value={value[rule]}
+                problem={boundProblem(rule, value)}
                 disabled={disabled}
                 onChange={(n: number | undefined) => onChange({ [rule]: n })}
               />
@@ -226,6 +193,7 @@ export function ValidationRulesEditor({
           value={value.message}
           disabled={disabled}
           describes={messageDescribes}
+          patternSet={(value.pattern ?? "").trim() !== ""}
           onChange={message => onChange({ message })}
         />
       )}
@@ -264,14 +232,24 @@ function MessageRow({
   value,
   disabled,
   describes,
+  patternSet,
   onChange,
 }: {
   value: string | undefined;
   disabled?: boolean;
   describes: "pattern" | "validation";
+  /** Whether a Pattern is written, which a message is then wanted for. */
+  patternSet: boolean;
   onChange: (v: string) => void;
 }) {
   const id = useId();
+  const nudgeId = `${id}-nudge`;
+  // A pattern cannot be put into words for the editor who fails it, so with
+  // none written they are told only that the value "does not match the
+  // required format" — not what is missing. The author is the one who knows,
+  // so they are asked here, once a pattern exists and while the box is blank.
+  const nudge =
+    describes === "pattern" && patternSet && (value ?? "").trim() === "";
   return (
     <div className="space-y-1">
       <Label htmlFor={id}>Custom error message</Label>
@@ -279,8 +257,18 @@ function MessageRow({
         id={id}
         value={value ?? ""}
         disabled={disabled}
+        placeholder={
+          describes === "pattern" ? "e.g. Must contain @123" : undefined
+        }
+        aria-describedby={nudge ? nudgeId : undefined}
         onChange={e => onChange(e.target.value)}
       />
+      {nudge && (
+        <p id={nudgeId} className="text-xs text-foreground">
+          Without a message, editors only see that the value does not match the
+          required format. Say what it needs.
+        </p>
+      )}
       {/* Which failure this message describes is the caller's, not something
           this component can see. Naming the Pattern is right where the runtime
           applies the message to that rule, and wrong where the same string also

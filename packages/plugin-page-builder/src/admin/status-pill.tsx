@@ -14,9 +14,22 @@
 import { PILL_LABEL, type PillState } from "@nextlyhq/plugin-sdk/admin";
 import type { JSX } from "react";
 
+/**
+ * A state the pill draws: the admin's, or "scheduled" for a page whose
+ * publication is set for later, which only the editor's own pill shows.
+ */
+export type StatusPillState = PillState | "scheduled";
+
 export interface StatusPillProps {
   /** Where the document stands, in the admin's words. */
-  state: PillState;
+  state: StatusPillState;
+  /**
+   * What the state is called, where the admin named it with the state (a
+   * page's life stage); the admin's pill words otherwise.
+   */
+  label?: string;
+  /** More about the state, on hover (when a scheduled page goes live). */
+  detail?: string;
   /** What the pill describes, said to a screen reader before the state. */
   subject?: string;
   /** `sm` for a row or a chip, where the bar's size would crowd the line. */
@@ -32,6 +45,8 @@ export interface StatusPillProps {
 export function StatusPill({
   state,
   subject,
+  label,
+  detail,
   size = "md",
 }: StatusPillProps): JSX.Element {
   const live = state === "published";
@@ -41,6 +56,7 @@ export function StatusPill({
     // that does nothing.
     <span
       data-status={state}
+      {...(detail === undefined ? {} : { title: detail })}
       className={[
         "border-[color:var(--nx-builder-border)] inline-flex shrink-0 items-center whitespace-nowrap rounded-full border",
         size === "sm" ? "h-[18px] px-1.5 text-[11px]" : "px-2 py-0.5 text-xs",
@@ -54,7 +70,7 @@ export function StatusPill({
       {subject === undefined ? null : (
         <span className="sr-only">{`${subject}: `}</span>
       )}
-      {PILL_LABEL[state]}
+      {label ?? (state === "scheduled" ? "" : PILL_LABEL[state])}
     </span>
   );
 }

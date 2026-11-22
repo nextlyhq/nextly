@@ -81,6 +81,41 @@ describe("SchemaChangeDialog destructive-drop acknowledgment", () => {
     expect(resolutions.legacy).toEqual({ action: "confirm_drop" });
   });
 
+  // A changed field the preview classed destructive, such as a many-to-many made a single link,
+  // drops its links: the person was warned of it, so its drop is confirmed by name as a removed
+  // field's is. A changed field the preview classed safe is not.
+  it("attaches a confirm_drop resolution for each changed field the preview classed destructive", () => {
+    const onConfirm = vi.fn();
+    const changes = emptyChanges();
+    changes.changed = [
+      {
+        name: "related",
+        from: "relationship",
+        to: "relationship",
+        rowCount: 3,
+        classification: "destructive",
+        reason: "relation_changed",
+      },
+      {
+        name: "summary",
+        from: "text",
+        to: "text",
+        rowCount: 0,
+        classification: "safe",
+        reason: "constraint_changed",
+      },
+    ];
+    renderDialog(changes, onConfirm);
+
+    fireEvent.click(screen.getByRole("button", { name: /apply changes/i }));
+
+    const resolutions = onConfirm.mock.calls[0][0] as Record<
+      string,
+      FieldResolution
+    >;
+    expect(resolutions).toEqual({ related: { action: "confirm_drop" } });
+  });
+
   // A purely additive change destroys no data, so the dialog must not attach
   // spurious confirm_drop resolutions that would misrepresent the intent.
   it("sends no confirm_drop resolutions when nothing is removed", () => {

@@ -215,7 +215,9 @@ export function ScheduledReleaseBanner({
   // request whose only outcome is a 403 under every document they open.
   const canRead = useCan("read-content-releases");
   const { data, isError } = useReleasesContaining(document, canRead);
-  const now = useMinuteClock();
+  // Moved on only while there is a release to show a time for: with none the
+  // banner draws nothing, and must not draw the screen again every minute.
+  const now = useMinuteClock((data?.items.length ?? 0) > 0);
   const { actions, dialogs } = useDocumentReleaseActions();
 
   // A LOOKUP THAT FAILED IS NOT AN EMPTY SCHEDULE, and collapsing the two hides

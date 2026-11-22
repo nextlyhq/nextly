@@ -22,7 +22,15 @@ import {
   readRepairs,
 } from "../record";
 
-import { asJson, collection, f, recordOf, tableTools } from "./apply-fixture";
+import {
+  asJson,
+  collection,
+  f,
+  recordOf,
+  tableTools,
+  AUTHOR,
+  legacyFields,
+} from "./apply-fixture";
 
 const TABLE = "dc_rf_posts";
 
@@ -31,12 +39,6 @@ const LINKS = f({
   name: "links",
   type: "repeater",
   fields: [{ name: "url", type: "text" }],
-});
-const AUTHOR = f({
-  name: "author",
-  type: "relationship",
-  relationTo: "users",
-  required: true,
 });
 
 describe.each(getConfiguredTestDialects())(
@@ -85,7 +87,7 @@ describe.each(getConfiguredTestDialects())(
     const columns = dialect === "sqlite" ? ["author"] : ["links", "author"];
 
     async function legacyTable() {
-      await tools.createTable(TABLE, fields);
+      await tools.createTable(TABLE, legacyFields(fields));
       if (dialect !== "sqlite") await tools.retype(TABLE, "links", "text");
       await tools.insert(TABLE, [
         {

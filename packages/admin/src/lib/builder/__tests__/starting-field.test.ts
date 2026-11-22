@@ -6,6 +6,7 @@ import {
   startingFieldChoices,
   startingFieldName,
   startingFields,
+  hasPageBuilderField,
 } from "../starting-field";
 
 const entry = (type: string, label: string): FieldTypeCatalogEntry<string> =>
@@ -83,5 +84,24 @@ describe("startingFieldName", () => {
     // fails at the API rather than here.
     expect(startingFieldName("///")).toBe("content");
     expect(startingFieldName("---")).toBe("content");
+  });
+});
+
+// The editor offers to open the Page Builder for an entity laid out from
+// blocks: one with the Page Builder's field at its top level, where a new
+// entry or the Single's document opens it.
+describe("hasPageBuilderField", () => {
+  it("is true for the Page Builder's field at the top level", () => {
+    expect(
+      hasPageBuilderField([
+        { name: "title", type: "text" },
+        { name: "blocks", type: "blocks" },
+      ])
+    ).toBe(true);
+  });
+
+  it("is false without it", () => {
+    expect(hasPageBuilderField([{ name: "title", type: "text" }])).toBe(false);
+    expect(hasPageBuilderField([])).toBe(false);
   });
 });

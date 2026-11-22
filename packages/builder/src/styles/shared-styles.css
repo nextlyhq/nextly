@@ -1,0 +1,505 @@
+/*
+ * The class selector, at the top of the style inspector.
+ *
+ * Chips wrap rather than scroll: the rail is narrow and a horizontal scroller
+ * hides the classes furthest from the start, which are the ones that override
+ * the others.
+ */
+.nx-classes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nx-classes__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-classes__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  padding-inline-start: 0.5rem;
+  background: var(--nx-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5rem;
+}
+
+.nx-classes__chip-name {
+  font-family: var(--font-mono, monospace);
+}
+
+.nx-classes__chip-remove {
+  height: 1.25rem;
+  min-width: 1.25rem;
+  padding: 0;
+  line-height: 1;
+}
+
+.nx-classes__options {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  overflow: hidden;
+}
+
+/*
+ * The row IS the target. It carries no nested button, because with
+ * `aria-activedescendant` the input owns the tab sequence and a focusable
+ * child would take rows into it.
+ */
+.nx-classes__option {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.25rem 0.5rem;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+/* The name keeps its own width while the row has room; the class name gives
+   way first, then the name. */
+.nx-classes__option-name {
+  flex: 0 1 auto;
+}
+
+.nx-classes__option-class {
+  flex: 1 1 0;
+}
+
+/*
+ * ONE highlighted row, and it is the React state that draws it — never :hover.
+ * The pointer moves that same state as it passes over a row, so hovering and
+ * arrowing cannot disagree. Adding `:hover` to this rule instead would paint a
+ * second row while Enter still committed the first, which is the exact
+ * confusion the shared state exists to prevent.
+ */
+.nx-classes__option--active {
+  background: var(--nx-accent);
+}
+
+/*
+ * The reordering hint under the layers tree.
+ *
+ * Quiet by construction: it is a standing legend rather than a message, so it
+ * has to be readable without competing with the tree it describes. Kept at the
+ * panel's own text size floor rather than smaller, because a hint nobody can
+ * read is the same as the missing hint it replaced.
+ */
+.nx-layers-panel__hint {
+  margin: 0;
+  padding: 0.5rem 0.625rem;
+  border-top: 1px solid var(--nx-border);
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  list-style: none;
+}
+
+/*
+ * One binding per row, with the keystroke in a column of its own.
+ *
+ * A run of them separated inline wraps mid-binding at this width — the key and
+ * the words it belongs to end up on different lines — which turns a legend
+ * meant to be scanned into a paragraph to be read.
+ */
+.nx-layers-panel__hint-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+/* Wide enough that the four labels start on one line rather than four. */
+.nx-layers-panel__hint-row .nx-layers-panel__hint-key {
+  flex: none;
+  min-width: 2.5rem;
+  text-align: center;
+}
+
+/*
+ * The keystroke reads as a key, so it is set apart from the words around it.
+ * `inline-block` rather than a bare span: the glyphs are narrow and the label
+ * beside them is not, and without a box the two run together at small sizes.
+ */
+.nx-layers-panel__hint-key {
+  display: inline-block;
+  padding: 0 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.25rem;
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  white-space: nowrap;
+}
+
+/*
+ * The canvas zoom trigger.
+ *
+ * Styled here because it is a bare Radix trigger: Preflight strips a button's
+ * border and background, so without this the percentage renders as plain text
+ * and reads as a status readout rather than something to press. It sits in the
+ * top bar beside the breakpoint switcher, so it borrows that furniture's
+ * proportions rather than introducing its own.
+ */
+.nx-zoom-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.5rem;
+  /* The editor's control height, as every control in the top bar is, with
+     the scale's values as fallbacks for the control drawn on its own. */
+  height: var(--nx-builder-control-height, 1.75rem);
+  padding: 0 var(--nx-builder-control-padding-x, 0.5rem);
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font-size: var(--nx-builder-font-size, 0.75rem);
+  /* The digits change as the canvas resizes, and a proportional face makes the
+     control shift width while an author is reading it. */
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.nx-zoom-control:hover {
+  background: var(--nx-muted);
+}
+
+/* Open is a STATE, not a hover: the menu can be opened from the keyboard, and
+   a trigger that looks unpressed while its menu is up reads as a stray popup. */
+.nx-zoom-control[data-state="open"] {
+  background: var(--nx-muted);
+  border-color: var(--nx-ring);
+}
+
+.nx-zoom-control:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}
+
+/* --- Fonts: the Design panel's Fonts tab, its catalogue, and the
+   inspector's Font control ------------------------------------------------
+   Built on the Variables tab's `.nx-vars*` rows, groups and 240px editor;
+   these rules add only what is particular to fonts. Every colour is an
+   `--nx-*` property, so light and dark need nothing more. */
+
+.nx-fonts__lead {
+  font-size: var(--text-sm);
+}
+
+/* A font variable row with nowhere to send the author: drawn, not pressed. */
+.nx-fonts__static-row {
+  cursor: default;
+}
+
+.nx-fonts__static-row:hover {
+  background: transparent;
+}
+
+.nx-fonts__attention {
+  margin: 0;
+  padding: 4px 0 6px 0.5rem;
+  border-inline-start: 2px solid var(--nx-warning);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--nx-foreground);
+}
+
+.nx-fonts__privacy {
+  padding-top: 0.25rem;
+}
+
+/* The Shared styles tab: drawn with the Variables tab's rows and popover
+   editor; these rules add the second line under a style's name, its lock,
+   and the lists in its details. Every colour is an `--nx-*` property, so
+   light and dark need nothing more, and no text is set under `--text-xs`
+   (12px), the smallest size the editor reads. */
+
+.nx-shared-styles__row {
+  grid-template-columns: 22px minmax(0, 1fr) auto auto auto;
+}
+
+/* The preview's tile, which stands for the site's page: its background and
+   text colours set inline when the tab has the site's variables, else this
+   neutral page with a border. The style's own colours are drawn on it, so a
+   dark text or a white background shows as it would on a page. */
+.nx-shared-styles__tile {
+  position: relative;
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  /* Visible, so the dark-mode flag can sit outside the corner, off the
+     glyph; the preview inside keeps to the rounded tile on its own. */
+  overflow: visible;
+  color: var(--nx-foreground);
+  background: var(--nx-page-background);
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+}
+
+/* An "Aa" not shown to read on its background: an outline painted under its
+   fill, so it shows on any colour. The site's page colour overrides this
+   inline where the tab has it. */
+/* The outline itself is the specimen's inline style, chosen against its own
+   background: a stroke, or two halos where the background can't be
+   measured. The class only paints a stroke under the fill. */
+.nx-shared-styles__lead--outlined {
+  paint-order: stroke fill;
+}
+
+.nx-shared-styles__lead {
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  border-radius: calc(var(--radius-sm) - 1px);
+}
+
+/* The filters close the search block, so the search row keeps no rule of
+   its own here. */
+.nx-shared-styles .nx-vars__search {
+  padding-bottom: 0.25rem;
+  border-bottom: 0;
+}
+
+/* All · Used · Unused · Locked under the search: the Variables tab's
+   segmented control, its segments sharing the panel's width. */
+.nx-shared-styles__filters {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--nx-border);
+}
+
+.nx-shared-styles__filters .nx-vars__seg {
+  display: flex;
+}
+
+.nx-shared-styles__filter {
+  flex: 1 1 0;
+  text-align: center;
+}
+
+.nx-shared-styles__filter-count {
+  margin-inline-start: 0.25rem;
+  color: var(--nx-muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.nx-shared-styles__names {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.nx-shared-styles__class {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-shared-styles__lock {
+  color: var(--nx-muted-foreground);
+}
+
+/* The specimen's stage, at the row's size rather than a tile's. */
+.nx-block-looks__specimen .nx-look-tile__stage {
+  --nx-look-sample-zoom: 0.64;
+  block-size: 2.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+/* The note that counts are minimums, under the list's head, and the row
+   that counts them now. */
+.nx-shared-styles__counting {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding-block: 0.25rem 0.5rem;
+}
+
+.nx-shared-styles__count-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+
+/* The design system's small button, at the panel's scale: the panel's
+   other controls are 24px rows in its extra-small type. */
+.nx-shared-styles__count-row .nx-shared-styles__count-now {
+  height: 1.5rem;
+  padding-inline: 0.5rem;
+  font-size: var(--text-xs);
+}
+
+/* Empty until a count says something: takes no room in the row. */
+.nx-shared-styles__count-row [role="status"]:empty {
+  display: none;
+}
+
+/* A zero not counted yet is words, not a count: no box, the panel's own
+   type, and room for the whole phrase. */
+.nx-vars__chip.nx-shared-styles__count--uncounted {
+  max-width: none;
+  padding: 0;
+  border-color: transparent;
+  font-family: inherit;
+}
+
+.nx-shared-styles__meta,
+.nx-shared-styles__hint,
+.nx-shared-styles__reach {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-shared-styles__reach {
+  color: var(--nx-foreground);
+}
+
+.nx-shared-styles__declares,
+.nx-shared-styles__uses {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-xs);
+}
+
+.nx-shared-styles__declares {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.nx-shared-styles__uses li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-shared-styles__use-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-shared-styles__remove-unused {
+  margin-inline-start: auto;
+}
+
+.nx-shared-styles__remove-unused:disabled {
+  color: var(--nx-muted-foreground);
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+/* No text in the tab under --text-xs. These classes are the Variables and
+   Fonts tabs' too, so they are raised here only, leaving those tabs as they
+   are. The editor is portalled out of the tab, so it is scoped by its own
+   class. */
+.nx-shared-styles .nx-vars__chip,
+.nx-shared-styles .nx-vars__group-name,
+.nx-shared-styles__editor .nx-vars-editor__code {
+  font-size: var(--text-xs);
+}
+
+/* A style's details and Remove unused fit inside the window: the body
+   scrolls, with the name kept at its top. The fallback covers a popover
+   Radix has not measured yet. */
+[data-slot="popover-content"].nx-shared-styles__editor {
+  display: flex;
+  flex-direction: column;
+  max-height: var(--radix-popover-content-available-height, 100vh);
+}
+
+.nx-shared-styles__editor > .nx-vars-editor__body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* A rule under the pinned name, so rows scrolling up stop at a line rather
+   than running into the class name. Always drawn: telling a scrolled body
+   from one at its top would need a listener for one hairline. */
+.nx-shared-styles__details-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding-bottom: 0.5rem;
+  background: var(--nx-popover);
+  border-bottom: 1px solid var(--nx-border);
+}
+
+/* "Show N more" and the tab's other text links get a 24px target here. The
+   class is the Variables and Fonts tabs' too, so it is raised in this tab
+   and its portalled editor only. */
+.nx-shared-styles .nx-vars__link,
+.nx-shared-styles__editor .nx-vars__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+}
+
+/* The dark-mode flag on a tile drawn on the light page: a small moon over the
+   tile's top corner, outside the "Aa" so it covers no letter; the row's
+   tooltip says why. */
+.nx-shared-styles__dark-flag {
+  position: absolute;
+  inset-block-start: -5px;
+  inset-inline-end: -5px;
+  padding: 1px;
+  color: var(--nx-foreground);
+  background: var(--nx-background);
+  border-radius: 9999px;
+}
+
+/* Remove unused names each style over its class, wrapped rather than cut, so
+   a long name reads in full in the 240px editor. */
+.nx-shared-styles__uses--stacked li {
+  flex-direction: column;
+  gap: 0;
+}
+
+.nx-shared-styles__uses--stacked .nx-shared-styles__use-title,
+.nx-shared-styles__uses--stacked .nx-shared-styles__class {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* A name that can't be changed reads as text rather than as a field. */
+.nx-shared-styles__editor input[readonly] {
+  cursor: default;
+  background: var(--nx-muted);
+  border-color: transparent;
+  box-shadow: none;
+}

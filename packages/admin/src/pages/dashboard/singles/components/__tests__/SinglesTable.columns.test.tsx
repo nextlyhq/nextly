@@ -3,7 +3,8 @@
  * The properties under test: a hidden column's header and cells leave the
  * rendered table, and the pinned columns (the label that names the row, and
  * the created date) survive a stored choice that hides everything else; the
- * plugins' Singles are listed under their plugin, read-only.
+ * plugins' Singles are listed under their plugin, read-only; and "View
+ * Document" opens a Single where the admin's one rule opens it.
  */
 import { TooltipProvider } from "@nextlyhq/ui";
 import userEvent from "@testing-library/user-event";
@@ -11,7 +12,25 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 
+import { navigateTo } from "@admin/lib/navigation";
+
 import SinglesTable from "../SinglesTable";
+
+vi.mock("@admin/lib/navigation", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  navigateTo: vi.fn(),
+}));
+// Answered as the admin's one "open this document" rule would for a
+// Homepage whose main field is a page layout, and as the form otherwise.
+vi.mock("@admin/lib/navigation/useDocumentAddress", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useDocumentAddress:
+    () =>
+    ({ kind, slug }: { kind: string; slug: string }) =>
+      kind === "single" && slug === "homepage"
+        ? "/admin/singles/homepage/builder?field=layout"
+        : `/admin/singles/${slug}`,
+}));
 
 /** The list inside the tooltip provider the admin's shell supplies. */
 function renderTable(): void {
@@ -172,5 +191,19 @@ describe("SinglesTable columns", () => {
       item => item.textContent
     );
     expect(offered).toEqual(["View", "View Document"]);
+  });
+
+  it("opens the Single's document where the admin's one rule opens it", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    const table = screen.getByRole("table", { name: "Singles table" });
+    const row = within(table).getAllByText("Homepage")[0].closest("tr")!;
+    await user.click(within(row).getByRole("button", { name: "Row actions" }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "View Document" })
+    );
+    expect(navigateTo).toHaveBeenCalledWith(
+      "/admin/singles/homepage/builder?field=layout"
+    );
   });
 });

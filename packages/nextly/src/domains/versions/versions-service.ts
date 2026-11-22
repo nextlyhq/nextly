@@ -10,8 +10,6 @@
  * A snapshot itself is never rewritten — history is append-only, which is what
  * makes a restore recoverable.
  *
- * @experimental The shape may change while versioning is in alpha.
- *
  * @module domains/versions/versions-service
  */
 

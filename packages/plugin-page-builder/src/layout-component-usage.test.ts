@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  areaRowsOf,
+  componentsNamedBy,
   layoutReferencesOf,
   MAX_LAYOUTS_SCANNED,
   type LayoutPage,
@@ -139,6 +141,22 @@ describe("which Layouts name a component", () => {
     const usage = await layoutReferencesOf({ read, componentId: "cmp" });
 
     expect(usage.references.map(r => r.layoutId)).toEqual(["l1", "l2"]);
+  });
+
+  it("reads a numeric component id as the Layout save's guard reads it", async () => {
+    // The save's guard (which reads `areaRowsOf`) and this scan are the two
+    // ends of one reference: a shape one of them reads and the other skips
+    // lets a Layout be saved naming a component the delete cannot see.
+    const areas = [area("header", 42), area("footer", { id: 7, title: "F" })];
+    const { read } = reader([stored(layout("l1", "Numeric", areas))]);
+
+    const usage = await layoutReferencesOf({ read, componentId: "42" });
+
+    expect(areaRowsOf(areas).map(row => row.componentId)).toEqual(["42", "7"]);
+    expect(componentsNamedBy({ areas })).toEqual(["42", "7"]);
+    expect(usage.references).toEqual([
+      expect.objectContaining({ layoutId: "l1", area: "header" }),
+    ]);
   });
 
   it("says NOTHING names it when nothing does, and says so completely", async () => {

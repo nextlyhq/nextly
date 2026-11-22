@@ -7,6 +7,7 @@
  */
 import type { Command } from "commander";
 
+import { withBusyTableBounds } from "../busy-table-options";
 import type { CommandContext, GlobalOptions } from "../context";
 import { lazyAction } from "../lazy-action";
 
@@ -16,8 +17,9 @@ export function registerRepairColumnsCommand(
   program: Command,
   createContext: (options: GlobalOptions) => CommandContext
 ): void {
-  program
-    .command(REPAIR_COLUMNS_COMMAND)
+  // The bounds of the wait for a table another session is using, as every schema change takes
+  // them; they bound the dry run's reads of a table as well as an apply's conversions.
+  withBusyTableBounds(program.command(REPAIR_COLUMNS_COMMAND))
     .description(
       "Report every column whose type or nullability differs from its field; with --apply, convert the safe ones"
     )

@@ -95,6 +95,54 @@ describe("a field declared unique", () => {
   );
 });
 
+describe("turning a field's Unique mark off", () => {
+  it.each(DIALECTS)(
+    "drops the index it had by its name while the live table does not show it yet, on %s",
+    dialect => {
+      // Outside development a save queues its file without running it: Unique turned on and then
+      // off before either file runs reads a live table without the index, and the second file
+      // must still drop what the first creates.
+      const service = new DynamicCollectionSchemaService(undefined, dialect);
+      const sql = service.generateAlterTableMigration(
+        "dc_widgets",
+        [
+          { name: "sku", type: "text", unique: true },
+        ] as unknown as FieldDefinition[],
+        [{ name: "sku", type: "text" }] as unknown as FieldDefinition[],
+        { uniqueColumns: new Map(), indexNames: new Set() }
+      );
+      expect(sql).toContain("uq_dc_widgets_sku");
+    }
+  );
+
+  it.each(DIALECTS)(
+    "drops nothing for an earlier one-to-one the live table shows without one, on %s",
+    dialect => {
+      // An earlier release made a one-to-one without any unique index: the live table decides.
+      const service = new DynamicCollectionSchemaService(undefined, dialect);
+      const sql = service.generateAlterTableMigration(
+        "dc_widgets",
+        [
+          {
+            name: "profile",
+            type: "relationship",
+            options: { target: "profiles", relationType: "oneToOne" },
+          },
+        ] as unknown as FieldDefinition[],
+        [
+          {
+            name: "profile",
+            type: "relationship",
+            options: { target: "profiles", relationType: "manyToOne" },
+          },
+        ] as unknown as FieldDefinition[],
+        { uniqueColumns: new Map(), indexNames: new Set() }
+      );
+      expect(sql).not.toContain("uq_dc_widgets_profile");
+    }
+  );
+});
+
 describe("a one-to-one relationship", () => {
   const oneToOne = [
     {
@@ -104,20 +152,27 @@ describe("a one-to-one relationship", () => {
     },
   ] as unknown as FieldDefinition[];
 
-  it.each(DIALECTS)("keeps its inline UNIQUE on %s", dialect => {
-    // Deliberately unchanged. Its cardinality has NO other enforcement — no constraint on the
-    // add-column path, no unique index in the desired schema, no runtime check — so moving it to a
-    // named index without also changing what the desired schema declares would silently let a
-    // one-to-one hold duplicates.
-    const column = columnLineFor(ddlFor(dialect, oneToOne), "profile");
-    expect(column).toMatch(/\bUNIQUE\b/i);
-  });
+  it.each(DIALECTS)(
+    "gets the named uq_ index, as a field marked unique does, on %s",
+    dialect => {
+      // A one-to-one's uniqueness has one spelling everywhere: the desired schema declares
+      // `uq_<table>_<column>` for it as for a field marked unique, so the create emits the same
+      // named index, and the next diff finds it and plans nothing.
+      const sql = ddlFor(dialect, oneToOne);
+      expect(sql).toContain("uq_dc_widgets_profile");
+      expect(columnLineFor(sql, "profile")).not.toMatch(/\bUNIQUE\b/i);
+    }
+  );
 
-  it.each(DIALECTS)("does NOT get a uq_ index on %s", dialect => {
-    // The desired schema declares a one-to-one's index as NON-unique. Emitting a unique one here
-    // would be a third spelling of the same property, and the next diff would propose dropping it.
-    expect(ddlFor(dialect, oneToOne)).not.toContain("uq_dc_widgets_profile");
-  });
+  it.each(DIALECTS)(
+    "keeps its plain index beside the unique one on %s",
+    dialect => {
+      // Every one-to-one made before its uniqueness was declared carries the plain index; the
+      // desired schema keeps declaring it, so a new one-to-one gets it too and an upgrade plans no
+      // drop of it.
+      expect(ddlFor(dialect, oneToOne)).toContain("idx_dc_widgets_profile");
+    }
+  );
 });
 
 describe("a unique field MySQL cannot key", () => {
@@ -182,6 +237,28 @@ describe("the unique index name", () => {
       true
     );
   });
+
+  it.each(DIALECTS)(
+    "is the bounded name for a one-to-one added to an existing table on %s",
+    dialect => {
+      const longTable = `dc_${"a".repeat(48)}`;
+      const longColumn = "b".repeat(48);
+      const sql = new DynamicCollectionSchemaService(
+        undefined,
+        dialect
+      ).generateAlterTableMigration(longTable, [], [
+        {
+          name: longColumn,
+          type: "relationship",
+          options: { target: "people", relationType: "oneToOne" },
+        },
+      ] as never);
+      const bounded = uniqueIndexNameForColumn(longTable, longColumn);
+
+      expect(sql).toContain(bounded);
+      expect(sql).not.toContain(`uq_${longTable}_${longColumn}`);
+    }
+  );
 
   it("stays DISTINCT for two long columns that share a prefix", () => {
     // Length alone is not the property. A plain truncation also produces a name within the limit —

@@ -74,6 +74,7 @@ import {
   STOPPED_SHORT,
   type ComponentSource,
   type DocumentReader,
+  type ReadDocument,
   type HeldLibrary,
 } from "./composition-reading";
 
@@ -98,6 +99,11 @@ export interface ComponentStoreAddress {
 /**
  * Component documents read through a write's own connection.
  *
+ * The documents asked for in one turn, in one form, are read in one stored
+ * read of them all (`readStoredOf`): a walk asks a round of reads together
+ * (`documentReader`), so a page placing many components reads them in a query
+ * per round and form, not one per component.
+ *
  * A read that fails for any reason establishes nothing, which is not the same
  * as a row that is not there — so it answers `unreadable`, and the walk refuses
  * rather than reading the gap as "places nothing".
@@ -106,21 +112,53 @@ export function storedComponentSource(
   write: PluginFieldWrite,
   store: ComponentStoreAddress
 ): ComponentSource {
-  return async (id, draft) => {
-    try {
-      const read = await write.readStored({
-        collection: store.collection,
-        id,
-        field: store.field,
-        form: draft ? "draft" : "published",
-      });
-      return read.kind === "absent"
-        ? { kind: "absent" }
-        : { kind: "document", document: read.value };
-    } catch {
-      return { kind: "unreadable" };
+  // The ids asked for and not yet read, by form, each with who is waiting.
+  const asked = new Map<boolean, Map<string, ((read: ReadDocument) => void)[]>>();
+  const readAsked = async (draft: boolean): Promise<void> => {
+    const waiting = asked.get(draft);
+    asked.delete(draft);
+    if (waiting === undefined) return;
+    const answerFor = await readTogether(write, store, [...waiting.keys()], draft);
+    for (const [id, answers] of waiting) {
+      for (const answer of answers) answer(answerFor(id));
     }
   };
+  return (id, draft) =>
+    new Promise(answer => {
+      let waiting = asked.get(draft);
+      if (waiting === undefined) {
+        waiting = new Map();
+        asked.set(draft, waiting);
+        // Once this turn's asks are in: they are read together.
+        queueMicrotask(() => void readAsked(draft));
+      }
+      waiting.set(id, [...(waiting.get(id) ?? []), answer]);
+    });
+}
+
+/** One form of several components, read in one stored read, by id. */
+async function readTogether(
+  write: PluginFieldWrite,
+  store: ComponentStoreAddress,
+  ids: readonly string[],
+  draft: boolean
+): Promise<(id: string) => ReadDocument> {
+  try {
+    const read = await write.readStoredOf({
+      collection: store.collection,
+      ids,
+      field: store.field,
+      form: draft ? "draft" : "published",
+    });
+    return id => {
+      const stored = read.get(id);
+      return stored === undefined || stored.kind === "absent"
+        ? { kind: "absent" }
+        : { kind: "document", document: stored.value };
+    };
+  } catch {
+    return () => ({ kind: "unreadable" });
+  }
 }
 
 /** The judgement's own settings: the caps every walk and composition read under. */

@@ -222,21 +222,27 @@ for (const dialect of getConfiguredTestDialects()) {
         slug: `${plain}_bad`,
         label: "Bad",
         fields: [
-          // `target` is the key the generator's relationship branch reads; the referenced
-          // collection need not exist, because the refusal happens while the DDL is still being
-          // rendered and no statement is ever run.
+          // A decimal with no digits, which the generator refuses while the DDL is still being
+          // rendered, so no statement is ever run.
           {
-            name: "author",
-            type: "relationship",
-            required: true,
-            options: { target: "authors", onDelete: "set null" },
+            name: "price",
+            type: "number",
+            dbType: "decimal",
+            precision: 0,
+            scale: 0,
           },
         ],
       };
 
       await expect(
         dispatchSingles("createSingle", {}, rejected)
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({ code: "DECIMAL_PRECISION_INVALID" }),
+          ],
+        },
+      });
 
       // Nothing persisted, so the corrected retry is a fresh create rather than a slug collision.
       expect(await registryRow(current, rejected.slug)).toBeUndefined();
@@ -612,6 +618,88 @@ for (const dialect of getConfiguredTestDialects()) {
         }
       );
 
+      expect((await registryRow(current, plain))?.migrationStatus).toBe(
+        "applied"
+      );
+    });
+
+    it("rebuilds a missing table through a settings save that adds a field filling its row", async () => {
+      current = await createTestNextly({ dialect });
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: plain,
+          label: "Plain",
+          fields: [{ name: "body", type: "text" }],
+        }
+      );
+      // The table gone from under its registered Single; the save plans the whole table again.
+      await current.adapter.executeQuery(`DROP TABLE single_${plain}`);
+
+      await dispatchSingles(
+        "updateSingleSchema",
+        { slug: plain },
+        {
+          fields: [
+            { name: "body", type: "text" },
+            {
+              name: "subtitle",
+              type: "text",
+              required: true,
+              defaultValue: "Untitled",
+            },
+          ],
+        }
+      );
+
+      expect(await current.adapter.tableExists(`single_${plain}`)).toBe(true);
+      expect((await registryRow(current, plain))?.migrationStatus).toBe(
+        "applied"
+      );
+    });
+
+    // A translated Single that lost both its tables is rebuilt as a pair: the push building the
+    // whole table makes its translations table too, so the missing one is not drift.
+    it("rebuilds a translated Single's missing table pair through a settings save that fills its row", async () => {
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: plain,
+          label: "Plain",
+          localized: true,
+          fields: [{ name: "body", type: "text", localized: true }],
+        }
+      );
+      await current.adapter.executeQuery(`DROP TABLE single_${plain}_locales`);
+      await current.adapter.executeQuery(`DROP TABLE single_${plain}`);
+
+      await dispatchSingles(
+        "updateSingleSchema",
+        { slug: plain },
+        {
+          localized: true,
+          fields: [
+            { name: "body", type: "text", localized: true },
+            {
+              name: "subtitle",
+              type: "text",
+              required: true,
+              defaultValue: "Untitled",
+            },
+          ],
+        }
+      );
+
+      expect(await current.adapter.tableExists(`single_${plain}`)).toBe(true);
+      expect(await current.adapter.tableExists(`single_${plain}_locales`)).toBe(
+        true
+      );
       expect((await registryRow(current, plain))?.migrationStatus).toBe(
         "applied"
       );

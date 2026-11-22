@@ -35,6 +35,22 @@ export function approvalDigest(
 }
 
 /**
+ * The fields a part's approval leaves out of its digest: the workflow's exempt fields, and for the
+ * shared part of a translated document every translated field. The shared part shows the fields
+ * every language shares; a translation is its own language's, and whichever language saved last
+ * must not change what the shared part's approval covers.
+ */
+export function partExemptFields(
+  exemptFields: readonly string[],
+  part: string | null,
+  translated: readonly string[] | null
+): readonly string[] {
+  return part === null && translated !== null && translated.length > 0
+    ? [...exemptFields, ...translated]
+    : exemptFields;
+}
+
+/**
  * Whether `snapshot` is still the content an approval with digest `stored` approved: its digest
  * now, or the digest earlier releases gave an approval, which left out the framework's keys every
  * comparison leaves out (`documentSystemKeys`) and no other framework column. An approval given

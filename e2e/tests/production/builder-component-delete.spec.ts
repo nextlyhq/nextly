@@ -291,7 +291,9 @@ test.describe("Delete component", () => {
     const refused = page.getByRole("alertdialog", {
       name: "This component can't be deleted yet",
     });
-    await expect(refused).toContainText("A Layout uses this component");
+    await expect(refused).toContainText(
+      "A header & footer set uses this component"
+    );
     await expect(
       refused.getByRole("link", { name: layoutTitle })
     ).toHaveAttribute("href", `/admin/collections/layouts/${layoutId}`);

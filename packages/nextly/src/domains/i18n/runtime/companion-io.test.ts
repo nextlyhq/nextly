@@ -52,6 +52,42 @@ describe("buildCompanionSchema", () => {
     });
   });
 
+  // Only a text column can hold an empty string. A translated number,
+  // checkbox, date or JSON column is never blank, and the non-blank test and
+  // the fallback expression must not compare it with '': PostgreSQL refuses
+  // the comparison, and MySQL coerces it, reading 0 or false as blank. Each
+  // is marked on every dialect that stores it as other than text; SQLite
+  // keeps JSON as text.
+  it.each([
+    { dialect: "postgresql" as const, json: true },
+    { dialect: "mysql" as const, json: true },
+    { dialect: "sqlite" as const, json: false },
+  ])(
+    "marks every column but a text one as not text on $dialect",
+    ({ dialect, json }) => {
+      const schema = buildCompanionSchema({
+        slug: "data",
+        tableName: "dc_data",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "rank", type: "number", localized: true },
+          { name: "featured", type: "checkbox", localized: true },
+          { name: "launch", type: "date", localized: true },
+          { name: "meta", type: "json", localized: true },
+        ],
+        dialect,
+      });
+      const byName = new Map(
+        schema!.localizedFields.map(field => [field.name, field.nonText])
+      );
+      expect(byName.get("title")).toBeUndefined();
+      expect(byName.get("rank")).toBe(true);
+      expect(byName.get("featured")).toBe(true);
+      expect(byName.get("launch")).toBe(true);
+      expect(byName.get("meta") === true).toBe(json);
+    }
+  );
+
   it("returns null when the entity has no translatable fields", () => {
     const schema = buildCompanionSchema({
       slug: "counters",

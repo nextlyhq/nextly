@@ -14,18 +14,15 @@
  * settings edit are diffed against the values the page loaded with, so a change
  * and a change-back both read as clean.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
 import type {
   BuilderField,
   BuilderFieldsApi,
 } from "@admin/components/features/schema-builder/types";
-import {
-  convertToBuilderField,
-  DEFAULT_SYSTEM_FIELDS,
-  SYSTEM_FIELD_NAMES,
-} from "@admin/lib/builder";
+import { convertToBuilderField } from "@admin/lib/builder";
+import { builtInFieldsOf } from "@admin/lib/builder/constants";
 import { collectFieldIds } from "@admin/lib/builder/field-placement";
 import {
   describeStep,
@@ -34,9 +31,22 @@ import {
   type RowMark,
   rowMarks,
 } from "@admin/lib/builder/pending-changes";
+import type { SchemaTemplateKind } from "@admin/lib/builder/schema-templates";
+import {
+  type SettingChange,
+  settingChanges,
+} from "@admin/lib/builder/settings-changes";
 import type { FieldDefinition } from "@admin/types/collection";
 
+import type { BuilderSnapshot } from "./useFieldBuilder";
+
 export interface UseBuilderEntityStateOptions<TEntity> {
+  /**
+   * Which kind of entity this is, which decides the built-in fields shown above its own
+   * (`builtInFieldsOf`): a collection's and a Single's title and slug, none for a field group,
+   * whose fields of those names are its own.
+   */
+  kind: SchemaTemplateKind;
   /** The loaded entity, or undefined while the query is in flight. */
   entity: TEntity | undefined;
   builder: BuilderFieldsApi;
@@ -44,11 +54,6 @@ export interface UseBuilderEntityStateOptions<TEntity> {
   toFields: (entity: TEntity) => FieldDefinition[];
   /** The settings the page opens with. */
   toSettings: (entity: TEntity) => BuilderSettingsValues;
-  /** Whether two settings snapshots differ enough to enable Save. */
-  isDirty: (
-    original: BuilderSettingsValues | null,
-    current: BuilderSettingsValues | null
-  ) => boolean;
   /** Run once when the entity lands — resetting the metadata form, and any
    *  seeding only this kind needs. */
   onLoad: (entity: TEntity) => void;
@@ -62,6 +67,13 @@ export interface UseBuilderEntityStateOptions<TEntity> {
    * was in flight, and pin baselines from the wrong record.
    */
   identity: (entity: TEntity) => string;
+  /**
+   * The entity was created in the editor and is not on the server yet. Its
+   * baseline is then no fields at all, so the fields it starts with are pending
+   * additions, and the create itself counts as one more pending change until a
+   * save brings the entity back from the server under its own identity.
+   */
+  unsaved?: boolean;
 }
 
 /** The Builder's pending changes, and what a person can do with them. */
@@ -70,6 +82,8 @@ export interface BuilderPendingChanges {
   changes: readonly PendingChange[];
   /** Each changed field's row marks, by field id. */
   marks: ReadonlyMap<string, ReadonlySet<RowMark>>;
+  /** Each of the entity's settings changed since the save, named. */
+  settingChanges: readonly SettingChange[];
   /**
    * The fields as last saved, system rows excluded: the baseline the changes
    * are counted from, and where a pending delete is shown and still holds its
@@ -84,6 +98,12 @@ export interface BuilderPendingChanges {
   redo: () => string | null;
   /** Put back the saved fields and settings, with nothing left to undo. */
   discardAll: () => void;
+  /**
+   * Discard all also leaves the editor: the entity itself was never saved, so
+   * discarding its changes discards it and returns to the list. That leave
+   * answers the leave guard's question, so it is not asked.
+   */
+  discardLeaves?: boolean;
 }
 
 export interface BuilderEntityState {
@@ -93,7 +113,7 @@ export interface BuilderEntityState {
   setSettings: (next: BuilderSettingsValues) => void;
   /** False until the entity has been read into the builder. */
   isInitialized: boolean;
-  /** Fields changed since load, plus one if any setting differs. Drives the
+  /** Fields changed since load, plus each setting changed. Drives the
    *  toolbar's Save enable state. */
   unsavedCount: number;
   /**
@@ -107,21 +127,69 @@ export interface BuilderEntityState {
   /** Re-pin the settings baseline. Called when the write lands, not when it is
    *  sent — clearing first would show a clean form over stale stored values. */
   pinSettings: (saved: BuilderSettingsValues) => void;
+  /**
+   * An unsaved entity's address moved: every state the history holds, and the
+   * settings it is measured from, take the new address. No step, so Undo does
+   * not take the move back and nothing pending is counted for it.
+   */
+  moveAddress: (address: string) => void;
 }
 
 /** One empty list, so a page with nothing loaded keeps one baseline object. */
 const NO_FIELDS: readonly BuilderField[] = [];
+const NO_SETTING_CHANGES: readonly SettingChange[] = [];
+
+type SettingsUpdate =
+  | BuilderSettingsValues
+  | null
+  | ((prev: BuilderSettingsValues | null) => BuilderSettingsValues | null);
+
+/**
+ * The settings as last written, as state for rendering, and the same value as
+ * of now for the pins: a save calls them from the render it started in, in
+ * either order, and the second must see what the first pinned.
+ */
+function useSettingsBaseline(): [
+  BuilderSettingsValues | null,
+  (next: SettingsUpdate) => void,
+  { readonly current: BuilderSettingsValues | null },
+] {
+  const [baseline, setBaseline] = useState<BuilderSettingsValues | null>(null);
+  const now = useRef<BuilderSettingsValues | null>(null);
+  const set = useCallback((next: SettingsUpdate) => {
+    now.current = typeof next === "function" ? next(now.current) : next;
+    setBaseline(now.current);
+  }, []);
+  return [baseline, set, now];
+}
+
+/**
+ * The state kept before a saved snapshot whose settings are not written yet:
+ * its fields with the settings as last written, so Undo takes back only what
+ * is still to land. None when its settings are the written ones.
+ */
+function writtenBefore(
+  saved: BuilderSnapshot,
+  written: BuilderSettingsValues | null
+): BuilderSnapshot | undefined {
+  if (written === null || saved.settings === null) return undefined;
+  if (settingChanges(written, saved.settings).length === 0) return undefined;
+  return { fields: saved.fields, settings: written };
+}
 
 export function useBuilderEntityState<TEntity>({
+  kind,
   entity,
   builder,
   toFields,
   toSettings,
-  isDirty,
   onLoad,
   identity,
+  unsaved = false,
 }: UseBuilderEntityStateOptions<TEntity>): BuilderEntityState {
-  const [settings, setSettings] = useState<BuilderSettingsValues | null>(null);
+  // The settings shown live in the builder's history beside the fields, so
+  // Undo, Redo and Discard all take a settings change back as a field's.
+  const { settings, setSettings } = builder;
   // Which entity was read in, rather than whether one was. A boolean cannot
   // tell "already loaded this" from "already loaded something", and the second
   // is what leaves a reused component showing the previous entity's fields.
@@ -134,8 +202,8 @@ export function useBuilderEntityState<TEntity>({
   const [originalFields, setOriginalFields] = useState<
     readonly BuilderField[] | null
   >(null);
-  const [originalSettings, setOriginalSettings] =
-    useState<BuilderSettingsValues | null>(null);
+  const [originalSettings, setOriginalSettings, baselineNow] =
+    useSettingsBaseline();
 
   const { resetFields } = builder;
 
@@ -146,23 +214,31 @@ export function useBuilderEntityState<TEntity>({
 
     onLoad(entity);
 
+    // The kind's built-in fields first (none for a field group), and the entity's own after:
+    // a field of a built-in's name is left out only where the kind holds that built-in, so a
+    // field group's own `title` or `slug` is shown, and saved, as any other field.
+    const builtIn = builtInFieldsOf(kind);
+    const builtInNames = builtIn.map(field => field.name);
     const userFields = toFields(entity).filter(
-      f => !SYSTEM_FIELD_NAMES.includes(f.name)
+      f => !builtInNames.includes(f.name)
     );
     const allFields = [
-      ...DEFAULT_SYSTEM_FIELDS,
-      ...userFields.map((field, index) => convertToBuilderField(field, index)),
+      ...builtIn,
+      ...userFields.map((field, index) =>
+        convertToBuilderField(field, index, false, builtInNames)
+      ),
     ];
-    // A load is no edit: the fields arrive with no history to undo into.
-    resetFields(allFields);
-    setOriginalFields(allFields.filter(f => !f.isSystem));
-
+    // A load is no edit: the fields and settings arrive with no history to
+    // undo into.
     const loaded = toSettings(entity);
-    setSettings(loaded);
+    resetFields(allFields, loaded);
+    // Nothing of an unsaved entity is saved, so none of its fields are either.
+    setOriginalFields(unsaved ? NO_FIELDS : allFields.filter(f => !f.isSystem));
     setOriginalSettings(loaded);
 
     setLoadedKey(currentKey);
   }, [
+    kind,
     entity,
     currentKey,
     loadedKey,
@@ -170,6 +246,8 @@ export function useBuilderEntityState<TEntity>({
     toFields,
     toSettings,
     onLoad,
+    unsaved,
+    setOriginalSettings,
   ]);
 
   // False while a different entity's data is still on screen, so the page
@@ -177,20 +255,28 @@ export function useBuilderEntityState<TEntity>({
   // under the new one's name.
   const isInitialized = currentKey !== null && loadedKey === currentKey;
 
-  // The settings are put back by this hook, which holds their baseline; the
-  // fields by the pending changes, which hold theirs.
-  const resetSettings = useCallback(() => {
-    if (originalSettings) setSettings(originalSettings);
-  }, [originalSettings]);
+  // Each changed setting, from the one comparison the count, the undo
+  // announcements and the review read.
+  const changedSettings = useMemo(
+    () =>
+      originalSettings && settings
+        ? settingChanges(originalSettings, settings)
+        : NO_SETTING_CHANGES,
+    [originalSettings, settings]
+  );
   const pending = useFieldPendingChanges(
     builder,
     originalFields,
-    resetSettings
+    originalSettings,
+    changedSettings
   );
-  // Derived from the change list, so the number shown and the changes listed
+  // Derived from the change lists, so the number shown and the changes listed
   // and marked cannot disagree.
   const unsavedCount =
-    pending.changes.length + (isDirty(originalSettings, settings) ? 1 : 0);
+    pending.changes.length +
+    changedSettings.length +
+    // The create itself, for an entity the server does not have yet.
+    (unsaved && isInitialized ? 1 : 0);
 
   // Derived from the same baseline the unsaved count reads, so "saved" and
   // "changed since saved" cannot disagree about which fields were saved.
@@ -205,14 +291,43 @@ export function useBuilderEntityState<TEntity>({
   // The fields the save sent, as this render holds them: an edit made while
   // the save was on its way stays pending against them, and undoable.
   const pinFields = useCallback(() => {
-    const saved = builder.fields;
-    setOriginalFields(saved.filter(f => !f.isSystem));
-    clearHistory(saved, builder.historyStep);
-  }, [builder.fields, builder.historyStep, clearHistory]);
+    const saved = builder.snapshot;
+    setOriginalFields(saved.fields.filter(f => !f.isSystem));
+    // The snapshot itself, as the history holds it, so the history finds the
+    // place the save was made from. Settings still to be written share this
+    // history, so one step stays before it: the saved fields with the settings
+    // as last written. Undo then takes back only what is yet to land, and a
+    // failed settings write leaves a change it can still take back
+    // (`pinSettings` closes that step once the write lands).
+    clearHistory(
+      saved,
+      builder.historyStep,
+      writtenBefore(saved, baselineNow.current)
+    );
+  }, [builder.snapshot, builder.historyStep, clearHistory, baselineNow]);
 
-  const pinSettings = useCallback((saved: BuilderSettingsValues) => {
-    setOriginalSettings(saved);
-  }, []);
+  // The settings landed: they are the baseline, and nothing before this place
+  // in the history can be undone any more.
+  const pinSettings = useCallback(
+    (saved: BuilderSettingsValues) => {
+      setOriginalSettings(saved);
+      clearHistory(builder.snapshot, builder.historyStep);
+    },
+    [builder.snapshot, builder.historyStep, clearHistory, setOriginalSettings]
+  );
+
+  const { rewriteSnapshots } = builder;
+  const moveAddress = useCallback(
+    (address: string) => {
+      rewriteSnapshots(snapshot =>
+        snapshot.settings
+          ? { ...snapshot, settings: { ...snapshot.settings, slug: address } }
+          : snapshot
+      );
+      setOriginalSettings(prev => (prev ? { ...prev, slug: address } : prev));
+    },
+    [rewriteSnapshots, setOriginalSettings]
+  );
 
   return {
     pending,
@@ -223,18 +338,36 @@ export function useBuilderEntityState<TEntity>({
     savedFieldIds,
     pinFields,
     pinSettings,
+    moveAddress,
   };
+}
+
+/**
+ * What one step of the history did, from `before` to `after`: a field's
+ * change in the fields' words, or the settings it changed, named as the
+ * Builder names them.
+ */
+function describeSnapshotStep(
+  before: BuilderSnapshot,
+  after: BuilderSnapshot
+): string {
+  if (before.fields === after.fields && before.settings && after.settings) {
+    const changed = settingChanges(before.settings, after.settings);
+    return `changed the settings: ${changed.map(c => c.label).join(", ")}`;
+  }
+  return describeStep(before.fields, after.fields);
 }
 
 /**
  * The pending changes of a builder's fields, measured from `saved`: the net
  * change list and each row's marks, Undo and Redo answering with what they
- * did, and Discard all, which also runs `resetSettings`.
+ * did, and Discard all, which puts back the saved fields and `savedSettings`.
  */
 function useFieldPendingChanges(
   builder: BuilderFieldsApi,
   saved: readonly BuilderField[] | null,
-  resetSettings: () => void
+  savedSettings: BuilderSettingsValues | null,
+  changedSettings: readonly SettingChange[]
 ): BuilderPendingChanges {
   const { fields, resetFields, undo: undoFields, redo: redoFields } = builder;
   // The net changes from what was saved, by field identity.
@@ -243,26 +376,33 @@ function useFieldPendingChanges(
     [saved, fields]
   );
   const marks = useMemo(
-    () => (saved ? rowMarks(saved, fields) : new Map<string, Set<RowMark>>()),
-    [saved, fields]
+    () =>
+      saved
+        ? rowMarks(saved, fields, changes)
+        : new Map<string, Set<RowMark>>(),
+    [saved, fields, changes]
   );
   const undo = useCallback(() => {
     const step = undoFields();
     // What the step undone did, from the fields before it to those after.
-    return step ? `Undid: ${describeStep(step.to, step.from)}` : null;
+    return step ? `Undid: ${describeSnapshotStep(step.to, step.from)}` : null;
   }, [undoFields]);
   const redo = useCallback(() => {
     const step = redoFields();
-    return step ? `Redid: ${describeStep(step.from, step.to)}` : null;
+    return step ? `Redid: ${describeSnapshotStep(step.from, step.to)}` : null;
   }, [redoFields]);
   const discardAll = useCallback(() => {
     // The builder's own system rows stay as they are: they are never changed.
-    resetFields([...fields.filter(f => f.isSystem), ...(saved ?? [])]);
-    resetSettings();
-  }, [resetFields, fields, saved, resetSettings]);
+    // The saved settings come back with the fields, in one fresh history.
+    resetFields(
+      [...fields.filter(f => f.isSystem), ...(saved ?? [])],
+      savedSettings ?? undefined
+    );
+  }, [resetFields, fields, saved, savedSettings]);
   return {
     changes,
     marks,
+    settingChanges: changedSettings,
     saved: saved ?? NO_FIELDS,
     canUndo: builder.canUndo,
     canRedo: builder.canRedo,

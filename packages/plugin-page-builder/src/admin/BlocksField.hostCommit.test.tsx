@@ -32,6 +32,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import * as React from "react";
+import { flushSync } from "react-dom";
 import {
   useForm,
   useWatch,
@@ -39,6 +40,7 @@ import {
   type FieldValues,
 } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closedDocumentSession } from "../__tests__/closed-document-session";
 
 /** Each unsaved-work report, as the key it was made under and its value. */
 const reports: { key: string; hasWork: boolean }[] = [];
@@ -65,6 +67,25 @@ let passage: BlockDocument | null = null;
 /** Replaces the open editor's document, as one undoable edit would. */
 let edit: ((next: BlockDocument) => void) | undefined;
 
+/**
+ * The document a panel field's draft makes once written, or `null` while no
+ * field holds one: the field writes it when it is left, or when a store
+ * finishes it first.
+ */
+let fieldDraft: BlockDocument | null = null;
+const draftListeners = new Set<() => void>();
+function subscribeDraft(listener: () => void): () => void {
+  draftListeners.add(listener);
+  return () => draftListeners.delete(listener);
+}
+/** A panel field holds `next` as its draft, typed and not yet written. */
+function holdDraft(next: BlockDocument): void {
+  act(() => {
+    fieldDraft = next;
+    for (const listener of draftListeners) listener();
+  });
+}
+
 /** Takes the open editor's last edit back, one step down its history. */
 let undoEdit: (() => void) | undefined;
 
@@ -74,6 +95,11 @@ let undoEdit: (() => void) | undefined;
  * one followed by the other.
  */
 let beforeStore: (() => void) | undefined;
+/**
+ * Every mounted caller's handler, as the admin keeps them: each runs before a
+ * store, not only the one that registered last.
+ */
+const storeHandlers = new Set<() => void>();
 let storedAt: Date | null = null;
 const storeListeners = new Set<() => void>();
 let documentActions: { storedAt: Date | null } | null = null;
@@ -188,6 +214,22 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         undoDepth,
       };
     },
+    /*
+     * The builder's field edit, as the host reads it: a draft held while
+     * `fieldDraft` is set, and finishing it writes it as the field's blur
+     * does, drawn by the time the call returns.
+     */
+    useFieldDraftHeld: () =>
+      React.useSyncExternalStore(subscribeDraft, () => fieldDraft !== null),
+    finishFieldEdit: () => {
+      const draft = fieldDraft;
+      if (draft === null) return;
+      flushSync(() => {
+        fieldDraft = null;
+        for (const listener of draftListeners) listener();
+        edit?.(draft);
+      });
+    },
     useInlineEditing: () => ({
       editing: passage === null ? null : { id: "h1" },
       editingRich: null,
@@ -207,9 +249,14 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 vi.mock("./publish-offer", () => ({
   usePublishOffer: () => null,
   useFormPublishOffer: () => null,
+  usePublishQuestion: () => ({ offer: () => Promise.resolve(), dialog: null }),
+  // Page checks asks which parts aren't published; answered as unknown, so
+  // it lists none and these tests stay on what they test.
+  askReadiness: async () => null,
 }));
 vi.mock("./removal-hold-client", () => ({
   useRemovalHold: () => null,
+  useRemovalQuestion: () => ({ hold: () => Promise.resolve(), dialog: null }),
 }));
 
 /** Asking the stored style again, as the editor does after a save. */
@@ -226,6 +273,13 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The empty page's starter pages read, offering none: no case here starts
+  // a page from one.
+  readPluginRoute: async () => ({ items: [] }),
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -242,6 +296,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
+  // The media library's upload, which an Image's empty state offers: these
+  // cases upload nothing.
+  useUploadMedia: () => ({ mutateAsync: () => new Promise<never>(() => {}) }),
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   // No preview here: the surrounding editor offers none.
   useDocumentPreview: () => null,
@@ -289,12 +346,27 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   },
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
+  // The session a header edited in place opens; none is opened here.
+  useDocumentSession: () => closedDocumentSession(),
   useBeforeDocumentAction: (handler: () => void) => {
-    beforeStore = handler;
+    const latest = React.useRef(handler);
+    React.useEffect(() => {
+      latest.current = handler;
+    });
+    React.useEffect(() => {
+      const run = (): void => latest.current();
+      storeHandlers.add(run);
+      return () => {
+        storeHandlers.delete(run);
+      };
+    }, []);
+    beforeStore = () => {
+      for (const run of storeHandlers) run();
+    };
   },
   // The header's controls the bar places; drawn by the admin, not here.
-  DocumentSaveIndicator: () => null,
-  DocumentPrimaryAction: () => null,
+  DocumentSaveAndPublish: () => null,
+  useDocumentLifeStage: () => null,
   useDocumentActions: () =>
     React.useSyncExternalStore(
       listener => {
@@ -405,6 +477,8 @@ beforeEach(() => {
   chromeRequests.length = 0;
   saved = undefined;
   edit = undefined;
+  fieldDraft = null;
+  draftListeners.clear();
   passage = null;
   heldAtExit.length = 0;
   undoEdit = undefined;
@@ -575,6 +649,50 @@ describe("leaving", () => {
   });
 });
 
+describe("a panel field holding a draft", () => {
+  /** The page once the draft a panel field holds is written into it. */
+  const DRAFTED: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      { id: "h1", type: "core/heading", props: { text: "Typed in the panel" } },
+    ],
+  } as BlockDocument;
+
+  it("reports work from the draft's first keystroke, before the field is left", () => {
+    openEditor();
+    holdDraft(DRAFTED);
+
+    expect(reports.at(-1)).toEqual({ key: "blocks:body", hasWork: true });
+  });
+
+  it("stores the draft when the page is stored with focus still in the field", () => {
+    openEditor();
+    holdDraft(DRAFTED);
+    // The handlers the editor registered through `useBeforeDocumentAction`,
+    // run as the admin's Save runs them before every store: the Save
+    // button's and the Save shortcut's alike, Command+S on a Mac among them
+    // (`DocumentSaveShortcuts.mac.test` in the admin drives that binding and
+    // the real hook). Here the hook is this file's stand-in, which keeps
+    // what the editor registers: the admin exports no document actions host
+    // a plugin test could mount the real hook inside.
+    expect(storeHandlers.size).toBeGreaterThan(0);
+    store();
+
+    expect(saved).toEqual(DRAFTED);
+    expect(reports.at(-1)).toEqual({ key: "blocks:body", hasWork: false });
+  });
+
+  it("hands the draft to the form when the author leaves from the field", () => {
+    openEditor();
+    holdDraft(DRAFTED);
+    fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
+
+    expect(saved).toEqual(DRAFTED);
+    expect(heldAtExit).toEqual([DRAFTED]);
+  });
+});
+
 describe("a colleague taking the document over", () => {
   /** Every distinct value the field took, so a commit can be counted. */
   const values: unknown[] = [];
@@ -635,7 +753,7 @@ describe("a colleague taking the document over", () => {
     // which the card says in words of its own, and the edit holds a block, so
     // the card offers its preview instead.
     await waitFor(() =>
-      expect(container.textContent).toContain("Live preview")
+      expect(container.textContent).toMatch(/Sections \(\d+\)/)
     );
     expect(container.textContent).not.toContain("Nothing here yet");
     // Into this browser\'s form only. Nothing left the editor through its

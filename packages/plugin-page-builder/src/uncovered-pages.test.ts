@@ -14,7 +14,11 @@ import {
   uncoveredPagesFrom,
   variablesOnUncoveredPages,
 } from "./uncovered-pages";
+import { variablesAsked } from "./token-usage";
 import { uncoveredReasons } from "./variables-routes";
+
+/** The site's prefix, as a site that sets none writes its variables. */
+const SITE = { prefix: undefined };
 
 const page = (entityKey: string, entity = "pages"): UncoveredPage => ({
   scope: "collection",
@@ -60,6 +64,40 @@ function pagesOf(
 }
 
 describe("a variable on the pages the index does not cover", () => {
+  it("finds a colour a shadow names through var(), its name read decoded", async () => {
+    /** A stored page whose one box's shadow is `shadow`. */
+    const shadowed = (shadow: string) => ({
+      title: "A page",
+      content: {
+        nodes: [
+          {
+            id: "b",
+            type: "core/box",
+            styles: { base: { base: { boxShadow: shadow } } },
+          },
+        ],
+      },
+    });
+    const outcome = await variablesOnUncoveredPages({
+      asked: variablesAsked(["t-accent", "t-spare", "t-other"], undefined),
+      pages: pagesOf([
+        [page("p1"), [shadowed("0 1px 2px var(--site-t-accent)")]],
+        // An escaped name, which no search of the text would match.
+        [page("p2"), [shadowed("0 1px 2px var(--site-t-spar\\65)")]],
+        // A property no site variable is written under names nothing.
+        [page("p3"), [shadowed("0 1px 2px var(--site-t-others)")]],
+      ]),
+      deadline: Number.POSITIVE_INFINITY,
+    });
+    expect(outcome).toEqual({
+      kind: "used",
+      uses: new Map([
+        ["t-accent", [page("p1")]],
+        ["t-spare", [page("p2")]],
+      ]),
+    });
+  });
+
   it("is clear where no uncovered page uses it, read past the walk's bound", async () => {
     // A page far larger than any walk bound: its text is read, not its blocks.
     const large = {
@@ -70,7 +108,7 @@ describe("a variable on the pages the index does not cover", () => {
     };
     expect(
       await variablesOnUncoveredPages({
-        identities: ["t-spare"],
+        asked: variablesAsked(["t-spare"], undefined),
         pages: pagesOf([[page("p1"), [large]]]),
         deadline: Number.POSITIVE_INFINITY,
       })
@@ -79,7 +117,7 @@ describe("a variable on the pages the index does not cover", () => {
 
   it("finds a reference in any stored form, the draft or a language included", async () => {
     const outcome = await variablesOnUncoveredPages({
-      identities: ["t-accent", "t-spare"],
+      asked: variablesAsked(["t-accent", "t-spare"], undefined),
       pages: pagesOf([
         [page("p1"), [storedUsing(), storedUsing("t-accent")]],
         [page("p2"), [storedUsing()]],
@@ -96,7 +134,7 @@ describe("a variable on the pages the index does not cover", () => {
     const p2 = page("p2");
     expect(
       await variablesOnUncoveredPages({
-        identities: ["t-spare"],
+        asked: variablesAsked(["t-spare"], undefined),
         pages: pagesOf([
           [page("p1"), [storedUsing()]],
           [p2, "fails"],
@@ -121,7 +159,7 @@ describe("a variable on the pages the index does not cover", () => {
     };
     expect(
       await variablesOnUncoveredPages({
-        identities: ["t-spare"],
+        asked: variablesAsked(["t-spare"], undefined),
         pages,
         deadline: 5_000,
         now: () => clock,
@@ -151,6 +189,7 @@ describe("the removal's reasons from the uncovered pages", () => {
         firstReadable: async uses =>
           uses[0]?.id === "p2" ? "Pricing" : undefined,
       },
+      SITE,
       () => clock
     );
     expect(reasons).toEqual([
@@ -169,7 +208,8 @@ describe("the removal's reasons from the uncovered pages", () => {
         { id: "t-spare", name: "Spare" },
       ],
       pagesOf([[page("p1"), [storedUsing("t-accent")]]]),
-      { firstReadable: async () => "Home" }
+      { firstReadable: async () => "Home" },
+      SITE
     );
     expect(reasons).toEqual([
       { id: "t-accent", message: "Accent is used on Home.", used: true },
@@ -183,7 +223,8 @@ describe("the removal's reasons from the uncovered pages", () => {
         [page("p1"), [storedUsing("t-accent")]],
         [page("p2"), [storedUsing("t-accent")]],
       ]),
-      {}
+      {},
+      SITE
     );
     expect(reasons).toEqual([
       { id: "t-accent", message: "Accent is used on 2 pages.", used: true },
@@ -195,7 +236,8 @@ describe("the removal's reasons from the uncovered pages", () => {
       await uncoveredReasons(
         [{ id: "t-spare", name: "Spare" }],
         pagesOf([[page("p1"), [storedUsing("t-accent")]]]),
-        {}
+        {},
+        SITE
       )
     ).toEqual([]);
   });
@@ -244,7 +286,7 @@ describe("each read held to the time box", () => {
     pages.forms = asked =>
       asked === p2 ? new Promise<never>(() => undefined) : forms(asked);
     const reasons = settledOf(
-      uncoveredReasons([{ id: "t-spare", name: "Spare" }], pages, namer)
+      uncoveredReasons([{ id: "t-spare", name: "Spare" }], pages, namer, SITE)
     );
     await vi.advanceTimersByTimeAsync(5_000);
     expect(reasons.value).toEqual([
@@ -269,7 +311,7 @@ describe("each read held to the time box", () => {
       forms: async () => [storedUsing()],
     };
     const reasons = settledOf(
-      uncoveredReasons([{ id: "t-spare", name: "Spare" }], pages, namer)
+      uncoveredReasons([{ id: "t-spare", name: "Spare" }], pages, namer, SITE)
     );
     await vi.advanceTimersByTimeAsync(5_000);
     expect(reasons.value).toEqual([
@@ -296,7 +338,7 @@ describe("each read held to the time box", () => {
     };
     const outcome = settledOf(
       variablesOnUncoveredPages({
-        identities: ["t-spare"],
+        asked: variablesAsked(["t-spare"], undefined),
         pages,
         deadline: Date.now() + 5_000,
       })
@@ -328,7 +370,8 @@ describe("each read held to the time box", () => {
           { id: "t-spare", name: "Spare" },
         ],
         pages,
-        namer
+        namer,
+        SITE
       )
     );
     await vi.advanceTimersByTimeAsync(4_000);
@@ -338,7 +381,7 @@ describe("each read held to the time box", () => {
     expect(vi.getTimerCount()).toBe(0);
 
     const clear = settledOf(
-      uncoveredReasons([{ id: "t-spare", name: "Spare" }], pages, namer)
+      uncoveredReasons([{ id: "t-spare", name: "Spare" }], pages, namer, SITE)
     );
     await vi.advanceTimersByTimeAsync(4_000);
     expect(clear.value).toEqual([]);
@@ -354,7 +397,12 @@ describe("each read held to the time box", () => {
     vi.useFakeTimers();
     const pages = pagesOf([[page("p2"), "fails"]]);
     const reasons = settledOf(
-      uncoveredReasons([{ id: "t-spare", name: "Spare" }], pages, stalledNamer)
+      uncoveredReasons(
+        [{ id: "t-spare", name: "Spare" }],
+        pages,
+        stalledNamer,
+        SITE
+      )
     );
     await vi.advanceTimersByTimeAsync(5_000);
     // Still refused, saying why, without the title the lookup never gave.
@@ -388,7 +436,8 @@ describe("each read held to the time box", () => {
             asked.push(uses[0]?.id ?? "");
             return stalledNamer.firstReadable();
           },
-        }
+        },
+        SITE
       )
     );
     // One box for every page the refusal names, not one per variable.
@@ -406,9 +455,14 @@ describe("each read held to the time box", () => {
     vi.useFakeTimers();
     const pages = pagesOf([[page("p2"), [storedUsing("t-accent")]]]);
     const reasons = settledOf(
-      uncoveredReasons([{ id: "t-accent", name: "Accent" }], pages, {
-        firstReadable: () => after(4_000, () => "Pricing"),
-      })
+      uncoveredReasons(
+        [{ id: "t-accent", name: "Accent" }],
+        pages,
+        {
+          firstReadable: () => after(4_000, () => "Pricing"),
+        },
+        SITE
+      )
     );
     await vi.advanceTimersByTimeAsync(4_000);
     expect(reasons.value).toEqual([
@@ -424,9 +478,14 @@ describe("each read held to the time box", () => {
     // The read spends the whole read box; the lookup then takes a second.
     pages.forms = () => new Promise<never>(() => undefined);
     const reasons = settledOf(
-      uncoveredReasons([{ id: "t-spare", name: "Spare" }], pages, {
-        firstReadable: () => after(1_000, () => "Pricing"),
-      })
+      uncoveredReasons(
+        [{ id: "t-spare", name: "Spare" }],
+        pages,
+        {
+          firstReadable: () => after(1_000, () => "Pricing"),
+        },
+        SITE
+      )
     );
     await vi.advanceTimersByTimeAsync(6_000);
     expect(reasons.value).toEqual([

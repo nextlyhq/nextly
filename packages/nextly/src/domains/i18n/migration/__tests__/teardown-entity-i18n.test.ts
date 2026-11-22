@@ -37,6 +37,18 @@ function makeAdapter(
       delete: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue({ rowCount: 3 }),
       }),
+      // The translation transition record is looked up and not found: there is none to forget.
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockReturnValue(
+              Object.assign(Promise.resolve([]), {
+                for: vi.fn().mockResolvedValue([]),
+              })
+            ),
+          }),
+        }),
+      }),
     }),
   };
 }
@@ -92,7 +104,11 @@ describe("teardownEntityI18n dialect SQL", () => {
   });
 
   it("reports the purged archive row count when the archive exists", async () => {
-    const adapter = makeAdapter("postgresql", () => true);
+    // Every table but the provenance record, whose purge has a test of its own on each dialect.
+    const adapter = makeAdapter(
+      "postgresql",
+      name => name !== "nextly_translation_provenance"
+    );
 
     const result = await teardownEntityI18n({
       adapter,
@@ -101,7 +117,12 @@ describe("teardownEntityI18n dialect SQL", () => {
       tableName: "dc_pages",
     });
 
-    expect(result).toEqual({ companionDropped: true, archiveRowsPurged: 3 });
+    expect(result).toEqual({
+      companionDropped: true,
+      archiveRowsPurged: 3,
+      provenanceRowsPurged: 0,
+      transitionRecordsPurged: 0,
+    });
   });
 
   it("drops the companion but leaves the archive alone when the slug is unknown", async () => {
@@ -116,7 +137,11 @@ describe("teardownEntityI18n dialect SQL", () => {
       tableName: "dc_articles",
     });
 
-    expect(result).toEqual({ companionDropped: true, archiveRowsPurged: 0 });
+    expect(result).toEqual({
+      companionDropped: true,
+      archiveRowsPurged: 0,
+      provenanceRowsPurged: 0,
+    });
     expect(adapter.getDrizzle).not.toHaveBeenCalled();
     expect(adapter.executeQuery).toHaveBeenCalledWith(
       'DROP TABLE IF EXISTS "dc_articles_locales" CASCADE'

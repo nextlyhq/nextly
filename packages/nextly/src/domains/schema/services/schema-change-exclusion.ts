@@ -63,11 +63,72 @@ export async function withSchemaChangeExcluded<T>(
     /** Names the operation in the refusal's log line, so an operator can see what was held off. */
     label: string;
     issuesDdl: boolean;
+    /**
+     * Where this change writes a migration: given by a Schema Builder save
+     * that has a writer. The project's migration files are then held from
+     * before `work` begins, so the save changes nothing, its definition
+     * included, while another writer of those files is at work.
+     */
+    migrationsDir?: string | undefined;
   },
   work: () => Promise<T>
 ): Promise<T> {
+  // Loaded on demand, as the migration machinery below is.
+  const { withBuilderWriterScope } = await import(
+    "../migrate-create/writer-hold"
+  );
+  // Loaded on demand, as the writer hold is.
+  const { withSaveRecords } = await import("../builder-save/save-in-progress");
+  // A migration this change writes is written holding the project's
+  // migration files, refused at once where another writer holds them. A
+  // save's record that it is in progress is cleared once the whole change
+  // has ended, its registry write included, as its outcome allows.
   const { adapter } = args;
-  if (!adapter) return work();
+  // A save that writes a migration settles first what an earlier save left part-way, holding the
+  // schema lock and the project's migration files as the save does: its files and its definition
+  // are the ones this save starts from.
+  const settleBefore = async (): Promise<string[]> => {
+    if (adapter === undefined || args.migrationsDir === undefined) return [];
+    const { settleBeforeBuilderSave } = await import(
+      "../builder-save/settle-left-save"
+    );
+    return settleBeforeBuilderSave(adapter, args.migrationsDir, args.logger);
+  };
+  const settleAfter = async (standing: readonly string[]): Promise<void> => {
+    if (adapter === undefined || args.migrationsDir === undefined) return;
+    const { settleAfterBuilderSave } = await import(
+      "../builder-save/settle-left-save"
+    );
+    await settleAfterBuilderSave(
+      adapter,
+      args.migrationsDir,
+      args.logger,
+      standing
+    );
+  };
+  const held = () =>
+    withBuilderWriterScope(
+      args.label,
+      async () => {
+        const standing = await settleBefore();
+        const result = await withSaveRecords(work, args.logger);
+        // A save that finished one left part-way (the same save again) has brought the database
+        // to it: settled now, that record clears rather than standing until the next start. Only
+        // the records standing before the save: one the save itself left is the next start's.
+        // The save has committed by now, so a settle that fails is logged, never its answer: a
+        // save answered as failed would be saved again, writing its change twice.
+        try {
+          await settleAfter(standing);
+        } catch (error) {
+          args.logger.warn(
+            `The save went through, but settling the Builder save left part-way before it failed (${error instanceof Error ? error.message : String(error)}). Its record stays, and the next development start settles it.`
+          );
+        }
+        return result;
+      },
+      args.migrationsDir
+    );
+  if (!adapter) return held();
 
   // Loaded on demand for the reason the services' own imports are: this module is reached from DI
   // registration, and a static import would pull the migration machinery into the boot graph of
@@ -91,6 +152,6 @@ export async function withSchemaChangeExcluded<T>(
       whenHeld: "refuse",
       refusal: "editor",
     },
-    work
+    held
   );
 }

@@ -8,6 +8,7 @@ import {
   isDeletable,
   matchesQuery,
   ownerGroupOf,
+  sendersDisplayOf,
   stateOf,
   type MessagesQuery,
 } from "../messages-model";
@@ -156,8 +157,19 @@ describe("matchesQuery", () => {
       slug: "order-shipped",
       subject: "On its way",
       description: "Sent when an order leaves the warehouse",
+      sentBy: {
+        declared: ["Someone signs up"],
+        referenced: ["Form: Contact, Notify team"],
+      },
     });
-    for (const term of ["shipped", "ORDER-SHIP", "its way", "warehouse"]) {
+    for (const term of [
+      "shipped",
+      "ORDER-SHIP",
+      "its way",
+      "warehouse",
+      "signs up",
+      "Notify team",
+    ]) {
       expect(matchesQuery(record, { ...ANY, search: term }), term).toBe(true);
     }
     expect(matchesQuery(record, { ...ANY, search: "refund" })).toBe(false);
@@ -207,5 +219,71 @@ describe("isDeletable", () => {
         email({ owner: { kind: "plugin", name: "shop", installed: false } })
       )
     ).toBe(true);
+  });
+});
+
+describe("sendersDisplayOf", () => {
+  it("says an owned template with no senders may be sent from code", () => {
+    expect(sendersDisplayOf(email({ owner: { kind: "core" } }))).toEqual({
+      lines: ["Not known: may be sent from code"],
+      incompleteNotice: null,
+    });
+    expect(
+      sendersDisplayOf(
+        email({ owner: { kind: "plugin", name: "shop", installed: true } })
+      )
+    ).toEqual({
+      lines: ["Not known: may be sent from code"],
+      incompleteNotice: null,
+    });
+  });
+
+  it("says a site template with no senders is not sent by anything yet", () => {
+    expect(sendersDisplayOf(email({ owner: { kind: "site" } }))).toEqual({
+      lines: ["Not sent by anything yet"],
+      incompleteNotice: null,
+    });
+  });
+
+  it("shows what sends an email when declared or referenced", () => {
+    const item = email({
+      owner: { kind: "core" },
+      sentBy: {
+        declared: ["Someone signs up", "A new verification link is asked for"],
+        referenced: ["Form: Contact us, Notify team"],
+      },
+    });
+    expect(sendersDisplayOf(item)).toEqual({
+      lines: [
+        "Someone signs up",
+        "A new verification link is asked for",
+        "Form: Contact us, Notify team",
+      ],
+      incompleteNotice: null,
+    });
+  });
+
+  it("warns when references could not all be checked", () => {
+    const empty = email({
+      owner: { kind: "site" },
+      referencesComplete: false,
+    });
+    expect(sendersDisplayOf(empty)).toEqual({
+      lines: ["Senders couldn't all be checked"],
+      incompleteNotice: null,
+    });
+
+    const withSenders = email({
+      owner: { kind: "core" },
+      sentBy: {
+        declared: ["Someone signs up"],
+        referenced: [],
+      },
+      referencesComplete: false,
+    });
+    expect(sendersDisplayOf(withSenders)).toEqual({
+      lines: ["Someone signs up"],
+      incompleteNotice: "Senders couldn't all be checked",
+    });
   });
 });

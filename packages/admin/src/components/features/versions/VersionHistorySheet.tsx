@@ -38,11 +38,11 @@ import {
 } from "@admin/hooks/queries/useVersions";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
-import { navigateTo } from "@admin/lib/navigation";
+import { navigateTo, setSearchParams } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
 
 import { useDocumentHistory } from "./document-history-context";
-import { useHistoryAddress } from "./history-address";
+import { RESTORE_PARAM, useHistoryAddress } from "./history-address";
 import { loadedWindow } from "./history-story";
 import { HistoryStoryList } from "./HistoryStoryList";
 import { restoreIntoEditor } from "./restore-into-editor";
@@ -331,6 +331,18 @@ export function VersionHistorySheet({
     selected === null ? null : predecessorOf(versions, selected, false);
   const previousVersionNo =
     previousTarget?.kind === "version" ? previousTarget.versionNo : null;
+  // The newest version in the chosen one's language, to compare against for
+  // everything since it, and to read the fields a first version holds that
+  // the content type no longer has. The language comes from the version's own
+  // read too, so a version a link names beyond the loaded rows still finds it.
+  const newestVersionNo =
+    selected === null
+      ? null
+      : newestInLocale(
+          versions,
+          selected,
+          detail.data === undefined ? undefined : (detail.data.locale ?? null)
+        );
 
   // Hand the chosen version to the document area, and take it back whenever
   // nothing is chosen — including when the panel closes, so dismissing it never
@@ -372,6 +384,22 @@ export function VersionHistorySheet({
    * stored: the person's own save or publish is the only write, and the toast
    * offers to take the restore back.
    */
+  // Handed over by the comparison page's "Restore…": the address names the
+  // version and asks for its restore list, once. The ask is taken out of the
+  // address as it is answered, so going back or reloading does not ask again.
+  const offersRestore =
+    canRestore &&
+    editor !== undefined &&
+    restoresInEditor(viewedAbout?.locale, editor.locale);
+  useEffect(() => {
+    if (!open || selected === null || !detail.data) return;
+    const asked =
+      new URLSearchParams(window.location.search).get(RESTORE_PARAM) === "1";
+    if (!asked) return;
+    setSearchParams({ [RESTORE_PARAM]: null }, { replace: true });
+    if (offersRestore) setConfirmingRestore(true);
+  }, [open, selected, detail.data, offersRestore]);
+
   const restoreChosen = useCallback(
     (names: string[]) => {
       if (!editor || selected === null) return;
@@ -419,6 +447,7 @@ export function VersionHistorySheet({
         comparedWithKind === "version" && previousVersionNo !== null
           ? { kind: "version", versionNo: previousVersionNo }
           : { kind: comparedWithKind === "first" ? "first" : "unknown" },
+      newestInLocale: newestVersionNo,
       about: viewedAbout,
     });
   }, [
@@ -432,6 +461,7 @@ export function VersionHistorySheet({
     viewedAbout,
     comparedWithKind,
     previousVersionNo,
+    newestVersionNo,
     scopeId,
     setViewing,
   ]);
@@ -448,11 +478,9 @@ export function VersionHistorySheet({
   const listFresh = !isRefetching && !isRefetchError;
   const canComparePrevious =
     selectedPresent && previousVersionNo !== null && listFresh;
-  // The newest version in the chosen one's language, to compare against for
-  // everything since it; withheld on the same freshness grounds, since a stale
-  // list can name a newest that has since been pruned.
-  const newestVersionNo =
-    selected === null ? null : newestInLocale(versions, selected);
+  // Comparing against the newest version in the chosen one's language is
+  // withheld on the same freshness grounds, since a stale list can name a
+  // newest that has since been pruned.
   const canCompareCurrent =
     selectedPresent && newestVersionNo !== null && listFresh;
 
@@ -512,10 +540,7 @@ export function VersionHistorySheet({
       // A restore puts values into an editor, so it is offered only where one
       // is there to take them.
       // And only into the editor of the version's own language.
-      canRestore:
-        canRestore &&
-        editor !== undefined &&
-        restoresInEditor(viewedAbout?.locale, editor.locale),
+      canRestore: offersRestore,
       request: requestRestore,
       returnToCurrent,
       // Where the page steps aside, the version is all that is on screen, so
@@ -547,8 +572,7 @@ export function VersionHistorySheet({
     openCurrentComparison,
     roomBeside,
     setRestore,
-    editor,
-    viewedAbout,
+    offersRestore,
   ]);
 
   // When previewing a version whose previous same-locale version has not loaded
@@ -679,6 +703,8 @@ export function VersionHistorySheet({
         <SheetContent
           side="right"
           className="p-0 flex flex-col"
+          // Where the history panel is, for a check that reads it alone.
+          data-history-panel=""
           // Width from the same constant the reservation is made with, so the
           // space kept clear cannot drift from the space taken. Capped at the
           // window because the panel is wider than a phone.

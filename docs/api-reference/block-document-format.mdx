@@ -114,11 +114,10 @@ pseudo-node. Document-level concerns live on the envelope instead.
 | `page`      | an entry's blocks-field content                                      |
 | `pattern`   | a copy-on-insert saved subtree, including full-page patterns         |
 | `component` | a linked, reusable definition with exposed props, slots and variants |
-| `region`    | a layout region such as a header or footer                           |
 | `template`  | a collection template                                                |
 
-A layout is a named bundle _referencing_ region documents, so it is not a kind of
-its own.
+A layout's header and footer are components, and the layout is a named bundle
+_referencing_ them, so it is not a kind of its own.
 
 ## A node
 
@@ -142,8 +141,22 @@ and migration read it unconditionally. A node without one cannot be migrated,
 only guessed at.
 
 Optional fields: `bindings`, `slots`, `styles`, `classes`, `visibility`,
-`locked`, `name`, `customCss`, `cssId`, `nosnippet`, `attributes`,
-`migrationFailed`.
+`locked`, `name`, `customCss`, `cssId`, `cssClasses`, `nosnippet`,
+`attributes`, `migrationFailed`.
+
+`cssClasses` is text: the block's own CSS class names, separated by spaces, as
+the author wrote them (`"promo hero-dark"`). The node's root element carries
+them after the classes Nextly generates, on the published page and on the
+canvas, so your own stylesheet can target the block. They are apart from
+`classes`, which holds the ids of the site's shared styles. Each name has to be
+one a stylesheet can target as written: it can't start with a digit, `.` or
+`#`, can't start with `nx-` (Nextly's own classes start with it) and can't hold
+a character a class name can't, such as `/` or `:`. A save that holds such a
+name is refused with `invalid-css-classes`, and the error names each refused
+name and why. `checkCssClassNames(text)` from `@nextlyhq/blocks-engine` answers
+the same question for one piece of text, keeping the valid names beside the
+refused ones. A document written before the field existed reads and renders
+exactly as it did.
 
 `nosnippet` is a boolean, written only as `true`: the node's root element
 carries the `data-nosnippet` attribute, so search engines that read it, Google

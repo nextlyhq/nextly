@@ -18,7 +18,9 @@
  */
 import type { ValidationIssue } from "@nextlyhq/plugin-sdk/admin";
 import { renderHook, act, waitFor } from "@testing-library/react";
+import { fluidValue } from "@nextlyhq/blocks-engine";
 import type * as React from "react";
+import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** What the stubbed read answers with for the test in hand. */
@@ -56,8 +58,6 @@ const overwrites: unknown[] = [];
 /** What reached Settings' route, and how often the document was read again. */
 const routeWrites: unknown[] = [];
 let refetches = 0;
-/** Whether the read after a write answers that it failed. */
-let readFails = false;
 /** What a fresh read answers with, and how many were made. */
 let freshAnswer: () => unknown = () => readAnswer.data;
 let freshReads = 0;
@@ -73,7 +73,7 @@ vi.mock("./site-style-read", () => ({
     ...readAnswer,
     refetch: async () => {
       refetches += 1;
-      return { isError: readFails };
+      return { isError: false };
     },
     readFresh: async () => {
       freshReads += 1;
@@ -124,11 +124,11 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 const {
   SITE_STYLE_PAUSE_MS,
   SiteStyleHistoryContext,
+  SiteStylePreviewContext,
   extendHeldSiteStyle,
   releaseHeldSiteStyle,
   useFontCatalogueClient,
   useSaveSiteStyle,
-  useSaveSpacingMode,
   useSiteStyle,
 } = await import("./site-style-client");
 const { KEPT_CHANGING_WORDS } = await import("./conflict-words");
@@ -152,7 +152,6 @@ beforeEach(() => {
   overwrites.length = 0;
   routeWrites.length = 0;
   refetches = 0;
-  readFails = false;
   freshAnswer = () => readAnswer.data;
   freshReads = 0;
   writeOptions = undefined;
@@ -205,6 +204,47 @@ describe("reading the site style", () => {
     expect(result.current.siteStyle.breakpoints?.viewport).toHaveLength(2);
   });
 
+  it("draws a code text style made fluid across a range held but not yet stored", () => {
+    // The range the author is changing is held over the read while its save
+    // waits; the canvas draws the code's fluid text style across it already.
+    const sizes = { small: 16, large: 32 };
+    const held = { min: 400, max: 800 };
+    const defaults = {
+      classes: [
+        {
+          id: "t-code-lead",
+          slug: "code-lead",
+          orderIndex: 0,
+          role: "text",
+          styles: {
+            base: {
+              base: { fontSize: fluidValue(sizes, { min: 360, max: 1280 }) },
+            },
+          },
+          fluidSizes: { base: sizes },
+        },
+      ],
+    } as never;
+    readAnswer = { data: {}, isPending: false, error: null };
+    const preview = new Map([
+      ["tokens" as const, { tokens: [], fluidRange: held }],
+    ]);
+    const { result } = renderHook(() => useSiteStyle(defaults), {
+      wrapper: ({ children }: { children: React.ReactNode }) =>
+        createElement(
+          SiteStylePreviewContext.Provider,
+          { value: preview },
+          children
+        ),
+    });
+    const lead = result.current.siteStyle.classes?.[0]?.styles as {
+      base: { base: { fontSize: unknown } };
+    };
+    expect(lead.base.base.fontSize).toBe(fluidValue(sizes, held));
+    // Nothing of it is stored: the stored tier holds no classes.
+    expect(result.current.stored.classes).toBeUndefined();
+  });
+
   it("reports PENDING separately, because defaults alone are also a real answer", () => {
     // The distinction a surface cannot make by looking at the value: a site
     // that stored nothing and a read that has not returned produce the same
@@ -215,49 +255,6 @@ describe("reading the site style", () => {
 
     expect(result.current.pending).toBe(true);
     expect(result.current.siteStyle.breakpoints?.viewport).toHaveLength(2);
-  });
-});
-
-describe("saving the space between blocks", () => {
-  it("writes the model through its route, then reads the style again", async () => {
-    // Reading again is what moves the canvas: it compiles from that read.
-    const { result } = renderHook(() => useSaveSpacingMode());
-    let verdict;
-    await act(async () => {
-      verdict = await result.current.save("classic");
-    });
-    expect(verdict).toEqual({ saved: true, refreshed: true });
-    expect(routeWrites).toEqual([
-      {
-        plugin: "@nextlyhq/plugin-page-builder",
-        path: "/site/style/spacing-mode",
-        body: { mode: "classic" },
-      },
-    ]);
-    expect(writes).toEqual([]);
-    expect(refetches).toBe(1);
-  });
-
-  it("says the choice is stored but not read back when the reread fails", async () => {
-    readFails = true;
-    const { result } = renderHook(() => useSaveSpacingMode());
-    let verdict;
-    await act(async () => {
-      verdict = await result.current.save("classic");
-    });
-    expect(verdict).toMatchObject({ saved: true, refreshed: false });
-    expect(refetches).toBe(1);
-  });
-
-  it("answers a refusal in the route's words and reads nothing again", async () => {
-    writeBehaviour = () => Promise.reject(new Error("Not allowed."));
-    const { result } = renderHook(() => useSaveSpacingMode());
-    let verdict;
-    await act(async () => {
-      verdict = await result.current.save("gaps");
-    });
-    expect(verdict).toMatchObject({ saved: false });
-    expect(refetches).toBe(0);
   });
 });
 
@@ -809,11 +806,13 @@ describe("writing one section", () => {
       verdict = await result.current.save("breakpoints", { viewport: [] });
     });
 
+    // Refused for the values themselves: an answer, with nothing stored.
     expect(verdict).toEqual({
       saved: false,
       issues: {
         breakpoints: "breakpoints.viewport[0] is not a breakpoint.",
       },
+      invalid: true,
     });
   });
 
@@ -930,6 +929,183 @@ describe("a save inside the editor, as a step of its history", () => {
       await steps[0]?.redo();
     });
     expect(writes.at(-1)).toEqual({ tokens: { tokens: [] } });
+  });
+
+  describe("a change a route stores, made through the history", () => {
+    const colour = (id: string, light = "#123456") => ({
+      id,
+      name: `color.${id.slice(2)}`,
+      kind: "color",
+      values: { light },
+    });
+    const before = {
+      tokens: [colour("t-spare"), colour("t-kept")],
+      order: ["t-kept", "t-spare"],
+    };
+    const after = { tokens: [colour("t-kept")], order: ["t-kept"] };
+
+    it("is one step: undo writes back the route's own before, redo its after", async () => {
+      // The editor's copy is older than what the route found stored.
+      readAnswer = { data: { tokens: after }, isPending: false, error: null };
+      const { steps, wrapper } = editorHistory();
+      const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+      await act(async () => {
+        await result.current.changeThrough("tokens", async () => ({
+          before,
+          after,
+        }));
+      });
+      // The route made the write; the history only records it.
+      expect(writes).toEqual([]);
+      expect(steps).toHaveLength(1);
+
+      await act(async () => {
+        await steps[0]?.undo();
+      });
+      expect(writes.at(-1)).toEqual({ tokens: before });
+      await act(async () => {
+        await steps[0]?.redo();
+      });
+      expect(writes.at(-1)).toEqual({ tokens: after });
+    });
+
+    it("runs the route once the writes before it have answered", async () => {
+      readAnswer = { data: { tokens: before }, isPending: false, error: null };
+      const { wrapper } = editorHistory();
+      const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+      const seen: unknown[] = [];
+      await act(async () => {
+        void result.current.save("tokens", after);
+        await result.current.changeThrough("tokens", async () => {
+          seen.push(writes.length);
+          return undefined;
+        });
+      });
+      expect(seen).toEqual([1]);
+    });
+
+    it("holds a save made while the route runs until the route has answered, and builds it on the route's after", async () => {
+      // The editor read version 5, before the route ran; the route's own
+      // write made it 6. The server refuses a write naming another version.
+      let current = 6;
+      readAnswer = {
+        data: { tokens: before, _rev: "5" },
+        isPending: false,
+        error: null,
+      };
+      freshAnswer = () => ({ tokens: after, _rev: String(current) });
+      writeBehaviour = async () => {
+        const sent = writes[writes.length - 1] ?? {};
+        if (sent._rev !== String(current)) throw staleRefusal(String(current));
+        current += 1;
+        return { id: "1", _rev: String(current) };
+      };
+      const { steps, wrapper } = editorHistory();
+      const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+      let answer: (halves: {
+        before: unknown;
+        after: unknown;
+      }) => void = () => {};
+      const routed = new Promise<{ before: unknown; after: unknown }>(
+        resolve => {
+          answer = resolve;
+        }
+      );
+      // The author's edit, made from the copy that still shows the spare
+      // colour: Kept turned red.
+      const red = colour("t-kept", "#ff0000");
+      const edited = {
+        tokens: [colour("t-spare"), red],
+        order: ["t-kept", "t-spare"],
+      };
+      let cleaned: Promise<void> | undefined;
+      let saved: Promise<unknown> | undefined;
+      await act(async () => {
+        cleaned = result.current.changeThrough("tokens", () => routed);
+        // Let the route start, then save: the save must not overtake it.
+        await Promise.resolve();
+        saved = result.current.save("tokens", edited, { base: before });
+        await new Promise(resolve => setTimeout(resolve, 20));
+      });
+      expect(writes).toEqual([]);
+      await act(async () => {
+        answer({ before, after });
+        await cleaned;
+        await saved;
+      });
+      // Merged onto what the route stored: the spare colour stays gone.
+      expect(writes.at(-1)).toEqual({
+        tokens: { tokens: [red], order: ["t-kept"] },
+        _rev: "6",
+      });
+      expect(steps).toHaveLength(2);
+      // Undoing the edit goes back to the route's after, never its before:
+      // the spare colour is not brought back.
+      await act(async () => {
+        await steps[1]?.undo();
+      });
+      expect(writes.at(-1)).toMatchObject({ tokens: after });
+    });
+
+    it("undoes a save queued behind the route to the route's after, where the site gives no versions", async () => {
+      // No versions: the save is written whole, with nothing read back, so
+      // what it replaced is only what the route said the section holds.
+      readAnswer = { data: { tokens: before }, isPending: false, error: null };
+      const { steps, wrapper } = editorHistory();
+      const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+      let answer: (halves: {
+        before: unknown;
+        after: unknown;
+      }) => void = () => {};
+      const routed = new Promise<{ before: unknown; after: unknown }>(
+        resolve => {
+          answer = resolve;
+        }
+      );
+      const edited = {
+        tokens: [colour("t-kept", "#ff0000")],
+        order: ["t-kept"],
+      };
+      let cleaned: Promise<void> | undefined;
+      let saved: Promise<unknown> | undefined;
+      await act(async () => {
+        cleaned = result.current.changeThrough("tokens", () => routed);
+        await Promise.resolve();
+        saved = result.current.save("tokens", edited);
+        await new Promise(resolve => setTimeout(resolve, 20));
+      });
+      await act(async () => {
+        answer({ before, after });
+        await cleaned;
+        await saved;
+      });
+      expect(writes).toEqual([{ tokens: edited }]);
+      expect(steps).toHaveLength(2);
+      await act(async () => {
+        await steps[1]?.undo();
+      });
+      // Back to what the route left, not to the spare colour it took out.
+      expect(writes.at(-1)).toEqual({ tokens: after });
+    });
+
+    it("keeps no step when the route stored nothing, or refused", async () => {
+      readAnswer = { data: { tokens: before }, isPending: false, error: null };
+      const { steps, wrapper } = editorHistory();
+      const { result } = renderHook(() => useSaveSiteStyle(), { wrapper });
+      await act(async () => {
+        await result.current.changeThrough("tokens", async () => undefined);
+      });
+      const refused = new Error("refused");
+      await act(async () => {
+        await expect(
+          result.current.changeThrough("tokens", async () => {
+            throw refused;
+          })
+        ).rejects.toBe(refused);
+      });
+      expect(steps).toEqual([]);
+      expect(writes).toEqual([]);
+    });
   });
 
   it("undoes a first write to a section by clearing it", async () => {
@@ -1429,6 +1605,7 @@ describe("a save held for the author's pause", () => {
     const refused = {
       saved: false,
       issues: { tokens: "That value is refused." },
+      invalid: true,
     };
     expect(await Promise.all(answers)).toEqual([refused, refused]);
     expect(writes).toHaveLength(1);

@@ -7,12 +7,18 @@ description: "An entity in `ui-schema.json` has the slug of a collection in `nex
 
 An entity in `ui-schema.json` has the slug of a collection in `nextly.config.ts`.
 
-`nextly migrate:check` reads the entities the Schema Builder saved in `ui-schema.json` beside those in `nextly.config.ts`, and a slug may be declared in only one of them. The Why line lists each slug both files declare.
+This code is retired. `nextly migrate:check` now warns about such an entity, naming its kind, as `nextly migrate:create` does: the code-first definition of that kind wins. No command ends with it any more; it is kept so a script or a log search that names it still reads correctly. Releases before the change failed `nextly migrate:check` with it whenever an entity in `ui-schema.json` had the slug of a code-first collection, whatever the entity's kind.
+
+The warning now reads, for example:
+
+```text
+./ui-schema.json declares a Single 'about' that a code-first Single of the same slug shadows; the code definition wins.
+```
 
 ## Fix
 
-- Remove each slug listed from one of the two files, or rename it in one of them.
-- Run `nextly migrate:check` again.
+- Nothing is required: the code-first definition is used, and the Builder's entry is ignored.
+- To silence the warning, remove the entry from `ui-schema.json`, or rename one of the two.
 
 ## Example
 

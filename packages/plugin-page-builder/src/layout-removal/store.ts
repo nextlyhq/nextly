@@ -370,7 +370,7 @@ export function layoutRemovalStore(
     }
     throw NextlyError.conflict({
       reason: "state",
-      message: "This Layout is already being removed.",
+      message: "This header & footer set is already being removed.",
       logContext: { reason: "layout-removal-mark-contended" },
     });
   };

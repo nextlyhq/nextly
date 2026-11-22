@@ -795,6 +795,112 @@ describe("after a save", () => {
       act(() => root.unmount());
     });
 
+    describe("the checked restore says what came of it", () => {
+      /*
+       * A caller that acts after the restore (a Save that keeps the offered
+       * changes) has to know which way it went: written, refused because the
+       * point is no longer what was offered, or not checked at all. Without
+       * this, a read that fails leaves nothing to observe — the offer stays
+       * exactly as it was — and such a caller waits forever.
+       */
+      it("answers restored once the point is written into the form", async () => {
+        getSpy.mockResolvedValue(CURRENT);
+        const { result } = renderRecovery(SCOPE);
+        await waitFor(() =>
+          expect(result.current.recovery.offer).not.toBeNull()
+        );
+
+        let outcome: string | undefined;
+        await act(async () => {
+          outcome = await result.current.recovery.restoreChecked();
+        });
+
+        expect(outcome).toBe("restored");
+        expect(result.current.form.getValues()).toEqual({ title: "recovered" });
+      });
+
+      it("answers changed, writing nothing, when the document was written since", async () => {
+        getSpy
+          .mockResolvedValueOnce(CURRENT)
+          .mockResolvedValueOnce({ ...CURRENT, superseded: "by-another" });
+        const { result } = renderRecovery(SCOPE);
+        await waitFor(() =>
+          expect(result.current.recovery.offer).not.toBeNull()
+        );
+
+        let outcome: string | undefined;
+        await act(async () => {
+          outcome = await result.current.recovery.restoreChecked();
+        });
+
+        expect(outcome).toBe("changed");
+        expect(result.current.form.getValues()).toEqual(STORED);
+        // Drawn again from the answer, as the plain restore does.
+        await waitFor(() =>
+          expect(result.current.recovery.offer?.olderVersion).toBe(true)
+        );
+      });
+
+      it("answers changed, writing nothing, when the point is gone", async () => {
+        getSpy.mockResolvedValueOnce(CURRENT).mockResolvedValueOnce(null);
+        const { result } = renderRecovery(SCOPE);
+        await waitFor(() =>
+          expect(result.current.recovery.offer).not.toBeNull()
+        );
+
+        let outcome: string | undefined;
+        await act(async () => {
+          outcome = await result.current.recovery.restoreChecked();
+        });
+
+        expect(outcome).toBe("changed");
+        expect(result.current.form.getValues()).toEqual(STORED);
+      });
+
+      it("answers unchecked, writing nothing and keeping the offer, when the read fails", async () => {
+        getSpy
+          .mockResolvedValueOnce(CURRENT)
+          .mockRejectedValueOnce(new Error("network"));
+        const { result } = renderRecovery(SCOPE);
+        await waitFor(() =>
+          expect(result.current.recovery.offer).not.toBeNull()
+        );
+
+        let outcome: string | undefined;
+        await act(async () => {
+          outcome = await result.current.recovery.restoreChecked();
+        });
+
+        expect(outcome).toBe("unchecked");
+        expect(result.current.form.getValues()).toEqual(STORED);
+        expect(result.current.recovery.offer?.snapshot).toEqual(
+          CURRENT.snapshot
+        );
+      });
+
+      it("leaves the plain restore as it was: nothing returned, the point written", async () => {
+        // The plain restore is the same restore with its answer ignored, so a
+        // caller that never asks for the answer sees no difference.
+        getSpy.mockResolvedValue(CURRENT);
+        const { result } = renderRecovery(SCOPE);
+        await waitFor(() =>
+          expect(result.current.recovery.offer).not.toBeNull()
+        );
+
+        let returned: unknown = "not called";
+        act(() => {
+          returned = result.current.recovery.restore();
+        });
+
+        expect(returned).toBeUndefined();
+        await waitFor(() =>
+          expect(result.current.form.getValues()).toEqual({
+            title: "recovered",
+          })
+        );
+      });
+    });
+
     it("restores it when it is still current, which is the control", async () => {
       getSpy.mockResolvedValue(CURRENT);
       const { result } = renderRecovery(SCOPE);

@@ -4,7 +4,7 @@
  * `manage-<resource>` on media, settings, email providers and email templates
  * is retired: every writer of a role's permissions stores it as the plain
  * read, create, update and delete there (`storedAsPlain`), and one an earlier
- * release stored counts for nothing. `nextly upgrade` converts the roles found
+ * release stored counts for nothing. `nextly migrate` converts the roles found
  * here, and each start names them until it has.
  *
  * Read through the adapter's own `select`, by table and column name, so one
@@ -102,7 +102,7 @@ export function formatRetiredManageWarning(
   roles: readonly RoleHoldingRetiredManage[]
 ): string {
   return [
-    "[nextly] These roles hold a retired manage permission, which no longer gives any access. Run `nextly upgrade` to give each the plain permissions in its place:",
+    "[nextly] These roles hold a retired manage permission, which no longer gives any access. Run `nextly migrate`, or `nextly db:sync` in development, to give each the plain permissions in its place:",
     ...roles.map(role => `  - ${role.name}: ${role.permissions.join(", ")}`),
   ].join("\n");
 }

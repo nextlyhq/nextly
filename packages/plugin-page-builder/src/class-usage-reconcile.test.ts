@@ -53,8 +53,38 @@ describe("deriving a document's index rows", () => {
     expect(derivation).toEqual({
       complete: true,
       rows: [
-        { ...page, classId: "card" },
-        { ...page, classId: "hero" },
+        { ...page, classId: "card", blocks: 1 },
+        { ...page, classId: "hero", blocks: 1 },
+      ],
+    });
+  });
+
+  it("counts the blocks wearing each class, a block once however often it lists one", () => {
+    const derivation = deriveClassUsageRows(page, {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          classes: ["hero"],
+        },
+        {
+          id: "n2",
+          type: "core/text",
+          version: 1,
+          props: {},
+          classes: ["hero", "hero", "card"],
+        },
+      ],
+    });
+    expect(derivation).toEqual({
+      complete: true,
+      rows: [
+        { ...page, classId: "card", blocks: 1 },
+        { ...page, classId: "hero", blocks: 2 },
       ],
     });
   });
@@ -77,7 +107,7 @@ describe("deriving a document's index rows", () => {
 
     expect(derivation).toEqual({
       complete: true,
-      rows: [{ ...single, classId: "hero" }],
+      rows: [{ ...single, classId: "hero", blocks: 1 }],
     });
   });
 
@@ -132,7 +162,7 @@ describe("deriving a document's index rows", () => {
       complete: false,
       // The marker id, not one of the ids it managed to read. A marker naming
       // a real class would be counted as a reference by every lookup for it.
-      undetermined: { ...page, classId: UNDETERMINED_CLASS_ID },
+      undetermined: { ...page, classId: UNDETERMINED_CLASS_ID, blocks: null },
     });
   });
 
@@ -159,6 +189,46 @@ describe("deriving a document's index rows", () => {
     expect(
       isUsableNamedClass({ id: "hero", slug: "undetermined", styles: {} })
     ).toBe(true);
+  });
+});
+
+describe("reconciling a class's block count", () => {
+  it("replaces a row whose count the document no longer has", () => {
+    // 3 blocks wore it; now 2 do. The new row goes in and the old one comes
+    // out, in that order, so the class is never absent from the table.
+    expect(
+      reconcileClassUsage(
+        page,
+        [{ ...page, classId: "hero", blocks: 2 }],
+        [{ id: "r1", ...page, classId: "hero", blocks: 3 }]
+      )
+    ).toEqual({
+      insert: [{ ...page, classId: "hero", blocks: 2 }],
+      remove: ["r1"],
+    });
+  });
+
+  it("replaces a row stored before the count was kept", () => {
+    expect(
+      reconcileClassUsage(
+        page,
+        [{ ...page, classId: "hero", blocks: 1 }],
+        [{ id: "r1", ...page, classId: "hero" }]
+      )
+    ).toEqual({
+      insert: [{ ...page, classId: "hero", blocks: 1 }],
+      remove: ["r1"],
+    });
+  });
+
+  it("leaves a row alone while its count still holds", () => {
+    expect(
+      reconcileClassUsage(
+        page,
+        [{ ...page, classId: "hero", blocks: 2 }],
+        [{ id: "r1", ...page, classId: "hero", blocks: 2 }]
+      )
+    ).toEqual({ insert: [], remove: [] });
   });
 });
 

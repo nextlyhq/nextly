@@ -108,13 +108,15 @@ export function MediaBulkActionBar({
 
         <div className="h-4 w-px bg-primary/20 mx-1" />
 
-        {/* Move to folder button */}
+        {/* Move to folder button, in the text colour: the primary token is a
+            fill a brand may set to any colour, and small text drawn in it
+            can fall under AA. */}
         <Button
           variant="outline"
           size="md"
           onClick={onMoveToFolder}
           disabled={isDeleting}
-          className="gap-1.5 h-8 text-xs font-normal bg-card border-border text-primary hover:bg-primary/5"
+          className="gap-1.5 h-8 text-xs font-normal bg-card border-border text-foreground hover:bg-primary/5"
         >
           <FolderInput className="h-3.5 w-3.5" />
           Move

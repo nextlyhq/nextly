@@ -282,6 +282,18 @@ test("a settings change saved, the hooks read back unchanged", async ({
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
     await expect(dialog).toHaveCount(0);
     await page.getByRole("button", { name: "Save", exact: true }).click();
+    // A save of the settings alone is reviewed first, listing what it changes,
+    // and written once confirmed.
+    const review = page.getByRole("alertdialog");
+    await expect(
+      review.getByRole("heading", {
+        name: `Save the settings of the collection ${slug}?`,
+      })
+    ).toBeVisible();
+    await expect(review.getByRole("list", { name: "Settings" })).toHaveText(
+      "Description: none → Pages with stored hooks"
+    );
+    await review.getByRole("button", { name: "Save", exact: true }).click();
 
     await expect
       .poll(async () => {

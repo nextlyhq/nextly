@@ -41,10 +41,12 @@ import {
   fieldsStoredOnRow,
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
+  getSingleRowColumnDescriptor,
   componentRelationIsSingleReference,
   type ColumnOrigin,
   kindAndSizes,
   systemColumnsForFields,
+  relationHoldsReferenceList,
   relationshipStoresJson,
   relationStorageShape,
 } from "../../services/field-column-descriptor";
@@ -293,6 +295,10 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
     // propose a `CREATE UNIQUE INDEX` the server refuses.
     const uniqueIsIndexable =
       context.fieldIsUnique(field) && context.uniquenessIsIndexable(field, col);
+    // A relationship unique by its cardinality alone keeps the plain index it has always had
+    // beside its unique one: every one-to-one made before its uniqueness was declared carries it,
+    // and dropping it would plan an operation for a column that is already unique.
+    const keepsPlainIndex = !uniqueIsIndexable || field.unique !== true;
 
     if (uniqueIsIndexable) {
       indexes.push({
@@ -300,7 +306,9 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
         columns: [col],
         unique: true,
       });
-    } else if (
+    }
+    if (
+      keepsPlainIndex &&
       (field.index === true || isSingleRelation) &&
       (context.columnIsIndexable?.(field, col) ?? true)
     ) {
@@ -492,10 +500,14 @@ export function buildDesiredTableFromFields(
   }
 
   // User-defined fields — descriptor module handles layout-only filtering,
-  // hasMany/relationTo promotion to JSON, and per-dialect token rendering.
+  // hasMany/relationTo promotion to JSON, and per-dialect token rendering. A
+  // Single's reference columns accept NULL (`getSingleRowColumnDescriptor`).
+  const describeUserColumn = tableName.startsWith("single_")
+    ? getSingleRowColumnDescriptor
+    : getColumnDescriptor;
   for (const field of stored) {
     if (localizedNames.has(field.name)) continue; // lives in the companion table
-    const desc = getColumnDescriptor(
+    const desc = describeUserColumn(
       // The descriptor's input type is FieldDefinition; this util is
       // structurally compatible (same name/type/required/hasMany/relationTo
       // keys). Cast through unknown to bridge the two surface types
@@ -527,7 +539,9 @@ export function buildDesiredTableFromFields(
     fieldIsUnique: field =>
       options.builtBy === "collection"
         ? builderColumnIsUnique(field)
-        : field.unique === true,
+        : // A code-first list relation marked unique is refused at start; asked here too, so a
+          // table that still carries one is never described as keeping it.
+          field.unique === true && !relationHoldsReferenceList(field),
     localizedNames,
     columnNameFor: field =>
       getColumnDescriptor(
@@ -885,8 +899,10 @@ export function buildDesiredTableFromComponentFields(
           columns.find(c => c.name === col)?.type ?? "",
           dialect
         ),
-      // The field-group creator makes a column unique on the flag alone, a relationship included.
-      fieldIsUnique: field => field.unique === true,
+      // The field-group creator makes a column unique on the flag alone, a relationship included,
+      // but never a relation holding a list, which no index can keep unique.
+      fieldIsUnique: field =>
+        field.unique === true && !relationHoldsReferenceList(field),
       // Components have no slug column; created_at is present when the
       // component carries timestamps.
       hasSlugColumn: false,

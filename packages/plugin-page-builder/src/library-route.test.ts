@@ -795,6 +795,27 @@ describe("the component tier", () => {
     expect(library.items[1]).toMatchObject({ keywords: null });
   });
 
+  it('carries a component\'s "Use as" area, so the editor knows a header block', async () => {
+    // The editor points out a page that shows the set's header AND places a
+    // component marked "Use as: Header"; it reads that mark from here rather
+    // than from a second read per placed component.
+    const { ctx } = componentContext({
+      pages: [[componentRow("a"), componentRow("b"), componentRow("c")]],
+      byId: {
+        a: { id: "a", title: "A", area: "header", content: draft("x") },
+        b: { id: "b", title: "B", area: null, content: draft("y") },
+        // Not an area: a stored value the select no longer offers.
+        c: { id: "c", title: "C", area: "sidebar", content: draft("z") },
+      },
+    });
+
+    const library = await readComponentLibrary(ctx);
+
+    expect(library.items[0]).toMatchObject({ area: "header" });
+    expect(library.items[1]).not.toHaveProperty("area");
+    expect(library.items[2]).not.toHaveProperty("area");
+  });
+
   it("carries no keywords key for a row that has none at all", async () => {
     // The control: a collection with no keywords field must not grow one.
     const { ctx } = componentContext({

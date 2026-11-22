@@ -80,6 +80,7 @@ function draw(
     onEditComponent?: (componentId: string, nodeId?: string) => void;
     mayCreate?: boolean;
     insertInside?: string;
+    insertAfter?: string;
   } = {}
 ): void {
   const offered = over.offered ?? read();
@@ -93,6 +94,7 @@ function draw(
     offerablePatterns: patterns => patterns,
     requestPanel: () => {},
     insertInside: over.insertInside,
+    insertAfter: over.insertAfter,
   } as never);
   render(<>{renderer?.(panel, { current: null, choose: () => {} })}</>);
 }
@@ -121,6 +123,14 @@ describe("the Components panel the editor offers", () => {
     expect(seen.components?.inside).toBe("box");
     expect(seen.components?.inside).toBe(seen.add?.inside);
     expect(seen.components?.beginInsertDrag).toBe(seen.add?.beginInsertDrag);
+  });
+
+  it("places in the gap a '+' chose, in both panels", () => {
+    draw("add", { insertAfter: "hero" });
+    draw("components", { insertAfter: "hero" });
+
+    expect(seen.add?.after).toBe("hero");
+    expect(seen.components?.after).toBe("hero");
   });
 
   it("offers Edit only where the author may update components", () => {

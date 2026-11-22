@@ -1,0 +1,219 @@
+/**
+ * A relationship holding a list, marked unique, is refused by the Schema Builder on every dialect,
+ * at the create and at a later save alike, before any statement runs.
+ *
+ * "Unique" on a list would mean no two entries hold the identical list, which is rarely what is
+ * meant, and no dialect keeps it well: PostgreSQL's index refuses a row once the list holds about a
+ * hundred ids, MySQL cannot key the column at all, and SQLite keys the whole list. So the Builder
+ * refuses the mark the same way everywhere, naming the field and what to do instead, and nothing is
+ * built for it.
+ */
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { clearServices } from "../../../di/register";
+import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
+import type { Params } from "../../../dispatcher/types";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../services";
+import { consoleLogger } from "../../../shared/types";
+import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
+
+/** A Builder action, as a development server runs it, where it applies its DDL first. */
+async function inDevelopment<T>(run: () => Promise<T>): Promise<T> {
+  const previous = process.env.NODE_ENV;
+  vi.stubEnv("NODE_ENV", "development");
+  try {
+    return await run();
+  } finally {
+    vi.stubEnv("NODE_ENV", previous);
+  }
+}
+
+function dispatch(
+  method: string,
+  params: Params,
+  body: Record<string, unknown>
+): Promise<unknown> {
+  return inDevelopment(() =>
+    dispatchCollections({} as ServiceContainer, method, params, body)
+  );
+}
+
+/** A relationship to the target collection holding a list, on the row. */
+function listOfTags(unique: boolean): Record<string, unknown> {
+  return {
+    name: "tags",
+    type: "relationship",
+    relationTo: "uql_tags",
+    // As the Builder's create takes a relationship: its target and relation type as options too.
+    options: { target: "uql_tags", relationType: "manyToOne" },
+    hasMany: true,
+    ...(unique ? { unique: true } : {}),
+  };
+}
+
+/** Every file under `dir`, by path, with what it holds. */
+async function filesUnder(dir: string): Promise<Record<string, string>> {
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+  const files: Record<string, string> = {};
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const path = join(entry.parentPath, entry.name);
+    files[path] = await readFile(path, "utf-8");
+  }
+  return files;
+}
+
+/**
+ * What a refused save must leave as it was: the project's files (the definition file and the
+ * migrations), the collection's stored fields, and the live indexes on its table.
+ */
+async function stateOf(
+  t: TestNextly,
+  dialect: string,
+  projectRoot: string
+): Promise<unknown> {
+  const stored = (await new DynamicCollectionRegistryService(
+    t.adapter as never,
+    consoleLogger
+  ).getCollection("uql_posts")) as { fields: unknown };
+  const indexSql =
+    dialect === "postgresql"
+      ? "SELECT indexname AS name FROM pg_indexes WHERE tablename = 'dc_uql_posts'"
+      : dialect === "mysql"
+        ? "SELECT DISTINCT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dc_uql_posts'"
+        : "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'dc_uql_posts'";
+  const indexes = (
+    (await t.adapter.executeQuery(indexSql)) as Array<{ name: string }>
+  )
+    .map(row => row.name)
+    .sort();
+  return {
+    files: await filesUnder(projectRoot),
+    fields: stored.fields,
+    indexes,
+  };
+}
+
+/** The refusal, naming the field and what to do instead. */
+const REFUSED = {
+  publicData: {
+    errors: [
+      expect.objectContaining({
+        path: "fields.tags",
+        code: "UNIQUE_NOT_ON_LIST",
+        message: expect.stringContaining(
+          'Turn Unique off on "tags", or make it a single link.'
+        ),
+      }),
+    ],
+  },
+};
+
+for (const dialect of getConfiguredTestDialects()) {
+  describe(`a list relationship marked unique is refused — ${dialect}`, () => {
+    let t: TestNextly | undefined;
+    let projectRoot: string;
+
+    beforeEach(async () => {
+      projectRoot = await mkdtemp(join(tmpdir(), "nextly-unique-list-"));
+      vi.spyOn(process, "cwd").mockReturnValue(projectRoot);
+      clearServices();
+      t = await createTestNextly({
+        dialect,
+        basePath: projectRoot,
+        // So a translated list can be created; a list kept per language is one all the same.
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      await dispatch(
+        "createCollection",
+        {},
+        {
+          name: "uql_tags",
+          label: "Tags",
+          fields: [{ name: "label", type: "text" }],
+        }
+      );
+    }, 120_000);
+
+    afterEach(async () => {
+      await t?.destroy();
+      t = undefined;
+      clearServices();
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      await rm(projectRoot, { recursive: true, force: true });
+    });
+
+    it("at the create, building nothing", async () => {
+      await expect(
+        dispatch(
+          "createCollection",
+          {},
+          { name: "uql_posts", label: "Posts", fields: [listOfTags(true)] }
+        )
+      ).rejects.toMatchObject(REFUSED);
+      expect(await t!.adapter.tableExists("dc_uql_posts")).toBe(false);
+    }, 120_000);
+
+    it("inside a named group, at the create, building nothing", async () => {
+      await expect(
+        dispatch(
+          "createCollection",
+          {},
+          {
+            name: "uql_posts",
+            label: "Posts",
+            fields: [
+              { name: "meta", type: "group", fields: [listOfTags(true)] },
+            ],
+          }
+        )
+      ).rejects.toMatchObject(REFUSED);
+      expect(await t!.adapter.tableExists("dc_uql_posts")).toBe(false);
+    }, 120_000);
+
+    it("translated, at the create, building nothing", async () => {
+      await expect(
+        dispatch(
+          "createCollection",
+          {},
+          {
+            name: "uql_posts",
+            label: "Posts",
+            localized: true,
+            fields: [{ ...listOfTags(true), localized: true }],
+          }
+        )
+      ).rejects.toMatchObject(REFUSED);
+      expect(await t!.adapter.tableExists("dc_uql_posts")).toBe(false);
+    }, 120_000);
+
+    it("at a later save that marks it unique, changing nothing", async () => {
+      await dispatch(
+        "createCollection",
+        {},
+        { name: "uql_posts", label: "Posts", fields: [listOfTags(false)] }
+      );
+      const before = await stateOf(t!, dialect, projectRoot);
+      await expect(
+        dispatch(
+          "applySchemaChanges",
+          { collectionName: "uql_posts" },
+          { fields: [listOfTags(true)], confirmed: true, schemaVersion: 1 }
+        )
+      ).rejects.toMatchObject(REFUSED);
+      // Refused before anything was written: no definition or migration file, no stored field
+      // and no index changed.
+      expect(await stateOf(t!, dialect, projectRoot)).toEqual(before);
+    }, 120_000);
+  });
+}

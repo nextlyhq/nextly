@@ -22,7 +22,7 @@ import {
 } from "../generate";
 import { buildInverseOperations } from "../down-generator";
 import { parseEntityHeaders } from "../format-file";
-import { writeSnapshot } from "../snapshot-io";
+import { recordedSnapshot } from "./helpers/recorded-snapshot";
 
 const NOW = new Date("2026-04-29T15:45:00.123Z");
 
@@ -179,7 +179,7 @@ describe("generateMigration", () => {
       [],
       "postgresql"
     );
-    await writeSnapshot(
+    await recordedSnapshot(
       join(migrationsDir, "meta"),
       "20260101_000000_000_initial",
       desired,
@@ -206,7 +206,7 @@ describe("generateMigration", () => {
       [],
       "postgresql"
     );
-    await writeSnapshot(
+    await recordedSnapshot(
       join(migrationsDir, "meta"),
       "20260101_000000_000_initial",
       desired,
@@ -255,7 +255,7 @@ describe("generateMigration", () => {
       [],
       "postgresql"
     );
-    await writeSnapshot(
+    await recordedSnapshot(
       join(migrationsDir, "meta"),
       "20260101_000000_000_initial",
       desired,
@@ -305,7 +305,7 @@ describe("generateMigration", () => {
       [],
       "sqlite"
     );
-    await writeSnapshot(
+    await recordedSnapshot(
       join(migrationsDir, "meta"),
       "20260101_000000_000_initial",
       desired,
@@ -349,7 +349,7 @@ describe("generateMigration", () => {
       [],
       "postgresql"
     );
-    await writeSnapshot(
+    await recordedSnapshot(
       join(migrationsDir, "meta"),
       "20260101_000000_000_initial",
       desired,
@@ -382,7 +382,7 @@ describe("generateMigration", () => {
       [],
       "postgresql"
     );
-    await writeSnapshot(
+    await recordedSnapshot(
       join(migrationsDir, "meta"),
       "20260101_000000_000_initial",
       desired,

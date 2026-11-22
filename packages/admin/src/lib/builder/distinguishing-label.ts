@@ -73,7 +73,7 @@ export function distinguishFields(
     ancestors: readonly BuilderField[]
   ): void => {
     for (const field of list) {
-      out.push(distinguishOne(field, ancestors));
+      out.push(distinguishFieldAt(field, ancestors));
       // Any field carrying nested fields is a container, as the other tree
       // walks of this module's siblings treat it.
       if (field.fields && field.fields.length > 0) {
@@ -108,7 +108,12 @@ function namedNode(
   return { name: field.name, declaredLabel: field.label ?? null, path };
 }
 
-function distinguishOne(
+/**
+ * One field told apart, given the containers above it, outermost first: for a
+ * list that already holds the field and its place, such as the fields a
+ * condition may read.
+ */
+export function distinguishFieldAt(
   field: BuilderField,
   ancestors: readonly BuilderField[]
 ): DistinguishedField {

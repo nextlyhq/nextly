@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { DEFAULT_ACTIVATION_PX } from "./canvas-drag";
+import { DEFAULT_ACTIVATION_PX } from "./canvas/canvas-drag";
 import {
   FIELD_SCRUB_START,
   fieldScrubMove,

@@ -76,6 +76,7 @@ import {
   isAbortedTransactionError,
   recordAbortedTransaction,
 } from "./aborted-transaction-sightings";
+import type { PluginPermission } from "./contributions";
 import { namingTestConsentOption, type PluginConsent } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { resetPluginRouteRegistry } from "./routes/route-registry";
@@ -220,6 +221,19 @@ async function probeForAbortedTransaction(
  */
 const GUARDED = Symbol.for("nextly.abortedTransactionGuardInstalled");
 
+/** The adapter's dialect, as it reports it; undefined where it reports none. */
+function dialectOf(adapter: unknown): string | undefined {
+  const reporting = adapter as {
+    dialect?: unknown;
+    getCapabilities?: () => { dialect?: unknown };
+  };
+  const dialect =
+    typeof reporting.getCapabilities === "function"
+      ? reporting.getCapabilities().dialect
+      : reporting.dialect;
+  return typeof dialect === "string" ? dialect : undefined;
+}
+
 function guardAgainstAbortedTransactions<T extends TestAdapter>(adapter: T): T {
   // An adapter can be handed to `createTestNextly` more than once — that is how a test keeps an
   // in-memory database alive across boots. Wrapping the wrapper would nest a probe per boot, so a
@@ -228,14 +242,26 @@ function guardAgainstAbortedTransactions<T extends TestAdapter>(adapter: T): T {
   const marker = adapter as unknown as Record<symbol, boolean>;
   if (marker[GUARDED]) return adapter;
 
+  // Only PostgreSQL leaves a transaction aborted after a failed statement, so only there is
+  // there anything to record. Probing elsewhere can break a healthy transaction instead: on
+  // MySQL a schema statement commits the transaction it runs in, the probe's savepoint is gone
+  // by the time it is released, and a migration that applied would be reported as failed.
+  if (dialectOf(adapter) !== "postgresql") return adapter;
+
   const originalTransaction = adapter.transaction?.bind(adapter);
   if (!originalTransaction) return adapter;
+  // MySQL never poisons a transaction, so it has nothing for the probe to find, and the probe
+  // would break it: MySQL commits a transaction before a statement that changes a table's shape,
+  // and the savepoints go with it, so a callback that dropped a table leaves the probe's release
+  // naming a savepoint that no longer exists. SQLite keeps such statements inside the
+  // transaction, so it is probed as before.
+  const probes = adapter.getCapabilities().dialect !== "mysql";
   const wrapped = async (...args: unknown[]): Promise<unknown> => {
     const [callback, ...rest] = args;
     // Probe on the context the callback itself used, so the question reaches the transaction
     // that may have been poisoned rather than a fresh connection from the pool.
     const instrumented =
-      typeof callback === "function"
+      probes && typeof callback === "function"
         ? async (ctx: AbortProbeContext): Promise<unknown> => {
             const result = await (
               callback as (c: AbortProbeContext) => Promise<unknown>
@@ -329,10 +355,11 @@ export interface CreateTestNextlyOptions {
     schema?: { extend?: SchemaHook[] };
   };
   /**
-   * Keep every translatable field per language from the start, as a config's
-   * `experimental.perLanguageStorage` does. Off by default.
+   * The configuration's `experimental.perLanguageStorage`, which chooses no layout any longer:
+   * every installation keeps its translatable fields per language. Set, the start warns that it
+   * is deprecated. A test standing in for an earlier release uses `setPerLanguageStorage` instead.
    *
-   * @experimental
+   * @deprecated Has no effect but the warning.
    */
   perLanguageStorage?: boolean;
   /** Override the adapter (defaults to a fresh in-memory SQLite adapter). */
@@ -341,6 +368,8 @@ export interface CreateTestNextlyOptions {
   logger?: Logger;
   /** The app's `security` block, as `nextly.config.ts` would give it. */
   security?: SecurityConfig;
+  /** The app's own custom permissions, as `nextly.config.ts` would declare them. */
+  permissions?: PluginPermission[];
   /** An app's password hasher, as `getNextly()` takes it. */
   passwordHasher?: NextlyServiceConfig["passwordHasher"];
   /**
@@ -942,13 +971,20 @@ async function bootServices(
         ? {}
         : { languageAddresses: opts.languageAddresses }),
       security: opts.security,
+      ...(opts.permissions === undefined
+        ? {}
+        : { permissions: opts.permissions }),
       passwordHasher: opts.passwordHasher,
       // Record every event by default so machinery tests are independent of
       // webhook endpoint setup; suites that exercise the endpoint gate turn this
       // off. Passed through the config (not set after) so it is published before
       // plugin init() runs, and boot-time plugin events are recorded too.
       webhookAuditEnabled: true,
-      perLanguageStorage: opts.perLanguageStorage === true,
+      // Passed only where a test sets it: the setting chooses no layout, and a site that sets it
+      // is told it is deprecated, which a test of that warning reads.
+      ...(opts.perLanguageStorage === undefined
+        ? {}
+        : { perLanguageStorage: opts.perLanguageStorage }),
     });
   } catch (error) {
     throw namingTestConsentOption(error, opts.pluginConsent);

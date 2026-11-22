@@ -124,7 +124,7 @@ async function everyValueIsJson(
  * value reads as JSON has nothing left to clear, so its retype is next, and one holding a value
  * that does not has its clearing next.
  */
-export async function liveStepOf(
+async function liveStepOf(
   db: unknown,
   dialect: SupportedDialect,
   progress: RecordedProgress,
@@ -177,7 +177,7 @@ export function isAt(
  * names any more, or one whose field now carries a pending change, still holds whatever step its
  * conversion reached.
  */
-export async function readLiveState(
+async function readLiveState(
   db: unknown,
   dialect: SupportedDialect,
   progress: RecordedProgress
@@ -194,6 +194,16 @@ export async function readLiveState(
       ? { typeModifier: found.typeModifier }
       : {}),
   };
+}
+
+/** A recorded conversion's live column, and the step it has reached (`liveStepOf`). */
+export async function liveProgressOf(
+  db: unknown,
+  dialect: SupportedDialect,
+  progress: RecordedProgress
+): Promise<{ live: ColumnState | null; reached: number | null }> {
+  const live = await readLiveState(db, dialect, progress);
+  return { live, reached: await liveStepOf(db, dialect, progress, live) };
 }
 
 /**

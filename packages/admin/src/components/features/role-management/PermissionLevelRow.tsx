@@ -20,6 +20,7 @@ import {
 } from "@admin/lib/permissions/level-labels";
 import {
   offeredLevels,
+  ownWithAction,
   ownWithLevel,
   rowLevel,
   rowNotes,
@@ -120,8 +121,10 @@ export function PermissionLevelRow({
     const next = levels.find(candidate => candidate === chosen);
     if (next !== undefined) onChange(ownWithLevel(value, row, next, lockedIds));
   };
+  // An action that needs read brings the row's read with it, and read turned
+  // off takes them away: see `ownWithAction`.
   const setAction = (id: string, on: boolean) => {
-    onChange(on ? [...value, id] : value.filter(kept => kept !== id));
+    onChange(ownWithAction(value, row, id, on, lockedIds));
   };
 
   return (

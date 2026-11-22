@@ -73,6 +73,12 @@ import {
   contentEventsTables,
 } from "../../../schemas/content-events";
 import { DELETED_PRINCIPALS_TABLE } from "../../../schemas/deleted-principals/table-name";
+import {
+  EXTERNAL_IDENTITIES_TABLE,
+  externalIdentitiesTables,
+  newExternalIdentityRow,
+  type ExternalIdentityFacts,
+} from "../../../schemas/external-identities";
 import { NOTICES_TABLE, noticesTables } from "../../../schemas/notices";
 import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
 import {
@@ -316,6 +322,16 @@ export interface CreateExternalUserData {
   roleIds: string[];
   /** When the provider verified the address; stored as `emailVerified`. */
   emailVerifiedAt: Date;
+  /**
+   * The external identity the account is provisioned for, where the caller
+   * is the sign-in path that owns one: attached IN this creation's
+   * transaction, so the identity table's unique index decides the whole
+   * creation when two first sign-ins race each other past the read — the
+   * loser's account and its roles roll back with the refused insert rather
+   * than standing as an account no identity will ever resolve to. A caller
+   * creating an external account without an identity omits it.
+   */
+  identity?: ExternalIdentityFacts;
 }
 
 /**
@@ -957,7 +973,9 @@ export class UserMutationService extends BaseService {
    * Roles are validated and assigned INSIDE the insert's transaction, unlike
    * `createLocalUser`, which assigns them afterwards and swallows failures —
    * that would leave an active account with fewer privileges than it was
-   * created with, and nothing to say so.
+   * created with, and nothing to say so. An `identity` the caller brings is
+   * attached in that same transaction, for the same reason: an account the
+   * identity table refused must not stand.
    */
   async createExternalUser(
     input: CreateExternalUserData,
@@ -1152,6 +1170,22 @@ export class UserMutationService extends BaseService {
             roleId: role.id,
             createdAt: now,
           });
+        }
+
+        // The identity the account is provisioned for, when the caller
+        // brought one, in the same transaction as the account it belongs to:
+        // two first sign-ins for one identity both pass the read that
+        // precedes them, and the table's unique index is what actually
+        // refuses the second — so its refusal must take the account and its
+        // roles with it rather than leaving an account no identity will ever
+        // resolve to. The row is built by the one builder the explicit link
+        // writes through, so both attaching doors store one shape.
+        if (input.identity !== undefined) {
+          await txDb
+            .insert(
+              externalIdentitiesTables(this.dialect).nextlyExternalIdentities
+            )
+            .values(newExternalIdentityRow(input.identity, newUserId));
         }
 
         // The CANONICAL decision, asked about the account that now exists,
@@ -3038,6 +3072,14 @@ export class UserMutationService extends BaseService {
     // reason notices are.
     const versionViewsExist = await this.tablePresent(VERSION_VIEWS_TABLE);
 
+    // The person's external identities: theirs alone, so they go with the
+    // account rather than waiting for a provider to hand the next account the
+    // same subject. Probed out here for the reason notices are: an
+    // installation that has not run `nextly migrate` has no identities table,
+    // and a delete against it would abort the transaction and the deletion
+    // with it.
+    const identitiesExist = await this.tablePresent(EXTERNAL_IDENTITIES_TABLE);
+
     // The record of content events names each event's actor; the name goes
     // with the account. Probed for the reason the tables above are.
     const contentEventsExist = await this.tablePresent(CONTENT_EVENTS_TABLE);
@@ -3216,7 +3258,16 @@ export class UserMutationService extends BaseService {
           String(userId),
           versionViewsExist
         );
-
+        // Their external identities, in the same transaction: the foreign key
+        // on `user_id` would take them with the row, but the delete says so
+        // where the deletion is read rather than leaving it to a cascade a
+        // database built without key enforcement would not run.
+        await this.eraseOwnedRows(
+          txDb,
+          externalIdentitiesTables(this.dialect).nextlyExternalIdentities,
+          String(userId),
+          identitiesExist
+        );
         if (widgetLayoutExists) {
           const layoutTable = widgetLayoutTables(this.dialect)
             .nextlyWidgetLayout as unknown as { id: Column };

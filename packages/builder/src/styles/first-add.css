@@ -1,0 +1,176 @@
+/**
+ * The chooser a block just added asks for, on the canvas
+ * (`canvas/first-add-choosers.tsx`): a plate drawn over the block in place of
+ * its body, in the editor's own colours, holding the block's choices and
+ * Skip.
+ *
+ * Positioned like `.nx-image-states`: a layer over the canvas root's content
+ * box that takes no presses itself, the plate opting back in at the rectangle
+ * the component measured. Above the empty-container "+" of the block's own
+ * empty columns, which the plate covers; below the block toolbar, which says
+ * what is selected.
+ *
+ * Opaque, on the editor's raised surface: the plate covers the site's own
+ * ground, whose colour the editor does not choose, and the editor's text
+ * holds its contrast only on the editor's surfaces, in either theme.
+ */
+.nx-first-add {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.nx-first-add__plate {
+  position: absolute;
+  box-sizing: border-box;
+  display: grid;
+  align-content: center;
+  pointer-events: auto;
+  border: 1px solid
+    color-mix(in srgb, var(--nx-builder-select) 40%, var(--nx-builder-border));
+  border-radius: var(--radius-md);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  font:
+    400 0.8125rem/1.4 var(--font-sans, system-ui),
+    sans-serif;
+  cursor: default;
+}
+
+/* The plate's content and its padding, measured as one: the room the block
+   is given while the chooser shows. */
+.nx-first-add__room {
+  padding: 1rem;
+}
+
+.nx-first-add__body {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+}
+
+.nx-first-add__title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--nx-builder-text);
+}
+
+/* The Content tab's tiles, larger: six across where the block is wide, as
+   many as fit where it is narrow. */
+.nx-columns-layout__tiles.nx-first-add__tiles {
+  grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr));
+  gap: 0.5rem;
+  inline-size: 100%;
+  max-inline-size: 42rem;
+}
+
+.nx-first-add__tiles .nx-columns-layout__tile {
+  gap: 0.375rem;
+  min-block-size: 4rem;
+  padding: 0.5rem;
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  font-size: 0.75rem;
+}
+
+.nx-first-add__tiles .nx-columns-layout__glyph {
+  block-size: 1.5rem;
+}
+
+.nx-first-add__tiles .nx-columns-layout__tile:hover,
+.nx-first-add__tiles .nx-columns-layout__tile:focus-visible {
+  border-color: var(--nx-builder-select);
+}
+
+.nx-first-add__tiles .nx-columns-layout__tile:hover .nx-columns-layout__glyph i,
+.nx-first-add__tiles
+  .nx-columns-layout__tile:focus-visible
+  .nx-columns-layout__glyph
+  i {
+  border-color: var(--nx-builder-select);
+  background: color-mix(in srgb, var(--nx-builder-select) 18%, transparent);
+}
+
+/* A new Collection list's two steps (`collection-list-picker.tsx`): the
+   collections as a wrapping row of buttons, then three layout tiles, each a
+   small drawing of the layout above its name, in the editor's colours. */
+.nx-list-picker {
+  inline-size: 100%;
+  max-inline-size: 36rem;
+}
+
+.nx-list-picker__sources {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.375rem;
+  max-inline-size: 100%;
+}
+
+.nx-list-picker__layouts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.5rem;
+  inline-size: 100%;
+}
+
+.nx-list-picker__tile {
+  display: grid;
+  justify-items: center;
+  gap: 0.375rem;
+  min-block-size: 5.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.nx-list-picker__tile:hover,
+.nx-list-picker__tile:focus-visible {
+  border-color: var(--nx-builder-select);
+}
+
+.nx-list-picker__tile:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: 1px;
+}
+
+/* The drawing has a size of its own, so a narrow canvas never stretches it
+   past the plate. */
+.nx-list-picker__glyph {
+  inline-size: 4.5rem;
+  block-size: 2.75rem;
+  max-inline-size: 100%;
+  fill: var(--nx-builder-text-muted);
+}
+
+.nx-list-picker__fill {
+  fill: color-mix(in srgb, var(--nx-builder-select) 30%, transparent);
+}
+
+.nx-list-picker__faint {
+  fill: color-mix(in srgb, var(--nx-builder-text-muted) 45%, transparent);
+}
+
+.nx-list-picker__note {
+  margin: 0;
+  color: var(--nx-builder-text-muted);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.nx-list-picker__more {
+  font-weight: 600;
+  color: var(--nx-builder-text);
+}
+
+.nx-list-picker__actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+}

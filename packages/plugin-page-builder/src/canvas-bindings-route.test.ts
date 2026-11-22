@@ -120,4 +120,23 @@ describe("the canvas's binding sources", () => {
       );
     }
   });
+
+  it("takes no limit, said as null, for a site that sets none", async () => {
+    const ctx = { caller: null } as unknown as PluginRouteContext;
+    const outcome = await canvasBindingsRoute()
+      .handler(
+        new Request(`http://nextly.test/x${CANVAS_BINDINGS_ROUTE_PATH}`, {
+          method: "POST",
+          body: JSON.stringify({ ...request(), allowance: null }),
+        }),
+        ctx
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error
+      );
+    // Past the body's check: whatever happens there (no runtime here), the
+    // allowance is not what is refused.
+    expect(NextlyError.isCode(outcome, "VALIDATION_ERROR")).toBe(false);
+  });
 });

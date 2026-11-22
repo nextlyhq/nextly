@@ -2,7 +2,7 @@
  * Lending a command's own connection to the services a grants change reaches.
  *
  * A CLI command starts no Nextly in its process, so its service container is
- * empty. A command that changes permissions or grants (`nextly upgrade`'s role
+ * empty. A command that changes permissions or grants (`nextly migrate`'s role
  * conversion, `nextly migrate`'s permission phase) still owes what such a
  * change owes in a running app, and both halves go through the container:
  * - the cached permission answers: emptied, and the shared role version every

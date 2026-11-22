@@ -1,74 +1,62 @@
 "use client";
 
 /**
- * The switch that applies visibility conditions on the canvas, and what it
- * says they did.
+ * Previewing as a visitor: the strip above the canvas while the author's
+ * "Preview as visitor" is on, what it says the conditions did, and why that
+ * view can't be turned on where it can't.
  *
- * On a template it sits in the Previewing strip after the entry, and checks
- * the conditions against that entry as a visitor reads it. On a component or
- * a Layout there is no entry to check, so a strip of its own holds the switch
- * disabled, with the reason beside it. Either appears only while the document
- * holds a conditioned block, so a document without one keeps the canvas's
- * full height.
- *
- * The switch is the author's own, for this session: it never changes what is
+ * The view itself is turned on in the top bar's Preview menu. While it is
+ * on, the canvas hides the blocks whose conditions don't match, as the
+ * published page would, and this strip says so, with Stop to turn it off.
+ * On a template the strip sits under the Previewing row, and checks against
+ * the entry being previewed; on a page, against the page as a visitor reads
+ * it. It is the author's own, for this session: it never changes what is
  * stored.
  *
  * @module conditions-strip
  */
 
+import type { DocumentKind } from "@nextlyhq/blocks-engine";
 import type { AppliedConditions } from "@nextlyhq/builder/shell";
-import { useId } from "react";
+import { Eye } from "lucide-react";
+import { useEffect, useState } from "react";
 
-/** The switch's state on a template, as the host keeps it. */
-export interface TemplateConditions {
-  /** Whether the conditions are applied. */
-  readonly on: boolean;
-  readonly toggle: () => void;
-  /** Whether an entry is previewed to check them against. */
-  readonly available: boolean;
-  /** What applying them did, while they are applied and an entry is previewed. */
-  readonly applied: AppliedConditions | undefined;
-  /** What the entry is called in words, lower case: "post". */
-  readonly noun: string;
-  /** Whether what is checked could not be read, so nothing is applied. */
-  readonly failed?: boolean;
-}
+/** Why "Preview as visitor" can't be used where no block has conditions. */
+const NO_CONDITIONS = "No block on this page has conditions";
 
-/** The switch itself: a button announced as a switch, pressed or not. */
-function ConditionsSwitch({
-  on,
-  disabled,
-  onToggle,
-  describedBy,
-}: {
-  readonly on: boolean;
-  readonly disabled: boolean;
-  readonly onToggle?: () => void;
-  readonly describedBy?: string;
-}): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      className="nx-preview-strip__switch"
-      disabled={disabled}
-      onClick={onToggle}
-      {...(describedBy === undefined
-        ? {}
-        : { "aria-describedby": describedBy })}
-    >
-      <span className="nx-preview-strip__track" aria-hidden="true" />
-      Apply conditions
-    </button>
-  );
+/** Why it can't on a component: a Layout's header and footer are ones too. */
+const PLACED_WHY =
+  "No entry to check here. The published page checks them where it’s placed.";
+
+/**
+ * Why it can't where the conditions have nothing to be checked against: a
+ * Single, which is no entry of a collection, or a template with no entry
+ * previewed.
+ */
+const NEEDS_ENTRY = "Needs an entry to check its conditions against.";
+
+/**
+ * Why "Preview as visitor" can't be turned on, or undefined where it can.
+ *
+ * `conditioned` is whether the document holds a conditioned block at all,
+ * its placed components' included; `entryToCheck` whether there is an entry
+ * to check them against (the page itself, or a template's previewed entry).
+ */
+export function visitorUnavailable(
+  kind: DocumentKind,
+  conditioned: boolean,
+  entryToCheck: boolean
+): string | undefined {
+  // Placed elsewhere and checked there, whether it holds conditions yet or
+  // not: no entry is ever checked here.
+  if (kind === "component") return PLACED_WHY;
+  if (!conditioned) return NO_CONDITIONS;
+  return entryToCheck ? undefined : NEEDS_ENTRY;
 }
 
 /**
- * What the conditions did for the entry, at the strip's far end: how many of
- * the blocks that read it are hidden, or that every one shows. A live region,
- * present while the switch is off too, so each change is announced.
+ * What the conditions did for the entry: how many of the blocks that read
+ * it are hidden, or that every one shows. Nothing while nothing is applied.
  */
 export function conditionsCountWords(
   applied: AppliedConditions | undefined,
@@ -101,102 +89,67 @@ function nothingHiddenWords(applied: AppliedConditions, noun: string): string {
     : `Every conditioned block shows for this ${noun}`;
 }
 
+/** What the strip says when what it checks against could not be read. */
+const FAILED_WORDS = "Couldn’t load the visitor view. Stop, then try again.";
+
 /**
- * The switch and its count, as the Previewing strip holds them after the
- * entry. Disabled while no entry is previewed: the strip's own notice says
- * why there is none.
+ * What the visitor strip says the conditions did: what was hidden, that the
+ * entry is still being read as a visitor reads it, or that it couldn't be.
  */
-export function TemplateConditionsPart({
-  conditions,
+export function visitorStripWords({
+  applied,
+  noun,
+  failed = false,
 }: {
-  readonly conditions: TemplateConditions;
-}): React.JSX.Element {
-  return (
-    <>
-      <span className="nx-preview-strip__sep" aria-hidden="true" />
-      <ConditionsControls conditions={conditions} />
-    </>
-  );
+  readonly applied: AppliedConditions | undefined;
+  /** What the entry is called in words, lower case: "post". */
+  readonly noun: string;
+  /** Whether what is checked could not be read, so nothing is applied. */
+  readonly failed?: boolean;
+}): string {
+  if (failed) return FAILED_WORDS;
+  return applied === undefined
+    ? "Checking…"
+    : conditionsCountWords(applied, noun);
 }
 
-/** What the switch says when what it checks against could not be read. */
-const FAILED_WORDS =
-  "Couldn’t check this page. Turn the switch off and on to try again.";
-
 /**
- * The switch and what the conditions did, as both strips hold them: a
- * template's after its entry, a page's alone.
+ * The strip while the canvas shows the page as a visitor gets it: that it
+ * does, what was hidden, and Stop. What was hidden is a live region, drawn
+ * empty first and filled once it is on the page, so even the first words
+ * are announced, then each change of them.
  */
-function ConditionsControls({
-  conditions,
+export function VisitorStrip({
+  said,
+  onStop,
 }: {
-  readonly conditions: TemplateConditions;
+  /** What the conditions did, from {@link visitorStripWords}. */
+  readonly said: string;
+  /** Turns the view off; it is told where focus goes once the strip is gone. */
+  readonly onStop: () => void;
 }): React.JSX.Element {
-  const said = !conditions.on
-    ? ""
-    : conditions.failed === true
-      ? FAILED_WORDS
-      : conditionsCountWords(conditions.applied, conditions.noun);
+  const [announced, setAnnounced] = useState("");
+  useEffect(() => setAnnounced(said), [said]);
   return (
-    <>
-      <ConditionsSwitch
-        on={conditions.on && conditions.available}
-        disabled={!conditions.available}
-        onToggle={conditions.toggle}
-      />
-      <span className="nx-preview-strip__count" role="status" title={said}>
-        {said}
+    <div className="nx-preview-strip" data-visitor-preview="">
+      <span className="nx-preview-strip__mode">
+        <Eye aria-hidden="true" size={14} />
+        Previewing as a visitor
       </span>
-    </>
-  );
-}
-
-/**
- * The strip a page gets while it holds a block whose conditions read the
- * page: the switch and what the conditions did, and no entry to name, since
- * the page is its own.
- */
-export function PageConditionsStrip({
-  conditions,
-}: {
-  readonly conditions: TemplateConditions;
-}): React.JSX.Element {
-  return (
-    <div className="nx-preview-strip">
-      <ConditionsControls conditions={conditions} />
-    </div>
-  );
-}
-
-/** Why the switch can't apply a component's or a Layout's conditions. */
-const PLACED_WHY =
-  "No entry to check here. The published page checks them where it’s placed.";
-
-/**
- * The strip a component or a Layout gets while it holds a conditioned block:
- * what is being edited, and the switch, disabled, since there is no entry to
- * check against here: the published page checks them where it is placed.
- */
-export function PlacedConditionsStrip({
-  kind,
-  name,
-}: {
-  /** What is being edited, in words: "Component" or "Layout". */
-  readonly kind: string;
-  readonly name: string;
-}): React.JSX.Element {
-  const why = useId();
-  return (
-    <div className="nx-preview-strip">
-      <span>{kind}</span>
-      <b className="nx-preview-strip__name" title={name}>
-        {name}
-      </b>
       <span className="nx-preview-strip__sep" aria-hidden="true" />
-      <ConditionsSwitch on={false} disabled describedBy={why} />
-      <span className="nx-preview-strip__why" id={why} title={PLACED_WHY}>
-        {PLACED_WHY}
+      <span className="nx-preview-strip__count" role="status" title={announced}>
+        {announced}
       </span>
+      <button
+        type="button"
+        className="nx-preview-strip__stop"
+        // The whole of what it stops, to a screen reader, starting with the
+        // word the button shows.
+        aria-label="Stop previewing as a visitor"
+        onClick={onStop}
+      >
+        Stop
+      </button>
     </div>
   );
 }

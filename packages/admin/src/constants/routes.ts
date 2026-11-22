@@ -56,6 +56,9 @@ export const ROUTES = {
   // two tables. The rail's Content item and the Content panel's title lead
   // here; COLLECTIONS and SINGLES below show one table each.
   CONTENT: "/admin/content",
+  // What waits for the reader's review across every collection and Single a workflow holds: the
+  // Content panel's first link where a workflow holds any content.
+  CONTENT_WAITING: "/admin/content/waiting",
 
   // ============================================================
   // Section landing pages.
@@ -152,6 +155,11 @@ export const ROUTES = {
   // rather than in the rail because it is machinery an operator watches, not
   // editorial work — the same reasoning that puts webhooks there.
   SETTINGS_BACKGROUND_JOBS: "/admin/settings/background-jobs",
+  // Workflows: each workflow the code defines, read-only, with the choices
+  // admins own about it (who takes each step, default reviewers, labels and
+  // emails) on its own page.
+  SETTINGS_WORKFLOWS: "/admin/settings/workflows",
+  SETTINGS_WORKFLOW_DETAIL: "/admin/settings/workflows/[slug]",
 
   // Plugin routes
   PLUGINS: "/admin/plugins",

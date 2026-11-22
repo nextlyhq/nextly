@@ -64,9 +64,7 @@ async function postWithHistory(
   await documentExcerpt(page).fill(first);
   await page.getByRole("button", { name: /save draft/i }).click();
 
-  // Saving a NEW entry returns to the LIST rather than staying in the editor.
-  await page.waitForURL(/\/collections\/posts$/, { timeout: 30_000 });
-  await page.getByRole("link", { name: title }).click();
+  // The first save stays on the new post, at its own address.
   await page.waitForURL(/\/collections\/posts\/(?!create$)[^/]+$/, {
     timeout: 30_000,
   });

@@ -29,6 +29,6 @@ describe("generateClientSchema for an icon field", () => {
       badge: "",
     });
     expect(required.success).toBe(false);
-    expect(required.error?.issues[0]?.message).toBe("This field is required");
+    expect(required.error?.issues[0]?.message).toBe("Badge is required.");
   });
 });

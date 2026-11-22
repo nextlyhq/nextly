@@ -71,41 +71,39 @@ export interface ComputeDiffOptions {
    * versions; a path that names a list row by index belongs in one version's
    * own set below, since the two versions may hold their rows in different
    * places.
-   *
-   * @experimental
    */
   withheld?: ReadonlySet<string>;
   /**
    * What the redaction removed from the earlier version (`before`), by that
    * version's own paths: a list row is named by its index in it
    * (`items.1.secret`).
-   *
-   * @experimental
    */
   withheldFrom?: ReadonlySet<string>;
   /**
    * What the redaction removed from the later version (`after`), by that
    * version's own paths, as `withheldFrom` is for the earlier one.
-   *
-   * @experimental
    */
   withheldTo?: ReadonlySet<string>;
   /**
    * Whether the caller's redaction applied each component's own read rules
    * inside the snapshots. Without it, a component field that declares a read
    * rule is left out, since nothing has judged it for this reader.
-   *
-   * @experimental
    */
   componentRulesApplied?: boolean;
   /**
    * The kind of document compared. A framework column belongs to some kinds
    * only (a Single has no owner column), and a key that is not one of this
    * kind's columns is a removed field. Defaults to `collection`.
-   *
-   * @experimental
    */
   entity?: SystemColumnEntity;
+  /**
+   * Compare only what the content type declares now, beside the framework's
+   * columns: a top-level key no declared field consumes is left out rather
+   * than reported as a removed field. A comparison of a subset of the fields
+   * (the shared part's) uses it, since a removed field may have been one the
+   * subset excludes.
+   */
+  declaredOnly?: boolean;
 }
 
 // The only framework key on a NESTED ROW (a component instance or repeater
@@ -163,6 +161,8 @@ interface WalkContext {
   withheld: { from: WithheldSide; to: WithheldSide };
   /** Whether component read rules were applied before the walk. */
   componentRulesApplied: boolean;
+  /** Whether a top-level key no declared field consumes is left out. */
+  declaredOnly?: boolean;
   /** A component-instance or repeater ROW object (its `id` is framework). */
   inRow: boolean;
   /**
@@ -1066,6 +1066,9 @@ function undeclaredNodes(
   for (const key of keys) {
     if (consumed.has(key) || ignored.has(key) || key.startsWith("_")) continue;
     const isSystem = ctx.top && ctx.systemColumns.has(key);
+    // A removed field at the top is left out of a comparison of declared
+    // fields only.
+    if (!isSystem && ctx.top && ctx.declaredOnly === true) continue;
     const node = unknownNode(
       key,
       beforeObj[key],
@@ -1168,6 +1171,7 @@ export function computeVersionDiff(
       to: { paths: withheldIn(opts, opts.withheldTo), at: [] },
     },
     componentRulesApplied: opts.componentRulesApplied === true,
+    declaredOnly: opts.declaredOnly === true,
   });
   const hasChanges = nodes.some(n => n.status !== "unchanged");
   // Read before pruning: a field withheld inside a group, a repeater row or a

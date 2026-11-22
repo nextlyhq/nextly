@@ -174,6 +174,17 @@ type ForwardedOption =
   // What a Single read that declines to create answers instead: shaping
   // too, since the default document is read under the same access as any.
   | "whenAbsent"
+  // Which language a read answers in, and what it says beside its values.
+  // Shaping, not authority: whole-document fallback reads a language under
+  // the same access as a request for it, and every language's values and
+  // their sources are judged by the field read rules as the row's are.
+  | "wholeDocumentFallback"
+  | "sourceLocales"
+  | "translations"
+  // Each row's review state beside its values. Shaping, not authority: it is
+  // given only for rows the read already returns, among the parts it may see,
+  // and never to a read that names no one.
+  | "reviewState"
   // `findSingles` filters.
   | "source"
   | "migrationStatus"

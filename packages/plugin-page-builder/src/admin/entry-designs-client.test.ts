@@ -30,6 +30,47 @@ describe("inSentence", () => {
   });
 });
 
+describe("a template named in a sentence", () => {
+  it("is named once, whether or not its title ends in the word", () => {
+    expect(OWN_DESIGN_WORDS.openTemplate("Blog post")).toBe(
+      "Open the Blog post template"
+    );
+    // A new template's own title, "<Singular> template".
+    expect(OWN_DESIGN_WORDS.openTemplate("Post template")).toBe(
+      "Open the Post template"
+    );
+    // Only the word itself: a title merely ending in the letters keeps it.
+    expect(OWN_DESIGN_WORDS.openTemplate("Stenciltemplate")).toBe(
+      "Open the Stenciltemplate template"
+    );
+  });
+
+  it("is how every sentence naming the template says it", () => {
+    expect(OWN_DESIGN_WORDS.openTemplate("Post template")).toBe(
+      "Open the Post template"
+    );
+    expect(OWN_DESIGN_WORDS.unpublishedWarning("Post template")).toBe(
+      "Visitors still see the Post template until you publish this design."
+    );
+    expect(
+      OWN_DESIGN_WORDS.noPublishedTemplate("Post", "Posts", "Post template")
+    ).toBe(
+      "The Post template isn't published yet, so this post isn't shown as a page on the site."
+    );
+    expect(OWN_DESIGN_WORDS.publishedSays("Post", "Post template")).toBe(
+      "Visitors see this post's own design. Changes to the Post template don't reach it."
+    );
+    expect(
+      OWN_DESIGN_WORDS.removeSays("Field notes", "Post template", "Posts")
+    ).toBe(
+      '"Field notes" will be shown with the Post template again. The own design and its history are deleted.'
+    );
+    expect(OWN_DESIGN_WORDS.unpublishedExplained("Post template")).toBe(
+      "Not published yet: visitors see the Post template"
+    );
+  });
+});
+
 describe("editedWhen", () => {
   const now = new Date(2026, 10, 7, 15, 0);
 

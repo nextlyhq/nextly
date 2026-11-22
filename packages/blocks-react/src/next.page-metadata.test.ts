@@ -64,7 +64,14 @@ const PRICING: BlockDocument = {
   formatVersion: DOCUMENT_FORMAT_VERSION,
   kind: "page",
   nodes: [
-    { id: "1", type: "core/heading", version: 1, props: { text: "Pricing" } },
+    // A heading offers no title: the page's title comes from its SEO title
+    // or its title pattern, so what the blocks say is the description alone.
+    {
+      id: "1",
+      type: "core/heading",
+      version: 1,
+      props: { text: "Pricing", level: "h1" },
+    },
     {
       id: "2",
       type: "core/text",
@@ -112,7 +119,6 @@ describe("a Page Builder route's offer for the head", () => {
     const config = handed[0];
     expect(config?.buildMetadata).toBeUndefined();
     expect(await config?.derivedMetadata?.(ENTRY, CONTEXT)).toEqual({
-      title: "Pricing",
       description: "Plans for every team.",
     });
   });
@@ -126,7 +132,9 @@ describe("a Page Builder route's offer for the head", () => {
       field: "content",
       nextly: reader() as never,
       blocks: { get: lookups },
-      metadata: (_entry, _context, derived) => ({ title: derived.title }),
+      metadata: (_entry, _context, derived) => ({
+        description: derived.description,
+      }),
     });
     const config = handed[0];
 
@@ -134,8 +142,8 @@ describe("a Page Builder route's offer for the head", () => {
     const afterOne = lookups.mock.calls.length;
     const offered = await config?.derivedMetadata?.(ENTRY, CONTEXT);
 
-    expect(own).toEqual({ title: "Pricing" });
-    expect(offered).toMatchObject({ title: "Pricing" });
+    expect(own).toEqual({ description: "Plans for every team." });
+    expect(offered).toMatchObject({ description: "Plans for every team." });
     expect(afterOne).toBeGreaterThan(0);
     expect(lookups.mock.calls.length).toBe(afterOne);
   });
@@ -156,7 +164,7 @@ describe("a Page Builder Single's offer for the head", () => {
         { id: "s1", content: PRICING },
         { slug: "homepage" }
       )
-    ).toEqual({ title: "Pricing", description: "Plans for every team." });
+    ).toEqual({ description: "Plans for every team." });
   });
 
   it("works the blocks out once when its own metadata asks for them too", async () => {
@@ -167,7 +175,9 @@ describe("a Page Builder Single's offer for the head", () => {
       field: "content",
       nextly: reader() as never,
       blocks: { get: lookups },
-      metadata: (_document, _context, derived) => ({ title: derived.title }),
+      metadata: (_document, _context, derived) => ({
+        description: derived.description,
+      }),
     });
     const config = handedSingles[0];
     const document = { id: "s1", content: PRICING };
@@ -178,8 +188,8 @@ describe("a Page Builder Single's offer for the head", () => {
     const afterOne = lookups.mock.calls.length;
     const offered = await config?.derivedMetadata?.(document, context);
 
-    expect(own).toEqual({ title: "Pricing" });
-    expect(offered).toMatchObject({ title: "Pricing" });
+    expect(own).toEqual({ description: "Plans for every team." });
+    expect(offered).toMatchObject({ description: "Plans for every team." });
     expect(afterOne).toBeGreaterThan(0);
     expect(lookups.mock.calls.length).toBe(afterOne);
   });
@@ -206,7 +216,6 @@ describe("a design's offer for one entry's head, asked outside a route", () => {
     });
 
     expect(asked).toEqual({
-      title: "Pricing",
       description: "Plans for every team.",
     });
     expect(asked).toEqual(routes);

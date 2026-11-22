@@ -20,7 +20,7 @@ export interface PageConditionsSource {
   readonly locale: string | undefined;
 }
 
-/** What the read answered, as the switch reads it. */
+/** What the read answered, as "Preview as visitor" reads it. */
 export interface PageConditionsRead {
   /**
    * The page as a visitor reads it, shaped as the entry a template previews
@@ -31,8 +31,8 @@ export interface PageConditionsRead {
   readonly noun: string;
   /**
    * Whether this attempt's read failed (a dropped connection, an expired
-   * session): the switch says so, and applying the conditions again asks
-   * again, since a failure is never kept as an answer.
+   * session): the visitor strip says so, and applying the conditions again
+   * asks again, since a failure is never kept as an answer.
    */
   readonly failed: boolean;
 }

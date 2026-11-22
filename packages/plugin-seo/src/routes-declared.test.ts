@@ -11,6 +11,10 @@ import { seoPlugin } from "./plugin";
 
 describe("the plugin's routes", () => {
   it("each declare what reaching them takes, for a site with pages", () => {
-    expect(undeclaredPluginRoutes(seoPlugin({ collections: ["pages"], baseUrl: "https://example.com" }))).toEqual([]);
+    expect(
+      undeclaredPluginRoutes(
+        seoPlugin({ collections: ["pages"], baseUrl: "https://example.com" })
+      )
+    ).toEqual([]);
   });
 });

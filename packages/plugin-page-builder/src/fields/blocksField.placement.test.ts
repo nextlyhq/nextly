@@ -3,11 +3,14 @@
  * form the write changes: a draft-only save is measured against the draft
  * alone, so a break only the published form holds is not passed off as old.
  */
-import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
+import { createBlockRegistry } from "@nextlyhq/blocks-engine";
 import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { blocksFieldType } from "./blocksField";
+
+/** The site's block registry these tests seed and judge against. */
+const blocks = createBlockRegistry();
 
 const base = {
   version: 1,
@@ -17,7 +20,7 @@ const base = {
 };
 
 beforeEach(() => {
-  registerBlocks(
+  blocks.register(
     [
       {
         ...base,
@@ -42,7 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  clearBlocks();
+  blocks.clear();
 });
 
 const broken = {
@@ -77,7 +80,7 @@ function write(): PluginFieldWrite {
 }
 
 async function validate(data: Record<string, unknown>) {
-  const field = blocksFieldType();
+  const field = blocksFieldType(undefined, undefined, blocks);
   return field.validate?.(broken, {
     path: "content",
     field: { name: "content", type: "blocks" },

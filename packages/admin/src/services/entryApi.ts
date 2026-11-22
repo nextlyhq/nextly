@@ -34,6 +34,12 @@ import type {
   PublishAllLanguageOutcome,
   PublishAllPreview,
 } from "./publishAllPreview";
+import {
+  publishPartsBody,
+  type PublishPartsChoice,
+  type PublishPartsDirection,
+  type PublishPartsResult,
+} from "./publishParts";
 
 /** The canonical mutation envelope, exactly as the server sends it. */
 interface MutationResponse<T> {
@@ -79,6 +85,11 @@ export interface FindParams {
    * are translated + each one's draft/published status). Sent as `?translation-status=1`.
    */
   translationStatus?: boolean;
+  /**
+   * Request each row's review state under `_review` (`?reviewState=true`): each part where it
+   * stands in the collection's workflow, as the Review column and the bulk moves read it.
+   */
+  reviewState?: boolean;
   /**
    * Count the total no further than the server's cap (`?count=capped`), so a
    * very large list says "1000+" instead of counting every row.
@@ -387,6 +398,10 @@ export const buildFindQuery = (params: FindParams): string => {
   if (params.cappedCount) {
     query.set("count", "capped");
   }
+  // Opt into each row's review state, for a collection a workflow holds.
+  if (params.reviewState) {
+    query.set("reviewState", "true");
+  }
 
   return query.toString();
 };
@@ -562,7 +577,14 @@ export const entryApi = {
     options?: Pick<
       FindParams,
       "depth" | "locale" | "fallbackLocale" | "draft" | "translationStatus"
-    >,
+    > & {
+      /**
+       * Also answer with the entry as stored, as a depth-0 read in the same
+       * language and view gives it, under `_stored`. A collection entry's
+       * read only; the users read ignores it.
+       */
+      stored?: boolean;
+    },
     { knownSingle = false }: CollectionReadOptions = {}
   ): Promise<Entry> => {
     const query = new URLSearchParams();
@@ -576,6 +598,7 @@ export const entryApi = {
     if (options?.draft !== undefined) query.set("draft", String(options.draft));
     // Opt into the per-locale translation-status overview map.
     if (options?.translationStatus) query.set("translation-status", "1");
+    if (options?.stored && collectionSlug !== "users") query.set("stored", "1");
     // Why: admin context is trusted (the route is gated by
     // requireCollectionAccess). Pass `status=all` so the server's default
     // published-only filter doesn't 404 the admin out of its own draft
@@ -931,6 +954,29 @@ export const entryApi = {
     protectedApi.get<PublishAllPreview>(
       `/collections/${collectionSlug}/entries/${id}/publish-all`
     ),
+
+  /**
+   * Publish or unpublish the parts of an entry a person chose: some of its languages, and
+   * separately its shared fields. With `describe`, say what that would do and change nothing.
+   * Hits `POST /api/collections/{slug}/entries/{id}/publish` (or `/unpublish`).
+   *
+   * @experimental Until publishing per language is complete.
+   */
+  publishParts: async (
+    collectionSlug: string,
+    id: string,
+    direction: PublishPartsDirection,
+    choice: PublishPartsChoice
+  ): Promise<PublishPartsResult> => {
+    const result = await protectedApi.post<{
+      message: string;
+      item: PublishPartsResult;
+    }>(
+      `/collections/${collectionSlug}/entries/${id}/${direction}`,
+      publishPartsBody(choice)
+    );
+    return result.item;
+  },
 
   // ===========================================================================
   // Legacy Methods (for backwards compatibility with internal table components)

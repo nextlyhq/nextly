@@ -60,7 +60,7 @@ export { PATTERN_GRANULARITIES };
 export function patternsCollection(): CollectionConfig {
   return defineCollection({
     slug: PATTERNS_SLUG,
-    labels: { singular: "Pattern", plural: "Patterns" },
+    labels: { singular: "Saved section", plural: "Saved sections" },
     fields: [
       text({ name: "title", required: true }),
       // Unique, so two patterns cannot answer to one name. Uniqueness is
@@ -100,7 +100,7 @@ export function patternsCollection(): CollectionConfig {
       }),
       blocks({
         name: "content",
-        label: "Pattern",
+        label: "Saved section",
         blocks: { kinds: ["pattern"] },
       }),
     ],

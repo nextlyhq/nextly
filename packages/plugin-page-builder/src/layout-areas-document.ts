@@ -15,15 +15,12 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { relationId } from "./default-layout/store";
+import { areaRowsOf } from "./layout-area-rows";
 
 /** The component ids a stored `areas` value names, in order; junk skipped. */
 export function areaComponentIds(areas: unknown): string[] {
-  const rows = typeof areas === "string" ? parsed(areas) : areas;
-  if (!Array.isArray(rows)) return [];
-  return rows
-    .map(area =>
-      relationId((area as { component?: unknown } | null)?.component)
-    )
+  return areaRowsOf(areas)
+    .map(area => relationId(area.component))
     .filter((id): id is string => id !== null);
 }
 
@@ -41,13 +38,4 @@ export function layoutAreasDocument(
       props: { componentId },
     })),
   };
-}
-
-/** Stored JSON text, or `null` when it does not parse. */
-function parsed(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }

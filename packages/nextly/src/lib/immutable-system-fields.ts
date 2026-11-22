@@ -24,12 +24,17 @@
  */
 
 import { isVirtualField } from "../collections/fields/virtual";
+import { WITHOUT_REVIEW_KEY } from "../domains/collections/services/save-door-gate";
+import { TRANSLATION_OVERVIEW_KEY } from "../domains/i18n/companion-join";
 import { fieldProducesColumn } from "../domains/schema/services/field-column-descriptor";
+import { NextlyError } from "../errors";
+import { addressableFields } from "../shared/addressable-fields";
 import { hiddenColumnMatcher } from "../shared/lib/password-fields";
 
 import { toSnakeCase } from "./case-conversion";
 import {
   DOCUMENT_OVERWRITE_KEY,
+  DOCUMENT_RESTORED_FROM_KEY,
   DOCUMENT_VERSION_KEY,
   immutableSystemColumnNames,
   immutableSystemColumnNamesAnyEntity,
@@ -105,11 +110,41 @@ export function statusGate(status: unknown): "publish" | "unpublish" {
 export async function writeGateFor(
   body: Record<string, unknown>,
   entity: WritableEntityKind,
+  /** The SQL table the body is written to, whose contributed columns it may name. */
+  tableName: string,
   hasLifecycle: () => boolean | Promise<boolean>
 ): Promise<"update" | "publish" | "unpublish"> {
-  return isStatusOnlyWrite(body, entity) && (await hasLifecycle())
-    ? statusGate(body.status)
+  // A contributed column is never written, so naming one makes the body no edit: the gate is
+  // asked of the body as the write will store it.
+  const stored = withoutContributedColumns(body, tableName);
+  return isStatusOnlyWrite(stored, entity) && (await hasLifecycle())
+    ? statusGate(stored.status)
     : "update";
+}
+
+/**
+ * Whether `key` names a column a schema hook contributed to `tableName`, in either spelling: a
+ * key every write accepts and none stores, matched by the predicate the row strip and the read
+ * responses use, so the write, its gate and its response cannot disagree about such a column.
+ */
+function contributedColumnOf(tableName: string): (key: string) => boolean {
+  return hiddenColumnMatcher(tableName);
+}
+
+/**
+ * `body` without the columns schema hooks contributed to `tableName`: what a write of it stores
+ * and what its gate is asked of. The one place a write leaves such a column behind before
+ * anything judges or stores the body.
+ */
+export function withoutContributedColumns(
+  body: Record<string, unknown>,
+  tableName: string
+): Record<string, unknown> {
+  const isContributed = contributedColumnOf(tableName);
+  if (!Object.keys(body).some(isContributed)) return body;
+  return Object.fromEntries(
+    Object.entries(body).filter(([key]) => !isContributed(key))
+  );
 }
 
 /**
@@ -269,4 +304,94 @@ function keptInOwnTable(
     keys.add(field.name);
   }
   return keys;
+}
+
+/**
+ * The keys a read adds to a document of its own (the translation overview, whether the document
+ * shown is a pending change, whether the shared part holds one). A client sending back what it
+ * read sends them too; a write accepts them and stores none.
+ */
+const READ_RESPONSE_KEYS: ReadonlySet<string> = new Set([
+  TRANSLATION_OVERVIEW_KEY,
+  "_isWorkingDraft",
+  "_sharedChangesPending",
+]);
+
+/**
+ * The keys a save names beside its values to say how it is made, read off the body before it is
+ * written and never stored: a publish made without review, which the publish gate is told.
+ */
+const WRITE_OPTION_KEYS: ReadonlySet<string> = new Set([WITHOUT_REVIEW_KEY]);
+
+/** The keys a write accepts and takes off its body before anything reads it as values. */
+const NOT_STORED_KEYS: ReadonlySet<string> = new Set([
+  ...READ_RESPONSE_KEYS,
+  ...WRITE_OPTION_KEYS,
+]);
+
+/**
+ * The keys of a write's body that name nothing a write of that entity may carry: no declared
+ * field under its declared name, no system column of the entity, none of the keys that say how
+ * to write (`_rev`, `_overwrite`, `_restoredFrom`) and none a read adds.
+ *
+ * Such a key has nowhere to go but a column of the same name: on the entity's own row, where a
+ * name that is no column fails the statement, or on a language's row, where it would be stored.
+ * A field's column name is no second name for it: field rules, validation and hooks look a field
+ * up by its declared name, so a value under its column's name would pass them by.
+ */
+function undeclaredWriteKeys(
+  data: Record<string, unknown>,
+  entity: WritableEntityKind,
+  /** The entity's declared fields, as configured. */
+  fields: unknown
+): string[] {
+  const allowed = new Set<string>([
+    ...systemColumnNames(column => column.appliesTo.includes(entity)),
+    DOCUMENT_VERSION_KEY,
+    DOCUMENT_OVERWRITE_KEY,
+    DOCUMENT_RESTORED_FROM_KEY,
+    ...NOT_STORED_KEYS,
+  ]);
+  for (const field of addressableFields(fields)) {
+    if (typeof field.name === "string") allowed.add(field.name);
+  }
+  return Object.keys(data).filter(key => !allowed.has(key));
+}
+
+/**
+ * A write's body as the write handles it: refused, with one validation issue per key, where it
+ * names a key it may not carry ({@link undeclaredWriteKeys}); otherwise without the keys a read
+ * adds, which say nothing about what to write. Called once the write's access has been judged and
+ * before any hook runs, so nothing of a refused key is ever written.
+ */
+export function writableBodyOf(
+  data: Record<string, unknown>,
+  entity: WritableEntityKind,
+  fields: unknown,
+  /** The SQL table the body is written to, whose schema-hook columns it may name. */
+  tableName: string
+): Record<string, unknown> {
+  // A column a schema hook contributed to the table is a known key, not an unknown one: a body
+  // that carries it is accepted and the column left unwritten, as the row strip leaves it
+  // (`stripImmutableSystemFields`, by the same predicate). Any other key is still refused.
+  const isContributed = contributedColumnOf(tableName);
+  const keys = undeclaredWriteKeys(data, entity, fields).filter(
+    key => !isContributed(key)
+  );
+  if (keys.length > 0) {
+    const kind = entity === "single" ? "Single" : "collection";
+    throw NextlyError.validation({
+      errors: keys.map(key => ({
+        path: key,
+        code: "UNKNOWN_FIELD",
+        message: `"${key}" is not a field of this ${kind}, so a save cannot set it.`,
+      })),
+    });
+  }
+  const notStored = (key: string) =>
+    NOT_STORED_KEYS.has(key) || isContributed(key);
+  if (!Object.keys(data).some(notStored)) return data;
+  return Object.fromEntries(
+    Object.entries(data).filter(([key]) => !notStored(key))
+  );
 }

@@ -113,6 +113,32 @@ export interface CustomEditViewProps {
 }
 
 /**
+ * @experimental Props passed to a document view's create dialog
+ * (`createDialog`), which the admin opens over a collection's list in place
+ * of the create form when "+ New" is pressed on a collection whose entries
+ * open in that view.
+ *
+ * The admin draws the dialog itself, titled "New <singular>", with its focus,
+ * Escape and overlay handling; the component draws its body (fields and its
+ * own buttons) and is mounted only while open. It is opened only for a reader
+ * who may create the collection's entries and update them, as an entry opens
+ * in a view only for one who may update it, so it can offer to open what it
+ * creates without asking.
+ */
+export interface DocumentCreateDialogProps {
+  /** The collection "+ New" was pressed on, for the dialog to word itself. */
+  collection: {
+    slug: string;
+    labels: { singular: string; plural: string };
+  };
+  /**
+   * Close the dialog. With the new entry's id the admin opens it where its
+   * collection opens entries; with none the list stays as it was.
+   */
+  close: (createdId?: string) => void;
+}
+
+/**
  * @experimental Props passed to a plugin's document view: the full-screen
  * screen a plugin contributes under a document's address.
  *

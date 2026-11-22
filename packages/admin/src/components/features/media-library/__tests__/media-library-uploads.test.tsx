@@ -40,13 +40,14 @@ const api = vi.hoisted(() => ({
   listRootFolders: vi.fn(),
   getFolderContents: vi.fn(),
   getFolderById: vi.fn(),
+  updateMedia: vi.fn(),
 }));
 vi.mock("@admin/services/mediaApi", () => ({
   fetchMedia: (...a: unknown[]) => api.fetchMedia(...a),
   listRootFolders: (...a: unknown[]) => api.listRootFolders(...a),
   listSubfolders: vi.fn(() => Promise.resolve([])),
   getFolderContents: (...a: unknown[]) => api.getFolderContents(...a),
-  updateMedia: vi.fn(),
+  updateMedia: (...a: unknown[]) => api.updateMedia(...a),
   bulkDeleteMedia: vi.fn(),
   deleteMedia: vi.fn(),
   getMediaById: vi.fn(),
@@ -491,14 +492,24 @@ describe("the upload tray", () => {
       within(tray()).getByRole("heading", { name: "2 uploaded" })
     ).toBeVisible();
 
-    // Close is the last stop in the page's tab order: Shift+Tab from the
-    // start of the document lands on it, and it carries the focus ring.
+    // Close is the last stop in the page's tab order before the rows' own
+    // actions, here each uploaded image's Add alt text: Shift+Tab from the
+    // start of the document passes those and lands on it, and it carries the
+    // focus ring.
     const close = within(tray()).getByRole("button", { name: "Close uploads" });
     expect(close.className).toMatch(/focus-visible:outline-2/);
     const user = userEvent.setup({
       advanceTimers: vi.advanceTimersByTime,
     });
     (document.activeElement as HTMLElement | null)?.blur();
+    await user.tab({ shift: true });
+    expect(
+      within(row("b.png")).getByRole("button", { name: /alt text/ })
+    ).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(
+      within(row("a.png")).getByRole("button", { name: /alt text/ })
+    ).toHaveFocus();
     await user.tab({ shift: true });
     expect(close).toHaveFocus();
     await user.keyboard("{Enter}");
@@ -566,5 +577,73 @@ describe("the upload tray", () => {
     expect(uploads[0].file.name).toBe("chosen.png");
     expect(uploads[0].folderId).toBeNull();
     expect(within(tray()).getAllByRole("listitem")).toHaveLength(1);
+  });
+});
+
+describe("alt text from the upload tray", () => {
+  /*
+   * Files upload the moment they are dropped, so there is no form to write
+   * alt text in beforehand. The tray is where a person sees the image arrive,
+   * so an uploaded image's row offers the same Edit dialog with its alt text
+   * field ready to type in.
+   */
+  it("opens Edit on an uploaded image's alt text, and offers nothing for a file that is not an image", async () => {
+    api.updateMedia.mockResolvedValue(undefined);
+    renderLibrary();
+    const heading = await screen.findByRole("heading", {
+      name: "Media Library",
+    });
+    const brief = new File(["x"], "brief.pdf", { type: "application/pdf" });
+
+    await dropOn(heading, [png("photo-1.png"), brief]);
+    await waitFor(() => expect(uploads).toHaveLength(2));
+    act(() => uploads.forEach(upload => upload.resolve(media(upload.file))));
+    await waitFor(() =>
+      expect(within(row("brief.pdf")).getByText("Done")).toBeVisible()
+    );
+
+    expect(
+      within(row("brief.pdf")).queryByRole("button", { name: /alt text/i })
+    ).toBeNull();
+    fireEvent.click(
+      within(row("photo-1.png")).getByRole("button", {
+        name: "Add alt text to photo-1.png",
+      })
+    );
+
+    // The dialog's code is fetched the first time Add alt text is used, which
+    // can outlast the default wait on a busy machine.
+    const dialog = await screen.findByRole(
+      "dialog",
+      { name: "Edit media" },
+      { timeout: 15_000 }
+    );
+    const altText = within(dialog).getByLabelText(/Alt text/);
+    await waitFor(() => expect(altText).toHaveFocus());
+
+    fireEvent.change(altText, { target: { value: "A red bicycle" } });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Save changes" })
+    );
+
+    await waitFor(() =>
+      expect(api.updateMedia).toHaveBeenCalledWith(
+        "id-photo-1.png",
+        expect.objectContaining({ altText: "A red bicycle" })
+      )
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // The row keeps the media as it uploaded; opening it again shows what was
+    // saved, not the empty field it started with.
+    fireEvent.click(
+      within(row("photo-1.png")).getByRole("button", {
+        name: "Add alt text to photo-1.png",
+      })
+    );
+    const reopened = await screen.findByRole("dialog", { name: "Edit media" });
+    expect(within(reopened).getByLabelText(/Alt text/)).toHaveValue(
+      "A red bicycle"
+    );
   });
 });

@@ -327,6 +327,47 @@ describeEachDialect("a collection's Builder save", dialect => {
     expect(await liveItems()).toBe(before);
   }, 120_000);
 
+  it("refuses a field type change that would clear values, telling the admin the field and why, with nothing changed", async () => {
+    // Each entry's code ("a-1", "b-2") is no number, so turning the field into one would clear it:
+    // the push refuses before anything runs, and the refusal reaches the admin by field and code.
+    await seeded();
+    const before = await liveItems();
+    const [row] = await query<{ fields: unknown }>(
+      `SELECT ${q("fields")} AS fields FROM ${q("dynamic_collections")} WHERE ${q("slug")} = 'items'`
+    );
+    const recorded = (
+      typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+    ) as FieldDefinition[];
+
+    await expect(
+      applyCollectionSchemaChange({
+        slug: "items",
+        collection: { tableName: "dc_items", fields: recorded },
+        fields: recorded.map(field =>
+          field.name === "code"
+            ? ({ ...field, type: "number" } as FieldDefinition)
+            : field
+        ),
+        wasLocalized: false,
+        isLocalized: false,
+        status: false,
+        wasStatus: false,
+        renameResolutions: [],
+        eventResolutions: [],
+      })
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_APPLY_FAILED",
+      publicMessage: expect.stringContaining(
+        "Collection 'items': field 'code' cannot change from text to number"
+      ) as unknown,
+      publicData: {
+        errors: [{ path: "fields.code", code: "TYPE_CHANGE_LOSES_VALUES" }],
+      },
+    });
+
+    expect(await liveItems()).toBe(before);
+  }, 120_000);
+
   /** The items table's columns, by name. */
   async function itemColumns(): Promise<string[]> {
     const snapshot = await introspectLiveSnapshot(
@@ -400,9 +441,9 @@ describeEachDialect("a collection's Builder save", dialect => {
   }, 120_000);
 
   it("keeps a column it never made, rather than trading it for a field the save adds", async () => {
-    // A column added outside the Builder looks to the pipeline like a rename
-    // candidate for a column the save adds. Only the columns the save itself
-    // removes are its to drop, so this one is left, and the save is refused.
+    // A column added outside the Builder is drift from the migration history:
+    // the save is refused before its push runs, naming the column, and the
+    // column is left where it is.
     await seeded();
     await query(`ALTER TABLE ${q("dc_items")} ADD COLUMN ${q("stray")} TEXT`);
     const recordedBefore = await recordedFields();
@@ -413,9 +454,7 @@ describeEachDialect("a collection's Builder save", dialect => {
     );
 
     expect(saved.success).toBe(false);
-    expect(saved.message).toMatch(
-      /holds a column "stray" that no field describes/
-    );
+    expect(saved.message).toContain("dc_items.stray present in DB");
     expect(await itemColumns()).toContain("stray");
     expect(await recordedFields()).toEqual(recordedBefore);
   }, 120_000);

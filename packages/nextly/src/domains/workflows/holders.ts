@@ -1,12 +1,20 @@
 /**
  * Whether a person or a role holds a permission, for deciding who may be assigned review work.
  *
- * Asked of the existing role and permission resolution, read-only: a person through their actor
- * (`actorForUser`: their roles in force, inherited roles included) and the one decision
- * (`decidePermission`); a role through the role services the admin uses: the role, the roles it
- * inherits (`listDescendantRoles`), the permissions it holds directly or through them
- * (`getAllPermissionsForRole`), and the super-admin role found by its slug. Nothing here walks
- * roles or reads grants itself, so a holder is what the rest of Nextly says it is.
+ * Asked of the existing role and permission resolution, read-only, by the roles that hold a
+ * permission (`rolesHolding`: the roles granted it directly and the super-admin role, and every
+ * role inheriting one of those). A role holds it when it is one of them; a person when a role
+ * assigned to them, in force now (`directRoleIdsOfUsers`), is one of them: the person's roles with
+ * inheritance reach a holding role exactly when one of their own is a holding role or inherits one.
+ * That is `decidePermission`'s answer for a person (super-admin authority, or a grant through their
+ * roles), retired `manage-` permissions included, asked of many people in a few statements.
+ *
+ * The roles holding a permission are found the same way the other way round: the roles granted it
+ * directly and the super-admin role, and every role inheriting one of those
+ * (`listAncestorRolesOfAll`, one walk). The same walk answers who would hold it once a write
+ * about to be made grants it directly to a given set of roles (`holderAnswerOnceGranted`), so a
+ * write that sets grants and default reviewers together judges the reviewers by what it is about to
+ * store.
  *
  * These read on the pool, not on a transaction: a caller asks before it opens the transaction its
  * writes go in, so no statement runs beside that transaction on another connection.
@@ -15,14 +23,19 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { decidePermission } from "../../auth/access/decide";
-import { actorForUser } from "../../auth/access/resolve-actor";
+import {
+  RETIRED_MANAGE_PLAIN_ACTIONS,
+  isRetiredManage,
+} from "../../auth/access/retired-manage-permissions";
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors";
 import { SUPER_ADMIN_SLUG } from "../../services/access/super-admin";
+import {
+  directRoleIdsOfUsers,
+  resolveUserRoles,
+} from "../../services/lib/permissions";
 import type { Logger } from "../../services/shared";
 import { consoleLogger } from "../../shared/types";
-import { PermissionCheckerService } from "../auth/services/permission-checker-service";
 import { PermissionService } from "../auth/services/permission-service";
 import { RoleInheritanceService } from "../auth/services/role-inheritance-service";
 import { RoleService } from "../auth/services/role-service";
@@ -39,28 +52,98 @@ export interface PersonRow {
   active: boolean;
 }
 
-/** The person `userId`, or null when there is none. */
+/** The person `userId`, or null when there is none: {@link readPersons} asked of one. */
 export async function readPerson(
   adapter: DrizzleAdapter,
   userId: string
 ): Promise<PersonRow | null> {
-  const [row] = await adapter.select<{
-    id: string;
-    name: string | null;
-    isActive: boolean | number | null;
-  }>("users", {
-    columns: ["id", "name", "isActive"],
-    where: { and: [{ column: "id", op: "=", value: userId }] },
-    limit: 1,
-  });
-  if (!row) return null;
-  // SQLite stores a boolean as 0 or 1.
-  return { id: row.id, name: row.name ?? null, active: Boolean(row.isActive) };
+  return (await readPersons(adapter, [userId])).get(userId) ?? null;
+}
+
+/** Ids per statement: SQLite's lowest per-statement parameter limit is 999. */
+const ID_CHUNK = 500;
+
+/** `ids`, each once, in statement-sized runs. */
+function chunks(ids: readonly string[]): string[][] {
+  const unique = [...new Set(ids)];
+  const runs: string[][] = [];
+  for (let at = 0; at < unique.length; at += ID_CHUNK) {
+    runs.push(unique.slice(at, at + ID_CHUNK));
+  }
+  return runs;
+}
+
+/**
+ * Whether the database compares ids without regard to case: MySQL does, under its case-insensitive
+ * collation; PostgreSQL and SQLite compare them exactly.
+ */
+function comparesIdsWithoutCase(adapter: DrizzleAdapter): boolean {
+  return adapter.dialect === "mysql";
+}
+
+/**
+ * Each of `requested` that names a row, mapped to that row, by the spelling asked, as the database
+ * matched it: the row of that exact id, and, where the database compares ids without regard to case
+ * (`foldsCase`), the one row whose id differs from it only in case, so every spelling MySQL matches
+ * to a row answers as that row, however many of them one batch asks. Where it compares exactly, a
+ * spelling in another case names no row, as the database answered it.
+ */
+function byRequestedId<Row extends { id: string }>(
+  requested: readonly string[],
+  rows: readonly Row[],
+  foldsCase: boolean
+): Map<string, Row> {
+  const exact = new Map(rows.map(row => [row.id, row]));
+  const folded = new Map<string, Row | null>();
+  if (foldsCase) {
+    for (const row of rows) {
+      const key = row.id.toLowerCase();
+      // Two rows differing only in case match no other spelling unambiguously.
+      folded.set(key, folded.has(key) ? null : row);
+    }
+  }
+  const found = new Map<string, Row>();
+  for (const id of requested) {
+    const row = exact.get(id) ?? folded.get(id.toLowerCase());
+    if (row) found.set(id, row);
+  }
+  return found;
+}
+
+/**
+ * The people among `userIds` that exist, by the id as asked (the row's own id may differ in case,
+ * where the database matched it so: see {@link byRequestedId}), read a statement per 500.
+ */
+async function readPersons(
+  adapter: DrizzleAdapter,
+  userIds: readonly string[]
+): Promise<Map<string, PersonRow>> {
+  const rows: PersonRow[] = [];
+  for (const run of chunks(userIds)) {
+    const found = await adapter.select<{
+      id: string;
+      name: string | null;
+      isActive: boolean | number | null;
+    }>("users", {
+      columns: ["id", "name", "isActive"],
+      where: { and: [{ column: "id", op: "IN", value: run }] },
+    });
+    for (const row of found) {
+      // SQLite stores a boolean as 0 or 1.
+      rows.push({
+        id: row.id,
+        name: row.name ?? null,
+        active: Boolean(row.isActive),
+      });
+    }
+  }
+  return byRequestedId(userIds, rows, comparesIdsWithoutCase(adapter));
 }
 
 /**
  * Whether the person or role `holder` holds `action` on `resource`. A person who does not exist,
  * or is deactivated, holds nothing, and says which; a role that does not exist says so.
+ * {@link holderAnswers} asked of one.
  */
 export async function holderAnswer(
   adapter: DrizzleAdapter,
@@ -68,16 +151,157 @@ export async function holderAnswer(
   action: string,
   resource: string
 ): Promise<HolderAnswer> {
-  if (holder.kind === "user") {
-    const person = await readPerson(adapter, holder.id);
-    if (!person) return "not-found";
-    if (!person.active) return "deactivated";
-    const actor = await actorForUser(person.id);
-    return decidePermission(actor, action, resource).allowed
-      ? "holds"
-      : "lacks";
+  const answers = await holderAnswers(adapter, [holder], action, resource);
+  return answers.get(holderKey(holder)) ?? "not-found";
+}
+
+/** The key {@link holderAnswers} answers a person or role under. */
+export function holderKey(holder: ReviewAssignee): string {
+  return `${holder.kind}:${holder.id}`;
+}
+
+/**
+ * Whether each of `holders` holds `action` on `resource`, by {@link holderKey}, asked of them all
+ * at once: the roles holding it are walked once, and the people, their roles and the roles named
+ * are each read a statement per 500, however many there are. A person who does not exist, or is
+ * deactivated, holds nothing, and says which; a role that does not exist says so.
+ */
+export async function holderAnswers(
+  adapter: DrizzleAdapter,
+  holders: readonly ReviewAssignee[],
+  action: string,
+  resource: string
+): Promise<Map<string, HolderAnswer>> {
+  const users = holders
+    .filter(each => each.kind === "user")
+    .map(each => each.id);
+  const roles = holders
+    .filter(each => each.kind === "role")
+    .map(each => each.id);
+  const answers = new Map<string, HolderAnswer>();
+  if (users.length > 0) {
+    for (const [id, answer] of await peopleAnswers(
+      adapter,
+      users,
+      action,
+      resource
+    )) {
+      answers.set(holderKey({ kind: "user", id }), answer);
+    }
   }
-  return roleAnswer(adapter, holder.id, action, resource);
+  if (roles.length > 0) {
+    const holding = new Set(await rolesHolding(adapter, action, resource));
+    const existing = await existingRoleIds(adapter, roles);
+    for (const id of roles) {
+      const stored = existing.get(id);
+      answers.set(
+        holderKey({ kind: "role", id }),
+        stored === undefined
+          ? "not-found"
+          : holding.has(stored)
+            ? "holds"
+            : "lacks"
+      );
+    }
+  }
+  return answers;
+}
+
+/**
+ * Each person's answer, by id. A retired `manage-` permission is held as the plain four it stood
+ * for are, each as stored, as `decidePermission` answers a person.
+ */
+async function peopleAnswers(
+  adapter: DrizzleAdapter,
+  userIds: readonly string[],
+  action: string,
+  resource: string
+): Promise<Map<string, HolderAnswer>> {
+  if (isRetiredManage(action, resource)) {
+    return retiredManageAnswers(adapter, userIds, resource);
+  }
+  const people = await readPersons(adapter, userIds);
+  const assigned = await rolesInForceOf(
+    [...people.values()].filter(person => person.active)
+  );
+  const holding = new Set(await rolesHolding(adapter, action, resource));
+  const answers = new Map<string, HolderAnswer>();
+  for (const id of new Set(userIds)) {
+    answers.set(id, personAnswer(people.get(id), assigned, holding));
+  }
+  return answers;
+}
+
+/**
+ * Each person's answer for a retired `manage-` permission: held where each of the plain four it
+ * stood for is held, else the first answer that is not "holds".
+ */
+async function retiredManageAnswers(
+  adapter: DrizzleAdapter,
+  userIds: readonly string[],
+  resource: string
+): Promise<Map<string, HolderAnswer>> {
+  // Each plain action's answers, by person.
+  const each: Map<string, HolderAnswer>[] = [];
+  for (const plain of RETIRED_MANAGE_PLAIN_ACTIONS) {
+    each.push(await peopleAnswers(adapter, userIds, plain, resource));
+  }
+  return new Map(
+    [...new Set(userIds)].map(id => [
+      id,
+      each
+        .map(answers => answers.get(id) ?? "not-found")
+        .find(answer => answer !== "holds") ?? "holds",
+    ])
+  );
+}
+
+/** The roles assigned to each of `people` and in force now, by their stored id, a read per 500. */
+async function rolesInForceOf(
+  people: readonly PersonRow[]
+): Promise<Map<string, ReadonlySet<string>>> {
+  const assigned = new Map<string, ReadonlySet<string>>();
+  for (const run of chunks(people.map(person => person.id))) {
+    for (const [id, roleIds] of await directRoleIdsOfUsers(run)) {
+      assigned.set(id, roleIds);
+    }
+  }
+  return assigned;
+}
+
+/** One person's answer: missing, deactivated, or whether a role of theirs in force holds it. */
+function personAnswer(
+  person: PersonRow | undefined,
+  assigned: ReadonlyMap<string, ReadonlySet<string>>,
+  holding: ReadonlySet<string>
+): HolderAnswer {
+  if (!person) return "not-found";
+  if (!person.active) return "deactivated";
+  const roles = assigned.get(person.id) ?? new Set<string>();
+  return [...roles].some(roleId => holding.has(roleId)) ? "holds" : "lacks";
+}
+
+/**
+ * Each of `roleIds` that names a role, mapped to the role's id as stored (see
+ * {@link byRequestedId}), read a statement per 500.
+ */
+async function existingRoleIds(
+  adapter: DrizzleAdapter,
+  roleIds: readonly string[]
+): Promise<Map<string, string>> {
+  const rows: { id: string }[] = [];
+  for (const run of chunks(roleIds)) {
+    const found = await adapter.select<{ id: unknown }>("roles", {
+      columns: ["id"],
+      where: { and: [{ column: "id", op: "IN", value: run }] },
+    });
+    for (const row of found) rows.push({ id: String(row.id) });
+  }
+  return new Map(
+    [...byRequestedId(roleIds, rows, comparesIdsWithoutCase(adapter))].map(
+      ([id, row]) => [id, row.id]
+    )
+  );
 }
 
 function logger(): Logger {
@@ -86,47 +310,185 @@ function logger(): Logger {
     : consoleLogger;
 }
 
-async function roleAnswer(
+/**
+ * The ids of the roles `slugs` name, as a caller's scope names its roles (a scope speaks in slugs,
+ * the way role rules read it), in the spelling assignments store (ids). A slug naming no role is
+ * left out.
+ *
+ * @experimental
+ */
+export async function roleIdsOfSlugs(
   adapter: DrizzleAdapter,
-  roleId: string,
+  slugs: readonly string[]
+): Promise<string[]> {
+  const roles = new RoleService(adapter, logger());
+  // One read per 500 slugs, however many roles a key carries.
+  const ids: string[] = [];
+  for (const run of chunks(slugs)) {
+    for (const role of await roles.findRoleIdsBySlugs(run)) ids.push(role.id);
+  }
+  return ids;
+}
+
+/**
+ * Whom the caller stands for when work is assigned: a person, as themselves and every role they
+ * hold now (inherited ones included). A key, full-access or scoped, as its roles alone, never as
+ * its owner in person: work assigned to the owner by name is the owner's to see, as an approval is
+ * a person's to give. Its roles are those its scope names, or, where it names none, its owner's,
+ * as its permissions are judged. The waiting list and a list's "assigned to me" filter both ask it.
+ *
+ * @experimental
+ */
+export async function holdersOf(
+  adapter: DrizzleAdapter,
+  caller:
+    | { kind: "user"; userId: string }
+    | { kind: "key"; userId: string; scope: { roles?: readonly string[] } }
+): Promise<ReviewAssignee[]> {
+  if (caller.kind === "key") {
+    // A scope names its roles by slug; work is assigned to a role by id.
+    const ids =
+      caller.scope.roles !== undefined
+        ? await roleIdsOfSlugs(adapter, caller.scope.roles)
+        : [...(await resolveUserRoles(caller.userId)).roleIds];
+    return ids.map(id => ({ kind: "role" as const, id }));
+  }
+  const { roleIds } = await resolveUserRoles(caller.userId);
+  return [
+    { kind: "user", id: caller.userId },
+    ...[...roleIds].map(id => ({ kind: "role" as const, id })),
+  ];
+}
+
+/** The stored permission for `action` on `resource`, or undefined when there is none. */
+async function permissionFor(
+  adapter: DrizzleAdapter,
+  log: Logger,
   action: string,
   resource: string
-): Promise<HolderAnswer> {
-  const log = logger();
-  const roles = new RoleService(adapter, log);
-  let role: { id: string };
-  try {
-    role = await roles.getRoleById(roleId);
-  } catch (error) {
-    // An id that is not a role's (absent, or not shaped like one) names no role.
-    if (NextlyError.isNotFound(error) || NextlyError.isValidation(error)) {
-      return "not-found";
-    }
-    throw error;
-  }
-  // A role holds what every role it inherits holds, super-admin authority included.
-  const inherited = await new RoleInheritanceService(
-    adapter,
-    log
-  ).listDescendantRoles(role.id);
-  const superAdmin = await roles.findRoleIdBySlug(SUPER_ADMIN_SLUG);
-  if (superAdmin && [role.id, ...inherited].includes(superAdmin.id)) {
-    return "holds";
-  }
+): Promise<{ id: string } | undefined> {
   const listed = await new PermissionService(adapter, log).listPermissions({
     action,
     resource,
     includeOrphaned: true,
     limit: 10,
   });
-  const wanted = listed.data.find(
+  return listed.data.find(
     permission =>
       permission.action === action && permission.resource === resource
   );
-  if (!wanted) return "lacks";
-  const held = await new PermissionCheckerService(
+}
+
+/**
+ * The ids of every role holding `action` on `resource`, as {@link holderAnswer} would answer each:
+ * the roles granted it directly and the super-admin role, and every role inheriting one of them.
+ */
+export async function rolesHolding(
+  adapter: DrizzleAdapter,
+  action: string,
+  resource: string
+): Promise<string[]> {
+  const wanted = await permissionFor(adapter, logger(), action, resource);
+  const granted = wanted
+    ? await adapter.select<{ roleId: unknown }>("role_permissions", {
+        columns: ["roleId"],
+        where: {
+          and: [{ column: "permissionId", op: "=", value: wanted.id }],
+        },
+      })
+    : [];
+  return [
+    ...(await rolesHoldingThrough(
+      adapter,
+      granted.map(row => String(row.roleId))
+    )),
+  ];
+}
+
+/**
+ * The roles holding a permission granted directly to `granted`: those, the super-admin role, and
+ * every role inheriting one of them.
+ */
+async function rolesHoldingThrough(
+  adapter: DrizzleAdapter,
+  granted: readonly string[]
+): Promise<Set<string>> {
+  const log = logger();
+  const superAdmin = await new RoleService(adapter, log).findRoleIdBySlug(
+    SUPER_ADMIN_SLUG
+  );
+  const holding = new Set([...granted, ...(superAdmin ? [superAdmin.id] : [])]);
+  // One walk up from all of them together, however many roles the permission is granted to.
+  const inheriting = await new RoleInheritanceService(
     adapter,
     log
-  ).getAllPermissionsForRole(role.id);
-  return held.includes(wanted.id) ? "holds" : "lacks";
+  ).listAncestorRolesOfAll([...holding]);
+  for (const roleId of inheriting) holding.add(roleId);
+  return holding;
+}
+
+/**
+ * Whether the person or role `holder` would hold a permission once it is granted directly to
+ * exactly the roles `granted`, as a write about to store those grants will leave it: by the roles
+ * that would then hold it ({@link rolesHolding}'s walk), and a person by the roles they hold now,
+ * inherited ones included. Answers as {@link holderAnswer} does for a person or role that does not
+ * exist or is deactivated. Read on the pool, before the write's transaction opens.
+ */
+export async function holderAnswerOnceGranted(
+  adapter: DrizzleAdapter,
+  holder: ReviewAssignee,
+  granted: readonly string[]
+): Promise<HolderAnswer> {
+  const holding = await rolesHoldingThrough(adapter, granted);
+  if (holder.kind === "user") {
+    const person = await readPerson(adapter, holder.id);
+    if (!person) return "not-found";
+    if (!person.active) return "deactivated";
+    const { roleIds } = await resolveUserRoles(person.id);
+    return [...roleIds].some(roleId => holding.has(roleId)) ? "holds" : "lacks";
+  }
+  const role = await existingRole(adapter, holder.id);
+  if (role === null) return "not-found";
+  return holding.has(role.id) ? "holds" : "lacks";
+}
+
+/** The role `roleId`, or null where no role has that id (absent, or not shaped like one). */
+async function existingRole(
+  adapter: DrizzleAdapter,
+  roleId: string
+): Promise<{ id: string } | null> {
+  try {
+    return await new RoleService(adapter, logger()).getRoleById(roleId);
+  } catch (error) {
+    if (NextlyError.isNotFound(error) || NextlyError.isValidation(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/** The names of these people and these roles, by id, each read in one statement. */
+export async function namesOf(
+  adapter: DrizzleAdapter,
+  ids: { users: readonly string[]; roles: readonly string[] }
+): Promise<{
+  users: Map<string, string | null>;
+  roles: Map<string, string | null>;
+}> {
+  const read = async (table: "users" | "roles", wanted: readonly string[]) =>
+    wanted.length === 0
+      ? []
+      : adapter.select<{ id: unknown; name: unknown }>(table, {
+          columns: ["id", "name"],
+          where: { and: [{ column: "id", op: "IN", value: [...wanted] }] },
+        });
+  const users = await read("users", [...new Set(ids.users)]);
+  const roles = await read("roles", [...new Set(ids.roles)]);
+  // A name is text where the row holds one, and null otherwise.
+  const nameOf = (value: unknown): string | null =>
+    typeof value === "string" ? value : null;
+  return {
+    users: new Map(users.map(row => [String(row.id), nameOf(row.name)])),
+    roles: new Map(roles.map(row => [String(row.id), nameOf(row.name)])),
+  };
 }

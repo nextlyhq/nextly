@@ -46,6 +46,12 @@ export interface UnpublishedDependency {
   readonly title: string | null;
   /** Whether this author may publish it: the offer names only these. */
   readonly mayPublish: boolean;
+  /**
+   * A live component named because only its unpublished changes have a
+   * setting the page uses: visitors see it without that setting, and
+   * publishing it publishes its other unpublished changes too.
+   */
+  readonly newSettings?: true;
 }
 
 /** The readiness answer. */

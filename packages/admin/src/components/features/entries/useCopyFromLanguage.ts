@@ -23,6 +23,7 @@ import { useFormContext } from "react-hook-form";
 import { toast } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
+import { copiedValuesFor } from "./copied-values";
 import { useEntryLocale } from "./EntryLocaleContext";
 
 /** True when a value counts as "present" (would be overwritten). Mirrors the blank=empty rule. */
@@ -138,6 +139,15 @@ export function useCopyFromLanguage(): CopyFromLanguage {
       for (const [name, value] of Object.entries(patch)) {
         form.setValue(name, value, { shouldDirty: true, shouldValidate: true });
       }
+      // Noted, so the save says these were copied from that language
+      // rather than written by the person.
+      // With the version of the source the read gave, so the server can tell a copy of the source
+      // as it stands from one of a source that has moved since.
+      copiedValuesFor(form.control).record(
+        patch,
+        pending,
+        typeof source._rev === "string" ? source._rev : undefined
+      );
       toast.success(
         `Copied ${count} field${count === 1 ? "" : "s"} from ${pendingLabel}. Review, then save.`
       );

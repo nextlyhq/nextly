@@ -2,6 +2,8 @@ import { act, renderHook } from "@testing-library/react";
 import { useForm } from "react-hook-form";
 import { describe, it, expect } from "vitest";
 
+import { useFormRestore } from "@admin/components/features/versions/useEditorRestoreSurface";
+
 import { useAutoSlug } from "../useAutoSlug";
 
 // ────────────────────────────────────────────────────────────────────────
@@ -255,5 +257,45 @@ describe("useAutoSlug", () => {
     });
 
     expect(result.current.getValues("slug")).toBe("second-draft");
+  });
+});
+
+describe("useAutoSlug, while a restore holds the title", () => {
+  function useRestoringDriver() {
+    const form = useForm<FormShape>({
+      defaultValues: { title: "Now", slug: "now" },
+    });
+    const restore = useFormRestore(form);
+    useAutoSlug({
+      form,
+      titleFieldName: "title",
+      slugFieldName: "slug",
+      restore,
+    });
+    return { form, restore };
+  }
+
+  it("leaves the slug as it is when a restore puts back only the title", () => {
+    const { result } = renderHook(() => useRestoringDriver());
+
+    act(() => {
+      result.current.restore.apply({ title: "Then" }, 3);
+    });
+
+    expect(result.current.form.getValues("title")).toBe("Then");
+    expect(result.current.form.getValues("slug")).toBe("now");
+  });
+
+  it("follows the title again once the person edits it", () => {
+    const { result } = renderHook(() => useRestoringDriver());
+
+    act(() => {
+      result.current.restore.apply({ title: "Then" }, 3);
+    });
+    act(() => {
+      result.current.form.setValue("title", "Typed title");
+    });
+
+    expect(result.current.form.getValues("slug")).toBe("typed-title");
   });
 });

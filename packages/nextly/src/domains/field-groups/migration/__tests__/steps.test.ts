@@ -687,6 +687,29 @@ describe("index survival across a rename", () => {
     }
   });
 
+  // A step runs again in each try for a busy table. A try after one whose rename committed (MySQL
+  // commits a rename on its own) finds the source gone, so the step keeps the indexes it read
+  // before its first try rather than reading none.
+  it("keeps the indexes read before its first try when a later try finds the table renamed", async () => {
+    const w = createWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero"],
+      columns: { comp_hero: [...TYPE_COLUMN] },
+      pointers: { [LEGACY_REGISTRY]: ["comp_hero"] },
+      indexes: { comp_hero: ["idx_hero_slug"] },
+    });
+    const step = stepFor(w);
+    // The first try's rename committed; the index did not come with it.
+    await step?.run(w.session);
+    w.dropIndexes("fg_hero");
+    // The next try finds the table already renamed.
+    await step?.run(w.session);
+
+    const error = await step?.verify(w.session).catch((e: unknown) => e);
+    expect(NextlyError.is(error) ? error.logContext?.lost : error).toEqual([
+      "idx_hero_slug",
+    ]);
+  });
+
   // On a resumed step the source is already gone, so there is no before-state.
   // Reported as not comparable rather than as nothing lost.
   it("does not claim index survival when the source was already renamed", async () => {

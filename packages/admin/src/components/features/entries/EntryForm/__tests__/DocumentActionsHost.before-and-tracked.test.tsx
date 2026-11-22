@@ -16,6 +16,7 @@ import { act, render, screen } from "@admin/__tests__/utils";
 
 import {
   DocumentActionsHost,
+  NoDocumentActions,
   useHostedDocumentActions,
 } from "../DocumentActionsContext";
 import {
@@ -526,5 +527,74 @@ describe("an action that stores none of the editor's work", () => {
     await expect(runAction(probe, "delete")).resolves.toEqual({ ok: true });
     expect(onDelete).toHaveBeenCalledTimes(1);
     expect(before).not.toHaveBeenCalled();
+  });
+});
+
+describe("an editor drawn inside another document's, such as a quick create", () => {
+  /**
+   * The host, with the outer surface reading its actions, and a quick editor
+   * inside it whose field registers a step before saving and tracks a write.
+   */
+  function renderQuickEditor(input: Partial<DocumentActionBindingsInput>) {
+    const probe: Probe = {
+      run: () => Promise.reject(new Error("not rendered")),
+      bindings: {},
+      track: () => {},
+    };
+    const before = vi.fn();
+    let trackInModal: (
+      label: string,
+      write: Promise<unknown>
+    ) => void = () => {};
+    function Outer(): null {
+      const hosted = useHostedDocumentActions();
+      probe.run = hosted.run;
+      probe.bindings = hosted.bindings;
+      return null;
+    }
+    function FieldInModal(): null {
+      useBeforeDocumentAction(before);
+      trackInModal = useTrackedWrite();
+      return null;
+    }
+    render(
+      <DocumentActionsHost
+        input={{
+          mode: "edit",
+          hasStatus: true,
+          entry: draft,
+          collectionSlug: "posts",
+          ...input,
+        }}
+      >
+        <Outer />
+        <NoDocumentActions>
+          <FieldInModal />
+        </NoDocumentActions>
+      </DocumentActionsHost>
+    );
+    return { probe, before, trackInModal: () => trackInModal };
+  }
+
+  it("never runs the modal's before-save step on the outer document's save", async () => {
+    const onSaveDraft = vi.fn(() => Promise.resolve(saved));
+    const { probe, before } = renderQuickEditor({ onSaveDraft });
+
+    await expect(runAction(probe, "save")).resolves.toEqual(saved);
+    expect(onSaveDraft).toHaveBeenCalledTimes(1);
+    expect(before).not.toHaveBeenCalled();
+  });
+
+  it("never holds the outer document's save on a write the modal tracks", async () => {
+    const onSaveDraft = vi.fn(() => Promise.resolve(saved));
+    const { probe, trackInModal } = renderQuickEditor({ onSaveDraft });
+    // A write that never settles: tracked on the outer document, it would
+    // hold its save for ever.
+    act(() => {
+      trackInModal()("A change in the modal", new Promise<void>(() => {}));
+    });
+
+    await expect(runAction(probe, "save")).resolves.toEqual(saved);
+    expect(onSaveDraft).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,0 +1,82 @@
+/**
+ * An Embed's empty state on the canvas (`canvas/embed-states.tsx`): a plate
+ * over the box an Embed with no link draws, in the editor's own colours,
+ * holding "Paste a YouTube, Vimeo or other link" and its field.
+ *
+ * Drawn on the Image's layer and plate rules (`image-states.css`), for the
+ * same reasons: a layer over the canvas root's content box that takes no
+ * presses itself, each plate opting back in at the rectangle the component
+ * measured, opaque on the editor's well so the editor's text keeps its
+ * contrast in either theme.
+ */
+/* The layer and the plate are the Image's (`image-states.css`), shared. */
+
+/* The cover over an Embed's frame: nothing to see, only a press to take. */
+.nx-embed-state[data-embed-state="frame"] {
+  padding: 0;
+  border: none;
+  background: transparent;
+  container-type: normal;
+}
+
+.nx-embed-state__form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.625rem;
+  width: min(26rem, 100%);
+  min-width: 0;
+}
+
+.nx-embed-state__icon {
+  flex: none;
+  color: var(--nx-builder-picture-icon);
+}
+
+.nx-embed-state__title {
+  font-weight: 600;
+  color: var(--nx-builder-text);
+}
+
+.nx-embed-state__row {
+  display: flex;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.nx-embed-state__address {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--nx-builder-control-height);
+  padding: 0 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  font: inherit;
+}
+
+.nx-embed-state__address:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: 1px;
+}
+
+.nx-embed-state__address:disabled {
+  opacity: 0.6;
+}
+
+/* A short box keeps the field and drops the icon, then the words, which
+   the field's own placeholder and the plate's name still give. */
+@container (max-height: 9rem) {
+  .nx-embed-state__icon {
+    display: none;
+  }
+}
+
+@container (max-height: 5.5rem) {
+  .nx-embed-state__title {
+    display: none;
+  }
+}

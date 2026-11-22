@@ -49,7 +49,9 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { FieldConfig } from "@nextly/collections";
 
 import { assertTopLevelFieldsNamed } from "../../../api/fields-payload";
+import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
+import { bumpSchemaVersion } from "../../../route-handler/schema-version";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
@@ -61,6 +63,7 @@ import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resourc
 import { assertAddressAllowed } from "../../../shared/address-rule";
 import { addressableFields } from "../../../shared/addressable-fields";
 import type { Logger } from "../../../shared/types";
+import type { TeardownAdapter } from "../../collections/services/teardown-adapter-in-transaction";
 import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
@@ -71,6 +74,7 @@ import {
 import {
   archiveFieldsLeavingTranslation,
   fieldsLeavingTranslationUnder,
+  refuseTranslationMovesLosingDefinition,
 } from "../../i18n/migration/archive-preflight";
 import {
   leavingFieldConstraints,
@@ -86,11 +90,16 @@ import {
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
 import type {
   BuilderSaveSetup,
+  CollectionSave,
   CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
 import { entitySaveDeps } from "../../schema/builder-save/entity-save-deps";
 import { entityRelations } from "../../schema/builder-save/single-relations";
 import { singleEntity } from "../../schema/builder-save/stored-entity";
+import {
+  declinedRename,
+  refuseUnansweredRename,
+} from "../../schema/field-rename-answers";
 import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import { writeRegistryRowsWith } from "../../schema/schema-version";
 import {
@@ -101,10 +110,14 @@ import {
 } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import type { SqliteTypeChange } from "../../schema/services/sqlite-nullability-rebuild";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
-import type { SingleRegistryService } from "./single-registry-service";
+import type {
+  SingleRegistryService,
+  UnregisteredSingleRow,
+} from "./single-registry-service";
 
 /**
  * The Builder save writer, loaded where a save runs: it brings the migration
@@ -240,6 +253,19 @@ export interface UpdateSingleSchemaResult {
    * the fields were recorded without them; empty when they were applied or none was asked for.
    */
   refusedSettings: { field: string; setting: "required" | "unique" }[];
+  /**
+   * Where this save's migration failed past its main change (`migrationStatus` "failed", its row
+   * kept so a retry has one describing the table): why, as the admin is told it, and the migration
+   * files the writer kept, recorded applied nowhere, in run order; empty where none was kept. `next`
+   * says what to do where none was kept and saving again would not help.
+   */
+  failure?: {
+    reason: string;
+    keptFiles: string[];
+    /** Of `keptFiles`, the one a resolve checks against the database (the writer's `checked`). */
+    checked?: string | null;
+    next?: string;
+  };
 }
 
 /** One Required or Unique setting of a field leaving translation, and the SQL that undoes it. */
@@ -271,6 +297,41 @@ function withoutRefusedSettings<F extends { name: string }>(
 }
 
 /**
+ * The registry columns an update writes, as the row recorded them before it: what puts the row
+ * back when the update's change landed but its files could not be recorded applied. A column the
+ * row held no value in is written empty, so no requested value stays behind.
+ */
+function recordedRowOf(
+  input: UpdateSingleSchemaInput
+): Partial<DynamicSingleInsert> {
+  const existing = input.existing as unknown as Record<string, unknown>;
+  return Object.fromEntries(
+    [...Object.keys(input.updateData), "migrationStatus"].map(key => [
+      key,
+      existing[key] ?? null,
+    ])
+  );
+}
+
+/**
+ * A migration that failed past its main change: the writer kept its files, recorded applied
+ * nowhere, in development as outside it, and `result` names them, so the admin is told which.
+ */
+function noteKeptFiles(
+  result: UpdateSingleSchemaResult | undefined,
+  written:
+    | { files: readonly string[]; applied: boolean; checked?: string | null }
+    | undefined
+): void {
+  if (result?.failure && written?.applied === false) {
+    result.failure.keptFiles = [...written.files];
+    if (written.checked !== undefined) {
+      result.failure.checked = written.checked;
+    }
+  }
+}
+
+/**
  * The schema work an update has to do, decided before any statement runs.
  *
  * One plan covers both shapes of update. A field change renders statements; a save that only flips
@@ -286,6 +347,13 @@ interface UpdateDdlPlan {
    * applied by rebuilding the table once its statements have run, in the same transaction.
    */
   sqliteNullability?: ReadonlyMap<string, boolean>;
+  /**
+   * On SQLite, the type changes `migrationSQL` can't express (column → the type it becomes),
+   * applied by the same rebuild. The values were judged against the new type while planning.
+   */
+  sqliteTypes?: ReadonlyMap<string, SqliteTypeChange>;
+  /** The values judged again on the rebuild's own transaction, where it changes a type. */
+  sqliteTypeJudge?: (db: unknown) => Promise<void>;
   /** The field list the table holds once this plan has run. */
   fields: FieldDefinition[];
   /** The field list the table holds now. The companion reconcile diffs against it. */
@@ -445,6 +513,7 @@ export class SingleMetadataService {
         adapter: this.adapter,
         logger: this.logger,
         label: `create single "${input.slug}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         issuesDdl: true,
       },
       () => this.createSingleExcluded(input)
@@ -619,6 +688,7 @@ export class SingleMetadataService {
         adapter: this.adapter,
         logger: this.logger,
         label: `delete single "${slug}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         issuesDdl: true,
       },
       () => this.deleteSingleExcluded(slug, tableName)
@@ -664,33 +734,9 @@ export class SingleMetadataService {
       });
     }
 
-    const adapter = this.adapter;
-    const remove = async (): Promise<void> => {
-      if (tableName && adapter) {
-        // Its many-to-many junction tables first: each holds a key into the Single's table, and
-        // the delete is not done while any stands, so its migration is never recorded applied
-        // with them left.
-        await this.dropJunctionTables(
-          tableName,
-          current?.fields ?? [],
-          adapter
-        );
-        await this.dropSingleStorage(slug, tableName, adapter);
-      }
-
-      // A row a concurrent delete already took is the state this method exists to reach, so it
-      // completes rather than failing.
-      //
-      // The tolerance covers this one call and nothing above it. A teardown or a drop that fails
-      // has to surface even when its message mentions something missing, because answering
-      // "deleted" to it would leave the registry row present and the storage half removed — the
-      // exact state the ordering above is arranged to prevent.
-      try {
-        await this.registry.deleteSingle(slug, { force: true });
-      } catch (error) {
-        if (!NextlyError.isNotFound(error)) throw error;
-      }
-    };
+    // `committed` marks the moment the delete is the database's, where it runs in one transaction.
+    const remove = (committed: () => void = () => undefined): Promise<void> =>
+      this.removeSingle(slug, tableName, current, committed);
 
     // Where a Builder save writer is set up, the delete is written as the Single's migration,
     // inside this same exclusion, with its junction tables and relationship keys, so no snapshot
@@ -718,15 +764,161 @@ export class SingleMetadataService {
           []
         )),
       },
-      remove
+      remove,
+      // A failure undone whole changed nothing, so the delete's files are withdrawn with it.
+      { rollsBackWhole: this.wholeDeleteAdapter() !== undefined }
     );
+  }
+
+  /**
+   * The adapter a Single's delete runs in one transaction on, or undefined where it runs in steps.
+   *
+   * On PostgreSQL and SQLite the storage and the registry row go in one transaction, as a
+   * collection's delete does: those databases undo a table drop with the rest, so a failure at
+   * any step leaves the whole Single, its translations and its row. MySQL commits each drop as it
+   * runs, so there the steps run one by one, ordered so a failure stays retryable.
+   */
+  private wholeDeleteAdapter(): DrizzleAdapter | undefined {
+    const adapter = this.adapter;
+    return adapter !== undefined &&
+      adapter.getCapabilities().dialect !== "mysql"
+      ? adapter
+      : undefined;
+  }
+
+  /**
+   * A Single's junction tables, storage and registry row removed, whole or in steps. `stored` is
+   * its record as the delete read it, absent where the row is already gone.
+   */
+  private removeSingle(
+    slug: string,
+    tableName: string | undefined,
+    stored: { fields?: readonly unknown[] } | null | undefined,
+    committed: () => void
+  ): Promise<void> {
+    const fields = stored?.fields ?? [];
+    const whole = this.wholeDeleteAdapter();
+    return whole !== undefined
+      ? this.removeSingleWhole(whole, slug, tableName, fields, committed, {
+          rowRead: stored !== undefined && stored !== null,
+        })
+      : this.removeSingleInSteps(this.adapter, slug, tableName, fields);
+  }
+
+  /**
+   * A Single's junction tables, storage and registry row removed one step at a time, each
+   * committing as it runs: on MySQL, which commits a table drop and what ran before it, and where
+   * no adapter is set up. The order keeps a failure retryable: storage first, the row last.
+   */
+  private async removeSingleInSteps(
+    adapter: DrizzleAdapter | undefined,
+    slug: string,
+    tableName: string | undefined,
+    fields: readonly unknown[]
+  ): Promise<void> {
+    if (tableName && adapter) {
+      // Its many-to-many junction tables first: each holds a key into the Single's table, and
+      // the delete is not done while any stands, so its migration is never recorded applied
+      // with them left.
+      await this.dropJunctionTables(tableName, fields, adapter);
+      await this.dropSingleStorage(slug, tableName, adapter);
+    }
+
+    // A row a concurrent delete already took is the state this method exists to reach, so it
+    // completes rather than failing.
+    //
+    // The tolerance covers this one call and nothing above it. A teardown or a drop that fails
+    // has to surface even when its message mentions something missing, because answering
+    // "deleted" to it would leave the registry row present and the storage half removed — the
+    // exact state the ordering above is arranged to prevent.
+    try {
+      await this.registry.deleteSingle(slug, { force: true });
+    } catch (error) {
+      if (!NextlyError.isNotFound(error)) throw error;
+    }
+  }
+
+  /**
+   * A Single's junction tables, storage and registry row removed in one transaction: the
+   * teardowns and drops run through an adapter bound to it (`teardownAdapterIn`), and the row goes
+   * on it too (`unregisterSingleIn`). What this process remembers about the Single is forgotten
+   * only once the transaction has committed. A row already gone is not an error, as the delete is
+   * idempotent; any other failure undoes the whole delete and is thrown.
+   */
+  private async removeSingleWhole(
+    adapter: DrizzleAdapter,
+    slug: string,
+    tableName: string | undefined,
+    fields: readonly unknown[],
+    committed: () => void,
+    /** Whether the delete read the Single's registry row before it began. */
+    options: { rowRead: boolean }
+  ): Promise<void> {
+    const [
+      { teardownAdapterIn },
+      { forgetCompanionReadiness },
+      { deleteTransactionInTries },
+    ] = await Promise.all([
+      import("../../collections/services/teardown-adapter-in-transaction"),
+      import("../../i18n/runtime/companion-readiness"),
+      import("../../collections/services/delete-transaction-tries"),
+    ]);
+    let unregistered: UnregisteredSingleRow | undefined;
+    try {
+      // The row's removal counts the registry write on the same transaction (`unregisterSingleIn`).
+      // In tries for a busy table: a try whose wait for a held table ended rolled back whole.
+      await deleteTransactionInTries(
+        adapter,
+        `delete single "${slug}"`,
+        line => this.logger.warn(line),
+        async tx => {
+          const through = teardownAdapterIn(adapter, tx);
+          if (tableName) {
+            await this.dropJunctionTables(tableName, fields, through);
+            await this.dropSingleStorage(slug, tableName, through);
+          }
+          unregistered = await this.registry.unregisterSingleIn(tx, slug);
+          // A row the delete read, which its removal then did not remove (a row-level rule or a
+          // trigger keeping it), would describe storage this transaction dropped: refused here, so
+          // the drops roll back with it and the Single stays whole.
+          if (options.rowRead && unregistered.removed === 0) {
+            throw NextlyError.conflict({
+              reason: "state",
+              message:
+                "The Single's registry entry could not be removed, so nothing was deleted. Check what " +
+                "keeps the entry (a row-level rule or a trigger on the registry), then delete again.",
+              logContext: { reason: "single-registry-row-not-removed", slug },
+            });
+          }
+        }
+      );
+    } catch (error) {
+      // Mapped as the registry's own delete maps a driver's failure, so every road reports one
+      // kind of error.
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(
+        toDbError(adapter.getCapabilities().dialect, error)
+      );
+    }
+    // The delete is the database's from here: a failure of what follows it no longer undoes it.
+    committed();
+    // Committed: this process serves the new version at once rather than after its read interval,
+    // as a registry write's commit does (`writeRegistryRows`).
+    bumpSchemaVersion();
+    // What the teardown recorded about the translations table it dropped was recorded against the
+    // transaction's adapter, so it is forgotten here against this one, once the drop is durable: a
+    // Single made again under the name starts from nothing remembered.
+    if (tableName) forgetCompanionReadiness(adapter, `${tableName}_locales`);
+    if (unregistered !== undefined) {
+      await this.registry.forgetUnregisteredSingle(slug, unregistered);
+    }
   }
 
   /** Drop the junction tables of a Single's many-to-many fields, each where it stands. */
   private async dropJunctionTables(
     tableName: string,
     fields: readonly unknown[],
-    adapter: DrizzleAdapter
+    adapter: TeardownAdapter
   ): Promise<void> {
     // Loaded on demand, as this service loads the column descriptor elsewhere.
     const { junctionTablesOf } = await import(
@@ -755,7 +947,8 @@ export class SingleMetadataService {
   private async dropSingleStorage(
     slug: string,
     tableName: string,
-    adapter: DrizzleAdapter
+    // The adapter itself, or one bound to a delete's transaction.
+    adapter: TeardownAdapter
   ): Promise<void> {
     // Embedded field-group instances point back at this table by a plain string with no foreign
     // key, so the drop below cascades nothing and would strand them. Sweep first.
@@ -809,6 +1002,7 @@ export class SingleMetadataService {
         adapter: this.adapter,
         logger: this.logger,
         label: `update single schema "${input.slug}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         // A save that changes only labels, admin options, versioning, revalidation or webhooks
         // writes a registry row and nothing else. Claiming DDL rights for it would make a
         // deployment whose role has DML but not DDL start refusing metadata edits that worked
@@ -848,10 +1042,11 @@ export class SingleMetadataService {
     // HMR reload can replace the process-global field-type registry while this request waits, and
     // `planUpdate` below renders DDL against the NEW registration while `updateData.fields` still
     // carries options only the old one accepted.
-    const { assertValidPluginFieldOptions } = await import(
-      "../../../api/fields-payload"
-    );
+    const { assertOptionValuesDistinct, assertValidPluginFieldOptions } =
+      await import("../../../api/fields-payload");
     assertValidPluginFieldOptions(args.fields ?? []);
+    // Nor two options sharing one value, which the stored value could not tell apart.
+    assertOptionValuesDistinct(args.fields ?? []);
     // Judged against the fields as stored now, so only a pair of sibling fields this save creates
     // is refused, and one the Single already holds keeps working.
     if (args.fields !== undefined) {
@@ -908,6 +1103,7 @@ export class SingleMetadataService {
     // A field renamed onto a column that is already there is refused here, before anything
     // changes: the archive write of a field leaving translation, just below, is the first write a
     // save makes.
+    await this.refuseUnansweredRename(input);
     await this.refuseRenameOntoTakenColumn(input);
 
     // The history checks a Builder save makes, before that first write, where a writer is set up.
@@ -951,7 +1147,15 @@ export class SingleMetadataService {
     let migrationStatus = input.existing.migrationStatus;
     const updateData = { ...input.updateData };
     let refusedSettings: UpdateSingleSchemaResult["refusedSettings"] = [];
+    let failure: UpdateSingleSchemaResult["failure"];
     if (outcome) {
+      if (outcome.status === "failed" && outcome.reason !== undefined) {
+        failure = {
+          reason: outcome.reason,
+          keptFiles: [],
+          ...(outcome.next === undefined ? {} : { next: outcome.next }),
+        };
+      }
       const { status: applied, refused } = outcome;
       if (applied !== undefined) {
         updateData.migrationStatus = applied;
@@ -983,7 +1187,12 @@ export class SingleMetadataService {
       this.registry.updateSingle(input.slug, updateData, { source: "ui" })
     );
 
-    return { record, migrationStatus, refusedSettings };
+    return {
+      record,
+      migrationStatus,
+      refusedSettings,
+      ...(failure === undefined ? {} : { failure }),
+    };
   }
 
   /**
@@ -1005,35 +1214,32 @@ export class SingleMetadataService {
    * the schema writes its settings-only migration, as a collection's does.
    *
    * A failure before the apply, or in its main migration, is thrown as before, with nothing
-   * written. Past the main migration the apply reports rather than throws, and so does this: where
+   * written. Past the main migration the apply reports rather than throws, and so does this. Where
    * the writer then refuses to record the files applied (the database does not stand as their
-   * snapshot says), the files are kept and the outcome is recorded as a failed migration, so the
-   * registry row is still written.
+   * snapshot says), the change has landed and its files are kept: the row is put back as it was
+   * recorded and the writer's refusal is thrown, naming the files and the steps that finish the
+   * change, the last of them a `nextly migrate` that brings the row in step with the files.
    */
   private async writeUpdate(
     deps: CollectionSaveDeps,
     input: UpdateSingleSchemaInput,
     plan: UpdateDdlPlan | null
   ): Promise<UpdateSingleSchemaResult> {
-    const { previousEntity, writeEntitySave } = await loadEntitySave();
-    const existing = input.existing;
-    const updateData = input.updateData;
-    const before = (existing.fields ?? []) as unknown as FieldDefinition[];
-    const after =
-      plan?.fields ??
-      (updateData.fields as FieldDefinition[] | undefined) ??
-      before;
-    const stored = singleEntity(existing);
-    const rename = await this.detectedFieldRename(before, after);
-    // The Required and Unique settings of fields leaving translation are applied after the
-    // companion's values are copied, and refused together where those values cannot take them. The
-    // first file is written without them, so it matches what the registry records either way; a
-    // second records them once they have applied.
-    const leaving = plan?.leavingSettings ?? [];
-    const planned =
-      leaving.length > 0 ? withoutRefusedSettings(after, leaving) : after;
-    const entityWith = (fields: FieldDefinition[]) =>
-      singleEntity({ ...existing, ...updateData, fields });
+    const { writeEntitySave } = await loadEntitySave();
+    const { before, after, rename, leaving, planned, entityWith, save } =
+      await this.updateSaveOf(deps, input, plan);
+    // Where the save carries no values across its change, its own migration file applies it in
+    // development, as the Builder dialog's save does: run as `nextly migrate` runs one, in tries over
+    // a busy table and on SQLite with foreign keys off. A save that carries values keeps the
+    // service's own statements, which move them; so does a plan that builds the whole table again
+    // (its table missing, say), which a file written as a change to the table cannot do.
+    if (
+      deps.applies &&
+      plan?.describesWholeTable !== true &&
+      !(await this.carriesValues(input, before, after, rename))
+    ) {
+      return this.writeUpdateByFile(deps, input, plan, save);
+    }
     // Held in an object, as the step below sets it from inside the writer.
     const ran: {
       outcome?: Awaited<ReturnType<SingleMetadataService["applyUpdateDdl"]>>;
@@ -1061,26 +1267,13 @@ export class SingleMetadataService {
       // recorded applied nowhere, never taken as applied.
       return ran.outcome?.status === "failed" ? "partly-applied" : undefined;
     };
+    let written: Awaited<ReturnType<typeof writeEntitySave>>;
     try {
-      await writeEntitySave(
-        deps,
-        {
-          kind: "single",
-          slug: input.slug,
-          previous: await previousEntity(deps, "single", input.slug, stored),
-          entity: entityWith(planned),
-          change: "update",
-          ...(rename ? { renamedFields: [rename] } : {}),
-          ...(await entityRelations(
-            deps.adapter,
-            this.logger,
-            existing.tableName,
-            before,
-            after
-          )),
-        },
-        applyAndRecord
-      );
+      // A plan that builds the whole table again (its table missing) builds what the database
+      // lacks, so the check before the push does not take the missing table for drift.
+      written = await writeEntitySave(deps, save, applyAndRecord, {
+        buildsWholeTable: plan?.describesWholeTable === true,
+      });
     } catch (error) {
       if (ran.result === undefined) throw error;
       this.logger.error(
@@ -1088,13 +1281,22 @@ export class SingleMetadataService {
           error instanceof Error ? error.message : String(error)
         }`
       );
-      return this.recordUpdate(
-        input,
-        { refused: [], ...ran.outcome, status: "failed" },
-        leaving
+      // The row the step wrote describes the requested shape, which no applied file records: it
+      // goes back to what was recorded, and the steps the refusal names bring it forward.
+      await writeRegistryRowsWith(this.adapter, () =>
+        this.registry.updateSingle(input.slug, recordedRowOf(input), {
+          source: "ui",
+        })
       );
+      // The apply registered the requested shape with the running server, which the table does
+      // not stand as: forgotten, so the next use rebuilds it from the table as it is.
+      if (this.adapter) {
+        this.retractRuntimeSchema(this.adapter, input.existing.tableName);
+      }
+      throw error;
     }
     if ("rowError" in ran) throw ran.rowError;
+    noteKeptFiles(ran.result, written);
     if (plan && leaving.length > 0 && ran.outcome?.status !== "failed") {
       const outcome = ran.outcome;
       const refused = await this.applyLeavingStep(
@@ -1112,6 +1314,226 @@ export class SingleMetadataService {
       }
     }
     return ran.result as UpdateSingleSchemaResult;
+  }
+
+  /**
+   * What an update is written as: the field lists before and after, the rename it makes, the
+   * Required and Unique settings of fields leaving translation, which the first file is written
+   * without, and the save the writer takes.
+   */
+  private async updateSaveOf(
+    deps: CollectionSaveDeps,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan | null
+  ) {
+    const { previousEntity } = await loadEntitySave();
+    const existing = input.existing;
+    const updateData = input.updateData;
+    const before = (existing.fields ?? []) as unknown as FieldDefinition[];
+    const after =
+      plan?.fields ??
+      (updateData.fields as FieldDefinition[] | undefined) ??
+      before;
+    const rename = await this.detectedFieldRename(before, after);
+    // The Required and Unique settings of fields leaving translation are applied after the
+    // companion's values are copied, and refused together where those values cannot take them. The
+    // first file is written without them, so it matches what the registry records either way; a
+    // second records them once they have applied.
+    const leaving = plan?.leavingSettings ?? [];
+    const planned =
+      leaving.length > 0 ? withoutRefusedSettings(after, leaving) : after;
+    const entityWith = (fields: FieldDefinition[]) =>
+      singleEntity({ ...existing, ...updateData, fields });
+    const save: CollectionSave = {
+      kind: "single",
+      slug: input.slug,
+      previous: await previousEntity(
+        deps,
+        "single",
+        input.slug,
+        singleEntity(existing)
+      ),
+      entity: entityWith(planned),
+      change: "update",
+      ...(rename ? { renamedFields: [rename] } : {}),
+      ...(await entityRelations(
+        deps.adapter,
+        this.logger,
+        existing.tableName,
+        before,
+        after
+      )),
+    };
+    return { before, after, rename, leaving, planned, entityWith, save };
+  }
+
+  /**
+   * Whether this save carries values across its change, which the service's own statements do and
+   * the migration file does not (`pushCarriesValues`): a Required or Unique field leaving
+   * translation, a column changing type, a field its row is filled in, or a change reaching a
+   * relation's storage. Asked before the save writes anything.
+   */
+  private async carriesValues(
+    input: UpdateSingleSchemaInput,
+    before: FieldDefinition[],
+    after: FieldDefinition[],
+    renamed: { from: string; to: string } | undefined
+  ): Promise<boolean> {
+    const adapter = this.adapter;
+    // Without an adapter there is no table to change, and the service's path reports that.
+    if (!adapter) return true;
+    const [
+      { pushCarriesValues },
+      { introspectLiveSnapshot },
+      { tableHasRows },
+      { DynamicCollectionSchemaService },
+      { toSnakeCase },
+      { offeredCompanionRename },
+      { getSingleRowColumnDescriptor },
+    ] = await Promise.all([
+      import("../../schema/builder-save/push-carries-values"),
+      import("../../schema/pipeline/diff/introspect-live"),
+      import("../../schema/pipeline/live-table-facts"),
+      import(
+        "../../dynamic-collections/services/dynamic-collection-schema-service"
+      ),
+      import("../../schema/field-rules"),
+      import("../../i18n/migration/companion-rename"),
+      import("../../schema/services/field-column-descriptor"),
+    ]);
+    const schemaService = new DynamicCollectionSchemaService(
+      undefined,
+      this.dialect
+    );
+    const dialect = adapter.getCapabilities().dialect;
+    const tableName = input.existing.tableName;
+    // Only a translated field's rename moves a value, on the companion: the rename the Builder
+    // dialog offers there (`offeredCompanionRename`). A shared field's rename is the file's.
+    const companion = await offeredCompanionRename({
+      tableName,
+      oldFields: before,
+      newFields: after,
+      wasLocalized: input.wasLocalized,
+      isLocalized: input.isLocalized,
+      dialect,
+      // A Single's table is built by the collection's generator.
+      builtBy: "collection",
+    });
+    return pushCarriesValues({
+      oldFields: before,
+      newFields: after,
+      wasStored: input.wasLocalized,
+      isStored: input.isLocalized,
+      statusChanges: input.wasStatus !== input.hasStatus,
+      // A companion rename the request declined moves no value: it is dropped and added.
+      renamed:
+        companion !== undefined &&
+        !declinedRename({
+          from: { name: companion.rename.from },
+          to: { name: companion.rename.to },
+        })
+          ? companion.rename
+          : undefined,
+      liveTable: async () =>
+        (
+          await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+            tableName,
+          ])
+        ).tables[0],
+      // A kept field whose declared column changes is judged by the push over its stored value,
+      // so the rule reads each field's column as the Single's row declares it.
+      columnOf: field =>
+        getSingleRowColumnDescriptor(field, dialect, "collection"),
+      // The rename the service detected, by column: a renamed field is kept, not dropped and added.
+      renames: renamed
+        ? [{ from: toSnakeCase(renamed.from), to: toSnakeCase(renamed.to) }]
+        : [],
+      // A Single's one row is filled in, in the service's own statements, for a field new to its
+      // table that is required or states a default the row takes: a value the file does not carry.
+      singleRow: {
+        renamedTo: renamed ? [toSnakeCase(renamed.to)] : [],
+        fills: field =>
+          field.required === true ||
+          schemaService.singleRowFillValue(field) !== undefined,
+        // A table that is not there holds no row: a save rebuilding a missing table fills nothing.
+        holdsRow: async () =>
+          (await adapter.tableExists(tableName)) &&
+          tableHasRows(adapter.getDrizzle(), dialect, tableName),
+      },
+    });
+  }
+
+  /**
+   * An update whose own migration file the writer runs, in development, and records applied; then
+   * the rest of the update follows the table as the file left it (`applyUpdateDdl` past its main
+   * migration: the companion, the runtime shape, the status), and the registry row is written.
+   *
+   * A row that cannot be written after the file has applied is logged and thrown as an internal
+   * error, the file left recorded applied: the database stands as the file says, so the same save
+   * tried again plans nothing for the table and writes the row.
+   */
+  private async writeUpdateByFile(
+    deps: CollectionSaveDeps,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan | null,
+    save: CollectionSave
+  ): Promise<UpdateSingleSchemaResult> {
+    const [{ writeEntitySave }, { appliedFieldsOf }] = await Promise.all([
+      loadEntitySave(),
+      import("../../schema/builder-save/stopped-save"),
+    ]);
+    // `apply` does not run where the writer runs the file itself.
+    await writeEntitySave(deps, save, () => Promise.resolve(undefined), {
+      runsFile: true,
+      // A file that stops part way is settled to what of it applied: the row then records the
+      // fields as far as the database holds them, and the save is thrown as the report of it.
+      onSettled: async report => {
+        const fields = appliedFieldsOf(
+          (input.existing.fields ?? []) as unknown as FieldDefinition[],
+          input.fields ?? [],
+          report
+        );
+        await this.recordUpdate(
+          {
+            ...input,
+            fields,
+            updateData: {
+              ...input.updateData,
+              fields,
+              schemaHash: calculateSchemaHash(
+                fields as unknown as FieldConfig[]
+              ),
+            },
+          },
+          { status: "applied", refused: [] }
+        );
+        // The running server's table follows the fields the row records, as after an apply.
+        if (plan) {
+          await this.registerUpdatedRuntimeSchema(
+            input,
+            { ...plan, fields },
+            deps.adapter,
+            input.isLocalized
+          );
+        }
+      },
+    });
+    const outcome = plan
+      ? await this.applyUpdateDdl(input, plan, false, "file")
+      : undefined;
+    try {
+      return await this.recordUpdate(input, outcome);
+    } catch (error) {
+      this.logger.error(
+        `[Singles] The update of "${input.slug}" ran its migration file, but its registry row could not be written: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      throw NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: { slug: input.slug, step: "registry-row-after-file" },
+      });
+    }
   }
 
   /**
@@ -1227,6 +1649,75 @@ export class SingleMetadataService {
   }
 
   /**
+   * Refuse a schema change, on a road that takes the request's answers, that removes a field and
+   * adds another of the same type with no answer for the pair (`refuseUnansweredRename`): it is
+   * never taken for a rename by guesswork. Asked before anything changes.
+   */
+  private async refuseUnansweredRename(
+    input: UpdateSingleSchemaInput
+  ): Promise<void> {
+    if (input.fields === undefined) return;
+    const { schema, candidates } = await this.renameCandidatesOf(
+      input,
+      input.fields
+    );
+    refuseUnansweredRename(
+      `The Single "${input.slug}"`,
+      candidates,
+      field => schema.storageNameOf(input.existing.tableName, field),
+      {
+        // A stored field without a name names nothing an answer could refer to.
+        before: (input.existing.fields ?? []).flatMap(f =>
+          typeof f.name === "string" ? [f.name] : []
+        ),
+        after: input.fields.map(f => f.name),
+      }
+    );
+    schema.refuseRenameJoiningTranslation(
+      `The Single "${input.slug}"`,
+      candidates,
+      { was: input.wasLocalized, is: input.isLocalized }
+    );
+  }
+
+  /**
+   * The translated field the request answered as a drop and an add, from the same candidates the
+   * refusal asks about (`translatedFieldDroppedByAnswer`), or none.
+   */
+  private async translatedFieldDroppedByAnswer(
+    input: UpdateSingleSchemaInput
+  ): Promise<string | undefined> {
+    if (input.fields === undefined) return undefined;
+    const { schema, candidates } = await this.renameCandidatesOf(
+      input,
+      input.fields
+    );
+    return schema.translatedFieldDroppedByAnswer(
+      candidates,
+      input.wasLocalized
+    );
+  }
+
+  /** The pairs this change could be renaming (`renameCandidatesOf`), with the service that read them. */
+  private async renameCandidatesOf(
+    input: UpdateSingleSchemaInput,
+    fields: FieldDefinition[]
+  ) {
+    const { DynamicCollectionSchemaService } = await import(
+      "../../dynamic-collections/services/dynamic-collection-schema-service"
+    );
+    const schema = new DynamicCollectionSchemaService(undefined, this.dialect);
+    return {
+      schema,
+      candidates: schema.renameCandidatesOf(
+        (input.existing.fields ?? []) as unknown as FieldDefinition[],
+        fields,
+        { was: input.wasLocalized, is: input.isLocalized }
+      ),
+    };
+  }
+
+  /**
    * The first step of a field leaving translation (`archiveFieldsLeavingTranslation`), for a
    * save whose flags were derived inside the exclusion. Nothing is asked when the save sends no
    * fields or the Single is translated neither before nor after it; a save that turns translation
@@ -1236,9 +1727,12 @@ export class SingleMetadataService {
   private async assertFieldsMayLeaveTranslation(
     input: UpdateSingleSchemaInput
   ): Promise<void> {
+    if (!input.wasLocalized && !input.isLocalized) return;
+    // A save that sends no fields moves nothing unless it turns translation on or off, and with no
+    // adapter none of it runs: neither is asked anything.
     if (
-      input.fields === undefined ||
-      (!input.wasLocalized && !input.isLocalized)
+      input.fields === undefined &&
+      (input.wasLocalized === input.isLocalized || !this.adapter)
     ) {
       return;
     }
@@ -1249,6 +1743,25 @@ export class SingleMetadataService {
           slug: input.slug,
         },
       });
+    }
+    if (input.fields === undefined) {
+      // A save that sends no fields still moves every translated field's values as it turns
+      // translation on or off, through the companion transition after it, so their columns are
+      // asked here what the move would lose.
+      const fields = (input.existing.fields ??
+        []) as unknown as FieldDefinition[];
+      await refuseTranslationMovesLosingDefinition({
+        adapter: this.adapter,
+        // Singles are built by the collection schema service.
+        builtBy: "collection",
+        tableName: input.existing.tableName,
+        oldFields: fields,
+        newFields: fields,
+        wasLocalized: input.wasLocalized,
+        isLocalized: input.isLocalized,
+        surface: "builder",
+      });
+      return;
     }
     // The site's default language as it is now, the same one the Single's companion reconcile reads.
     const defaultLocale = appLocalization()?.defaultLocale ?? "en";
@@ -1265,7 +1778,20 @@ export class SingleMetadataService {
       newFields: input.fields,
       wasLocalized: input.wasLocalized,
       isLocalized: input.isLocalized,
+      // The translated field the request answered as a drop and an add: that removal, and only
+      // that one, is the request's.
+      ...(await this.droppedByAnswerArgs(input)),
     });
+  }
+
+  /** What the translated-field preflight is told of a drop the request answered for, if any. */
+  private async droppedByAnswerArgs(
+    input: UpdateSingleSchemaInput
+  ): Promise<{ renamed?: null; droppedByAnswer?: string }> {
+    const droppedByAnswer = await this.translatedFieldDroppedByAnswer(input);
+    return droppedByAnswer === undefined
+      ? {}
+      : { renamed: null, droppedByAnswer };
   }
 
   private async refreshForUpdate(
@@ -1444,9 +1970,19 @@ export class SingleMetadataService {
         fields,
         wasLocalized,
         isLocalized,
+        migrationStatus: existing.migrationStatus,
       },
       liveFacts.liveColumnTypes,
       schemaService
+    );
+
+    // A junction carried to a name the database already holds would meet that table at apply,
+    // after earlier statements ran. Asked on the full lists, the ones the junctions are planned on.
+    await schemaService.refuseJunctionMovesOntoLiveTables(
+      tableName,
+      startingFields,
+      fields,
+      table => adapter.tableExists(table)
     );
 
     if (liveFacts.tableHasRows !== false) {
@@ -1476,6 +2012,7 @@ export class SingleMetadataService {
 
     // What SQLite can't alter in place, which the apply rebuilds the table for.
     const sqliteNullability = new Map<string, boolean>();
+    const sqliteTypes = new Map<string, SqliteTypeChange>();
     return {
       leavingSettings: deferred.leavingSettings,
       migrationSQL: schemaService.generateAlterTableMigration(
@@ -1487,6 +2024,10 @@ export class SingleMetadataService {
           isSingle: true,
           wasStatus,
           hasStatus,
+          // The junction tables are decided on the full lists, as a collection's save decides
+          // them: a translated many-to-many sits in neither list the main diff sees and still
+          // has one.
+          junctionFields: { old: startingFields, new: fields },
           tableHasRows: liveFacts.tableHasRows,
           foreignKeysByColumn: liveFacts.foreignKeysByColumn,
           indexNames: liveFacts.indexNames,
@@ -1502,9 +2043,24 @@ export class SingleMetadataService {
           ...groupMigration,
           onSqliteNullability: (column, required) =>
             sqliteNullability.set(column, required),
+          onSqliteTypeChange: (column, change) =>
+            sqliteTypes.set(column, change),
         }
       ),
       sqliteNullability,
+      sqliteTypes,
+      sqliteTypeJudge: this.typeChangeJudgeInRebuild(
+        input.slug,
+        tableName,
+        {
+          previousFields: startingFields,
+          fields,
+          wasLocalized,
+          isLocalized,
+          migrationStatus: existing.migrationStatus,
+        },
+        schemaService
+      ),
       fields,
       previousFields,
       describesWholeTable: false,
@@ -1513,9 +2069,118 @@ export class SingleMetadataService {
   }
 
   /**
+   * Each field whose type the save changes, judged over the value it holds (in each language, for
+   * a translated one), as every road that changes a field's type judges it, read through `db`: the
+   * app's database while the save is planned, the rebuild's own transaction where SQLite rebuilds
+   * the table (`typeChangeJudgeInRebuild`). Loaded here, as the save preconditions are, so the
+   * schema machinery stays out of the service's boot.
+   */
+  private async typeChangeRefusals(
+    db: unknown,
+    slug: string,
+    tableName: string,
+    change: {
+      previousFields: FieldDefinition[];
+      fields: FieldDefinition[];
+      wasLocalized: boolean;
+      isLocalized: boolean;
+      migrationStatus: string | null | undefined;
+    },
+    schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
+  ) {
+    const adapter = this.adapter;
+    if (!adapter) return [];
+    const [
+      {
+        entityLabel,
+        fieldTypeChangeRefusals,
+        perLanguageAfter,
+        perLanguageBefore,
+      },
+      { builtByFor },
+    ] = await Promise.all([
+      import("../../schema/value-conversion/type-change/field-type-changes"),
+      import("../../schema/pipeline/registered-collections"),
+    ]);
+    const rename = schemaService.detectFieldRename(
+      change.previousFields,
+      change.fields
+    );
+    return fieldTypeChangeRefusals(db, adapter.getCapabilities().dialect, {
+      label: entityLabel("single", slug),
+      table: tableName,
+      ...perLanguageBefore(
+        { localized: change.wasLocalized },
+        tableName,
+        change.previousFields
+      ),
+      ...perLanguageAfter({ localized: change.isLocalized }, change.fields),
+      previous: change.previousFields,
+      next: change.fields,
+      ...(rename !== null
+        ? { renamed: new Map([[rename.from.name, rename.to.name]]) }
+        : {}),
+      migrationStatus: change.migrationStatus ?? null,
+      builtBy: builtByFor("single", true),
+    });
+  }
+
+  /**
+   * The same judgement, for the SQLite rebuild that makes a type change: run on the rebuild's own
+   * transaction, before its copy, so a value written after the save was planned is judged too, and
+   * no write can come between it and the copy (SQLite's one connection runs the transaction alone).
+   * The save's statements have run by then, a rename among them, so the fields before are read
+   * under the names they now have.
+   */
+  private typeChangeJudgeInRebuild(
+    slug: string,
+    tableName: string,
+    change: {
+      previousFields: FieldDefinition[];
+      fields: FieldDefinition[];
+      wasLocalized: boolean;
+      isLocalized: boolean;
+      migrationStatus: string | null | undefined;
+    },
+    schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
+  ): (db: unknown) => Promise<void> {
+    const rename = schemaService.detectFieldRename(
+      change.previousFields,
+      change.fields
+    );
+    const previousFields =
+      rename === null
+        ? change.previousFields
+        : change.previousFields.map(field =>
+            field.name === rename.from.name
+              ? { ...field, name: rename.to.name }
+              : field
+          );
+    return async db => {
+      const refusals = await this.typeChangeRefusals(
+        db,
+        slug,
+        tableName,
+        { ...change, previousFields },
+        schemaService
+      );
+      if (refusals.length === 0) return;
+      const { typeChangeError } = await import(
+        "../../schema/value-conversion/type-change/field-type-changes"
+      );
+      const errors = refusals.map(typeChangeError);
+      throw NextlyError.validation({
+        errors,
+        logContext: { single: slug, fields: errors.map(e => e.path) },
+      });
+    };
+  }
+
+  /**
    * Refuses the save, before any statement runs, when the value the Single holds cannot take the
-   * change: a field made unique over a repeated value, or a text field narrowed below the value it
-   * holds. A Single's table is built by the collection's generator, so the collection save's rule
+   * change: a field whose type changes to one its value cannot be read as, or would be cut or
+   * rounded by (`fieldTypeChangeRefusals`), a field made unique over a repeated value, or a text
+   * field narrowed below the value it holds. A Single's table is built by the collection's generator, so the collection save's rule
    * (`refusalsForCollectionSave`) is the one asked. Asked here rather than left to the database,
    * because MySQL would have committed every statement before the refused one, and PostgreSQL's
    * cast would cut a longer value to fit rather than refuse it.
@@ -1531,6 +2196,8 @@ export class SingleMetadataService {
       fields: FieldDefinition[];
       wasLocalized: boolean;
       isLocalized: boolean;
+      /** The registry row's status: a type change while it awaits its migration is refused. */
+      migrationStatus: string | null | undefined;
     },
     liveColumnTypes: ReadonlyMap<string, string>,
     schemaService: Pick<
@@ -1544,6 +2211,16 @@ export class SingleMetadataService {
       "../../dynamic-collections/services/save-preconditions"
     );
     const dialect = adapter.getCapabilities().dialect;
+    const { typeChangeError } = await import(
+      "../../schema/value-conversion/type-change/field-type-changes"
+    );
+    const typeChanges = await this.typeChangeRefusals(
+      adapter.getDrizzle(),
+      slug,
+      tableName,
+      change,
+      schemaService
+    );
     const where = await this.whereTheValuesAre(change);
     const onMain = await refusalsForCollectionSave({
       adapter,
@@ -1582,12 +2259,16 @@ export class SingleMetadataService {
         })
       : [];
     const refusals = [...onMain, ...onCompanion];
-    if (refusals.length === 0) return;
+    if (refusals.length === 0 && typeChanges.length === 0) return;
+    const errors = [
+      ...typeChanges.map(typeChangeError),
+      ...refusals.map(r => r.error),
+    ];
     throw NextlyError.validation({
-      errors: refusals.map(r => r.error),
+      errors,
       logContext: {
         single: slug,
-        fields: refusals.map(r => r.error.path),
+        fields: errors.map(e => e.path),
         // What is in the way, for the log only, and never the value itself.
         details: refusals.flatMap(r => (r.logContext ? [r.logContext] : [])),
       },
@@ -1615,8 +2296,21 @@ export class SingleMetadataService {
         .filter(f => isFieldLocalized(f, change.wasLocalized))
         .map(f => f.name)
     );
+    // Not unique by either rule (`builderColumnIsUnique`): neither its mark nor a one-to-one's
+    // cardinality, so a translated relationship made one-to-one is not grouped by its column alone
+    // when its index is per language.
+    const notUnique = (f: FieldDefinition): FieldDefinition => {
+      const options = f.options as { relationType?: unknown } | undefined;
+      return f.type === "relationship" && options?.relationType === "oneToOne"
+        ? {
+            ...f,
+            unique: false,
+            options: { ...options, relationType: "manyToOne" },
+          }
+        : { ...f, unique: false };
+    };
     const lengthOnly = (f: FieldDefinition): FieldDefinition =>
-      isFieldLocalized(f, change.isLocalized) ? { ...f, unique: false } : f;
+      isFieldLocalized(f, change.isLocalized) ? notUnique(f) : f;
     return {
       main: {
         oldFields: change.previousFields.filter(
@@ -1632,7 +2326,7 @@ export class SingleMetadataService {
         ),
         newFields: change.fields
           .filter(f => translatedBefore.has(f.name))
-          .map(f => ({ ...f, unique: false })),
+          .map(notUnique),
       },
     };
   }
@@ -2038,6 +2732,33 @@ export class SingleMetadataService {
    *
    * @throws NextlyError `NEXTLY_MIGRATION_APPLY_FAILED` when the database refuses the RENAME
    */
+  /**
+   * The moves made before the main table changes: a field becoming translated takes its value to
+   * the default language's companion row (the main ALTER drops its column), and a translated
+   * field's companion column is renamed (`renameTranslatedColumnFirst`). The save's migration file
+   * makes both itself, so after it neither is made again, and the companion reconcile plans from
+   * the companion as the file left it.
+   */
+  private async movesBeforeMain(
+    adapter: DrizzleAdapter,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan,
+    main: "statements" | "file"
+  ): Promise<{ joinedBefore: string[]; undoRename: string[] }> {
+    if (main === "file") return { joinedBefore: [], undoRename: [] };
+    const joinedBefore = await this.moveJoiningFieldValues(
+      adapter,
+      input,
+      plan
+    );
+    const undoRename = await this.renameTranslatedColumnFirst(
+      adapter,
+      input,
+      plan
+    );
+    return { joinedBefore, undoRename };
+  }
+
   private async renameTranslatedColumnFirst(
     adapter: DrizzleAdapter,
     input: UpdateSingleSchemaInput,
@@ -2151,7 +2872,13 @@ export class SingleMetadataService {
     plan: UpdateDdlPlan,
     undoRename: readonly string[]
   ): Promise<void> {
-    if (!plan.migrationSQL && !plan.sqliteNullability?.size) return;
+    if (
+      !plan.migrationSQL &&
+      !plan.sqliteNullability?.size &&
+      !plan.sqliteTypes?.size
+    ) {
+      return;
+    }
     try {
       await applyMigrationWhole({
         db: adapter.getDrizzle(),
@@ -2160,10 +2887,16 @@ export class SingleMetadataService {
         entity: "single",
         tolerateApplied: true,
         busyTable: this.busyTableWait(adapter),
-        sqliteNullability: plan.sqliteNullability && {
+        sqliteNullability: {
           adapter,
           tableName,
-          required: plan.sqliteNullability,
+          required: plan.sqliteNullability ?? new Map(),
+          ...(plan.sqliteTypes === undefined
+            ? {}
+            : { types: plan.sqliteTypes }),
+          ...(plan.sqliteTypeJudge === undefined
+            ? {}
+            : { judge: plan.sqliteTypeJudge }),
         },
       });
     } catch (refusal) {
@@ -2235,11 +2968,20 @@ export class SingleMetadataService {
      * Leave the Required and Unique settings of fields leaving translation to the caller, which
      * applies them as a step of their own (`applyLeavingStep`): the fields are bound without them.
      */
-    deferLeaving = false
+    deferLeaving = false,
+    /**
+     * Where the main table's change came from: the plan's own statements, or the save's migration
+     * file, which the writer has already run, so only what follows it is done here.
+     */
+    main: "statements" | "file" = "statements"
   ): Promise<{
     status: SingleMigrationStatus | undefined;
     /** The leaving settings refused, so the fields are recorded without them; else empty. */
     refused: LeavingSettingStep[];
+    /** Why a "failed" status was reached, as the admin is told it; the database's words go to the log. */
+    reason?: string;
+    /** What to do, where saving again would not clear the failure. */
+    next?: string;
   }> {
     const adapter = this.adapter;
     const tableName = input.existing.tableName;
@@ -2254,30 +2996,26 @@ export class SingleMetadataService {
       };
     }
 
-    // A field becoming translated takes its value to the default language's companion row first:
-    // the main ALTER below drops its column. Before the try below, as the migration is: a failure
-    // here stops the save before the main table changes.
-    const joinedBefore = await this.moveJoiningFieldValues(
+    // Before the try below, as the migration is: a failure here stops the save before the main
+    // table changes.
+    const { joinedBefore, undoRename } = await this.movesBeforeMain(
       adapter,
       input,
-      plan
-    );
-
-    const undoRename = await this.renameTranslatedColumnFirst(
-      adapter,
-      input,
-      plan
+      plan,
+      main
     );
 
     // Before the try below, which records what it catches: a refusal here has changed nothing
     // the registry should describe, so it fails the save.
-    await this.applyMainMigrationOrUndo(
-      adapter,
-      input.slug,
-      tableName,
-      plan,
-      undoRename
-    );
+    if (main === "statements") {
+      await this.applyMainMigrationOrUndo(
+        adapter,
+        input.slug,
+        tableName,
+        plan,
+        undoRename
+      );
+    }
 
     try {
       // Observed, not assumed, and it covers the rebuild case as well as the alter: a plan that
@@ -2286,7 +3024,11 @@ export class SingleMetadataService {
         this.logger.error(
           `[Singles] Table "${tableName}" not found after migration update`
         );
-        return { status: "failed", refused: [] };
+        return {
+          status: "failed",
+          refused: [],
+          reason: "its table was not found after the change",
+        };
       }
 
       // 🔴 Past this point the MAIN table holds `plan.fields`. The companion may or may not follow,
@@ -2346,7 +3088,11 @@ export class SingleMetadataService {
               : String(companionError)
           }`
         );
-        return { status: "failed", refused: [] };
+        return {
+          status: "failed",
+          refused: [],
+          reason: "its translations table did not follow the change",
+        };
       }
 
       // The Required and Unique settings of fields leaving translation, now that their shared
@@ -2413,7 +3159,13 @@ export class SingleMetadataService {
           `[Singles] "${tableName}" is recorded as a failed migration and this save only ` +
             `describes a change to it, so its status is left as failed`
         );
-        return { status: "failed", refused: [] };
+        return {
+          status: "failed",
+          refused: [],
+          reason:
+            "an earlier change to it did not finish, and a change to some of its fields does not clear that",
+          next: "The server log holds the earlier failure: check the table against the Single's fields.",
+        };
       }
 
       return { status: "applied", refused: [] };
@@ -2443,7 +3195,11 @@ export class SingleMetadataService {
       if (plan.migrationSQL) {
         this.logger.error(`[Singles] Migration SQL was: ${plan.migrationSQL}`);
       }
-      return { status: "failed", refused: [] };
+      return {
+        status: "failed",
+        refused: [],
+        reason: "the database refused a step after the change to its table",
+      };
     }
   }
 
@@ -2650,10 +3406,11 @@ export class SingleMetadataService {
     //
     // Placed alongside the ownership checks so the whole precondition set is re-established in one
     // place: this method is what a new precondition should be added to.
-    const { assertValidPluginFieldOptions } = await import(
-      "../../../api/fields-payload"
-    );
+    const { assertOptionValuesDistinct, assertValidPluginFieldOptions } =
+      await import("../../../api/fields-payload");
     assertValidPluginFieldOptions(input.fields);
+    // Nor two options sharing one value, which the stored value could not tell apart.
+    assertOptionValuesDistinct(input.fields);
   }
 
   private async planCreate(input: CreateSingleInput): Promise<CreateDdlPlan> {

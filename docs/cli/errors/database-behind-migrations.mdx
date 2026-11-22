@@ -1,0 +1,29 @@
+---
+title: DATABASE_BEHIND_MIGRATIONS
+description: "The database lacks a table or column that the migrations it records as applied created."
+---
+
+## Cause
+
+The database lacks a table or column that the migrations it records as applied created.
+
+`nextly migrate` compares the newest applied migration's snapshot with the database before it changes anything. A table or column that snapshot records is missing from the database: it was dropped outside Nextly's migrations, or the database was restored from a backup older than its ledger. A table or column a later applied migration dropped is not missing. `nextly migrate` refuses, rather than report a database that no longer matches its ledger as up to date.
+
+A table or column the database holds beyond the snapshot, or holds with another type, is not this check's.
+
+## Fix
+
+- Restore what is missing: from a backup, or by running again the statements of the migration each line names.
+- Run `nextly migrate` again.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ The database lacks 2 tables or columns its applied migrations created, so it no longer matches its ledger. Nothing was changed.
+  Why:  - table dc_posts (created by 20261116_120000_000_create_posts)
+        - column dc_tags.label (created by 20261116_120000_001_add_label)
+  Next: Restore what is missing (from a backup, or by running again the statements of the migration named), then run `nextly migrate` again. Nothing applies until the database holds what its ledger says it does.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-behind-migrations  (DATABASE_BEHIND_MIGRATIONS)
+```

@@ -8,6 +8,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import {
   checkbox,
   chips,
@@ -25,6 +26,19 @@ import type { FieldDiff } from "../diff/types";
 
 const SUPER_ADMIN = { id: "system", roles: ["super-admin"] };
 
+/**
+ * The harness, with SUPER_ADMIN seeded as a super-admin the read gate can look up:
+ * a history read asks the document's read gate as its caller, and role names
+ * on the user handed in grant nothing.
+ */
+async function createTestNextlyAsSuperAdmin(
+  options: Parameters<typeof createTestNextly>[0]
+): Promise<TestNextly> {
+  const booted = await createTestNextly(options);
+  await superAdminUser(booted, SUPER_ADMIN.id);
+  return booted;
+}
+
 let current: TestNextly | undefined;
 
 afterEach(async () => {
@@ -38,7 +52,7 @@ function nodeByName(fields: FieldDiff[], name: string): FieldDiff | undefined {
 
 describe("version diff (integration)", () => {
   it("surfaces a change on each field kind, and records nothing for an identical re-save", async () => {
-    current = await createTestNextly({
+    current = await createTestNextlyAsSuperAdmin({
       collections: [
         defineCollection({
           slug: "posts",
@@ -121,7 +135,7 @@ describe("version diff (integration)", () => {
   });
 
   it("drops unchanged fields under modifiedOnly", async () => {
-    current = await createTestNextly({
+    current = await createTestNextlyAsSuperAdmin({
       collections: [
         defineCollection({
           slug: "posts",
@@ -159,7 +173,7 @@ describe("version diff (integration)", () => {
   });
 
   it("names a field the reader may not read as hidden, and sends nothing of it", async () => {
-    current = await createTestNextly({
+    current = await createTestNextlyAsSuperAdmin({
       collections: [
         defineCollection({
           slug: "posts",
@@ -220,7 +234,7 @@ describe("version diff (integration)", () => {
   });
 
   it("refuses to compare a version with itself", async () => {
-    current = await createTestNextly({
+    current = await createTestNextlyAsSuperAdmin({
       collections: [
         defineCollection({
           slug: "notes",

@@ -48,7 +48,7 @@ export const DEFAULT_LAYOUT_WRITE_CONTEXT: Readonly<Record<string, unknown>> = {
 
 /** What an unsanctioned write is told. Names the one place the default is set. */
 export const SETTINGS_WRITE_REFUSAL =
-  "The default Layout is set from the Layouts list, with Make default.";
+  "The site default is set from the Header & footer list, with Make site default.";
 
 /**
  * Refuse a write to the settings Single that does not carry the marker.
@@ -90,7 +90,7 @@ export function pageBuilderSettingsSingle(): SingleConfig {
     admin: {
       hidden: true,
       description:
-        "Which Layout pages are drawn inside when they name none. Set from the Layouts list.",
+        "The header & footer set pages are drawn inside when they choose none of their own. Set from the Header & footer list.",
     },
     hooks: {
       beforeValidate: [refuseUnmarkedWrite],
@@ -101,7 +101,7 @@ export function pageBuilderSettingsSingle(): SingleConfig {
       // regions until the repair seeds one.
       relationship({
         name: "defaultLayout",
-        label: "Default Layout",
+        label: "Default header & footer set",
         relationTo: LAYOUTS_SLUG,
         admin: { readOnly: true },
       }),
@@ -110,7 +110,7 @@ export function pageBuilderSettingsSingle(): SingleConfig {
       // called "Site layout" is never adopted, renamed or republished.
       relationship({
         name: "seededLayout",
-        label: "Seeded Layout",
+        label: "Seeded header & footer set",
         relationTo: LAYOUTS_SLUG,
         admin: { readOnly: true, hidden: true },
       }),

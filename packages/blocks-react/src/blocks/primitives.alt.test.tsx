@@ -85,12 +85,10 @@ describe("a newly placed core/image", () => {
     expect(el.props.alt).toBe("A tabby cat");
   });
 
-  it("still draws its example address with no alt text before a file is picked", async () => {
+  it("draws no picture, and so no alt text, before a file is picked", async () => {
+    // Placed with no address: a visitor's page draws nothing for it, where
+    // it once drew a placeholder file the site did not have.
     const placed = { ...image.defaultProps, ...image.example?.props };
-    const el = (await renderImage(args(placed))) as {
-      props: { alt: string; src: string };
-    };
-    expect(el.props.src).toBe("/example.jpg");
-    expect(el.props.alt).toBe("");
+    expect(await renderImage(args(placed))).toBeNull();
   });
 });

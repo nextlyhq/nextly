@@ -1,0 +1,125 @@
+/**
+ * The check a relationship meets when a collection is created or its fields
+ * are replaced: it must name a collection to link to, read as the editor
+ * writes it today (`relationTo`, one collection or several) or as the earlier
+ * Builder stored it (`options.target`, with its cardinality beside it in
+ * `options.relationType`). A cardinality given either way must be one the
+ * schema knows, and a many-to-many cannot be required.
+ */
+import { describe, expect, it } from "vitest";
+
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import { DynamicCollectionValidationService } from "../dynamic-collection-validation-service";
+
+/**
+ * The check on a relationship field named `author`, given as a request sends
+ * it: any shape at all, an unknown cardinality included, since the check is
+ * what judges it.
+ */
+const check = (field: Record<string, unknown>) => () =>
+  new DynamicCollectionValidationService().validateRelationshipField({
+    name: "author",
+    type: "relationship",
+    ...field,
+  } as FieldDefinition);
+
+describe("a relationship's create check", () => {
+  it("takes the target as the editor writes it, with no options", () => {
+    expect(check({ relationTo: "authors" })).not.toThrow();
+  });
+
+  it("takes a link to several collections as the editor writes it", () => {
+    expect(check({ relationTo: ["authors", "editors"] })).not.toThrow();
+  });
+
+  it("takes the earlier shape, its target and cardinality in options", () => {
+    expect(
+      check({ options: { target: "authors", relationType: "manyToOne" } })
+    ).not.toThrow();
+  });
+
+  it("refuses a relationship naming no collection, either way", () => {
+    expect(check({})).toThrow(
+      'Relationship field "author" must specify a target collection'
+    );
+    expect(check({ relationTo: "" })).toThrow(/must specify a target/);
+    expect(check({ relationTo: [] })).toThrow(/must specify a target/);
+  });
+
+  it("refuses a link to several collections naming one that is not a collection's address", () => {
+    expect(check({ relationTo: [""] })).toThrow(/must specify a target/);
+    expect(check({ relationTo: ["authors", 123] })).toThrow(
+      /must specify a target/
+    );
+  });
+
+  it("takes a relationTo target only when it is spelled as a collection's address", () => {
+    expect(check({ relationTo: "blog-posts" })).not.toThrow();
+    // A system collection may be linked to, though no new one may take its address.
+    expect(check({ relationTo: "users" })).not.toThrow();
+    for (const relationTo of [
+      " ",
+      "Bad Slug",
+      "a".repeat(51),
+      ["authors", "Bad Slug"],
+    ]) {
+      expect(check({ relationTo })).toThrow(/must specify a target/);
+    }
+  });
+
+  it("refuses a relationTo that is neither a string nor a list, though options name a target", () => {
+    for (const relationType of ["manyToOne", "manyToMany"]) {
+      expect(
+        check({ relationTo: 123, options: { target: "authors", relationType } })
+      ).toThrow(/must specify a target/);
+    }
+  });
+
+  it("refuses an action on delete or update that is not a string, as a refusal and not a crash", () => {
+    expect(
+      check({ relationTo: "authors", options: { onDelete: 123 } })
+    ).toThrow(/Invalid onDelete action "123"/);
+    expect(
+      check({ relationTo: "authors", options: { onUpdate: true } })
+    ).toThrow(/Invalid onUpdate action "true"/);
+    expect(
+      check({ relationTo: "authors", options: { onDelete: "Cascade" } })
+    ).not.toThrow();
+  });
+
+  it("takes a many-to-many only with its target in options, where its junction table is made from", () => {
+    expect(
+      check({ relationTo: "tags", options: { relationType: "manyToMany" } })
+    ).toThrow(/must specify a target/);
+    expect(
+      check({
+        relationTo: "tags",
+        options: { target: "tags", relationType: "manyToMany" },
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses the earlier shape without its cardinality", () => {
+    expect(check({ options: { target: "authors" } })).toThrow(
+      /must specify a relationType/
+    );
+  });
+
+  it("refuses an unknown cardinality, whichever way the target is given", () => {
+    expect(
+      check({ relationTo: "authors", options: { relationType: "lots" } })
+    ).toThrow(/Invalid relationType "lots"/);
+  });
+
+  it("refuses a required many-to-many, beside relationTo or not", () => {
+    for (const relationTo of ["authors", undefined]) {
+      expect(
+        check({
+          ...(relationTo ? { relationTo } : {}),
+          required: true,
+          options: { target: "authors", relationType: "manyToMany" },
+        })
+      ).toThrow(/cannot be marked as required/);
+    }
+  });
+});

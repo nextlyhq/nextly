@@ -224,8 +224,34 @@ export type VersionRequiredPublicData = {
   revsKey?: string;
 };
 
+/**
+ * What a submit for review refused over its step tells its caller: the step it named, which is
+ * not a submit, or the part named and the stage it stands in, which no submit step leaves. Each
+ * is the caller's own word or what a read of the part already tells them.
+ *
+ * @experimental
+ */
+export type WorkflowSubmitPublicData =
+  | { step: string }
+  | { part: string | null; stage: string };
+
+/**
+ * What a Builder save that stopped part way names: each change it asked for, by field, and whether
+ * the database holds it. A rename names its field by the name it took, with the name it had. Field
+ * names only, which the caller sent; statements and tables stay in the log.
+ */
+export type StoppedSavePublicData = {
+  changes: Array<{
+    field: string;
+    change: "add" | "drop" | "rename" | "retype" | "settings";
+    applied: boolean;
+    from?: string;
+  }>;
+};
+
 export type PublicData =
   | ValidationPublicData
+  | StoppedSavePublicData
   | StaleVersionPublicData
   | VersionRequiredPublicData
   | SampleContentPublicData
@@ -238,4 +264,5 @@ export type PublicData =
   | ReleaseProblemsPublicData
   | SharedFieldsConflictPublicData
   | WorkflowRefusalPublicData
+  | WorkflowSubmitPublicData
   | undefined;

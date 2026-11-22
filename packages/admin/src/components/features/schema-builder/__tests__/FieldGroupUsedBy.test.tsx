@@ -17,7 +17,7 @@ import {
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 
-import { FieldGroupUsedBy } from "../FieldGroupUsedBy";
+import { FieldGroupUsedBy, knownPlaceCount } from "../FieldGroupUsedBy";
 
 const get = vi.hoisted(() => vi.fn());
 // Where a link would take the page, watched rather than followed.
@@ -206,5 +206,27 @@ describe("FieldGroupUsedBy", () => {
       expect(screen.queryByRole("alertdialog")).toBeNull();
       expect(window.location.pathname).toBe("/admin/builder/collections/posts");
     });
+  });
+});
+
+describe("knownPlaceCount", () => {
+  const PAGES_HERO = {
+    entityType: "collection" as const,
+    entitySlug: "pages",
+    fieldPath: "hero",
+  };
+  it("counts each holder once, and nothing after a failed read, a kept answer included", () => {
+    expect(
+      knownPlaceCount({
+        data: [PAGES_HERO, { ...PAGES_HERO, fieldPath: "footer" }],
+        isError: false,
+      })
+    ).toBe(1);
+    expect(
+      knownPlaceCount({ data: [PAGES_HERO], isError: true })
+    ).toBeUndefined();
+    expect(
+      knownPlaceCount({ data: undefined, isError: false })
+    ).toBeUndefined();
   });
 });

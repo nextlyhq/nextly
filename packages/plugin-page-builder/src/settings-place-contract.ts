@@ -81,6 +81,30 @@ export interface PageBuilderSettingsTabProps {
   openGeneral?: () => void;
 }
 
+/**
+ * What a block at the place is handed besides the context: what the builder
+ * shows of the page's search result is drawn there, in Page settings'
+ * General and in the right panel's page settings, by the plugin that edits
+ * SEO; the builder's own plain preview stands in only where no plugin adds
+ * a block.
+ *
+ * @experimental Settles with the SEO panel in both places.
+ */
+// A type rather than an interface, so it is handed as the record a place's
+// blocks receive (`TargetSlot`'s `blockProps`).
+export type PageBuilderSettingsBlockProps = {
+  /** Where the block is drawn: Page settings' General, or the right panel. */
+  at: "general" | "panel";
+  /** The page's content type, named for its pages ("Pages"), where known. */
+  typePlural?: string;
+  /** The entry's form, which the page's fields are typed into. */
+  control: Control<FieldValues>;
+  /** The page's blocks as they are being edited, which the form holds only once stored. */
+  design: BlockDocument;
+  /** The form path of the field the builder edits. */
+  designField?: string;
+};
+
 declare module "@nextlyhq/plugin-sdk" {
   interface AdminPlaces {
     "nextlyhq-plugin-page-builder.settings": {

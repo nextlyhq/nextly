@@ -23,9 +23,7 @@ async function savedPost(page: Page): Promise<void> {
   await page.getByRole("textbox", { name: "Title", exact: true }).fill(title);
   await excerpt(page).fill(`saved excerpt ${stamp}`);
   await page.getByRole("button", { name: /save draft/i }).click();
-  // Saving a new entry returns to the list.
-  await page.waitForURL(/\/collections\/posts$/, { timeout: 30_000 });
-  await page.getByRole("link", { name: title }).click();
+  // The first save stays on the new post, at its own address.
   await page.waitForURL(/\/collections\/posts\/(?!create$)[^/]+$/, {
     timeout: 30_000,
   });

@@ -72,6 +72,9 @@ export const nextlyVersionsSqlite = sqliteTable(
     fieldSources: text("field_sources", { mode: "json" }).$type<
       Record<string, number>
     >(),
+    // The parts this version changed, as the PostgreSQL schema says.
+    changedLocales: text("changed_locales", { mode: "json" }).$type<string[]>(),
+    sharedChanged: integer("shared_changed", { mode: "boolean" }),
   },
   table => [
     // Durable version_no uniqueness per document. A FULL (non-partial) unique

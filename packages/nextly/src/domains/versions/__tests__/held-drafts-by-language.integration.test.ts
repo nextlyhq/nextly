@@ -15,6 +15,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import {
   defineCollection,
   defineFieldGroup,
@@ -128,6 +129,9 @@ async function boot(
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
   });
+  // A super-admin the read gate can look up: a comparison asks the document's
+  // read gate as its caller, and role names on a user grant nothing.
+  await superAdminUser(handle, superAdmin.id);
   return handle;
 }
 

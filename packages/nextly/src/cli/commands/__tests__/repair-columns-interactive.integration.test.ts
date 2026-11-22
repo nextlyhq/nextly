@@ -4,8 +4,8 @@
  * terminals, with `--non-interactive` forcing a run that may not. A run that may not never reads
  * standard input: it skips and reports the lossy column, and converts the safe one.
  *
- * The apply is the real one, over a SQLite database holding a safe difference (a required
- * relationship's NOT NULL) and a lossy one (an integer column becoming a real, holding a word). The
+ * The apply is the real one, over a SQLite database holding a safe difference (a NOT NULL an
+ * optional relationship no longer declares) and a lossy one (an integer column becoming a real, holding a word). The
  * terminal question is stood in for, so each case observes whether it was put; standard input is a
  * stream each case owns, watched for any read. A terminal run with no `--non-interactive` is the
  * positive control: there the question is put.
@@ -66,8 +66,10 @@ import {
 } from "../../../plugins/test-nextly";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import {
+  AUTHOR,
   collection,
   f,
+  legacyFields,
   tableTools,
 } from "../../../domains/schema/repair-columns/__tests__/apply-fixture";
 import { COLUMN_REPAIRS_TABLE } from "../../../domains/schema/repair-columns/record";
@@ -76,12 +78,6 @@ import { repairColumnsAction } from "../repair-columns";
 
 const TABLE = "dc_ri_posts";
 const TITLE = f({ name: "title", type: "text" });
-const AUTHOR = f({
-  name: "author",
-  type: "relationship",
-  relationTo: "users",
-  required: true,
-});
 const PRICE = f({
   name: "price",
   type: "number",
@@ -155,7 +151,7 @@ describe("repair-columns --apply decides whether it may ask before it asks anyth
     state.asked = [];
     // A run under CI may never ask; each case decides whether it is one.
     vi.stubEnv("CI", "");
-    await tools.createTable(TABLE, [TITLE, AUTHOR]);
+    await tools.createTable(TABLE, legacyFields([TITLE, AUTHOR]));
     await tools.run(`ALTER TABLE "${TABLE}" ADD COLUMN "price" integer`);
     await tools.insert(TABLE, [
       { id: "p1", title: "a", author: "u1", price: 3 },

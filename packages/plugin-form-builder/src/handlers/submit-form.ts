@@ -438,11 +438,14 @@ export async function submitForm(
 
   try {
     // 1. Fetch form configuration
+    // In the visitor's language: the answers are judged against the fields
+    // and options that language drew, which a host may have localized.
     const form = await fetchFormBySlug(
       formSlug,
       pluginConfig,
       pluginContext,
-      access
+      access,
+      locale
     );
 
     if (!form) {
@@ -779,7 +782,8 @@ export async function fetchFormBySlug(
   slug: string,
   pluginConfig: ResolvedFormBuilderConfig,
   pluginContext: PluginContext,
-  access: SubmissionAccess = { as: "system" }
+  access: SubmissionAccess = { as: "system" },
+  locale?: string
 ): Promise<FormDocument | null> {
   const { collections } = pluginContext.services;
 
@@ -795,7 +799,8 @@ export async function fetchFormBySlug(
   const result = await collections.listEntries(
     pluginConfig.formOverrides.slug,
     { where: { slug: { equals: slug } }, pagination: { limit: 1 } },
-    access
+    // Read in `locale` when one is named, so a localized form answers in it.
+    locale === undefined ? access : { ...access, locale }
   );
 
   const form = result.data?.[0];

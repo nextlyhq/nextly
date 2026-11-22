@@ -5,9 +5,10 @@
  * visible still render. Header queries are scoped to the table because the
  * toolbar's column menu lists every toggleable column by design.
  */
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, within } from "@admin/__tests__/utils";
+import { render, screen, waitFor, within } from "@admin/__tests__/utils";
 import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
 
 import { ApiKeyTable } from "../ApiKeyTable";
@@ -106,5 +107,42 @@ describe("ApiKeyTable columns", () => {
     expect(within(table).getByText("Ada Lovelace")).toBeTruthy();
     expect(within(table).getByText("Hidden")).toBeTruthy();
     expect(within(table).queryByText("Deleted user")).toBeNull();
+  });
+
+  it("finds a key by its role, which its Type badge shows", async () => {
+    const user = userEvent.setup();
+    render(
+      <ApiKeyTable
+        data={[
+          KEY,
+          {
+            ...KEY,
+            id: "role-key-1",
+            name: "Editors' key",
+            tokenType: "role-based",
+            role: { id: "r-admin", name: "Admin", slug: "admin" },
+          },
+        ]}
+        onEdit={vi.fn()}
+        onRevoke={vi.fn()}
+        canEdit
+        canRevoke
+        ownersVisible
+      />
+    );
+
+    await user.type(
+      screen.getByPlaceholderText(/name, description, type, role/),
+      "admin"
+    );
+
+    const table = screen.getByRole("table");
+    // The search applies once typing pauses: the read-only key, which holds
+    // no role, leaves the table.
+    await waitFor(() =>
+      expect(within(table).queryByText("CI Deploy")).toBeNull()
+    );
+    expect(within(table).getByText("Role-based: Admin")).toBeTruthy();
+    expect(within(table).getByText("Editors' key")).toBeTruthy();
   });
 });

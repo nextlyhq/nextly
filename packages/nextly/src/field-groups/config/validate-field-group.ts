@@ -25,7 +25,10 @@
  * ```
  */
 
-import { RESERVED_SLUGS } from "../../collections/config/validate-config";
+import {
+  RESERVED_SLUGS,
+  uniqueOnListError,
+} from "../../collections/config/validate-config";
 import { isFieldGroupField } from "../../collections/fields/guards";
 import type { FieldConfig } from "../../collections/fields/types";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
@@ -91,8 +94,12 @@ export type FieldGroupValidationErrorCode =
   | "FIELDS_EMPTY"
   | "FIELD_NAME_REQUIRED"
   | "FIELD_NAME_INVALID_FORMAT"
+  // A name longer than any field name may be (`MAX_FIELD_NAME_LENGTH`).
+  | "FIELD_NAME_TOO_LONG"
   | "FIELD_NAME_SQL_KEYWORD"
   | "FIELD_NEVER_TRANSLATABLE"
+  // `unique` on a relation holding a list, which no dialect keeps (`uniqueOnListError`).
+  | "UNIQUE_NOT_ON_LIST"
   | "FIELD_NAME_DUPLICATE"
   // A name that snake-cases onto a column this group's table already carries. The same code the
   // collection and single validators report, because it is the same mistake with the same fix.
@@ -208,6 +215,11 @@ function validateField(
     return;
   }
   const fieldType = f.type as string;
+
+  // The one refusal a collection's and a Single's config make of `unique` on a relation holding a
+  // list, so a field group's config answers as its schema's create does.
+  const listUnique = uniqueOnListError(f, path);
+  if (listUnique) errors.push(listUnique);
 
   // A plugin type reaches none of the cases below, so its own declaration
   // checks run here rather than as a case that could never be written for a

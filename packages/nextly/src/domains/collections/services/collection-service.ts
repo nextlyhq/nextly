@@ -73,6 +73,12 @@ import { BaseService } from "../../../shared/base-service";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
+  parseFieldRenameAnswers,
+  withFieldRenameAnswers,
+  withoutRenameAnswers,
+  type FieldRenameAnswer,
+} from "../../schema/field-rename-answers";
+import {
   parseFieldRewrite,
   rewriteCallerOf,
   rewritesSingle,
@@ -135,6 +141,12 @@ export interface UpdateCollectionInput {
   description?: string;
   icon?: string;
   fields?: FieldDefinition[];
+  /**
+   * @experimental For a field `fields` removes and another of the same type it adds, whether
+   * that is a rename (`"rename"`, keeping the values) or not (`"drop_and_add"`). A change
+   * that makes such a pair without answering it is refused, never taken for a rename.
+   */
+  renames?: FieldRenameAnswer[];
 }
 
 /**
@@ -165,6 +177,36 @@ export interface CollectionEntry {
    *   longer the current version (`STALE_VERSION`).
    */
   _rev?: string;
+}
+
+/**
+ * A create from a source as the entry service takes it, from a caller's
+ * request context. The source is copied field by field, so nothing beyond
+ * the entry it names reaches the copy from the caller's object.
+ */
+function copyRequestOf(
+  collectionName: string,
+  data: Record<string, unknown>,
+  source: { collection: string; id: string; field?: string },
+  context: RequestContext
+): Parameters<CollectionEntryService["createEntryFromSource"]>[0] {
+  const forwarded = forwardedFromContext(context);
+  return {
+    collectionName,
+    source: {
+      collection: source.collection,
+      id: source.id,
+      ...(source.field === undefined ? {} : { field: source.field }),
+    },
+    data,
+    user: forwarded.user,
+    overrideAccess: forwarded.overrideAccess,
+    authenticatedScope: forwarded.authenticatedScope,
+    context: forwarded.context,
+    request: forwarded.request,
+    locale: forwarded.locale,
+    ...(forwarded.actor === undefined ? {} : { actor: forwarded.actor }),
+  };
 }
 
 /**
@@ -605,9 +647,14 @@ export class CollectionService extends BaseService {
   ): Promise<Collection> {
     this.logger.debug("Updating collection", { collectionName, input });
 
-    const result = await this.metadataService.updateCollection(
-      { collectionName },
-      input
+    // Run with the input's answers, so a pair it doesn't answer is refused, not guessed.
+    const result = await withFieldRenameAnswers(
+      parseFieldRenameAnswers(input.renames),
+      () =>
+        this.metadataService.updateCollection(
+          { collectionName },
+          withoutRenameAnswers(input)
+        )
     );
 
     if (!result.success) {
@@ -753,6 +800,81 @@ export class CollectionService extends BaseService {
     });
 
     return result.data as CollectionEntry;
+  }
+
+  /**
+   * @experimental Create an entry that copies a stored one: read `source` as
+   * the caller, then create `data` in `collectionName`, its field validators
+   * told what it copies (`PluginFieldWrite.copiedFrom`), so a value the
+   * source already holds, in a form and a field the caller's read could see,
+   * may count as no change. A source the caller may not read is refused as
+   * that read refuses it (NOT_FOUND for one they cannot see), and nothing is
+   * created. A duplicate is this create, with data built from the source.
+   *
+   * Intended to become stable, since plugins call it. Server-only: no REST
+   * route reaches it, and nothing a request sends can name a copy.
+   *
+   * @param collectionName - The collection the new entry is created in
+   * @param data - Entry data
+   * @param source - The entry it copies, and the field its value came from
+   * where that differs from the field it is written to
+   * @param context - Request context with user info
+   * @returns Created entry
+   * @throws NextlyError if the source read or the creation fails
+   */
+  // Reached only through the plugin facade's method list, which the dead-code
+  // gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async createEntryFromSource(
+    collectionName: string,
+    data: Record<string, unknown>,
+    source: { collection: string; id: string; field?: string },
+    context: RequestContext
+  ): Promise<CollectionEntry> {
+    const result = await this.entryService.createEntryFromSource(
+      copyRequestOf(collectionName, data, source, context)
+    );
+    if (!result.success) {
+      this.logger.warn("Entry creation from a source failed", {
+        collectionName,
+        sourceCollection: source.collection,
+        message: result.message,
+        statusCode: result.statusCode,
+      });
+      throw this.mapLegacyErrorToNextlyError(result, {
+        entity: "entry",
+        collectionName: source.collection,
+        entryId: source.id,
+      });
+    }
+    return result.data as CollectionEntry;
+  }
+
+  /**
+   * @experimental {@link createEntryFromSource} inside `tx`: the source is
+   * read as the caller on the transaction and the entry created on it, so a
+   * dry run rolled back after it judges the copy as the create itself does.
+   * Preceded by {@link warmLocalizedReadiness} for both collections.
+   * Intended to become stable with it.
+   */
+  // Reached only through the plugin facade's method list, which the dead-code
+  // gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async createEntryFromSourceInTransaction(
+    tx: TransactionContext,
+    collectionName: string,
+    data: Record<string, unknown>,
+    source: { collection: string; id: string; field?: string },
+    context: RequestContext
+  ): Promise<CollectionEntry> {
+    const result = await this.entryService.createEntryFromSourceInTransaction(
+      tx,
+      copyRequestOf(collectionName, data, source, context)
+    );
+    return this.settleTxWrite<CollectionEntry>(tx, result, {
+      message: "Entry creation from a source in transaction failed",
+      logContext: { collectionName, sourceCollection: source.collection },
+    });
   }
 
   /**

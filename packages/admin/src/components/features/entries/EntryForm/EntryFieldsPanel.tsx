@@ -27,6 +27,10 @@ import type * as React from "react";
 
 import { computeFieldsBeside } from "@admin/lib/builder/takeoverLayout";
 
+import { effectiveFieldGate } from "../fields/field-admin-gates";
+
+import { DocumentAddressChip } from "./DocumentAddressChip";
+import { useEntryDetails, type EntryDetailsTarget } from "./entry-details-read";
 import { EntryFormContent } from "./EntryFormContent";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 
@@ -36,6 +40,39 @@ import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
  * the page's address. The fields and their rules are the same either way.
  */
 export type EntryFieldsPresentation = "panel" | "dialog";
+
+/**
+ * Which of the entry's fields to draw: its identity (`"page"`: the title, and
+ * the slug as its address), or everything else (`"content"`).
+ */
+export type EntryFieldsGroup = "page" | "content";
+
+/**
+ * What a surface asks of the entry's fields: how they are framed, which group,
+ * and which top-level fields to leave out because the surface draws them its
+ * own way (another editor of the same kind, say). A left-out field keeps its
+ * value in the form, so Save still stores it.
+ */
+export interface EntryFieldsOptions {
+  /** How the fields are framed. Defaults to the panel's sections. */
+  presentation?: EntryFieldsPresentation;
+  /** One group alone; both, in their order, where left out. */
+  group?: EntryFieldsGroup;
+  /** Top-level field names drawn nowhere here. */
+  leaveOut?: readonly string[];
+}
+
+/**
+ * What the dialog's address needs to be drawn as the entry header draws it:
+ * the site's address and the entry's path, with copy and edit. Read from the
+ * entry's details only while it is drawn.
+ */
+export interface EntryAddressFacts {
+  /** The entry whose details hold its address. */
+  detailsOf: EntryDetailsTarget;
+  /** Whether the entry is live, so its address may be opened. */
+  published: boolean;
+}
 
 export interface EntryFieldsPanelProps {
   /** The document's identity — title, slug. */
@@ -58,6 +95,17 @@ export interface EntryFieldsPanelProps {
   slugName?: string;
   /** How the fields are framed. Defaults to the panel's sections. */
   presentation?: EntryFieldsPresentation;
+  /**
+   * For the dialog: the slug drawn as the entry's full address, as the entry
+   * header draws it, rather than as a plain field. Absent, it is a field
+   * labelled "Address".
+   */
+  address?: EntryAddressFacts | undefined;
+  /**
+   * For the dialog: whether one group is drawn alone, so it has no heading of
+   * its own (the surface around it names it).
+   */
+  alone?: boolean | undefined;
 }
 
 /**
@@ -126,6 +174,8 @@ export function EntryFieldsPanel({
   mode,
   slugName,
   presentation = "panel",
+  address,
+  alone,
 }: EntryFieldsPanelProps): React.JSX.Element {
   if (presentation === "dialog") {
     return (
@@ -136,6 +186,8 @@ export function EntryFieldsPanel({
         readOnly={readOnly}
         mode={mode}
         slugName={slugName}
+        address={address}
+        alone={alone}
       />
     );
   }
@@ -182,19 +234,6 @@ export function EntryFieldsPanel({
   );
 }
 
-/**
- * The panel for one asking field, or NULL when it would have nothing in it.
- *
- * The whole decision in one place, because it is one decision. A caller reads
- * the answer twice — once to decide whether to offer a region and once to fill
- * it — and those must not be able to disagree; returning an element that
- * happens to render nothing is what reserved width to display blankness.
- *
- * Named and exported rather than inlined into the form's callback so the rule
- * can be exercised without standing up an entire `EntryForm`. What that leaves
- * uncovered is the form CALLING this, which no test reaches today because
- * nothing renders `EntryForm` at all.
- */
 /** A field shown under another label in this view, its rules untouched. */
 function relabelled(
   fields: FieldConfig[],
@@ -208,8 +247,9 @@ function relabelled(
 
 /**
  * The fields flat, for a dialog: the page's own group (its title, and its
- * slug read as the page's address with the full address under it and the
- * change warning), then the rest, with no section cards or form headings.
+ * slug read as the page's address, with the change warning), then the rest,
+ * with no section cards or form headings. The group has a heading only while
+ * both are drawn; drawn alone, the surface around it names it.
  */
 function FlatEntryFields({
   page,
@@ -218,31 +258,21 @@ function FlatEntryFields({
   readOnly,
   mode,
   slugName,
+  address,
+  alone = false,
 }: Omit<EntryFieldsPanelProps, "presentation">): React.JSX.Element {
-  // The slug is the field named so, whether or not its address is live yet.
-  const slugField = slugName ?? "slug";
   return (
     <div className="space-y-6" onKeyDown={blockImplicitSubmit}>
       {page.length === 0 ? null : (
-        <section aria-labelledby="entry-fields-page" className="space-y-1">
-          <h3 id="entry-fields-page" className="text-sm font-semibold">
-            Page
-          </h3>
-          <EntryFormContent
-            fields={relabelled(page, slugField, "Address")}
-            disabled={disabled}
-            readOnly={readOnly}
-            mode={mode}
-          />
-          {/* Warned about only where the address is already live. */}
-          {slugName === undefined ? null : (
-            <PublicUrlChangeNotice
-              slugName={slugName}
-              active
-              className="mt-2 block"
-            />
-          )}
-        </section>
+        <IdentityGroup
+          page={page}
+          disabled={disabled}
+          readOnly={readOnly}
+          mode={mode}
+          slugName={slugName}
+          address={address}
+          alone={alone}
+        />
       )}
       {content.length === 0 ? null : (
         <EntryFormContent
@@ -256,6 +286,149 @@ function FlatEntryFields({
   );
 }
 
+/**
+ * The document's identity, flat: its title, and its slug as the page's
+ * address. With the entry's address facts, the slug is drawn as its full
+ * address (the chip the entry header draws); without them, as a field
+ * labelled "Address", with the change warning where the address is live.
+ */
+function IdentityGroup({
+  page,
+  disabled,
+  readOnly,
+  mode,
+  slugName,
+  address,
+  alone,
+}: Omit<EntryFieldsPanelProps, "presentation" | "content">): React.JSX.Element {
+  // The slug is the field named so, whether or not its address is live yet.
+  const slugField = slugName ?? "slug";
+  const slug = page.find(f => f.name === slugField);
+  const chip = address !== undefined && slug !== undefined;
+  return (
+    <section
+      {...(alone === true ? {} : { "aria-labelledby": "entry-fields-page" })}
+      className="space-y-1"
+    >
+      {alone === true ? null : (
+        <h3 id="entry-fields-page" className="text-sm font-semibold">
+          Page
+        </h3>
+      )}
+      <EntryFormContent
+        fields={relabelled(
+          chip ? page.filter(f => f !== slug) : page,
+          slugField,
+          "Address"
+        )}
+        disabled={disabled}
+        readOnly={readOnly}
+        mode={mode}
+      />
+      {chip ? (
+        <AddressChipField
+          slug={slug}
+          facts={address}
+          locked={addressLocked(slug, readOnly, disabled)}
+          hasPublicAddress={slugName !== undefined}
+        />
+      ) : (
+        <AddressNotice slugName={slugName} />
+      )}
+    </section>
+  );
+}
+
+/**
+ * Whether the address chip may not edit the slug: the form's one decision
+ * about the field (`effectiveFieldGate`), from what the panel holds and the
+ * slug's own read-only and disabled gates, as the field itself would be.
+ * Its condition is judged before this, where the field is offered at all.
+ */
+function addressLocked(
+  slug: FieldConfig,
+  readOnly: boolean | undefined,
+  disabled: boolean | undefined
+): boolean {
+  const gate = effectiveFieldGate(
+    slug,
+    { shown: true, readOnly: readOnly === true, disabled: disabled === true },
+    undefined
+  );
+  return gate.readOnly || gate.disabled;
+}
+
+/** The change warning beside the slug drawn as a field, only where it is live. */
+function AddressNotice({
+  slugName,
+}: {
+  slugName: string | undefined;
+}): React.JSX.Element | null {
+  if (slugName === undefined) return null;
+  return (
+    <PublicUrlChangeNotice slugName={slugName} active className="mt-2 block" />
+  );
+}
+
+/**
+ * The slug as the entry's full address, labelled "Address": the site's
+ * address and the entry's path in the header's chip, with its copy, its
+ * in-place edit (Enter keeps, Escape puts back) and, where the address is
+ * live, the warning that changing it retires the old one. Its details are
+ * read here, while it is drawn, as the header reads them.
+ */
+function AddressChipField({
+  slug,
+  facts,
+  locked,
+  hasPublicAddress,
+}: {
+  slug: FieldConfig;
+  facts: EntryAddressFacts;
+  locked: boolean;
+  hasPublicAddress: boolean;
+}): React.JSX.Element {
+  const details = useEntryDetails(facts.detailsOf);
+  return (
+    <div
+      role="group"
+      aria-labelledby="entry-fields-address"
+      className="pt-3"
+      // The slug's place, where a surface showing a field it refused finds it.
+      data-field={"name" in slug ? slug.name : "slug"}
+    >
+      <p id="entry-fields-address" className="text-sm font-medium">
+        Address
+      </p>
+      <DocumentAddressChip
+        slug={{ field: slug, locked, hasPublicAddress }}
+        address={details?.address}
+        published={facts.published}
+      />
+    </div>
+  );
+}
+
+/** The top-level fields left after `leaveOut`, by name. */
+function withoutLeftOut<T extends { name?: string }>(
+  fields: T[],
+  leaveOut: readonly string[] | undefined
+): T[] {
+  if (leaveOut === undefined || leaveOut.length === 0) return fields;
+  const out = new Set(leaveOut);
+  return fields.filter(f => !out.has(f.name ?? ""));
+}
+
+/**
+ * The panel for one asking field, or NULL when it would have nothing in it.
+ *
+ * The whole decision in one place, because it is one decision. A caller reads
+ * the answer twice — once to decide whether to offer a region and once to fill
+ * it — and those must not be able to disagree; returning an element that
+ * happens to render nothing is what reserved width to display blankness. A
+ * group asked for alone, or fields left out, decide it the same way: what is
+ * left is what is counted.
+ */
 export function fieldsBesidePanel(
   allFields: FieldConfig[],
   excludePath: string,
@@ -271,26 +444,35 @@ export function fieldsBesidePanel(
     values?: Record<string, unknown>;
     /** Whether the document has a public address the slug decides. */
     hasPublicAddress?: boolean;
-    /** How the fields are framed. */
-    presentation?: EntryFieldsPresentation;
-  } = {}
+    /** For the dialog, the slug drawn as the entry's full address. */
+    address?: EntryAddressFacts;
+  } & EntryFieldsOptions = {}
 ): React.ReactNode | null {
   const beside = computeFieldsBeside(allFields, excludePath, options.values);
-  if (beside.page.length === 0 && beside.content.length === 0) return null;
+  const group = options.group;
+  const page =
+    group === "content" ? [] : withoutLeftOut(beside.page, options.leaveOut);
+  const content =
+    group === "page" ? [] : withoutLeftOut(beside.content, options.leaveOut);
+  if (page.length === 0 && content.length === 0) return null;
   // Warned about only where the slug is actually offered AND the document has
   // an address to break: a notice on a document nobody can reach is noise, and
   // one beside a field this panel is not showing points at nothing.
-  const slug = beside.page.find(f => f.name === "slug");
+  const slug = page.find(f => f.name === "slug");
   return (
     <EntryFieldsPanel
-      page={beside.page}
-      content={beside.content}
+      page={page}
+      content={content}
       disabled={options.disabled}
       readOnly={options.readOnly}
       mode={options.mode}
       {...(options.presentation === undefined
         ? {}
         : { presentation: options.presentation })}
+      // Drawn as the full address only where the identity is asked for on
+      // its own: a surface drawing both groups keeps them as fields.
+      address={group === "page" ? options.address : undefined}
+      alone={group !== undefined}
       slugName={
         options.hasPublicAddress === true && slug !== undefined
           ? (slug.name ?? "slug")

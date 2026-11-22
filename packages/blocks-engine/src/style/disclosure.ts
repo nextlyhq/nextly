@@ -11,15 +11,17 @@
  * has, and its open look (the chevron turned, the plus a minus) is a rule on
  * `details[open]`: no script, and the browser's keyboard and focus stay.
  *
- * `browser` keeps the browser's own marker. It is what a site built before
- * these choices keeps, so its pages look as they did.
+ * Three are offered: a plus that becomes a minus while open, a chevron that
+ * turns, and none. A fourth value, `browser`, may still be stored by a site
+ * that chose it before; it draws the plus, as the default does, so every
+ * accordion's title row is the same row, with a 44px toggle in every browser.
  *
  * @module style/disclosure
  * @experimental
  */
 
 import type { KeywordExpansion } from "./catalog-types";
-import { DISCLOSURE_ICON_CLASS, DISCLOSURE_TITLE_CLASS } from "./node-class";
+import { DISCLOSURE_ICON_CLASS } from "./node-class";
 
 /** The custom property the icon choice is traced by on the Accordion. */
 export const DISCLOSURE_ICON_PROPERTY = "--nx-pb-disclosure-icon";
@@ -27,17 +29,19 @@ export const DISCLOSURE_ICON_PROPERTY = "--nx-pb-disclosure-icon";
 /** The custom property the icon's position is traced by on the Accordion. */
 export const DISCLOSURE_POSITION_PROPERTY = "--nx-pb-disclosure-position";
 
-/** The choices of icon, in the order an editor offers them. */
-export const DISCLOSURE_ICONS = ["chevron", "plus", "none", "browser"] as const;
+/**
+ * The icon values a stored style may hold: the three an editor offers, in
+ * its order, then `browser`, which is accepted and drawn as `plus`.
+ */
+export const DISCLOSURE_ICONS = ["plus", "chevron", "none", "browser"] as const;
 
 /** Where the icon sits against the title. */
 export const DISCLOSURE_POSITIONS = ["before", "after"] as const;
 
-/** A section's title row, its icon, and its title, as child selectors. */
+/** A section's title row and its icon, as child selectors. */
 const SUMMARY = "> details > summary";
 const ICON = `${SUMMARY} > .${DISCLOSURE_ICON_CLASS}`;
 const OPEN_ICON = `> details[open] > summary > .${DISCLOSURE_ICON_CLASS}`;
-const TITLE = `${SUMMARY} > .${DISCLOSURE_TITLE_CLASS}`;
 
 /** A 16-unit stroked glyph as a mask: its paths, drawn in any one colour. */
 function glyph(paths: string): string {
@@ -69,10 +73,22 @@ function painted(mask: string): readonly KeywordExpansion[] {
   ];
 }
 
+/**
+ * The plus: a minus while the section is open, unturned over another
+ * device's Chevron turn.
+ */
+const PLUS_ICON: readonly KeywordExpansion[] = [
+  ...ROW,
+  ...painted(PLUS),
+  { descendant: OPEN_ICON, property: "mask", value: MINUS },
+  { descendant: OPEN_ICON, property: "transform", value: "none" },
+];
+
 /** Every icon choice's declarations, by its keyword. */
 export const DISCLOSURE_ICON_EXPANSIONS: Readonly<
   Record<(typeof DISCLOSURE_ICONS)[number], readonly KeywordExpansion[]>
 > = {
+  plus: PLUS_ICON,
   chevron: [
     ...ROW,
     ...painted(CHEVRON),
@@ -81,26 +97,11 @@ export const DISCLOSURE_ICON_EXPANSIONS: Readonly<
     { descendant: OPEN_ICON, property: "mask", value: CHEVRON },
     { descendant: OPEN_ICON, property: "transform", value: "rotate(180deg)" },
   ],
-  plus: [
-    ...ROW,
-    ...painted(PLUS),
-    // A minus while the section is open, unturned over another device's
-    // Chevron turn.
-    { descendant: OPEN_ICON, property: "mask", value: MINUS },
-    { descendant: OPEN_ICON, property: "transform", value: "none" },
-  ],
   // A row with no marker and no icon: the whole title still toggles.
   none: [...ROW, { descendant: ICON, property: "display", value: "none" }],
-  // The browser's marker, with a heading title kept on its line. The row's
-  // display and marker style roll back to the browser's own, so Browser
-  // default set on an accordion restores the marker over a row its block
-  // defaults (Chevron) or another tier made.
-  browser: [
-    { descendant: SUMMARY, property: "display", value: "revert" },
-    { descendant: SUMMARY, property: "list-style", value: "revert" },
-    { descendant: ICON, property: "display", value: "none" },
-    { descendant: TITLE, property: "display", value: "inline" },
-  ],
+  // A stored Browser default draws the plus: the browser's marker sat
+  // outside the title row, so it could not share the toggle's look.
+  browser: PLUS_ICON,
 };
 
 /**

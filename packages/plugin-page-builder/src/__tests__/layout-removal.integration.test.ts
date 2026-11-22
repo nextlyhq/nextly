@@ -502,7 +502,7 @@ describe.each(getConfiguredTestDialects())(
 
           expect(answer.status).toBe(409);
           expect(told(answer)).toBe(
-            '1 page uses this Layout: "Home". Choose another Layout for it first.'
+            '1 page uses this header & footer set: "Home". Choose another header & footer set for it first.'
           );
           expect((await layoutRow(t, other))?.status).toBe("published");
           expect(await fence().removalOf(other)).toBeNull();
@@ -1517,7 +1517,7 @@ describe.each(getConfiguredTestDialects())(
         expect(pending()).toBe(false);
         expect(answer.status).toBe(409);
         expect(told(answer)).toBe(
-          '1 page uses this Layout: "Home". Choose another Layout for it first.'
+          '1 page uses this header & footer set: "Home". Choose another header & footer set for it first.'
         );
         expect((await layoutRow(t, other))?.status).toBe("published");
         expect(await fence().removalOf(other)).toBeNull();
@@ -1543,7 +1543,7 @@ describe.each(getConfiguredTestDialects())(
         expect(pending()).toBe(false);
         expect(answer.status, JSON.stringify(answer.body)).toBe(200);
         expect(answer.body.message).toBe(
-          "Home still uses this Layout. It shows the site default until it is published with another Layout."
+          "Home still uses this header & footer set. It shows the site default until it is published with another header & footer set."
         );
         expect(
           (answer.body.item as { stillUsedBy?: unknown }).stillUsedBy
@@ -2385,7 +2385,7 @@ describe.each(getConfiguredTestDialects())(
         expect(await rewritesOf(t, edited)).toEqual([
           expect.objectContaining({
             actorKind: "person",
-            note: 'Layout "Other" is being deleted, so this page was moved to the site default.',
+            note: 'Header & footer set "Other" is being deleted, so this page was moved to the site default.',
             payload: expect.objectContaining({
               field: "layout",
               copies: ["live", "draft"],
@@ -2709,7 +2709,7 @@ describe.each(getConfiguredTestDialects())(
 
         expect(answer.status).toBe(409);
         expect(told(answer)).toBe(
-          '1 page uses this Layout: "Live". Choose another Layout for it first.'
+          '1 page uses this header & footer set: "Live". Choose another header & footer set for it first.'
         );
         expect(await layoutRow(t, other)).toBeDefined();
       });

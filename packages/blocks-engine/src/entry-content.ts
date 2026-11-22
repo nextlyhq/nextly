@@ -36,6 +36,7 @@ import {
 import { remapFragmentBindings, remapFragmentProps } from "./fragment-refs";
 import { describeValue, pointer } from "./issue-text";
 import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
+import { remapListBindings } from "./list-binding-refs";
 import { isPlainRecord } from "./plain-record";
 import {
   claimedDomId,
@@ -326,6 +327,17 @@ function drawnIds(
   return ids;
 }
 
+/** The same drawn ids, by each stored node's own id rather than the node. */
+function drawnNodeIds(
+  ids: ReadonlyMap<BlockNode, string>
+): Map<string, string> {
+  const byId = new Map<string, string>();
+  for (const [node, id] of ids) {
+    if (typeof node.id === "string") byId.set(node.id, id);
+  }
+  return byId;
+}
+
 /**
  * The DOM id each of the entry's authored ids becomes once drawn inside the
  * template: minted from the drawn node's id, as a component's are, and
@@ -361,9 +373,18 @@ function drawnDomIds(
 function drawnNode(
   node: BlockNode,
   ids: ReadonlyMap<BlockNode, string>,
+  nodeIds: ReadonlyMap<string, string>,
   domIds: ReadonlyMap<string, string>
 ): BlockNode {
   const drawn: BlockNode = { ...node, id: ids.get(node) ?? node.id };
+  // A binding naming one of the entry's lists reads it under its drawn id,
+  // the one the renderer records that list's entry under.
+  if (node.bindings !== undefined) {
+    drawn.bindings = remapListBindings(
+      node.bindings,
+      nodeIds
+    ) as BlockNode["bindings"];
+  }
   if (domIds.size === 0) return drawn;
   const rendered = renderedDomId(node);
   const minted = rendered === undefined ? undefined : domIds.get(rendered);
@@ -374,9 +395,9 @@ function drawnNode(
     drawn.attributes = drawnAttributes(node.attributes, minted, domIds);
   }
   drawn.props = remapFragmentProps(node.props, domIds) as BlockNode["props"];
-  if (node.bindings !== undefined) {
+  if (drawn.bindings !== undefined) {
     drawn.bindings = remapFragmentBindings(
-      node.bindings,
+      drawn.bindings,
       domIds
     ) as BlockNode["bindings"];
   }
@@ -561,7 +582,8 @@ export function composeEntryContent(
   if (kept.length === 0) return document;
   const ids = drawnIds(kept, first.node.id, host.ids);
   const domIds = drawnDomIds(kept, ids, host.domIds);
-  const drawn = mapForest(kept, node => drawnNode(node, ids, domIds));
+  const nodeIds = drawnNodeIds(ids);
+  const drawn = mapForest(kept, node => drawnNode(node, ids, nodeIds, domIds));
   // The block as stored, by identity: the walk hands back the very node the
   // rebuild below meets, so only that one is composed.
   const target: unknown = first.node;

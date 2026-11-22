@@ -102,6 +102,12 @@ export interface PromptDispatchResult {
   // false when the user picks "abort" or closes the prompt; orchestrator
   // short-circuits the apply with PromptCancelledError in that case.
   proceed: boolean;
+  /**
+   * The ids of the lossy type changes (`TypeChangeEvent.lossy`) whose named values may be cleared:
+   * the consent naming the column covers each, or the person at the terminal agreed. Pre-cleanup
+   * clears those rows before the column is converted. Absent, nothing is cleared.
+   */
+  clearing?: string[];
 }
 
 // F7/F8: routes prompts to the user (terminal via clack, browser via SSE-
@@ -141,6 +147,15 @@ export interface PreCleanupField {
   type: string;
 }
 
+/**
+ * Told as each statement starts and once it has run, with whether it is a schema statement: what
+ * an apply records of what stays when it fails (`PipelineResult.statementsKept`).
+ */
+export interface StatementRecord {
+  starting(schema: boolean): void;
+  finished(schema: boolean): void;
+}
+
 export interface PreCleanupExecutor {
   execute(args: {
     tx: unknown;
@@ -154,6 +169,10 @@ export interface PreCleanupExecutor {
     operations: readonly Operation[];
     fields: PreCleanupField[];
     dialect: SupportedDialect;
+    /** The lossy type changes whose named values to clear (`PromptDispatchResult.clearing`). */
+    clearing?: readonly string[];
+    /** Told of each statement it runs, as it starts and once it has run. */
+    statements?: StatementRecord;
   }): Promise<NextlySchemaSnapshot>;
 }
 

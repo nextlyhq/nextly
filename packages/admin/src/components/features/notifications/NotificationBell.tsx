@@ -68,6 +68,10 @@ export function NotificationBell({
   if (permissionsLoading) return null;
 
   const unread = noticeUnread + (showJournal ? journalUnread : 0);
+  // What the badge draws, and what the bell's name says: a person using speech
+  // input says the drawn count to press it, so the name holds it, outside
+  // parentheses, which Label in Name sets aside.
+  const shownUnread = unread > 9 ? "9+" : String(unread);
   const handleOpenChange = (next: boolean): void => {
     setOpen(next);
     if (next && showJournal) {
@@ -82,7 +86,9 @@ export function NotificationBell({
         <button
           type="button"
           aria-label={
-            unread > 0 ? `Notifications (${unread} unread)` : "Notifications"
+            unread > 0
+              ? `Notifications, ${shownUnread} unread`
+              : "Notifications"
           }
           data-testid="notification-bell"
           className={cn(
@@ -98,7 +104,7 @@ export function NotificationBell({
               data-testid="notification-bell-badge"
               className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-sm bg-danger-text text-danger-surface text-danger-surface! text-xs font-bold leading-[18px] text-center"
             >
-              {unread > 9 ? "9+" : String(unread)}
+              {shownUnread}
             </span>
           )}
         </button>

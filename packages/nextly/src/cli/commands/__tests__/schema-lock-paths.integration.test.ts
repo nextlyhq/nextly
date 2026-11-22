@@ -43,7 +43,7 @@ import { baselineCore } from "../migrate-baseline";
 import { downDatabaseDeps, migrateDownCore } from "../migrate-down";
 import { migrateCore } from "../migrate";
 import { withMigrateLock } from "../../../domains/schema/pipeline/locks";
-import { runUpgrade } from "../upgrade";
+import { runMigrateDataSteps } from "./helpers/run-migrate-data-steps";
 
 const FILE = "20261027_000001_schema_lock_paths";
 const TABLE = "slp_items";
@@ -162,6 +162,7 @@ describe.each(LOCK_DIALECTS)("a held schema lock on %s", dialect => {
               },
               collections: [],
             },
+            served: { collections: [] } as never,
             lockWaitMs: 1_000,
             adapter: Object.assign(adapter, { dialect }) as never,
             logger: serviceLogger,
@@ -245,27 +246,23 @@ describe.each(LOCK_DIALECTS)("a held schema lock on %s", dialect => {
     }
   }, 90_000);
 
-  it("refuses upgrade, running no step", async () => {
+  it("refuses the data steps of nextly migrate, running no step", async () => {
     let stepRan = false;
     await refusedWhileHeld(
       () =>
-        runUpgrade(
-          { confirmBackedUp: true },
-          {
-            adapter: adapter as never,
-            lockWaitMs: 1_000,
-            steps: [
-              {
-                title: "a step with work",
-                pending: async () => 1,
-                run: async () => {
-                  stepRan = true;
-                  return 1;
-                },
+        runMigrateDataSteps(adapter, {
+          lockWaitMs: 1_000,
+          steps: [
+            {
+              title: "a step with work",
+              pending: async () => 1,
+              run: async () => {
+                stepRan = true;
+                return 1;
               },
-            ],
-          }
-        ),
+            },
+          ],
+        }),
       "NEXTLY_MIGRATE_LOCK_BUSY"
     );
     expect(stepRan).toBe(false);

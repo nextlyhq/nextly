@@ -378,9 +378,11 @@ export function DesignCell({
     return null;
   }
   // An entry without its own design in a collection with no template is
-  // drawn with nothing: "Template" there would name one that does not exist.
+  // drawn with nothing: "Collection template" there would name one that does not exist.
   if (meta.template === null) return null;
-  return <span className="text-xs text-muted-foreground">Template</span>;
+  return (
+    <span className="text-xs text-muted-foreground">Collection template</span>
+  );
 }
 
 /**

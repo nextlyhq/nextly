@@ -264,4 +264,5 @@ export type {
   HookType,
   HookHandler,
   HookContext,
+  HookLanguageContext,
 } from "@nextly/hooks/types";

@@ -215,6 +215,9 @@ interface TodayConditionSourceOption {
 interface TodayConditionSource {
   name: string;
   label?: string;
+  // An optional addition: what tells a source apart from another of the same
+  // label, shown after it. A consumer that passes none sees the row as before.
+  description?: string;
   type?: string;
   options?: readonly TodayConditionSourceOption[];
 }

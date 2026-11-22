@@ -680,6 +680,7 @@ that publish.
 | `LOCALE_SCOPED`               | names one language, which a release cannot move on its own                                                                                                 |
 | `AUTHOR_MAY_NOT_ACT`          | was added by someone who may no longer publish it (or unpublish it)                                                                                        |
 | `DOCUMENT_GONE`               | no longer exists                                                                                                                                           |
+| `ENTITY_REMOVED_FROM_CODE`    | is in a collection or Single removed from code, named by `detail.kind` and `detail.slug`; take it out of the release, or declare the entity again          |
 | `NO_LIFECYCLE`                | is in a collection or Single that no longer has a draft/published lifecycle                                                                                |
 | `COMPANION_WITHOUT_LIFECYCLE` | is in a collection localized before Draft/Published was enabled, whose translation table has no per-language status, so its languages cannot all be moved  |
 | `DRAFT_HELD_IN_LOCALE`        | has unreleased work saved in another language (`detail.locales` names them), which a release moving every language will not decide for                     |
@@ -790,6 +791,15 @@ release sharing documents with a stopped one still runs at its time.
 A write made inside the collection service's `withTransaction` is checked once that transaction
 commits, never inside it. A release's documents are always judged as the person who added each
 one, as the run would judge them.
+
+**A collection or Single removed from code.** Removing an entity from `nextly.config.ts` and
+deploying is not a write, and a server's start writes nothing, so no event above reports it.
+Instead, every job pass starts by finding the scheduled releases holding a document of an entity
+removed from code (`ENTITY_REMOVED_FROM_CODE`). The first pass under the new configuration stops
+each one before its time, telling its owner, and before it runs anything due. If that step fails
+it is logged as `release-removed-entity-stop-failed`, the pass runs what is due as usual, and
+the next pass tries again. To fix the release, take those documents out of it, or declare the
+entity again, then schedule it again.
 
 **What is still caught only at the release's time.** The job pass checks every release again
 when it runs it, and stops it then for anything the events above do not report:

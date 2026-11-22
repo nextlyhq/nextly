@@ -34,6 +34,27 @@ const CLASS_OF: Record<ConversionReasonKind, ConversionClass> = {
   "no-conversion": "blocked",
   "late-write": "blocked",
   "cleared-under-not-null": "blocked",
+  "not-a-number": "lossy",
+  "not-a-date": "lossy",
+  "not-an-email": "lossy",
+  "not-an-option": "lossy",
+  "not-a-boolean": "lossy",
+  "non-finite": "lossy",
+  object: "lossy",
+  "kind-never-held": "lossy",
+  "column-refuses": "lossy",
+  "field-refuses": "lossy",
+  rounded: "blocked",
+  "out-of-range": "blocked",
+  "no-time-or-offset": "blocked",
+  "several-items": "blocked",
+  "item-not-held": "blocked",
+  "pair-blocked": "blocked",
+  "link-not-carried": "blocked",
+  repeated: "blocked",
+  "needs-rewrite": "blocked",
+  // A value stored in the new type's form loses nothing: it is counted, never consented to.
+  "new-form": "safe",
 };
 
 const RANK: Record<ConversionClass, number> = { safe: 0, lossy: 1, blocked: 2 };

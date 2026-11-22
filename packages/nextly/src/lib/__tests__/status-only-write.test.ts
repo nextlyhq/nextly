@@ -2,7 +2,14 @@
  * A write changes only an entry's status when its body names `status` and
  * nothing a write would store: judged by the keys alone, never their values.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  clearActiveExtensionSchema,
+  setActiveExtensionSchema,
+} from "../../domains/schema/extension/active-schema";
+import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
+import { col } from "../../domains/schema/extension/dsl";
 
 import {
   isStatusOnlyWrite,
@@ -101,10 +108,20 @@ describe("statusGate", () => {
 describe("writeGateFor", () => {
   it("names the gate a status-only body's status names, on an entry with a lifecycle", async () => {
     await expect(
-      writeGateFor({ status: "published" }, "collection", () => true)
+      writeGateFor(
+        { status: "published" },
+        "collection",
+        "dc_posts",
+        () => true
+      )
     ).resolves.toBe("publish");
     await expect(
-      writeGateFor({ status: "draft", id: "e1" }, "single", async () => true)
+      writeGateFor(
+        { status: "draft", id: "e1" },
+        "single",
+        "single_site",
+        async () => true
+      )
     ).resolves.toBe("unpublish");
   });
 
@@ -114,6 +131,7 @@ describe("writeGateFor", () => {
       writeGateFor(
         { status: "published", title: "t" },
         "collection",
+        "dc_posts",
         hasLifecycle
       )
     ).resolves.toBe("update");
@@ -123,13 +141,81 @@ describe("writeGateFor", () => {
   it("names update for a status-only body where there is no lifecycle", async () => {
     // `status` is then an ordinary field.
     await expect(
-      writeGateFor({ status: "published" }, "collection", () => false)
+      writeGateFor(
+        { status: "published" },
+        "collection",
+        "dc_posts",
+        () => false
+      )
     ).resolves.toBe("update");
   });
 
   it("names update for a body whose status is left undefined", async () => {
     await expect(
-      writeGateFor({ status: undefined }, "collection", () => true)
+      writeGateFor({ status: undefined }, "collection", "dc_posts", () => true)
     ).resolves.toBe("update");
+  });
+  describe("beside a column a schema hook contributed to the table", () => {
+    const TABLE = "dc_articles";
+
+    afterEach(() => {
+      clearActiveExtensionSchema();
+    });
+
+    /** `searchVector`, a column the app's schema hook adds to `dc_articles`, never a field. */
+    async function contribute(): Promise<void> {
+      const schema = await buildExtensionSchema({
+        dialect: "postgresql",
+        coreTableNames: ["users", "media"],
+        entities: [
+          {
+            name: TABLE,
+            slug: "articles",
+            entityKind: "collection",
+            columns: [
+              { name: "id", kind: "varchar", nullable: false },
+              { name: "title", kind: "text", nullable: true },
+            ],
+          },
+        ],
+        pluginPrefixes: new Map(),
+        plugins: [],
+        app: {
+          owner: { kind: "app" },
+          extend: [
+            ({ schema: draft }) => {
+              draft.extendTable(TABLE, {
+                columns: { searchVector: col.text({ nullable: true }) },
+              });
+            },
+          ],
+        },
+      });
+      setActiveExtensionSchema("postgresql", schema);
+    }
+
+    it("judges a status-only body as the publish it is, so a caller who may publish but not update is asked publish", async () => {
+      await contribute();
+      // The contributed column is never written, so it makes the body no edit.
+      for (const spelling of ["searchVector", "search_vector"]) {
+        await expect(
+          writeGateFor(
+            { status: "published", [spelling]: "a" },
+            "collection",
+            TABLE,
+            () => true
+          )
+        ).resolves.toBe("publish");
+      }
+      // A field named beside it is still an edit.
+      await expect(
+        writeGateFor(
+          { status: "published", searchVector: "a", title: "t" },
+          "collection",
+          TABLE,
+          () => true
+        )
+      ).resolves.toBe("update");
+    });
   });
 });

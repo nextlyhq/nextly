@@ -48,7 +48,19 @@ const named = (name: string): Command => commandAt(program, name.split(" "));
  */
 const RETIRED: Record<string, string[]> = {
   "db:sync": ["-f, --force"],
+  // The earlier spelling of the backup confirmation `--backup-confirmed`.
+  migrate: ["--confirm-backed-up"],
   "migrate:fresh": ["-f, --force", "--yes"],
+  // Each belonged to the database work `nextly migrate` now does: still
+  // accepted, so a run with one ends naming that command, and no longer read.
+  upgrade: [
+    "--confirm-backed-up",
+    "-f, --force",
+    "--target-table-name <name>",
+    "--reconcile-core",
+    "--accept-data-loss [targets]",
+    "--force-unlock",
+  ],
   prune: ["--force"],
   "generate:widget": ["--force"],
 };
@@ -139,6 +151,7 @@ const WRITES = [
   "generate:manifest",
   "generate:types",
   "generate:widget",
+  "i18n:convert-zoned-dates",
   "i18n:restore",
   "init",
   "media reindex-usage",

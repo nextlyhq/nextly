@@ -9,6 +9,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import { reconcileMigrationMetadata } from "../reconcile-metadata";
 
+// On SQLite the pass first repairs the registries' timestamps, which reads tables this fixture's
+// adapter does not have; that repair has suites of its own, so here it finds nothing to repair.
+vi.mock("../../../../database/repair-sqlite-registry-timestamps", () => ({
+  repairSqliteRegistryTimestamps: vi.fn(async () => ({ repaired: 0 })),
+  addressesCreatedInMilliseconds: vi.fn(async () => []),
+}));
+
 const silent = {
   info: () => {},
   warn: () => {},
@@ -110,6 +117,10 @@ async function run(opts: {
     ) => work({ getDrizzle: () => ({}) }),
     inRegistryStep: (_adapter: unknown, work: () => Promise<unknown>) => work(),
     newestAppliedAppMigration: () => null,
+    // Read as inside a registry write a caller holds: the archive's labelling and the removal of
+    // what dropped entities left step aside, as before the pass had them. Their own suites
+    // (`deployed-delete-of-a-translated-entity.integration.test.ts`) judge them.
+    registryWriteOpen: () => true,
   }));
   const made = mockRegistries(
     opts.collections ?? [],

@@ -2098,7 +2098,14 @@ function repositoryPathOf(specifier, from, packages) {
 }
 
 function trackedFiles() {
-  return execFileSync("git", ["ls-files", "-z"], { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8" }).split("\0").filter(Boolean);
+  // Room for a listing past the 1 MiB a spawn may print by default.
+  return execFileSync("git", ["ls-files", "-z"], {
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  })
+    .split("\0")
+    .filter(Boolean);
 }
 
 const PACKAGE_SCRIPTS = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).scripts;

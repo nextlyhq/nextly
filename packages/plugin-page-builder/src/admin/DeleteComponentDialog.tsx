@@ -215,7 +215,9 @@ function DocumentLink({ document }: { document: NamedDocument }): JSX.Element {
     // Inline, so a long title wraps and reads in full, the icon after its
     // last word.
     <a
-      className="font-medium break-words text-primary underline-offset-4 hover:underline"
+      // In the text colour, underlined: a brand's primary is a fill and
+      // can fall under AA as small text.
+      className="font-medium break-words text-foreground underline underline-offset-2"
       href={documentHref(document)}
       target="_blank"
       rel="noopener noreferrer"
@@ -642,11 +644,13 @@ function refusedFace(
         {layoutCount > 0 ? (
           <>
             {layoutCount === 1
-              ? "A Layout uses "
-              : `${String(layoutCount)} Layouts use `}
+              ? "A header & footer set uses "
+              : `${String(layoutCount)} header & footer sets use `}
             <Named name={name} />
             {". Choose a different component in "}
-            {layoutCount === 1 ? "that Layout" : "those Layouts"}
+            {layoutCount === 1
+              ? "that header & footer set"
+              : "those header & footer sets"}
             {" first."}
           </>
         ) : (
@@ -662,7 +666,7 @@ function refusedFace(
     body: (
       <div className="space-y-3">
         {layouts !== undefined && layoutCount > 0 ? (
-          <DocumentLinks list={layouts} label="Layouts" />
+          <DocumentLinks list={layouts} label="Header & footer sets" />
         ) : null}
         <LeftDocuments
           left={left}

@@ -47,6 +47,11 @@ export interface ChangedField {
   from: string;
   to: string;
   rowCount: number;
+  /**
+   * Set when the values or links the change drops could not be counted: `rowCount` is then 0
+   * and means nothing, as on a removed field.
+   */
+  rowCountUnknown?: true;
   classification: ChangeClassification;
   reason: string; // e.g., "type_changed", "constraint_changed"
 }

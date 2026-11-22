@@ -7,8 +7,8 @@
  * stranded parts. It appends one `workflow.stage_changed` event to the webhooks outbox, so the
  * event commits with the move or not at all, and the webhook drain delivers it after commit.
  *
- * A publish closing a part's review cycle does not call it here: the publish path that builds
- * that closing calls this same function when it does.
+ * A publish closing a part's review cycle calls it from the workflow's publish gate, as the move
+ * settles, on the publish's own transaction.
  *
  * Recording follows the outbox's own gate, as every content write's event does: nothing is
  * appended for a collection or Single that opted out of webhook recording, or on an install with
@@ -36,7 +36,7 @@ import type { ReviewDocument } from "./review-state-repository";
 /**
  * What moved a part: a step; an edit or a changed definition withdrawing an approval; a deploy
  * that renamed its stage, redirected it out of a removed one, or detached the workflow; a discard
- * of its working draft; or the recovery command.
+ * of its working draft; the recovery command; or a publish closing its review cycle.
  *
  * @experimental
  */
@@ -48,7 +48,8 @@ export type StageChangeCause =
   | "redirect"
   | "detach"
   | "discard"
-  | "recovery";
+  | "recovery"
+  | "publish";
 
 /**
  * One part's change of stage or approval.

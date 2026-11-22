@@ -80,9 +80,13 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  * - `notification-bell`: the bell lists the Schema Builder's changes, so the
  *   admin offers it only where the builder runs, and a production build hides
  *   it with the builder.
- * - `builder-fonts`: its stand-in font catalogue is plain http on localhost,
- *   which only a development server may reach; a production server rightly
- *   refuses it.
+ * - `builder-fonts` and `builder-fonts-network`: their stand-in font
+ *   catalogue is plain http on localhost, which only a development server may
+ *   reach; a production server rightly refuses it.
+ * - `admin-hydration`: React reports invalid nesting in a development build
+ *   only. The spec also watches the document itself, which holds anywhere.
+ * - `builder-publish-requests`: it counts the engine's whole-document survey
+ *   by the function's name, which a production build minifies away.
  */
 const DEV_SPECS = [
   "**/setup-*.spec.ts",
@@ -100,11 +104,26 @@ const DEV_SPECS = [
   "**/builder-canvas-embed.spec.ts",
   "**/removed-from-code-singles-list.spec.ts",
   "**/builder-fonts.spec.ts",
+  "**/builder-fonts-network.spec.ts",
+  "**/admin-hydration.spec.ts",
+  "**/builder-publish-requests.spec.ts",
 ];
 
 /** Only the dev specs, for the run beside a production one. */
 const DEV_SPECS_ONLY =
   SERVER === "dev" && process.env.E2E_DEV_SPECS_ONLY === "1";
+
+/**
+ * The specs of a site that draws its header and footer in code
+ * (`siteHeaderFooter: "code"`). One server answers a whole run, so they run
+ * by themselves, against a playground started in that mode
+ * (`E2E_HEADER_FOOTER_IN_CODE_ONLY=1`), and every other run leaves them out.
+ */
+const HEADER_FOOTER_IN_CODE_SPECS = ["**/*-header-footer-in-code.spec.ts"];
+
+/** Only the specs of a site that draws its header and footer in code. */
+const HEADER_FOOTER_IN_CODE_ONLY =
+  process.env.E2E_HEADER_FOOTER_IN_CODE_ONLY === "1";
 
 /**
  * Where a run writes its results and report. The dev specs' run has its own,
@@ -114,9 +133,11 @@ const DEV_SPECS_ONLY =
  */
 const RUN_OUTPUT = DEV_SPECS_ONLY
   ? "dev-specs"
-  : EVERY_DIALECT_ONLY
-    ? E2E_DATABASE.dialect
-    : "suite";
+  : HEADER_FOOTER_IN_CODE_ONLY
+    ? "header-footer-in-code"
+    : EVERY_DIALECT_ONLY
+      ? E2E_DATABASE.dialect
+      : "suite";
 
 /**
  * The commands that start each server, after the database is emptied.
@@ -157,8 +178,12 @@ export default defineConfig({
   testIgnore: [
     "**/production/**",
     ...(SERVER === "production" ? DEV_SPECS : []),
+    ...(HEADER_FOOTER_IN_CODE_ONLY ? [] : HEADER_FOOTER_IN_CODE_SPECS),
   ],
   ...(DEV_SPECS_ONLY ? { testMatch: DEV_SPECS } : {}),
+  ...(HEADER_FOOTER_IN_CODE_ONLY
+    ? { testMatch: HEADER_FOOTER_IN_CODE_SPECS }
+    : {}),
   ...(EVERY_DIALECT_ONLY ? { grep: new RegExp(EVERY_DIALECT) } : {}),
   outputDir: `./.playwright/results/${RUN_OUTPUT}`,
 
@@ -267,15 +292,24 @@ export default defineConfig({
       // asserts against. They are off by default so a contributor's admin
       // keeps the monochrome identity a default install has.
       NEXTLY_E2E_BRANDING: "1",
+      // A site that draws its header and footer in code, for the run of its
+      // own specs only (`E2E_HEADER_FOOTER_IN_CODE_ONLY`).
+      ...(HEADER_FOOTER_IN_CODE_ONLY
+        ? { NEXTLY_E2E_SITE_HEADER_FOOTER: "code" }
+        : {}),
       // Turns off Next.js's development indicator, whose button a development
       // server injects into the canvas's frame too: a tab stop inside the
       // canvas that a production build never draws, which the keyboard specs
       // walking in and out of the frame would otherwise meet.
       NEXTLY_E2E_DEV_INDICATORS: "0",
-      // Registers the style fixture, which plugin-admin-styling.spec.ts and
-      // plugin-page-routing.spec.ts both depend on. Off by default so a test
-      // double does not appear in a contributor's plugins list or inject a
-      // showcase section into the Posts collection.
+      // Registers the playground's test fixtures: the style fixture
+      // (plugin-admin-styling.spec.ts, plugin-page-routing.spec.ts), the
+      // block fixture's "Test fixture: …" blocks (plugin-blocks.spec.ts,
+      // plugin-block-frame-environment.spec.ts), the widget-kit fixture's
+      // dashboard widgets (the dashboard and widget-kit specs) and the
+      // contributions fixture (plugin-contributions.spec.ts and the specs that
+      // read its pieces). Off by default so no test double appears in a
+      // contributor's plugins list, Add panel or dashboard.
       NEXTLY_E2E_STYLE_FIXTURE: "1",
       // Leaves the query devtools out of the dev server's admin: their floating icon sits over
       // the bottom-right corner, where a toast's Undo is drawn, and takes the click a phone-width
@@ -323,6 +357,11 @@ export default defineConfig({
       // Points the page builder's font catalogue at the stand-in global setup
       // starts, so adding a font never reaches the real catalogue.
       NEXTLY_E2E_FONT_CATALOGUE: FONT_CATALOGUE_ORIGIN,
+      // Ten times the product's REST limits (`apps/playground/src/e2e-rate-limit.ts`). The
+      // workers share one address and seed pages, styles and fonts between steps far faster
+      // than a person writes, and at the defaults a refused seed fails a spec far from its
+      // cause. The limiter still runs; admin-request-budget.spec.ts holds pages to the defaults.
+      NEXTLY_E2E_RATE_LIMIT: "1",
     },
   },
 

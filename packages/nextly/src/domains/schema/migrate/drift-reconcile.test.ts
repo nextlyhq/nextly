@@ -1105,3 +1105,147 @@ describe("a file whose applied row loses to another run's", () => {
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_CONCURRENT_RUN" });
   });
 });
+
+describe("reconcileFile — an app file nextly migrate hands its snapshot proof", () => {
+  const CHECKSUM = "ab".repeat(32);
+  const app = { ...file, sha256: CHECKSUM };
+  const proof =
+    (
+      statements: Array<{
+        label: string;
+        status: "shown" | "unshown" | "not-done";
+      }>
+    ) =>
+    async () => ({
+      statements,
+      recordedChecksum: CHECKSUM,
+    });
+  const ADD = { label: "CREATE TABLE b", status: "shown" as const };
+  const BACKFILL = { label: 'UPDATE "b" SET', status: "unshown" as const };
+
+  it("records a file its snapshot proves without running it", async () => {
+    const repo = fakeRepo();
+    const executeSql = executor();
+    const r = await reconcileFile({
+      file: app,
+      before: snap("a"),
+      target: snap("a", "b"),
+      live: snap("a", "b"),
+      dialect: "sqlite",
+      repo,
+      executeSql,
+      snapshotProof: proof([ADD]),
+    });
+    expect(r.state).toBe("already_applied");
+    expectNoStatements(executeSql);
+    expect(repo.applied).toEqual([
+      { statementsExecuted: 0, uniqueFilename: file.filename },
+    ]);
+  });
+
+  it("refuses, before any write, a file holding a statement its snapshot does not show", async () => {
+    const repo = fakeRepo();
+    const executeSql = executor();
+    await expect(
+      reconcileFile({
+        file: app,
+        before: snap("a"),
+        target: snap("a", "b"),
+        live: snap("a", "b"),
+        dialect: "sqlite",
+        repo,
+        executeSql,
+        snapshotProof: proof([ADD, BACKFILL]),
+      })
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_NOT_PROVEN",
+      publicMessage: expect.stringContaining(
+        '2. UPDATE "b" SET (not shown by its snapshot)'
+      ),
+    });
+    expect(executeSql).not.toHaveBeenCalled();
+    expect(repo.starts).toBe(0);
+    expect(repo.applied).toEqual([]);
+  });
+
+  it("refuses an edited file, and one with an unresolved attempt on PostgreSQL", async () => {
+    await expect(
+      reconcileFile({
+        file: { ...app, sha256: "cd".repeat(32) },
+        before: snap("a"),
+        target: snap("a", "b"),
+        live: snap("a", "b"),
+        dialect: "sqlite",
+        repo: fakeRepo(),
+        executeSql: executor(),
+        snapshotProof: proof([ADD]),
+      })
+    ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_NOT_PROVEN" });
+    await expect(
+      reconcileFile({
+        file: app,
+        before: snap("a"),
+        target: snap("a", "b"),
+        live: snap("a", "b"),
+        dialect: "postgresql",
+        repo: fakeRepo([{ status: "failed", startedAt: new Date(1) }]),
+        executeSql: executor(),
+        snapshotProof: proof([ADD]),
+      })
+    ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_NOT_PROVEN" });
+  });
+
+  it("records it once its failed attempt is resolved", async () => {
+    const repo = fakeRepo([
+      { status: "failed", startedAt: new Date(1) },
+      { status: "rolled_back", startedAt: new Date(2) },
+    ]);
+    const r = await reconcileFile({
+      file: app,
+      before: snap("a"),
+      target: snap("a", "b"),
+      live: snap("a", "b"),
+      dialect: "postgresql",
+      repo,
+      executeSql: executor(),
+      snapshotProof: proof([ADD]),
+    });
+    expect(r.state).toBe("already_applied");
+  });
+
+  it("does not read its proof where the database stands at its start", async () => {
+    let read = 0;
+    await reconcileFile({
+      file: app,
+      before: snap("a"),
+      target: snap("a", "b"),
+      live: snap("a"),
+      dialect: "sqlite",
+      repo: fakeRepo(),
+      executeSql: executor(),
+      snapshotProof: () => {
+        read += 1;
+        return proof([ADD])();
+      },
+    });
+    expect(read).toBe(0);
+  });
+
+  it("runs the whole file where the database stands at its start, data statements included", async () => {
+    // A data-only file starts and ends at the same schema: at its start, it runs (D20).
+    const repo = fakeRepo();
+    const executeSql = executor();
+    const r = await reconcileFile({
+      file: app,
+      before: snap("a"),
+      target: snap("a"),
+      live: snap("a"),
+      dialect: "sqlite",
+      repo,
+      executeSql,
+      snapshotProof: proof([BACKFILL]),
+    });
+    expect(r.state).toBe("in_sync");
+    expect(executeSql.mock.calls[0][0]).toBe(file.sql);
+  });
+});

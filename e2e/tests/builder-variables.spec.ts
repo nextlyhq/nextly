@@ -1,7 +1,8 @@
 /**
  * Variables in the Design panel, end to end: an author creates a variable with
- * a dark value, it is in the panel after a reload, and the compiled sheet
- * applies its dark value when the device prefers dark — and only then. A role
+ * a dark value, it is in the panel after a reload, the compiled sheet holds
+ * its dark value behind the device's preference, and the canvas draws it once
+ * the top bar previews dark. A role
  * that may read Design but not change it sees the variables read-only and is
  * refused their changes; and each action an author takes on a variable is
  * kept across a reload.
@@ -185,8 +186,9 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
     await expect(page.getByRole("dialog")).toHaveCount(0);
 
     // The compiled sheet carries the dark value under the guarded device
-    // block, and the browser applies it only when the device prefers dark.
-    // In the canvas's own document, where the page and its sheet are drawn.
+    // block, in the canvas's own document, where the page and its sheet are
+    // drawn. The published page applying it on a dark device is
+    // site-style.spec.ts's; the canvas itself previews light until ☾.
     const canvasRoot = canvasFrame(page).locator("html");
     const sheet = await canvasRoot.evaluate(root =>
       [...root.ownerDocument.querySelectorAll("style")]
@@ -205,7 +207,10 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
         PROPERTY
       );
     expect(await resolved()).toBe(LIGHT);
+    // A dark device does not turn the canvas dark: the top bar's ☾ does.
     await page.emulateMedia({ colorScheme: "dark" });
+    expect(await resolved()).toBe(LIGHT);
+    await page.getByRole("button", { name: "Preview in dark mode" }).click();
     await expect.poll(resolved).toBe(DARK);
 
     // A light marker below the root pins light there, on a dark device: the
@@ -303,7 +308,7 @@ function adminChrome(page: Page) {
   });
 }
 
-test("a mode picked in the Design panel draws the canvas in it, on a device that prefers the other", async ({
+test("the top bar's preview draws the canvas in its mode, whichever the device prefers, and leaves the editor's chrome alone", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -349,45 +354,38 @@ test("a mode picked in the Design panel draws the canvas in it, on a device that
       page
         .locator(CANVAS_FRAME)
         .evaluate(frame => getComputedStyle(frame).colorScheme);
-    const preview = page.getByRole("group", { name: "Preview" });
-    const useDevice = page.getByRole("button", { name: "Use device" });
+    const darkPreview = page.getByRole("button", {
+      name: "Preview in dark mode",
+    });
+    // The Design panel has no switch of its own.
+    const panel = page.getByRole("region", { name: "Design panel" });
+    await expect(
+      panel.getByRole("group", { name: "Preview", exact: true })
+    ).toHaveCount(0);
+    await expect(
+      panel.getByRole("button", { name: "Dark", exact: true })
+    ).toHaveCount(0);
 
-    // Nothing picked: the device's dark, and no tag.
-    await expect(preview.getByRole("button", { name: "Dark" })).toHaveAttribute(
-      "aria-pressed",
-      "true"
-    );
-    await expect.poll(canvasMode).toEqual({ scheme: "dark", value: DARK });
-    await expect(useDevice).toHaveCount(0);
-    const darkChrome = await adminChrome(page);
-
-    // Light, on a dark device.
-    await preview.getByRole("button", { name: "Light" }).click();
+    // Light first, on a dark device.
+    await expect(darkPreview).toHaveAttribute("aria-pressed", "false");
     await expect.poll(canvasMode).toEqual({ scheme: "light", value: LIGHT });
     await expect.poll(frameScheme).toBe("light");
-    await expect(page.getByText("Light preview")).toBeVisible();
-    await expect(useDevice).toBeVisible();
-    expect(await adminChrome(page)).toEqual(darkChrome);
+    const darkChrome = await adminChrome(page);
 
-    // Use device clears the pick: the canvas and the switch follow the
-    // device again, and the tag goes.
-    await useDevice.click();
+    // Dark, then light again, and the editor's own chrome never moves.
+    await darkPreview.click();
     await expect.poll(canvasMode).toEqual({ scheme: "dark", value: DARK });
-    await expect.poll(frameScheme).toBe("normal");
-    await expect(useDevice).toHaveCount(0);
-    await expect(preview.getByRole("button", { name: "Dark" })).toHaveAttribute(
-      "aria-pressed",
-      "true"
-    );
+    await expect.poll(frameScheme).toBe("dark");
+    expect(await adminChrome(page)).toEqual(darkChrome);
+    await darkPreview.click();
+    await expect.poll(canvasMode).toEqual({ scheme: "light", value: LIGHT });
 
     // Dark, on a light device.
     await page.emulateMedia({ colorScheme: "light" });
-    await expect.poll(canvasMode).toEqual({ scheme: "light", value: LIGHT });
     const lightChrome = await adminChrome(page);
-    await preview.getByRole("button", { name: "Dark" }).click();
+    await darkPreview.click();
     await expect.poll(canvasMode).toEqual({ scheme: "dark", value: DARK });
     await expect.poll(frameScheme).toBe("dark");
-    await expect(page.getByText("Dark preview")).toBeVisible();
     expect(await adminChrome(page)).toEqual(lightChrome);
   } finally {
     // Dropping a variable is refused until every page is counted.
@@ -529,12 +527,14 @@ function canvasValue(page: Page, property: string): Promise<string> {
     );
 }
 
-/** The "+" labels of the Variables groups, every way to add a variable. */
+/** The add rows the Variables lists end with, every way to add a variable. */
 const ADD_LABELS = [
   "Add colour",
   "Add type size",
-  "Add spacing, radius or shadow",
-  "Add another variable",
+  "Add spacing",
+  "Add radius",
+  "Add shadow",
+  "Add value",
 ];
 
 /**
@@ -603,8 +603,25 @@ test("a role that may read Design but not change it sees the variables read-only
       await expect(field).toBeEnabled();
       await expect(field).not.toBeEditable();
     }
-    // No Reset, Remove, "Use light value" or colour picker: no button at all.
-    await expect(editor.getByRole("button")).toHaveCount(0);
+    // Only what reads, never what changes: copying the code name and listing
+    // where it is used. No Reset, Remove, "Remove dark value" or colour
+    // picker.
+    const buttons = await editor
+      .getByRole("button")
+      .evaluateAll(found =>
+        found.map(
+          button =>
+            button.getAttribute("aria-label") ??
+            button.textContent?.trim() ??
+            ""
+        )
+      );
+    expect(buttons).toContain("Copy code name");
+    expect(
+      buttons.filter(
+        label => !/^(Copy code name|Show where|Show all \d+)$/.test(label)
+      )
+    ).toEqual([]);
     await name.selectText();
     expect(
       await name.evaluate(field => {
@@ -758,7 +775,7 @@ test("each variable action is kept across a reload: rename, value, dark value, r
     // Clear its dark value: it follows light again.
     await rowNamed("Lagoon, light").click();
     const cleared = styleWrite(page);
-    await editor.getByRole("button", { name: "Use light value" }).click();
+    await editor.getByRole("button", { name: "Remove dark value" }).click();
     await cleared;
     await page.keyboard.press("Escape");
     await reloadDesign(page);

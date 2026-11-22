@@ -679,6 +679,7 @@ describe("a unit run outside a transaction, on MySQL and PostgreSQL", () => {
       transaction: async <T>(
         work: (ctx: {
           execute: (statement: string) => Promise<unknown[]>;
+          queryStatement: () => Promise<Record<string, unknown>[]>;
           getDrizzle: () => unknown;
         }) => Promise<T>
       ): Promise<T> =>
@@ -687,6 +688,9 @@ describe("a unit run outside a transaction, on MySQL and PostgreSQL", () => {
             log.push(`tx: ${statement}`);
             return [];
           },
+          // The transaction's own reads, as the real context runs them: here the read of its
+          // session's id, which this stand-in has none to answer with.
+          queryStatement: async () => [],
           getDrizzle: () => ({ tx: true }),
         }),
     });

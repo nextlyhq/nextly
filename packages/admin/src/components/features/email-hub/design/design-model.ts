@@ -21,11 +21,6 @@ import { DEFAULT_LAYOUT_SLUG } from "../messages/messages-model";
 // Words
 // ============================================================
 
-/** `1 email`, `20 emails`. */
-export function plural(count: number, one: string, many = `${one}s`): string {
-  return `${count} ${count === 1 ? one : many}`;
-}
-
 /** The first few names, then how many more. */
 export function namesLine(names: string[], shown = 3): string {
   const head = names.slice(0, shown).join(", ");

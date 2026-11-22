@@ -28,6 +28,7 @@
  * @module composition-service
  */
 import type {
+  BlockRegistryReader,
   DocumentLimits,
   NamedQueryDeclaration,
   RetiredExposures,
@@ -127,6 +128,8 @@ export interface CompositionServiceSetup {
   readonly namedQueries?: () => readonly NamedQueryDeclaration[];
   /** What a page action's bindings are judged with. */
   readonly bindings?: PageActionsSetup["bindings"];
+  /** The site's block registry, which the page and definition actions plan with. */
+  readonly blocks: BlockRegistryReader;
 }
 
 /**

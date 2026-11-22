@@ -11,12 +11,18 @@
  * Variables panel's line, and in a toast for shared styles and fonts.
  */
 import { act, cleanup, render, renderHook } from "@testing-library/react";
-import type { NamedClass } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_FLUID_RANGE,
+  fluidValue,
+  type NamedClass,
+} from "@nextlyhq/blocks-engine";
 import type {
   FontsPanelProps,
   SharedStyleChange,
 } from "@nextlyhq/builder/shell";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { resolveSiteStyle } from "../../site-style";
 
 /** Each section save, and what the next one answers. */
 const saves = vi.hoisted(() => ({
@@ -73,11 +79,15 @@ const panels = vi.hoisted(() => ({
   fonts: undefined as
     | undefined
     | { onRemoveFamily: (family: unknown) => Promise<string | undefined> },
+  /** The variables write made at once the studio hands its import. */
+  storeTokensNow: undefined as
+    | undefined
+    | ((tokens: unknown) => Promise<unknown>),
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({ useCan: () => true }));
 
-vi.mock("../site-style-client", () => {
+vi.mock("../site-style-client", async () => {
   const save = async (section: string, value: unknown, options?: object) => {
     saves.calls.push({ section, value, options });
     return saves.answer();
@@ -94,8 +104,10 @@ vi.mock("../site-style-client", () => {
     cancel: () => {},
   });
   return {
+    // Outside an editor: no history, and nothing drawn over the read.
+    SiteStyleHistoryContext: (await import("react")).createContext(null),
+    SiteStylePreviewContext: (await import("react")).createContext(new Map()),
     useSaveSiteStyle: () => ({ save, reserve, reread }),
-    useSaveSpacingMode: () => ({ save: async () => ({ saved: true }) }),
     useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
     useFontCatalogueClient: () => ({
       load: async () => ({ families: [], previewBase: "", fetchedAt: "" }),
@@ -104,26 +116,41 @@ vi.mock("../site-style-client", () => {
   };
 });
 
-vi.mock("@nextlyhq/builder/shell", async importOriginal => ({
-  ...(await importOriginal<typeof import("@nextlyhq/builder/shell")>()),
+vi.mock("@nextlyhq/builder/shell", async importOriginal => {
+  const actual = await importOriginal<typeof import("@nextlyhq/builder/shell")>();
+  return {
+  ...actual,
+  // The real header, with the write its import stores variables through kept.
+  useVariablesHeader: (
+    options: Parameters<typeof actual.useVariablesHeader>[0]
+  ) => {
+    panels.storeTokensNow = options.storeTokensNow;
+    return actual.useVariablesHeader(options);
+  },
   TokensPanel: (props: NonNullable<typeof panels.tokens>) => {
     panels.tokens = props;
     return null;
   },
-  FontsPanel: (props: NonNullable<typeof panels.fonts>) => {
+  // The Fonts screen the plugin draws, with the writers it hands the list.
+  FontsScreen: (props: NonNullable<typeof panels.fonts>) => {
     panels.fonts = props;
     return null;
   },
-}));
+  };
+});
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   useUploadMedia: () => ({ mutateAsync: vi.fn(), isPending: false }),
   usePluginClientConfig: () => undefined,
+  // The author the catalogue keeps the choice to show previews for.
+  useCurrentUserId: () => "u1",
 }));
 
-const { FontsPanelWithUpload, TokensStudio, VariablesTab, useClassSurface } =
-  await import("./site-style-studios");
+const { TokensStudio, VariablesTab, useClassSurface } = await import(
+  "./site-style-studios"
+);
+const { SiteFontsScreen } = await import("./site-style-fonts");
 
 const brand = {
   name: "color.brand",
@@ -186,6 +213,7 @@ beforeEach(() => {
   toasts.warning.length = 0;
   panels.tokens = undefined;
   panels.fonts = undefined;
+  panels.storeTokensNow = undefined;
 });
 
 afterEach(cleanup);
@@ -233,6 +261,93 @@ describe("the Variables studio's saves", () => {
     expect(names(saves.calls[1]?.options?.base as never)).toEqual(
       expect.arrayContaining(["color.brand", "color.other", "color.accent"])
     );
+  });
+});
+
+describe("the Variables studio's write made at once, for an import", () => {
+  const space = {
+    name: "space.4",
+    kind: "dimension",
+    values: { light: "1rem" },
+  };
+  // The site refuses this value on its own: a dimension it can't read.
+  const refusedSpace = { ...space, values: { light: "big" } };
+
+  it("answers that it stored part, and why, once its retry of the rest is stored", async () => {
+    render(
+      <TokensStudio
+        merged={{ tokens: [brand, space] } as never}
+        supplied={undefined}
+        pending={false}
+      >
+        <VariablesTab />
+      </TokensStudio>
+    );
+    let answers = 0;
+    saves.answer = () => {
+      answers += 1;
+      return answers === 1
+        ? {
+            saved: false,
+            issues: { "tokens/space.4": "space.4: the value isn't a size." },
+          }
+        : { saved: true, issues: {} };
+    };
+    let stored: unknown;
+    await act(async () => {
+      stored = await panels.storeTokensNow?.({
+        tokens: [brand, refusedSpace, accent],
+      });
+    });
+    // The retry stored the rest: brand and accent, and space as it was.
+    expect(saves.calls).toHaveLength(2);
+    expect(names(saves.calls[1]?.value as never)).toEqual(
+      expect.arrayContaining(["color.brand", "color.accent"])
+    );
+    expect(stored).toEqual({
+      stored: "part",
+      why: expect.stringContaining("space.4"),
+    });
+  });
+
+  it("answers that it stored none when the retry is refused too", async () => {
+    render(
+      <TokensStudio
+        merged={{ tokens: [brand, space] } as never}
+        supplied={undefined}
+        pending={false}
+      >
+        <VariablesTab />
+      </TokensStudio>
+    );
+    saves.answer = () => ({
+      saved: false,
+      issues: { "tokens/space.4": "space.4: the value isn't a size." },
+    });
+    let stored: unknown;
+    await act(async () => {
+      stored = await panels.storeTokensNow?.({
+        tokens: [brand, refusedSpace, accent],
+      });
+    });
+    expect(stored).toEqual({ stored: "none" });
+  });
+
+  it("answers all for a write stored whole", async () => {
+    render(
+      <TokensStudio
+        merged={{ tokens: [brand] } as never}
+        supplied={undefined}
+        pending={false}
+      >
+        <VariablesTab />
+      </TokensStudio>
+    );
+    let stored: unknown;
+    await act(async () => {
+      stored = await panels.storeTokensNow?.({ tokens: [brand, accent] });
+    });
+    expect(stored).toEqual({ stored: "all" });
   });
 });
 
@@ -289,7 +404,7 @@ describe("the Fonts tab's saves", () => {
 
   it("removes a family from the faces it read, and builds the next save on the stored merge", async () => {
     render(
-      <FontsPanelWithUpload
+      <SiteFontsScreen
         {...({} as FontsPanelProps)}
         storedFaces={[lora, inter]}
         storedPending={false}
@@ -499,7 +614,7 @@ describe("a save stored over someone else's change", () => {
       src: [{ url: "/api/media/m4/raw", format: "woff2" as const }],
     };
     render(
-      <FontsPanelWithUpload
+      <SiteFontsScreen
         {...({} as FontsPanelProps)}
         storedFaces={[lora, inter]}
         storedPending={false}
@@ -541,5 +656,314 @@ describe("a save stored over someone else's change", () => {
       await panels.fonts?.onRemoveFamily({ key: "inter", family: "Inter" });
     });
     expect(saves.calls[1]?.options?.base).toEqual([lora, inter]);
+  });
+});
+
+describe("a block style action's whole-list write", () => {
+  const text = {
+    id: "look:core/button:text",
+    slug: "button-text",
+    label: "Text",
+    orderIndex: 0,
+    blockType: "core/button",
+    styles: {},
+  } as NamedClass;
+  const ghost = {
+    id: "ghost",
+    slug: "button-ghost",
+    label: "Ghost",
+    orderIndex: 1,
+    blockType: "core/button",
+    styles: {},
+  } as NamedClass;
+
+  it("stores what differs from the site's code, as one place in the history", async () => {
+    // The code supplies Text; hiding it stores only the override.
+    const read = { classes: [text] as NamedClass[] };
+    const { result } = renderHook(() =>
+      useClassSurface(read, false, null, { classes: [text] })
+    );
+    let refused: string | undefined = "not answered";
+    await act(async () => {
+      refused = await result.current.edit(existing => ({
+        classes: existing.map(entry => ({ ...entry, hidden: true as const })),
+      }));
+    });
+    expect(refused).toBeUndefined();
+    expect(saves.calls).toHaveLength(1);
+    expect(saves.calls[0]?.section).toBe("classes");
+    expect(saves.calls[0]?.value).toEqual([{ ...text, hidden: true }]);
+    // Composed against the list it read: nothing stored before.
+    expect(saves.calls[0]?.options?.base).toEqual([]);
+  });
+
+  it("composes against the write queued before it, never the list both started from", async () => {
+    const read = { classes: [ghost] as NamedClass[] };
+    const { result } = renderHook(() =>
+      useClassSurface(read, false, null, undefined)
+    );
+    await act(async () => {
+      await Promise.all([
+        result.current.edit(existing => ({
+          classes: existing.map(entry => ({ ...entry, label: "Soft" })),
+        })),
+        result.current.edit(existing => ({
+          classes: [...existing, { ...ghost, id: "copy", slug: "button-copy" }],
+        })),
+      ]);
+    });
+    expect(saves.calls.map(call => call.value)).toEqual([
+      [{ ...ghost, label: "Soft" }],
+      [
+        { ...ghost, label: "Soft" },
+        { ...ghost, id: "copy", slug: "button-copy" },
+      ],
+    ]);
+  });
+
+  it("answers a plan's refusal without storing, and a refused save in its words", async () => {
+    const read = { classes: [ghost] as NamedClass[] };
+    const { result } = renderHook(() =>
+      useClassSurface(read, false, null, undefined)
+    );
+    let planned: string | undefined;
+    await act(async () => {
+      planned = await result.current.edit(() => ({ reason: "Taken." }));
+    });
+    expect(planned).toBe("Taken.");
+    expect(saves.calls).toHaveLength(0);
+
+    saves.answer = () => ({
+      saved: false,
+      issues: {
+        classes:
+          'classes[0] is a built-in block style, "Text", so it can\'t be renamed.',
+      },
+    });
+    let stored: string | undefined;
+    await act(async () => {
+      stored = await result.current.edit(existing => ({
+        classes: [...existing],
+      }));
+    });
+    expect(stored).toBe(
+      'classes[0] is a built-in block style, "Text", so it can\'t be renamed.'
+    );
+  });
+});
+
+describe("a text style the site's code makes fluid, on a site storing another range", () => {
+  const SIZES = { small: 16, large: 32 };
+  const NEW = { min: 400, max: 800 };
+  /** The code's text style, its Desktop size made across the code's range. */
+  const codeLead = (locked?: true): NamedClass =>
+    ({
+      id: "t-code-lead",
+      slug: "code-lead",
+      label: "Code lead",
+      orderIndex: 0,
+      role: "text",
+      styles: {
+        base: { base: { fontSize: fluidValue(SIZES, DEFAULT_FLUID_RANGE) } },
+      },
+      fluidSizes: { base: SIZES },
+      ...(locked === undefined ? {} : { locked }),
+    }) as NamedClass;
+  const card = {
+    id: "c-card",
+    slug: "card",
+    label: "Card",
+    orderIndex: 1,
+    styles: {},
+  } as NamedClass;
+  /**
+   * The surface as the editor has it: the code's classes as the config, and
+   * the read the canvas draws, the code over the stored tier holding the
+   * site's range and the site's own style.
+   */
+  const surfaceOver = (code: NamedClass) => {
+    const config = { classes: [code] };
+    const read = resolveSiteStyle(config, {
+      tokens: { tokens: [], fluidRange: NEW },
+      classes: [card],
+    });
+    return renderHook(() => useClassSurface(read, false, null, config)).result;
+  };
+  const ids = (value: unknown) =>
+    (value as readonly NamedClass[]).map(entry => entry.id);
+
+  it.each([
+    ["unlocked", undefined],
+    ["locked", true as const],
+  ])(
+    "stores no override of it (%s) when another style is created",
+    async (_name, locked) => {
+      const result = surfaceOver(codeLead(locked));
+      await act(async () => {
+        await result.current.add({
+          id: "c-new",
+          slug: "new",
+          orderIndex: 2,
+          styles: {},
+        } as NamedClass);
+      });
+      expect(saves.calls).toHaveLength(1);
+      expect(ids(saves.calls[0]?.value)).toEqual(["c-card", "c-new"]);
+      expect(ids(saves.calls[0]?.options?.base)).toEqual(["c-card"]);
+    }
+  );
+
+  it("stores no override of it when another style is renamed", async () => {
+    const result = surfaceOver(codeLead());
+    await act(async () => {
+      await result.current.rename("c-card", {
+        label: "Panel",
+        slug: "panel",
+      });
+    });
+    expect(saves.calls).toHaveLength(1);
+    expect(ids(saves.calls[0]?.value)).toEqual(["c-card"]);
+  });
+
+  it("stores no override of it from a whole-list edit of another style", async () => {
+    const result = surfaceOver(codeLead());
+    await act(async () => {
+      await result.current.edit(existing => ({
+        classes: existing.map(entry =>
+          entry.id === "c-card" ? { ...entry, hidden: true as const } : entry
+        ),
+      }));
+    });
+    expect(ids(saves.calls[0]?.value)).toEqual(["c-card"]);
+  });
+
+  it("starts an edit of it from the size the site's range gives it", async () => {
+    // The positive control: the surface does hold the style, and an edit of
+    // it stores the override made from the size drawn, not the code's clamp.
+    const result = surfaceOver(codeLead());
+    await act(async () => {
+      await result.current.writeStyles("t-code-lead", setColor("red"));
+    });
+    const stored = (saves.calls[0]?.value as NamedClass[] | undefined)?.find(
+      entry => entry.id === "t-code-lead"
+    );
+    expect(stored?.styles).toMatchObject({
+      base: { base: { fontSize: fluidValue(SIZES, NEW) } },
+    });
+  });
+});
+
+/**
+ * A change that sets one device's size at rest (or, with `undefined`, clears
+ * it, as Reset does), and whose inverse sets back the size it replaced.
+ */
+function setSize(device: string, size: unknown): SharedStyleChange {
+  type Styles = { base?: Record<string, Record<string, unknown>> };
+  return Object.assign(
+    (styles: Styles) => {
+      const atRest = styles.base ?? {};
+      const { fontSize: _was, ...rest } = atRest[device] ?? {};
+      const values = size === undefined ? rest : { ...rest, fontSize: size };
+      return {
+        kind: "write" as const,
+        styles: { ...styles, base: { ...atRest, [device]: values } },
+      };
+    },
+    {
+      invert: (before: Styles) =>
+        setSize(device, before.base?.[device]?.fontSize),
+    }
+  ) as unknown as SharedStyleChange;
+}
+
+describe("a text style's size edited by hand", () => {
+  const SIZES = { small: 16, large: 32 };
+  const MADE = "clamp(1rem, 0.6087rem + 1.7391vw, 2rem)";
+  const TYPED = "clamp(1rem, 2vw, 3rem)";
+  /** A text style whose Desktop and Mobile sizes were made with "Fluid…". */
+  const lead = {
+    id: "t-lead",
+    slug: "lead",
+    orderIndex: 0,
+    role: "text",
+    styles: { base: { base: { fontSize: MADE }, mobile: { fontSize: MADE } } },
+    fluidSizes: { base: SIZES, mobile: SIZES },
+  };
+  const surface = () =>
+    renderHook(() =>
+      useClassSurface(
+        { classes: [lead] as unknown as NamedClass[] },
+        false,
+        null,
+        undefined
+      )
+    ).result;
+  const savedLead = (): Record<string, unknown> | undefined =>
+    (saves.calls.at(-1)?.value as Record<string, unknown>[] | undefined)?.find(
+      entry => entry.id === "t-lead"
+    );
+
+  it("drops that device's fluid sizes in the same write, keeping the typed size", async () => {
+    const result = surface();
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setSize("base", TYPED));
+    });
+    expect(saves.calls).toHaveLength(1);
+    expect(savedLead()).toMatchObject({
+      styles: { base: { base: { fontSize: TYPED } } },
+      fluidSizes: { mobile: SIZES },
+    });
+    expect(savedLead()?.fluidSizes).not.toHaveProperty("base");
+  });
+
+  it("drops them on a Reset too, and the field once none is left", async () => {
+    const result = surface();
+    const one = { ...lead, fluidSizes: { base: SIZES } };
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setSize("base", undefined));
+    });
+    expect(savedLead()?.fluidSizes).toEqual({ mobile: SIZES });
+    const single = renderHook(() =>
+      useClassSurface(
+        { classes: [one] as unknown as NamedClass[] },
+        false,
+        null,
+        undefined
+      )
+    ).result;
+    await act(async () => {
+      await single.current.writeStyles("t-lead", setSize("base", "20px"));
+    });
+    expect(savedLead()).not.toHaveProperty("fluidSizes");
+  });
+
+  it("keeps them where the edit leaves the size as it was", async () => {
+    const result = surface();
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setColor("blue"));
+    });
+    expect(savedLead()?.fluidSizes).toEqual({ base: SIZES, mobile: SIZES });
+  });
+
+  it("puts the sizes back with the size on Undo, and drops them again on Redo", async () => {
+    const result = surface();
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setSize("base", TYPED));
+    });
+    const held = [savedLead()];
+    const undone = saves.inverse?.undo(held) as {
+      kind: string;
+      value: Record<string, unknown>[];
+    };
+    expect(undone.kind).toBe("write");
+    expect(undone.value[0]).toMatchObject({
+      styles: { base: { base: { fontSize: MADE } } },
+      fluidSizes: { base: SIZES, mobile: SIZES },
+    });
+    const redone = saves.inverse?.redo(undone.value) as {
+      kind: string;
+      value: Record<string, unknown>[];
+    };
+    expect(redone.value[0]?.fluidSizes).toEqual({ mobile: SIZES });
   });
 });

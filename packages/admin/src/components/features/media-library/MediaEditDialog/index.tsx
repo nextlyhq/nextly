@@ -3,7 +3,8 @@
 /**
  * MediaEditDialog Component
  *
- * Dialog for editing media metadata, opened from an upload field. For an
+ * Dialog for editing media metadata, opened from an upload field, and from
+ * the library's upload tray to add alt text to a new image. For an
  * image it shows the whole image with the shared focus point control. Here
  * Done only places the point: "Save changes" sends it with the text in one
  * `onSave`, as this exported dialog always has, so a caller whose handler
@@ -90,6 +91,11 @@ export interface MediaEditDialogProps {
   onDownload?: (media: Media) => void;
   onCopyUrl?: (url: string) => void;
   isLoading?: boolean;
+  /**
+   * Puts focus in the Alt text field on open, for a caller that opened the
+   * dialog to write alt text, such as the upload tray's Add alt text.
+   */
+  focusAltText?: boolean;
 }
 
 // ============================================================
@@ -105,6 +111,7 @@ export function MediaEditDialog({
   onDownload,
   onCopyUrl,
   isLoading = false,
+  focusAltText = false,
 }: MediaEditDialogProps): React.JSX.Element | null {
   const [isSaving, setIsSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -195,6 +202,13 @@ export function MediaEditDialog({
         // stays open.
         onEscapeKeyDown={event => {
           if (isFocalPointKeyEvent(event)) event.preventDefault();
+        }}
+        // The dialog would focus its first control, the focus point; a
+        // caller that opened it for alt text gets that field instead.
+        onOpenAutoFocus={event => {
+          if (!focusAltText) return;
+          event.preventDefault();
+          form.setFocus("altText");
         }}
       >
         <DialogHeader className="p-6 pb-2">

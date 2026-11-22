@@ -20,6 +20,7 @@ import type React from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useNowTick } from "@admin/hooks/useNowTick";
+import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
 
 import { FrameState } from "../widgets/frame/card-state";
 import { listViewHref } from "../widgets/frame/list-view-href";
@@ -60,6 +61,8 @@ export const RecentEntriesCard: React.FC<RecentEntriesCardProps> = ({
   // The clock ticks, so "5m ago" moves on as time passes.
   const now = useNowTick();
   const sources = useBranding().widgetSources;
+  // Each row opens where every other link to its entry opens.
+  const addressOf = useDocumentAddress();
   const slug =
     typeof settings.collection === "string" ? settings.collection : undefined;
   // Whether the collection has a lifecycle, as its published source says: only
@@ -90,7 +93,8 @@ export const RecentEntriesCard: React.FC<RecentEntriesCardProps> = ({
     data.title,
     data.columns,
     now,
-    lifecycle
+    lifecycle,
+    addressOf
   );
   return (
     <WidgetTable<Row>

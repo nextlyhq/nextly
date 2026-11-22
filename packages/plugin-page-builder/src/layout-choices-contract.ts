@@ -7,7 +7,11 @@
  *
  * @module layout-choices-contract
  */
-import type { BlockDocument, LayoutRegion } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  LayoutRegion,
+  RegionArea,
+} from "@nextlyhq/blocks-engine";
 
 import type { FencedLayoutState } from "./layout-removal/words";
 
@@ -32,6 +36,22 @@ export const LAYOUT_CHOICES_LOCALE_PARAM = "locale";
  */
 export const LAYOUT_CHOICES_SEARCH_PARAM = "q";
 
+/**
+ * The query parameter asking for every listed set's picture: the PUBLISHED
+ * definitions of each listed set's regions, not only of the two a page can be
+ * drawn inside. Asked by the header & footer menu once it opens, so the
+ * canvas's own read stays as small as the two sets it draws.
+ */
+export const LAYOUT_CHOICES_PICTURES_PARAM = "pictures";
+
+/**
+ * The query parameter asking whether each listed PUBLISHED set has changes
+ * not yet published, not only the two a page can be drawn inside. Asked by
+ * the builder's Pages panel, which marks every set's row; the page's menu
+ * does not ask, so its read stays as small as it was.
+ */
+export const LAYOUT_CHOICES_DRAFTS_PARAM = "drafts";
+
 /** The longest Layout id the route accepts, as an entry id is bounded. */
 export const LAYOUT_ID_MAX = 200;
 
@@ -49,7 +69,12 @@ export const LAYOUT_SEARCH_MAX = 200;
  */
 export function layoutChoicesPath(
   selected: string | null,
-  options: { locale?: string | null; search?: string } = {}
+  options: {
+    locale?: string | null;
+    search?: string;
+    pictures?: boolean;
+    drafts?: boolean;
+  } = {}
 ): string {
   const query = new URLSearchParams();
   if (selected !== null && selected !== "") {
@@ -59,6 +84,8 @@ export function layoutChoicesPath(
   if (locale !== "") query.set(LAYOUT_CHOICES_LOCALE_PARAM, locale);
   const search = options.search?.trim() ?? "";
   if (search !== "") query.set(LAYOUT_CHOICES_SEARCH_PARAM, search);
+  if (options.pictures === true) query.set(LAYOUT_CHOICES_PICTURES_PARAM, "1");
+  if (options.drafts === true) query.set(LAYOUT_CHOICES_DRAFTS_PARAM, "1");
   const text = query.toString();
   return text === ""
     ? LAYOUT_CHOICES_ROUTE_PATH
@@ -119,6 +146,14 @@ export interface LayoutChoice {
    */
   readonly regions: readonly LayoutRegion[];
   /**
+   * The areas the set fills, header first: its published areas, or, for a set
+   * never published, its own. None for a set that holds no header and no
+   * footer, which would mean the same as "No header or footer", so the menu
+   * offers it only to a page that already names it; one or both, as the
+   * menu's note says ("Header only", "Footer only", "Header and footer").
+   */
+  readonly areasFilled: readonly RegionArea[];
+  /**
    * Where the Layout stands with Remove Layout, when it is behind its fence:
    * being removed now, or unpublished by it and not published since. A page
    * write naming it is refused, so the picker offers it no longer. Absent for
@@ -131,6 +166,13 @@ export interface LayoutChoice {
 export interface RegionComponentFacts {
   /** Whether the component holds edits a visitor does not see yet. */
   readonly draftChangesNotLive: boolean;
+  /**
+   * The area this component is the site's untouched starter for: the starter
+   * header or footer a fresh site was seeded with, its published content
+   * still as seeded. Absent for every other component, and for a starter
+   * someone has published a change to.
+   */
+  readonly untouchedStarter?: "header" | "footer";
 }
 
 /** The route's answer: the canonical list envelope. */
@@ -158,6 +200,24 @@ export interface LayoutChoicesResponse {
      */
     readonly canUpdateLayouts: boolean;
     /**
+     * Whether the caller may create sets, which offers a set's "Duplicate"
+     * in the builder's Pages panel. Optional: an answer from before it was
+     * sent offers no copy.
+     */
+    readonly canCreateLayouts?: boolean;
+    /**
+     * Whether the caller may update ANY set, a rule over set rows included,
+     * which offers a set's "Rename" in the builder's Pages panel: the write
+     * itself judges the row. Optional, as `canCreateLayouts` is.
+     */
+    readonly canUpdateAnyLayout?: boolean;
+    /**
+     * Whether the caller may delete ANY set, a rule over set rows included,
+     * which offers a set's "Delete…" in the builder's Pages panel: the
+     * removal's own checks and its final write judge the set. Optional.
+     */
+    readonly canDeleteAnyLayout?: boolean;
+    /**
      * Whether more Layouts match than the list holds: the picker then offers
      * a search, since the rest are reachable by title.
      */
@@ -180,7 +240,9 @@ export interface LayoutChoicesResponse {
      * The PUBLISHED definitions the regions of the selected Layout and the
      * default reach, nested components included, by id: what the canvas draws
      * them from, read as the caller. Only those two can be drawn, so only
-     * theirs are sent, which bounds the answer whatever the list holds.
+     * theirs are sent, which bounds the answer whatever the list holds; asked
+     * for pictures, every listed published set's too, under the renderer's
+     * own bounds.
      */
     readonly regionDefinitions: Readonly<Record<string, BlockDocument>>;
   };

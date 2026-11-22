@@ -2,12 +2,17 @@
  * The comparisons a review shows, "since submitted" and "since approved", resolved from the
  * versions workflows pinned for the part (`entered-review:<part>`, `approved:<part>`), through
  * the same function REST's diff route calls, on every configured dialect. A part with no such pin
- * is refused with its reason, as core's baselines are.
+ * is refused with its reason, as core's baselines are. The shared part (`part: "shared"`) is compared
+ * across languages, over its shared fields alone, from its own approval or its last publish.
  */
+import { and, eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { getVersionDiffForDocument } from "../../../dispatcher/handlers/versions-methods";
 import { NextlyError } from "../../../errors";
+import { createDynamicHandlers } from "../../../routeHandler";
+import { versionsTables } from "../../../schemas/versions";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import {
   getConfiguredTestDialects,
@@ -19,7 +24,15 @@ import {
   workflowPins,
 } from "../workflow-pins";
 
-import { bootSteps, entry, shownVersion } from "./helpers/step-harness";
+import {
+  bootSteps,
+  entry,
+  person,
+  role,
+  saveIn,
+  shownVersion,
+  snapshotOf,
+} from "./helpers/step-harness";
 
 let t: TestNextly | undefined;
 
@@ -64,14 +77,169 @@ async function pin(id: string, slot: string, versionNo: number) {
   );
 }
 
-function compare(id: string, args: { to: number; baseline: string }) {
+function compare(
+  id: string,
+  args: {
+    to: number;
+    from?: number;
+    baseline?: string;
+    part?: "shared";
+  },
+  slug = "pages"
+) {
   return getVersionDiffForDocument({
     scopeKind: "collection",
-    slug: "pages",
+    slug,
     entryId: id,
     user: superAdmin,
     ...args,
   });
+}
+
+/** Points the workflows slot `slot` of the post at `versionNo`, as a step does. */
+async function pinPost(id: string, slot: string, versionNo: number) {
+  await app().adapter.transaction(tx =>
+    workflowPins.pin(tx, {
+      ref: { scopeKind: "collection", scopeSlug: "posts", entryId: id },
+      slot,
+      versionNo,
+    })
+  );
+}
+
+/**
+ * A post whose shared field (`code`) changed in English after `since`, then saved in Spanish
+ * with only its own title changed: `since` the English version the shared part is compared
+ * from, `spanish` the Spanish version that carries the shared change.
+ */
+async function postWithSharedChange(): Promise<{
+  id: string;
+  since: number;
+  spanish: number;
+}> {
+  const id = await entry(app(), "posts");
+  await saveIn(app(), "posts", id, "en", {
+    title: "English one",
+    code: "A",
+    status: "draft",
+  });
+  const since = await shownVersion(app(), "posts", id, "en");
+  await saveIn(app(), "posts", id, "en", {
+    title: "English two",
+    code: "B",
+    status: "draft",
+  });
+  await saveIn(app(), "posts", id, "es", {
+    title: "Español",
+    status: "draft",
+  });
+  const spanish = await shownVersion(app(), "posts", id, "es");
+  return { id, since, spanish };
+}
+
+/**
+ * The names of a comparison's content nodes that changed, and whether it holds a node for the
+ * translated title at all, changed or not. A column the framework keeps on every document (when
+ * it was first published) is a `system` node, which a dialect storing whole seconds can show as
+ * changed between a publish and a later save; it is no field of the content type.
+ */
+function namesOf(diff: {
+  fields: { name: string | null; status: string; reason?: string }[];
+}) {
+  const content = diff.fields.filter(field => field.reason !== "system");
+  return {
+    changed: content
+      .filter(field => field.status !== "unchanged")
+      .map(field => field.name),
+    title: content.some(field => field.name === "title"),
+  };
+}
+
+/** A role-based API key owned by `ownerId`, its role holding exactly `read-posts`. */
+async function postsReaderKey(ownerId: string): Promise<string> {
+  const apiKeys = app().getService("apiKeyService") as unknown as {
+    createApiKey: (
+      userId: string,
+      input: {
+        name: string;
+        tokenType: string;
+        roleId: string;
+        expiresIn: string;
+      }
+    ) => Promise<{ key: string }>;
+  };
+  const { key } = await apiKeys.createApiKey(ownerId, {
+    name: "posts reader key",
+    tokenType: "role-based",
+    roleId: await role(app(), "posts-key-reader", [["read", "posts"]]),
+    expiresIn: "unlimited",
+  });
+  return key;
+}
+
+/** REST's comparison of a post's versions, as `key`, with the query given. */
+async function restCompare(
+  key: string,
+  id: string,
+  query: Record<string, string>
+): Promise<{ status: number; body: unknown }> {
+  const segments = ["collections", "posts", "entries", id, "versions", "diff"];
+  const response = await createDynamicHandlers().GET(
+    new Request(
+      `http://localhost/api/${segments.join("/")}?${new URLSearchParams(query).toString()}`,
+      { headers: { authorization: `Bearer ${key}` } }
+    ),
+    { params: Promise.resolve({ params: segments }) }
+  );
+  return { status: response.status, body: await response.json() };
+}
+
+/**
+ * Adds `extra` to the stored snapshot of a post's version, as a version saved under an earlier
+ * schema holds a field the content type has since lost.
+ */
+async function addToSnapshot(
+  id: string,
+  versionNo: number,
+  extra: Record<string, unknown>
+) {
+  const snapshot = (await snapshotOf(app(), "posts", id, versionNo)) as Record<
+    string,
+    unknown
+  >;
+  const { nextlyVersions } = versionsTables(app().adapter.dialect);
+  const db = app().adapter.getDrizzle() as unknown as {
+    update: (table: unknown) => {
+      set: (values: unknown) => {
+        where: (condition: unknown) => Promise<unknown>;
+      };
+    };
+  };
+  await db
+    .update(nextlyVersions)
+    .set({ snapshot: { ...snapshot, ...extra } })
+    .where(
+      and(
+        eq(nextlyVersions.scopeSlug, "posts"),
+        eq(nextlyVersions.entryId, id),
+        eq(nextlyVersions.versionNo, versionNo)
+      )
+    );
+}
+
+/** How a refused call ends, as its caller is told: code, message and data. */
+async function answerOf(promise: Promise<unknown>) {
+  const error = await promise.then(
+    () => undefined,
+    (err: unknown) => err
+  );
+  expect(NextlyError.is(error)).toBe(true);
+  const refused = error as NextlyError;
+  return {
+    code: refused.code,
+    message: refused.publicMessage,
+    data: refused.publicData,
+  };
 }
 
 /** The refusal `promise` ends in: its code and message, as a reader is told them. */
@@ -92,6 +260,8 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     it("compares with the version the part entered review at, and the one last approved", async () => {
       t = await bootSteps(dialect);
+      // A super-admin the read gate can look up: role names on a user grant nothing.
+      await superAdminUser(t, superAdmin.id);
       const { id, saves } = await pageWithSaves();
       const [submitted, approved, latest] = saves;
       await pin(id, enteredReviewSlot(null), submitted);
@@ -115,6 +285,8 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses a part never submitted or approved, and the pinned version itself, with why", async () => {
       t = await bootSteps(dialect);
+      // A super-admin the read gate can look up: role names on a user grant nothing.
+      await superAdminUser(t, superAdmin.id);
       const { id, saves } = await pageWithSaves();
       const latest = saves[2];
 
@@ -144,6 +316,195 @@ describe.each(getConfiguredTestDialects())(
         code: "NO_BASELINE",
         message: "This is the version approved, so nothing has changed since.",
       });
+    });
+
+    it("compares the shared fields alone across languages, from the shared approval", async () => {
+      t = await bootSteps(dialect);
+      // A super-admin the read gate can look up: role names on a user grant nothing.
+      await superAdminUser(t, superAdmin.id);
+      const { id, since, spanish } = await postWithSharedChange();
+      await pinPost(id, approvedSlot(null), since);
+
+      const fromApproval = await compare(
+        id,
+        { to: spanish, baseline: "since-approved", part: "shared" },
+        "posts"
+      );
+      expect(fromApproval).toMatchObject({
+        from: since,
+        to: spanish,
+        hasChanges: true,
+        baseline: { name: "since-approved", versionNo: since },
+      });
+      // Exactly the shared change: the shared field, and no translated title in either
+      // language, though both languages' titles differ between the two versions.
+      expect(namesOf(fromApproval)).toEqual({
+        changed: ["code"],
+        title: false,
+      });
+
+      // The same pair named outright compares the same fields.
+      expect(
+        namesOf(
+          await compare(
+            id,
+            { from: since, to: spanish, part: "shared" },
+            "posts"
+          )
+        )
+      ).toEqual({ changed: ["code"], title: false });
+    });
+
+    it("compares the shared fields from the last publish in any language", async () => {
+      t = await bootSteps(dialect);
+      // A super-admin the read gate can look up: role names on a user grant nothing.
+      await superAdminUser(t, superAdmin.id);
+      // Published in English, then the shared field changed by a Spanish draft and the Spanish
+      // title saved again: a Spanish draft leaves the document published.
+      const id = await entry(app(), "posts");
+      await saveIn(app(), "posts", id, "en", {
+        title: "English one",
+        code: "A",
+        status: "published",
+      });
+      const since = await shownVersion(app(), "posts", id, "en");
+      await saveIn(app(), "posts", id, "es", {
+        title: "Español",
+        code: "B",
+        status: "draft",
+      });
+      await saveIn(app(), "posts", id, "es", {
+        title: "Español dos",
+        status: "draft",
+      });
+      const spanish = await shownVersion(app(), "posts", id, "es");
+
+      const fromPublish = await compare(
+        id,
+        { to: spanish, baseline: "published", part: "shared" },
+        "posts"
+      );
+      expect(fromPublish).toMatchObject({
+        from: since,
+        to: spanish,
+        baseline: { name: "published", versionNo: since },
+      });
+      expect(namesOf(fromPublish)).toEqual({
+        changed: ["code"],
+        title: false,
+      });
+    });
+
+    it("still refuses a pair in two languages without the shared part", async () => {
+      t = await bootSteps(dialect);
+      // A super-admin the read gate can look up: role names on a user grant nothing.
+      await superAdminUser(t, superAdmin.id);
+      const { id, since, spanish } = await postWithSharedChange();
+
+      expect(
+        await refusalOf(compare(id, { from: since, to: spanish }, "posts"))
+      ).toMatchObject({ path: "to", code: "LOCALE_MISMATCH" });
+    });
+
+    it("answers a shared comparison through the Direct API as REST answers it", async () => {
+      t = await bootSteps(dialect);
+      const reader = await person(t, "posts-reader", [["read", "posts"]]);
+      const key = await postsReaderKey(reader.userId);
+      const { id, since, spanish } = await postWithSharedChange();
+
+      const rest = await restCompare(key, id, {
+        from: String(since),
+        to: String(spanish),
+        part: "shared",
+      });
+      expect(rest.status, JSON.stringify(rest.body)).toBe(200);
+      const direct = await t.nextly.versions.compare({
+        collection: "posts",
+        id,
+        from: since,
+        to: spanish,
+        part: "shared",
+        overrideAccess: false,
+        user: { id: reader.userId },
+      });
+      // One answer through either door: the shared field alone, across languages.
+      expect(direct).toEqual(rest.body);
+      expect(namesOf(direct)).toEqual({ changed: ["code"], title: false });
+
+      // Without `part`, the Direct API still refuses the pair in two languages.
+      expect(
+        await refusalOf(
+          t.nextly.versions.compare({
+            collection: "posts",
+            id,
+            from: since,
+            to: spanish,
+            overrideAccess: false,
+            user: { id: reader.userId },
+          })
+        )
+      ).toMatchObject({ path: "to", code: "LOCALE_MISMATCH" });
+    });
+
+    it("leaves a field the content type no longer declares out of the shared comparison", async () => {
+      t = await bootSteps(dialect);
+      // A super-admin the read gate can look up: role names on a user grant nothing.
+      await superAdminUser(t, superAdmin.id);
+      const { id, since, spanish } = await postWithSharedChange();
+      // A translated field since removed: each language's version kept its own value.
+      await addToSnapshot(id, since, { subtitle: "English subtitle" });
+      await addToSnapshot(id, spanish, { subtitle: "Subtítulo" });
+
+      const diff = await compare(
+        id,
+        { from: since, to: spanish, part: "shared" },
+        "posts"
+      );
+      expect(diff.fields.map(field => field.name)).not.toContain("subtitle");
+      expect(namesOf(diff)).toEqual({ changed: ["code"], title: false });
+    });
+
+    it("says nothing of a language the reader cannot read when the shared part picks its version", async () => {
+      t = await bootSteps(dialect);
+      // Letters are read in every language but Spanish.
+      const reader = await person(t, "letters-reader", [["read", "letters"]]);
+      const id = await entry(t, "letters");
+      await saveIn(t, "letters", id, "en", {
+        title: "English",
+        status: "draft",
+      });
+      await saveIn(t, "letters", id, "es", {
+        title: "Español",
+        status: "draft",
+      });
+      const asReader = (entryId: string) =>
+        getVersionDiffForDocument({
+          scopeKind: "collection",
+          slug: "letters",
+          entryId,
+          user: { id: reader.userId },
+          baseline: "since-approved",
+          part: "shared",
+        });
+
+      // The reader can read the letter's English history, so a refusal below is about Spanish.
+      const english = await shownVersion(t, "letters", id, "en");
+      expect(
+        await getVersionDiffForDocument({
+          scopeKind: "collection",
+          slug: "letters",
+          entryId: id,
+          user: { id: reader.userId },
+          to: english,
+          baseline: "previous",
+        })
+      ).toMatchObject({ to: english });
+
+      // The newest version is Spanish: the reader is answered as for no document at all,
+      // never with the shared part's approval or a version number from Spanish.
+      expect(await answerOf(asReader(id))).toEqual(
+        await answerOf(asReader("no-such-letter"))
+      );
     });
   }
 );

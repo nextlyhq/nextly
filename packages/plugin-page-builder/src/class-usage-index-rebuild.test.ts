@@ -158,6 +158,8 @@ describe("rebuilding the class-usage index", () => {
         locale: "",
         variant: "published",
         classId: "hero",
+        // The one block the document has wearing it, as a current row holds.
+        blocks: 1,
       },
     ]);
 
@@ -398,6 +400,8 @@ describe("rows whose document no longer exists", () => {
         locale: "",
         variant: "published",
         classId: "hero",
+        // The one block the document has wearing it, as a current row holds.
+        blocks: 1,
       },
       {
         id: "r9",

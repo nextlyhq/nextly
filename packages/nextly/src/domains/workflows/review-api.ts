@@ -1,0 +1,1008 @@
+/**
+ * What developers read and move of review state, through REST and the Direct API, with the same
+ * rules as the admin: a document's review state per part, what waits for a caller, and steps or
+ * assignments over several documents at once.
+ *
+ * The rules of a step stay where they live (`takeWorkflowStep`, `assignWorkflowParts`): this
+ * module reads, and runs those one document at a time. Whether a caller may READ a document is
+ * asked by the door through `readable`, the one read check its document routes already make, so
+ * review state never shows a document its reader may not see.
+ *
+ * @module domains/workflows/review-api
+ * @experimental
+ */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
+import { decidePermission } from "../../auth/access/decide";
+import { NextlyError } from "../../errors";
+import type { PublishCaller } from "../collections/services/publish-gate";
+import { configuredLocales } from "../i18n/configured-locales";
+import { newestVersionNoPerLocale } from "../versions/versions-repository";
+
+import { primaryStep } from "./define-workflow";
+import { holdersOf } from "./holders";
+import { livePartsOf, partStage, pendingPartsOn } from "./implicit-stage";
+import { lastMovesOn, type LastMove } from "./last-moves";
+import {
+  documentTableOn,
+  partVersionOn,
+  versionUnderReview,
+} from "./part-versions";
+import {
+  nameWaits,
+  partsWaitingFor,
+  partWaitsDecider,
+  type PartWaitingFor,
+  type PartWaits,
+  type PartWaitsDecider,
+} from "./part-waits-for";
+import { registeredWorkflows, workflowAttachedTo } from "./registry";
+import {
+  readDocumentReviewStates,
+  readWaitingReviewStates,
+  waitingOrder,
+  waitingPosition,
+  type ReviewAssignee,
+  type ReviewDocument,
+  type ReviewState,
+  type WaitingShare,
+  type WaitingStageTerms,
+  type WaitingTerms,
+} from "./review-state-repository";
+import {
+  readStagePresentation,
+  type StagePresentation,
+} from "./stage-presentation";
+import {
+  accountableFor,
+  allowsPublish,
+  assignWorkflowParts,
+  primaryAction,
+  stepsTakeableBy,
+  takeWorkflowStep,
+  takesStep,
+  workflowCallerActor,
+  type Assignment,
+  type SeenPart,
+  type TakeStepResult,
+  type WorkflowCaller,
+} from "./steps";
+import type { ResolvedWorkflowStep, Workflow, WorkflowStepKind } from "./types";
+import type { WaitingPosition } from "./waiting-cursor";
+import { mayPublishWithoutReview } from "./workflow-publish-gate";
+
+/** Error codes this module refuses with. @experimental */
+export const REVIEW_API_ERROR_CODES = {
+  /** An approval asked for several documents at once: each is given for the version shown. */
+  bulkApproval: "WORKFLOW_BULK_APPROVAL",
+} as const;
+
+/** A step a part may take from where it stands. @experimental */
+export interface AvailableStep {
+  name: string;
+  label: string;
+  kind: WorkflowStepKind;
+  to: string;
+  /**
+   * Whether the caller may take it on this part, judged by the checks the step makes of who takes
+   * it (`stepsTakeableBy`): its permission, a person for an approval or a request for changes,
+   * and the self-approval it refuses. True for trusted code but on a step only a person may take.
+   * What the step checks of the content (the version seen, a comment) is asked when it is taken.
+   *
+   * @experimental
+   */
+  mayTake: boolean;
+  /**
+   * Whether it is its stage's primary step: the stage's only step out, or the one marked
+   * `primary`. Exactly one step out of a stage is.
+   *
+   * @experimental
+   */
+  primary: boolean;
+  /**
+   * Whether it is taken only with a comment: a request for changes always, any other step whose
+   * definition asks for one. The step refuses one taken without.
+   *
+   * @experimental
+   */
+  commentRequired: boolean;
+}
+
+/** One part's review state, as a reader is told it. @experimental */
+export interface PartReview {
+  /** A language, or null for the shared part. */
+  part: string | null;
+  /** The stage it stands in; null for a live part with nothing waiting to go live. */
+  stage: string | null;
+  /** Its stage's label as Settings shows it: the label saved there, else the code's. */
+  stageLabel: string | null;
+  /** Its stage's colour as saved in Settings, a hex value; null where none is. */
+  stageColour: string | null;
+  /** Whether its stage allows publishing. */
+  publishable: boolean;
+  enteredAt: Date | null;
+  enteredBy: string | null;
+  assignee: ReviewAssignee | null;
+  dueAt: Date | null;
+  /** The approval it holds, given under the definition attached now; null otherwise. */
+  approval: { versionNo: number; by: string; at: Date } | null;
+  /** Its review-state revision, 0 for a part with none yet: what a step says it saw. */
+  revision: number;
+  /** The document's version as a reader of this part holds it: what a step says it saw. */
+  version: string | null;
+  /**
+   * The number of the part's version under review: its newest recorded version, in its language
+   * or, for the shared part, in any. What approving the part approves, so an editor can tell
+   * whether the version it shows is that one. Null for a part never saved.
+   */
+  reviewedVersionNo: number | null;
+  /** The steps that leave from its stage, each with whether the caller may take it. */
+  steps: AvailableStep[];
+  /**
+   * Who it waits for: its assignee; else its stage's default reviewer, where they may take the
+   * stage's primary step; else the roles that may. Null in a stage with no step out of it.
+   */
+  waitingFor: PartWaitingFor | null;
+  /** Its latest workflow event other than an assignment; null for a part that never moved. */
+  lastMove: LastMove | null;
+}
+
+/**
+ * A document's review state, part by part. With no workflow attached to its collection or Single,
+ * `workflow` is null and `parts` is empty.
+ *
+ * @experimental
+ */
+export interface DocumentReview {
+  workflow: { slug: string; label: string } | null;
+  parts: PartReview[];
+  /**
+   * Whether the caller may publish the document without review, as the publish gate judges a
+   * publish that asks to (`mayPublishWithoutReview`): trusted code, or a person holding
+   * "Publish without review" on its collection or Single; never an API key. False where no
+   * workflow is attached, as there is no review to go past.
+   *
+   * @experimental
+   */
+  mayPublishWithoutReview: boolean;
+}
+
+/** A step leaving a stage, before whether the caller may take it is judged. */
+type StepOut = Omit<AvailableStep, "mayTake">;
+
+/** A workflow caller as the publish gate names it, so the gate judges the read's caller. */
+function publishCallerOf(caller: WorkflowCaller): PublishCaller {
+  switch (caller.kind) {
+    case "system":
+      return { kind: "trusted" };
+    case "user":
+      return { kind: "user", userId: caller.userId };
+    case "key":
+      return { kind: "api-key", userId: caller.userId, scope: caller.scope };
+  }
+}
+
+/** The steps leaving `stage`, as a reader is told them, its primary step marked. */
+function stepsFrom(workflow: Workflow, stage: string | null): StepOut[] {
+  if (stage === null) return [];
+  const primary = primaryStep(workflow, stage)?.name;
+  return workflow.steps
+    .filter(step => step.from.includes(stage))
+    .map(step => ({
+      name: step.name,
+      label: step.label,
+      kind: step.kind,
+      to: step.to,
+      primary: step.name === primary,
+      commentRequired: step.commentRequired,
+    }));
+}
+
+/**
+ * A document's review state, each part where it stands: its review state's stage, or for a part
+ * with none, where its content puts it (`partStage`). Read in one transaction, so every part is
+ * read as of one moment, its last move included. Who each part waits for, and which steps `caller`
+ * may take, are asked after, on the pool, as every question of who holds a permission is. The
+ * caller has already been allowed to read the document, so a document with no workflow attached
+ * answers as such only to one who may read it.
+ *
+ * @experimental
+ */
+export async function reviewStateOf(
+  adapter: DrizzleAdapter,
+  document: ReviewDocument,
+  caller: WorkflowCaller
+): Promise<DocumentReview> {
+  const registered = workflowAttachedTo(document.scopeKind, document.scopeSlug);
+  if (!registered) {
+    return { workflow: null, parts: [], mayPublishWithoutReview: false };
+  }
+  const { workflow } = registered;
+  const table = await documentTableOn(document);
+  const parts: (string | null)[] = table.localized
+    ? [...(configuredLocales() ?? []), null]
+    : [null];
+  const live = await livePartsOf(adapter, document, parts);
+  // Read on the pool before the transaction, as every other read of settings is.
+  const shown = await readStagePresentation(adapter, workflow);
+  const dialect = adapter.getCapabilities().dialect;
+  const read = await adapter.transaction(async tx => {
+    const states = await readDocumentReviewStates(tx, document);
+    const pending = await pendingPartsOn(tx, document);
+    const moves = await lastMovesOn(tx, dialect, document);
+    // Every part's version under review from one read of the history, whatever the part count.
+    const newestByLocale = await newestVersionNoPerLocale(
+      tx,
+      dialect,
+      document
+    );
+    const read: (Omit<PartReview, "waitingFor" | "steps"> & {
+      steps: StepOut[];
+    })[] = [];
+    for (const part of parts) {
+      const state = states.find(candidate => candidate.part === part) ?? null;
+      const stage = partStage(workflow, state, {
+        live: live.get(part) === true,
+        pending: pending(part),
+      });
+      const current =
+        state?.approval != null &&
+        state.definitionHash === registered.definitionHash;
+      read.push({
+        part,
+        stage,
+        stageLabel: stage === null ? null : shown(stage).label,
+        stageColour: stage === null ? null : shown(stage).colour,
+        publishable: stage !== null && allowsPublish(workflow, stage),
+        enteredAt: state?.enteredAt ?? null,
+        enteredBy: state?.enteredBy ?? null,
+        assignee: state?.assignee ?? null,
+        dueAt: state?.dueAt ?? null,
+        approval:
+          current && state.approval
+            ? {
+                versionNo: state.approval.versionNo,
+                by: state.approval.by,
+                at: state.approval.at,
+              }
+            : null,
+        revision: state?.revision ?? 0,
+        version:
+          (await partVersionOn(tx, dialect, table, document.entryId, part)) ??
+          null,
+        reviewedVersionNo: versionUnderReview(newestByLocale, part) ?? null,
+        steps: stepsFrom(workflow, stage),
+        lastMove: moves.get(part) ?? null,
+      });
+    }
+    return read;
+  });
+  const waiting = await partsWaitingFor(
+    adapter,
+    registered,
+    document.scopeSlug,
+    read
+  );
+  const mayTake = await stepsTakeableBy(
+    adapter,
+    workflow,
+    document,
+    caller,
+    read.map(part => ({
+      part: part.part,
+      stage: part.stage,
+      enteredBy: part.enteredBy,
+    }))
+  );
+  const bypass = await mayPublishWithoutReview(
+    publishCallerOf(caller),
+    document.scopeSlug
+  );
+  return {
+    workflow: { slug: workflow.slug, label: workflow.label },
+    mayPublishWithoutReview: bypass,
+    parts: read.map((part, index) => ({
+      ...part,
+      steps: part.steps.map(step => ({
+        ...step,
+        mayTake: mayTake(part.part, step.name),
+      })),
+      waitingFor: waiting[index] ?? null,
+    })),
+  };
+}
+
+/** A part waiting for a caller, as the list names it. @experimental */
+export interface WaitingPart {
+  document: ReviewDocument;
+  part: string | null;
+  stage: string;
+  /** Its stage's label as Settings shows it: the label saved there, else the code's. */
+  stageLabel: string;
+  /** Its stage's colour as saved in Settings, a hex value; null where none is. */
+  stageColour: string | null;
+  /** Who it is assigned to; null for work no one is assigned, which waits for every holder. */
+  assignee: ReviewAssignee | null;
+  /** Whom it waits for, named as the document's own review read names it. */
+  waitingFor: PartWaitingFor | null;
+  enteredAt: Date;
+  dueAt: Date | null;
+}
+
+/** What `waitingFor` reads: the caller, a page, and the read checks its door makes. */
+export interface WaitingQuery {
+  caller: WorkflowCaller & { kind: "user" | "key" };
+  limit: number;
+  offset: number;
+  /** Whether the caller may read anything of a collection or Single, asked once per entity. */
+  readsEntity: (
+    kind: "collection" | "single",
+    slug: string
+  ) => Promise<boolean>;
+  /**
+   * Which of `items` the caller may read, each document in the language its part names, in order.
+   * Asked once for every candidate together: a list weighs many, and a read check apiece would be a
+   * round trip apiece.
+   */
+  readable: (items: readonly WaitingReadable[]) => Promise<readonly boolean[]>;
+  /**
+   * How many review states one request may read at most; {@link WAITING_SCAN_CEILING} where it
+   * names none. Neither door names one: it exists so a test can reach the ceiling with few rows.
+   */
+  scanCeiling?: number;
+  /**
+   * Where the list goes on from: just past this position (the one an earlier page's `next` named),
+   * with `offset` counted from there. Absent, the list starts at its oldest part.
+   */
+  after?: WaitingPosition;
+}
+
+/** A document a waiting list asks the read check of, in the language its part names. */
+export interface WaitingReadable {
+  document: ReviewDocument;
+  part: string | null;
+}
+
+/** One stage of one attached collection or Single. */
+interface ScopedStage {
+  kind: "collection" | "single";
+  slug: string;
+  stage: string;
+  action: string;
+  /** The stage's primary step, the one whose taker work in the stage waits for. */
+  step: ResolvedWorkflowStep;
+  /** The workflow attached, whose rule and settings decide whom its parts wait for. */
+  workflow: Workflow;
+}
+
+/** Every stage with a step out of it, of every collection and Single a workflow is attached to. */
+function attachedStages(): ScopedStage[] {
+  const stages: ScopedStage[] = [];
+  for (const registered of registeredWorkflows()) {
+    const entities = [
+      ...registered.collections.map(slug => ({
+        kind: "collection" as const,
+        slug,
+      })),
+      ...registered.singles.map(slug => ({ kind: "single" as const, slug })),
+    ];
+    for (const entity of entities) {
+      for (const stage of registered.workflow.stages) {
+        const action = primaryAction(registered.workflow, stage.name);
+        const step = primaryStep(registered.workflow, stage.name);
+        if (action !== null && step !== undefined) {
+          stages.push({
+            ...entity,
+            stage: stage.name,
+            action,
+            step,
+            workflow: registered.workflow,
+          });
+        }
+      }
+    }
+  }
+  return stages;
+}
+
+/**
+ * How many review states a list reads of each share (the caller's own work, and the rest of the
+ * stages) in one window. A request reads windows until it holds one more readable part than its
+ * page needs, or everything is read.
+ */
+const WAITING_SCAN_LIMIT = 1000;
+
+/**
+ * The most review states one request reads, however many it passes over (parts the caller may not
+ * move or read): a ceiling, so one request's cost stays bounded. Past it the count is a floor
+ * (`totalCapped`) and more may wait, never "nothing more".
+ */
+const WAITING_SCAN_CEILING = 20_000;
+
+/**
+ * What waits for a caller: the parts whose next step they may take, by its permission on the
+ * part's collection or Single and by who may take it (no approval for an API key; no approval of
+ * work the caller brought into the stage, where the step refuses that), that wait for them by the
+ * rule a part's read names (`partWaitsDecider`): assigned to them or one of their roles, assigned
+ * to someone who may not take it on that part, or assigned to no one where the stage's default
+ * reviewer is theirs or may not take it. Only collections and Singles the caller may read are
+ * looked in; each part is then asked the document read check, and only those it passes are listed
+ * AND counted, so the count never takes in a part the caller may not read.
+ *
+ * @experimental
+ */
+export async function waitingFor(
+  adapter: DrizzleAdapter,
+  query: WaitingQuery
+): Promise<{
+  items: WaitingPart[];
+  total: number;
+  totalCapped: boolean;
+  /**
+   * Where the next page starts, or null where nothing is left: the last part this page shows when
+   * more were found past it, else the last review state the request read when it stopped before
+   * reading everything (so a walk passes parts the caller may not see, a bounded read at a time).
+   */
+  next: WaitingPosition | null;
+}> {
+  const takeable = await takeableStages(adapter, query);
+  if (takeable.length === 0) {
+    return { items: [], total: 0, totalCapped: false, next: null };
+  }
+  const mine = await holdersOf(adapter, query.caller);
+  const isMine = (who: ReviewAssignee) =>
+    mine.some(each => each.kind === who.kind && each.id === who.id);
+  const deciderOf = decidersByEntity(adapter);
+  // Who the caller stands for, once for every stage the list reads.
+  const terms: WaitingTerms = {
+    mine,
+    stages: await stageTerms(takeable, isMine, deciderOf),
+  };
+  // Each workflow's stage presentation, its settings read once for the whole request.
+  const presentations = new Map<
+    string,
+    Promise<(stage: string) => StagePresentation>
+  >();
+  const decided: WaitingContext = {
+    query,
+    isMine,
+    deciderOf,
+    accountable: await accountableFor(adapter, query.caller),
+    stageOfRow: new Map(
+      takeable.map(scoped => [
+        `${scoped.kind}:${scoped.slug}:${scoped.stage}`,
+        scoped,
+      ])
+    ),
+    presentationOf: workflow => {
+      let read = presentations.get(workflow.slug);
+      if (read === undefined) {
+        read = readStagePresentation(adapter, workflow);
+        presentations.set(workflow.slug, read);
+      }
+      return read;
+    },
+  };
+  // Windows read until the list holds one part more than the page needs (so it knows there is a
+  // next page), everything is read, or the request reaches its ceiling.
+  const need = query.offset + query.limit + 1;
+  const ceiling = query.scanCeiling ?? WAITING_SCAN_CEILING;
+  const scan = waitingScan(adapter, terms, query.after);
+  const waiting: PlacedPart[] = [];
+  while (waiting.length < need && !scan.done() && scan.read < ceiling) {
+    const window = await scan.next(
+      Math.min(WAITING_SCAN_LIMIT, ceiling - scan.read)
+    );
+    waiting.push(...(await waitingIn(window, decided)));
+  }
+  const end = query.offset + query.limit;
+  const shownLast = waiting.length > end ? waiting[end - 1] : undefined;
+  // Whom each part on the page waits for, named once for the page: one read per kind of name.
+  const page = waiting.slice(query.offset, end);
+  const names = await nameWaits(
+    adapter,
+    page.map(each => ({
+      slug: each.part.document.scopeSlug,
+      waits: each.waits,
+    }))
+  );
+  return {
+    items: page.map((each, index) => ({
+      ...each.part,
+      waitingFor: names[index] ?? null,
+    })),
+    total: waiting.length,
+    totalCapped: !scan.done(),
+    next:
+      shownLast !== undefined
+        ? shownLast.position
+        : scan.done()
+          ? null
+          : (scan.position ?? query.after ?? null),
+  };
+}
+
+/**
+ * A waiting part, with where it stands in the list's order and whom it waits for, decided but not
+ * yet named.
+ */
+interface PlacedPart {
+  part: WaitingPart;
+  position: WaitingPosition;
+  waits: PartWaits;
+}
+
+/** What deciding whether a window's parts wait for the caller needs, asked once per list. */
+interface WaitingContext {
+  query: WaitingQuery;
+  isMine: (who: ReviewAssignee) => boolean;
+  deciderOf: (scoped: ScopedStage) => Decider;
+  accountable: string | null;
+  stageOfRow: ReadonlyMap<string, ScopedStage>;
+  /** How a workflow's stages are shown, its settings read once a request. */
+  presentationOf: (
+    workflow: Workflow
+  ) => Promise<(stage: string) => StagePresentation>;
+}
+
+/** The parts of one window that wait for the caller and that they may read, in order. */
+async function waitingIn(
+  window: readonly ReviewState[],
+  {
+    query,
+    isMine,
+    deciderOf,
+    accountable,
+    stageOfRow,
+    presentationOf,
+  }: WaitingContext
+): Promise<PlacedPart[]> {
+  // Who each part's assignee or default reviewer is, asked in batches per collection or Single
+  // before any part of the window is decided, so a long queue of distinct assignees costs a few
+  // reads.
+  await primeDeciders(window, stageOfRow, deciderOf);
+  const movable: ReviewState[] = [];
+  const stageOf = new Map<ReviewState, ScopedStage>();
+  const waitsOf = new Map<ReviewState, PartWaits>();
+  for (const row of window) {
+    const scoped = stageOfRow.get(
+      `${row.scopeKind}:${row.scopeSlug}:${row.stage}`
+    );
+    if (!scoped) continue;
+    // Whom this part waits for, by the rule its read names: the caller, one of their roles, or
+    // every holder, which the caller is, by the stage's permission asked in `takeableStages`.
+    const waits = await deciderOf(scoped).decide(row);
+    if (waits === null || (waits.kind === "one" && !isMine(waits.who))) {
+      continue;
+    }
+    // Work the caller brought into a stage whose step refuses that is not theirs to move.
+    if (takesStep(scoped.step, query.caller, accountable, row.enteredBy)) {
+      movable.push(row);
+      stageOf.set(row, scoped);
+      waitsOf.set(row, waits);
+    }
+  }
+  // The read check, asked of every part the caller may move at once, before the page is cut: a
+  // part they may not read never takes a place on a page or counts.
+  const readable = await query.readable(
+    movable.map(row => ({
+      document: {
+        scopeKind: row.scopeKind,
+        scopeSlug: row.scopeSlug,
+        entryId: row.entryId,
+      },
+      part: row.part,
+    }))
+  );
+  const items: PlacedPart[] = [];
+  for (const [index, row] of movable.entries()) {
+    const scoped = stageOf.get(row);
+    const waits = waitsOf.get(row);
+    if (readable[index] !== true || !scoped || waits === undefined) continue;
+    // Shown as every surface shows the stage: its saved label and colour, else the code's.
+    const shown = (await presentationOf(scoped.workflow))(row.stage);
+    items.push({
+      part: waitingItem(row, row.assignee, shown),
+      position: waitingPosition(row),
+      waits,
+    });
+  }
+  return items;
+}
+
+/**
+ * How many stages' next step the caller may take, in collections and Singles they may read: the
+ * stages the waiting list looks in (`takeableStages`), counted with no document read. Nothing can
+ * ever wait for a caller with none.
+ *
+ * @experimental
+ */
+export async function takeableStageCount(
+  adapter: DrizzleAdapter,
+  query: Pick<WaitingQuery, "caller" | "readsEntity">
+): Promise<number> {
+  return (await takeableStages(adapter, query)).length;
+}
+
+/**
+ * The stages whose next step the caller may take, in collections and Singles they may read: its
+ * permission, and who may take it (a step only a person takes is never a key's).
+ */
+async function takeableStages(
+  adapter: DrizzleAdapter,
+  query: Pick<WaitingQuery, "caller" | "readsEntity">
+): Promise<ScopedStage[]> {
+  const actor = await workflowCallerActor(adapter, query.caller);
+  const takeable: ScopedStage[] = [];
+  const readsCache = new Map<string, boolean>();
+  for (const scoped of attachedStages()) {
+    const key = `${scoped.kind}:${scoped.slug}`;
+    let reads = readsCache.get(key);
+    if (reads === undefined) {
+      reads = await query.readsEntity(scoped.kind, scoped.slug);
+      readsCache.set(key, reads);
+    }
+    if (
+      reads &&
+      decidePermission(actor, scoped.action, scoped.slug).allowed &&
+      takesStep(scoped.step, query.caller, null, undefined)
+    ) {
+      takeable.push(scoped);
+    }
+  }
+  return takeable;
+}
+
+type Decider = PartWaitsDecider;
+
+/** One decider per collection or Single: the rule a part's read asks, its answers kept across parts. */
+function decidersByEntity(
+  adapter: DrizzleAdapter
+): (scoped: ScopedStage) => Decider {
+  const deciders = new Map<string, Decider>();
+  return scoped => {
+    const key = `${scoped.kind}:${scoped.slug}`;
+    let decide = deciders.get(key);
+    if (decide === undefined) {
+      decide = partWaitsDecider(adapter, scoped.workflow, scoped.slug);
+      deciders.set(key, decide);
+    }
+    return decide;
+  };
+}
+
+/** Primes each collection's or Single's decider with its candidates, one batch per action. */
+async function primeDeciders(
+  candidates: readonly ReviewState[],
+  stageOfRow: ReadonlyMap<string, ScopedStage>,
+  deciderOf: (scoped: ScopedStage) => Decider
+): Promise<void> {
+  const byEntity = new Map<
+    string,
+    { scoped: ScopedStage; rows: ReviewState[] }
+  >();
+  for (const row of candidates) {
+    const scoped = stageOfRow.get(
+      `${row.scopeKind}:${row.scopeSlug}:${row.stage}`
+    );
+    if (!scoped) continue;
+    const key = `${scoped.kind}:${scoped.slug}`;
+    const entity = byEntity.get(key) ?? { scoped, rows: [] };
+    entity.rows.push(row);
+    byEntity.set(key, entity);
+  }
+  for (const { scoped, rows } of byEntity.values()) {
+    await deciderOf(scoped).prime(rows);
+  }
+}
+
+/**
+ * Each takeable stage's terms: whether an unassigned part waits for the caller by the stage alone
+ * (its default reviewer is theirs, or it waits for every holder), asked as of a part no one brought
+ * in.
+ */
+async function stageTerms(
+  takeable: readonly ScopedStage[],
+  isMine: (who: ReviewAssignee) => boolean,
+  deciderOf: (scoped: ScopedStage) => Decider
+): Promise<WaitingStageTerms[]> {
+  const terms: WaitingStageTerms[] = [];
+  for (const scoped of takeable) {
+    const unassigned = await deciderOf(scoped).decide({
+      stage: scoped.stage,
+      assignee: null,
+      enteredBy: null,
+    });
+    terms.push({
+      kind: scoped.kind,
+      slug: scoped.slug,
+      stage: scoped.stage,
+      unassigned:
+        unassigned?.kind === "holders" ||
+        (unassigned?.kind === "one" && isMine(unassigned.who)),
+    });
+  }
+  return terms;
+}
+
+/** One share's place in a waiting scan: whether a window has held all of it. */
+interface ShareCursor {
+  share: WaitingShare;
+  done: boolean;
+}
+
+/**
+ * The review states a list decides, oldest first, a window at a time, from two bounded reads per
+ * window: the caller's own work, and the rest, so the rest of a busy stage never crowds their own
+ * work out of a window. Each read asks for one row past the window, so a share that fits is known
+ * to be whole. One that does not is whole only up to the window's last row; past the earlier such
+ * end the window would miss what that read never reached, so it ends there, and the next window
+ * reads on from it. A share is done only once a window held all of it.
+ *
+ * Every window holds each share's states up to its last one and none past it, so one position, the
+ * last state consumed (`position`), says where both shares go on from. Each read starts just past
+ * it (a keyset), from `after` for the first window.
+ */
+function waitingScan(
+  adapter: DrizzleAdapter,
+  terms: WaitingTerms,
+  after: WaitingPosition | undefined
+): {
+  read: number;
+  position: WaitingPosition | undefined;
+  done: () => boolean;
+  next: (size: number) => Promise<ReviewState[]>;
+} {
+  const cursors: ShareCursor[] = (["own", "rest"] as const).map(share => ({
+    share,
+    done: false,
+  }));
+  const scan = {
+    read: 0,
+    position: after,
+    done: () => cursors.every(cursor => cursor.done),
+    async next(size: number): Promise<ReviewState[]> {
+      const fetched: { cursor: ShareCursor; state: ReviewState }[] = [];
+      const full = new Set<ShareCursor>();
+      let end: ReviewState | undefined;
+      // The window's budget split between the shares still being read, so neither read fetches
+      // more than its part of `size` (at least one state, plus the one that says whether it is
+      // whole).
+      const reading = cursors.filter(cursor => !cursor.done);
+      const perShare = Math.max(
+        1,
+        Math.floor(size / Math.max(1, reading.length))
+      );
+      for (const cursor of reading) {
+        const states = await readWaitingReviewStates(
+          adapter,
+          terms,
+          cursor.share,
+          perShare + 1,
+          scan.position
+        );
+        if (states.length > perShare) {
+          states.length = perShare;
+          full.add(cursor);
+          const last = states[perShare - 1];
+          if (end === undefined || waitingOrder(last, end) < 0) end = last;
+        }
+        for (const state of states) fetched.push({ cursor, state });
+      }
+      // Never more than `size` states, so a request stops at its ceiling: where the shares' parts
+      // together come to more (each read at least one state), the earliest in the list's order
+      // are kept. What is cut is past the window's last state, so the next window, reading on
+      // from that position, reaches it; and its share is not whole, so the scan goes on.
+      const window = fetched
+        .filter(each => end === undefined || waitingOrder(each.state, end) <= 0)
+        .sort((a, b) => waitingOrder(a.state, b.state))
+        .slice(0, size);
+      const kept = new Set(window);
+      for (const cursor of cursors) {
+        // Whole when its read fit the window and none of it was cut at the window's end.
+        const cut = fetched.some(
+          each => each.cursor === cursor && !kept.has(each)
+        );
+        if (!cursor.done && !full.has(cursor) && !cut) cursor.done = true;
+      }
+      scan.read += window.length;
+      const last = window[window.length - 1];
+      if (last !== undefined) scan.position = waitingPosition(last.state);
+      return window.map(each => each.state);
+    },
+  };
+  return scan;
+}
+
+/** One waiting part, its stage shown as `shown` says (its workflow's saved presentation). */
+function waitingItem(
+  row: ReviewState,
+  assignee: ReviewAssignee | null,
+  shown: StagePresentation
+): WaitingPart {
+  return {
+    document: {
+      scopeKind: row.scopeKind,
+      scopeSlug: row.scopeSlug,
+      entryId: row.entryId,
+    },
+    part: row.part,
+    stage: row.stage,
+    stageLabel: shown.label,
+    stageColour: shown.colour,
+    assignee,
+    // Named once for the page it lands on, by `nameWaits`.
+    waitingFor: null,
+    enteredAt: row.enteredAt,
+    dueAt: row.dueAt,
+  };
+}
+
+/** One document of a move over several, with the parts it moves as the caller saw them. */
+export interface ManyDocument {
+  document: ReviewDocument;
+  parts: readonly (string | null)[] | "all";
+  seen: readonly SeenPart[];
+}
+
+/** A document a move over several refused, and why, as its own move would have said. */
+export interface ManyRefusal {
+  document: ReviewDocument;
+  code: string;
+  message: string;
+}
+
+/**
+ * A step over several documents: each document moves in its own transaction through the one step
+ * every door takes (`takeWorkflowStep`), so each is moved if it may be and each refusal is named
+ * with its own reason. A document its caller may not read is refused as not found, asked before
+ * anything else about it is looked at. A step of kind approve in the workflow of a document the
+ * caller may read is refused for the whole request before anything moves: an approval is given
+ * from the review of one document, for the version shown.
+ *
+ * @experimental
+ */
+export async function stepMany(
+  adapter: DrizzleAdapter,
+  input: {
+    documents: readonly ManyDocument[];
+    step: string;
+    comment?: string | null;
+    caller: WorkflowCaller;
+    /** Whether the caller may read the document in each of the parts a move names. */
+    readable: (
+      document: ReviewDocument,
+      parts: ManyDocument["parts"]
+    ) => Promise<boolean>;
+  }
+): Promise<{
+  moved: { document: ReviewDocument; result: TakeStepResult }[];
+  refused: ManyRefusal[];
+}> {
+  // Each document's read asked first, before anything about it is looked at: a document its
+  // caller may not read is refused as not found, and its workflow and steps are never inspected,
+  // so no answer tells the caller how it is configured.
+  const readable: boolean[] = [];
+  for (const entry of input.documents) {
+    readable.push(await input.readable(entry.document, entry.parts));
+  }
+  // Then refused whole, before any moves, where the step is an approval in the workflow of any
+  // document the caller may read.
+  for (const [index, { document }] of input.documents.entries()) {
+    if (!readable[index]) continue;
+    const registered = workflowAttachedTo(
+      document.scopeKind,
+      document.scopeSlug
+    );
+    const step = registered?.workflow.steps.find(
+      candidate => candidate.name === input.step
+    );
+    if (step?.kind === "approve") {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "step",
+            code: REVIEW_API_ERROR_CODES.bulkApproval,
+            message:
+              "Approvals are given one document at a time, for the version the reviewer was shown.",
+          },
+        ],
+      });
+    }
+  }
+  const moved: { document: ReviewDocument; result: TakeStepResult }[] = [];
+  const refused: ManyRefusal[] = [];
+  for (const [index, entry] of input.documents.entries()) {
+    const outcome = await oneOfMany(
+      entry.document,
+      () => Promise.resolve(readable[index] === true),
+      () =>
+        takeWorkflowStep(adapter, {
+          document: entry.document,
+          step: input.step,
+          parts: entry.parts,
+          seen: entry.seen,
+          comment: input.comment,
+          caller: input.caller,
+        })
+    );
+    if ("refused" in outcome) refused.push(outcome.refused);
+    else moved.push({ document: entry.document, result: outcome.result });
+  }
+  return { moved, refused };
+}
+
+/**
+ * Assignments over several documents: each document's assignments are made in their own
+ * transaction through the one assignment every door makes, so each is made if it may be and each
+ * refusal is named with its own reason.
+ *
+ * @experimental
+ */
+export async function assignMany(
+  adapter: DrizzleAdapter,
+  input: {
+    assignments: readonly Assignment[];
+    caller: WorkflowCaller;
+    /** Whether the caller may read the document in each of the parts its assignments name. */
+    readable: (
+      document: ReviewDocument,
+      parts: readonly (string | null)[]
+    ) => Promise<boolean>;
+  }
+): Promise<{ assigned: ReviewDocument[]; refused: ManyRefusal[] }> {
+  const byDocument = new Map<string, Assignment[]>();
+  for (const assignment of input.assignments) {
+    const key = JSON.stringify([
+      assignment.document.scopeKind,
+      assignment.document.scopeSlug,
+      assignment.document.entryId,
+    ]);
+    byDocument.set(key, [...(byDocument.get(key) ?? []), assignment]);
+  }
+  const assigned: ReviewDocument[] = [];
+  const refused: ManyRefusal[] = [];
+  for (const assignments of byDocument.values()) {
+    const document = assignments[0].document;
+    const outcome = await oneOfMany(
+      document,
+      () =>
+        input.readable(
+          document,
+          assignments.map(assignment => assignment.part)
+        ),
+      () => assignWorkflowParts(adapter, { assignments, caller: input.caller })
+    );
+    if ("refused" in outcome) refused.push(outcome.refused);
+    else assigned.push(document);
+  }
+  return { assigned, refused };
+}
+
+/**
+ * One document of a move over several: refused as not found where the caller may not read it, so
+ * a refusal never tells them it exists; otherwise moved, or refused with its own reason.
+ */
+async function oneOfMany<T>(
+  document: ReviewDocument,
+  readable: () => Promise<boolean>,
+  move: () => Promise<T>
+): Promise<{ result: T } | { refused: ManyRefusal }> {
+  if (!(await readable())) {
+    return {
+      refused: { document, code: "NOT_FOUND", message: "Not found." },
+    };
+  }
+  try {
+    return { result: await move() };
+  } catch (error) {
+    if (!NextlyError.is(error)) throw error;
+    return {
+      refused: {
+        document,
+        code: error.code,
+        message: error.publicMessage,
+      },
+    };
+  }
+}

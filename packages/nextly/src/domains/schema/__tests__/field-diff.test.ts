@@ -362,4 +362,46 @@ describe("computeFieldDiff", () => {
       expect(diff.hasChanges).toBe(false);
     });
   });
+
+  // A many-to-many keeps its links in a link table of its own (`usesJunctionTable`); a field
+  // moving into or out of one changes where its values are stored, whatever else stays the same.
+  describe("a relationship moving into or out of its link table", () => {
+    const manyToMany: FieldDefinition = {
+      name: "tags",
+      type: "relationship",
+      relationTo: "tags",
+      options: { target: "tags", relationType: "manyToMany" },
+    } as FieldDefinition;
+    const singleLink: FieldDefinition = {
+      name: "tags",
+      type: "relationship",
+      relationTo: "tags",
+    } as FieldDefinition;
+
+    it("finds a many-to-many made a single link changed, its relation", () => {
+      const diff = computeFieldDiff([manyToMany], [singleLink]);
+      expect(diff.unchanged).toEqual([]);
+      expect(diff.changed).toEqual([
+        {
+          name: "tags",
+          from: "relationship",
+          to: "relationship",
+          reason: "relation_changed",
+        },
+      ]);
+    });
+
+    it("finds a single link made a many-to-many changed, its relation", () => {
+      const diff = computeFieldDiff([singleLink], [manyToMany]);
+      expect(diff.changed.map(change => change.reason)).toEqual([
+        "relation_changed",
+      ]);
+    });
+
+    it("finds no change when both keep their links where they were", () => {
+      expect(computeFieldDiff([manyToMany], [manyToMany]).unchanged).toEqual([
+        "tags",
+      ]);
+    });
+  });
 });

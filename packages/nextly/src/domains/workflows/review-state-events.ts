@@ -48,6 +48,27 @@ export const REVIEW_STATE_EVENT_KINDS = {
     name: "workflow-discarded",
     label: "Review closed: draft discarded by {actor}",
   },
+  published: {
+    name: "workflow-published",
+    label: "Review closed: published by {actor}",
+    // The approval the part went live under, kept in the history once its review state is gone.
+    payload: z
+      .object({
+        approval: z
+          .object({
+            versionNo: z.number().int(),
+            by: z.string().min(1),
+            at: z.string().min(1),
+          })
+          .strict()
+          .nullable(),
+      })
+      .strict(),
+  },
+  publishedWithoutReview: {
+    name: "workflow-published-without-review",
+    label: "Published without review by {actor}",
+  },
   strandedMoved: {
     name: "workflow-stranded-moved",
     label: "Moved out of a removed stage by {actor}",

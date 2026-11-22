@@ -423,9 +423,9 @@ function layoutDocuments(context: HookContext<unknown>): BlockDocument[] {
 function subjectNoun(
   args: Parameters<typeof registerComponentReadinessNotice>[0],
   slug: string
-): "page" | "component" | "Layout" {
+): "page" | "component" | "header & footer set" {
   if (slug === args.componentCollection) return "component";
-  if (slug === args.layoutCollection) return "Layout";
+  if (slug === args.layoutCollection) return "header & footer set";
   return "page";
 }
 
@@ -438,7 +438,7 @@ function subjectNoun(
  */
 function describe(
   count: number,
-  subject: "page" | "component" | "Layout"
+  subject: "page" | "component" | "header & footer set"
 ): string {
   const noun = count === 1 ? "1 component" : `${String(count)} components`;
   const tail =

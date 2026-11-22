@@ -135,9 +135,12 @@ export const ProjectStatsGrid: React.FC = () => {
           </CardTitle>
           <div className="h-1 w-6 bg-primary/30 rounded-sm" />
         </div>
+        {/* In the text colour: the primary token is a fill a brand may set
+            to any colour, and small text drawn in it, on its own tint, can
+            fall under AA. */}
         <Link
           href={ROUTES.SETTINGS}
-          className="text-xs font-black uppercase tracking-[0.2em] text-primary hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-md bg-primary/5 hover-unified"
+          className="text-xs font-black uppercase tracking-[0.2em] text-foreground hover-unified transition-all flex items-center gap-2 px-4 py-2 rounded-md bg-primary/5 hover-unified"
         >
           Infrastructure <ChevronRight className="h-3 w-3" />
         </Link>

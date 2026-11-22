@@ -77,6 +77,12 @@ export const NEXTLY_ERROR_STATUS = {
   // Deliberately NOT added to CANONICAL_CODE_FOR_STATUS -- that list drives the
   // status -> code direction, where 422 stays mapped to INVALID_INPUT.
   BUSINESS_RULE_VIOLATION: 422,
+  // A submit for review naming a step that is not a submit (an approval, a request for changes
+  // or a move). 400: the call names the wrong step, whatever the document's state.
+  WORKFLOW_STEP_NOT_SUBMIT: 400,
+  // A submit for review naming no step, of a part whose stage no submit step leaves. 409 like a
+  // stale write: the part's state stands in the way, not the call, and it may change.
+  WORKFLOW_NO_SUBMIT_STEP: 409,
   INTERNAL_ERROR: 500,
   DATABASE_ERROR: 500,
   // A request waited `pool.connectionTimeoutMs` for a database connection and
@@ -155,6 +161,12 @@ export const NEXTLY_ERROR_STATUS = {
   // database is migrated, and running `nextly migrate` is the recovery.
   NEXTLY_DATABASE_NOT_MIGRATED: 503,
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: 409,
+  // A core upgrade drizzle-kit cannot plan from this database, refused
+  // before any statement: the database is as it was, and an earlier release
+  // takes it the first step.
+  NEXTLY_CORE_UPGRADE_UNSUPPORTED: 409,
+  // A core upgrade that ran and still left a declared column or table out.
+  NEXTLY_CORE_UPGRADE_INCOMPLETE: 500,
   NEXTLY_MIGRATION_DRIFT: 409,
   NEXTLY_MIGRATION_APPLY_FAILED: 500,
   // A SQLite migration unit would leave a row referencing a row that does
@@ -163,6 +175,9 @@ export const NEXTLY_ERROR_STATUS = {
   // A migration unit marked to run outside a transaction failed part-way;
   // the statements before the failing one stayed applied.
   NEXTLY_MIGRATION_PARTIALLY_APPLIED: 500,
+  // A pending app migration the database already stands at the end of, whose snapshot does not
+  // prove all it does, refused rather than recorded applied without running.
+  NEXTLY_MIGRATION_NOT_PROVEN: 409,
   // Another run recorded the same migration applied, or rolled back, while
   // this one was running it: this run's ledger write lost, and its work is
   // rolled back wherever the transaction can undo it.
@@ -291,6 +306,18 @@ export const NEXTLY_ERROR_STATUS = {
   // implicit English alone, and its translations in other languages would read as gone. 500 for the
   // same reason: the remedy is the server's configuration.
   NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED: 500,
+  // `nextly upgrade` found two configured language codes that become one code once in their
+  // standard form (`pt_BR` beside `pt-BR`): it changes nothing until the developer keeps one. 500
+  // for the same reason: the remedy is the site's configuration.
+  NEXTLY_LANGUAGE_CODES_COLLIDE: 500,
+  // The configuration writes a language code the earlier way (`pt_BR`) and the database still
+  // stores rows under it: the start refuses until `nextly upgrade` has moved them to the standard
+  // code they are read as. 500: the remedy is a command the developer runs.
+  NEXTLY_LANGUAGE_CODES_NOT_UPGRADED: 500,
+  // `nextly upgrade` found a translated entity whose values are both on its main table and in its
+  // translations table, with no record saying the copy across finished: which copy is current
+  // cannot be told, so it changes nothing until `nextly migrate --repair-localization` has run.
+  NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED: 500,
   // `db.postgres.schema` names a schema holding no installation while another
   // schema of the database holds one: the setting moved on an existing site.
   // 500 for the same reason as the mismatch above: a boot-time refusal of the

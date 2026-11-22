@@ -196,6 +196,25 @@ describe("the component read", () => {
     ]);
   });
 
+  it("says which component is used as a header or footer, from the same rows", () => {
+    // What tells a placed header or footer apart from any other component.
+    pending();
+    const before = renderHook(() => useComponentLibrary());
+    expect(before.result.current.areaOf("site-header")).toBeUndefined();
+
+    answering([
+      { id: "site-header", title: "Header", area: "header", document: header },
+      { id: "site-footer", title: "Footer", area: "footer", document: header },
+      { id: "card", title: "Card", document: header },
+    ]);
+    const { result } = renderHook(() => useComponentLibrary());
+
+    expect(result.current.areaOf("site-header")).toBe("header");
+    expect(result.current.areaOf("site-footer")).toBe("footer");
+    expect(result.current.areaOf("card")).toBeUndefined();
+    expect(result.current.areaOf("unknown")).toBeUndefined();
+  });
+
   it("names each component by its title, from the same rows, and names nothing before they arrive", () => {
     // What Layers, the bottom bar, the search and the section list name a
     // placement by. Read off the same response as the list, so a title and a

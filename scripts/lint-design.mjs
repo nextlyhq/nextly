@@ -105,9 +105,13 @@ export function isPluginSurface(file) {
   return PLUGIN_SURFACE_RE.test(file);
 }
 
-// Admin's reviewed `!important` baseline (see packages/admin/src/styles/globals.css). The
-// guard fails if this grows; lower it when overrides are removed.
-const ADMIN_IMPORTANT_BASELINE = 35;
+// The reviewed `!important` baseline outside plugins: the admin's
+// (packages/admin/src/styles/globals.css) and the builder's canvas-only
+// overrides, among them the entrance-animation replay rule in
+// packages/builder/src/canvas/appear-replay.ts, which must outweigh a block's
+// compiled timeline whatever its selector's weight. The guard fails if this
+// grows; lower it when overrides are removed.
+const ADMIN_IMPORTANT_BASELINE = 36;
 
 const TOKEN_WRAP_RE = createTokenWrapPattern();
 const COLOR_LITERAL_RE = createColorLiteralPattern();

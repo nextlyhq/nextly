@@ -45,6 +45,7 @@ import {
   entry,
   partOf,
   person,
+  publishedPastReview,
   seedState,
   shownVersion,
   stateOf,
@@ -359,7 +360,7 @@ async function save(
       ...(locale ? { locale } : {}),
     },
     // An update names its version or says it overwrites; this one read none.
-    { ...data, _overwrite: true }
+    { ...publishedPastReview(data), _overwrite: true }
   );
   // A refused save fails the test rather than leaving the document as it was.
   if (!result.success) {

@@ -10,6 +10,12 @@ import { describe, expect, it, vi } from "vitest";
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { SchemaEventRow } from "../../events/schema-events-repository";
 import {
+  judgeDataLoss,
+  NO_CONSENT,
+  refusalForStart,
+  type DataLossConsent,
+} from "../../migrate/data-loss-consent";
+import {
   assertPluginSchemaVersionsUsable,
   assertSchemaVersionDeclarable,
   assertSchemaVersionUsable,
@@ -252,5 +258,141 @@ describe("assertPluginSchemaVersionsUsable", () => {
         warn: () => {},
       })
     ).rejects.toBe(fault);
+  });
+});
+
+describe("a plugin behind after the start's migrations were refused for the data-loss consent", () => {
+  const MODULE = "plugin:seo/002_drop_summary";
+  const behind = { name: "seo", declaredVersion: 2, appliedVersion: 1 };
+  const TODAY =
+    'The plugin "seo" expects schema version 2, and the database has 1. Run "nextly migrate" or "nextly plugins install seo".';
+
+  /** The consent check's own refusal of a module dropping one column, as a start with `consent` is told it. */
+  async function refusedWith(consent: DataLossConsent) {
+    const verdict = await judgeDataLoss({
+      deletions: [{ kind: "column", table: "seo_pages", column: "summary" }],
+      consent,
+      interactive: false,
+      ask: async () => false,
+      print: () => {},
+      sourceOf: () => MODULE,
+    });
+    if (verdict.kind !== "refused") throw new Error("expected a refusal");
+    return { message: refusalForStart(verdict.message) };
+  }
+
+  const thrownBy = (work: () => void): NextlyError => {
+    try {
+      work();
+    } catch (error) {
+      if (NextlyError.is(error)) return error;
+      throw error;
+    }
+    throw new Error("expected a refusal");
+  };
+
+  it("says so, with the consent check's listing and the consent as a start is given it", async () => {
+    const refusal = await refusedWith(NO_CONSENT);
+
+    const error = thrownBy(() =>
+      assertSchemaVersionUsable(behind, {
+        production: true,
+        warn: () => {},
+        consentRefusal: refusal,
+      })
+    );
+
+    expect(error.code).toBe("PLUGIN_SCHEMA_BEHIND");
+    expect(error.publicMessage).toBe(
+      [
+        'The plugin "seo" expects schema version 2, and the database has 1, because this start did not apply its pending migrations.',
+        "Deleting data needs consent, and nobody can be asked (no terminal, CI, or --non-interactive). This would delete:",
+        `  ${MODULE}:`,
+        "    - column seo_pages.summary",
+        'Nothing was changed. To consent: start with NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary, or run "nextly migrate --accept-data-loss=seo_pages.summary".',
+      ].join("\n")
+    );
+    expect(error.logContext).toEqual({
+      plugin: "seo",
+      declared: 2,
+      applied: 1,
+      reason: "data-loss-consent",
+    });
+  });
+
+  it("says so for a consent that names other targets and leaves the deletion out", async () => {
+    const refusal = await refusedWith({
+      ...NO_CONSENT,
+      given: {
+        from: "env",
+        targets: { tables: new Set(["seo_redirects"]), columns: new Set() },
+      },
+    });
+
+    const { publicMessage } = thrownBy(() =>
+      assertSchemaVersionUsable(behind, {
+        production: true,
+        warn: () => {},
+        consentRefusal: refusal,
+      })
+    );
+
+    expect(publicMessage).toContain(
+      "because this start did not apply its pending migrations.\nThe consent given does not cover 1 deletion:"
+    );
+    expect(publicMessage).toContain(
+      'To delete this too: start with NEXTLY_ACCEPT_DATA_LOSS=seo_redirects,seo_pages.summary, or run "nextly migrate --accept-data-loss=seo_redirects,seo_pages.summary".'
+    );
+  });
+
+  it("keeps today's message for a plugin behind with no such refusal", () => {
+    const error = thrownBy(() =>
+      assertSchemaVersionUsable(behind, { production: true, warn: () => {} })
+    );
+
+    expect(error.publicMessage).toBe(TODAY);
+    expect(error.logContext).toEqual({
+      plugin: "seo",
+      declared: 2,
+      applied: 1,
+    });
+  });
+
+  it("does not refuse a plugin that is not behind, whatever the start refused", async () => {
+    const refusal = await refusedWith(NO_CONSENT);
+
+    expect(() =>
+      assertSchemaVersionUsable(
+        { name: "seo", declaredVersion: 2, appliedVersion: 2 },
+        { production: true, warn: () => {}, consentRefusal: refusal }
+      )
+    ).not.toThrow();
+  });
+
+  it("names the first plugin behind, handed the start's refusal with the ledger's reading", async () => {
+    const refusal = await refusedWith(NO_CONSENT);
+
+    await expect(
+      assertPluginSchemaVersionsUsable({
+        plugins: [
+          {
+            name: "seo",
+            schemaVersion: 2,
+            migrations: [
+              { name: "001_create", schemaVersion: 1 },
+              { name: "002_drop_summary", schemaVersion: 2 },
+            ],
+          },
+        ],
+        readLedger: async () => [],
+        ledgerExists: async () => true,
+        production: true,
+        warn: () => {},
+        consentRefusal: refusal,
+      })
+    ).rejects.toMatchObject({
+      code: "PLUGIN_SCHEMA_BEHIND",
+      logContext: { plugin: "seo", reason: "data-loss-consent" },
+    });
   });
 });

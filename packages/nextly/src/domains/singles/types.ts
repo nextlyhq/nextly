@@ -87,6 +87,27 @@ export interface GetSingleOptions {
   translationStatus?: boolean;
 
   /**
+   * Attach `_details`: who changed the Single last and when, and where the
+   * site serves it, as an entry read's `details` does. Answered only once
+   * the read is granted; the caller decides who may ask (a signed-in admin
+   * user), so a visitor or an API key is never told.
+   */
+  details?: boolean;
+
+  /**
+   * Whole-document fallback: where the Single is not published in the
+   * requested language, answer in the first language of its fallback chain it
+   * is published in, and say which (`_locale`).
+   */
+  wholeDocumentFallback?: boolean;
+
+  /** Attach `_sources`: for each translatable field, the language its value came from. */
+  sourceLocales?: boolean;
+
+  /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+  translations?: "all";
+
+  /**
    * The fields to answer with, as a collection read selects them
    * (`shared/lib/field-selection`): a field named `true` is included, a `false`
    * entry is ignored, and a selection that includes nothing answers the whole
@@ -234,8 +255,6 @@ export interface UpdateSingleOptions {
    * The fields this write restored, and the version each came from, as server
    * code states it. A client states it as `_restoredFrom` in the body, read
    * at the write's boundary when this is absent.
-   *
-   * @experimental
    */
   restoredFrom?: FieldSources;
   /**

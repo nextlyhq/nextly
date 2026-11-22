@@ -110,6 +110,16 @@ function decodeDocumentVersion(raw: unknown): DecodedVersion {
 }
 
 /**
+ * The counter language `code` holds in a `_rev` a client read: 0 where the version names none.
+ * How a copy says which version of its source language it was made from.
+ *
+ * @throws NextlyError.validation when `raw` is not a version.
+ */
+export function languageCounterInVersion(raw: unknown, code: string): number {
+  return languageCounterOf(decodeDocumentVersion(raw), code);
+}
+
+/**
  * The version `body` names, decoded; undefined when it names none. Only the
  * decode: whether a write must name one is `versionCheckFor`'s to decide.
  *
@@ -588,6 +598,43 @@ export function staleParts(
   return stale;
 }
 
+/**
+ * A document's state as the version a client would hold for it: its own
+ * row's counter and each language read. What an overwrite holds as the
+ * version it was judged against, to compare under the row lock as a `_rev`
+ * is compared.
+ */
+export function versionOfRevision(
+  state: DocumentRevisionState
+): DecodedVersion {
+  return {
+    main: state.main.counter,
+    languages: Object.fromEntries(
+      Object.values(state.languages).map(part => [part.part, part.counter])
+    ),
+  };
+}
+
+/**
+ * Whether a document moved since `judged` was read: compared by
+ * {@link staleParts}, as a `_rev` is, against its state read under the row
+ * lock (`now`, the main row and the same languages). A document that had no
+ * row when judged moved if it has one now.
+ */
+export function movedSinceJudged(
+  judged: DecodedVersion | undefined,
+  now: DocumentRevisionState | undefined
+): boolean {
+  if (now === undefined) return false;
+  if (judged === undefined) return true;
+  return (
+    staleParts(judged, {
+      main: now.main,
+      languages: Object.values(now.languages),
+    }).length > 0
+  );
+}
+
 /** Who changed a document last, as the picker answers: ids only, never a name. */
 export interface LastChanger {
   kind: string;
@@ -649,13 +696,18 @@ const CHANGER_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * A last changer as a refusal shows it: a person by the name their account
- * gives now, never their email, and no name once the account is gone; a
+ * A changer as a refusal shows it: a person by the name their account gives
+ * now, never their email, and no name once the account is gone; a
  * plugin-defined person by their kind alone; anything else by its kind.
  * Undefined for a kind this version of Nextly does not know.
+ *
+ * The one naming rule for "who changed it" wherever a caller who may read the
+ * document is told: a refused save, a recovery point, an entry's details.
+ *
+ * @experimental
  */
-async function shownChanger(
-  changer: LastChanger,
+export async function shownChanger(
+  changer: Pick<LastChanger, "kind" | "id" | "principalKind">,
   namePeople: boolean
 ): Promise<StaleVersionPublicData["changedBy"]> {
   if (!CHANGER_KINDS.has(changer.kind)) return undefined;

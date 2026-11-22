@@ -31,6 +31,7 @@ import {
   entry,
   partOf,
   person,
+  publishedPastReview,
   seedState,
   stateOf,
   versionOf,
@@ -126,7 +127,7 @@ async function save(
   const result = await handlerOf(app()).updateEntry(
     { collectionName: "posts", entryId, overrideAccess: true, locale },
     // An update names its version or says it overwrites; this one read none.
-    { ...data, _overwrite: true }
+    { ...publishedPastReview(data), _overwrite: true }
   );
   // A refused save fails the test rather than leaving the document as it was.
   if (!result.success) {

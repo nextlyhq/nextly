@@ -7,12 +7,14 @@ description: "`nextly upgrade` would change the database, and no backup was conf
 
 `nextly upgrade` would change the database, and no backup was confirmed, with no terminal attached to ask.
 
+This code is retired. `nextly upgrade` no longer changes stored data: `nextly migrate` and `nextly i18n:convert-zoned-dates` do, and without a confirmed backup or a terminal they end as `DATA_STEPS_BACKUP_NOT_CONFIRMED`. No command ends with it any more; it is kept so a script or a log search that names it still reads correctly. Releases before the change ended `nextly upgrade` with it:
+
 `nextly upgrade` asks for a backup before its first step that changes anything. With no terminal attached, as in CI, it cannot ask, and `--confirm-backed-up` was not passed. Nothing was changed.
 
 ## Fix
 
 - Back up the database.
-- Run `nextly upgrade --confirm-backed-up`.
+- Run `nextly migrate --backup-confirmed`, which now does this work once its migrations have applied.
 
 ## Example
 

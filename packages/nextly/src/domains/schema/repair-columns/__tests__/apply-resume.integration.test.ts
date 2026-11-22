@@ -31,18 +31,20 @@ import { stepName } from "../resume";
 import { dryRunReport } from "../run-report";
 import type { RepairEntity } from "../types";
 
-import { asJson, collection, f, recordOf, tableTools } from "./apply-fixture";
+import {
+  AUTHOR,
+  asJson,
+  collection,
+  f,
+  legacyFields,
+  recordOf,
+  tableTools,
+} from "./apply-fixture";
 
 const POSTS = "dc_rs_posts";
 const CARDS = "comp_rs_card";
 
 const TITLE = f({ name: "title", type: "text" });
-const AUTHOR = f({
-  name: "author",
-  type: "relationship",
-  relationTo: "users",
-  required: true,
-});
 const RELATED = f({
   name: "related",
   type: "relationship",
@@ -106,7 +108,7 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
         column: "author",
         entity: () => collection(POSTS, [TITLE, AUTHOR]),
         create: async () => {
-          await tools.createTable(POSTS, [TITLE, AUTHOR]);
+          await tools.createTable(POSTS, legacyFields([TITLE, AUTHOR]));
           await tools.insert(POSTS, [
             { id: "p1", title: "a", author: "u1" },
             { id: "p2", title: "b", author: "u2" },
@@ -399,7 +401,7 @@ describe.each(getConfiguredTestDialects().filter(d => d !== "mysql"))(
     });
 
     it("a stopped run leaves no recorded progress and no partly converted column", async () => {
-      await tools.createTable(POSTS, [TITLE, AUTHOR]);
+      await tools.createTable(POSTS, legacyFields([TITLE, AUTHOR]));
       await tools.insert(POSTS, [{ id: "p1", title: "a", author: "u1" }]);
       const before = await tools.definition(POSTS);
       const values = await tools.values(POSTS, "author");

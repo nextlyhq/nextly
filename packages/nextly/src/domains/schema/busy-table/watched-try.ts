@@ -19,8 +19,13 @@ import { prepareTryWatchdog } from "./watchdog";
 export interface WatchedTry {
   /** Starts watching the try's session, once its id is known. */
   readonly onSession: (session: string) => void;
-  /** Stops the watch: awaited before the try's connection is let go, and once the try is done. */
-  readonly settle: () => Promise<void>;
+  /**
+   * Stops the watch: awaited before the try's connection is let go, and once the try is done.
+   * Resolves to how long the watch saw the session waiting for locks, in milliseconds (0 on
+   * SQLite, which it does not watch): a runner that charges a try's wait to a bound reads the
+   * wait apart from the time the statement spent working.
+   */
+  readonly settle: () => Promise<number>;
   /**
    * Stops the watch and says what held the table where `error` is the try's wait for a lock
    * ending (`endedWaiting`); undefined where it is any other failure, which the try lets through.
@@ -71,6 +76,7 @@ export function watchTry(
     },
     settle: async () => {
       await watchdog.stop();
+      return watchdog.waited();
     },
     ended: async error => {
       const { fired } = await watchdog.stop();

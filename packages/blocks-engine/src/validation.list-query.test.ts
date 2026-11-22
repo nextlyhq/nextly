@@ -987,16 +987,25 @@ describe("a list split into pages", () => {
     expect(found.map(({ code }) => code)).toEqual(["list-paginate-related"]);
   });
 
-  it.each([
-    ["component", "in a component"],
-    ["region", "in a Layout region"],
-  ])("refuses a list split into pages in a %s", (kind, words) => {
+  it("refuses a list split into pages in a component", () => {
     const [found] = pageCodes(
       [list("shared", { collection: "posts", paginate: true })],
-      kind
+      "component"
     );
     expect(found?.code).toBe("list-paginate-shared");
-    expect(found?.message).toContain(words);
+    expect(found?.message).toContain("in a component");
+  });
+
+  it("does not take a kind spelled like an inherited name for a component", () => {
+    // A stored document's kind is outside input: one named `constructor`
+    // is no component, and its refusal must not read an object's own
+    // property as words.
+    expect(
+      pageCodes(
+        [list("one", { collection: "posts", paginate: true })],
+        "constructor"
+      )
+    ).toEqual([]);
   });
 
   it.each(["page", "pattern", "template"])(

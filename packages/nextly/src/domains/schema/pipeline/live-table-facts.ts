@@ -108,6 +108,54 @@ async function probeReturnsRow(
   return (await rowsOf<unknown>(db, dialect, probe)).length > 0;
 }
 
+/**
+ * Of `names` (lower-cased), those some relation of the database already has, compared without
+ * regard to case: a table, a view, or anything else a `CREATE TABLE` of the name would meet.
+ * A `CREATE TABLE IF NOT EXISTS` of such a name makes nothing and says nothing, so only a name
+ * this leaves out is one the statement is sure to create.
+ *
+ * Every kind of relation counts, and more than the name could ever meet:
+ * - PostgreSQL: any `pg_class` entry outside the system schemas, whatever its kind (a table, a
+ *   partitioned table, a view, a materialised view, a foreign table, a sequence, an index, a
+ *   composite type) and whatever its schema, a session's temporary schema included;
+ * - MySQL: any `information_schema.TABLES` row of the database, a view among them;
+ * - SQLite: any entry of `sqlite_master` or `sqlite_temp_master`.
+ */
+export async function readTakenRelationNames(
+  db: unknown,
+  dialect: SupportedDialect,
+  names: readonly string[]
+): Promise<Set<string>> {
+  if (names.length === 0) return new Set();
+  const namesIn = sql.join(
+    names.map(name => sql`${name.toLowerCase()}`),
+    sql`, `
+  );
+  const query =
+    dialect === "postgresql"
+      ? // Folded under the "C" collation, letter by letter in ASCII alone, as the names asked
+        // are: the database's own locale may fold an ASCII letter to another (Turkish `I`), and
+        // a relation so named must not read as absent.
+        sql`SELECT lower(c.relname::text COLLATE "C") AS name FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE lower(c.relname::text COLLATE "C") IN (${namesIn})
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND n.nspname NOT LIKE 'pg_toast%'`
+      : dialect === "mysql"
+        ? sql`SELECT lower(TABLE_NAME) AS name FROM information_schema.TABLES
+              WHERE TABLE_SCHEMA = DATABASE()
+                AND lower(TABLE_NAME) IN (${namesIn})`
+        : sql`SELECT lower(name) AS name FROM sqlite_master
+              WHERE lower(name) IN (${namesIn})
+              UNION ALL
+              SELECT lower(name) AS name FROM sqlite_temp_master
+              WHERE lower(name) IN (${namesIn})`;
+  const rows = await rowsOf<{ name?: unknown }>(db, dialect, query);
+  return new Set(
+    rows.flatMap(row => (typeof row.name === "string" ? [row.name] : []))
+  );
+}
+
 export async function tableHasRows(
   db: unknown,
   dialect: SupportedDialect,
@@ -722,22 +770,43 @@ export async function readIndexUniqueness(
  * Each column comes with the name of the index that covers it, so turning Unique off drops the
  * index that is there rather than one of the names the generator would have used. The name is
  * null where no statement can drop it by name: the primary key, and SQLite's index for an inline
- * `UNIQUE`, which only a table rebuild removes.
+ * `UNIQUE`, which only a table rebuild removes. Where several cover one column, the last read
+ * (`readUniqueIndexesByColumn` has them all).
  */
 export async function readUniqueColumns(
   db: unknown,
   dialect: SupportedDialect,
   tableName: string
 ): Promise<Map<string, string | null>> {
-  const unique = (await readIndexes(db, dialect, tableName)).filter(
-    index => index.unique && index.wholeColumns && index.columns.length === 1
-  );
+  const byColumn = await readUniqueIndexesByColumn(db, dialect, tableName);
   return new Map(
-    unique.map(index => [
-      index.columns[0],
-      index.droppableByName ? index.name : null,
-    ])
+    [...byColumn].map(([column, names]) => [column, names[names.length - 1]])
   );
+}
+
+/**
+ * Every index that holds a column unique on its own, by the column, each by its name (null where
+ * no statement can drop it by name), read as `readUniqueColumns` reads them. A column can be held
+ * unique by more than one: an older table keeps an index under a name Nextly did not make beside
+ * the one Nextly declares, and a migration file written while both stand has to name the other.
+ */
+export async function readUniqueIndexesByColumn(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<Map<string, (string | null)[]>> {
+  const byColumn = new Map<string, (string | null)[]>();
+  for (const index of await readIndexes(db, dialect, tableName)) {
+    if (!index.unique || !index.wholeColumns || index.columns.length !== 1) {
+      continue;
+    }
+    const column = index.columns[0];
+    byColumn.set(column, [
+      ...(byColumn.get(column) ?? []),
+      index.droppableByName ? index.name : null,
+    ]);
+  }
+  return byColumn;
 }
 
 /** An object of the database holding a name an index is about to take. */
@@ -1080,4 +1149,203 @@ export async function readForeignKeyColumns(
   )) as SqliteForeignKeyRow[];
   for (const row of rows) record(row.from, null);
   return out;
+}
+
+/**
+ * Each column of `tableName` that carries a foreign key, with the tables its keys reference,
+ * named exactly as the database names them, so two tables a name can tell apart stay apart:
+ * PostgreSQL's `regclass` text, bare for an unquoted name on the search path and quoted for
+ * any other (`"Posts"` is not `posts`), MySQL's name in the current database, and SQLite's
+ * lower-cased, as its names are compared without case. A column without a key has no entry.
+ */
+export async function readForeignKeyTargets(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const record = (column: string, target: string) => {
+    out.set(column, [...(out.get(column) ?? []), target]);
+  };
+
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT a.attname AS column_name, c.confrelid::regclass::text AS target
+          FROM pg_constraint c
+          JOIN unnest(c.conkey) AS k(attnum) ON true
+          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+          WHERE c.contype = 'f' AND c.conrelid = to_regclass(${tableName})`
+    )) as { rows: { column_name: string; target: string }[] };
+    for (const row of result.rows) record(row.column_name, row.target);
+    return out;
+  }
+
+  if (dialect === "mysql") {
+    const rows = mysqlRows<{
+      COLUMN_NAME: string;
+      REFERENCED_TABLE_NAME: string;
+      REFERENCED_TABLE_SCHEMA: string;
+    }>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_TABLE_SCHEMA
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = ${tableName}
+              AND REFERENCED_TABLE_NAME IS NOT NULL
+              AND REFERENCED_TABLE_SCHEMA = DATABASE()`
+      )
+    );
+    for (const row of rows) record(row.COLUMN_NAME, row.REFERENCED_TABLE_NAME);
+    return out;
+  }
+
+  const rows = (await (db as SqliteAll).all(
+    sql`PRAGMA foreign_key_list(${sql.identifier(tableName)})`
+  )) as (SqliteForeignKeyRow & { table: string })[];
+  for (const row of rows) record(row.from, row.table.toLowerCase());
+  return out;
+}
+
+/** What a column carries beside its type and default, as its database reports it. */
+export interface ColumnExtras {
+  comment: string | null;
+  /** MySQL: the column's character set. Null elsewhere, where a column has none of its own. */
+  charset: string | null;
+  /**
+   * The column's collation where it is not what a column of its type takes unnamed: PostgreSQL's
+   * non-default collation (schema-qualified), MySQL's collation, and on SQLite `declared` when the
+   * table's statement names any collation, which SQLite keeps only in that text.
+   */
+  collation: string | null;
+}
+
+/** The character set and collation a column added to a table without naming them takes. */
+export interface ReceivingDefaults {
+  charset: string | null;
+  collation: string | null;
+}
+
+/**
+ * The comment, character set and collation of each of `columns` on `table`, by column. A column
+ * the table does not have, or a table that does not exist, has no entry.
+ */
+export async function readColumnExtras(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string,
+  columns: readonly string[]
+): Promise<Map<string, ColumnExtras>> {
+  const found = new Map<string, ColumnExtras>();
+  if (columns.length === 0) return found;
+  const names = sql.join(
+    columns.map(name => sql`${name}`),
+    sql`, `
+  );
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT a.attname AS column_name,
+                 col_description(a.attrelid, a.attnum) AS comment,
+                 CASE WHEN a.attcollation <> t.typcollation
+                      THEN n.nspname || '.' || co.collname END AS collation
+          FROM pg_attribute a
+          JOIN pg_type t ON t.oid = a.atttypid
+          LEFT JOIN pg_collation co ON co.oid = a.attcollation
+          LEFT JOIN pg_namespace n ON n.oid = co.collnamespace
+          WHERE a.attrelid = to_regclass(${table}) AND a.attnum > 0
+            AND NOT a.attisdropped AND a.attname IN (${names})`
+    )) as {
+      rows: {
+        column_name: string;
+        comment: string | null;
+        collation: string | null;
+      }[];
+    };
+    for (const row of result.rows) {
+      found.set(row.column_name, {
+        comment: row.comment,
+        charset: null,
+        collation: row.collation,
+      });
+    }
+    return found;
+  }
+  if (dialect === "mysql") {
+    const rows = mysqlRows<{
+      COLUMN_NAME: string;
+      COLUMN_COMMENT: string | null;
+      CHARACTER_SET_NAME: string | null;
+      COLLATION_NAME: string | null;
+    }>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT COLUMN_NAME, COLUMN_COMMENT, CHARACTER_SET_NAME, COLLATION_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${table}
+              AND COLUMN_NAME IN (${names})`
+      )
+    );
+    for (const row of rows) {
+      found.set(row.COLUMN_NAME, {
+        // MySQL reports a column with no comment as an empty one.
+        comment: row.COLUMN_COMMENT ? row.COLUMN_COMMENT : null,
+        charset: row.CHARACTER_SET_NAME,
+        collation: row.COLLATION_NAME,
+      });
+    }
+    return found;
+  }
+  // SQLite keeps a column's collation only in its table's statement, so any collation the
+  // statement names counts for every column judged: telling which column it belongs to would take
+  // a parser of that statement, and no table Nextly creates names one.
+  const rows = (await Promise.resolve(
+    (db as SqliteAll).all(
+      sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${table}`
+    )
+  )) as { sql: string | null }[];
+  const statement = rows[0]?.sql;
+  if (statement === undefined) return found;
+  const live = (await Promise.resolve(
+    (db as SqliteAll).all(
+      sql`SELECT name FROM pragma_table_info(${table}) WHERE name IN (${names})`
+    )
+  )) as { name: string }[];
+  // Quoted text is left out first: a column named "collate", or a default literal holding the
+  // word, names no collation.
+  const unquoted = (statement ?? "").replace(
+    /'(?:[^']|'')*'|"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]/g,
+    " "
+  );
+  const declared = /\bcollate\b/i.test(unquoted) ? "declared" : null;
+  for (const { name } of live) {
+    found.set(name, { comment: null, charset: null, collation: declared });
+  }
+  return found;
+}
+
+/**
+ * The character set and collation a column added to `table` without naming them takes: on MySQL
+ * the table's own defaults, or the database's where the table does not exist yet and will be
+ * created naming none. PostgreSQL gives such a column its type's collation and SQLite none, so
+ * both report none.
+ */
+export async function readReceivingDefaults(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string
+): Promise<ReceivingDefaults> {
+  if (dialect !== "mysql") return { charset: null, collation: null };
+  const [own] = mysqlRows<{ charset: string; collation: string }>(
+    await (db as PgMysqlExecute).execute(
+      sql`SELECT co.CHARACTER_SET_NAME AS charset, t.TABLE_COLLATION AS collation
+          FROM information_schema.TABLES t
+          JOIN information_schema.COLLATIONS co ON co.COLLATION_NAME = t.TABLE_COLLATION
+          WHERE t.TABLE_SCHEMA = DATABASE() AND t.TABLE_NAME = ${table}`
+    )
+  );
+  if (own !== undefined) return own;
+  const [database] = mysqlRows<{ charset: string; collation: string }>(
+    await (db as PgMysqlExecute).execute(
+      sql`SELECT @@character_set_database AS charset, @@collation_database AS collation`
+    )
+  );
+  return database ?? { charset: null, collation: null };
 }

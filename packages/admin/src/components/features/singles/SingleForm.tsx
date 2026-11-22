@@ -28,8 +28,10 @@ import { useEffect, useMemo, useCallback, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
+import { copiedValuesFor } from "@admin/components/features/entries/copied-values";
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
+import { HISTORY_REASON } from "@admin/components/features/entries/EntryForm/document-actions";
 import { pluginDocumentLock } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
 import {
   topLevelFieldNames,
@@ -120,6 +122,11 @@ import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLoc
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
 import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
+import { storedStampOf } from "@admin/components/features/entries/review/review-words";
+import { ReviewChanges } from "@admin/components/features/entries/review/ReviewChanges";
+import { ReviewStatusLine } from "@admin/components/features/entries/review/ReviewStatusLine";
+import { StepRefusalNote } from "@admin/components/features/entries/review/StepRefusalNote";
+import { useEditorReview } from "@admin/components/features/entries/review/useEditorReview";
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
@@ -162,7 +169,12 @@ import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
-import { versionForLanguage, versionOf } from "@admin/lib/document-version";
+import {
+  versionForLanguage,
+  versionOf,
+  type ShownCopy,
+  type ShownCopyHandle,
+} from "@admin/lib/document-version";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
 import {
@@ -177,6 +189,7 @@ import type { SingleAdminOptions } from "@admin/types/entities";
 import type { RemovedFromCodeMark } from "@admin/types/removed-from-code";
 
 import { relaxIdentityRequired } from "./identity-fields";
+import { useSinglePanel, type SinglePanelProps } from "./useSinglePanel";
 import { useSinglePreviewLink } from "./useSinglePreviewLink";
 import { useSinglePreviewPane } from "./useSinglePreviewPane";
 
@@ -219,6 +232,11 @@ export interface SingleSchema extends RemovedFromCodeMark {
    * cannot offer an affordance the engine will not honour.
    */
   draftsEnabled?: boolean;
+  /**
+   * The workflow that holds this Single's publishing, from the schema read;
+   * `null` (or absent from an older server) where none is attached.
+   */
+  workflow?: { slug: string; label: string } | null;
 }
 
 /**
@@ -337,6 +355,11 @@ export interface SingleFormProps {
   revealWaiting?: boolean;
   /** Additional CSS classes */
   className?: string;
+  /**
+   * Filled with how to read the copy this editor shows, for an action the page draws outside it
+   * (publishing chosen parts) that must be refused when the Single changed since it opened.
+   */
+  shownCopy?: ShownCopyHandle;
 }
 
 // ============================================================================
@@ -599,10 +622,12 @@ function SingleFormRail({
   documentStatus,
   singleSlug,
   locale,
+  reviewHold,
   onLocaleChange,
   panel,
   panelOrder,
   placedSectionProps,
+  about,
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
@@ -615,12 +640,16 @@ function SingleFormRail({
   /** The Single's slug, which releases address it by with its id. */
   singleSlug: string;
   locale?: string;
+  /** Why the Review section's steps wait, as the header's do (`stepsHold`). */
+  reviewHold: string | undefined;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   panel: Pick<ReturnType<typeof useDocumentPanel>, "mode" | "shown" | "hide">;
   /** The panel's sections in the order the server placed them. */
   panelOrder: PanelOrderEntry[] | undefined;
   /** What each section plugins declared at the Single's page is handed. */
   placedSectionProps: SidebarSectionProps | undefined;
+  /** What the panel says about the Single itself (`useSinglePanel`). */
+  about: SinglePanelProps;
 }) {
   const documentId = entry?.id === undefined ? "" : String(entry.id);
   return (
@@ -631,6 +660,7 @@ function SingleFormRail({
     >
       <EntryFormSidebar
         mode="edit"
+        {...about}
         {...(panelOrder === undefined ? {} : { panelOrder })}
         {...(placedSectionProps === undefined ? {} : { placedSectionProps })}
         entry={entry}
@@ -649,6 +679,7 @@ function SingleFormRail({
         navigationDisabled={navigationDisabled}
         publishAllDisabled={publishAllDisabled}
         {...(locale === undefined ? {} : { locale })}
+        reviewHold={reviewHold}
         {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
       />
     </DocumentSidePanel>
@@ -718,6 +749,7 @@ export function SingleForm({
   latest,
   revealOutline,
   revealWaiting = false,
+  shownCopy,
 }: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
@@ -860,6 +892,9 @@ export function SingleForm({
       lastResetPlaceRef.current = place;
       adoptRead(document);
       form.reset(defaultValuesRef.current);
+      // The refused edits are kept as a recovery point; the form itself starts afresh, holding
+      // nothing a copy put into it.
+      copiedValuesFor(form.control).clear();
       return;
     } else if (versionPinned()) {
       // A refused save holds the form: the newer version that follows the
@@ -891,6 +926,9 @@ export function SingleForm({
     // echo of this author's own save keeps the version that save answered.
     if (!echoOfOwnSave) adoptRead(document);
     form.reset(defaultValuesRef.current, { keepDirtyValues: echoOfOwnSave });
+    // Another document or language, or a version not this author's, starts afresh: nothing a
+    // copy put into the form is in it any more. An echo of their own save keeps unsaved work.
+    if (!echoOfOwnSave) copiedValuesFor(form.control).clear();
   }, [
     document,
     locale,
@@ -1408,6 +1446,7 @@ export function SingleForm({
         version.release();
         version.adoptRead(current);
         form.reset(defaultValuesRef.current);
+        copiedValuesFor(form.control).clear();
         return;
       }
       // The read that brings the current version is still on its way.
@@ -1546,15 +1585,30 @@ export function SingleForm({
   // availability rule through the locale context. A Single is addressed by its
   // slug alone, so it supplies its own action exactly as it supplies its own
   // source read.
+  // The copy on screen, read as the editor reads it, so a publish of every
+  // language, or of chosen parts from the page, is refused when that language
+  // changed since it opened, and waits for the copy's recordings on their way.
+  const startedFrom = version.startedFrom;
+  const readsDraft = schema.draftsEnabled === true;
+  const shownCopyOf = useCallback(
+    (): ShownCopy => ({
+      version: startedFrom(),
+      locale,
+      draft: readsDraft,
+      recordings: recordingsFor,
+    }),
+    [startedFrom, locale, readsDraft, recordingsFor]
+  );
+  useEffect(() => {
+    if (!shownCopy) return undefined;
+    shownCopy.current = shownCopyOf;
+    return () => {
+      shownCopy.current = null;
+    };
+  }, [shownCopy, shownCopyOf]);
   const publishAllSingleLanguages = usePublishAllSingleLocales({
     slug: schema.slug,
-    // The copy on screen, read as the editor reads it, so a publish of every
-    // language is refused when that language changed since it opened.
-    shown: () => ({
-      version: version.startedFrom(),
-      locale,
-      draft: schema.draftsEnabled === true,
-    }),
+    shown: shownCopyOf,
   });
   // Publishing every language waits for the Single's recordings in flight.
   const afterRecordings = useAfterRecordings(
@@ -1615,6 +1669,13 @@ export function SingleForm({
   // collection entry's page.
   const { panelOrder, sectionsAboveForm, placedSectionProps } =
     useDocumentPanelParts(documentPlace, panel.mode === "sheet");
+  // What the panel says about the Single: what it is, its last change and
+  // who made it, its API address, and its history.
+  const singlePanel = useSinglePanel({
+    schema,
+    documentId: document.id ? String(document.id) : undefined,
+    locale,
+  });
 
   const localeCtx = useEntryLocaleContext({
     locale,
@@ -1735,6 +1796,28 @@ export function SingleForm({
     pendingOfferAt: recovery.offer?.savedAt ?? null,
   };
 
+  // The workflow's next step, where a workflow holds this Single's
+  // publishing, in the language being edited.
+  const review = useEditorReview({
+    document: {
+      scopeKind: "single",
+      scopeSlug: schema.slug,
+      entryId: String(document.id),
+    },
+    locale,
+    isDirty: hasUnsavedWork,
+    storedStamp: storedStampOf(document),
+    // A past version on screen, or a save or recovery on its way, holds
+    // the review's steps outside the header as the header holds its own.
+    held:
+      viewingVersion !== null ? HISTORY_REASON : busy ? "Saving…" : undefined,
+    // Known from the schema read: a Single with no workflow publishes
+    // without waiting for a review state. Absent (an older server), it waits.
+    ...(schema.workflow === undefined
+      ? {}
+      : { workflowExpected: schema.workflow !== null }),
+  });
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode: "edit",
     hasStatus,
@@ -1768,6 +1851,7 @@ export function SingleForm({
     ...storingHandlers(handleSubmit),
     onDiscardWorkingDraft: discardWorkingDraft,
     onCancel: handleCancel,
+    ...(review.binding === undefined ? {} : { review: review.binding }),
     ...(onViewApi === undefined ? {} : { onViewApi }),
   };
 
@@ -2034,6 +2118,31 @@ export function SingleForm({
                                       // instead.
                                       isSubmitting={writePending}
                                     />
+                                    <ReviewStatusLine
+                                      status={editedStatus.status}
+                                      hasWorkingDraft={
+                                        editedStatus.hasWorkingDraft
+                                      }
+                                      part={review.part}
+                                      parts={review.parts}
+                                      className={DOCUMENT_COLUMN_INSET}
+                                    />
+                                    <StepRefusalNote
+                                      refusal={review.refusal}
+                                      onDismiss={review.clearRefusal}
+                                      className={DOCUMENT_COLUMN_INSET}
+                                    />
+                                    <ReviewChanges
+                                      scope={{
+                                        kind: "single",
+                                        slug: schema.slug,
+                                        documentId: String(document.id),
+                                      }}
+                                      parts={review.onScreen}
+                                      allParts={review.parts}
+                                      hold={review.hold}
+                                      className={DOCUMENT_COLUMN_INSET}
+                                    />
                                     <EntryMetaStrip
                                       panelCarriesId={panel.docked}
                                       documentId={document.id}
@@ -2109,7 +2218,11 @@ export function SingleForm({
                                   panel={panel}
                                   panelOrder={panelOrder}
                                   placedSectionProps={placedSectionProps}
+                                  about={singlePanel}
                                   {...(locale === undefined ? {} : { locale })}
+                                  // The Review section's steps wait for
+                                  // what holds the header's.
+                                  reviewHold={review.stepsHold}
                                   {...(switchLocale === undefined
                                     ? {}
                                     : { onLocaleChange: switchLocale })}
@@ -2146,6 +2259,7 @@ export function SingleForm({
           onLoadCurrent={() => lock.now.keepEditsAndLoad()}
           onSaveAnyway={saveAnyway}
         />
+        {review.dialog}
       </UnsavedWorkProvider>
     </UnsavedChangesGuard>
   );

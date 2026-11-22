@@ -91,16 +91,6 @@ function fieldReadOnlyReason(
 }
 
 /**
- * Whether a field belongs to code or a plugin by its own markers: one that
- * cannot change, and that no other field moves past either, since that would
- * change its place too. The move rule asks this of a drag's two ends and of a
- * one-step move's neighbour.
- */
-export function ownedElsewhere(field: BuilderField): boolean {
-  return fieldReadOnlyReason(field, null) !== null;
-}
-
-/**
  * The read-only reason of a field placed under `ancestors` (outermost first)
  * in an entity that may itself be read-only: the rule above, applied down the
  * chain, so a field inside an owned container is read-only as the outline
@@ -487,7 +477,12 @@ export function visibleRows(
   nodes: readonly OutlineNode[],
   folded: ReadonlySet<string>,
   query: string,
-  typeLabel: (type: string) => string
+  typeLabel: (type: string) => string,
+  /**
+   * The outline level of `nodes`, drawn as level 1: a focused container's fields start below
+   * its own level (`focusView`).
+   */
+  rootLevel = 1
 ): VisibleRow[] {
   const finding = query.trim() !== "";
   const matches = new Set<string>();
@@ -520,7 +515,7 @@ export function visibleRows(
         : undefined;
       rows.push({
         node,
-        level: node.level,
+        level: node.level - rootLevel + 1,
         posinset: index + 1,
         setsize: siblings.length,
         expanded,

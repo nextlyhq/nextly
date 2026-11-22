@@ -520,6 +520,9 @@ const blockNodeObject = z.looseObject({
   name: z.string().optional(),
   customCss: z.string().optional(),
   cssId: z.string().optional(),
+  // The block's own CSS class names, separated by spaces. The engine's
+  // validation judges each name; the schema says only that it is text.
+  cssClasses: z.string().optional(),
   // "Never quote this": the node's root element carries `data-nosnippet`.
   nosnippet: z.boolean().optional(),
   attributes: typedRecord(

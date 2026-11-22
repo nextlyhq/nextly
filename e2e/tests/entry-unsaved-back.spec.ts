@@ -52,8 +52,10 @@ async function openSavedPost(page: Page): Promise<string> {
   await excerpt(page).fill(saved);
   await page.getByRole("button", { name: /save draft/i }).click();
 
-  // Saving a new entry returns to the list rather than staying in the editor.
-  await page.waitForURL(LIST_PATH, { timeout: 30_000 });
+  // The first save stays on the new post. It is then opened again from the
+  // list, so the page before it in the history is the list.
+  await page.waitForURL(EDIT_PATH, { timeout: 30_000 });
+  await gotoAdmin(page, "/collections/posts");
   await page.getByRole("link", { name: title }).click();
   await page.waitForURL(EDIT_PATH, { timeout: 30_000 });
   await expect(excerpt(page)).toHaveValue(saved, { timeout: 30_000 });

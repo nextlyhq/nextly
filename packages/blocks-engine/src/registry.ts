@@ -2,14 +2,25 @@
  * The block registry: the single place that knows which block types exist in a
  * running app, and the gate every definition passes through.
  *
- * `globalThis`-pinned and cleared per boot (clear-and-rebuild), so a dev-server
- * hot reload re-registering the same blocks never collides with itself, while a
- * genuine duplicate name inside one boot still fails loudly.
+ * A registry is a value (`createBlockRegistry`), held by whoever serves a
+ * site: on the server, each page builder holds its own, so two sites in one
+ * process never share blocks. The module functions (`registerBlocks`,
+ * `getBlock`, …) read and write this bundle's own registry, which is what a
+ * browser bundle such as the admin's editor fills; a server reads the
+ * registry of the site it serves instead.
+ *
+ * Cleared per boot (clear-and-rebuild), so a dev-server hot reload
+ * re-registering the same blocks never collides with itself, while a genuine
+ * duplicate name inside one boot still fails loudly.
  *
  * Registration is where definition rules are enforced — a malformed block fails
  * at boot with a named error rather than producing broken pages later.
  */
-import type { AnyBlockDefinition, BlockSupports } from "./block";
+import {
+  propPlacementRefusal,
+  type AnyBlockDefinition,
+  type BlockSupports,
+} from "./block";
 import {
   COMPONENT_INSTANCE_TYPE,
   CONDITION_HIDDEN_TYPE,
@@ -18,7 +29,11 @@ import {
   isTokenRef,
 } from "./document";
 import type { MigrationSource } from "./migration";
-import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
+import {
+  MAX_MIGRATION_STEPS,
+  findMigrationGaps,
+  migrationInfoOf,
+} from "./migration";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
 import { isSlotLock } from "./slot-lock";
@@ -69,25 +84,11 @@ const BUILT_IN_SUPPORTS: SupportDefinition[] = [
   { key: "customCss", label: "Custom CSS" },
 ];
 
-const globalForBlocks = globalThis as unknown as {
-  __nextly_blocks?: Map<string, RegistryEntry>;
-  __nextly_blockSupports?: Map<string, SupportDefinition>;
-};
-
-function blockStore(): Map<string, RegistryEntry> {
-  globalForBlocks.__nextly_blocks ??= new Map();
-  return globalForBlocks.__nextly_blocks;
-}
-
-function supportStore(): Map<string, SupportDefinition> {
-  if (!globalForBlocks.__nextly_blockSupports) {
-    const map = new Map<string, SupportDefinition>();
-    // Seed here rather than at module load so a cleared store always comes
-    // back with the built-ins present.
-    for (const support of BUILT_IN_SUPPORTS) map.set(support.key, support);
-    globalForBlocks.__nextly_blockSupports = map;
-  }
-  return globalForBlocks.__nextly_blockSupports;
+/** A fresh support vocabulary: the built-ins, nothing else. */
+function builtInSupports(): Map<string, SupportDefinition> {
+  const map = new Map<string, SupportDefinition>();
+  for (const support of BUILT_IN_SUPPORTS) map.set(support.key, support);
+  return map;
 }
 
 /**
@@ -193,6 +194,11 @@ function assertValidPropRoles(def: AnyBlockDefinition): void {
         `block "${def.name}" prop "${propName}" role must be "content", or left out.`
       );
     }
+    // Where the prop is edited: a tab and section it can be drawn in.
+    const placement = isPlainRecord(schema)
+      ? propPlacementRefusal(def.name, propName, schema)
+      : undefined;
+    if (placement !== undefined) fail("NEXTLY_BLOCK_INVALID", placement);
   }
 }
 
@@ -227,7 +233,10 @@ function assertValidAddressProps(def: AnyBlockDefinition): void {
  * Check one definition against the rules registration enforces. Split out so a
  * caller can validate a definition without committing it to the registry.
  */
-function assertValidDefinition(def: AnyBlockDefinition): void {
+function assertValidDefinition(
+  def: AnyBlockDefinition,
+  supports: ReadonlyMap<string, SupportDefinition>
+): void {
   if (typeof def.name !== "string" || !isBlockType(def.name)) {
     fail(
       "NEXTLY_BLOCK_INVALID",
@@ -538,15 +547,15 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
     );
   }
 
-  assertKnownSupports(def.name, def.supports);
+  assertKnownSupports(def.name, def.supports, supports);
 }
 
 function assertKnownSupports(
   blockName: string,
-  supports: BlockSupports | undefined
+  supports: BlockSupports | undefined,
+  known: ReadonlyMap<string, SupportDefinition>
 ): void {
   if (!supports) return;
-  const known = supportStore();
   for (const [key, value] of Object.entries(supports)) {
     const support = known.get(key);
     if (!support) {
@@ -589,160 +598,219 @@ function assertKnownSupports(
 }
 
 /**
- * Register block definitions. Called once per boot per source; a duplicate name
- * within a boot is a collision, naming both sources so the conflict is
- * actionable. Registration is all-or-nothing per call: the batch is validated
- * before anything is stored, so a bad definition cannot leave the registry
- * half-populated.
+ * What reads a registry: its blocks, its supports, and the views validation,
+ * nesting, slot defaults and migration take. A route or a check is handed
+ * this, never the writes.
  */
+export interface BlockRegistryReader {
+  /** A registered block definition, or `undefined`. */
+  get(name: string): AnyBlockDefinition | undefined;
+  has(name: string): boolean;
+  /** Every registered block definition, in registration order. */
+  all(): AnyBlockDefinition[];
+  /** Which source registered a block, for diagnostics. */
+  sourceOf(name: string): string | undefined;
+  support(key: string): SupportDefinition | undefined;
+  supports(): SupportDefinition[];
+  /** The block-type lookup validation expects. */
+  lookup(): BlockTypeLookup;
+  /** Each block's declared parents and slot allow-lists. */
+  nestingSource(): NestingSource;
+  /** Each block's definition, for slot defaults and locked slots. */
+  blockSource(): SlotDefaultSource;
+  /** Each block's version and upgrade steps. */
+  migrationSource(): MigrationSource;
+}
+
+/**
+ * One site's block registry: what {@link BlockRegistryReader} reads, and the
+ * gate every definition passes through to get there.
+ */
+export interface BlockRegistry extends BlockRegistryReader {
+  /**
+   * Register block definitions. Called once per boot per source; a duplicate
+   * name within a boot is a collision, naming both sources so the conflict is
+   * actionable. Registration is all-or-nothing per call: the batch is
+   * validated before anything is stored, so a bad definition cannot leave the
+   * registry half-populated.
+   */
+  register(
+    definitions: readonly AnyBlockDefinition[],
+    options?: RegisterOptions
+  ): void;
+  /**
+   * Add a style capability blocks may opt into. Third parties extend the
+   * support vocabulary through this rather than by editing the engine.
+   */
+  registerSupport(support: SupportDefinition): void;
+  /**
+   * Drop every registered block and reset supports to the built-ins. Called
+   * at the start of each boot (and by tests) so re-registration is
+   * idempotent.
+   */
+  clear(): void;
+}
+
+/**
+ * A new, empty registry, with the built-in supports.
+ *
+ * Every view it hands out reads through to the live registry on each call,
+ * so a view taken before a re-register stays correct after it.
+ */
+export function createBlockRegistry(): BlockRegistry {
+  const blocks = new Map<string, RegistryEntry>();
+  let supports = builtInSupports();
+  const get = (name: string): AnyBlockDefinition | undefined =>
+    blocks.get(name)?.definition;
+  const has = (name: string): boolean => blocks.has(name);
+  return {
+    register(definitions, options = {}) {
+      const source = options.source ?? "app";
+      const seenInBatch = new Set<string>();
+      for (const def of definitions) {
+        assertValidDefinition(def, supports);
+        const existing = blocks.get(def.name);
+        if (existing) {
+          fail(
+            "NEXTLY_BLOCK_COLLISION",
+            `block "${def.name}" is already registered by "${existing.source}" and cannot be redefined by "${source}".`
+          );
+        }
+        if (seenInBatch.has(def.name)) {
+          fail(
+            "NEXTLY_BLOCK_COLLISION",
+            `block "${def.name}" is registered twice by "${source}".`
+          );
+        }
+        seenInBatch.add(def.name);
+      }
+      for (const def of definitions) {
+        blocks.set(def.name, { definition: def, source });
+      }
+    },
+    registerSupport(support) {
+      if (
+        typeof support.key !== "string" ||
+        !SUPPORT_KEY_RE.test(support.key)
+      ) {
+        fail(
+          "NEXTLY_SUPPORT_INVALID",
+          `support key "${String(support.key)}" must be a single alphanumeric token.`
+        );
+      }
+      if (supports.has(support.key)) {
+        fail(
+          "NEXTLY_SUPPORT_COLLISION",
+          `support "${support.key}" is already registered.`
+        );
+      }
+      supports.set(support.key, support);
+    },
+    clear() {
+      blocks.clear();
+      supports = builtInSupports();
+    },
+    get,
+    has,
+    all: () => [...blocks.values()].map(entry => entry.definition),
+    sourceOf: name => blocks.get(name)?.source,
+    support: key => supports.get(key),
+    supports: () => [...supports.values()],
+    lookup: () => ({ has }),
+    // A block the registry does not hold answers `undefined`, which the rule
+    // reads as "declares no restriction" rather than as "unknown". That is
+    // deliberate: an unregistered type is reported by the block-type lookup,
+    // and refusing its placement as well would describe a missing
+    // registration as a layout mistake. The same holds for the parent's half,
+    // read from the container's own slot declaration.
+    nestingSource: () => ({
+      parentsOf: name => get(name)?.parent,
+      slotAllowOf: (parentType, slot) => get(parentType)?.slots?.[slot]?.allow,
+    }),
+    // The DEFINITION rather than any node, because a container inserted from
+    // the palette has no `slots` key until something is put in it, which is
+    // precisely the container that needs filling. One source for the
+    // children an insert creates and the children a save requires.
+    blockSource: () => ({ get }),
+    migrationSource: () => ({
+      get: name => {
+        const definition = get(name);
+        if (!definition) return undefined;
+        return migrationInfoOf(definition);
+      },
+    }),
+  };
+}
+
+/**
+ * This bundle's own registry, which the module functions below read and
+ * write. A browser bundle (the admin's editor) serves one site, so one
+ * registry per bundle is right there. A server serving sites reads each
+ * site's own registry instead, and never this one.
+ */
+const bundleRegistry: BlockRegistry = createBlockRegistry();
+
+/** Register block definitions in this bundle's registry. */
 export function registerBlocks(
   definitions: AnyBlockDefinition[],
   options: RegisterOptions = {}
 ): void {
-  const source = options.source ?? "app";
-  const map = blockStore();
-
-  const seenInBatch = new Set<string>();
-  for (const def of definitions) {
-    assertValidDefinition(def);
-    const existing = map.get(def.name);
-    if (existing) {
-      fail(
-        "NEXTLY_BLOCK_COLLISION",
-        `block "${def.name}" is already registered by "${existing.source}" and cannot be redefined by "${source}".`
-      );
-    }
-    if (seenInBatch.has(def.name)) {
-      fail(
-        "NEXTLY_BLOCK_COLLISION",
-        `block "${def.name}" is registered twice by "${source}".`
-      );
-    }
-    seenInBatch.add(def.name);
-  }
-
-  for (const def of definitions) map.set(def.name, { definition: def, source });
+  bundleRegistry.register(definitions, options);
 }
 
-/**
- * Add a style capability blocks may opt into. Third parties extend the support
- * vocabulary through this rather than by editing the engine.
- */
+/** Add a style capability to this bundle's registry. */
 export function registerSupport(support: SupportDefinition): void {
-  if (typeof support.key !== "string" || !SUPPORT_KEY_RE.test(support.key)) {
-    fail(
-      "NEXTLY_SUPPORT_INVALID",
-      `support key "${String(support.key)}" must be a single alphanumeric token.`
-    );
-  }
-  const map = supportStore();
-  if (map.has(support.key)) {
-    fail(
-      "NEXTLY_SUPPORT_COLLISION",
-      `support "${support.key}" is already registered.`
-    );
-  }
-  map.set(support.key, support);
+  bundleRegistry.registerSupport(support);
 }
 
-/** A registered block definition, or `undefined`. */
+/** A block definition this bundle's registry holds, or `undefined`. */
 export function getBlock(name: string): AnyBlockDefinition | undefined {
-  return blockStore().get(name)?.definition;
+  return bundleRegistry.get(name);
 }
 
 export function hasBlock(name: string): boolean {
-  return blockStore().has(name);
+  return bundleRegistry.has(name);
 }
 
-/** Every registered block definition. */
+/** Every block definition this bundle's registry holds. */
 export function allBlocks(): AnyBlockDefinition[] {
-  return [...blockStore().values()].map(entry => entry.definition);
+  return bundleRegistry.all();
 }
 
-/** Which source registered a block, for diagnostics. */
+/** Which source registered a block in this bundle, for diagnostics. */
 export function getBlockSource(name: string): string | undefined {
-  return blockStore().get(name)?.source;
+  return bundleRegistry.sourceOf(name);
 }
 
 export function getSupport(key: string): SupportDefinition | undefined {
-  return supportStore().get(key);
+  return bundleRegistry.support(key);
 }
 
 export function allSupports(): SupportDefinition[] {
-  return [...supportStore().values()];
+  return bundleRegistry.supports();
 }
 
-/**
- * Drop every registered block and reset supports to the built-ins. Called at
- * the start of each boot (and by tests) so re-registration is idempotent.
- */
+/** Empty this bundle's registry, supports back to the built-ins. */
 export function clearBlocks(): void {
-  blockStore().clear();
-  globalForBlocks.__nextly_blockSupports = undefined;
+  bundleRegistry.clear();
 }
 
-/**
- * The registry as the block-type lookup validation expects, so validating a
- * document against the running app's blocks needs no adapter at the call site.
- * Reads through to the live registry, so it stays correct across a re-register.
- */
+/** This bundle's registry as the block-type lookup validation expects. */
 export function registryLookup(): BlockTypeLookup {
-  return { has: hasBlock };
+  return bundleRegistry.lookup();
 }
 
-/**
- * The registry as the nesting source, exposing each block's declared parents so
- * a document can be checked against where its blocks say they belong.
- *
- * A block the registry does not hold answers `undefined`, which the rule reads
- * as "declares no restriction" rather than as "unknown". That is deliberate: an
- * unregistered type is reported by the block-type lookup, and refusing its
- * placement as well would describe a missing registration as a layout mistake.
- *
- * Reads through to the live registry on every call, so it stays correct across a
- * re-register rather than capturing the definitions present when it was built.
- */
+/** This bundle's registry as the nesting source. */
 export function registryNestingSource(): NestingSource {
-  return {
-    parentsOf: name => getBlock(name)?.parent,
-    // The parent's half, read from the container's own slot declaration. An
-    // unregistered parent or an undeclared slot answers `undefined` for the same
-    // reason `parentsOf` does: the missing registration is reported by the
-    // block-type lookup, and refusing the placement as well would describe it as
-    // a layout mistake.
-    slotAllowOf: (parentType, slot) =>
-      getBlock(parentType)?.slots?.[slot]?.allow,
-  };
+  return bundleRegistry.nestingSource();
 }
 
-/**
- * The registry as a block-definition source: each block's version, declared
- * slots, prop defaults and parents.
- *
- * What `expandSlotDefaults` reads to build the children a block starts with,
- * and what validation reads to check that a locked slot still holds them. One
- * source for both, so the children a save requires cannot drift from the
- * children an insert creates.
- *
- * Reads the DEFINITION rather than any node, because a container inserted from
- * the palette has no `slots` key until something is put in it, which is
- * precisely the container that needs filling. Reads through to the live
- * registry on every call, as the nesting source does.
- */
+/** This bundle's registry as a block-definition source. */
 export function registryBlockSource(): SlotDefaultSource {
-  return { get: type => getBlock(type) };
+  return bundleRegistry.blockSource();
 }
 
-/**
- * The registry as the migration source, exposing each block's current version
- * and upgrade steps so a stored document can be brought up to date.
- */
+/** This bundle's registry as the migration source. */
 export function registryMigrationSource(): MigrationSource {
-  return {
-    get: name => {
-      const definition = getBlock(name);
-      if (!definition) return undefined;
-      return { version: definition.version, migrate: definition.migrate };
-    },
-  };
+  return bundleRegistry.migrationSource();
 }

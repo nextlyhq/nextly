@@ -1,0 +1,35 @@
+/*
+ * The Colours tab's named groups: a group's ⋯ beside its name, the name
+ * field that renames it in place, and "+ New group" under the last group.
+ */
+.nx-colour-group__more {
+  flex: none;
+}
+
+.nx-colour-group__name-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 0.375rem;
+  border: 1px solid var(--nx-input);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.nx-colour-group__name-field:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/* A row being dragged, and the place a colour may be dropped. */
+[data-colour-group] .nx-vars__item[draggable="true"] {
+  cursor: grab;
+}
+
+.nx-colour-group__new {
+  margin-top: 0.25rem;
+}

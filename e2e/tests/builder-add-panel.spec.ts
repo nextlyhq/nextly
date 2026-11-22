@@ -157,7 +157,10 @@ test.describe("the Add panel", () => {
     for (let added = 0; added < 5; added++) {
       await tile(page, "Divider").click();
       // The block just added is the selection, and the next one's anchor.
-      await expect(placementLine(page)).toHaveText("Adding after Divider");
+      // The pointer still rests on the tile, so the line names it.
+      await expect(placementLine(page)).toHaveText(
+        "Divider goes after Divider"
+      );
     }
     await saveDraft(page);
 
@@ -169,20 +172,31 @@ test.describe("the Add panel", () => {
     ]);
   });
 
-  test("an empty container's + adds inside it, then after what it added", async ({
+  test("an empty container's +, browsed on to Add, adds inside it, then after what it added", async ({
     page,
   }) => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
 
+    // The "+" opens the in-place picker inside the Section; "Browse all"
+    // carries that place on to the Add panel.
     await page
       .getByRole("button", {
-        name: "Drop a block here, or click to add one, in Section",
+        name: "Add a block, or drop one here, in Section",
       })
       .click();
-    await expect(placementLine(page)).toHaveText("Adding inside Section");
+    await page
+      .getByRole("dialog", { name: "Add a block" })
+      .getByRole("button", { name: "Browse all blocks and sections →" })
+      .click();
+    await expect(placementLine(page)).toHaveText(
+      "Adding inside Section, at the end"
+    );
     await tile(page, "Divider").click();
-    await expect(placementLine(page)).toHaveText("Adding after Divider");
+    // The pointer still rests on the tile, so the line names it.
+    await expect(placementLine(page)).toHaveText(
+      "Divider goes after Divider, inside Section"
+    );
     await tile(page, "Divider").click();
     await saveDraft(page);
 
@@ -210,9 +224,9 @@ test.describe("the Add panel", () => {
       .click();
     await openAdd(page);
 
-    // An accordion item belongs inside an accordion, and nothing a click may
-    // use from here is one.
-    const item = tile(page, "Accordion item");
+    // A question belongs inside an accordion, and nothing a click may use
+    // from here is one.
+    const item = tile(page, "Question");
     await expect(item).toHaveAttribute("data-refused", "true");
     // One plain instruction, generated from where the rule lets it go.
     await expect(item).toHaveAccessibleDescription(
@@ -226,7 +240,9 @@ test.describe("the Add panel", () => {
       "data-refused",
       "true"
     );
-    await saveDraft(page);
+    // The refused click changed nothing, so there is nothing to save: the
+    // save button reads "Saved", and the stored page is as it was made.
+    await expect(page.getByRole("button", { name: "Saved" })).toBeDisabled();
     const nodes = await storedNodes(page.request, id);
     expect(nodes.map(node => node.type)).toEqual([
       "core/heading",

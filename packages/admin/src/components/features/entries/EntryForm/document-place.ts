@@ -186,6 +186,43 @@ export function useContentFields<F extends { name?: unknown }>(
   }, [fields, takenKey]);
 }
 
+/**
+ * Which plugin tab drawn on the edit page takes each field it takes over, by
+ * the tab's contribution id: the same delivered tabs, judged by the same
+ * rule (`fieldsTakenByTabs`), as {@link useContentFields} leaves those fields
+ * out of the page's content by. The first tab to take a field keeps it.
+ */
+export function useFieldsTakenByTab(
+  place: DocumentPlace,
+  fieldNames: readonly string[]
+): ReadonlyMap<string, string> {
+  const tabs = usePlaceContributions(place.place, "tab", {
+    context: place.context,
+    ...(place.entry === undefined ? {} : { entry: place.entry }),
+  });
+  const pairs =
+    place.context === null
+      ? []
+      : tabs.flatMap(tab =>
+          "builtIn" in tab
+            ? []
+            : [...fieldsTakenByTabs([tab], fieldNames)].map(
+                name => [name, tab.id] as const
+              )
+        );
+  // A key rather than the list, which is new on every render.
+  const key = pairs.map(pair => pair.join("\u0001")).join("\u0000");
+  return useMemo(() => {
+    const taken = new Map<string, string>();
+    if (key === "") return taken;
+    for (const pair of key.split("\u0000")) {
+      const [name = "", id = ""] = pair.split("\u0001");
+      if (!taken.has(name)) taken.set(name, id);
+    }
+    return taken;
+  }, [key]);
+}
+
 /** A document's top-level field names, which the edit page's tabs are judged by. */
 export function topLevelFieldNames(
   fields: readonly { name?: unknown }[]

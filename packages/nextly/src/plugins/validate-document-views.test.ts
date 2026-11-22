@@ -16,7 +16,13 @@ function asPlugins(defs: unknown[]): PluginDefinition[] {
 function plugin(
   name: string,
   slug: string,
-  views: { path: string; component?: string; label?: string }[],
+  views: {
+    path: string;
+    component?: string;
+    label?: string;
+    openLabel?: unknown;
+    createDialog?: unknown;
+  }[],
   extra: Record<string, unknown> = {}
 ): unknown {
   return {
@@ -186,8 +192,15 @@ describe("assertDocumentViews", () => {
 function fieldTypePlugin(
   name: string,
   ownTypes: string[],
-  views: { path: string; fieldType: string; label?: string }[],
-  slugViews: Record<string, { path: string }[]> = {}
+  views: {
+    path: string;
+    fieldType: string;
+    label?: string;
+    openLabel?: string;
+    createDialog?: string;
+    opensFirst?: string;
+  }[],
+  slugViews: Record<string, { path: string; opensFirst?: string }[]> = {}
 ): unknown {
   return {
     name,
@@ -353,5 +366,230 @@ describe("contributedDocumentViews", () => {
         plugin: "@acme/forms",
       },
     ]);
+  });
+});
+
+describe("a view that asks to open first", () => {
+  it('accepts `opensFirst: "mainField"` on a field-type view and publishes it', () => {
+    const plugins = asPlugins([
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [{ path: "builder", fieldType: "blocks", opensFirst: "mainField" }]
+      ),
+    ]);
+    expect(() => assertDocumentViews(plugins)).not.toThrow();
+    // The admin decides where an entry opens from what it is given, so the
+    // declaration has to reach it.
+    expect(contributedDocumentViews(plugins)).toEqual([
+      {
+        fieldType: "blocks",
+        path: "builder",
+        component: "@acme/builder/admin#View",
+        opensFirst: "mainField",
+        plugin: "@acme/builder",
+      },
+    ]);
+  });
+
+  it("refuses it on a view declared on a slug, naming the plugin and the path", () => {
+    // A slug view has no field type, so there is no main field for it to match.
+    const error = refusal([
+      fieldTypePlugin("@acme/builder", ["blocks"], [], {
+        pages: [{ path: "builder", opensFirst: "mainField" }],
+      }),
+    ]);
+    expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID");
+    expect(error.logMessage).toContain("@acme/builder");
+    expect(error.logMessage).toContain('"builder"');
+    expect(error.logMessage).toContain("opensFirst");
+  });
+
+  it('refuses a value other than "mainField"', () => {
+    const error = refusal([
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [{ path: "builder", fieldType: "blocks", opensFirst: "always" }]
+      ),
+    ]);
+    expect(error.logMessage).toContain('"always"');
+  });
+
+  it("refuses two views asking to open first on one field type", () => {
+    // Two answers to "where does this entry open" with nothing to choose
+    // between them.
+    const error = refusal([
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [
+          { path: "builder", fieldType: "blocks", opensFirst: "mainField" },
+          { path: "canvas", fieldType: "blocks", opensFirst: "mainField" },
+        ]
+      ),
+    ]);
+    expect(error.logMessage).toContain('"builder"');
+    expect(error.logMessage).toContain('"canvas"');
+  });
+
+  it("leaves `opensFirst` off a view that does not declare it", () => {
+    const [view] = contributedDocumentViews(
+      asPlugins([
+        fieldTypePlugin(
+          "@acme/builder",
+          ["blocks"],
+          [{ path: "builder", fieldType: "blocks" }]
+        ),
+      ])
+    );
+    expect(view).not.toHaveProperty("opensFirst");
+  });
+});
+
+describe("the words a way into a view shows (`openLabel`)", () => {
+  it("publishes a declared openLabel on a slug view and on a field-type view", () => {
+    const slugView = plugin("@acme/forms", "submissions", [
+      { path: "review", openLabel: "Open in review" },
+    ]);
+    const typeView = fieldTypePlugin(
+      "@acme/builder",
+      ["blocks"],
+      [{ path: "builder", fieldType: "blocks", openLabel: "Open in builder" }]
+    );
+    expect(contributedDocumentViews(asPlugins([slugView, typeView]))).toEqual([
+      {
+        slug: "submissions",
+        path: "review",
+        component: "@acme/forms/admin#View",
+        openLabel: "Open in review",
+        plugin: "@acme/forms",
+      },
+      {
+        fieldType: "blocks",
+        path: "builder",
+        component: "@acme/builder/admin#View",
+        openLabel: "Open in builder",
+        plugin: "@acme/builder",
+      },
+    ]);
+  });
+
+  it("leaves openLabel off a view that does not declare it", () => {
+    const [view] = contributedDocumentViews(
+      asPlugins([plugin("@acme/forms", "submissions", [{ path: "review" }])])
+    );
+    expect(view).not.toHaveProperty("openLabel");
+  });
+
+  it.each([
+    ["a number", 42],
+    ["an object", { text: "Open" }],
+    ["empty", ""],
+    ["only spaces", "   "],
+  ])("refuses an openLabel that is %s, naming it", (_case, openLabel) => {
+    // The words are the whole of the way in a row or a bar offers, so one
+    // with no words would be an entry nobody can read.
+    const error = refusal([
+      plugin("@acme/builder", "pages", [{ path: "builder", openLabel }]),
+    ]);
+    expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID");
+    expect(error.logMessage).toContain("openLabel");
+  });
+
+  it("accepts a view with words to open it by", () => {
+    // The control for the refusals above.
+    expect(() =>
+      assertDocumentViews(
+        asPlugins([
+          plugin("@acme/builder", "pages", [
+            { path: "builder", openLabel: "Open in builder" },
+          ]),
+        ])
+      )
+    ).not.toThrow();
+  });
+});
+
+describe("a view's own create dialog (`createDialog`)", () => {
+  it("publishes a declared createDialog on a slug view and on a field-type view", () => {
+    const slugView = plugin("@acme/forms", "submissions", [
+      { path: "review", createDialog: "@acme/forms/admin#NewSubmission" },
+    ]);
+    const typeView = fieldTypePlugin(
+      "@acme/builder",
+      ["blocks"],
+      [
+        {
+          path: "builder",
+          fieldType: "blocks",
+          createDialog: "@acme/builder/admin#NewPage",
+        },
+      ]
+    );
+    expect(contributedDocumentViews(asPlugins([slugView, typeView]))).toEqual([
+      {
+        slug: "submissions",
+        path: "review",
+        component: "@acme/forms/admin#View",
+        createDialog: "@acme/forms/admin#NewSubmission",
+        plugin: "@acme/forms",
+      },
+      {
+        fieldType: "blocks",
+        path: "builder",
+        component: "@acme/builder/admin#View",
+        createDialog: "@acme/builder/admin#NewPage",
+        plugin: "@acme/builder",
+      },
+    ]);
+  });
+
+  it("leaves createDialog off a view that does not declare it", () => {
+    const [view] = contributedDocumentViews(
+      asPlugins([plugin("@acme/forms", "submissions", [{ path: "review" }])])
+    );
+    expect(view).not.toHaveProperty("createDialog");
+  });
+
+  it.each([
+    ["a number", 42],
+    ["an object", { component: "@acme/x#New" }],
+    ["empty", ""],
+    ["only spaces", "   "],
+  ])("refuses a createDialog that is %s, naming it", (_case, createDialog) => {
+    // The list opens the dialog by this path, so one that names no component
+    // would leave "+ New" opening nothing.
+    const error = refusal([
+      plugin("@acme/builder", "pages", [{ path: "builder", createDialog }]),
+    ]);
+    expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID");
+    expect(error.logMessage).toContain("createDialog");
+  });
+
+  it("refuses a blank createDialog on a field-type view too", () => {
+    // Both declaration sites reach the same check.
+    const error = refusal([
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [{ path: "builder", fieldType: "blocks", createDialog: " " }]
+      ),
+    ]);
+    expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID");
+    expect(error.logMessage).toContain("createDialog");
+  });
+
+  it("accepts a view with a create dialog to open", () => {
+    // The control for the refusals above.
+    expect(() =>
+      assertDocumentViews(
+        asPlugins([
+          plugin("@acme/builder", "pages", [
+            { path: "builder", createDialog: "@acme/builder/admin#NewPage" },
+          ]),
+        ])
+      )
+    ).not.toThrow();
   });
 });

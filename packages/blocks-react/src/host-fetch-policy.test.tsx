@@ -231,7 +231,7 @@ describe("the host fetch list", () => {
     const policy: BlockHostPolicy = { remotePatterns: ALLOWED };
 
     const frame = renderToStaticMarkup(
-      renderEmbed(
+      await renderEmbed(
         embedArgs({ src: "https://player.allowed.test/v", title: "t" }, policy)
       )
     );
@@ -241,8 +241,8 @@ describe("the host fetch list", () => {
     expect(css).toContain("player.allowed.test");
   });
 
-  it("refuses an unlisted host in a block's own markup", () => {
-    const out = renderEmbed(
+  it("refuses an unlisted host in a block's own markup", async () => {
+    const out = await renderEmbed(
       embedArgs(
         { src: "https://player.other.test/v", title: "t" },
         { remotePatterns: ALLOWED }
@@ -264,7 +264,9 @@ describe("the host fetch list", () => {
     // Absent means unasked, not allowed-nothing. A host that configures nothing
     // must render exactly as it did before this existed, through both channels.
     const frame = renderToStaticMarkup(
-      renderEmbed(embedArgs({ src: "https://player.other.test/v", title: "t" }))
+      await renderEmbed(
+        embedArgs({ src: "https://player.other.test/v", title: "t" })
+      )
     );
     expect(frame).toContain("player.other.test");
 

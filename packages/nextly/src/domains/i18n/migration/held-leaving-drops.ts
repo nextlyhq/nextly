@@ -10,6 +10,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   applyMigrationWhole,
   applyStatementsInTries,
@@ -17,7 +18,10 @@ import {
 } from "../../schema/services/apply-migration-statements";
 
 import { ensureI18nArchive, runI18nSchemaStatements } from "./ensure-archive";
-import type { CompanionTransitionPlan } from "./reconcile-companion";
+import type {
+  CompanionTransitionPlan,
+  FieldRename,
+} from "./reconcile-companion";
 import type { I18nTransitionKind } from "./transition-state";
 
 /**
@@ -53,12 +57,48 @@ export async function applyCompanionTransition(args: {
   kind: I18nTransitionKind;
   slug: string;
   tableName: string;
+  /** The translated field this change renames, as the schema dialog decided it. */
+  renamed?: FieldRename | null;
 }): Promise<void> {
   const { adapter, plan, settleLeaving, busyTable } = args;
   await applyCompanionStatements(adapter, plan, busyTable);
   if (settleLeaving) {
     await settleLeaving();
     await dropHeldLeavingFields(adapter, plan, args.kind, busyTable);
+  }
+  // A renamed translated field keeps its records of where each language's value came from, under
+  // its new name. Moved here, once its column has been, rather than among the plan's statements,
+  // which a migration file may carry: the records are data, not schema.
+  if (args.renamed && (args.kind === "collection" || args.kind === "single")) {
+    const { renameFieldProvenance, renameFieldProvenanceStatements } =
+      await import("../provenance/record-provenance");
+    const rename = {
+      scopeKind: args.kind,
+      scopeSlug: args.slug,
+      from: args.renamed.from,
+      to: args.renamed.to,
+    };
+    try {
+      await renameFieldProvenance(adapter, rename);
+    } catch (error) {
+      // The change has landed by now (its columns moved, its file recorded), so the failure says
+      // so, and what finishes it: no later save knows of the rename to move the records again.
+      // The statements go to the server log here, whichever entity's save this is, as the answer
+      // tells a developer to find them there.
+      const statements = renameFieldProvenanceStatements(
+        adapter.getCapabilities().dialect,
+        rename
+      );
+      const failure = provenanceNotMoved(error, rename, statements);
+      const [{ getLoggerFromDI }, { consoleLogger }] = await Promise.all([
+        import("../../../dispatcher/helpers/di"),
+        import("../../../shared/types"),
+      ]);
+      (getLoggerFromDI() ?? consoleLogger).error(
+        `[translations step] The translation records of ${rename.scopeKind} '${rename.scopeSlug}' were not moved after its rename: ${failure.logMessage ?? ""}. Run these to finish it:\n${statements.join("\n")}`
+      );
+      throw failure;
+    }
   }
   // The transition record describes a companion that no longer exists, so it stops being true the
   // moment the disable succeeds. Left behind, it would refuse the next enable's real source locale:
@@ -77,6 +117,53 @@ export async function applyCompanionTransition(args: {
       args.slug
     );
   }
+}
+
+/** What a provenance move that failed after its change landed is marked with (`provenanceNotMoved`). */
+const PROVENANCE_NOT_MOVED = "translation-records-not-moved";
+
+/**
+ * The failure of a renamed field's provenance move, once its change has landed: the admin is told
+ * the change landed, which records stayed under the old name and what that costs, and that a
+ * developer can finish it; the statements that do (`renameFieldProvenanceStatements`) and the
+ * cause go with it for the server log, never in the answer, which may reach someone with no
+ * database to run them on.
+ */
+function provenanceNotMoved(
+  error: unknown,
+  rename: {
+    scopeKind: "collection" | "single";
+    scopeSlug: string;
+    from: string;
+    to: string;
+  },
+  statements: string[]
+): NextlyError {
+  const notMoved = `its translations step failed, so the translation records of "${rename.from}" were not moved to "${rename.to}". Until they are, no language of ${rename.to} can be found out of date.`;
+  // Where the save ran its own migration file, the file is recorded and the Single's or
+  // Collection's row is written with the change, so the answer ends here. A Collection's push
+  // that stops part way adds its kept files' steps after it (`partWayPush`).
+  const publicMessage =
+    rename.scopeKind === "single"
+      ? `Single "${rename.scopeSlug}" was saved: its change landed, but ${notMoved} A developer can finish it with the statements in the server log.`
+      : `Collection "${rename.scopeSlug}" was saved only in part: its change landed in the database, but ${notMoved} A developer can move them with the statements in the server log.`;
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_APPLY_FAILED",
+    publicMessage,
+    logMessage: error instanceof Error ? error.message : String(error),
+    logContext: { reason: PROVENANCE_NOT_MOVED, ...rename, statements },
+    ...(error instanceof Error ? { cause: error } : {}),
+  });
+}
+
+/**
+ * Whether `error` is a renamed field's provenance move that failed after its change landed
+ * (`provenanceNotMoved`): its caller records the change, as it did land, and passes it on as it is.
+ */
+export function isProvenanceNotMoved(error: unknown): error is NextlyError {
+  return (
+    NextlyError.is(error) && error.logContext?.reason === PROVENANCE_NOT_MOVED
+  );
 }
 
 /**

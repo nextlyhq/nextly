@@ -9,6 +9,10 @@ import {
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  starterFingerprint,
+  type StarterRecord,
+} from "./default-layout/starter-record";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "./library-route";
 
 import {
@@ -74,12 +78,20 @@ function fake(store: Store) {
         const search = (
           args.where as { title?: { contains?: string } } | undefined
         )?.title?.contains;
+        // Core's workflow filter, as the batched draft read asks it: the
+        // rows with a working draft the caller may see.
+        const pendingOnly =
+          (args.where as { _pendingChange?: unknown } | undefined)
+            ?._pendingChange === true;
         const rows = store.layouts
           .filter(
             row =>
               args.overrideAccess === true ||
               !(store.filtered ?? []).includes(String(row.id))
           )
+          // As core's filter answers: it keeps a row with a working draft
+          // whatever the caller may do to it.
+          .filter(row => !pendingOnly || store.drafts.includes(String(row.id)))
           .filter(row => asked === undefined || asked.includes(String(row.id)))
           .filter(
             row =>
@@ -228,6 +240,7 @@ describe("readLayoutChoices", () => {
         published: true,
         draftChangesNotLive: true,
         regions: [{ area: "header", componentId: "header" }],
+        areasFilled: ["header"],
       },
       {
         id: "draft",
@@ -235,8 +248,36 @@ describe("readLayoutChoices", () => {
         published: false,
         draftChangesNotLive: false,
         regions: [],
+        // Never published, but its own areas name a header.
+        areasFilled: ["header"],
       },
     ]);
+  });
+
+  it("names the areas a set fills, none when its areas name no component, published or not", async () => {
+    const { nextly } = fake({
+      ...store,
+      layouts: [
+        ...store.layouts,
+        { id: "seed", title: "Site layout", status: "published", areas: [] },
+        {
+          id: "blank",
+          title: "Blank",
+          status: "draft",
+          areas: [{ area: "header", component: null }],
+        },
+      ],
+    });
+    const { items } = await readLayoutChoices(context(), nextly, asked());
+    const areas = Object.fromEntries(
+      items.map(item => [item.id, item.areasFilled])
+    );
+    expect(areas).toEqual({
+      main: ["header"],
+      draft: ["header"],
+      seed: [],
+      blank: [],
+    });
   });
 
   it("answers the default, the caller's right to edit, and the region facts", async () => {
@@ -256,6 +297,39 @@ describe("readLayoutChoices", () => {
     const { meta } = await readLayoutChoices(context(), nextly, asked());
     expect(meta.regionComponents).toEqual({
       header: { draftChangesNotLive: true },
+    });
+  });
+
+  it("tells the region it shows the site's starter while its published content is as seeded", async () => {
+    const { nextly } = fake({ ...store, updatable: [] });
+    const { meta } = await readLayoutChoices(context(false), nextly, asked());
+    const published = meta.regionDefinitions.header;
+    const record = (fingerprint: string): StarterRecord => ({
+      header: { id: "header", fingerprint },
+      footer: { id: "gone", fingerprint: "0".repeat(32) },
+    });
+    const untouched = await readLayoutChoices(
+      context(false),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, {
+        starter: async () => record(starterFingerprint(published)),
+      })
+    );
+    expect(untouched.meta.regionComponents.header).toEqual({
+      draftChangesNotLive: false,
+      untouchedStarter: "header",
+    });
+    // Published since with other content: an ordinary header.
+    const changed = await readLayoutChoices(
+      context(false),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, {
+        starter: async () =>
+          record(starterFingerprint({ ...published, nodes: [] })),
+      })
+    );
+    expect(changed.meta.regionComponents.header).toEqual({
+      draftChangesNotLive: false,
     });
   });
 
@@ -540,6 +614,188 @@ describe("readLayoutChoices", () => {
     const { meta } = await readLayoutChoices(context(), nextly, asked("l7"));
     expect(Object.keys(meta.regionDefinitions).sort()).toEqual(["h0", "h7"]);
   });
+
+  it("discovers each picture under its own node bound, reading a shared component once", async () => {
+    // Eleven header-only sets, more regions than one page's bound of ten
+    // nodes: each picture fits its bound, so each is answered for. Every
+    // header places the same shared logo, read once for all of them.
+    const instance = (id: string, componentId: string) => ({
+      id,
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId },
+    });
+    const layouts = Array.from({ length: 11 }, (_, i) =>
+      layoutRow(`l${i}`, `Layout ${i}`, `h${i}`)
+    );
+    const components: Record<string, unknown> = { logo: component([]) };
+    for (let i = 0; i < 11; i += 1) {
+      components[`h${i}`] = component([instance(`n${i}`, "logo")]);
+    }
+    const { nextly, calls } = fake({
+      ...store,
+      layouts,
+      components,
+      defaultLayout: "l0",
+    });
+    const { meta } = await readLayoutChoices(
+      context(),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, {
+        pictures: true,
+        limits: { ...DEFAULT_LIMITS, maxNodes: 10 },
+      })
+    );
+    expect(Object.keys(meta.regionDefinitions).sort()).toEqual(
+      ["logo", ...Array.from({ length: 11 }, (_, i) => `h${i}`)].sort()
+    );
+    const logoReads = calls.filter(
+      call =>
+        call.collection === "components" &&
+        JSON.stringify(call.where ?? {}).includes('"logo"')
+    );
+    expect(logoReads.length).toBeLessThanOrEqual(2);
+  });
+
+  it("reads the pictures' distinct components in one batch, not one read per set", async () => {
+    // Eleven header-only sets, each with a header of its own: every picture
+    // asks for a different component, and all are asked for together.
+    const layouts = Array.from({ length: 11 }, (_, i) =>
+      layoutRow(`l${i}`, `Layout ${i}`, `h${i}`)
+    );
+    const components: Record<string, unknown> = {};
+    for (let i = 0; i < 11; i += 1) components[`h${i}`] = component([]);
+    const { nextly, calls } = fake({
+      ...store,
+      layouts,
+      components,
+      defaultLayout: "l0",
+    });
+    const { meta } = await readLayoutChoices(
+      context(),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, { pictures: true })
+    );
+    expect(Object.keys(meta.regionDefinitions)).toHaveLength(11);
+    const publishedReads = calls.filter(
+      call => call.collection === "components" && call.status === "published"
+    );
+    expect(publishedReads).toHaveLength(1);
+  });
+
+  it("says which listed published sets have changes not published, in one read, when asked", async () => {
+    const layouts = [
+      layoutRow("l0", "Main"),
+      layoutRow("l1", "Landing"),
+      layoutRow("l2", "Campaign"),
+    ];
+    const { nextly, calls } = fake({
+      ...store,
+      layouts,
+      drafts: ["l2"],
+      defaultLayout: "l0",
+    });
+    const { items } = await readLayoutChoices(
+      context(),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, { drafts: true })
+    );
+    expect(
+      Object.fromEntries(items.map(item => [item.id, item.draftChangesNotLive]))
+    ).toEqual({ l0: false, l1: false, l2: true });
+    // One batched read for the listed sets, not a read by id per set.
+    const pendingReads = calls.filter(
+      call =>
+        (call.where as { _pendingChange?: unknown } | undefined)
+          ?._pendingChange === true
+    );
+    expect(pendingReads).toHaveLength(1);
+    const byIdLayoutReads = calls.filter(
+      call => call.collection === "layouts" && "draft" in call
+    );
+    expect(byIdLayoutReads.map(call => call.id)).toEqual(["l0"]);
+  });
+
+  it("says nothing of other sets' changes to a caller who may not update sets", async () => {
+    const { nextly } = fake({
+      ...store,
+      layouts: [layoutRow("l0", "Main"), layoutRow("l2", "Campaign")],
+      drafts: ["l2"],
+      defaultLayout: "l0",
+    });
+    const { items } = await readLayoutChoices(
+      context(false),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, { drafts: true })
+    );
+    expect(items.find(item => item.id === "l2")?.draftChangesNotLive).toBe(
+      false
+    );
+  });
+
+  it("says whether the caller may create sets", async () => {
+    const { nextly } = fake(store);
+    const may = await readLayoutChoices(context(), nextly, asked());
+    expect(may.meta.canCreateLayouts).toBe(true);
+    const mayNot = {
+      ...context(),
+      caller: {
+        identity: async () => ({ user: { id: "author" } }),
+        can: async (action: string) => action !== "create",
+      },
+    } as unknown as Parameters<typeof readLayoutChoices>[0];
+    const refused = await readLayoutChoices(mayNot, nextly, asked());
+    expect(refused.meta.canCreateLayouts).toBe(false);
+  });
+
+  it("says nothing of unfocused sets' changes when not asked", async () => {
+    const { nextly } = fake({
+      ...store,
+      layouts: [layoutRow("l0", "Main"), layoutRow("l2", "Campaign")],
+      drafts: ["l2"],
+      defaultLayout: "l0",
+    });
+    const { items } = await readLayoutChoices(
+      context(),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE)
+    );
+    expect(items.find(item => item.id === "l2")?.draftChangesNotLive).toBe(
+      false
+    );
+  });
+
+  it("sends every listed published set's definitions when asked for pictures", async () => {
+    const layouts = [
+      ...Array.from({ length: 3 }, (_, i) =>
+        layoutRow(`l${i}`, `Layout ${i}`, `h${i}`)
+      ),
+      // Not published: nothing of it is drawn, so nothing of it is sent.
+      { ...layoutRow("d", "Draft", "hd"), status: "draft" },
+    ];
+    const components: Record<string, unknown> = {
+      hd: component([]),
+    };
+    for (let i = 0; i < 3; i += 1) components[`h${i}`] = component([]);
+    const { nextly } = fake({
+      ...store,
+      layouts,
+      components,
+      defaultLayout: "l0",
+    });
+    const { meta } = await readLayoutChoices(
+      context(),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, { pictures: true })
+    );
+    expect(Object.keys(meta.regionDefinitions).sort()).toEqual([
+      "h0",
+      "h1",
+      "h2",
+    ]);
+    // The facts are still asked of the two a page can be drawn inside only.
+    expect(Object.keys(meta.regionComponents)).toEqual(["h0"]);
+  });
   it("reads every Layout and component as the caller, never past their access", async () => {
     const { nextly, calls } = fake({ ...store, filtered: ["main"] });
     await readLayoutChoices(context(), nextly, asked("main"));
@@ -660,12 +916,26 @@ describe("parseChoicesQuery", () => {
       parseChoicesQuery(
         "http://x/layouts/choices?selected=abc&locale=de&q=Land"
       )
-    ).toEqual({ selected: "abc", locale: "de", search: "Land" });
+    ).toEqual({
+      selected: "abc",
+      locale: "de",
+      search: "Land",
+      pictures: false,
+      drafts: false,
+    });
     expect(parseChoicesQuery("http://x/layouts/choices")).toEqual({
       selected: null,
       locale: undefined,
       search: undefined,
+      pictures: false,
+      drafts: false,
     });
+    expect(
+      parseChoicesQuery("http://x/layouts/choices?pictures=1").pictures
+    ).toBe(true);
+    expect(parseChoicesQuery("http://x/layouts/choices?drafts=1").drafts).toBe(
+      true
+    );
   });
 
   it("refuses a value it cannot take", () => {
@@ -677,6 +947,9 @@ describe("parseChoicesQuery", () => {
     ).toThrow();
     expect(() =>
       parseChoicesQuery(`http://x/layouts/choices?q=${"x".repeat(201)}`)
+    ).toThrow();
+    expect(() =>
+      parseChoicesQuery("http://x/layouts/choices?pictures=yes")
     ).toThrow();
   });
 });

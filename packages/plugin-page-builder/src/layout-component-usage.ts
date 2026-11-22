@@ -189,33 +189,57 @@ function referencesIn(
 ): LayoutComponentReference[] {
   const named = layoutIdentityOf(item);
   if (named === null) return [];
+  // A row that names the component always has an area to report, empty when
+  // the stored value is not a string: it still names the component and still
+  // has to be refused.
+  return areaRowsOf((item as Record<string, unknown>).areas)
+    .filter(row => row.componentId === componentId)
+    .map(row => ({ ...named, area: row.area, variant }));
+}
 
-  const areas = (item as Record<string, unknown>).areas;
-  if (!Array.isArray(areas)) return [];
-
-  const found: LayoutComponentReference[] = [];
-  for (const row of areas) {
-    const area = areaNaming(row, componentId);
-    if (area === null) continue;
-    found.push({ ...named, area, variant });
-  }
-  return found;
+/** One row of `areas` that names a component: where it sits, its area, and which. */
+export interface AreaRow {
+  /** The row's position in `areas`, for a refusal on that row. */
+  readonly index: number;
+  /** Its area, or empty when the stored value is not a string. */
+  readonly area: string;
+  readonly componentId: string;
 }
 
 /**
- * Every component a stored Layout's areas name, read with the same row reader
- * the delete guard matches with, so the two cannot disagree about what a
- * Layout names. A shape this cannot read names nothing.
+ * The rows of a stored or written `areas` value that name a component: the
+ * ONE reading of a Layout's references, which the delete's scan, the reach of
+ * a component and the Layout save's guard all derive from, so no two of them
+ * can disagree about what a Layout names.
+ *
+ * Read defensively: `areas` is a repeater stored as one JSON column that
+ * nothing guarantees was validated, so a row this cannot read names nothing.
+ * Stored JSON text is parsed. A relationship comes back as the bare id at
+ * `depth: 0` and as the populated row above it, and this module does not
+ * control the depth its caller reads at; an id is a non-empty string or a
+ * finite number, read as its string, as the run table keys one.
  */
-export function componentsNamedBy(item: unknown): string[] {
-  if (!isRecord(item) || !Array.isArray(item.areas)) return [];
-  const named: string[] = [];
-  for (const row of item.areas) {
-    if (!isRecord(row)) continue;
-    const id = componentIdOf(row.component);
-    if (id !== undefined && id !== "") named.push(id);
-  }
+export function areaRowsOf(areas: unknown): AreaRow[] {
+  const rows = typeof areas === "string" ? parsed(areas) : areas;
+  if (!Array.isArray(rows)) return [];
+  const named: AreaRow[] = [];
+  rows.forEach((row: unknown, index) => {
+    if (!isRecord(row)) return;
+    const componentId = referenceIdOf(row.component);
+    if (componentId === null) return;
+    named.push({
+      index,
+      area: typeof row.area === "string" ? row.area : "",
+      componentId,
+    });
+  });
   return named;
+}
+
+/** Every component a stored Layout's areas name, in order. */
+export function componentsNamedBy(item: unknown): string[] {
+  if (!isRecord(item)) return [];
+  return areaRowsOf(item.areas).map(row => row.componentId);
 }
 
 /**
@@ -238,36 +262,25 @@ function layoutIdentityOf(
 }
 
 /**
- * The area this repeater row places `componentId` in, or null when the row
- * does not name that component at all.
- *
- * Matching and locating are ONE question here, because a row that matches
- * always has an area to report — empty when the stored value is not a string,
- * which is a row that still names the component and still has to be refused.
- * Separating them would let a caller act on a match while holding no place to
- * send the author.
+ * A relationship value's id, or a row's: the bare id, or the populated row's.
+ * A non-empty string, or a finite number read as its string.
  */
-function areaNaming(row: unknown, componentId: string): string | null {
-  if (!isRecord(row)) return null;
-  if (componentIdOf(row.component) !== componentId) return null;
-  return typeof row.area === "string" ? row.area : "";
-}
-
-/**
- * The component a repeater row names, whichever shape the read returned.
- *
- * A relationship comes back as the bare id at `depth: 0` and as the populated
- * document above it, and this module does not control the depth its caller
- * reads at. Handling one shape only would answer "no Layout names this" on
- * every installation whose caller populated — the direction that permits the
- * delete.
- */
-function componentIdOf(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
-  if (isRecord(value) && typeof value.id === "string") return value.id;
-  return undefined;
+export function referenceIdOf(value: unknown): string | null {
+  if (typeof value === "string") return value === "" ? null : value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (isRecord(value)) return referenceIdOf(value.id);
+  return null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Stored JSON text, or `null` when it does not parse. */
+function parsed(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }

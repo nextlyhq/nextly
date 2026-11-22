@@ -73,6 +73,7 @@ import {
   DEFAULT_MEDIA_SKELETON_COUNT,
   MEDIA_GRID_CLASSES,
 } from "@admin/constants/media";
+import type { Media } from "@admin/types/media";
 import type { MediaGridProps } from "@admin/types/ui/media-grid";
 
 import { MediaCard } from "../MediaCard";
@@ -118,6 +119,7 @@ export function MediaGrid({
   currentId = null,
   onSelectionChange,
   onItemClick,
+  onItemDoubleClick,
   onEdit,
   onDelete,
   onCopyUrl,
@@ -125,7 +127,10 @@ export function MediaGrid({
   onRetry,
   className = "",
   emptyStateMessage,
-}: MediaGridProps): JSX.Element {
+}: MediaGridProps & {
+  /** What a double-click on a tile does, where the grid offers one. */
+  onItemDoubleClick?: (media: Media) => void;
+}): JSX.Element {
   // Loading state: Show skeleton cards
   if (isLoading) {
     return (
@@ -198,6 +203,7 @@ export function MediaGrid({
           isCurrent={item.id === currentId}
           onSelectionChange={onSelectionChange}
           onClick={onItemClick}
+          onDoubleClick={onItemDoubleClick}
           onEdit={onEdit}
           onDelete={onDelete}
           onCopyUrl={onCopyUrl}

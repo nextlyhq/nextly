@@ -49,9 +49,9 @@ import {
 } from "../versions/versions-repository";
 import { statusEventsFor } from "../webhooks/status-events";
 
-import { stillApproved } from "./approval-digest";
+import { partExemptFields, stillApproved } from "./approval-digest";
 import { entersReview } from "./define-workflow";
-import { shownVersionOn } from "./part-versions";
+import { documentTableOn, shownVersionOn } from "./part-versions";
 import { workflowAttachedTo, type RegisteredWorkflow } from "./registry";
 import {
   readDocumentReviewStates,
@@ -238,6 +238,8 @@ interface SaveWithdrawal {
   registered: RegisteredWorkflow;
   /** The version the save recorded, whose shared values other languages may show. */
   saved: VersionRow | undefined;
+  /** The document's translated fields; null for a document that is not translated. */
+  translated: readonly string[] | null;
   accountable: string | null;
   now: Date;
 }
@@ -245,6 +247,7 @@ interface SaveWithdrawal {
 /** Whether `content` is still what `approval` named, the stage's exempt fields left out. */
 function asApproved(
   c: SaveWithdrawal,
+  part: string | null,
   approval: ReviewApproval,
   content: PartContent | null
 ): boolean {
@@ -254,7 +257,11 @@ function asApproved(
     approval.digest,
     content.snapshot,
     entityOf(c.save.document),
-    c.registered.workflow.onEdit.exemptFields
+    partExemptFields(
+      c.registered.workflow.onEdit.exemptFields,
+      part,
+      c.translated
+    )
   );
 }
 
@@ -318,7 +325,7 @@ async function withdrawIfChanged(
       c.save,
       c.saved
     );
-    if (asApproved(c, state.approval, content)) return null;
+    if (asApproved(c, state.part, state.approval, content)) return null;
     if (await withdrawPart(c, state, content)) {
       return { part: state.part, from: state.stage };
     }
@@ -368,6 +375,7 @@ export async function withdrawApprovalsOnSave(
       refOf(document),
       versionNo
     ),
+    translated: (await documentTableOn(document, tx.getDrizzle())).translated,
     accountable,
     now: new Date(),
   };

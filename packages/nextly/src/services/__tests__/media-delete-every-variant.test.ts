@@ -35,6 +35,7 @@ import {
   testLogger,
   type TestDb,
 } from "../../__tests__/fixtures/db";
+import { copyPathsOf } from "../../domains/media/copies/copy-rules";
 import { storedFilesOf } from "../../domains/media/stored-files";
 import { Bucket } from "../../storage/__tests__/stand-in-bucket";
 import { MediaService } from "../media";
@@ -457,6 +458,50 @@ describe("a size recorded by its URL alone on a storage a folder delete is given
   });
 });
 
+// A folder cascade through a storage that keeps resized copies removes an
+// item's copies with it, except one another item names as its own file.
+describe("a copy another item names, on a storage a folder delete is given", () => {
+  it("stays while the rest of the deleted item's copies go", async () => {
+    onLocalDisk();
+    const folders = new MediaFolderService(db.adapter, testLogger);
+    const created = await folders.createFolder({
+      name: `folder-${randomUUID()}`,
+      createdBy: "user-1",
+    });
+    const folder = created.data!.id;
+    const cdn = "https://cdn.example";
+    const onGivenStorage = async (id: string, filename: string) => {
+      await db.db
+        .update(db.schema.media)
+        .set({ filename, url: `${cdn}/${filename}`, thumbnailUrl: null })
+        .where(eq(db.schema.media.id, id));
+    };
+    const inside = "2026/11/inside-copies.png";
+    const named = `${inside}.w640.webp`;
+    await onGivenStorage(await uploadImage(folder), inside);
+    // An item outside the folder whose own file is the inside item's copy.
+    await onGivenStorage(await uploadImage(), named);
+    const given: string[] = [];
+    const storage = {
+      bulkDelete: async (filePaths: string[]) => {
+        given.push(...filePaths);
+        return { successful: filePaths, failed: [] };
+      },
+      getPublicUrl: (filePath: string) => `${cdn}/${filePath}`,
+      getStorageType: () => "s3",
+      keepsCopies: () => true,
+    };
+
+    const result = await folders.deleteFolder(folder, true, storage);
+
+    expect(result.success).toBe(true);
+    // The control: the item's own file and its other copies went.
+    expect(given).toContain(inside);
+    expect(given).toContain(`${inside}.w320.webp`);
+    expect(given).not.toContain(named);
+  });
+});
+
 // Whether another item names a file is asked by its key, compared as the
 // storage tells its files apart: S3 keeps `2026//10/x` and `2026/10/x` as
 // two objects, while a custom adapter promises nothing of the kind.
@@ -558,7 +603,8 @@ describe("a file another item also refers to", () => {
         return result;
       }
     );
-    // The search reads exactly the columns `storedFilesOf` needs.
+    // The search reads exactly the columns `storedFilesOf` needs, and the
+    // type the resized copies an item can have are read from.
     vi.spyOn(db.adapter, "getDrizzle").mockImplementation(relations => {
       const drizzle = getDrizzle(relations);
       return new Proxy(drizzle, {
@@ -570,7 +616,7 @@ describe("a file another item also refers to", () => {
             const read = Object.keys(fields ?? {})
               .sort()
               .join(",");
-            if (read === "filename,sizes,thumbnailUrl,url") {
+            if (read === "filename,mimeType,sizes,thumbnailUrl,url") {
               lookedAfterCommit.push(committed);
             }
             return target.select(fields as never);
@@ -861,7 +907,12 @@ describe("a file the delete cannot remove", () => {
     const result = await service.deleteMedia("media-1");
 
     expect(result.success).toBe(true);
-    expect(removed.mock.calls.map(([p]) => p)).toEqual(["2026/10/a1-x.png"]);
+    // The original and the resized copies it can have, which the bucket
+    // keeps; never the thumbnail, whose location is not known.
+    expect(removed.mock.calls.map(([p]) => p)).toEqual([
+      "2026/10/a1-x.png",
+      ...copyPathsOf({ filename: "2026/10/a1-x.png", mimeType: "image/png" }),
+    ]);
     // Fields arrive as an object beside the message, so they are read as
     // JSON rather than as `[object Object]`.
     const said = warn.mock.calls
@@ -1059,7 +1110,11 @@ describe("deleting a folder with its contents", () => {
     });
     const folder = await newFolder();
     for (let i = 0; i < 3; i++) await uploadPhoto(folder);
-    const perItem = bucket.files.size / 3;
+    // An item's files are what it stored and the resized copies it can have,
+    // which the bucket keeps and a delete removes with it.
+    const perItem =
+      bucket.files.size / 3 +
+      copyPathsOf({ filename: "x.png", mimeType: "image/png" }).length;
     const remove = bucket.delete.bind(bucket);
     let inFlight = 0;
     let most = 0;

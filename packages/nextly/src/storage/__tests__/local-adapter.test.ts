@@ -120,6 +120,45 @@ describe("LocalStorageAdapter", () => {
     });
   });
 
+  describe("uploadAt()", () => {
+    it("writes at exactly the key, leaving no partial file behind", async () => {
+      const key = "2026/11/0b6f-photo.jpg.w640.webp";
+      const result = await adapter.uploadAt(key, Buffer.from("copy"), {
+        mimeType: "image/webp",
+      });
+      expect(result).toEqual({ url: "/uploads/" + key, path: key });
+      expect(await adapter.read(key)).toEqual(Buffer.from("copy"));
+      const left = await fs.readdir(path.join(testDir, "2026/11"));
+      expect(left).toEqual(["0b6f-photo.jpg.w640.webp"]);
+    });
+
+    it("keeps a copy whose name is near the 255-byte limit", async () => {
+      // 246 bytes: fits as a name, but not with a second suffix on it.
+      const long = `2026/11/${"b".repeat(232)}.jpg.w640.webp`;
+      expect(path.basename(long).length).toBe(246);
+      await adapter.uploadAt(long, Buffer.from("copy"), {
+        mimeType: "image/webp",
+      });
+      expect(await adapter.read(long)).toEqual(Buffer.from("copy"));
+    });
+
+    it("refuses a key it would have to tidy, writing nothing anywhere", async () => {
+      for (const key of [
+        "../../outside.webp",
+        "/leading.webp",
+        "a/../b.webp",
+      ]) {
+        await expect(
+          adapter.uploadAt(key, Buffer.from("x"), { mimeType: "image/webp" })
+        ).rejects.toThrow();
+      }
+      await expect(
+        fs.access(path.join(testDir, "..", "..", "outside.webp"))
+      ).rejects.toThrow();
+      expect(await fs.readdir(testDir)).toEqual([]);
+    });
+  });
+
   describe("getType()", () => {
     it("should return 'local'", () => {
       expect(adapter.getType()).toBe("local");

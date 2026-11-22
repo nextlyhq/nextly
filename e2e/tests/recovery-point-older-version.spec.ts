@@ -56,8 +56,7 @@ test("a post another author wrote through REST after its recovery point is offer
   await gotoAdmin(page, "/collections/posts/create");
   await page.getByRole("textbox", { name: "Title", exact: true }).fill(title);
   await page.getByRole("button", { name: /save draft/i }).click();
-  await page.waitForURL(/\/collections\/posts$/, { timeout: 30_000 });
-  await page.getByRole("link", { name: title }).click();
+  // The first save stays on the new post, at its own address.
   await page.waitForURL(/\/collections\/posts\/(?!create$)[^/]+$/, {
     timeout: 30_000,
   });

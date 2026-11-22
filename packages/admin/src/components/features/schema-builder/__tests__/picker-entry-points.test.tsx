@@ -50,7 +50,15 @@ function renderList(
   const callbacks: OutlineCallbacks = {
     select: vi.fn(),
     addAt: onAddAt,
-    move: vi.fn(),
+    fields,
+    // Nothing here moves: every move is refused, so the menu offers none.
+    judgeMove: vi.fn(() => ({
+      allowed: false as const,
+      reason: "not-found" as const,
+      message: "",
+    })),
+    moveDestinations: vi.fn(() => []),
+    commitMove: vi.fn(),
     duplicate: vi.fn(),
     remove: vi.fn(),
     setHidden: vi.fn(),

@@ -87,6 +87,7 @@ import {
   ENUM_STORAGE_LENGTH,
   fieldsStoredOnRow,
   getColumnDescriptor,
+  getSingleRowColumnDescriptor,
   migrateStepColumnDescriptors,
   renderDialectType,
   systemColumnsForFields,
@@ -609,10 +610,15 @@ function buildDrizzleColumnRecord(
   // come back as `null` from getColumnDescriptor and are skipped. Those inside
   // a group with no name are columns of this row, read through the walk every
   // builder of the row's columns shares (`fieldsStoredOnRow`); the group
-  // itself has no name to give a column.
+  // itself has no name to give a column. A Single's reference columns accept
+  // NULL (`getSingleRowColumnDescriptor`).
+  const describeUserColumn =
+    options.isSingle === true
+      ? getSingleRowColumnDescriptor
+      : getColumnDescriptor;
   for (const field of fieldsStoredOnRow(fields)) {
     if (localizedNames.has(field.name)) continue; // companion-owned
-    const desc = getColumnDescriptor(
+    const desc = describeUserColumn(
       field,
       dialect,
       options.builtBy ?? "codeFirst"
@@ -791,6 +797,43 @@ export function systemColumnDriverValue(
   return columns.column.mapToDriverValue(value);
 }
 
+/**
+ * `value` as a translation table's column of `kind` stores it (`generateCompanionRuntimeSchema`),
+ * for a statement that binds a field's value itself rather than through that table: a `Date`
+ * bound bare on PostgreSQL is the Node process's local wall clock, while the column, as the main
+ * table's, holds the UTC one. Built from the same descriptor and builder as that column, so the
+ * two cannot encode differently.
+ */
+export function fieldColumnDriverValue(
+  dialect: SupportedDialect,
+  kind: ColumnDescriptor["kind"],
+  value: unknown
+): unknown {
+  const key = `${dialect}\u0000field:${kind}`;
+  let table = encoderTables.get(key);
+  if (table === undefined) {
+    const record = {
+      column: buildUserDrizzleColumn(
+        { name: "column", dialectType: "", nullable: true, kind },
+        dialect
+      ),
+    };
+    table = (
+      dialect === "postgresql"
+        ? pgTable("__nextly_encode", record as never)
+        : dialect === "mysql"
+          ? mysqlTable("__nextly_encode", record as never)
+          : sqliteTable("__nextly_encode", record as never)
+    ) as Record<string, unknown>;
+    encoderTables.set(key, table);
+  }
+  const columns = getColumns(table as never) as Record<
+    string,
+    { mapToDriverValue(value: unknown): unknown }
+  >;
+  return columns.column.mapToDriverValue(value);
+}
+
 const languageRevisionTables = new Map<string, Record<string, unknown>>();
 
 /**
@@ -942,7 +985,7 @@ export function buildPgColumnFromKind(
     case "json":
       return withNullability(pgJsonb(name), nullable);
     case "fkSingle":
-      return pgText(name);
+      return withNullability(pgText(name), nullable);
     // Extension-only kinds. Omitting them does NOT fail to compile — this
     // function returns `unknown`, so a missing case falls through to
     // `undefined` and the table receives a non-column. Every kind is listed
@@ -1012,7 +1055,10 @@ export function buildMysqlColumnFromKind(
     case "json":
       return withNullability(mysqlJson(name), nullable);
     case "fkSingle":
-      return mysqlVarchar(name, { length: length ?? 36 });
+      return withNullability(
+        mysqlVarchar(name, { length: length ?? 36 }),
+        nullable
+      );
     // See the PostgreSQL builder: a missing case falls through to `undefined`
     // rather than failing to compile, so every kind is listed.
     case "bigint": {
@@ -1085,7 +1131,7 @@ export function buildSqliteColumnFromKind(
       // SQLite stores JSON as text.
       return withNullability(sqliteText(name), nullable);
     case "fkSingle":
-      return sqliteText(name);
+      return withNullability(sqliteText(name), nullable);
     case "skip":
       return null;
     default:

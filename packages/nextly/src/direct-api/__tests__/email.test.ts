@@ -9,7 +9,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import type { NextlyContext } from "../namespaces/context";
-import { createEmailNamespace } from "../namespaces/email";
+import {
+  createEmailNamespace,
+  createEmailTemplatesNamespace,
+} from "../namespaces/email";
 
 function build() {
   const send = vi
@@ -192,5 +195,35 @@ describe("Direct API - Email namespace", () => {
         })
       );
     });
+  });
+});
+
+describe("Direct API - Email templates namespace", () => {
+  it("forwards a written template's format and blocks to the service", async () => {
+    const createTemplate = vi.fn().mockResolvedValue({ id: "t1" });
+    const ctx = {
+      emailTemplateService: { createTemplate },
+      defaultConfig: {},
+    } as unknown as NextlyContext;
+    const blocks = {
+      version: 1 as const,
+      blocks: [{ type: "divider" as const }],
+    };
+
+    await createEmailTemplatesNamespace(ctx).create({
+      data: {
+        name: "Order",
+        slug: "order",
+        subject: "Your order",
+        htmlContent: "",
+        format: "written",
+        blocks,
+      },
+    });
+
+    expect(createTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({ format: "written", blocks }),
+      undefined
+    );
   });
 });

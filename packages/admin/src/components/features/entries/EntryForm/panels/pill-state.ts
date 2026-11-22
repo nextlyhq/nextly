@@ -64,3 +64,32 @@ export function savedPillState(
   const state = pillStateFromForm(status, false, hasWorkingDraft);
   return state === "modified" ? "published" : state;
 }
+
+/**
+ * Where a document is in its life, and nothing about its work: Draft,
+ * Published or Scheduled. For a surface whose Save and Publish buttons say
+ * whether the work is saved and whether the live page is behind, so its pill
+ * never says it a second time ("Changed", "Modified").
+ */
+export type LifeStage = "draft" | "published" | "scheduled";
+
+/** What each life stage is called, in one place. */
+export const LIFE_STAGE_LABEL: Record<LifeStage, string> = {
+  draft: "Draft",
+  published: "Published",
+  scheduled: "Scheduled",
+};
+
+/**
+ * The life stage, from the lifecycle status and whether a publication is
+ * scheduled: never from publication history, so a page unpublished since it
+ * was live is a Draft again. Scheduled comes first, as a first publication
+ * that is scheduled is not a plain Draft.
+ */
+export function lifeStage(
+  status: string | undefined,
+  scheduled: boolean
+): LifeStage {
+  if (scheduled) return "scheduled";
+  return status === "published" ? "published" : "draft";
+}

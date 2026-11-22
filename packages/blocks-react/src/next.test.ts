@@ -501,9 +501,11 @@ describe("createBlocksPage", () => {
     ).resolves.toBeNull();
   });
 
-  it("derives metadata from the page's own blocks", async () => {
+  it("derives metadata from the page's own blocks, never a title from a heading", async () => {
     // The common case: nobody filled the SEO fields in, and the page already
-    // contains its title, its opening prose and its first picture.
+    // contains its opening prose. Its first heading is worded unlike the
+    // page's title and is not offered as one: the title comes from the
+    // page's SEO title or the content type's pattern, never from the design.
     const page: BlockDocument = {
       formatVersion: DOCUMENT_FORMAT_VERSION,
       kind: "page",
@@ -512,7 +514,7 @@ describe("createBlocksPage", () => {
           id: "1",
           type: "core/heading",
           version: 1,
-          props: { text: "Pricing" },
+          props: { text: "Plans for every team", level: "h1" },
         },
         {
           id: "2",
@@ -530,7 +532,7 @@ describe("createBlocksPage", () => {
       blocks: coreResolver(),
       metadata: (_entry, _ctx, derived) => {
         seen = derived;
-        return { title: derived.title };
+        return { description: derived.description };
       },
     });
 
@@ -538,12 +540,12 @@ describe("createBlocksPage", () => {
       params: { slug: ["pricing"] },
     });
 
-    expect(meta).toEqual({ title: "Pricing" });
+    expect(meta).toEqual({ description: "Plans for every team." });
     expect(seen).toMatchObject({
-      title: "Pricing",
       description: "Plans for every team.",
       canonical: "/pricing",
     });
+    expect(seen).not.toHaveProperty("title");
   });
 
   it("resolves a derived media id into a URL for the preview image", async () => {
@@ -609,14 +611,14 @@ describe("createBlocksPage", () => {
       nodes: [
         {
           id: "1",
-          type: "core/heading",
+          type: "core/text",
           version: 1,
           props: { text: "Members only" },
           visibility: { conditions: [{ kind: "always", value: false }] },
         } as never,
         {
           id: "2",
-          type: "core/heading",
+          type: "core/text",
           version: 1,
           props: { text: "Public" },
         },
@@ -636,7 +638,7 @@ describe("createBlocksPage", () => {
 
     await route.generateMetadata({ params: { slug: ["about"] } });
 
-    expect(seen?.title).toBe("Public");
+    expect(seen?.description).toBe("Public");
   });
 
   it("repairs a malformed stored document instead of failing the route", async () => {
@@ -769,14 +771,14 @@ describe("createBlocksPage", () => {
     expect(instance.findByID).not.toHaveBeenCalled();
   });
 
-  it("derives a title from a heading whose stored text is a number", async () => {
+  it("derives a description from prose whose stored text is a number", async () => {
     // The renderer normalizes `2024` to text and shows it, so skipping it here
-    // would title the page from a later heading the visitor sees second.
+    // would describe the page by later prose the visitor sees second.
     const page: BlockDocument = {
       formatVersion: DOCUMENT_FORMAT_VERSION,
       kind: "page",
       nodes: [
-        { id: "1", type: "core/heading", version: 1, props: { text: 2024 } },
+        { id: "1", type: "core/text", version: 1, props: { text: 2024 } },
       ],
     };
     let seen: DerivedPageSeo | undefined;
@@ -793,7 +795,7 @@ describe("createBlocksPage", () => {
 
     await route.generateMetadata({ params: { slug: ["y"] } });
 
-    expect(seen?.title).toBe("2024");
+    expect(seen?.description).toBe("2024");
   });
 
   it("stays anonymous when resolving a reference", async () => {

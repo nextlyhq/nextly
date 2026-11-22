@@ -3,10 +3,14 @@
  * is refused, and one the stored definition already held is kept, so an
  * unrelated edit to that component still saves.
  */
+import { createBlockRegistry } from "@nextlyhq/blocks-engine";
 import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
 import { blocksFieldType } from "./blocksField";
+
+/** The site's block registry these tests judge against: it holds none. */
+const blocks = createBlockRegistry();
 
 function component(variants: Record<string, unknown>) {
   return {
@@ -38,7 +42,7 @@ function write(stored: unknown): PluginFieldWrite {
 }
 
 async function validate(value: unknown, stored: unknown) {
-  const field = blocksFieldType();
+  const field = blocksFieldType(undefined, undefined, blocks);
   return field.validate?.(value, {
     path: "document",
     field: {

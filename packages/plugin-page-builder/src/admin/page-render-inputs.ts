@@ -38,6 +38,7 @@ import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import { offeredTiers } from "@nextlyhq/builder/shell";
 
 import { readRemotePatterns } from "../host-policy";
+import { customCssPolicy } from "../site-code/css-check";
 import { siteBreakpoints, type SiteStyleData } from "../site-style";
 
 /**
@@ -103,6 +104,18 @@ export interface PageRenderInputsOptions {
    * would let it paint a hover appearance no visitor is seeing.
    */
   previewStates?: boolean;
+  /**
+   * Whether the surface draws the page in a frame of its own, as the canvas
+   * does. Only such a surface draws custom CSS: a page's or the site's CSS is
+   * written for the whole page (`body { … }`), and drawn inside the admin's
+   * own document it would restyle, or hide, the admin around it.
+   */
+  framed?: boolean;
+  /**
+   * The site's own custom CSS, where a framed surface has read it: drawn
+   * before the page's own, as on the live page.
+   */
+  siteCss?: string;
   /** The site's document caps, already read from the config. */
   limits: DocumentLimits;
   /**
@@ -128,6 +141,8 @@ export function pageRenderInputs({
   previewStates,
   limits,
   definitions,
+  framed,
+  siteCss,
 }: PageRenderInputsOptions): PageRenderInputs {
   /*
    * ONE read of the breakpoints, feeding both the compile and the decision
@@ -152,6 +167,13 @@ export function pageRenderInputs({
         ? {}
         : { previewContainer }),
       ...(previewStates === true ? { previewStates: true } : {}),
+      /*
+       * Custom CSS through the page builder's one checker, the same one the
+       * published route and the server use, so the canvas draws exactly what
+       * goes live: what it refuses is drawn nowhere. Only on a framed surface,
+       * where CSS styling `body` reaches the page and never the admin.
+       */
+      ...(framed === true ? { customCss: customCssPolicy(siteCss) } : {}),
     },
     /*
      * ABSENT is not the same as empty here, and the difference is the whole

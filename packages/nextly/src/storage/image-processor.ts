@@ -13,6 +13,7 @@
 
 import type { default as SharpDefault } from "sharp";
 
+import { isAnimatedPng } from "./animated-png";
 import { loadSharp } from "./sharp-loader";
 import type { ImageMetadata, ProcessedImage } from "./types";
 
@@ -48,10 +49,37 @@ export function refusesUpload(validity: ImageValidity): boolean {
  */
 export interface ImageProcessorDeps {
   loader?: () => Promise<SharpModule | null>;
+  /**
+   * The most pixels an original may have for a resized copy to be made of
+   * it. Injected so a test can reach the limit with a small image.
+   */
+  copyPixelLimit?: number;
 }
 
 /** The square, in pixels, the admin thumbnail is fitted inside. */
 const THUMBNAIL_BOX = 480;
+
+/**
+ * The most pixels an original may have for a copy to be made of it: 50
+ * million, past a full-frame camera's 45. A copy is made while a visitor
+ * waits, and decoding takes about four bytes a pixel, so the limit is what
+ * keeps one request from taking hundreds of megabytes. Lower than sharp's own
+ * default of about 268 million, which is set for batch work.
+ */
+const COPY_PIXEL_LIMIT = 50_000_000;
+
+/** A format a resized copy is written in. */
+export type ImageCopyFormat = "avif" | "webp" | "jpeg" | "png";
+
+/**
+ * What asking for a resized copy came to: the copy's bytes; `unavailable`
+ * when this install has no image processing; `refused` when the original
+ * could not be read as an image within the pixel limit.
+ */
+export type ImageCopyResult =
+  | { kind: "made"; bytes: Buffer }
+  | { kind: "unavailable" }
+  | { kind: "refused" };
 
 export class ImageProcessor {
   constructor(private readonly deps: ImageProcessorDeps = {}) {}
@@ -181,6 +209,61 @@ export class ImageProcessor {
   }
 
   /**
+   * A copy of an image at `width` CSS pixels wide, in `format`.
+   *
+   * Turned upright first, as its camera recorded it, because the copy carries
+   * no orientation for a browser to apply. Never enlarged: an original
+   * narrower than `width` keeps its own width, since a larger copy would be
+   * more bytes with no more detail. Metadata is not carried over, so a
+   * photo's location never reaches a copy.
+   *
+   * An original past the pixel limit, an animated one, or bytes that are not
+   * an image, are `refused` rather than thrown: the caller answers with the
+   * original instead, and a bad file must not take the request down.
+   *
+   * @experimental
+   */
+  async copyAtWidth(
+    buffer: Buffer,
+    width: number,
+    format: ImageCopyFormat
+  ): Promise<ImageCopyResult> {
+    const sharp = await this.sharp();
+    if (!sharp) return { kind: "unavailable" };
+    try {
+      const limits = {
+        limitInputPixels: this.deps.copyPixelLimit ?? COPY_PIXEL_LIMIT,
+      };
+      // An animated original (WebP or PNG with several frames) would come out
+      // as its first frame alone, so it is sent as it is instead. The library
+      // counts an animated WebP's frames but reads an APNG as one, so an APNG
+      // is told by its own animation chunk.
+      if (
+        isAnimatedPng(buffer) ||
+        ((await sharp(buffer, limits).metadata()).pages ?? 1) > 1
+      ) {
+        return { kind: "refused" };
+      }
+      const resized = sharp(buffer, limits)
+        .rotate()
+        .resize({ width, withoutEnlargement: true });
+      const encoded =
+        format === "avif"
+          ? // A low effort: the copy is made while someone waits, and the
+            // higher efforts cost several times the time for a few percent.
+            resized.avif({ quality: 50, effort: 2 })
+          : format === "webp"
+            ? resized.webp({ quality: 75, effort: 4 })
+            : format === "jpeg"
+              ? resized.jpeg({ quality: 80, progressive: true, mozjpeg: true })
+              : resized.png({ compressionLevel: 9 });
+      return { kind: "made", bytes: await encoded.toBuffer() };
+    } catch {
+      return { kind: "refused" };
+    }
+  }
+
+  /**
    * Resize image to specific dimensions
    *
    * @param maxWidth Maximum width (maintains aspect ratio)
@@ -246,8 +329,12 @@ export class ImageProcessor {
       // as a failure, so an upload proceeds without it.
       if (!sharp) return null;
       const metadata = await sharp(buffer).metadata();
-      if (metadata.width && metadata.height) {
-        return { width: metadata.width, height: metadata.height };
+      // As the picture is shown, upright: a photo whose camera recorded it
+      // turned a quarter (EXIF orientation 5 to 8) is stored on its side, and
+      // every browser, resized copy and layout reads it turned back.
+      const shown = metadata.autoOrient ?? metadata;
+      if (shown.width && shown.height) {
+        return { width: shown.width, height: shown.height };
       }
       return null;
     } catch {

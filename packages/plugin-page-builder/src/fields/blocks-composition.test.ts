@@ -5,11 +5,10 @@
  * here can only come from composing it over the library its write reads.
  */
 import {
-  clearBlocks,
+  createBlockRegistry,
   COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
-  registerBlocks,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -29,7 +28,12 @@ import {
   type StillBrokenHosts,
   type UnjudgedHosts,
 } from "./blocks-composition";
+import { readStoredOfVia } from "../__tests__/stored-reads-of";
+
 import type { ListFieldsReader, TemplateTargets } from "./list-query-judgement";
+
+/** The site's block registry these tests seed and judge against. */
+const blocks = createBlockRegistry();
 
 const COMPONENTS = "nx_pb_components";
 const FIELD = "content";
@@ -43,7 +47,7 @@ const base = {
 };
 
 beforeEach(() => {
-  registerBlocks(
+  blocks.register(
     [
       // Declared slots: a child in a slot its container never declares is
       // refused on its own account, which these cases do not test.
@@ -117,7 +121,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  clearBlocks();
+  blocks.clear();
 });
 
 type Node = Record<string, unknown>;
@@ -175,7 +179,7 @@ function storeOf(rows: Record<string, Record<string, Stored>>) {
     if (value === "not-ready") throw NextlyError.serviceUnavailable();
     return { kind: "value", value };
   };
-  return { readStored, asked };
+  return { readStored, readStoredOf: readStoredOfVia(readStored), asked };
 }
 
 /** A write to `slug`, with the stored id an update carries. */
@@ -191,6 +195,7 @@ function write(
     ...(id === undefined ? {} : { id }),
     inTransaction,
     readStored,
+    readStoredOf: readStoredOfVia(readStored),
   };
 }
 
@@ -231,6 +236,7 @@ function judge(
     {
       store: STORE,
       limits: limits ?? DEFAULT_LIMITS,
+      blocks,
       // Only the callbacks a case names: an absent one is never handed in.
       ...callbacks,
       composesDocuments: composesDocuments ?? true,
@@ -2654,6 +2660,7 @@ describe("a placement's own values", () => {
       slug: "homepage",
       inTransaction: false,
       readStored,
+      readStoredOf: components.readStoredOf,
     };
     expect(
       codes(await judge(page([valued({ subtitle: "Hi", title: 7 })]), single))

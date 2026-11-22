@@ -28,7 +28,9 @@ describe("validateCrossFile", () => {
     expect(issues).toEqual([]);
   });
 
-  it("flags a slug present in both code and UI", () => {
+  // A slug in both is the code-first entity shadowing the Builder's, which the merge reports per
+  // kind (`mergeUiEntities`' `shadowed`) and the commands warn about; it refuses nothing here.
+  it("raises no issue for a slug present in both code and UI", () => {
     const manifest = uiSchemaManifest.parse({
       collections: [{ slug: "posts", fields: [{ name: "x", type: "text" }] }],
     });
@@ -36,9 +38,7 @@ describe("validateCrossFile", () => {
       codeCollectionSlugs: ["posts"],
       manifest,
     });
-    expect(issues.some(i => i.code === "NEXTLY_SCHEMA_SLUG_COLLISION")).toBe(
-      true
-    );
+    expect(issues).toEqual([]);
   });
 
   it("flags a relationTo that points at no known target", () => {
@@ -59,6 +59,102 @@ describe("validateCrossFile", () => {
     expect(
       issues.some(i => i.code === "NEXTLY_SCHEMA_RELATION_TARGET_MISSING")
     ).toBe(true);
+  });
+
+  // The earlier Builder's shape keeps the target in `options.target`, which the parser accepts and
+  // the generator keys a column to, so it is judged as `relationTo` is.
+  it("flags an options.target that points at no known target", () => {
+    const manifest = uiSchemaManifest.parse({
+      collections: [
+        {
+          slug: "events",
+          fields: [
+            {
+              name: "owner",
+              type: "relationship",
+              options: { target: "ghosts" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(validateCrossFile({ codeCollectionSlugs: [], manifest })).toEqual([
+      {
+        code: "NEXTLY_SCHEMA_RELATION_TARGET_MISSING",
+        message: "events.owner relates to unknown target 'ghosts'",
+      },
+    ]);
+  });
+
+  it("flags a relationship nested in a group, named by its path", () => {
+    const manifest = uiSchemaManifest.parse({
+      collections: [
+        {
+          slug: "events",
+          fields: [
+            {
+              name: "meta",
+              type: "group",
+              fields: [
+                { name: "owner", type: "relationship", relationTo: "ghosts" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(validateCrossFile({ codeCollectionSlugs: [], manifest })).toEqual([
+      {
+        code: "NEXTLY_SCHEMA_RELATION_TARGET_MISSING",
+        message: "events.meta.owner relates to unknown target 'ghosts'",
+      },
+    ]);
+  });
+
+  it("names a target once when relationTo and options.target agree", () => {
+    const manifest = uiSchemaManifest.parse({
+      collections: [
+        {
+          slug: "events",
+          fields: [
+            {
+              name: "owner",
+              type: "relationship",
+              relationTo: "ghosts",
+              options: { target: "ghosts" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(
+      validateCrossFile({ codeCollectionSlugs: [], manifest })
+    ).toHaveLength(1);
+  });
+
+  // A relationship retargeted in the Builder is saved with its new `relationTo` and the options it
+  // was read with, the earlier target among them. Reads take `relationTo` over `options.target`
+  // (`relationshipTargetSlug`), so the stale one is no target to judge.
+  it("judges relationTo, not a stale options.target beside it", () => {
+    const manifest = uiSchemaManifest.parse({
+      collections: [
+        { slug: "authors", fields: [{ name: "name", type: "text" }] },
+        {
+          slug: "events",
+          fields: [
+            {
+              name: "owner",
+              type: "relationship",
+              relationTo: "authors",
+              options: { target: "people" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(validateCrossFile({ codeCollectionSlugs: [], manifest })).toEqual(
+      []
+    );
   });
 
   it("accepts relationTo pointing at a core table (users/media)", () => {

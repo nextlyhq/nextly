@@ -144,6 +144,20 @@ vi.mock("../../../domains/schema/sibling-fields", () => ({
 vi.mock("../../../shared/address-rule", () => ({
   assertConfiguredAddresses: async () => {},
 }));
+// The steps over data an earlier release stored are another suite's subject:
+// here the run has none to take, and its dry run adds nothing to the plan.
+vi.mock("../stored-data-of-run", () => ({
+  storedDataOfRun: () => ({
+    askBackedUp: async () => true,
+    preview: async () => {},
+    plan: async () => ({ changes: [] }),
+    confirmBeforeSchemaChanges: async () => {},
+    takeAfterSchemaChanges: async () => {},
+    warnOfPasswordsLeft: async () => {},
+    refusal: () => null,
+  }),
+  planWithStoredData: (plan: unknown) => plan,
+}));
 vi.mock("../../../shared/lib/assert-plugin-field-declarations", () => ({
   assertPluginFieldDeclarations: () => {},
 }));
@@ -284,6 +298,8 @@ vi.mock("../dev-server", () => ({
   performComponentsAutoSync: async () => {},
   performSinglesAutoSync: async () => {},
   performSinglesReconcile: async () => {},
+  // These runs are not in production, so db:sync has no refusal to give.
+  productionSyncRefusal: () => undefined,
 }));
 vi.mock("../dev-watcher", () => ({ createDebouncedSync: () => () => {} }));
 

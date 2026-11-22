@@ -14,6 +14,12 @@
  * shown about one. What `run` reads is decided by the renderer, which hands
  * it a reader limited to what it declares (`blocks-react`'s `named-read`).
  *
+ * It is also the package's `./named-query` entry, which a block-contributing
+ * plugin reaches through `@nextlyhq/plugin-sdk/blocks`, so it may import only
+ * modules with no runtime dependency: through the root, that one import would
+ * bring the whole engine and its CSS parser to every admin screen. The
+ * boundary is checked against the built bundles in `format-boundary.test.ts`.
+ *
  * @module named-query
  */
 import type { BindingFieldShape } from "./binding-rules";

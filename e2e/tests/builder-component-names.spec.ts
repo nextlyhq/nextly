@@ -135,7 +135,13 @@ test.describe("a placed component's name", () => {
     const pageId = await seed(page, title, tag);
 
     await gotoAdmin(page, `/collections/pages/${pageId}`);
-    const rows = page.getByRole("list", { name: "Sections" }).getByRole("link");
+    // The sections are folded under their count until asked for.
+    await page
+      .getByRole("button", { name: "Sections (3)" })
+      .click({ timeout: 30_000 });
+    const rows = page
+      .getByRole("list", { name: "Sections (3)" })
+      .getByRole("link");
     await expect(rows).toHaveText(
       [
         new RegExp(`^1\\s*Heading\\s*Lead ${tag}`),

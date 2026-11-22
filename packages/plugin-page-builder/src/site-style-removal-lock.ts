@@ -40,9 +40,12 @@
  * - A write whose shared styles ADD a variable the document as it leaves it
  *   does not define is refused, as the guard before the transaction refuses
  *   it (`undefinedSharedStyleVariables`), with the same code.
- * - A write dropping a variable a shared style in that document still names
- *   is refused as in use, as the remove route's check refuses it
- *   (`sharedStyleReasons`), before the lock is asked for.
+ * - A write dropping a variable a shared style or another variable in that
+ *   document still names is refused as in use, as the remove route's check
+ *   refuses it (`sharedStyleReasons`, `variableReasons`), before the lock is
+ *   asked for. Each is asked for the variable's identity and the custom
+ *   property the document writes it under (`variablesAsked`), as the
+ *   stored documents are under the lock.
  *
  * ## Read on the write's own transaction
  *
@@ -88,6 +91,7 @@
  *
  * @module site-style-removal-lock
  */
+import { isPlainRecord } from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   type InTransactionContext,
@@ -112,13 +116,18 @@ import {
   SITE_STYLE_SLUG,
   droppedSharedStyles,
   droppedVariables,
+  sharedStyleName,
   sharedStylesOverCode,
+  siteTokensOverCode,
   undefinedSharedStyleVariables,
   undefinedSharedStyleVariablesRefusal,
   variableGuardsJudge,
   type NamedVariable,
 } from "./site-style-storage";
-import { sharedStyleReasons } from "./variables-routes";
+import { textStyleReasons } from "./site-text-uses";
+import { readStoredJson } from "./stored-json";
+import { variablesAsked, type VariablesAsked } from "./token-usage";
+import { sharedStyleReasons, variableReasons } from "./variables-routes";
 import { readWithinOrRefuse, type UnreadReason } from "./within-time";
 
 /**
@@ -169,10 +178,11 @@ export interface SiteStyleRemovalLockSetup {
   readonly documentsOn: (write: SiteStyleWrite) => StoredDocuments;
   /**
    * Every stored document in `documents` still naming any of the variables,
-   * by the walk the remove route's rescan makes.
+   * by the walk the remove route's rescan makes, asked by usage key: each
+   * variable's identity and its property's key (`variablesAsked`).
    */
   readonly variableUses: (
-    ids: readonly string[],
+    keys: readonly string[],
     documents: StoredDocuments
   ) => Promise<readonly StoredUse[]>;
   /** Every stored document still applying any of the shared styles, likewise. */
@@ -227,9 +237,18 @@ export async function refuseRemovalsInUse(
       )
     : [];
   if (variables.length === 0 && classes.length === 0) return;
+  // A Site text row the write leaves following a text style it drops, judged
+  // from the Single as this write leaves it, before the lock: no page is
+  // asked, and the remove route refuses with the same words.
+  await refuseFollowedTextStyles(classes, before?.classes, setup, section);
+  // The variables asked as the Single, as this write leaves it, writes them.
+  const asked = variablesAsked(
+    variables,
+    siteTokensOverCode(setup.defaults(), await section("tokens")).prefix
+  );
   // Judged from the Single as this write leaves it, before the lock: no
   // other document is asked, and no page can change it.
-  await refuseVariablesSharedStylesName(dropped, setup, section);
+  await refuseVariablesTheSiteStyleNames(dropped, setup, section, asked);
 
   // The lock first, then the read: what the read sees is everything a page
   // write holding the lock before this one committed.
@@ -257,7 +276,7 @@ export async function refuseRemovalsInUse(
       return {
         variables:
           variables.length > 0
-            ? await setup.variableUses(variables, documents)
+            ? await setup.variableUses(asked.keys, documents)
             : [],
         classes:
           classes.length > 0
@@ -283,6 +302,35 @@ export async function refuseRemovalsInUse(
       { uses: () => Promise.resolve(found.classes) },
       "classIds"
     );
+  }
+}
+
+/**
+ * Refuse dropping a text style a Site text row still follows, the code's
+ * rows included, naming each row. `stored` is the classes section before the
+ * write, read for the dropped styles' names.
+ */
+async function refuseFollowedTextStyles(
+  dropped: readonly string[],
+  stored: unknown,
+  setup: SiteStyleRemovalLockSetup,
+  section: SectionAfter
+): Promise<void> {
+  if (dropped.length === 0) return;
+  const read = readStoredJson(stored);
+  const entries = Array.isArray(read) ? read : [];
+  const removable = dropped.map(id => {
+    const entry: unknown = entries.find(
+      candidate => isPlainRecord(candidate) && candidate.id === id
+    );
+    return { id, name: isPlainRecord(entry) ? sharedStyleName(entry) : id };
+  });
+  const reasons = textStyleReasons(
+    removable,
+    siteTokensOverCode(setup.defaults(), await section("tokens"))
+  );
+  if (reasons.length > 0) {
+    throw removalRefusalOf(reasons, { classIds: [...dropped] });
   }
 }
 
@@ -342,22 +390,31 @@ async function refuseUndefinedSharedStyleVariables(
 }
 
 /**
- * Refuse dropping a variable a shared style still names, in the site's
- * shared styles as this write leaves them (the code's and the stored ones,
- * merged): the remove route's own reasons and in-use refusal, filed on the
- * tokens section as the Single's guard files them. Every write is judged, as
- * every removal under the lock is.
+ * Refuse dropping a variable a shared style or another variable still names,
+ * in the site's shared styles and variables as this write leaves them (the
+ * code's and the stored ones, merged): the remove route's own reasons and
+ * in-use refusal, filed on the tokens section as the Single's guard files
+ * them. Every write is judged, as every removal under the lock is.
  */
-async function refuseVariablesSharedStylesName(
+async function refuseVariablesTheSiteStyleNames(
   dropped: readonly NamedVariable[],
   setup: SiteStyleRemovalLockSetup,
-  section: SectionAfter
+  section: SectionAfter,
+  asked: VariablesAsked
 ): Promise<void> {
   if (dropped.length === 0) return;
-  const reasons = sharedStyleReasons(
-    dropped,
-    sharedStylesOverCode(setup.defaults(), await section("classes"))
-  );
+  const reasons = [
+    ...sharedStyleReasons(
+      dropped,
+      sharedStylesOverCode(setup.defaults(), await section("classes")),
+      asked
+    ),
+    ...variableReasons(
+      dropped,
+      siteTokensOverCode(setup.defaults(), await section("tokens")),
+      asked
+    ),
+  ];
   if (reasons.length === 0) return;
   throw removalRefusalOf(
     reasons,

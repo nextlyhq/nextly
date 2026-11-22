@@ -15,8 +15,6 @@
  *
  * @module app/(frontend)/page
  */
-import { createBlockResolver } from "@nextlyhq/blocks-react";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createSinglePage } from "@nextlyhq/blocks-react/next";
 
 import {
@@ -46,10 +44,6 @@ const { SinglePage, generateMetadata } = createSinglePage({
   // because inferring it means reading configuration at request time and a
   // reader may defer booting until its first query.
   locale: "en",
-  // An explicit set rather than the process registry, which is populated by
-  // whatever booted the editor — so a public route depending on it draws the
-  // unknown-block placeholder whenever a visitor arrives before an admin does.
-  blocks: createBlockResolver(coreBlocks),
   styleContext: SITE_STYLE_CONTEXT,
   siteStyles: SITE_STYLES,
   metadata: singleMetadata,

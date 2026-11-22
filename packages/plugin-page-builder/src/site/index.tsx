@@ -25,21 +25,38 @@
  * @module site
  * @experimental
  */
-import { draftMode } from "next/headers";
 import type { JSX } from "react";
 
 import {
   isGatedSiteCode,
+  PAGE_CODE_BODY_BOOTSTRAP,
   SITE_CODE_BOOTSTRAP,
   SITE_CODE_DATA_ATTRIBUTE,
 } from "../site-code/bootstrap";
+import { pageCodeOf } from "../site-code/page-code";
 import {
   siteCodeScriptKind,
   type SiteCodeAttrs,
   type SiteCodeEntry,
   type SiteCodeSlot,
 } from "../site-code/rules";
+import { sanitiseSiteCode } from "../site-code/sanitise";
 import { SITE_CODE_SLUG, storedSiteCodeEntries } from "../site-code/storage";
+
+import { PageCodeBoundary } from "./page-code-boundary";
+
+/**
+ * Whether the page is drawn for a draft-mode request, which the preview pane
+ * makes: asked as Nextly's own content routes ask it, so it is false outside
+ * a request (a page drawn by a test or a script) rather than an error, and
+ * Next's own signals during a prerender are handed back to it. Not read from
+ * `next/headers` here: a module importing that can't be loaded by plain
+ * Node, and this one is reached from the plugin's root, which the CLI loads.
+ */
+async function inDraftMode(): Promise<boolean> {
+  const { isDraftModeRequest } = await import("@nextlyhq/plugin-sdk");
+  return isDraftModeRequest();
+}
 
 /** What `<SiteCode>` is given. */
 export interface SiteCodeProps {
@@ -75,7 +92,10 @@ const DEFAULT_SKIP: readonly string[] = ["/admin"];
  * (`basePath: "/site"` serves the admin at `/site/admin`), which Next.js
  * builds into every bundle as `process.env.__NEXT_ROUTER_BASEPATH`.
  */
-function skippedPaths(props: SiteCodeProps): string[] {
+function skippedPaths(props: {
+  readonly skip?: readonly string[];
+  readonly basePath?: string;
+}): string[] {
   const base = (
     props.basePath ??
     process.env.__NEXT_ROUTER_BASEPATH ??
@@ -246,12 +266,41 @@ export async function SiteCode(
   props: SiteCodeProps
 ): Promise<JSX.Element | null> {
   // The preview pane shows drafts in draft mode, framed by the admin.
-  if ((await draftMode()).isEnabled) return null;
+  if (await inDraftMode()) return null;
   const slug = props.slug ?? SITE_CODE_SLUG;
   const entries = storedSiteCodeEntries(
     await (props.read ?? readStoredSiteCode)(slug),
     props.slot
   );
+  return (
+    <CodeOutput
+      slot={props.slot}
+      entries={entries}
+      skip={skippedPaths(props)}
+      {...(props.nonce === undefined ? {} : { nonce: props.nonce })}
+    />
+  );
+}
+
+/**
+ * One place's code as a page carries it: what runs nothing written as is,
+ * then the data block, then the loader that starts the rest. Site code and a
+ * page's own code are both written by this, so both are guarded alike.
+ */
+function CodeOutput({
+  slot,
+  entries,
+  skip,
+  nonce,
+  loader = SITE_CODE_BOOTSTRAP,
+}: {
+  readonly slot: SiteCodeSlot;
+  readonly entries: readonly SiteCodeEntry[];
+  readonly skip: readonly string[];
+  readonly nonce?: string;
+  /** The loader that starts the gated code: site code's, by default. */
+  readonly loader?: string;
+}): JSX.Element {
   const gated = entries.filter(isGatedSiteCode);
   return (
     <>
@@ -262,22 +311,99 @@ export async function SiteCode(
         ))}
       <script
         type="application/json"
-        {...{ [SITE_CODE_DATA_ATTRIBUTE]: props.slot }}
+        {...{ [SITE_CODE_DATA_ATTRIBUTE]: slot }}
         dangerouslySetInnerHTML={{
-          __html: scriptData({
-            slot: props.slot,
-            skip: skippedPaths(props),
-            entries: gated,
-          }),
+          __html: scriptData({ slot, skip, entries: gated }),
         }}
       />
       {/* The loader reads the data block just before it. */}
       {gated.length === 0 ? null : (
         <script
-          {...(props.nonce === undefined ? {} : { nonce: props.nonce })}
-          dangerouslySetInnerHTML={{ __html: SITE_CODE_BOOTSTRAP }}
+          {...(nonce === undefined ? {} : { nonce })}
+          dangerouslySetInnerHTML={{ __html: loader }}
         />
       )}
+    </>
+  );
+}
+
+/**
+ * A short digest of a place's code, which names it to its boundary: the same
+ * code gives the same name, so the boundary can tell code kept from code
+ * changed or dropped without carrying the code itself.
+ */
+function digestOf(text: string): string {
+  // FNV-1a, 32 bits: a name, not a guard.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/** What `<PageCode>` is given. */
+export interface PageCodeProps {
+  /** The place on the page: the head, or the end of the body. */
+  readonly slot: SiteCodeSlot;
+  /**
+   * The page's published blocks value, as the route draws it: in the
+   * page's language where its Page Builder field is kept per language, each
+   * language keeping code of its own.
+   */
+  readonly document: unknown;
+  /** The site's per-request nonce, as `<SiteCode>` takes it. */
+  readonly nonce?: string;
+  /** The paths code never runs under, as `<SiteCode>` takes them. */
+  readonly skip?: readonly string[];
+  /** The app's base path, as `<SiteCode>` takes it. */
+  readonly basePath?: string;
+}
+
+/**
+ * `<PageCode>`: the code a page adds to itself in its Page settings, for one
+ * place, written and guarded exactly as `<SiteCode>` writes the site's.
+ *
+ * The published route draws it around the page (`pageBuilderContent()`'s
+ * `around`), the head's before the page and the end of the body's after it.
+ * It runs after the site's code in each place: the head's loader is site
+ * code's own, which queues after the site's head, and the end of the body's
+ * starts one task later (`PAGE_CODE_BODY_BOOTSTRAP`), after the site's end
+ * of body. A page whose code the loader starts is loaded, and left, as a
+ * whole document (`PageCodeBoundary`), since client-side navigation would
+ * neither start that code nor take it away. Nothing under draft mode, as
+ * `<SiteCode>`. What is stored was
+ * judged when it was saved; it is sanitised again here, so a value edited in
+ * the database is held to the same rules, and what fails is left out. The
+ * builder's canvas never renders it.
+ *
+ * @experimental Settles with page code.
+ */
+export async function PageCode(
+  props: PageCodeProps
+): Promise<JSX.Element | null> {
+  // The preview pane shows drafts in draft mode, as for site code.
+  if (await inDraftMode()) return null;
+  const code = pageCodeOf(props.document);
+  const text = code?.[props.slot] ?? "";
+  if (text === "") return null;
+  const { entries } = sanitiseSiteCode(text, props.slot);
+  return (
+    <>
+      <CodeOutput
+        slot={props.slot}
+        entries={entries}
+        skip={skippedPaths(props)}
+        loader={
+          props.slot === "body" ? PAGE_CODE_BODY_BOOTSTRAP : SITE_CODE_BOOTSTRAP
+        }
+        {...(props.nonce === undefined ? {} : { nonce: props.nonce })}
+      />
+      {/* What the loader starts is outside React, so the page is reached and
+          left as a whole document (`PageCodeBoundary`). */}
+      {entries.some(isGatedSiteCode) ? (
+        <PageCodeBoundary owner={`${props.slot}:${digestOf(text)}`} />
+      ) : null}
     </>
   );
 }

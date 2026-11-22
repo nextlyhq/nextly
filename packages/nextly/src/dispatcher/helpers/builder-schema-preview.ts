@@ -60,6 +60,8 @@ export async function builderSchemaPreviewBody(args: {
     // What the save asks for, so turning translation on or off reads as the change it is.
     requestedLocalized:
       args.requestedLocalized ?? args.entity.localized === true,
+    // A field group keeps a many-to-many's ids in its own row, with no link table.
+    builtBy: args.builtBy,
   });
   // Detected by the same pipeline run, so they describe the same diff; a translated field's
   // rename, which the pipeline cannot see on the main table, is offered on its companion.

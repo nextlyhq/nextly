@@ -27,7 +27,12 @@ import { CANVAS_FRAME, canvasFrame } from "./support/canvas-frame";
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
 
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 
 function heading(page: Page, id: string) {
   return canvasFrame(page).locator(`.nx-canvas [data-nx-node="${id}"]`).first();
@@ -172,7 +177,10 @@ test("opens a repeater row's blocks field by the row's id, and stays on that row
     await expect(announced("moved to position 1")).toHaveCount(1);
     // Its way in now comes first, still naming the same row's id.
     await expect(
-      page.getByRole("link", { name: OPEN_BUILDER_ACTION }).first()
+      page
+        .locator(PAGE_BUILDER_CARD)
+        .getByRole("link", { name: OPEN_BUILDER_ACTION })
+        .first()
     ).toHaveAttribute("href", new RegExp(`field=sections\\.${heroId}\\.body$`));
 
     // Back returns to the builder's address, which opens the same row at its

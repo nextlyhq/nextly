@@ -26,25 +26,49 @@ describe("who wins, for the title", () => {
     content: { title: { value: "From the content", field: "title" } },
     site: { title: "The site" },
   };
-  // Each row takes the levels above it away, so the next one wins.
+  // Each row takes the levels above it away, so the next one wins. The
+  // design's title stays in every row, and never wins: a title is the page's
+  // SEO title, else its title in the content type's pattern.
   it.each([
     ["page", "Typed", {}],
     ["code", "From code", { page: {} }],
-    ["template", "From the template", { page: {}, code: {} }],
-    ["pattern", "From the pattern", { page: {}, code: {}, template: {} }],
-    [
-      "content",
-      "From the content",
-      { page: {}, code: {}, template: {}, pattern: {} },
-    ],
-    [
-      "site",
-      "The site",
-      { page: {}, code: {}, template: {}, pattern: {}, content: {} },
-    ],
+    ["pattern", "From the pattern", { page: {}, code: {} }],
+    ["content", "From the content", { page: {}, code: {}, pattern: {} }],
+    ["site", "The site", { page: {}, code: {}, pattern: {}, content: {} }],
   ] as const)("%s wins when nothing above has one", (from, value, gone) => {
     const answer = resolveOrder({ ...every, ...gone });
     expect(answer.title).toMatchObject({ value, from });
+  });
+
+  it("ranks the title pattern above anything the design offers", () => {
+    const answer = resolveOrder({
+      ...none,
+      template: { title: "Plans for every team" },
+      pattern: {
+        title: {
+          value: "Pricing · Ridgeline",
+          pattern: "{Title} · {Site name}",
+        },
+      },
+    });
+    expect(answer.title).toEqual({
+      value: "Pricing · Ridgeline",
+      from: "pattern",
+      pattern: "{Title} · {Site name}",
+    });
+  });
+
+  it("takes no title from the design, even where no other level has one", () => {
+    const answer = resolveOrder({
+      ...none,
+      template: { title: "Plans for every team" },
+    });
+    expect(answer.title).toBeUndefined();
+    // CONTROL: the design's description, from the same level, still counts.
+    expect(
+      resolveOrder({ ...none, template: { description: "From the design" } })
+        .description
+    ).toEqual({ value: "From the design", from: "template" });
   });
 
   it("is absent where no level has one, never empty", () => {

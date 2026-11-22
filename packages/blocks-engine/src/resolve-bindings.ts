@@ -55,6 +55,7 @@ import { walkForest } from "./forest-walk";
 import type { DocumentLimits } from "./limits";
 import { isPlainRecord } from "./plain-record";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
+import { withSettingDefaults } from "./setting-defaults";
 import { isImageAddress } from "./url-policy";
 
 /**
@@ -244,7 +245,27 @@ export type BindingScope =
       readonly item?: Readonly<Record<string, unknown>>;
       /** The item's schema ref, when its collection is known. */
       readonly itemRef?: BindingSchemaRef;
+      /**
+       * The entry each list around the node is drawing, by the list's node
+       * id, the nearest included: what an item binding naming its `list`
+       * reads. Absent, such a binding is judged without the lists, and reads
+       * nothing.
+       *
+       * @experimental Settles with the editor's binding controls.
+       */
+      readonly lists?: ReadonlyMap<string, EnclosingListEntry>;
     };
+
+/**
+ * One list's entry, as a list around a node draws it: the entry's values,
+ * and the schema ref they bind against, when known.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface EnclosingListEntry {
+  readonly item: Readonly<Record<string, unknown>>;
+  readonly itemRef?: BindingSchemaRef;
+}
 
 /**
  * One node's props after its bindings in a scope were filled.
@@ -288,7 +309,10 @@ function sourceOf(
         ? undefined
         : run.sources.singles?.get(binding.sourceKey);
     case "item":
-      return scope.phase === "item" ? scope.item : undefined;
+      if (scope.phase !== "item") return undefined;
+      return binding.list === undefined
+        ? scope.item
+        : scope.lists?.get(binding.list)?.item;
   }
 }
 
@@ -601,7 +625,9 @@ function fillOf(
       message:
         binding.source === "item"
           ? "This binding reads a list item, and this block is not inside a list."
-          : `This binding's ${binding.source} source was not read for this page.`,
+          : binding.source === "setting"
+            ? "This binding follows a component's setting, and this block is not inside a component."
+            : `This binding's ${binding.source} source was not read for this page.`,
       path: binding.path,
     });
     return fallbackFillOf(binding.kind, binding.fallback);
@@ -641,7 +667,24 @@ export function bindingRefsFor(
     scope.phase === "item" && scope.itemRef !== undefined
       ? { item: scope.itemRef }
       : {};
-  return run.entryRef === undefined ? item : { entry: run.entryRef, ...item };
+  const lists =
+    scope.phase === "item" && scope.lists !== undefined
+      ? { lists: listRefs(scope.lists) }
+      : {};
+  const refs = { ...item, ...lists };
+  return run.entryRef === undefined ? refs : { entry: run.entryRef, ...refs };
+}
+
+/** Each list's schema ref, by its node id. */
+function listRefs(
+  lists: ReadonlyMap<string, EnclosingListEntry>
+): ReadonlyMap<string, BindingSchemaRef | undefined> {
+  return new Map(
+    [...lists].map(([id, entry]): [string, BindingSchemaRef | undefined] => [
+      id,
+      entry.itemRef,
+    ])
+  );
 }
 
 /** One binding, checked and then filled, or nothing to leave the own value. */
@@ -815,9 +858,12 @@ export function bindDocument(
     return changed ? next : slots;
   };
 
-  const nodes = bindNodes(document.nodes);
+  // A component shown on its own shows each setting's default where a block
+  // follows it; composed, the placement filled it before this pass.
+  const shown = withSettingDefaults(document);
+  const nodes = bindNodes(shown.nodes);
   return {
-    document: nodes === document.nodes ? document : { ...document, nodes },
+    document: nodes === document.nodes ? document : { ...shown, nodes },
     bound,
     issues,
   };

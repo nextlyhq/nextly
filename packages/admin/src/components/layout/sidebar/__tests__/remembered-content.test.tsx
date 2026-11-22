@@ -67,11 +67,11 @@ describe("RememberedContentBody", () => {
     draw();
 
     expect(outline()).toEqual([
-      "Collections2",
+      "Collections 2",
       "Online shop",
       "Products",
       "Posts",
-      "Singles1",
+      "Singles 1",
       "Homepage",
     ]);
     expect(
@@ -102,10 +102,10 @@ describe("RememberedContentBody", () => {
       "false"
     );
     expect(outline()).toEqual([
-      "Collections2",
+      "Collections 2",
       "Online shop",
       "Posts",
-      "Singles1",
+      "Singles 1",
       "Homepage",
     ]);
   });
@@ -113,6 +113,6 @@ describe("RememberedContentBody", () => {
   it("draws no heading for a kind the panel did not show", () => {
     draw({ ...MENU, parts: { collections: false, singles: true } });
 
-    expect(outline()).toEqual(["Singles1", "Homepage"]);
+    expect(outline()).toEqual(["Singles 1", "Homepage"]);
   });
 });
