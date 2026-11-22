@@ -301,6 +301,13 @@ describe.each(getConfiguredTestDialects())(
       refuseRetiredWrites = true;
       await save(t, heroId, ["body"], "published");
       expect(await retiredRows(t)).toEqual([]);
+      // Retention keeps each part's latest publish whatever the cap, and the
+      // removal's version is the shared part's until a later publish: so one
+      // follows, adding a field and dropping none, and only the pin is left
+      // to keep the removal. (Version 1 stays whatever the pin: every
+      // installation keeps translatable fields per language, and the create
+      // is the one save that names the default language's part.)
+      await save(t, heroId, ["body", "extra"], "published");
       // More held saves than retention keeps (50 a document by default), so
       // the version from before the removal is pruned unless it is held.
       for (let save_ = 0; save_ < 55; save_ += 1) {
@@ -321,14 +328,8 @@ describe.each(getConfiguredTestDialects())(
       expect(triples(await retiredRows(t))).toEqual([
         [heroId, "property", "title"],
       ]);
-      // Recorded, so released: the next publish's retention prunes the
-      // removal's version. Retention keeps each part's latest publish whatever
-      // the cap, so it is a publish, which takes that place from version 2:
-      // only the pin could keep it now. Version 1 is left out of it: every
-      // installation keeps translatable fields per language, and the create
-      // is the one save that names the default language's part, so it stays
-      // as that part's latest publish, pinned or not.
-      await save(t, heroId, ["body", "after"], "published");
+      // Recorded, so released: the next save's retention prunes the removal.
+      await save(t, heroId, ["body", "after"]);
       expect(await historyOf!(heroId)).not.toContain(2);
     }, 120_000);
 
