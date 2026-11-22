@@ -56,6 +56,7 @@ import {
   usersRoleAssignmentsInForce,
   type ResolvedRoles,
 } from "./role-assignments";
+import { type UserIdMatch, userIdMatchFor } from "./user-id-match";
 
 if (typeof window !== "undefined") {
   throw new Error(
@@ -121,11 +122,10 @@ class PermissionChecker {
   // request's memo of the configured database must never serve.
   private readonly ownDatabase: boolean;
 
-  // Whether the database the reads run on compares ids without regard to
-  // case: MySQL does, under its case-insensitive collation, so an assignment
-  // row may spell a user's id in another case and still be that user's;
-  // PostgreSQL and SQLite compare ids exactly.
-  private readonly foldsIdCase: boolean;
+  // How the database the reads run on compares user ids (`userIdMatchFor`):
+  // MySQL without regard to case, so an assignment row may spell a user's id
+  // in another case and still be that user's; PostgreSQL and SQLite exactly.
+  private readonly sameUser: UserIdMatch;
 
   constructor(dialect?: string) {
     // The tables of the dialect the reads run on: the caller's, when it reads
@@ -134,7 +134,7 @@ class PermissionChecker {
     this.t = dialect ? getDialectTables(dialect) : getTablesLazy();
     this.ownDatabase = dialect !== undefined;
     // The same dialect `getDialectTables` resolves the tables by.
-    this.foldsIdCase = (dialect || env.DB_DIALECT) === "mysql";
+    this.sameUser = userIdMatchFor(dialect || env.DB_DIALECT);
   }
 
   async hasPermission(
@@ -318,16 +318,10 @@ class PermissionChecker {
         usersRoleAssignmentsInForce(userRoles, userIds, new Date())
       )) as Array<{ userId: string; roleId: string; expiresAt: Date | null }>;
     // Each assignment row counts for every requested id the database matched
-    // it to: the exact id, and where ids compare without regard to case, every
-    // spelling differing from the row's only in case. An exact-only filter
-    // here would drop, on MySQL, a row the statement itself matched, and with
-    // it a role the user holds.
-    const sameUser = this.foldsIdCase
-      ? (rowUserId: string, userId: string) =>
-          rowUserId.toLowerCase() === userId.toLowerCase()
-      : (rowUserId: string, userId: string) => rowUserId === userId;
+    // it to: an exact-only sort would drop, on MySQL, a row the statement
+    // itself matched, and with it a role the user holds.
     for (const userId of new Set(userIds)) {
-      const own = rows.filter(row => sameUser(String(row.userId), userId));
+      const own = rows.filter(row => this.sameUser(String(row.userId), userId));
       byUser.set(userId, {
         roleIds: new Set(own.map(row => String(row.roleId))),
         validUntil: soonestExpiry(own),
