@@ -360,7 +360,10 @@ import {
   splitPendingChange,
   writeCompanionValues,
 } from "./apply-pending-change";
-import { resolveSingleForRequest } from "./ensure-runtime-table";
+import {
+  resolveSingleForRequest,
+  withDeclaredFields,
+} from "./ensure-runtime-table";
 import { liveSharedSingle, type SharedComparison } from "./live-shared-single";
 import {
   assertDraftsMayBePromoted,
@@ -2696,7 +2699,7 @@ export class SingleMutationService extends BaseService {
 
     try {
       // 1. Get Single metadata from registry
-      const singleMeta = await resolveSingleForRequest(
+      const storedMeta = await resolveSingleForRequest(
         this.adapter,
         this.singleRegistryService,
         slug,
@@ -2704,6 +2707,15 @@ export class SingleMutationService extends BaseService {
         // A write: refused in production where the Single was never registered.
         { intent: "write" }
       );
+      // With the fields the running configuration declares that the registry row predates: a
+      // production start writes no registry row and serves those fields over it, so the save
+      // accepts, validates and stores them as a read returns them.
+      const singleMeta =
+        storedMeta &&
+        withDeclaredFields(
+          storedMeta,
+          this.singleRegistryService.getCodeFirstFields(slug)
+        );
       if (!singleMeta) {
         return {
           success: false,

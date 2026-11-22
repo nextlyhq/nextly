@@ -1515,11 +1515,16 @@ async function onePart(
   return [a, b].every(tag => tag === null || tag === defaultLocale);
 }
 
-/** The collection's or Single's registry record, or null when it is gone. */
+/**
+ * The collection's or Single's registry record, or null when it is gone. Read for what it
+ * decides about a history read (its languages, which part is live), never a write, so a
+ * collection's comes from the registry row cache, as a Single's does: an editor's screens ask
+ * it on every open.
+ */
 async function registryEntityOf(scopeKind: VersionScopeKind, slug: string) {
   return scopeKind === "single"
     ? getService("singleRegistryService").getSingleBySlug(slug)
-    : getService("collectionRegistryService").getCollectionBySlug(slug);
+    : getService("collectionRegistryService").getCollectionBySlugForRead(slug);
 }
 
 /**
