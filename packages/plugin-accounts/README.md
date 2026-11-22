@@ -4,7 +4,27 @@ Site accounts for Nextly: the visitors of a site, such as a shop's buyers, sign
 up, verify their address, sign in and look after their own account. A site
 account is its own kind of signed-in person and can never reach the admin.
 
-**Status:** in development, `@experimental` throughout, and not yet published.
+**Status:** experimental. Published to npm with the Nextly release, and
+`@experimental` throughout: its exports may change between alpha releases.
+
+## Install
+
+```bash
+npm install @nextlyhq/plugin-accounts
+```
+
+Install it at the same version as `nextly`, then add it to the site's config
+with the site's own origin, which every link in an email is built on, and run
+`nextly migrate:create` and `nextly migrate` for the collections it adds:
+
+```ts
+import { defineConfig } from "nextly";
+import { accounts } from "@nextlyhq/plugin-accounts";
+
+export default defineConfig({
+  plugins: [accounts({ origin: "https://example.com" })],
+});
+```
 
 ## Server functions
 
@@ -53,6 +73,8 @@ accounts({ origin: "https://example.com", signUp: "closed" });
 ```
 
 ```ts
+import { accountsServer } from "@nextlyhq/plugin-accounts";
+
 const server = await accountsServer();
 const { link, expiresAt } = await server.invite({
   address: "dana@example.com",
@@ -88,6 +110,10 @@ The invitation page shows a password form and accepts with
 REST endpoint `POST /invitation/accept`, or the server function:
 
 ```ts
+import type { AccountVisitor } from "@nextlyhq/plugin-accounts";
+
+declare const visitor: AccountVisitor; // read from the request with visitorFrom
+declare const token: string, password: string; // the invitation page's form
 const accepted = await server.acceptInvitation({ visitor, token, password });
 // accepted.account.id, accepted.data, and accepted.cookies to write
 ```
@@ -113,6 +139,9 @@ page in the admin. A site's own server code does the same through three
 server functions, for when its own records say someone's access has ended:
 
 ```ts
+import { accountsServer } from "@nextlyhq/plugin-accounts";
+
+declare const accountId: string; // the account whose access has ended
 const server = await accountsServer();
 await server.endAccountSessions({ accountId });
 await server.deactivateAccount({ accountId });
@@ -165,3 +194,12 @@ reach, need one.
 A visitor who signs in stays signed in across browser restarts until they sign
 out or the session runs out. Say so beside the sign-in button, so a visitor on
 a shared computer knows to sign out.
+
+## Related packages
+
+- [`nextly`](../nextly) — the core whose signed-in people and one-purpose links this plugin uses
+- [`@nextlyhq/plugin-sdk`](../plugin-sdk) — the SDK this plugin is built on
+
+## License
+
+MIT © Nextly
