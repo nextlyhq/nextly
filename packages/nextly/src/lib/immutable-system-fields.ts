@@ -343,9 +343,7 @@ function undeclaredWriteKeys(
   data: Record<string, unknown>,
   entity: WritableEntityKind,
   /** The entity's declared fields, as configured. */
-  fields: unknown,
-  /** The fields the running configuration declares for it, where it declares any. */
-  declared?: unknown
+  fields: unknown
 ): string[] {
   const allowed = new Set<string>([
     ...systemColumnNames(column => column.appliesTo.includes(entity)),
@@ -355,9 +353,6 @@ function undeclaredWriteKeys(
     ...NOT_STORED_KEYS,
   ]);
   for (const field of addressableFields(fields)) {
-    if (typeof field.name === "string") allowed.add(field.name);
-  }
-  for (const field of addressableFields(declared)) {
     if (typeof field.name === "string") allowed.add(field.name);
   }
   return Object.keys(data).filter(key => !allowed.has(key));
@@ -374,19 +369,13 @@ export function writableBodyOf(
   entity: WritableEntityKind,
   fields: unknown,
   /** The SQL table the body is written to, whose schema-hook columns it may name. */
-  tableName: string,
-  /**
-   * The fields the running configuration declares for the entity, where it declares any: a
-   * production start writes no registry row, so it serves a field a newer build declares over a
-   * row that predates it, and a save names that field as a read returns it.
-   */
-  declared?: unknown
+  tableName: string
 ): Record<string, unknown> {
   // A column a schema hook contributed to the table is a known key, not an unknown one: a body
   // that carries it is accepted and the column left unwritten, as the row strip leaves it
   // (`stripImmutableSystemFields`, by the same predicate). Any other key is still refused.
   const isContributed = contributedColumnOf(tableName);
-  const keys = undeclaredWriteKeys(data, entity, fields, declared).filter(
+  const keys = undeclaredWriteKeys(data, entity, fields).filter(
     key => !isContributed(key)
   );
   if (keys.length > 0) {

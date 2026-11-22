@@ -517,6 +517,8 @@ export class CollectionRegistryService extends BaseRegistryService<
    * (`getRecordBySlugForRead`): for a read that decides no write. A write decides from
    * `getCollectionBySlug`, which reads the row as stored.
    */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
   async getCollectionBySlugForRead(
     slug: string
   ): Promise<DynamicCollectionRecord | null> {

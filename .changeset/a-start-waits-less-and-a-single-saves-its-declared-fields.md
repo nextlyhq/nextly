@@ -32,5 +32,5 @@
 A production start makes fewer database round trips, and a Single saves a field its configuration declares.
 
 - A start reads each field group's stored table only where a plugin or the app declares a schema extension that needs it. A site whose configuration declares no language with a region part (such as `pt-BR`) no longer checks for older spellings of its language codes, and so no longer reads or writes a `nextly_meta` row for that check. The per-language layout check takes the field groups' registry rows from the start's own reading. A start with no plugins again makes at most 20 round trips one after another.
-- A Single's save accepts a field the running configuration declares when the registry row was written by an earlier build. Before, a production start served that field but a save of it was refused with `UNKNOWN_FIELD`.
+- A Single's save accepts a field the running configuration declares when the registry row was written by an earlier build, and judges it by its rules. Before, a production start served that field but a save of it was refused with `UNKNOWN_FIELD`.
 - A version history read, and an editor's autosave check, read a collection's registry row from the registry row cache. Admin screens read no registry row again once they are warm.
