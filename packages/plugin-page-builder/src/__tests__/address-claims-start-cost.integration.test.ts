@@ -96,6 +96,37 @@ const PAGE_BUILDER_WRITES =
 const STORE_OR_PAGES =
   /\b[`"]?(dc_nx_pb_address_claims|dc_pages|page_builder__site_options)[`"]?/;
 
+/**
+ * The most statements of the store and the pages an unchanged start makes,
+ * whatever the number of pages. Every installation keeps a document's
+ * translatable fields in its per-language table, and the pages' titles and
+ * slugs and the claims' keys and paths are such fields: so each pass reads
+ * its rows' translated values from that table too, and the boot checks each
+ * of the two tables is there and which languages it holds.
+ */
+const MOST_STORE_READS = 15;
+
+/**
+ * The reads the server makes at most once per interval rather than once per
+ * request, by the table each reads: the stored languages, the stored schema
+ * version and the roles' version. Whether a start pays one again depends on
+ * how long it ran, which a slower database or a larger site stretches, so
+ * they are left out of the count compared between the two sites.
+ */
+const TIMED_READS =
+  /\b[`"]?(nextly_languages|nextly_meta|nextly_rbac_epoch)[`"]?/;
+
+/**
+ * The statement MySQL's adapter sends each new pooled connection before its
+ * first query. Whether a start opens one more connection depends on the pool,
+ * not on the site, so it is left out of the comparison too.
+ */
+const CONNECTION_SETUP = /^SET SESSION /i;
+
+/** Whether `text` is a statement the comparison counts. */
+const countedTrip = (text: string): boolean =>
+  !TIMED_READS.test(text) && !CONNECTION_SETUP.test(text.trim());
+
 describe.each(getConfiguredTestDialects())(
   "the address store at start (%s)",
   (dialect: TestDialect) => {
@@ -199,9 +230,10 @@ describe.each(getConfiguredTestDialects())(
               PAGE_BUILDER_WRITES.test(writtenTable(call.text) ?? "")
           )
           .map(call => call.text),
-        // Every statement of the start, the boot's own included: they are
-        // the same whatever the site holds, so any difference is the passes'.
-        trips: calls.length,
+        // Every statement of the start, the boot's own included, but for the
+        // reads on a timer and a new connection's setup: they are the same
+        // whatever the site holds, so any difference is the passes'.
+        trips: calls.filter(call => countedTrip(call.text)).length,
         store: calls.filter(call => STORE_OR_PAGES.test(call.text)).length,
       };
       await current?.destroy();
@@ -218,7 +250,7 @@ describe.each(getConfiguredTestDialects())(
       expect(fifty.writes).toEqual([]);
       expect(fifty.trips).toBe(five.trips);
       expect(fifty.store).toBe(five.store);
-      expect(five.store).toBeLessThanOrEqual(12);
+      expect(five.store).toBeLessThanOrEqual(MOST_STORE_READS);
     }, 600_000);
 
     it("claims every page in a language the site starts serving", async () => {

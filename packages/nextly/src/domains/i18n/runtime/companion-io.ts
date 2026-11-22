@@ -1204,6 +1204,13 @@ function isMissingTableError(error: unknown): boolean {
   );
 }
 
+/** Whether the calling flow holds a transaction open on `adapter`. */
+function transactionOpenInFlow(adapter: object): boolean {
+  const open = (adapter as { transactionOpenInFlow?: unknown })
+    .transactionOpenInFlow;
+  return typeof open === "function" && open.call(adapter) === true;
+}
+
 /** Whether `adapter` can ask the catalog for a table. */
 function hasTableExists(
   adapter: object
@@ -1236,7 +1243,14 @@ export async function companionTableExists(
   // Inside a read routed to a transaction, asked of the catalog: on
   // PostgreSQL a statement naming a missing table aborts the transaction it
   // runs in, and the read's caller holds that transaction open for its write.
-  if (readsOnTransaction(adapter) && hasTableExists(adapter)) {
+  // The same while the calling flow holds a transaction open on the adapter:
+  // a read inside a plugin's transaction (a Single's runtime table resolved
+  // there) reaches this through the adapter itself, and its statement lands
+  // on that transaction's connection.
+  if (
+    (readsOnTransaction(adapter) || transactionOpenInFlow(adapter)) &&
+    hasTableExists(adapter)
+  ) {
     return adapter.tableExists(companionTableName);
   }
   const q =

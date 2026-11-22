@@ -1479,9 +1479,12 @@ export class SingleMutationService extends BaseService {
           scopeSlug: params.slug,
           entryId,
         };
+        // A Single that is not translated has one pending change, kept by
+        // part: its shared draft goes with its language's.
+        const withShared = draftsKeptByPart() && singleMeta.localized !== true;
         const { removed, judged: before } = await removePendingChangeJudged(
           tx,
-          { ref: discardedRef, locale: draftLocale },
+          { ref: discardedRef, locale: draftLocale, withShared },
           judging.check,
           () => this.refuseIfPendingChangeMoved(tx, judging, entryId, stale),
           { main: undefined, language: undefined }
@@ -1552,7 +1555,14 @@ export class SingleMutationService extends BaseService {
               kind: "draftDiscarded",
               actor: actorForWrite(params.actor ?? null, params.user),
               personName: params.user?.name ?? null,
-              ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+              ...(draftLocale
+                ? {
+                    parts: {
+                      locales: [draftLocale],
+                      ...(withShared ? { shared: true } : {}),
+                    },
+                  }
+                : {}),
             }
           );
           // What the draft said about where its values came from goes with
