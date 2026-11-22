@@ -295,6 +295,8 @@ function configWith(...plugins: (typeof FEEDS)[]): unknown {
       defineCollection({
         slug: "pla-posts",
         fields: [text({ name: "title" })],
+        // Opened to every preset, so each preset's own rule decides.
+        grants: { presets: ["admin", "editor", "author", "viewer"] },
       }),
     ],
     // The app's own permission, which only the older release's viewer grants.
@@ -623,6 +625,7 @@ describe.each(getConfiguredTestDialects())(
           defineCollection({
             slug: "pla-posts",
             fields: [text({ name: "title" })],
+            grants: { presets: ["admin", "editor", "author", "viewer"] },
           }),
         ],
       });
@@ -814,7 +817,9 @@ describe.each(getConfiguredTestDialects())(
       const live = (await permissionRows()).filter(p => !p.orphaned);
       for (const p of ROLE_PRESETS) {
         expect(held(rows, p.slug), p.slug).toEqual(
-          resolvePreset(p, live)
+          // The collection is opened to every preset, and the rest are not
+          // collections, so every permission reaches every preset.
+          resolvePreset(p, live, { presetsFor: () => undefined })
             .map(found => found.slug)
             .sort()
         );

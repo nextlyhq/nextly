@@ -182,7 +182,7 @@ export async function seedPermissionsRolesAndPresets(args: {
   logger: Logger;
   /** The configuration the command loaded; `roles` only where a caller has them. */
   config: PermissionSeeding["config"] &
-    Pick<NextlyServiceConfig, "roles"> &
+    Pick<NextlyServiceConfig, "roles" | "presetGrants"> &
     RuleContextConfig;
   /**
    * Whether the Public role's plugin grants that `config.plugins` no longer
@@ -205,7 +205,7 @@ export async function seedPermissionsRolesAndPresets(args: {
     permissionSeedService: new PermissionSeedService(adapter, logger),
     config,
   });
-  await seedRolePresets(adapter, logger);
+  await seedRolePresets(adapter, logger, config);
   const made = await publicRole.make();
   if (made.made) {
     await withRuleContextOf(adapter, config, () =>
@@ -530,7 +530,11 @@ async function seedEverything(): Promise<void> {
     seedAllPermissions
   );
   await seedingStep("role presets", () =>
-    seedRolePresets(getService("adapter"), getService("logger"))
+    seedRolePresets(
+      getService("adapter"),
+      getService("logger"),
+      getService("config")
+    )
   );
   // The role visitors are judged by. Made once and then left to the owner,
   // unlike a preset: only its permissions change after it exists.
