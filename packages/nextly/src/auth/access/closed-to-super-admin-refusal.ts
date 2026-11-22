@@ -7,6 +7,7 @@
  * @module auth/access/closed-to-super-admin-refusal
  */
 
+import { isSuperAdminOrRefuse } from "../../services/lib/permissions";
 import {
   scopeHoldsSuperAdmin,
   type AuthenticatedScope,
@@ -16,7 +17,6 @@ import {
   isClosedToSuperAdmin,
   refreshStoredClosedMarks,
 } from "./closed-to-super-admin";
-import { userIsSuperAdmin } from "./resolve-actor";
 
 /** The caller a way in asks about, as it holds them. */
 export interface SuperAdminCaller {
@@ -54,5 +54,7 @@ export async function superAdminRefusedOn(
     return scopeHoldsSuperAdmin(caller.scope);
   }
   if (!caller.userId) return false;
-  return userIsSuperAdmin(caller.userId, { executor: caller.executor });
+  // A lookup that fails refuses, rather than answering "not a super-admin":
+  // that answer would let a super-admin past the mark this guards.
+  return isSuperAdminOrRefuse(caller.userId, caller.executor);
 }

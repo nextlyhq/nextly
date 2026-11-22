@@ -54,6 +54,11 @@ interface ClosedMarksState {
   read?: (executor?: unknown) => Promise<readonly string[]>;
   /** A read in flight, joined by any caller that arrives meanwhile. */
   reading?: Promise<void>;
+  /**
+   * Counts this instance's own changes, so a read that began before one is
+   * not taken over it.
+   */
+  changes: number;
 }
 
 /**
@@ -70,6 +75,7 @@ function state(): ClosedMarksState {
     declared: new Map(),
     stored: new Set(),
     storedAt: 0,
+    changes: 0,
   });
 }
 
@@ -108,6 +114,7 @@ export function useStoredClosedMarks(
  */
 export function noteStoredClosedMark(slug: string, closed: boolean): void {
   const s = state();
+  s.changes += 1;
   if (closed) s.stored.add(slug);
   else s.stored.delete(slug);
 }
@@ -151,7 +158,12 @@ export async function refreshStoredClosedMarks(
   const now = options.now ?? Date.now();
   if (s.read === undefined || now - s.storedAt < STORED_MARKS_TTL_MS) return;
   const read = s.read;
+  const began = s.changes;
+  // A read that began before this instance made a change of its own is
+  // dropped, not taken: it may predate the change, and taking it would undo
+  // the change here until the next read. The next question reads again.
   const take = (slugs: readonly string[]) => {
+    if (s.changes !== began) return;
     s.stored = new Set(slugs);
     s.storedAt = Date.now();
   };

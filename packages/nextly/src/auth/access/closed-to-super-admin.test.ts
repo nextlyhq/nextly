@@ -5,9 +5,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const lookups = vi.hoisted(() => ({ userIsSuperAdmin: vi.fn() }));
-vi.mock("./resolve-actor", () => ({
-  userIsSuperAdmin: lookups.userIsSuperAdmin,
+const lookups = vi.hoisted(() => ({ isSuperAdminOrRefuse: vi.fn() }));
+vi.mock("../../services/lib/permissions", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../services/lib/permissions")>()),
+  isSuperAdminOrRefuse: lookups.isSuperAdminOrRefuse,
 }));
 
 import {
@@ -28,7 +29,7 @@ const holder = globalThis as { __nextly_closedToSuperAdmin?: unknown };
 
 beforeEach(() => {
   holder.__nextly_closedToSuperAdmin = undefined;
-  lookups.userIsSuperAdmin.mockReset();
+  lookups.isSuperAdminOrRefuse.mockReset();
 });
 
 afterEach(() => {
@@ -75,6 +76,21 @@ describe("a collection's mark", () => {
     expect(isClosedToSuperAdmin("health")).toBe(true);
   });
 
+  it("keeps this instance's own change when a read that began before it ends after it", async () => {
+    let finish: (slugs: string[]) => void = () => {};
+    useStoredClosedMarks(
+      () =>
+        new Promise<string[]>(resolve => {
+          finish = resolve;
+        })
+    );
+    const pending = refreshStoredClosedMarks();
+    noteStoredClosedMark("health", true);
+    finish([]);
+    await pending;
+    expect(isClosedToSuperAdmin("health")).toBe(true);
+  });
+
   it("takes this instance's own change at once", () => {
     noteStoredClosedMark("health", true);
     expect(isClosedToSuperAdmin("health")).toBe(true);
@@ -98,13 +114,28 @@ describe("the question each way in asks", () => {
   });
 
   it("refuses a super-admin person on a closed collection, and only there", async () => {
-    lookups.userIsSuperAdmin.mockResolvedValue(true);
+    lookups.isSuperAdminOrRefuse.mockResolvedValue(true);
     expect(await superAdminRefusedOn("pay", { userId: "root" })).toBe(true);
     expect(await superAdminRefusedOn("posts", { userId: "root" })).toBe(false);
   });
 
+  it("refuses rather than letting a super-admin through when the roles cannot be read", async () => {
+    lookups.isSuperAdminOrRefuse.mockRejectedValue(
+      new Error("roles unreadable")
+    );
+    await expect(
+      superAdminRefusedOn("pay", { userId: "root" })
+    ).rejects.toThrow("roles unreadable");
+  });
+
+  it("asks on the caller's transaction where one is handed in", async () => {
+    lookups.isSuperAdminOrRefuse.mockResolvedValue(true);
+    await superAdminRefusedOn("pay", { userId: "root", executor: "tx" });
+    expect(lookups.isSuperAdminOrRefuse).toHaveBeenCalledWith("root", "tx");
+  });
+
   it("leaves any other person to the collection's own access", async () => {
-    lookups.userIsSuperAdmin.mockResolvedValue(false);
+    lookups.isSuperAdminOrRefuse.mockResolvedValue(false);
     expect(await superAdminRefusedOn("pay", { userId: "editor" })).toBe(false);
     expect(await superAdminRefusedOn("pay", {})).toBe(false);
   });
@@ -123,12 +154,12 @@ describe("the question each way in asks", () => {
       })
     ).toBe(false);
     // A key is judged by its own authority, never by its maker's roles.
-    expect(lookups.userIsSuperAdmin).not.toHaveBeenCalled();
+    expect(lookups.isSuperAdminOrRefuse).not.toHaveBeenCalled();
   });
 
   it("asks nothing about the caller for a collection that is not closed", async () => {
     expect(await superAdminRefusedOn("posts", { userId: "root" })).toBe(false);
-    expect(lookups.userIsSuperAdmin).not.toHaveBeenCalled();
+    expect(lookups.isSuperAdminOrRefuse).not.toHaveBeenCalled();
   });
 });
 
