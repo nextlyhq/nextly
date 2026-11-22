@@ -20,5 +20,8 @@ Do what the message names, then run `nextly migrate` again:
 ## Example
 
 ```text
-EXAMPLE
+✗ The translatable values of the collection "posts" (title) are both on the main table and in its translations table, and nothing records which is current.
+  Why:  `nextly migrate` moves the stored data of an earlier release into per-language storage, and what it found here could be moved more than one way, so it stopped before choosing one.
+  Next: Run `nextly migrate --repair-localization` once. Nothing was changed.
+  Docs: https://nextlyhq.com/docs/cli/errors/localization-unresolved  (LOCALIZATION_UNRESOLVED)
 ```

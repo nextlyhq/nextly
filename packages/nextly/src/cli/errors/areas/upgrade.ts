@@ -194,7 +194,7 @@ export const UPGRADE_CODES = defineCodes({
         describe: error =>
           whatThenNext(
             error.publicMessage,
-            "`nextly migrate` moves the stored data of an earlier release into per-language storage, and what it found here can be moved more than one way, so it asks before choosing."
+            "`nextly migrate` moves the stored data of an earlier release into per-language storage, and what it found here could be moved more than one way, so it stopped before choosing one."
           ),
       },
     ],

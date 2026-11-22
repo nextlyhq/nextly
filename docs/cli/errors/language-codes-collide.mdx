@@ -17,5 +17,8 @@ description: "`nextly migrate` would write two language codes of the configurati
 ## Example
 
 ```text
-EXAMPLE
+✗ The configuration names "en_us" and "en-us" (both "en-US"): one language under two codes once written in standard form.
+  Why:  `nextly migrate` writes every language code in its standard form, and two codes here are one language in that form, so moving them would make two languages one.
+  Next: Keep one of them in the configuration and run `nextly migrate` again. Nothing was changed.
+  Docs: https://nextlyhq.com/docs/cli/errors/language-codes-collide  (LANGUAGE_CODES_COLLIDE)
 ```
