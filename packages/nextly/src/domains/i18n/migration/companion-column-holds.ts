@@ -118,7 +118,7 @@ export function mayHaveEarlierCompanionColumn(
 ): boolean {
   const spec = fieldToLocalizedColumnSpec(field, dialect, builtBy);
   return (
-    spec !== undefined &&
+    spec !== null &&
     earlierCompanionColumnType(ddlType(spec, dialect), dialect) !== undefined
   );
 }
