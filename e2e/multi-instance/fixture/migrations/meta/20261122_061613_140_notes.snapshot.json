@@ -6,12 +6,7 @@
           "admin": {
             "pagination": {
               "defaultLimit": 10,
-              "limits": [
-                10,
-                25,
-                50,
-                100
-              ]
+              "limits": [10, 25, 50, 100]
             }
           },
           "fields": [
@@ -168,25 +163,18 @@
         ],
         "indexes": [
           {
-            "columns": [
-              "created_at"
-            ],
+            "columns": ["created_at"],
             "name": "idx_dc_notes_created_at",
             "unique": false
           },
           {
-            "columns": [
-              "created_by"
-            ],
+            "columns": ["created_by"],
             "name": "idx_dc_notes_created_by",
             "unique": false
           }
         ],
         "localized": true,
-        "localizedColumns": [
-          "slug",
-          "value"
-        ],
+        "localizedColumns": ["slug", "value"],
         "name": "dc_notes",
         "uniqueLocalizedColumns": [
           {
