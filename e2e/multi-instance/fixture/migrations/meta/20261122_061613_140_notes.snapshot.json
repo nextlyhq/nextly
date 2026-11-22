@@ -6,7 +6,12 @@
           "admin": {
             "pagination": {
               "defaultLimit": 10,
-              "limits": [10, 25, 50, 100]
+              "limits": [
+                10,
+                25,
+                50,
+                100
+              ]
             }
           },
           "fields": [
@@ -42,7 +47,66 @@
     "fieldGroups": {},
     "singles": {}
   },
-  "migrationHash": "abbf4c2193b5b1bbd1b57b295237d548b716dc5ece92c73e755f39793497f43f",
+  "migration": "20261122_061613_140_notes",
+  "migrationHash": "b0a1676001f22089887bd19224901a390d3dd66752c590fb31da56c1f5392609",
+  "parent": null,
+  "permissions": {
+    "app": {},
+    "collections": {
+      "notes": {
+        "create-notes": {
+          "action": "create",
+          "danger": false,
+          "description": "Permission to create notes",
+          "group": null,
+          "name": "Create Notes",
+          "resource": "notes"
+        },
+        "delete-notes": {
+          "action": "delete",
+          "danger": false,
+          "description": "Permission to delete notes",
+          "group": null,
+          "name": "Delete Notes",
+          "resource": "notes"
+        },
+        "publish-notes": {
+          "action": "publish",
+          "danger": false,
+          "description": "Permission to publish notes",
+          "group": null,
+          "name": "Publish Notes",
+          "resource": "notes"
+        },
+        "read-notes": {
+          "action": "read",
+          "danger": false,
+          "description": "Permission to read notes",
+          "group": null,
+          "name": "Read Notes",
+          "resource": "notes"
+        },
+        "unpublish-notes": {
+          "action": "unpublish",
+          "danger": false,
+          "description": "Permission to unpublish notes",
+          "group": null,
+          "name": "Unpublish Notes",
+          "resource": "notes"
+        },
+        "update-notes": {
+          "action": "update",
+          "danger": false,
+          "description": "Permission to update notes",
+          "group": null,
+          "name": "Update Notes",
+          "resource": "notes"
+        }
+      }
+    },
+    "plugins": {},
+    "singles": {}
+  },
   "snapshot": {
     "tables": [
       {
@@ -91,11 +155,6 @@
             "type": "text"
           },
           {
-            "name": "slug",
-            "nullable": false,
-            "type": "text"
-          },
-          {
             "name": "title",
             "nullable": false,
             "type": "text"
@@ -105,31 +164,36 @@
             "name": "updated_at",
             "nullable": true,
             "type": "timestamp"
-          },
-          {
-            "name": "value",
-            "nullable": false,
-            "type": "text"
           }
         ],
         "indexes": [
           {
-            "columns": ["created_at"],
+            "columns": [
+              "created_at"
+            ],
             "name": "idx_dc_notes_created_at",
             "unique": false
           },
           {
-            "columns": ["created_by"],
+            "columns": [
+              "created_by"
+            ],
             "name": "idx_dc_notes_created_by",
             "unique": false
-          },
-          {
-            "columns": ["slug"],
-            "name": "idx_dc_notes_slug",
-            "unique": true
           }
         ],
-        "name": "dc_notes"
+        "localized": true,
+        "localizedColumns": [
+          "slug",
+          "value"
+        ],
+        "name": "dc_notes",
+        "uniqueLocalizedColumns": [
+          {
+            "column": "slug",
+            "kind": "text"
+          }
+        ]
       }
     ]
   },
