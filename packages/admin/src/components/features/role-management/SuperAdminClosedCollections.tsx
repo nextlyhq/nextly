@@ -1,20 +1,24 @@
 "use client";
 
 /**
- * The super-admin role's Permissions section: the line saying what the role
- * holds, naming the collections closed to it, and each collection's mark,
- * which a super-admin changes by entering their password again.
+ * The super-admin role's Permissions section: what the role holds, and which
+ * collections are closed to it, each with its mark.
  *
- * A collection whose code sets the mark shows it and cannot be changed here.
- * The change is sent to `PATCH /roles/screen/closed-to-super-admin`, which
- * checks the password before anything changes and writes the audit row.
+ * Closed collections come first and say so in words, not only by the switch,
+ * so a long list reads at a glance. A collection whose code sets the mark
+ * shows it and cannot be changed here; any other is changed through a dialog
+ * that asks for the super-admin's password again
+ * (`PATCH /roles/screen/closed-to-super-admin`, which checks it before
+ * anything changes and writes the audit row).
  */
 
-import { Label, Switch } from "@nextlyhq/ui";
+import { Badge, Label, Switch } from "@nextlyhq/ui";
 import { useState, type JSX } from "react";
 
 import {
   collectionName,
+  inListOrder,
+  refusalText,
   useChangeClosedMark,
   useMarkedCollections,
   type MarkedCollection,
@@ -28,86 +32,148 @@ interface PendingChange {
   closed: boolean;
 }
 
-/** The sentence naming what the role holds, and what is closed to it. */
-function holdsLine(closed: readonly MarkedCollection[]): string {
-  if (closed.length === 0) {
-    return "Super-admins have every permission, including new collections and plugins. This role can't be edited.";
+/** The line under a collection's name: where its mark is set, and whose it is. */
+function detailOf(
+  collection: MarkedCollection,
+  pluginNames: ReadonlyMap<string, string>
+): string {
+  const parts: string[] = [];
+  if (collection.closedToSuperAdmin.setIn === "code") {
+    parts.push("Set in code, so it can't be changed here");
   }
-  return `Super-admins have every permission, including new collections and plugins, except the collections closed to them: ${closed
-    .map(collectionName)
-    .join(", ")}. This role can't be edited.`;
+  if (collection.plugin) {
+    parts.push(
+      `From ${pluginNames.get(collection.plugin) ?? collection.plugin}`
+    );
+  }
+  return parts.join(" · ");
 }
 
-/** One collection's row: its name, where its mark is set, and its switch. */
+/** One collection's row: its name, its state in words, and its switch. */
 function MarkRow({
   collection,
+  pluginNames,
   busy,
   onChange,
 }: {
   collection: MarkedCollection;
+  pluginNames: ReadonlyMap<string, string>;
   busy: boolean;
   onChange: (closed: boolean) => void;
 }): JSX.Element {
-  const setInCode = collection.closedToSuperAdmin.setIn === "code";
+  const { closed, setIn } = collection.closedToSuperAdmin;
   const id = `closed-to-super-admin-${collection.slug}`;
+  const detail = detailOf(collection, pluginNames);
+  const detailId = detail ? `${id}-detail` : undefined;
   return (
-    <li className="flex items-center justify-between gap-3 px-3 py-2">
-      <Label htmlFor={id} className="flex flex-col gap-0.5">
-        <span className="text-sm text-foreground">
-          {collectionName(collection)}
-        </span>
-        {setInCode && (
-          <span className="text-xs text-muted-foreground">Set in code</span>
+    <li className="flex items-center justify-between gap-4 px-4 py-3">
+      <div className="min-w-0 space-y-0.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <Label htmlFor={id} className="text-sm font-medium text-foreground">
+            {collectionName(collection)}
+          </Label>
+          {closed && <Badge variant="warning">Closed</Badge>}
+        </div>
+        {detail && (
+          <p id={detailId} className="text-sm text-muted-foreground">
+            {detail}
+          </p>
         )}
-      </Label>
+      </div>
       <Switch
         id={id}
-        checked={collection.closedToSuperAdmin.closed}
-        disabled={setInCode || busy}
+        checked={closed}
+        disabled={setIn === "code" || busy}
+        aria-describedby={detailId}
         onCheckedChange={(next: boolean) => onChange(next)}
       />
     </li>
   );
 }
 
-export function SuperAdminClosedCollections(): JSX.Element {
+export function SuperAdminClosedCollections({
+  pluginNames = new Map(),
+}: {
+  /** Each plugin's name as the admin shows it, by package name. */
+  pluginNames?: ReadonlyMap<string, string>;
+}): JSX.Element {
   const screen = useMarkedCollections();
   const [pending, setPending] = useState<PendingChange | null>(null);
   const change = useChangeClosedMark(() => setPending(null));
 
-  const collections = screen.data ?? [];
-  const closed = collections.filter(c => c.closedToSuperAdmin.closed);
+  const collections = inListOrder(screen.data ?? []);
+  const closedCount = collections.filter(
+    c => c.closedToSuperAdmin.closed
+  ).length;
+  const ask = (next: PendingChange | null) => {
+    // A new request starts without the last one's refusal.
+    change.reset();
+    setPending(next);
+  };
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">{holdsLine(closed)}</p>
-      {screen.isError && (
-        <p className="text-sm text-destructive">
-          The collections closed to super-admins could not be loaded.
-        </p>
-      )}
-      {collections.length > 0 && (
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-foreground">
-            Closed to super-admins
+    <div className="space-y-6">
+      <p className="text-sm text-muted-foreground">
+        Super-admins have every permission, including new collections and
+        plugins, and the role&apos;s permissions can&apos;t be edited. A
+        collection can still be closed to them below.
+      </p>
+
+      <section
+        aria-labelledby="closed-to-super-admin-heading"
+        className="space-y-3"
+      >
+        <div className="space-y-1">
+          <h3
+            id="closed-to-super-admin-heading"
+            className="text-sm font-medium text-foreground"
+          >
+            Collections closed to super-admins
           </h3>
           <p className="text-sm text-muted-foreground">
             A closed collection&apos;s entries are refused to every super-admin
-            and full-access key, including yours. Changing one asks for your
-            password and is recorded in the audit log.
+            and full-access API key, yours included. Your app&apos;s own server
+            code still reads them. Changing one asks for your password and is
+            recorded in the audit log.
           </p>
-          <ul className="divide-y divide-border rounded-md border border-border">
-            {collections.map(collection => (
-              <MarkRow
-                key={collection.slug}
-                collection={collection}
-                busy={change.isPending}
-                onChange={next => setPending({ collection, closed: next })}
-              />
-            ))}
-          </ul>
         </div>
-      )}
+
+        {screen.isLoading && (
+          <p className="text-sm text-muted-foreground" role="status">
+            Loading collections…
+          </p>
+        )}
+        {screen.isError && (
+          <p className="text-sm font-medium text-danger-text" role="alert">
+            The collections couldn&apos;t be loaded. Reload the page to try
+            again.
+          </p>
+        )}
+        {screen.isSuccess && (
+          <>
+            <p className="text-sm text-foreground" role="status">
+              {closedCount === 0
+                ? "No collection is closed to super-admins."
+                : `${closedCount} of ${collections.length} collections ${
+                    closedCount === 1 ? "is" : "are"
+                  } closed to super-admins.`}
+            </p>
+            {collections.length > 0 && (
+              <ul className="divide-y divide-border rounded-md border border-border bg-card">
+                {collections.map(collection => (
+                  <MarkRow
+                    key={collection.slug}
+                    collection={collection}
+                    pluginNames={pluginNames}
+                    busy={change.isPending}
+                    onChange={next => ask({ collection, closed: next })}
+                  />
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </section>
 
       <ClosedMarkDialog
         // A new request starts with an empty password field.
@@ -123,7 +189,8 @@ export function SuperAdminClosedCollections(): JSX.Element {
             : null
         }
         saving={change.isPending}
-        onCancel={() => setPending(null)}
+        refusal={refusalText(change.error)}
+        onCancel={() => ask(null)}
         onConfirm={password =>
           pending &&
           change.mutate({

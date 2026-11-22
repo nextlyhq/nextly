@@ -173,6 +173,7 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
                 screenMode={screenMode}
                 copyRole={copyRole}
                 isLoading={isLoading}
+                pluginNames={pluginNames}
               >
                 <RolePermissionsSection
                   form={form}
@@ -225,17 +226,20 @@ function RolePermissionsArea({
   screenMode,
   copyRole,
   isLoading,
+  pluginNames,
   children,
 }: {
   screenMode: RoleScreenMode;
   copyRole: () => void;
   isLoading: boolean;
+  /** Each plugin's name as the admin shows it, by package name. */
+  pluginNames: ReadonlyMap<string, string>;
   children: ReactNode;
 }): JSX.Element {
   if (screenMode === "super-admin") {
-    // The line names the collections closed to super-admin, and each
-    // collection's mark is shown and changed beside it.
-    return <SuperAdminClosedCollections />;
+    // What the role holds, and each collection's closed-to-super-admin
+    // mark, shown and changed here.
+    return <SuperAdminClosedCollections pluginNames={pluginNames} />;
   }
   return (
     <div className="-mx-6">
