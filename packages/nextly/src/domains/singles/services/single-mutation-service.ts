@@ -6557,12 +6557,13 @@ export class SingleMutationService extends BaseService {
             hookCollection
           )
             ? this.queryService.deserializeJsonFields(
-                await this.translationIn(
+                // The language's values alone, decoded as a document's are.
+                (await this.translationIn(
                   existingDoc.id,
                   companion,
                   writeLocale,
                   tx
-                ),
+                )) as SingleDocument,
                 fieldConfigs
               )
             : {};
