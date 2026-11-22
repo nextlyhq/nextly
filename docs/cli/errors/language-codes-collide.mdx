@@ -1,0 +1,21 @@
+---
+title: LANGUAGE_CODES_COLLIDE
+description: "`nextly migrate` would write two language codes of the configuration or the stored rows as one standard code, so it changed nothing."
+---
+
+## Cause
+
+`nextly migrate` would write two language codes of the configuration or the stored rows as one standard code, so it changed nothing.
+
+`nextly migrate` writes every language code in its standard form (`en-US`, not `en_us`). Where the configuration names one language under two spellings, or rows are kept for the same thing under both, moving them to the standard code would make two languages one, so the run stops before changing anything.
+
+## Fix
+
+- Where the configuration names both spellings, keep one of them, then run `nextly migrate` again.
+- Where rows are kept under both, keep the rows of one spelling, then run `nextly migrate` again.
+
+## Example
+
+```text
+EXAMPLE
+```

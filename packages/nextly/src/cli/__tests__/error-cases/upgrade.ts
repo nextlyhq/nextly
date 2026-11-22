@@ -140,6 +140,26 @@ export const UPGRADE_CASES = {
         table: "nextly_schema_events",
       },
     }),
+  // As `collision` in the language-codes step throws it.
+  LANGUAGE_CODES_COLLIDE: () =>
+    new NextlyError({
+      code: "NEXTLY_LANGUAGE_CODES_COLLIDE",
+      publicMessage:
+        'The configuration names "en_us" and "en-us" (both "en-US"): one language under two ' +
+        "codes once written in standard form. Keep one of them in the configuration and run " +
+        "`nextly migrate` again. Nothing was changed.",
+      logContext: { colliding: ["en-US"] },
+    }),
+  // As the values step throws it for values kept in both places.
+  LOCALIZATION_UNRESOLVED: () =>
+    new NextlyError({
+      code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
+      publicMessage:
+        'The translatable values of the collection "posts" (title) are both on the main table ' +
+        "and in its translations table, and nothing records which is current. Run " +
+        "`nextly migrate --repair-localization` once. Nothing was changed.",
+      logContext: { entities: ['the collection "posts" (title)'] },
+    }),
   // Retired: as `nextly upgrade` ended with it while it moved the migration records.
   UPGRADE_LEDGER_UNREADABLE: () =>
     new CliError("UPGRADE_LEDGER_UNREADABLE", {

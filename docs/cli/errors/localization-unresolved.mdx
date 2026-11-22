@@ -1,0 +1,24 @@
+---
+title: LOCALIZATION_UNRESOLVED
+description: "`nextly migrate` found stored data its move into per-language storage cannot settle by itself, so it changed nothing."
+---
+
+## Cause
+
+`nextly migrate` found stored data its move into per-language storage cannot settle by itself, so it changed nothing.
+
+`nextly migrate` moves the stored data of an earlier release into per-language storage. It stops before changing anything where that data can be moved more than one way: translatable values kept both on the main table and in the translations table with nothing recording which is current, pending changes to one document saved at the same moment, or a version history not yet laid out as this release keeps it.
+
+## Fix
+
+Do what the message names, then run `nextly migrate` again:
+
+- values kept in both places: run `nextly migrate --repair-localization` once;
+- pending changes saved at the same moment: keep one of them, as the message says;
+- a version history missing its columns: run `nextly migrate` without `--step`, so its migrations add them first.
+
+## Example
+
+```text
+EXAMPLE
+```

@@ -79,6 +79,16 @@ const ACCOUNTS_TEMPLATES: Array<
     subject: "Your password changed",
     htmlContent: `<p>Your account's password changed. If you didn't do this, reset it now.</p>`,
   },
+  {
+    slug: "accounts-invitation",
+    subject: "You're invited to make an account",
+    htmlContent: `<p>You're invited to make an account with this address. <a href="{{link}}">Choose a password</a> to start.</p><p>If you weren't expecting this, you can ignore this email.</p>`,
+  },
+  {
+    slug: "accounts-invitation-has-account",
+    subject: "You're invited to sign in",
+    htmlContent: `<p>You're invited to use your account here, and this address already has one. <a href="{{signInLink}}">Sign in</a>, or <a href="{{resetLink}}">reset your password</a> if you've forgotten it. If your account was closed, contact us.</p>`,
+  },
 ];
 
 /** Exercises the subject, preheader and plain text, which the others leave empty. */
@@ -207,7 +217,7 @@ describe("every template renders exactly as before", () => {
         ...ACCOUNTS_TEMPLATES.map(t => t.slug),
       ])
     );
-    expect(ACCOUNTS_TEMPLATES).toHaveLength(10);
+    expect(ACCOUNTS_TEMPLATES).toHaveLength(12);
   });
 
   it("pins the accounts plugin's templates as its source holds them now", async () => {

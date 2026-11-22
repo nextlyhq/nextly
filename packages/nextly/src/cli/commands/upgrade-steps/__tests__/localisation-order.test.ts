@@ -10,7 +10,12 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { perLanguageStorageSuite } from "../../../../__tests__/storage-layout";
 import { LOCALISATION_DATA_STEPS, MIGRATE_DATA_STEPS } from "../index";
+
+// The steps as every installation runs them (`storage-layout`): on the earlier layout the setup
+// leaves the localisation steps out of `MIGRATE_DATA_STEPS`, and this suite is about where they sit.
+perLanguageStorageSuite();
 
 describe("the localisation data steps' order", () => {
   it("runs codes, keys, values, drafts, stamps and the archive listing, in that order", () => {

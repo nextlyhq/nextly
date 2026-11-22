@@ -171,6 +171,34 @@ export const UPGRADE_CODES = defineCodes({
       },
     ],
   },
+  LANGUAGE_CODES_COLLIDE: {
+    cause:
+      "`nextly migrate` would write two language codes of the configuration or the stored rows as one standard code, so it changed nothing.",
+    from: [
+      {
+        code: "NEXTLY_LANGUAGE_CODES_COLLIDE",
+        describe: error =>
+          whatThenNext(
+            error.publicMessage,
+            "`nextly migrate` writes every language code in its standard form, and two codes here are one language in that form, so moving them would make two languages one."
+          ),
+      },
+    ],
+  },
+  LOCALIZATION_UNRESOLVED: {
+    cause:
+      "`nextly migrate` found stored data its move into per-language storage cannot settle by itself, so it changed nothing.",
+    from: [
+      {
+        code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
+        describe: error =>
+          whatThenNext(
+            error.publicMessage,
+            "`nextly migrate` moves the stored data of an earlier release into per-language storage, and what it found here can be moved more than one way, so it asks before choosing."
+          ),
+      },
+    ],
+  },
   UPGRADE_LEDGER_UNREADABLE: {
     cause:
       "`nextly upgrade` found a `nextly_migrations` table holding records it cannot read, so it moved none of them.",
