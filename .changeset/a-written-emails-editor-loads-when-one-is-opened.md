@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Two refusals of `nextly migrate` now end with codes of their own rather than `UNEXPECTED_ERROR`: `LANGUAGE_CODES_COLLIDE`, where the configuration or the stored rows name one language under two codes that become one in standard form, and `LOCALIZATION_UNRESOLVED`, where the move into per-language storage finds stored data it cannot settle by itself. Each has a docs page saying what to do. The "Waiting for my review" screen draws its title with the shared page header, as every other admin page does, and a written email's block editor loads when a written email is opened rather than with every email screen.
+A written email's block editor loads when a written email is opened, rather than with every email screen, so the email message screens load as quickly as they did before written emails.

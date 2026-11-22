@@ -42,6 +42,22 @@ function leftAsItWas(error: NextlyError): string {
     : "Nothing was changed.";
 }
 
+/**
+ * A localisation step's refusal, whose message states what was found, then the step that settles
+ * it, then that nothing was changed: the sentence before that closing one is the next step.
+ */
+function foundThenStep(message: string, why: string): CliErrorParts {
+  const closing = " Nothing was changed.";
+  const body = message.endsWith(closing)
+    ? message.slice(0, -closing.length)
+    : message;
+  const end = body.lastIndexOf(". ");
+  if (end === -1) {
+    return { what: body, why, next: "Run `nextly migrate` again." };
+  }
+  return { what: body.slice(0, end + 1), why, next: body.slice(end + 2) };
+}
+
 export const UPGRADE_CODES = defineCodes({
   UPGRADE_CANCELLED: {
     cause:
@@ -171,30 +187,30 @@ export const UPGRADE_CODES = defineCodes({
       },
     ],
   },
-  LANGUAGE_CODES_COLLIDE: {
+  MIGRATE_LANGUAGE_CODES_COLLIDE: {
     cause:
-      "`nextly migrate` would write two language codes of the configuration or the stored rows as one standard code, so it changed nothing.",
+      "Two language codes, configured or stored, become one code once written in standard form, so `nextly migrate` changed nothing.",
     from: [
       {
         code: "NEXTLY_LANGUAGE_CODES_COLLIDE",
         describe: error =>
-          whatThenNext(
+          foundThenStep(
             error.publicMessage,
-            "`nextly migrate` writes every language code in its standard form, and two codes here are one language in that form, so moving them would make two languages one."
+            "`nextly migrate` keeps every language under its standard code, and these two would become one, putting two languages' values in one place. Nothing was changed."
           ),
       },
     ],
   },
-  LOCALIZATION_UNRESOLVED: {
+  MIGRATE_LOCALIZATION_UNRESOLVED: {
     cause:
-      "`nextly migrate` found stored data its move into per-language storage cannot settle by itself, so it changed nothing.",
+      "`nextly migrate` found stored translations it cannot move into the layout this release keeps without choosing between two values, so it changed nothing.",
     from: [
       {
         code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
         describe: error =>
-          whatThenNext(
+          foundThenStep(
             error.publicMessage,
-            "`nextly migrate` moves the stored data of an earlier release into per-language storage, and what it found here could be moved more than one way, so it stopped before choosing one."
+            "`nextly migrate` moves stored translations into the layout this release keeps, and moves nothing it would have to guess at. Nothing was changed."
           ),
       },
     ],

@@ -140,25 +140,26 @@ export const UPGRADE_CASES = {
         table: "nextly_schema_events",
       },
     }),
-  // As `collision` in the language-codes step throws it.
-  LANGUAGE_CODES_COLLIDE: () =>
+  // As `localisation-codes.ts` throws it for two configured codes that become one.
+  MIGRATE_LANGUAGE_CODES_COLLIDE: () =>
     new NextlyError({
       code: "NEXTLY_LANGUAGE_CODES_COLLIDE",
       publicMessage:
-        'The configuration names "en_us" and "en-us" (both "en-US"): one language under two ' +
-        "codes once written in standard form. Keep one of them in the configuration and run " +
+        'The configuration names "pt_BR" and "pt-br" (both "pt-BR"): one language under two codes ' +
+        "once written in standard form. Keep one of them in the configuration and run " +
         "`nextly migrate` again. Nothing was changed.",
-      logContext: { colliding: ["en-US"] },
+      logContext: { colliding: ["pt-BR"] },
     }),
-  // As the values step throws it for values kept in both places.
-  LOCALIZATION_UNRESOLVED: () =>
+  // As `localisation-keys.ts` throws it for pending changes saved at one moment.
+  MIGRATE_LOCALIZATION_UNRESOLVED: () =>
     new NextlyError({
       code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
       publicMessage:
-        'The translatable values of the collection "posts" (title) are both on the main table ' +
-        "and in its translations table, and nothing records which is current. Run " +
-        "`nextly migrate --repair-localization` once. Nothing was changed.",
-      logContext: { entities: ['the collection "posts" (title)'] },
+        'More than one pending change was saved at the same moment for the collection "posts" ' +
+        "entry 42 in fr (7, 8), so which one to keep cannot be told. Delete all but one " +
+        "of them from nextly_versions (by the ids named), then run `nextly migrate` again. " +
+        "Nothing was changed.",
+      logContext: { drafts: ['the collection "posts" entry 42 in fr (7, 8)'] },
     }),
   // Retired: as `nextly upgrade` ended with it while it moved the migration records.
   UPGRADE_LEDGER_UNREADABLE: () =>

@@ -15,7 +15,15 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import type { BindingFieldSource } from "./binding-services";
 import type { EditorState } from "../editor-state";
@@ -43,6 +51,8 @@ beforeAll(() => {
 afterAll(() => {
   clearBlocks();
 });
+
+afterEach(cleanup);
 
 /** One source with one field: a host that lists fields, so buttons are drawn. */
 const SOURCES: readonly BindingFieldSource[] = [
@@ -137,107 +147,130 @@ function unfoldSections(): void {
   }
 }
 
-describe("the core block library's bind buttons", () => {
-  it("offers one on every bindable prop of every core block, but the props a group draws without binding", () => {
-    const unbound: string[] = [];
-    for (const block of coreBlocks) {
-      const document = drawn(block);
-      const inspection = inspectSelection(document, "n");
-      // A Style setting (a container's Content width) is the block's own,
-      // drawn by its Style control, and never filled from a field.
-      const styled = new Set(
-        (inspection?.sections.styleProps ?? []).flatMap(section =>
-          section.rows.map(row => row.name)
-        )
-      );
-      const props = (inspection?.props ?? []).filter(
-        prop => prop.offered && !styled.has(prop.name)
-      );
-      // The groups as the panel finds them, so the walk follows each group's
-      // own statement of what it binds rather than a copy of it.
-      const groups = propGroupsOf(props);
-      const grouped = new Set(groups.flatMap(group => [...group.drawn]));
-      const binds = new Set(groups.flatMap(group => [...group.bindable]));
-      // An Advanced setting (a container's HTML tag) is bound in the Advanced
-      // tab, so it is looked for there, after every Content one.
-      const advanced = new Set(
-        (inspection?.sections.advanced ?? []).flatMap(section =>
-          section.rows.map(row => row.name)
-        )
-      );
-      const inTabOrder = [
-        ...props.filter(prop => !advanced.has(prop.name)),
-        ...props.filter(prop => advanced.has(prop.name)),
-      ];
-      let onAdvanced = false;
-      // Every Content section unfolded, as an author opens one: a section
-      // holding no value yet (a Form's After sending) starts folded.
-      unfoldSections();
-      for (const prop of inTabOrder) {
-        if (bindablePropKind(prop.schema) === undefined) continue;
-        if (CHOSEN_NEVER_FILLED.has(`${block.name}.${prop.name}`)) {
-          unbound.push(`${block.name}.${prop.name}`);
-          continue;
-        }
-        if (grouped.has(prop.name) && !binds.has(prop.name)) {
-          unbound.push(`${block.name}.${prop.name}`);
-          continue;
-        }
-        if (advanced.has(prop.name) && !onAdvanced) {
-          fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
-          // Its sections too: HTML holding nothing yet (a Heading's) is folded.
-          unfoldSections();
-          onAdvanced = true;
-        }
-        const buttons = screen.queryAllByRole("button", {
-          name: `Bind ${propLabel(prop.name, prop.schema)} to a field`,
-        });
-        expect(buttons.length, `${block.name} ${prop.name}`).toBeGreaterThan(0);
-      }
-      cleanup();
+/**
+ * The props of `block` its panel draws no bind button for, because a group
+ * draws them and says it does not bind them, or because they are chosen and
+ * never filled. Every other bindable prop is looked for, and its button
+ * expected, in the tab it is drawn in.
+ */
+function unboundOf(block: (typeof coreBlocks)[number]): string[] {
+  const unbound: string[] = [];
+  const document = drawn(block);
+  const inspection = inspectSelection(document, "n");
+  // A Style setting (a container's Content width) is the block's own,
+  // drawn by its Style control, and never filled from a field.
+  const styled = new Set(
+    (inspection?.sections.styleProps ?? []).flatMap(section =>
+      section.rows.map(row => row.name)
+    )
+  );
+  const props = (inspection?.props ?? []).filter(
+    prop => prop.offered && !styled.has(prop.name)
+  );
+  // The groups as the panel finds them, so the walk follows each group's
+  // own statement of what it binds rather than a copy of it.
+  const groups = propGroupsOf(props);
+  const grouped = new Set(groups.flatMap(group => [...group.drawn]));
+  const binds = new Set(groups.flatMap(group => [...group.bindable]));
+  // An Advanced setting (a container's HTML tag) is bound in the Advanced
+  // tab, so it is looked for there, after every Content one.
+  const advanced = new Set(
+    (inspection?.sections.advanced ?? []).flatMap(section =>
+      section.rows.map(row => row.name)
+    )
+  );
+  const inTabOrder = [
+    ...props.filter(prop => !advanced.has(prop.name)),
+    ...props.filter(prop => advanced.has(prop.name)),
+  ];
+  let onAdvanced = false;
+  // Every Content section unfolded, as an author opens one: a section
+  // holding no value yet (a Form's After sending) starts folded.
+  unfoldSections();
+  for (const prop of inTabOrder) {
+    if (bindablePropKind(prop.schema) === undefined) continue;
+    if (CHOSEN_NEVER_FILLED.has(`${block.name}.${prop.name}`)) {
+      unbound.push(`${block.name}.${prop.name}`);
+      continue;
     }
-    // Named, with why, so neither a group binding nothing nor one binding
-    // everything passes: a link's target and entry qualify the address
-    // its own button binds (the entry is bound from the Link's picker, which
-    // writes both halves at once; a link relationship, in Advanced, has a
-    // button of its own); an image's decorative mark is a mode of its
-    // words' menu; a list's query is chosen, never filled from a field.
-    expect(unbound.sort()).toEqual(
-      [
-        "core/box.entryCollection",
-        "core/box.entryId",
-        "core/box.target",
-        "core/button.entryCollection",
-        "core/button.entryId",
-        "core/button.target",
-        "core/card.entryCollection",
-        "core/card.entryId",
-        "core/card.target",
-        "core/collection-loop.collection",
-        "core/collection-loop.limit",
-        "core/collection-loop.offset",
-        "core/collection-loop.paginate",
-        "core/collection-loop.sort",
-        "core/form.afterSending",
-        "core/form.entryCollection",
-        "core/form.entryId",
-        "core/form.href",
-        "core/heading.entryCollection",
-        "core/heading.entryId",
-        "core/heading.target",
-        "core/icon.entryCollection",
-        "core/icon.entryId",
-        "core/icon.target",
-        "core/image.decorative",
-        "core/image.entryCollection",
-        "core/image.entryId",
-        "core/image.target",
-        // What a click does is chosen, not filled from a field.
-        "core/image.whenClicked",
-        "core/quote.entryCollection",
-        "core/quote.entryId",
-        "core/quote.target",
-      ].sort()
-    );
+    if (grouped.has(prop.name) && !binds.has(prop.name)) {
+      unbound.push(`${block.name}.${prop.name}`);
+      continue;
+    }
+    if (advanced.has(prop.name) && !onAdvanced) {
+      fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+      // Its sections too: HTML holding nothing yet (a Heading's) is folded.
+      unfoldSections();
+      onAdvanced = true;
+    }
+    const buttons = screen.queryAllByRole("button", {
+      name: `Bind ${propLabel(prop.name, prop.schema)} to a field`,
+    });
+    expect(buttons.length, `${block.name} ${prop.name}`).toBeGreaterThan(0);
+  }
+  return unbound;
+}
+
+// Named, with why, so neither a group binding nothing nor one binding
+// everything passes: a link's target and entry qualify the address
+// its own button binds (the entry is bound from the Link's picker, which
+// writes both halves at once; a link relationship, in Advanced, has a
+// button of its own); an image's decorative mark is a mode of its
+// words' menu; a list's query is chosen, never filled from a field.
+const UNBOUND: readonly string[] = [
+  "core/box.entryCollection",
+  "core/box.entryId",
+  "core/box.target",
+  "core/button.entryCollection",
+  "core/button.entryId",
+  "core/button.target",
+  "core/card.entryCollection",
+  "core/card.entryId",
+  "core/card.target",
+  "core/collection-loop.collection",
+  "core/collection-loop.limit",
+  "core/collection-loop.offset",
+  "core/collection-loop.paginate",
+  "core/collection-loop.sort",
+  "core/form.afterSending",
+  "core/form.entryCollection",
+  "core/form.entryId",
+  "core/form.href",
+  "core/heading.entryCollection",
+  "core/heading.entryId",
+  "core/heading.target",
+  "core/icon.entryCollection",
+  "core/icon.entryId",
+  "core/icon.target",
+  "core/image.decorative",
+  "core/image.entryCollection",
+  "core/image.entryId",
+  "core/image.target",
+  // What a click does is chosen, not filled from a field.
+  "core/image.whenClicked",
+  "core/quote.entryCollection",
+  "core/quote.entryId",
+  "core/quote.target",
+];
+
+// One test a block: the walk renders every block's panel, and as a single test
+// its time was the sum of all of them.
+describe("the core block library's bind buttons", () => {
+  it.each(coreBlocks.map(block => [block.name, block] as const))(
+    "offers one on every bindable prop of %s, but the props a group draws without binding",
+    (name, block) => {
+      expect(unboundOf(block).sort()).toEqual(
+        UNBOUND.filter(entry => entry.startsWith(`${name}.`)).sort()
+      );
+    }
+  );
+
+  it("names only props of blocks in the library as left unbound", () => {
+    const names = new Set(coreBlocks.map(block => block.name));
+    expect(
+      UNBOUND.filter(
+        entry => !names.has(entry.slice(0, entry.lastIndexOf(".")))
+      )
+    ).toEqual([]);
   });
 });

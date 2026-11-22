@@ -108,9 +108,9 @@ describe("the service config a request-path cold boot registers", () => {
     }
   });
 
-  it("carries what the configuration wrote of the per-language storage setting, and nothing where it wrote none", () => {
-    // The setting chooses no layout: the start warns a site that still writes it, and only such a
-    // site, so a value written either way is carried as written and an unwritten one stays unset.
+  it("carries what the configuration wrote of the per-language storage setting, and only that", () => {
+    // The setting chooses no layout any longer: the start reads it only to warn a site that still
+    // writes it, so it is carried as written, either way, and absent where nothing writes it.
     const on = buildServiceConfig({
       config: sanitizeConfig({ experimental: { perLanguageStorage: true } }),
     });

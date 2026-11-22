@@ -7,7 +7,7 @@
  * sends these emails today, and none of them may change.
  *
  * Covered: every core built-in template and the default layout (read from
- * their source), the accounts plugin's ten templates (frozen below, since this
+ * their source), the accounts plugin's twelve templates (frozen below, since this
  * package cannot import the plugin), and one template that exercises the
  * subject, preheader and plain-text paths. Each is rendered with four sets of
  * data: typical values, hostile values, nothing at all, and values that are
