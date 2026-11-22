@@ -26,6 +26,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { pageOutline } from "@nextlyhq/blocks-react";
 import type { BlockRenderArgs, PageContext } from "@nextlyhq/blocks-react";
 import type { BlockNode, NestingSource } from "@nextlyhq/blocks-engine";
 import { ENTRY_CONTENT_TYPE, validateDocument } from "@nextlyhq/blocks-engine";
@@ -88,6 +89,16 @@ function walk(nodes: readonly BlockNode[]): BlockNode[] {
 }
 
 const NODES = walk(KITCHEN_SINK_DOCUMENT.nodes);
+
+/**
+ * The page's outline, as `PageRenderer` hands it to every block it draws: read
+ * once off this document's own tree. A block that lists the page's headings
+ * (`core/table-of-contents`) draws from it, so without it that block would be
+ * judged on a page with no headings at all.
+ */
+const OUTLINE = pageOutline([
+  { area: "content", nodes: KITCHEN_SINK_DOCUMENT.nodes },
+]);
 
 describe("the kitchen-sink document", () => {
   it("was actually walked", () => {
@@ -232,6 +243,7 @@ describe("the kitchen-sink document", () => {
         data: { find: () => Promise.resolve({ items: [], total: 0 }) },
         resolveMedia: () => Promise.resolve(null),
         resolveEntryPath: () => Promise.resolve(null),
+        outline: OUTLINE,
       };
       const element = await (definition as Definition).render({
         props: node.props,
