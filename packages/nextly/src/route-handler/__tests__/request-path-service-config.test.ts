@@ -108,16 +108,20 @@ describe("the service config a request-path cold boot registers", () => {
     }
   });
 
-  it("carries the per-language storage choice into the service config", () => {
-    // Registration publishes what the service config carries, so a choice dropped here would boot
-    // the site storing translatable values on its main tables whatever the config says.
+  it("carries what the configuration wrote of the per-language storage setting, and only that", () => {
+    // The setting chooses no layout any longer: the start reads it only to warn a site that still
+    // writes it, so it is carried as written, either way, and absent where nothing writes it.
     const on = buildServiceConfig({
       config: sanitizeConfig({ experimental: { perLanguageStorage: true } }),
     });
     expect(on.perLanguageStorage).toBe(true);
+    const off = buildServiceConfig({
+      config: sanitizeConfig({ experimental: { perLanguageStorage: false } }),
+    });
+    expect(off.perLanguageStorage).toBe(false);
     expect(
       buildServiceConfig({ config: sanitizeConfig({}) }).perLanguageStorage
-    ).toBe(false);
+    ).toBeUndefined();
   });
 
   it("forwards the database directories the builder deliberately does not", () => {
