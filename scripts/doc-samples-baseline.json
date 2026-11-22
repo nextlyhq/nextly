@@ -208,6 +208,10 @@
       "samples": 11,
       "compiled": 7
     },
+    "docs/plugins/accounts.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
     "docs/plugins/admin-ui.mdx": {
       "samples": 34,
       "compiled": 20
@@ -248,6 +252,10 @@
       "samples": 7,
       "compiled": 3
     },
+    "docs/plugins/mcp.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
     "docs/plugins/permissions.mdx": {
       "samples": 3,
       "compiled": 1
@@ -285,7 +293,7 @@
       "compiled": 3
     },
     "docs/plugins/signed-in-people.mdx": {
-      "samples": 10,
+      "samples": 11,
       "compiled": 5
     },
     "docs/plugins/testing.mdx": {
@@ -355,6 +363,10 @@
     "packages/nextly/README.md": {
       "samples": 2,
       "compiled": 2
+    },
+    "packages/plugin-accounts/README.md": {
+      "samples": 6,
+      "compiled": 4
     },
     "packages/plugin-commerce/README.md": {
       "samples": 3,

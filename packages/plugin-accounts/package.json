@@ -1,8 +1,7 @@
 {
   "name": "@nextlyhq/plugin-accounts",
   "version": "0.0.2-alpha.78",
-  "private": true,
-  "description": "Site accounts for Nextly: visitors who sign up, sign in and keep their own account, never staff",
+  "description": "Experimental site accounts for Nextly: visitors who sign up, sign in and keep their own account, never staff",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -97,6 +96,11 @@
     "type": "git",
     "url": "git+https://github.com/nextlyhq/nextly.git",
     "directory": "packages/plugin-accounts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
   },
   "homepage": "https://nextlyhq.com",
   "bugs": {
