@@ -47,8 +47,11 @@ interface ClosedMarksState {
   stored: Set<string>;
   /** When `stored` was read; 0 before the first read. */
   storedAt: number;
-  /** The read the start registered, absent where nothing was registered. */
-  read?: () => Promise<readonly string[]>;
+  /**
+   * The read the start registered, absent where nothing was registered; on
+   * the caller's transaction where one is handed in.
+   */
+  read?: (executor?: unknown) => Promise<readonly string[]>;
   /** A read in flight, joined by any caller that arrives meanwhile. */
   reading?: Promise<void>;
 }
@@ -92,7 +95,7 @@ export function declareClosedToSuperAdmin(
  * read, so the next question reads them afresh.
  */
 export function useStoredClosedMarks(
-  read: () => Promise<readonly string[]>
+  read: (executor?: unknown) => Promise<readonly string[]>
 ): void {
   const s = state();
   s.read = read;
@@ -136,17 +139,29 @@ export function isClosedToSuperAdmin(slug: string): boolean {
  * {@link STORED_MARKS_TTL_MS}. A failed read throws, so the question fails
  * rather than answering from marks it could not read: a mark closing a
  * collection must not be read as absent.
+ *
+ * Asked inside a transaction, it reads on that transaction's `executor` and
+ * joins no read in flight on the pool: waiting for a pooled connection the
+ * transaction itself may be holding would never end.
  */
 export async function refreshStoredClosedMarks(
-  now: number = Date.now()
+  options: { now?: number; executor?: unknown } = {}
 ): Promise<void> {
   const s = state();
+  const now = options.now ?? Date.now();
   if (s.read === undefined || now - s.storedAt < STORED_MARKS_TTL_MS) return;
+  const read = s.read;
+  const take = (slugs: readonly string[]) => {
+    s.stored = new Set(slugs);
+    s.storedAt = Date.now();
+  };
+  if (options.executor !== undefined) {
+    take(await read(options.executor));
+    return;
+  }
   s.reading ??= (async () => {
     try {
-      const slugs = await s.read!();
-      s.stored = new Set(slugs);
-      s.storedAt = Date.now();
+      take(await read());
     } finally {
       s.reading = undefined;
     }

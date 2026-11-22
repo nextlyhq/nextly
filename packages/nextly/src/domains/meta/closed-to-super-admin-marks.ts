@@ -55,11 +55,15 @@ export async function readStoredClosedMarks(
  * was closed before.
  */
 export async function writeStoredClosedMark(
-  meta: Pick<MetaService, "getEntry" | "set">,
+  meta: Pick<MetaService, "getEntry" | "set" | "insertIfAbsent">,
   executor: unknown,
   slug: string,
   closed: boolean
 ): Promise<boolean> {
+  // The row is made first, so the locked read below always has a row to
+  // lock: two first changes at once would otherwise both read none, and the
+  // later write would drop the earlier one's mark.
+  await meta.insertIfAbsent(STORED_KEY, { collections: [] }, executor);
   const slugs = new Set(
     await readStoredClosedMarks(meta, executor, { lock: true })
   );
@@ -112,7 +116,7 @@ export interface DeclaredClosedMarkChange {
 
 /** What {@link applyDeclaredClosedMarks} reads and writes through. */
 export interface DeclaredClosedMarksDeps {
-  meta: Pick<MetaService, "getEntry" | "set">;
+  meta: Pick<MetaService, "getEntry" | "set" | "insertIfAbsent">;
   /** Runs `work` in one transaction, handing it the transaction's executor. */
   transaction: (work: (executor: unknown) => Promise<void>) => Promise<void>;
 }
@@ -140,6 +144,9 @@ export async function applyDeclaredClosedMarks(
   await deps.transaction(async executor => {
     // Started afresh by an attempt the adapter retries.
     changes = [];
+    // Made first, so the locked read has a row to lock (as for the admin's
+    // marks above): two first runs at once then report each change once.
+    await deps.meta.insertIfAbsent(DECLARED_KEY, { collections: {} }, executor);
     const applied = await readAppliedDeclaredMarks(deps.meta, executor, {
       lock: true,
     });

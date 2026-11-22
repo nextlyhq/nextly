@@ -43,7 +43,9 @@ export async function superAdminRefusedOn(
   slug: string,
   caller: SuperAdminCaller
 ): Promise<boolean> {
-  await refreshStoredClosedMarks();
+  await refreshStoredClosedMarks(
+    caller.executor === undefined ? {} : { executor: caller.executor }
+  );
   if (!isClosedToSuperAdmin(slug)) return false;
   if (caller.keyHoldsSuperAdmin !== undefined) {
     return caller.keyHoldsSuperAdmin;

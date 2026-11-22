@@ -4499,8 +4499,8 @@ function registerCodeDefinedAccess(
   // marks set in the admin are read: registered with the rules, so every way
   // in that asks the rules asks these too.
   declareClosedToSuperAdmin(transformedConfig.collections ?? []);
-  useStoredClosedMarks(() =>
-    readStoredClosedMarks(container.get<MetaService>("metaService"))
+  useStoredClosedMarks(executor =>
+    readStoredClosedMarks(container.get<MetaService>("metaService"), executor)
   );
   // The targets a command asks the same rules through (`codeDefinedAccessTargets`).
   for (const target of codeDefinedAccessTargets(transformedConfig)) {

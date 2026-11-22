@@ -56,13 +56,23 @@ describe("a collection's mark", () => {
     let stored = ["health"];
     const read = vi.fn(async () => stored);
     useStoredClosedMarks(read);
-    await refreshStoredClosedMarks(1_000_000);
+    await refreshStoredClosedMarks({ now: 1_000_000 });
     stored = [];
-    await refreshStoredClosedMarks(1_000_001);
+    await refreshStoredClosedMarks({ now: 1_000_001 });
     expect(isClosedToSuperAdmin("health")).toBe(true);
-    await refreshStoredClosedMarks(Date.now() + STORED_MARKS_TTL_MS + 1);
+    await refreshStoredClosedMarks({
+      now: Date.now() + STORED_MARKS_TTL_MS + 1,
+    });
     expect(read).toHaveBeenCalledTimes(2);
     expect(isClosedToSuperAdmin("health")).toBe(false);
+  });
+
+  it("reads on the caller's transaction when asked inside one, joining no read on the pool", async () => {
+    const read = vi.fn(async (_executor?: unknown) => ["health"]);
+    useStoredClosedMarks(read);
+    await refreshStoredClosedMarks({ executor: "tx" });
+    expect(read).toHaveBeenCalledWith("tx");
+    expect(isClosedToSuperAdmin("health")).toBe(true);
   });
 
   it("takes this instance's own change at once", () => {

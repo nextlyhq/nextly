@@ -24,6 +24,9 @@ function fakeMeta() {
     set: vi.fn(async (key: string, value: unknown) => {
       rows.set(key, JSON.stringify(value));
     }),
+    insertIfAbsent: vi.fn(async (key: string, value: unknown) => {
+      if (!rows.has(key)) rows.set(key, JSON.stringify(value));
+    }),
   };
 }
 
@@ -44,6 +47,10 @@ describe("the admin's change", () => {
       "collections-closed-to-super-admin",
       "tx",
       { lock: true }
+    );
+    // The row is made before it is read locked, so there is one to lock.
+    expect(meta.insertIfAbsent.mock.invocationCallOrder[0]).toBeLessThan(
+      meta.getEntry.mock.invocationCallOrder[0]
     );
   });
 });

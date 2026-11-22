@@ -14,6 +14,7 @@
  *   collection whose code sets the mark; the change it makes is written to the
  *   audit log with who, the collection, and the value before and after;
  * - the roles screen shows each collection's mark and where it is set;
+ * - two first changes made at once both hold;
  * - one account gets only a few password tries a window;
  * - the configuration's mark is written to the audit log the first time a
  *   start applies it, once.
@@ -27,6 +28,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { defineCollection, relationship, text } from "../../config";
 import { Nextly } from "../../direct-api/nextly";
+import { MetaService } from "../../domains/meta/services/meta-service";
 import { seedPermissionsAndRolePresets } from "../../init/seed-permissions";
 import {
   createTestNextly,
@@ -40,6 +42,7 @@ import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
 
 const ORIGIN = "http://localhost";
+const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 const PASSWORD = "Password123!";
 const KIND = "collection-super-admin-access-changed";
 
@@ -93,7 +96,7 @@ describe.each(getConfiguredTestDialects())(
     let owner: string;
     let recordId: string;
 
-    /** The audit rows of this kind, oldest first. */
+    /** The audit rows of this kind, in no particular order. */
     async function auditRows(): Promise<
       Array<{ actor: string | null; metadata: Record<string, unknown> }>
     > {
@@ -300,11 +303,52 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (await rest("GET", `collections/${HEALTH}/entries`, owner)).status
       ).toBe(200);
+      // One row for each change; the table keeps no order a read can rely on.
       expect(
         (await auditRows())
           .filter(r => r.metadata.source === "admin")
-          .map(r => r.metadata.after)
-      ).toEqual(["closed", "open"]);
+          .map(r => `${String(r.metadata.before)}>${String(r.metadata.after)}`)
+          .sort()
+      ).toEqual(["closed>open", "open>closed"]);
+    });
+
+    it("keeps both of two first changes made at once", async () => {
+      // No row of admin marks yet, as on a site that never closed one.
+      await new MetaService(
+        t.adapter as unknown as DrizzleAdapter,
+        quiet
+      ).delete("collections-closed-to-super-admin");
+      const path = "roles/screen/closed-to-super-admin";
+      const both = await Promise.all(
+        [HEALTH, NOTES].map(collection =>
+          rest("PATCH", path, owner, {
+            collection,
+            closed: true,
+            password: PASSWORD,
+          })
+        )
+      );
+      expect(both.map(res => res.status)).toEqual([200, 200]);
+      const screen = (await (
+        await rest("GET", "roles/screen", owner)
+      ).json()) as {
+        items: Array<{
+          slug: string;
+          closedToSuperAdmin?: { closed: boolean };
+        }>;
+      };
+      const closed = (slug: string) =>
+        screen.items.find(item => item.slug === slug)?.closedToSuperAdmin
+          ?.closed;
+      expect([closed(HEALTH), closed(NOTES)]).toEqual([true, true]);
+      for (const collection of [HEALTH, NOTES]) {
+        const reopened = await rest("PATCH", path, owner, {
+          collection,
+          closed: false,
+          password: PASSWORD,
+        });
+        expect(reopened.status).toBe(200);
+      }
     });
 
     it("stops taking password tries from one account after a few in a window", async () => {
