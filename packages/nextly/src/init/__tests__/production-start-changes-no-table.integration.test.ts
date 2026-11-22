@@ -49,6 +49,9 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../__tests__/helpers/fresh-database";
+import { runMigrateCreate } from "../../cli/commands/migrate-create";
+import type { CommandContext } from "../../cli/program";
+import { createLogger } from "../../cli/utils/logger";
 import {
   defineCollection,
   defineConfig,
@@ -60,6 +63,7 @@ import {
 import { createAdapter } from "../../database/factory";
 import { shutdownServices } from "../../di/register";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { setNonInteractive } from "../../domains/schema/migrate/can-prompt";
 import { recordPluginLifecycle } from "../../domains/schema/ownership/plugin-lifecycle-state";
 import { getNextly, shutdownNextly, startSettled } from "../../init";
 import { seedBuilderCollection } from "../../plugins/__tests__/seed-builder-entity";
@@ -73,6 +77,23 @@ import { resetDispatcherForTests } from "../../route-handler/auth-handler";
 import { createDynamicHandlers } from "../../routeHandler";
 import { _resetEnvCache } from "../../shared/lib/env";
 import { sanitizeConfig } from "../../shared/types/config";
+
+/** The configuration `nextly migrate:create` loads, while one is set. */
+const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
+
+// `migrate:create` loads the test's configuration rather than a file; every
+// other caller, a start among them, loads as it always does.
+vi.mock("../../cli/utils/config-loader", async original => {
+  const actual =
+    await original<typeof import("../../cli/utils/config-loader")>();
+  return {
+    ...actual,
+    loadConfig: (...args: Parameters<typeof actual.loadConfig>) =>
+      loaded.config === undefined
+        ? actual.loadConfig(...args)
+        : Promise.resolve({ config: loaded.config, dependencies: [] }),
+  };
+});
 
 /** Readable by anyone, so a request reads the entries as a visitor. */
 const READABLE = { read: () => true };
@@ -271,6 +292,45 @@ describe.each(getConfiguredTestDialects())(
       rmSync(migrationsDir, { recursive: true, force: true });
     });
 
+    /**
+     * The migration `nextly migrate:create` writes for `shape` into the
+     * migrations folder, as a deployment that turns the migrations at start on
+     * commits one: they apply what the files record and refuse a configuration
+     * holding changes no file records.
+     */
+    async function migrationWritten(shape: object): Promise<void> {
+      loaded.config = defineConfig({
+        ...(shape as Parameters<typeof defineConfig>[0]),
+        db: { migrationsDir },
+      });
+      const said: string[] = [];
+      const capture = (message: string) => {
+        said.push(message);
+      };
+      const context = {
+        logger: {
+          ...createLogger({ quiet: true }),
+          info: capture,
+          warn: capture,
+          success: capture,
+          error: capture,
+        },
+        options: {},
+        cwd: migrationsDir,
+      } as CommandContext;
+      const exit = vi.spyOn(process, "exit").mockImplementation(code => {
+        throw new Error(`exit ${String(code)}: ${said.join("\n")}`);
+      });
+      setNonInteractive(true);
+      try {
+        await runMigrateCreate("pscn", { cwd: migrationsDir }, context);
+      } finally {
+        setNonInteractive(false);
+        exit.mockRestore();
+        loaded.config = undefined;
+      }
+    }
+
     /** Start in production with `config`, then serve one request. */
     async function productionStart(config: never): Promise<void> {
       vi.stubEnv("NODE_ENV", "production");
@@ -440,13 +500,39 @@ describe.each(getConfiguredTestDialects())(
     it.each([false, true])(
       "a translated field group whose translation table is gone gets it back only from the migrations at start (on: %s)",
       async migrationsAtStart => {
-        const setup = await adapterFor();
-        await createTestNextly({
-          adapter: setup as never,
-          ...translatedFieldGroup(),
-        });
-        await shutdownServices();
-        await setup.disconnect().catch(() => undefined);
+        // With migrations at start on, the deployment's database is set up
+        // by that step from the migration its configuration was written to;
+        // with them off, it was set up before the start, as `nextly migrate`
+        // leaves it.
+        const config = () =>
+          sanitizeConfig(
+            defineConfig({
+              ...translatedFieldGroup(),
+              ...(migrationsAtStart
+                ? { db: { runMigrationsOnBoot: true, migrationsDir } }
+                : {}),
+            })
+          ) as never;
+        if (migrationsAtStart) {
+          await migrationWritten(translatedFieldGroup());
+          vi.stubEnv("NODE_ENV", "production");
+          _resetEnvCache();
+          await getNextly({ config: config() });
+          await startSettled();
+          await shutdownNextly();
+          await shutdownServices();
+          resetDispatcherForTests();
+          vi.stubEnv("NODE_ENV", "test");
+          _resetEnvCache();
+        } else {
+          const setup = await adapterFor();
+          await createTestNextly({
+            adapter: setup as never,
+            ...translatedFieldGroup(),
+          });
+          await shutdownServices();
+          await setup.disconnect().catch(() => undefined);
+        }
         const tables = async (): Promise<Set<string>> => {
           const check = await adapterFor();
           try {
@@ -466,16 +552,7 @@ describe.each(getConfiguredTestDialects())(
 
         vi.stubEnv("NODE_ENV", "production");
         _resetEnvCache();
-        const nextly = await getNextly({
-          config: sanitizeConfig(
-            defineConfig({
-              ...translatedFieldGroup(),
-              ...(migrationsAtStart
-                ? { db: { runMigrationsOnBoot: true, migrationsDir } }
-                : {}),
-            })
-          ) as never,
-        });
+        const nextly = await getNextly({ config: config() });
 
         if (!migrationsAtStart) {
           // The first request loads the definitions again, and still makes
@@ -531,6 +608,9 @@ describe.each(getConfiguredTestDialects())(
     );
 
     it("the control: with migrations at start on, that step sets an empty database up and the start goes on", async () => {
+      // The migration the configuration's entities were written to, which
+      // the step applies.
+      await migrationWritten(entities(false));
       vi.stubEnv("NODE_ENV", "production");
       _resetEnvCache();
       await getNextly({

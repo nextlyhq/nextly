@@ -757,8 +757,9 @@ describe.each(getConfiguredTestDialects())(
           expect((refused as Error).message).toMatch(
             /the collection "articles" \(headline\)/
           );
+          // Named by the slug its registry row records, as the configuration's is.
           expect((refused as Error).message).toMatch(
-            /the collection "dc_posts" \(heading\)/
+            /the collection "posts" \(heading\)/
           );
         } finally {
           _resetEnvCache();

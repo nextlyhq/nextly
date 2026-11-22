@@ -185,6 +185,12 @@ describe("nextly plugins add in sites made from the templates", () => {
         JSON.stringify(NOTES.manifest)
       );
       await writeFile(join(notes, "index.js"), NOTES.entry);
+      // A code-first project's first migration, written from its config as
+      // the scaffold writes it once the project is installed
+      // (`create-nextly-app`'s `installers/initial-migration.ts`): `nextly
+      // migrate` refuses a configuration holding changes no migration records.
+      const created = await nextly(["migrate:create", "initial"], root);
+      expect(created.status, created.stdout + created.stderr).toBe(0);
       const migrated = await nextly(["migrate"], root);
       expect(migrated.status, migrated.stderr).toBe(0);
       const before = await readFile(join(root, "nextly.config.ts"), "utf8");
