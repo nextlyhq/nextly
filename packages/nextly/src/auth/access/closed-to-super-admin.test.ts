@@ -68,12 +68,63 @@ describe("a collection's mark", () => {
     expect(isClosedToSuperAdmin("health")).toBe(false);
   });
 
-  it("reads on the caller's transaction when asked inside one, joining no read on the pool", async () => {
-    const read = vi.fn(async (_executor?: unknown) => ["health"]);
-    useStoredClosedMarks(read);
-    await refreshStoredClosedMarks({ executor: "tx" });
-    expect(read).toHaveBeenCalledWith("tx");
-    expect(isClosedToSuperAdmin("health")).toBe(true);
+  it("never puts a transaction's read into the marks every request shares", async () => {
+    vi.useFakeTimers();
+    try {
+      let pool: string[] = [];
+      const read = vi.fn(async (executor?: unknown) =>
+        // A transaction's snapshot from before the close.
+        executor === undefined ? pool : []
+      );
+      useStoredClosedMarks(read);
+      vi.setSystemTime(1_000_000);
+      await refreshStoredClosedMarks();
+      // The close commits; the shared marks are due again.
+      pool = ["health"];
+      vi.setSystemTime(1_000_000 + STORED_MARKS_TTL_MS + 1);
+
+      // A question inside the transaction reads on it, and its answer stays
+      // with that question: it is not kept, nor counted as a fresh read.
+      lookups.isSuperAdminOrRefuse.mockResolvedValue(true);
+      await superAdminRefusedOn("health", { userId: "root", executor: "tx" });
+      expect(read).toHaveBeenLastCalledWith("tx");
+
+      // So the next question outside it reads the pool, and sees the close.
+      await refreshStoredClosedMarks();
+      expect(read).toHaveBeenLastCalledWith();
+      expect(isClosedToSuperAdmin("health")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses inside a transaction where either its own read or the shared marks close the collection", async () => {
+    vi.useFakeTimers();
+    try {
+      lookups.isSuperAdminOrRefuse.mockResolvedValue(true);
+      vi.setSystemTime(1_000_000);
+      // A snapshot from before the close, the shared marks after it.
+      useStoredClosedMarks(async executor =>
+        executor === undefined ? ["health"] : []
+      );
+      await refreshStoredClosedMarks();
+      expect(
+        await superAdminRefusedOn("health", { userId: "root", executor: "tx" })
+      ).toBe(true);
+      // The transaction's own close, which the shared marks, now due, have
+      // not read yet.
+      holder.__nextly_closedToSuperAdmin = undefined;
+      useStoredClosedMarks(async executor =>
+        executor === undefined ? [] : ["notes"]
+      );
+      await refreshStoredClosedMarks();
+      vi.setSystemTime(1_000_000 + STORED_MARKS_TTL_MS + 1);
+      expect(
+        await superAdminRefusedOn("notes", { userId: "root", executor: "tx" })
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps this instance's own change when a read that began before it ends after it", async () => {

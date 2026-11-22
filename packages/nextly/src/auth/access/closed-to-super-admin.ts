@@ -97,6 +97,20 @@ export function declareClosedToSuperAdmin(
 }
 
 /**
+ * What the configuration says now, in the shape {@link declareClosedToSuperAdmin}
+ * takes: for a reload to put back when it does not land.
+ */
+export function declaredClosedMarks(): Array<{
+  slug: string;
+  closedToSuperAdmin: boolean;
+}> {
+  return [...state().declared].map(([slug, closedToSuperAdmin]) => ({
+    slug,
+    closedToSuperAdmin,
+  }));
+}
+
+/**
  * Registers how the marks set in the admin are read, and forgets the last
  * read, so the next question reads them afresh.
  */
@@ -142,17 +156,17 @@ export function isClosedToSuperAdmin(slug: string): boolean {
 }
 
 /**
- * Reads the stored marks where the last read is older than
- * {@link STORED_MARKS_TTL_MS}. A failed read throws, so the question fails
- * rather than answering from marks it could not read: a mark closing a
- * collection must not be read as absent.
+ * Reads the stored marks on the pool where the last read is older than
+ * {@link STORED_MARKS_TTL_MS}, for every request to share. A failed read
+ * throws, so the question fails rather than answering from marks it could not
+ * read: a mark closing a collection must not be read as absent.
  *
- * Asked inside a transaction, it reads on that transaction's `executor` and
- * joins no read in flight on the pool: waiting for a pooled connection the
- * transaction itself may be holding would never end.
+ * Never asked inside a transaction: that question reads on the transaction
+ * instead ({@link closedInTransaction}), since waiting here for a pooled
+ * connection the transaction may be holding would never end.
  */
 export async function refreshStoredClosedMarks(
-  options: { now?: number; executor?: unknown } = {}
+  options: { now?: number } = {}
 ): Promise<void> {
   const s = state();
   const now = options.now ?? Date.now();
@@ -167,10 +181,6 @@ export async function refreshStoredClosedMarks(
     s.stored = new Set(slugs);
     s.storedAt = Date.now();
   };
-  if (options.executor !== undefined) {
-    take(await read(options.executor));
-    return;
-  }
   s.reading ??= (async () => {
     try {
       take(await read());
@@ -179,6 +189,31 @@ export async function refreshStoredClosedMarks(
     }
   })();
   await s.reading;
+}
+
+/**
+ * Whether `slug` is closed to super-admin, for a question asked inside a
+ * transaction: the code's mark where the code sets one, and otherwise closed
+ * where either the marks every request shares or, once those are due, the
+ * transaction's own read close it. The transaction's read is never kept, nor counted as a fresh read
+ * of the shared marks: on a database that holds a transaction's snapshot (as
+ * MySQL's repeatable read does), it can predate a close, and kept it would
+ * reopen the collection for every request.
+ */
+export async function closedInTransaction(
+  slug: string,
+  executor: unknown
+): Promise<boolean> {
+  const s = state();
+  const declared = s.declared.get(slug);
+  if (declared !== undefined) return declared;
+  if (s.stored.has(slug)) return true;
+  // Read on the transaction only once the shared marks are due, as the pool
+  // would be: an open collection costs no query in between.
+  if (s.read === undefined || Date.now() - s.storedAt < STORED_MARKS_TTL_MS) {
+    return false;
+  }
+  return (await s.read(executor)).includes(slug);
 }
 
 /** Every collection the code or the admin closes, by slug, from what is known now. */

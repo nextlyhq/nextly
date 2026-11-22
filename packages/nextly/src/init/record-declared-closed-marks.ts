@@ -30,18 +30,29 @@ export async function recordDeclaredClosedMarks(
     { MetaService },
     { applyDeclaredClosedMarks },
     { buildAuditLogWriter },
+    { changingRoleGrants },
+    { expireContentAfterGrantsChange },
   ] = await Promise.all([
     import("../domains/meta/services/meta-service"),
     import("../domains/meta/closed-to-super-admin-marks"),
     import("../domains/audit/audit-log-writer"),
+    import("../domains/auth/services/role-grants-changed"),
+    import("../domains/flush-content-change"),
   ]);
-  const changes = await applyDeclaredClosedMarks(
-    {
-      meta: new MetaService(adapter, logger),
-      transaction: work => adapter.transaction(tx => work(tx.getDrizzle())),
-    },
-    collections
-  );
+  // A change of a mark expires every cached content read, as a change of
+  // grants does, so no read cached before a close is served after it; queued
+  // before the write, and withdrawn where nothing changed.
+  const changes = await changingRoleGrants(async () => {
+    const applied = await applyDeclaredClosedMarks(
+      {
+        meta: new MetaService(adapter, logger),
+        transaction: work => adapter.transaction(tx => work(tx.getDrizzle())),
+      },
+      collections
+    );
+    if (applied.length > 0) await expireContentAfterGrantsChange();
+    return applied;
+  });
   if (changes.length === 0) return;
   const audit = buildAuditLogWriter((name: string) =>
     name === "adapter" ? adapterFor() : getService(name as "logger")

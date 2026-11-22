@@ -17,18 +17,21 @@
  * - two first changes made at once both hold;
  * - one account gets only a few password tries a window;
  * - the configuration's mark is written to the audit log the first time a
- *   start applies it, once.
+ *   start applies it, once;
+ * - a change of the mark, from the admin or from code, expires the cached
+ *   content reads, so no read cached before a close is served after it.
  */
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, relationship, text } from "../../config";
 import { Nextly } from "../../direct-api/nextly";
 import { MetaService } from "../../domains/meta/services/meta-service";
+import { recordDeclaredClosedMarks } from "../../init/record-declared-closed-marks";
 import { seedPermissionsAndRolePresets } from "../../init/seed-permissions";
 import {
   createTestNextly,
@@ -36,7 +39,9 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../plugins/test-nextly";
+import type { RevalidationIntent } from "../../revalidation/types";
 import { createDynamicHandlers } from "../../routeHandler";
+import { NextCacheRevalidator } from "../../runtime/cache/next-cache-revalidator";
 import { SUPER_ADMIN_SLUG } from "../../services/access/super-admin";
 import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
@@ -54,6 +59,28 @@ const NOTES = "csa-notes";
 const HEALTH = "csa-health";
 
 type Method = "GET" | "PATCH";
+
+/**
+ * Watches every flush of the cache revalidator the request path boots
+ * (Next's), so a case sees every tag a change expires, whichever instance the
+ * route registered.
+ */
+class FlushWatch {
+  readonly flushed: RevalidationIntent[] = [];
+  constructor() {
+    const flush = NextCacheRevalidator.prototype.flush;
+    const watch = this;
+    vi.spyOn(NextCacheRevalidator.prototype, "flush").mockImplementation(
+      function (this: NextCacheRevalidator, intents: RevalidationIntent[]) {
+        watch.flushed.push(...intents);
+        return flush.call(this, intents);
+      }
+    );
+  }
+  get tags(): string[] {
+    return this.flushed.flatMap(intent => intent.tags);
+  }
+}
 
 /** One request through the REST catch-all, as the admin sends it. */
 function rest(
@@ -95,6 +122,7 @@ describe.each(getConfiguredTestDialects())(
     let ownerId: string;
     let owner: string;
     let recordId: string;
+    let spy: FlushWatch;
 
     /** The audit rows of this kind, in no particular order. */
     async function auditRows(): Promise<
@@ -165,6 +193,10 @@ describe.each(getConfiguredTestDialects())(
         process.env.NEXTLY_SECRET ?? ""
       );
       owner = `nextly_session=${token}`;
+      // The request path's first call boots the services it serves from,
+      // with the cache revalidator it expires through; that one is watched.
+      expect((await rest("GET", "roles/screen", owner)).status).toBe(200);
+      spy = new FlushWatch();
 
       const record = await trusted.create({
         collection: RECORDS,
@@ -266,6 +298,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("closes a collection with the password, refusing the super-admin at once, and audits who and what", async () => {
+      spy.flushed.length = 0;
       const res = await rest(
         "PATCH",
         "roles/screen/closed-to-super-admin",
@@ -276,6 +309,9 @@ describe.each(getConfiguredTestDialects())(
 
       const after = await rest("GET", `collections/${HEALTH}/entries`, owner);
       expect([401, 403, 404]).toContain(after.status);
+      // No read cached before the close, a super-admin's included, outlives
+      // it: the cached content reads are expired, as for a change of grants.
+      expect(spy.tags).toContain(`nextly:${HEALTH}`);
 
       const admin = (await auditRows()).filter(
         r => r.metadata.source === "admin"
@@ -393,6 +429,34 @@ describe.each(getConfiguredTestDialects())(
       ]);
       await seedPermissionsAndRolePresets();
       expect(await fromCode()).toHaveLength(1);
+    });
+
+    it("expires the cached content reads when a change made in code takes effect", async () => {
+      spy.flushed.length = 0;
+      // The code now closes notes too, as a saved config would say.
+      await recordDeclaredClosedMarks(
+        t.adapter as unknown as DrizzleAdapter,
+        quiet,
+        [
+          { slug: RECORDS, closedToSuperAdmin: true },
+          { slug: NOTES, closedToSuperAdmin: true },
+        ],
+        () => t.adapter as unknown as DrizzleAdapter
+      );
+      expect(spy.tags).toContain(`nextly:${NOTES}`);
+
+      // Applied once: the same code again changes nothing and expires nothing.
+      spy.flushed.length = 0;
+      await recordDeclaredClosedMarks(
+        t.adapter as unknown as DrizzleAdapter,
+        quiet,
+        [
+          { slug: RECORDS, closedToSuperAdmin: true },
+          { slug: NOTES, closedToSuperAdmin: true },
+        ],
+        () => t.adapter as unknown as DrizzleAdapter
+      );
+      expect(spy.flushed).toEqual([]);
     });
   }
 );

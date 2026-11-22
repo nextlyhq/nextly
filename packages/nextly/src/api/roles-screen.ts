@@ -37,6 +37,8 @@ import { countsOf } from "../auth/handlers/unknown-source";
 import { authRateLimiter } from "../auth/middleware/rate-limiter";
 import { getService } from "../di";
 import { buildAuditLogWriter } from "../domains/audit/audit-log-writer";
+import { changingRoleGrants } from "../domains/auth/services/role-grants-changed";
+import { expireContentAfterGrantsChange } from "../domains/flush-content-change";
 import { writeStoredClosedMark } from "../domains/meta/closed-to-super-admin-marks";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
 import { NextlyError } from "../errors/nextly-error";
@@ -279,15 +281,24 @@ export const setClosedToSuperAdmin = withErrorHandler(async (req: Request) => {
   const adapter = getService("adapter");
   const meta = getService("metaService");
   let before = false;
-  await adapter.transaction(async tx => {
-    before = await writeStoredClosedMark(
-      meta,
-      tx.getDrizzle(),
-      collection,
-      closed
-    );
+  // A read cached before a close must not be served after it, a super-admin's
+  // included, and a cached read is not keyed by the mark: so a change expires
+  // every cached content read, as a change of grants does. The expiry is
+  // queued before the write (`changingRoleGrants`), so it is owed even if
+  // this process stops right after the commit; withdrawn where nothing
+  // changed.
+  await changingRoleGrants(async () => {
+    await adapter.transaction(async tx => {
+      before = await writeStoredClosedMark(
+        meta,
+        tx.getDrizzle(),
+        collection,
+        closed
+      );
+    });
+    noteStoredClosedMark(collection, closed);
+    if (before !== closed) await expireContentAfterGrantsChange();
   });
-  noteStoredClosedMark(collection, closed);
   if (before !== closed) {
     await buildAuditLogWriter(getService as (name: string) => unknown).write({
       kind: "collection-super-admin-access-changed",

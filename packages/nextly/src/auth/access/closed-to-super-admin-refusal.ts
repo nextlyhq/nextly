@@ -14,6 +14,7 @@ import {
 } from "../authenticated-scope";
 
 import {
+  closedInTransaction,
   isClosedToSuperAdmin,
   refreshStoredClosedMarks,
 } from "./closed-to-super-admin";
@@ -43,10 +44,16 @@ export async function superAdminRefusedOn(
   slug: string,
   caller: SuperAdminCaller
 ): Promise<boolean> {
-  await refreshStoredClosedMarks(
-    caller.executor === undefined ? {} : { executor: caller.executor }
-  );
-  if (!isClosedToSuperAdmin(slug)) return false;
+  // Inside a transaction, its own read and the shared marks, never the pool;
+  // outside one, the shared marks, read again once they are due.
+  let closed: boolean;
+  if (caller.executor !== undefined) {
+    closed = await closedInTransaction(slug, caller.executor);
+  } else {
+    await refreshStoredClosedMarks();
+    closed = isClosedToSuperAdmin(slug);
+  }
+  if (!closed) return false;
   if (caller.keyHoldsSuperAdmin !== undefined) {
     return caller.keyHoldsSuperAdmin;
   }
