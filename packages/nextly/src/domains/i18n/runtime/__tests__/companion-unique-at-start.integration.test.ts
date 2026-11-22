@@ -34,6 +34,12 @@ const TABLE = "dc_articles";
 const COMPANION = `${TABLE}_locales`;
 const SLUG_INDEX = companionUniqueIndexName(COMPANION, "slug");
 
+/** The fields, as the reconcile reads them: a name, a type and the rule. */
+const FIELDS = [
+  { name: "title", type: "text" },
+  { name: "slug", type: "text", unique: true },
+] as const;
+
 const articles = defineCollection({
   slug: COLLECTION,
   fields: [text({ name: "title" }), text({ name: "slug", unique: true })],
@@ -111,7 +117,7 @@ describe("a translations table a start makes keeps its unique fields", () => {
           builtBy: "codeFirst",
           slug: COLLECTION,
           tableName: TABLE,
-          fields: articles.fields,
+          fields: FIELDS,
         },
         message => warnings.push(message)
       )
