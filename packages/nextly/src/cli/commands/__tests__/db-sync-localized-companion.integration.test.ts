@@ -29,9 +29,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  checkbox,
   defineCollection,
   defineConfig,
   defineSingle,
+  repeater,
   text,
 } from "../../../config";
 import {
@@ -283,6 +285,47 @@ describe("db:sync creates localized companion tables in-process (integration)", 
       status: "seeded",
       sourceLocale: "de",
     });
+  });
+
+  it("runs again over a Single that has no translatable field, and records nothing for it", async () => {
+    // Every installation keeps translatable values per language, so every entity is asked for a
+    // translations table; one with nothing to translate (a link list and switches) gets none.
+    // Recording a finished transition for it anyway made the next run try to begin that
+    // transition again and refuse, failing every second `nextly migrate` of such a site.
+    const config = defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      singles: [
+        defineSingle({
+          slug: "dbsync_nav",
+          fields: [
+            repeater({
+              name: "links",
+              fields: [text({ name: "label" }), text({ name: "href" })],
+            }),
+            checkbox({ name: "showSearch" }),
+          ],
+        }),
+      ],
+    });
+
+    // As every installation lays tables out, not this file's earlier layout.
+    setPerLanguageStorage(true);
+    try {
+      await runSync(config);
+      await runSupervisedRepair(config);
+      await adapter?.disconnect();
+      adapter = undefined;
+      await runSync(config);
+      await expect(runSupervisedRepair(config)).resolves.toBeUndefined();
+
+      expect(await tableExists("single_dbsync_nav")).toBe(true);
+      expect(await tableExists("single_dbsync_nav_locales")).toBe(false);
+      await expect(
+        readTransition("single", "dbsync_nav")
+      ).resolves.toMatchObject({ status: "untracked" });
+    } finally {
+      _resetPerLanguageStorage();
+    }
   });
 
   it("copies content that predates localization into the companion", async () => {

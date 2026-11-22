@@ -16,8 +16,11 @@ import { loadSiteStyle } from "./site-style-load";
 /** What the started instance offers, per test. */
 let offered: Record<string, Record<string, unknown>> = {};
 
-vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
-  ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk")>()),
+// `getCachedNextly` alone: it is the one name `loadSiteStyle` reads of the SDK
+// root, and only at call time. The real root re-exports all of `nextly`, so
+// loading it here would evaluate that whole graph inside the first test's
+// time limit rather than before it.
+vi.mock("@nextlyhq/plugin-sdk", () => ({
   getCachedNextly: async () => ({ plugins: offered }),
 }));
 
