@@ -25,7 +25,7 @@
  * @module admin/entry-and-settings-words.test
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
@@ -368,7 +368,9 @@ describe("the entry and settings screens' words", () => {
   );
   const shown = new Map(
     files.map(file => [
-      relative(PACKAGES, file),
+      // Keyed with "/" whatever the platform, as the lists above are: on
+      // Windows `relative` answers with "\\", and no listed file would match.
+      relative(PACKAGES, file).split(sep).join("/"),
       shownTexts(readFileSync(file, "utf8"), file),
     ])
   );
