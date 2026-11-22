@@ -15813,8 +15813,10 @@ export class CollectionMutationService extends BaseService {
     // rows and the library they read are kept per language whether or not
     // the host is, so the request's language is the one an ordinary update
     // and the draft's snapshot use; without it they read the default. An
-    // empty one is no language, as the write's own locale check reads it.
-    const judgedIn = draftLocale ?? (params.locale || undefined);
+    // empty one is no language, as the write's own locale check reads it,
+    // whether it reaches here as the request's or as the draft's key, which
+    // every document has now that each keeps its values per language.
+    const judgedIn = draftLocale || params.locale || undefined;
     await this.fieldGroupDataService.validateComponentDataInTransaction(tx, {
       parentId: params.entryId,
       parentTable: collectionTableName(collection, params.collectionName),
@@ -23187,6 +23189,23 @@ export class CollectionMutationService extends BaseService {
 
       let currentData: Record<string, unknown> = { ...body };
 
+      // The entry as its hooks are handed it, as an update outside a
+      // transaction hands it (`hookOriginal` there): its translated values in
+      // the language this write is for, the default, included. Under
+      // per-language storage the main row alone holds none of them, so a hook
+      // reading the entry's title would find nothing.
+      const hookOriginal: Record<string, unknown> = options.runHooks
+        ? {
+            ...existingEntry,
+            ...(await this.translationIn(
+              params.collectionName,
+              existingEntry.id,
+              undefined,
+              tx
+            )),
+          }
+        : existingEntry;
+
       // Shared context between all hooks in this request
       // Seeded from the caller, like the non-transactional pipelines. An
       // empty literal here meant a hook context reached every write EXCEPT
@@ -23228,7 +23247,7 @@ export class CollectionMutationService extends BaseService {
           collection: params.collectionName,
           operation: "update" as const,
           data: currentData,
-          originalData: existingEntry,
+          originalData: hookOriginal,
           user: params.user,
           context: sharedContext,
           // Bind DB-reading hooks (e.g. the built-in sanitization hook) to the
@@ -23341,7 +23360,7 @@ export class CollectionMutationService extends BaseService {
           collection: params.collectionName,
           operation: "update",
           data: finalData,
-          originalData: existingEntry,
+          originalData: hookOriginal,
           storedHooks,
           queryDatabase: this.queryDatabaseFn,
           user: params.user,
@@ -24568,7 +24587,7 @@ export class CollectionMutationService extends BaseService {
           // as changing again.
           originalData: priorWorkingDraftDocument
             ? markedDraft(priorWorkingDraftDocument)
-            : existingEntry,
+            : hookOriginal,
           user: params.user,
           context: sharedContext,
           // Bind an after-hook that reads via context.executor to the caller's
