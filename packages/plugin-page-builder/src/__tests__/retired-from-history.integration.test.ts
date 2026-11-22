@@ -321,9 +321,15 @@ describe.each(getConfiguredTestDialects())(
       expect(triples(await retiredRows(t))).toEqual([
         [heroId, "property", "title"],
       ]);
-      // Recorded, so released: the next save's retention prunes them.
-      await save(t, heroId, ["body", "after"]);
-      expect(await historyOf!(heroId)).not.toContain(1);
+      // Recorded, so released: the next publish's retention prunes the
+      // removal's version. Retention keeps each part's latest publish whatever
+      // the cap, so it is a publish, which takes that place from version 2:
+      // only the pin could keep it now. Version 1 is left out of it: every
+      // installation keeps translatable fields per language, and the create
+      // is the one save that names the default language's part, so it stays
+      // as that part's latest publish, pinned or not.
+      await save(t, heroId, ["body", "after"], "published");
+      expect(await historyOf!(heroId)).not.toContain(2);
     }, 120_000);
 
     it("does not retire a field only a draft held", async () => {

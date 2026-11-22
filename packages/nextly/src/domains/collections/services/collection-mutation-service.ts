@@ -1171,6 +1171,25 @@ function upsertsTranslation(args: {
 }
 
 /**
+ * The entry `row` as written in a language: its main row with the language's
+ * translated values, `translation`, laid over it. Every installation keeps its
+ * translatable fields in the per-language table, so the main row alone holds
+ * no title, slug or other text field the write did not name. A field the
+ * language holds no value for is `undefined` in `translation`, and never hides
+ * a value the main row still holds.
+ */
+function withTranslation(
+  row: Record<string, unknown>,
+  translation: Record<string, unknown>
+): Record<string, unknown> {
+  const entry = { ...row };
+  for (const [name, value] of Object.entries(translation)) {
+    if (value !== undefined || !(name in entry)) entry[name] = value;
+  }
+  return entry;
+}
+
+/**
  * A language's split as a publish of every language reads and writes it, kept
  * to the language its pending change is stored under. The split resolves a
  * language the app no longer configures to the default, whose row would then
@@ -6424,9 +6443,15 @@ export class CollectionMutationService extends BaseService {
           scopeSlug: params.collectionName,
           entryId: params.entryId,
         };
+        // An entry that is not translated has one pending change, kept by
+        // part: its shared draft goes with its language's.
+        const withShared =
+          params.shared !== true &&
+          draftsKeptByPart() &&
+          (collection as { localized?: boolean }).localized !== true;
         const { removed, judged: before } = await removePendingChangeJudged(
           tx,
-          { ref: discardedRef, locale: draftLocale },
+          { ref: discardedRef, locale: draftLocale, withShared },
           judging.check,
           () => this.refuseIfPendingChangeMoved(tx, judging, staleWrite),
           { main: undefined, language: undefined }
@@ -6499,7 +6524,12 @@ export class CollectionMutationService extends BaseService {
               ...(params.shared === true
                 ? { parts: { shared: true } }
                 : draftLocale
-                  ? { parts: { locales: [draftLocale] } }
+                  ? {
+                      parts: {
+                        locales: [draftLocale],
+                        ...(withShared ? { shared: true } : {}),
+                      },
+                    }
                   : {}),
             }
           );
@@ -19632,10 +19662,17 @@ export class CollectionMutationService extends BaseService {
       // `updated` is the OLD published content. Everything that reports what this
       // update produced — the response, the afterUpdate/afterChange hooks — uses
       // the pending draft document instead.
-      const responseSource = (workingDraftDocument ?? updated) as Record<
-        string,
-        unknown
-      >;
+      //
+      // A live write answers with the entry in the language written: the
+      // re-fetched main row holds the shared values only, so the translated
+      // values read on the write's transaction are laid over it, as the
+      // after-hooks are handed them. A value the language holds none of never
+      // hides one the main row still has.
+      const updatedEntry = withTranslation(
+        updated as Record<string, unknown>,
+        writtenTranslation
+      );
+      const responseSource = workingDraftDocument ?? updatedEntry;
       // Stamped BEFORE the hooks run, not only on the response below.
       //
       // A draft edit leaves `status` at the live parent's value, so a document
@@ -19661,7 +19698,9 @@ export class CollectionMutationService extends BaseService {
           readRevalidateConfig(collection),
           {
             id: params.entryId,
-            slug: readStringField(updated as Record<string, unknown>, "slug"),
+            // A declared slug is translatable, kept with the language's
+            // values rather than on the main row.
+            slug: readStringField(updatedEntry, "slug"),
             previousSlug,
             locale: localizedUpdate?.writeLocale,
           }
