@@ -107,6 +107,23 @@ export function earlierCompanionColumnType(
 }
 
 /**
+ * Whether an earlier release may have spelled `field`'s companion column otherwise
+ * (`earlierCompanionColumnType`): judged from the field alone, so a caller reads the live columns
+ * only of the tables that may hold one.
+ */
+export function mayHaveEarlierCompanionColumn(
+  field: CompanionFieldLike,
+  dialect: SupportedDialect,
+  builtBy: ColumnOrigin
+): boolean {
+  const spec = fieldToLocalizedColumnSpec(field, dialect, builtBy);
+  return (
+    spec !== undefined &&
+    earlierCompanionColumnType(ddlType(spec, dialect), dialect) !== undefined
+  );
+}
+
+/**
  * Whether `live` is a companion column as an earlier release spelled it
  * (`earlierCompanionColumnType`). It holds the same instants, each read in the session's zone, so
  * it is converted (`zonedDateColumns`) rather than judged as a column that cannot hold its field.
