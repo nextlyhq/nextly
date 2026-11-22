@@ -29,6 +29,12 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
+A form is found again when it is submitted in a language other than the default. A form's
+slug is kept once for every language, as it was before every installation kept translatable
+fields per language: kept per language, the slug, which is unique, was read in the
+visitor's language alone and never filled from the default, so a form with no translation
+in that language answered "Form not found" and the submit route answered 404.
+
 A form that redirects to a picked page sends a public visitor to the page's published
 default again when the page's translation in the visitor's language is still a draft.
 Since a public read in a language finds nothing for a document not published in it, the
