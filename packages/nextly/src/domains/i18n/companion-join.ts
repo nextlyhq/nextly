@@ -26,6 +26,7 @@ import { DOCUMENT_REVISION_COLUMN } from "../versions/document-revision";
 import { draftsKeptByPart } from "../versions/part-drafts";
 
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
+import { nonBlankColumnSql } from "./non-blank-sql";
 import {
   documentLanguageKey,
   fieldProvenanceOf,
@@ -946,12 +947,7 @@ export function buildTranslationStatusCondition(args: {
   const nonBlankOn = (ref: CompanionTableRef): SQL =>
     localizedColumns.length > 0
       ? sql.join(
-          localizedColumns.map(c => {
-            const col = sql.identifier(c);
-            return nonText.has(c)
-              ? sql`(${ref}.${col} IS NOT NULL)`
-              : sql`(${ref}.${col} IS NOT NULL AND ${ref}.${col} <> '')`;
-          }),
+          localizedColumns.map(c => nonBlankColumnSql(ref, c, nonText.has(c))),
           sql` OR `
         )
       : sql`1=0`;

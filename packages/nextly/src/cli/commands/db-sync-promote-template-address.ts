@@ -7,7 +7,10 @@
 
 import { sql, type SQL } from "drizzle-orm";
 
+import { COMPANION_PARENT_COLUMN } from "../../domains/i18n/companion-columns";
+import { mainTableFields } from "../../domains/i18n/per-language-storage";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
 /** The page builder's package, as its collections' registry source names it. */
 const PAGE_BUILDER_SOURCE = "plugin:@nextlyhq/plugin-page-builder";
@@ -40,7 +43,7 @@ export async function storedTemplateAddress(
     // to read.
     if (!record?.tableName) return null;
     const rows = await deps.queryStatement(
-      sql`SELECT ${sql.identifier(ADDRESS_COLUMN)} FROM ${sql.identifier(record.tableName)} WHERE ${sql.identifier(COLLECTION_COLUMN)} = ${collection}`
+      addressStatement(record, record.tableName, collection)
     );
     const address = rows.find(
       row => typeof row.address === "string" && row.address !== ""
@@ -49,6 +52,36 @@ export async function storedTemplateAddress(
   } catch {
     return null;
   }
+}
+
+/**
+ * The read of the address `collection`'s template stores, from the table each of the two fields
+ * is kept in: the templates' own table, or for a field whose values are kept per language, its
+ * per-language table, whose rows each name the template they belong to. Every language's row is
+ * read, and the first address found is the one printed.
+ */
+function addressStatement(
+  record: DynamicCollectionRecord,
+  tableName: string,
+  collection: string
+): SQL {
+  const onMain = new Set(
+    mainTableFields(
+      record as { localized?: unknown },
+      (record.fields ?? []) as { name?: string; type: string }[]
+    ).map(field => field.name)
+  );
+  const main = sql.identifier("m");
+  const languages = sql.identifier("l");
+  const column = (name: string): SQL =>
+    sql`${onMain.has(name) ? main : languages}.${sql.identifier(name)}`;
+  const from =
+    onMain.has(ADDRESS_COLUMN) && onMain.has(COLLECTION_COLUMN)
+      ? sql`${sql.identifier(tableName)} ${main}`
+      : sql`${sql.identifier(tableName)} ${main} JOIN ${sql.identifier(
+          `${tableName}${STORAGE_FORMAT.companionSuffix}`
+        )} ${languages} ON ${languages}.${sql.identifier(COMPANION_PARENT_COLUMN)} = ${main}.${sql.identifier("id")}`;
+  return sql`SELECT ${column(ADDRESS_COLUMN)} AS ${sql.identifier(ADDRESS_COLUMN)} FROM ${from} WHERE ${column(COLLECTION_COLUMN)} = ${collection}`;
 }
 
 /**

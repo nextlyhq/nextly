@@ -540,8 +540,9 @@ for (const dialect of getConfiguredTestDialects()) {
         fields: badgeFields(),
       } as never);
 
-      // The review names each column the save adds, as missing from the table an earlier version
-      // made, rather than one line for the table.
+      // The review names each column the save adds to the table an earlier version made, one
+      // line per column rather than one line for the table. Each is added empty (nullable), which
+      // `bringForward` reads back from the table.
       const t = await startWithPages();
       const preview = (await (
         (await dispatchComponents(
@@ -555,8 +556,8 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(
           notices.some(
             notice =>
-              notice.includes(` ${column} from missing`) &&
-              notice.includes("nullable")
+              notice.startsWith("comp_fgnbadge ") &&
+              notice.endsWith(`adds the column ${column}.`)
           ),
           `a notice naming ${column}`
         ).toBe(true);

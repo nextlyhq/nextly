@@ -154,6 +154,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import { provenanceFieldsOf } from "../../i18n/provenance/field-status";
 import { translationProvenancePresent } from "../../i18n/provenance/record-provenance";
 import {
   ALL_LOCALES_KEY,
@@ -2458,7 +2459,7 @@ export class SingleQueryService extends BaseService {
           scopeKind: "single" as const,
           scopeSlug: slug,
           dialect: this.adapter.dialect,
-          fields: companion.localizedFields.map(field => field.name),
+          ...provenanceFieldsOf(companion.localizedFields),
         }
       : undefined;
     await populateTranslationStatus({

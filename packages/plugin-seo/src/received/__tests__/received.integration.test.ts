@@ -133,10 +133,15 @@ const pageBuilder: PluginDefinition = {
   version: "1.0.0",
   nextly: "*",
   contributes: {
-    // Its Settings place, which the SEO plugin adds a tab to.
+    // Its Settings place, which the SEO plugin adds a tab to, and the block
+    // drawn where the builder shows a page's search result: as the real
+    // plugin declares it.
     admin: {
       places: [
-        { name: "nextlyhq-plugin-page-builder.settings", accepts: ["tab"] },
+        {
+          name: "nextlyhq-plugin-page-builder.settings",
+          accepts: ["tab", "block"],
+        },
       ],
     },
     services: {
