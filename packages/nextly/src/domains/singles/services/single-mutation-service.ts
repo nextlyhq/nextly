@@ -1529,7 +1529,7 @@ export class SingleMutationService extends BaseService {
             // translation row.
             const languagesTable = `${singleMeta.tableName}_locales`;
             const translated =
-              singleMeta.localized === true &&
+              storesPerLanguage(singleMeta) &&
               this.localization !== undefined &&
               (
                 await liveColumnNames(tx.getDrizzle(), this.adapter.dialect, [
