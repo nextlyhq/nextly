@@ -91,12 +91,15 @@ export async function sendQueuedEmail(
 ): Promise<void> {
   if (await emailSentBy(ctx.db, attempt.jobId)) return;
   // Names the account the email is to, so core erases the delivery
-  // record with the account when it is reported deleted.
+  // record with the account when it is reported deleted; an invitation to
+  // an address with no account names nobody.
   const sent = await ctx.services.email.sendWithTemplate(
     templateSlug(email.kind),
     email.to,
     emailVariables(email),
-    { person: { kind: ACCOUNT_PRINCIPAL, id: email.accountId } }
+    email.accountId === null
+      ? undefined
+      : { person: { kind: ACCOUNT_PRINCIPAL, id: email.accountId } }
   );
   if (!sent.success) throw new Error(`The ${email.kind} email did not send.`);
   await recordEmailSent(ctx.db, ctx.dialect, attempt.jobId, attempt.now);
