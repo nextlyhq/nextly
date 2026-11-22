@@ -30,3 +30,5 @@
 ---
 
 The admin's "Waiting for my review" page takes its title from the shared page header, as every other page does.
+
+`nextly migrate` ends with a CLI error code of its own, and a docs page, where its localisation steps refuse: `MIGRATE_LANGUAGE_CODES_COLLIDE` for two language codes that become one, and `MIGRATE_LOCALIZATION_UNRESOLVED` for stored translations it cannot move without choosing between two values.
