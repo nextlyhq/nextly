@@ -1929,6 +1929,21 @@ export function refusalAfterUndo(error: unknown, restored: boolean): unknown {
 }
 
 /**
+ * Whether `error` is core's refusal of a publish: its publish gate answers
+ * the person in the words of the action it refused ("You can't publish this
+ * note."), and nothing else a save refuses is worded so. A field rule that
+ * keeps a value out, or the import's own check of what was stored, refuses
+ * in other words and is not this.
+ */
+function refusedPublish(error: unknown): boolean {
+  return (
+    NextlyError.isCode(error, "FORBIDDEN") &&
+    error instanceof NextlyError &&
+    error.publicMessage.startsWith("You can't publish ")
+  );
+}
+
+/**
  * A published version's write refused for want of the publish permission,
  * said as that. Where a type keeps working drafts, a save naming its
  * published state writes the live row, which core lets only someone who may
@@ -1939,9 +1954,7 @@ export function publishRefusalAbout(
   error: unknown,
   page: { write: VersionWrite; label: string }
 ): unknown {
-  if (page.write !== "live" || !NextlyError.isCode(error, "FORBIDDEN")) {
-    return error;
-  }
+  if (page.write !== "live" || !refusedPublish(error)) return error;
   return new NextlyError({
     code: "FORBIDDEN",
     statusCode: 403,
