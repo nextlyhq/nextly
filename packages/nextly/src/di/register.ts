@@ -47,6 +47,7 @@ import {
   unkeyedStrategyWarnings,
 } from "../auth/handlers/proxy-posture";
 import { resetPasswordPolicy } from "../auth/password/policy";
+import type { PresetRoleSlug } from "../auth/role-presets";
 import { issueSetupTokenAtBoot } from "../auth/setup-token/setup-gate";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
@@ -537,6 +538,12 @@ export interface NextlyServiceConfig {
 
   /** @experimental App-declared custom permissions, seeded like plugin permissions (D36). */
   permissions?: PluginPermission[];
+
+  /**
+   * @experimental The collections the app opens to the preset roles, by
+   * slug, read when the preset roles' grants are set.
+   */
+  presetGrants?: Readonly<Record<string, readonly PresetRoleSlug[]>>;
 
   /** @experimental App-declared role bundles, seeded like plugin roles (D67). */
   roles?: PluginRole[];

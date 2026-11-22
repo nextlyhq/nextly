@@ -212,6 +212,9 @@ const FEEDS = definePlugin({
 });
 const FEEDS_PERMISSION = "sync-pla-feeds";
 
+/** The app's permission it keeps from every preset role (`presets: []`). */
+const PRIVATE_PERMISSION = "reveal-pla-private";
+
 /** Another plugin, whose install sets the presets again. */
 const DIGEST = definePlugin({
   name: "@test/pla-digest",
@@ -295,10 +298,16 @@ function configWith(...plugins: (typeof FEEDS)[]): unknown {
       defineCollection({
         slug: "pla-posts",
         fields: [text({ name: "title" })],
+        // Opened to every preset, so each preset's own rule decides.
+        grants: { presets: ["admin", "editor", "author", "viewer"] },
       }),
     ],
-    // The app's own permission, which only the older release's viewer grants.
-    permissions: [{ action: "export", resource: "pla-posts" }],
+    permissions: [
+      // The app's own permission, which only the older release's viewer grants.
+      { action: "export", resource: "pla-posts" },
+      // One the app keeps from every preset role.
+      { action: "reveal", resource: "pla-private", presets: [] },
+    ],
     plugins,
     db: { migrationsDir: "./migrations" },
   });
@@ -623,6 +632,7 @@ describe.each(getConfiguredTestDialects())(
           defineCollection({
             slug: "pla-posts",
             fields: [text({ name: "title" })],
+            grants: { presets: ["admin", "editor", "author", "viewer"] },
           }),
         ],
       });
@@ -650,6 +660,23 @@ describe.each(getConfiguredTestDialects())(
 
       started = await startInProduction();
       expect(held(await grantRows(), "admin")).toContain(FEEDS_PERMISSION);
+    }, 240_000);
+
+    it("keeps a permission the app keeps from every preset from them when a plugin's install sets the presets", async () => {
+      await migrateCreate();
+      await migrate(NEW);
+      expect(await permission(PRIVATE_PERMISSION)).toBeDefined();
+      expect(held(await grantRows(), "admin")).not.toContain(
+        PRIVATE_PERMISSION
+      );
+
+      // The install names only the plugin it installs, and sets every
+      // preset's grants over every stored permission: the app's word on its
+      // own permission still holds.
+      await install(FEEDS.name);
+      const rows = await grantRows();
+      expect(held(rows, "admin")).toContain(FEEDS_PERMISSION);
+      expect(held(rows, "admin")).not.toContain(PRIVATE_PERMISSION);
     }, 240_000);
 
     it("writes no permission, role, grant or install state when the install stops before it records the plugin installed, and a production start refuses the plugin", async () => {
@@ -814,7 +841,13 @@ describe.each(getConfiguredTestDialects())(
       const live = (await permissionRows()).filter(p => !p.orphaned);
       for (const p of ROLE_PRESETS) {
         expect(held(rows, p.slug), p.slug).toEqual(
-          resolvePreset(p, live)
+          // The collection is opened to every preset, and the rest are not
+          // collections, so every permission reaches every preset but the one
+          // the app keeps from all of them.
+          resolvePreset(p, live, {
+            presetsFor: found =>
+              found.resource === "pla-private" ? new Set() : undefined,
+          })
             .map(found => found.slug)
             .sort()
         );

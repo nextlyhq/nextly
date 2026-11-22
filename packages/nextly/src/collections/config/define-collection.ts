@@ -33,6 +33,7 @@
 
 import type { BeforeOperationHandler, HookHandler } from "@nextly/hooks/types";
 
+import type { CollectionGrants } from "../../auth/preset-reach";
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
 import type { CollectionDbOptions } from "../../domains/collections/services/collection-db-options";
 import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
@@ -1054,6 +1055,22 @@ export interface CollectionConfig {
    * @experimental
    */
   closedToSuperAdmin?: boolean;
+
+  /**
+   * Which built-in preset roles (Admin, Editor, Author, Viewer) this
+   * collection is opened to. A collection reaches a preset only once it is
+   * opened to it by name, so adding one never widens what an existing role
+   * can do; super-admins reach every collection whatever this says, except one
+   * closed to them (`closedToSuperAdmin`).
+   *
+   * @example
+   * ```typescript
+   * grants: { presets: ["admin", "editor", "author", "viewer"] }
+   * ```
+   *
+   * @experimental
+   */
+  grants?: CollectionGrants;
 
   /**
    * Collection-level lifecycle hooks.
