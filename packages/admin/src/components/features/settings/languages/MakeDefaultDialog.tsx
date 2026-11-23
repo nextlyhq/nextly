@@ -4,9 +4,10 @@
  * Making another language the default, confirmed after reading what the
  * server says the change touches: how much content each language holds, and
  * whether the current default has unpublished changes, which the server
- * refuses the change over. Translations tracked against the old default
- * restart as of unknown origin, and the dialog says so rather than promising
- * the content is untouched.
+ * refuses the change over. The change rewrites no content: each translated
+ * value keeps its record of the language it was made from, and only values
+ * written in the new default from then on count as written originally. The
+ * dialog says so, rather than promising anything about the content beyond it.
  */
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
@@ -124,11 +125,11 @@ function ChangeSummary({
         when they ask for no language. {from} stays a language of the site.
       </p>
       <p>
-        <span className="font-medium">Translation tracking restarts.</span>{" "}
-        Translations made from {from} lose the record of the {from} text they
-        came from. Until each is next edited, it counts as out of date only when
-        its source was saved after it. What is written in {from} counts as
-        written originally in {from}.
+        <span className="font-medium">Translations keep their records.</span>{" "}
+        Each translated value still records the language it was made from,{" "}
+        {`${to}'s translations from ${from} included`}, and counts as out of
+        date when that language&apos;s text changes. What is written in {to}{" "}
+        from now on counts as written originally in {to}.
       </p>
       <div>
         <p className="font-medium">Content in each language</p>

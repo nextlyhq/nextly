@@ -297,7 +297,7 @@ test("makes Spanish the default after showing what that changes", async ({
   await expect(dialog).toContainText(
     "Spanish becomes the language content is edited in, and the one readers get when they ask for no language. English stays a language of the site."
   );
-  await expect(dialog).toContainText("Translation tracking restarts.");
+  await expect(dialog).toContainText("Translations keep their records.");
   await expect(dialog).toContainText(/English: \d+ items?/);
   await expect(dialog).toContainText(/Spanish: \d+ items?/);
   await expectNoAxeViolations(page, { include: '[role="alertdialog"]' });

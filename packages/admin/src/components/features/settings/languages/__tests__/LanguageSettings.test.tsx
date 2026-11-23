@@ -319,8 +319,10 @@ describe("Settings › Languages", () => {
       "Spanish becomes the language content is edited in, and the one readers get when they ask for no language. English stays a language of the site."
     );
     expect(dialog).toHaveTextContent(
-      "Translation tracking restarts. Translations made from English lose the record of the English text they came from. Until each is next edited, it counts as out of date only when its source was saved after it."
+      "Translations keep their records. Each translated value still records the language it was made from, Spanish's translations from English included, and counts as out of date when that language's text changes. What is written in Spanish from now on counts as written originally in Spanish."
     );
+    // The change rewrites no record, so the dialog claims none is lost.
+    expect(dialog).not.toHaveTextContent(/lose|restart/i);
     expect(dialog).toHaveTextContent("English: 40 items");
     expect(dialog).toHaveTextContent("Spanish: 12 items");
     expect(dialog).toHaveTextContent("Arabic: 1 item");
