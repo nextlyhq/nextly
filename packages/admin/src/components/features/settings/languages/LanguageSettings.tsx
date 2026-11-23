@@ -23,7 +23,7 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import type React from "react";
-import { useRef, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 
 import { MoreHorizontal } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
@@ -84,6 +84,10 @@ export function LanguageSettings({
   const changeLanguages = useChangeLanguages();
   const [open, setOpen] = useState<OpenDialogFrom | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
+  const focusAddOnceSaved = useFocusOnceSaved(
+    addButton,
+    changeLanguages.isPending
+  );
 
   const save = async (change: LanguageChange): Promise<boolean> => {
     try {
@@ -139,6 +143,8 @@ export function LanguageSettings({
         fallback: language.fallback.filter(code => inUse.has(code)),
       },
       {
+        // Its Add back button leaves with it, from the removed list.
+        onSuccess: focusAddOnceSaved,
         onError: error => {
           toast.error(`${language.label} could not be added back`, {
             description: apiErrorMessage(error),
@@ -227,6 +233,24 @@ export function LanguageSettings({
       )}
     </div>
   );
+}
+
+/**
+ * Focuses `target` once nothing is being saved, when asked: a control that
+ * goes when its change is saved hands focus on, and `target` is not offered
+ * until the save has finished.
+ */
+function useFocusOnceSaved(
+  target: RefObject<HTMLElement | null>,
+  saving: boolean
+): () => void {
+  const [asked, setAsked] = useState(false);
+  useEffect(() => {
+    if (!asked || saving) return;
+    target.current?.focus();
+    setAsked(false);
+  }, [asked, saving, target]);
+  return () => setAsked(true);
 }
 
 /** A refused change's message, or nothing while none was refused. */

@@ -639,6 +639,27 @@ describe("Settings › Languages", () => {
     );
   });
 
+  it("gives focus to Add language once a language added back is saved, its Add back button being gone", async () => {
+    const french = language("fr", "French", 1, { active: false });
+    await open({ lockedByConfig: false, languages: [ENGLISH, french] });
+    api.changeLanguages.mockResolvedValueOnce({
+      lockedByConfig: false,
+      languages: [ENGLISH, { ...french, active: true }],
+    });
+
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Add French back" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("list", { name: "Removed languages" })
+      ).toBeNull()
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add language" })).toHaveFocus()
+    );
+  });
+
   it("counts a language the server lists no translations for as holding none", async () => {
     // The server's summary names only the languages that hold translation
     // rows; on a site with no translated content it names none at all.
