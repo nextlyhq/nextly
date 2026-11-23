@@ -12,9 +12,10 @@
  * A safe change, a lossy one its consent covers and a widening go on into the apply, which judges
  * them again on the rows as they are then.
  *
- * Before that rule, each code-first entity is judged as a Schema Builder save judges it
- * (`configuredTypeChangeRefusals`), a field inside a group's or a repeater's JSON included, and an
- * entity that judgement refuses is held with its refusals in the Builder's words.
+ * The type changes that rule never sees, since they plan no statement (a field inside a group's or a
+ * repeater's JSON, a field whose column keeps its type), are judged as a Schema Builder save judges
+ * them (`configuredTypeChangeRefusals`), and an entity with a refused one is held with its refusals
+ * in the Builder's words, beside the rule's own reasons.
  *
  * @module init/code-first-type-changes
  */
@@ -93,28 +94,33 @@ export async function typeChangesHeldBack(args: {
     env: args.env,
     honours: ["NEXTLY_ALLOW_CODE_FIRST_DROPS"],
   });
-  // The Schema Builder's judgement first, over every code-first entity the reload states its old
-  // fields for, a field inside a group's or a repeater's JSON included, held in the Builder's words.
-  // Only stricter: an entity it holds is held whatever the rule below says, every other entity still
-  // meets that rule, and a lossy change the consent naming its column covers is left to the rule.
-  const held: HeldBackTypeChange[] = (
-    await configuredTypeChangeRefusals(
-      args.schema,
-      args.db,
-      args.dialect,
-      (table, column) =>
-        consentForColumn(consent, table, column, "a type change").covered
-    )
-  ).map(({ kind, slug, refusals }) => ({
-    kind,
-    slug,
-    reasons: refusals.map(refusal => refusal.message),
-  }));
-  const heldByJudgement = new Set(
-    held.map(({ kind, slug }) => `${kind}:${slug}`)
-  );
+  // The type changes the rule below never sees, which plan no statement (a field inside a group's
+  // or a repeater's JSON, a column that keeps its type), judged first as a Schema Builder save
+  // judges them and held in its words, beside the rule's own reasons: only stricter.
+  const held = new Map<string, HeldBackTypeChange>();
+  const hold = (
+    kind: HeldBackTypeChange["kind"],
+    slug: string,
+    reasons: readonly string[]
+  ): void => {
+    if (reasons.length === 0) return;
+    const key = `${kind}:${slug}`;
+    const entry = held.get(key) ?? { kind, slug, reasons: [] };
+    entry.reasons.push(...reasons);
+    held.set(key, entry);
+  };
+  for (const { kind, slug, refusals } of await configuredTypeChangeRefusals(
+    args.schema,
+    args.db,
+    args.dialect
+  )) {
+    hold(
+      kind,
+      slug,
+      refusals.map(refusal => refusal.message)
+    );
+  }
   for (const entity of args.entities) {
-    if (heldByJudgement.has(`${entity.kind}:${entity.slug}`)) continue;
     const judge = typeChangeJudge({
       db: args.db,
       dialect: args.dialect,
@@ -131,11 +137,9 @@ export async function typeChangesHeldBack(args: {
         ...reasonsToHold(op, judged.judgement, consent, args.dialect)
       );
     }
-    if (reasons.length > 0) {
-      held.push({ kind: entity.kind, slug: entity.slug, reasons });
-    }
+    hold(entity.kind, entity.slug, reasons);
   }
-  return held;
+  return [...held.values()];
 }
 
 /** Why one judged type change is held back, or nothing where it goes on into the apply. */

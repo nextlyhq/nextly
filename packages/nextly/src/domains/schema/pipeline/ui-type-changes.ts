@@ -10,18 +10,14 @@
  * since only the answers say which old column the new field's values come from.
  *
  * A code-first apply (a reload under `next dev`, `nextly db:sync`, a development start) states its
- * old fields too, from each entity's registry row, and its field type changes are judged by the
- * same judgement in the same words (`configuredTypeChangeRefusals`), a field held inside a group's
- * or a repeater's JSON included. Only stricter: a change it allows still meets the code-first rule
- * after it, and a lossy change of a field on the row that the data-loss consent or a terminal
- * answers for is left to that rule, which clears values only so.
+ * old fields too, from each entity's registry row. Its type changes that plan no statement, a field
+ * held inside a group's or a repeater's JSON and a field whose column keeps its type, are judged by
+ * the same judgement in the same words (`configuredTypeChangeRefusals`), since nothing else judges
+ * them. A change of a column's type is the code-first rule's, which the classifier asks.
  *
  * @module domains/schema/pipeline/ui-type-changes
  */
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { canPrompt } from "../migrate/can-prompt";
-import { resolveDataLossConsent } from "../migrate/data-loss-consent";
-import { consentForColumn } from "../repair-columns/consent";
 import {
   fieldsStoredOnRow,
   type SupportedDialect,
@@ -33,7 +29,9 @@ import {
 import {
   entityLabel,
   type EntityTypeChangeInput,
+  type FieldTypeChange,
   fieldTypeChangeRefusals,
+  fieldTypeChangesOf,
   perLanguageAfter,
   perLanguageBefore,
   refuseFieldTypeChanges,
@@ -126,7 +124,7 @@ function entityInput(
  * @throws {NextlyError} a validation error naming each refused field of the first entity that has
  *   one
  */
-export async function refuseUiTypeChanges(
+async function refuseUiTypeChanges(
   desired: DesiredSchema,
   db: unknown,
   dialect: SupportedDialect
@@ -151,31 +149,23 @@ export interface ConfiguredTypeChangeRefusals {
 }
 
 /**
- * Whether the code-first rule answers for a lossy type change of the column `table`.`column`, which
- * the judgement then leaves to it: the data-loss consent naming the column, or a terminal that asks.
- */
-export type ConfiguredLossAnswered = (table: string, column: string) => boolean;
-
-/**
- * Each code-first entity's field type changes, judged as a Schema Builder save judges them, over the
- * values its columns and its containers' JSON hold, with each refusal in the Builder's words
- * (`fieldTypeChangeRefusals`). A lossy change of a field on the row that `answered` covers is left to
- * the code-first rule, which clears its values only under that answer. A value held inside JSON is
- * never cleared, so no answer covers its change.
+ * Each code-first entity's field type changes that the code-first rule never sees, judged as a
+ * Schema Builder save judges them, over the values they hold, with each refusal in the Builder's
+ * words (`fieldTypeChangeRefusals`). The code-first rule judges a change of a column's type, which
+ * plans a statement; a field inside a group's or a repeater's JSON, and a field whose column keeps
+ * its name and its type, plan none, so nothing else judges them, and nothing converts or clears
+ * their values: a lossy change of one is refused whatever consent is given.
  */
 export async function configuredTypeChangeRefusals(
   desired: DesiredSchema,
   db: unknown,
-  dialect: SupportedDialect,
-  answered: ConfiguredLossAnswered
+  dialect: SupportedDialect
 ): Promise<ConfiguredTypeChangeRefusals[]> {
   const refused: ConfiguredTypeChangeRefusals[] = [];
   for (const saved of savedEntities(desired, "configured")) {
-    const refusals = await fieldTypeChangeRefusals(
-      db,
-      dialect,
-      configuredInput(saved, dialect, answered)
-    );
+    const input = configuredInput(saved, dialect);
+    if (input === null) continue;
+    const refusals = await fieldTypeChangeRefusals(db, dialect, input);
     if (refusals.length > 0) {
       refused.push({ kind: saved.kind, slug: saved.entity.slug, refusals });
     }
@@ -184,64 +174,78 @@ export async function configuredTypeChangeRefusals(
 }
 
 /**
- * Refuse a code-first apply's refused field type changes (`configuredTypeChangeRefusals`), entity by
- * entity, before it plans anything: a lossy change of a field on the row is left to the code-first
- * rule where the data-loss consent names its column or a terminal will ask.
+ * Refuse an apply's refused field type changes before it plans anything: a Schema Builder save's
+ * (`refuseUiTypeChanges`), or a code-first apply's that the code-first rule never sees
+ * (`configuredTypeChangeRefusals`), entity by entity.
  *
  * @throws {NextlyError} a validation error naming each refused field of the first entity that has
  *   one
  */
-export async function refuseConfiguredTypeChanges(
+export async function refuseTypeChangesBeforeApply(
+  source: "ui" | "code",
   desired: DesiredSchema,
   db: unknown,
   dialect: SupportedDialect
 ): Promise<void> {
-  const answered = configuredLossAnswer(canPrompt());
+  if (source === "ui") {
+    await refuseUiTypeChanges(desired, db, dialect);
+    return;
+  }
   for (const saved of savedEntities(desired, "configured")) {
-    await refuseFieldTypeChanges(
-      db,
-      dialect,
-      configuredInput(saved, dialect, answered)
-    );
+    const input = configuredInput(saved, dialect);
+    if (input !== null) await refuseFieldTypeChanges(db, dialect, input);
   }
 }
 
 /**
- * The code-first rule's answer for a lossy type change: the data-loss consent naming its column, as
- * `db:sync` and the development push read it, or, where `asks`, the terminal's question.
- */
-export function configuredLossAnswer(asks: boolean): ConfiguredLossAnswered {
-  const consent = resolveDataLossConsent({
-    env: process.env,
-    honours: ["NEXTLY_ALLOW_CODE_FIRST_DROPS"],
-  });
-  return (table, column) =>
-    asks || consentForColumn(consent, table, column, "a type change").covered;
-}
-
-/**
- * What the judgement reads of one code-first entity: its fields before and after, and, as
- * acknowledged, each field on the row whose column's lossy change `answered` covers.
+ * What the judgement reads of one code-first entity: the pairs of its fields whose type change the
+ * code-first rule never sees, each container whose fields inside its JSON change type and each field
+ * whose column keeps its name and its type. Null where it has none.
  */
 function configuredInput(
   saved: SavedEntity,
-  dialect: SupportedDialect,
-  answered: ConfiguredLossAnswered
-): EntityTypeChangeInput {
+  dialect: SupportedDialect
+): EntityTypeChangeInput | null {
   const input = entityInput(saved);
-  const acknowledged = new Set<string>();
-  for (const field of fieldsStoredOnRow(saved.next)) {
-    const column = columnDescriptorAt(field, dialect, input)?.name;
-    if (column !== undefined && answered(saved.entity.tableName, column)) {
-      acknowledged.add(field.name);
-    }
-  }
-  return {
-    ...input,
+  const previous: FieldDefinition[] = [];
+  const next: FieldDefinition[] = [];
+  const taken = new Set<string>();
+  for (const change of fieldTypeChangesOf({
     previous: saved.previous,
     next: saved.next,
-    acknowledged,
-  };
+    dialect,
+    builtBy: input.builtBy,
+    ...(input.componentRow === true ? { componentRow: true } : {}),
+    nested: true,
+  })) {
+    const pair =
+      change.within?.container ??
+      (keepsColumn(change, dialect, input) ? change : undefined);
+    if (pair === undefined || taken.has(pair.to.name)) continue;
+    taken.add(pair.to.name);
+    previous.push(pair.from);
+    next.push(pair.to);
+  }
+  return next.length === 0 ? null : { ...input, previous, next };
+}
+
+/**
+ * Whether a type change keeps its column: the same name and the same type on the database, each
+ * read where the entity keeps its fields (`at`: a field group's on its own rows).
+ */
+function keepsColumn(
+  change: FieldTypeChange,
+  dialect: SupportedDialect,
+  at: ColumnAt
+): boolean {
+  const from = columnDescriptorAt(change.from, dialect, at);
+  const to = columnDescriptorAt(change.to, dialect, at);
+  return (
+    from !== null &&
+    to !== null &&
+    from.name === to.name &&
+    from.dialectType.toLowerCase() === to.dialectType.toLowerCase()
+  );
 }
 
 /**

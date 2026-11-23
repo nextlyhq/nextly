@@ -1,16 +1,16 @@
 /**
- * One field type change judged the same on every road a change takes: the same class, the same
- * reasons and the same counts, in the same words (`describeClassed`). The Builder's schema dialog,
- * the collection update (through the save writer), a code-first reload under `next dev` and
- * `nextly db:sync` each refuse `price` changing from text to number over "1", "1.5", "abc" and an
- * empty value: blocked, with each reason and its count. Each keys the rows by its own ids, so the
- * judgement is compared with them masked and its reasons in one order (`judgementIn`). `nextly
- * migrate`, applying the Builder's file to another database, names it too
- * (`migrate-judges-type-changes.integration.test.ts`).
+ * One field type change judged the same on the Schema Builder's roads: the same class, the same
+ * reasons and the same counts, in the same words (`describeClassed`). The Builder's schema dialog
+ * and the collection update (through the save writer) each refuse `price` changing from text to
+ * number over "1", "1.5", "abc" and an empty value: blocked, with each reason and its count. Each
+ * keys the rows by its own ids, so the judgement is compared with them masked and its reasons in
+ * one order (`judgementIn`). `nextly migrate`, applying the Builder's file to another database,
+ * names it too (`migrate-judges-type-changes.integration.test.ts`).
  *
- * The code-first roads judge a field inside a group's JSON as the Builder does, too: the reload
- * holds its entity back and `db:sync` refuses, each naming the field by its path and changing
- * nothing.
+ * The code-first roads judge, as the Builder does and in its words, the type changes their own rule
+ * never sees, which plan no statement: a field inside a group's JSON, and a field whose column keeps
+ * its type. The reload holds its entity back and `db:sync` refuses, each naming the field by its
+ * path and changing nothing. A change of a column's type stays the code-first rule's.
  */
 import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -110,6 +110,16 @@ const declaring = (fields: unknown[]) =>
 const priced = (type: string) => [{ name: "price", type }];
 const detailed = (type: string) => [
   { name: "details", type: "group", fields: [{ name: "contact", type }] },
+];
+/** A field on the row, `contact`: a select's one option is the email `a@b.co`. */
+const contacted = (type: string) => [
+  {
+    name: "contact",
+    type,
+    ...(type === "select"
+      ? { options: [{ label: "A", value: "a@b.co" }] }
+      : {}),
+  },
 ];
 
 describe.each(getConfiguredTestDialects())(
@@ -286,45 +296,70 @@ describe.each(getConfiguredTestDialects())(
     }
 
     const ids = {
-      whole: "00000000-0000-4000-8000-000000000001",
-      fraction: "00000000-0000-4000-8000-000000000002",
-      word: "00000000-0000-4000-8000-000000000003",
-      empty: "00000000-0000-4000-8000-000000000004",
+      readable: "00000000-0000-4000-8000-000000000001",
+      unreadable: "00000000-0000-4000-8000-000000000002",
     };
 
-    it("names the same judgement from the dialog, the update, a code-first reload and db:sync", async () => {
+    it("names the same judgement from the dialog and the update", async () => {
       const dialog = await builderRoad("dialog");
       // "1.5" is held only rounded by a whole number, and "abc" by no number.
       expect(dialog).toMatch(/^blocked: /);
       expect(dialog).toContain("would be cleared (1 row: id <lost>)");
       expect(await builderRoad("update")).toBe(dialog);
+    }, 240_000);
 
-      let lost = "";
-      const reloaded = await reload(
-        priced("text"),
-        priced("number"),
+    // An email becoming a select keeps its column (a text on every database), so no statement
+    // plans it and the code-first rule never sees it: the Builder's judgement does.
+    it("holds back a code-first reload of a change that keeps its column, over a value the new type can't read", async () => {
+      let unreadable = "";
+      const { said, held } = await reload(
+        contacted("email"),
+        contacted("select"),
         async t => {
-          lost = await seed(t);
+          await t.nextly.create({
+            collection: SLUG,
+            data: { contact: "a@b.co" },
+          } as never);
+          const created = (await t.nextly.create({
+            collection: SLUG,
+            data: { contact: "x@y.co" },
+          } as never)) as unknown as { item: { id: unknown } };
+          unreadable = String(created.item.id);
         }
       );
-      expect(reloaded.said).toContain(
-        `Code-first change for '${SLUG}' was not applied`
-      );
-      expect(judgementIn(reloaded.said, lost)).toBe(dialog);
-      await instance?.destroy();
-      instance = undefined;
 
+      expect(said).toContain(`Code-first change for '${SLUG}' was not applied`);
+      expect(said).toContain(
+        `Collection '${SLUG}': field 'contact' cannot change from email to select`
+      );
+      expect(said).toContain(
+        `values that are not one of the field's options would be cleared (1 row: id ${unreadable})`
+      );
+      expect(held).toContain("x@y.co");
+    }, 240_000);
+
+    it("refuses db:sync of a change that keeps its column, over a value the new type can't read, changing nothing", async () => {
       const adapter = await syncDatabase();
-      expect(await dbSync(priced("text"))).toBeUndefined();
-      await written(adapter, "price", {
-        [ids.whole]: "1",
-        [ids.fraction]: "1.5",
-        [ids.word]: "abc",
-        [ids.empty]: null,
+      expect(await dbSync(contacted("email"))).toBeUndefined();
+      await written(adapter, "contact", {
+        [ids.readable]: "a@b.co",
+        [ids.unreadable]: "x@y.co",
       });
-      const refused = await dbSync(priced("number"));
-      expect(judgementIn(refused ?? "(applied)", ids.word)).toBe(dialog);
-    }, 300_000);
+
+      const refused = await dbSync(contacted("select"));
+
+      expect(refused).toContain(
+        `Collection '${SLUG}': field 'contact' cannot change from email to select`
+      );
+      expect(refused).toContain(
+        `values that are not one of the field's options would be cleared (1 row: id ${ids.unreadable})`
+      );
+      expect(
+        await adapter.executeQuery(
+          `SELECT ${q("contact")} AS contact FROM ${q(TABLE)} ORDER BY ${q("id")}`
+        )
+      ).toEqual([{ contact: "a@b.co" }, { contact: "x@y.co" }]);
+    }, 240_000);
 
     it("holds back a code-first reload of a group's field whose value the new type can't read, naming the field by its path", async () => {
       let unreadable = "";
@@ -356,8 +391,8 @@ describe.each(getConfiguredTestDialects())(
       const adapter = await syncDatabase();
       expect(await dbSync(detailed("text"))).toBeUndefined();
       await written(adapter, "details", {
-        [ids.whole]: JSON.stringify({ contact: "a@b.co" }),
-        [ids.word]: JSON.stringify({ contact: "abc" }),
+        [ids.readable]: JSON.stringify({ contact: "a@b.co" }),
+        [ids.unreadable]: JSON.stringify({ contact: "abc" }),
       });
       const before = JSON.stringify(
         await adapter.executeQuery(
@@ -371,7 +406,7 @@ describe.each(getConfiguredTestDialects())(
         `Collection '${SLUG}': field 'details.contact' cannot change from text to email`
       );
       expect(refused).toContain(
-        `values the email field's rule refuses would be cleared (1 row: id ${ids.word})`
+        `values the email field's rule refuses would be cleared (1 row: id ${ids.unreadable})`
       );
       expect(
         JSON.stringify(
