@@ -14,16 +14,21 @@
 
 import type { FieldConfig, DataFieldConfig } from "nextly/config";
 
-import type { NextlyColumn } from "@admin/components/ui/table/data-table";
+import type {
+  CellRenderer,
+  NextlyColumn,
+} from "@admin/components/ui/table/data-table";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { fieldLabel } from "@admin/lib/field-label";
 import type { WorkflowStepKind } from "@admin/types/workflows";
 
 import { entryTitleField } from "../entry-title";
+import type { LocaleTranslationMeta } from "../translation-meta";
 
 import { EntryTableCell } from "./EntryTableCell";
-import { LanguageDots } from "./LanguageDots";
+import { LanguageChips } from "./LanguageChips";
 import { ReviewCell, rowReviewParts } from "./ReviewCell";
+import type { TitleLanguage } from "./TitleLanguageSelect";
 
 // ============================================================================
 // Types
@@ -430,6 +435,77 @@ export function pickTitleFieldName(
 export interface EntryColumnActions {
   /** Open a row in a given content language. Absent leaves the marks inert. */
   openInLocale?: (entryId: string, locale: string) => void;
+  /** The title column's titles in a language the reader chose. Absent shows the list's own. */
+  titlesIn?: TitlesShownIn;
+}
+
+/** Titles shown in a chosen language, over the title column. */
+export interface TitlesShownIn {
+  /** The language chosen. */
+  language: TitleLanguage;
+  /** The default language, which the list's own read shows titles in. */
+  defaultLanguage: TitleLanguage;
+  /** Each row's title in the chosen language, by id, once read; a row not returned is absent. */
+  titles: ReadonlyMap<string, unknown> | undefined;
+}
+
+/** The `dir` a language's text is written in. */
+const dirOf = (language: TitleLanguage): "rtl" | "ltr" =>
+  language.rtl ? "rtl" : "ltr";
+
+/**
+ * The title column's cell for titles in a chosen language, drawn by the column's own cell so a
+ * title looks the same in either language.
+ *
+ * A row shows a title in the chosen language only where the read in that language returned one
+ * that is not blank. Anything else (not read yet, not translated, a row or field that read did
+ * not return, a read that was refused) shows the list's own title, in the default language,
+ * marked with its language once the read has answered, so a default title is never passed off
+ * as a translation. Each title carries its language's `lang` and `dir`.
+ */
+function titleInLanguageCell(
+  base: CellRenderer<Record<string, unknown>>,
+  titleName: string,
+  shownIn: TitlesShownIn
+): CellRenderer<Record<string, unknown>> {
+  return ctx => {
+    const id = ctx.row.id;
+    const title =
+      typeof id === "string" || typeof id === "number"
+        ? shownIn.titles?.get(String(id))
+        : undefined;
+    if (typeof title === "string" && title.trim() !== "") {
+      return (
+        <span
+          lang={shownIn.language.code}
+          dir={dirOf(shownIn.language)}
+          data-title-language={shownIn.language.code}
+        >
+          {base({
+            ...ctx,
+            value: title,
+            row: { ...ctx.row, [titleName]: title },
+          })}
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex flex-wrap items-baseline gap-x-1.5">
+        <span
+          lang={shownIn.defaultLanguage.code}
+          dir={dirOf(shownIn.defaultLanguage)}
+          data-title-language={shownIn.defaultLanguage.code}
+        >
+          {base(ctx)}
+        </span>
+        {shownIn.titles !== undefined && (
+          <span className="text-xs text-muted-foreground">
+            ({shownIn.defaultLanguage.label})
+          </span>
+        )}
+      </span>
+    );
+  };
 }
 
 /**
@@ -522,9 +598,9 @@ export function buildEntryColumns(
     const hidden = isHidden(columnName);
 
     if (!field) {
-      // One dot per translatable language, so a row says WHICH languages are
-      // missing rather than only how many. Offered by `getAvailableColumns`
-      // for localized collections only, so a non-localized table is unchanged.
+      // One chip per language, so a row says WHICH languages need work and
+      // what kind. Offered by `getAvailableColumns` for localized collections
+      // only, so a non-localized table is unchanged.
       if (columnName === "translations") {
         cols.push({
           name: "translations",
@@ -532,12 +608,18 @@ export function buildEntryColumns(
           sortable: false,
           hidden,
           cell: ({ row }) => (
-            <LanguageDots
+            <LanguageChips
               translations={
                 row._translations as
-                  | Record<string, { translated: boolean; status?: string }>
+                  | Record<string, LocaleTranslationMeta>
                   | undefined
               }
+              // The document's own status speaks for every language only on a
+              // collection with the Draft / Published lifecycle: elsewhere a
+              // field named `status` is the author's own.
+              {...(collection.status === true
+                ? { documentStatus: row.status }
+                : {})}
               {...(actions?.openInLocale && typeof row.id === "string"
                 ? {
                     onOpenLocale: (locale: string) =>
@@ -669,6 +751,20 @@ export function buildEntryColumns(
         />
       ),
     });
+  }
+
+  // The title column shows titles in the language the reader chose, where one is chosen.
+  const titlesIn = actions?.titlesIn;
+  if (titlesIn) {
+    const titleName = getEntryTitleField(collection);
+    const index = cols.findIndex(column => column.name === titleName);
+    const base = index >= 0 ? cols[index].cell : undefined;
+    if (titleName && base) {
+      cols[index] = {
+        ...cols[index],
+        cell: titleInLanguageCell(base, titleName, titlesIn),
+      };
+    }
   }
 
   return cols;

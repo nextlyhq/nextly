@@ -45,6 +45,7 @@ import { useCan } from "@admin/hooks/useCan";
 import { useDefaultLanguageAsksTranslationStatus } from "@admin/hooks/useCanRequest";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ListResponse } from "@admin/lib/api/response-types";
@@ -74,10 +75,7 @@ import {
 } from "./collection-for-columns";
 import { declaredColumns } from "./declared-columns";
 import { EntryEmptyState } from "./EntryEmptyState";
-import {
-  buildEntryWhereFilter,
-  type TranslationListFilter,
-} from "./entryFilters";
+import { buildEntryWhereFilter } from "./entryFilters";
 import {
   EntryTable,
   type TablePaginationState,
@@ -86,6 +84,7 @@ import {
 import {
   getAvailableColumns,
   getDefaultVisibleColumns,
+  getEntryTitleField,
   choiceInForce,
   linkedSortFor,
   linkedStatusFor,
@@ -98,11 +97,14 @@ import {
   pluginFilterWheres,
   writePluginFilterParams,
 } from "./plugin-filters";
+import type { TitleLanguageChoice } from "./TitleLanguageSelect";
 import { useDeclaredBulkActions } from "./useDeclaredBulkActions";
 import { useDeclaredRowActions } from "./useDeclaredRowActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import type { EntryRow, EntryVersions } from "./useEntrySelection";
+import { useLanguageListFilters } from "./useLanguageListFilters";
 import { useListCreateDialog } from "./useListCreateDialog";
+import { useTitlesInLanguage } from "./useTitlesInLanguage";
 import { workflowListFilters } from "./workflow-list-filters";
 
 // ============================================================================
@@ -263,9 +265,11 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   const [createdTo, setCreatedTo] = useState("");
   const [updatedFrom, setUpdatedFrom] = useState("");
   const [updatedTo, setUpdatedTo] = useState("");
-  // The active language filter (locale + translation state), or null.
-  const [translationFilter, setTranslationFilter] =
-    useState<TranslationListFilter | null>(null);
+  // The language the title column shows, as the reader chose it on this
+  // collection; until then, the default language the list is read in.
+  const [chosenTitleLanguage, setChosenTitleLanguage] = useState<
+    ChosenForCollection | undefined
+  >();
 
   // Read where parameter from URL for filtering (e.g., from SubmissionsFilter)
   const searchParams = useSearchParams();
@@ -282,14 +286,25 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // offered from it.
   const { data: collection, isLoading: collectionLoading } =
     useCollection(collectionSlug);
-  // The plugins' filters, then the review filters of the workflow holding the collection: one
-  // toolbar, one `pf` in the URL and one way into the request for both.
+  // Whether the collection's content is per language: the list's languages
+  // column, its language filter and its "Titles in" control all start here.
+  const collectionLocalized =
+    (collection as { localized?: boolean } | undefined)?.localized === true;
+  // The language filter, where the list shows each row's languages: offered
+  // from the collection and the reader's access, so a choice waits for both.
+  const languageFilters = useLanguageListFilters(
+    collectionSlug,
+    collectionLocalized
+  );
+  // The plugins' filters, then the review filters of the workflow holding the collection, then
+  // the language filter: one toolbar, one `pf` in the URL and one way into the request for all.
   const pluginFilters = useMemo(
     () => [
       ...listFiltersFor(plugins, collectionSlug),
       ...workflowListFilters(collection?.workflow),
+      ...languageFilters.filters,
     ],
-    [plugins, collectionSlug, collection?.workflow]
+    [plugins, collectionSlug, collection?.workflow, languageFilters.filters]
   );
   const chosenPluginFilterOptions = useMemo(
     () =>
@@ -306,9 +321,11 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     isUnavailable: pluginFiltersUnavailable,
   } = useBrandingStatus();
   const choosesPluginFilter = pluginFilterParamValues(searchParams).length > 0;
-  // A review filter is offered from the collection, so a choice waits for it too.
+  // A review filter is offered from the collection, and the language filter
+  // from the reader's access too, so a choice waits for them as well.
   const awaitsPluginFilters =
-    (pluginFiltersPending || collectionLoading) && choosesPluginFilter;
+    (pluginFiltersPending || collectionLoading || languageFilters.pending) &&
+    choosesPluginFilter;
   const lostPluginFilters =
     !pluginFiltersPending && pluginFiltersUnavailable && choosesPluginFilter;
   // The page returns to the first whenever the choice changes, however it
@@ -404,7 +421,6 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       createdTo,
       updatedFrom,
       updatedTo,
-      translated: translationFilter,
       readsTranslationState: asksTranslationStatus,
       pluginWheres: pluginFilterWheres(
         pluginFilters,
@@ -420,7 +436,6 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     createdTo,
     updatedFrom,
     updatedTo,
-    translationFilter,
     asksTranslationStatus,
   ]);
 
@@ -531,8 +546,80 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     [collection, collectionSlug]
   );
 
-  const entries = entriesResponse?.items ?? [];
+  const entries = useMemo(
+    () => entriesResponse?.items ?? [],
+    [entriesResponse?.items]
+  );
   const pagination = toTablePaginationState(entriesResponse, limit);
+
+  // ---------------------------------------------------------------------------
+  // Title language
+  // ---------------------------------------------------------------------------
+
+  // "Titles in" is offered where a document has languages to choose among: a
+  // site with two languages or more and a collection whose content is per
+  // language. Each title in the chosen language comes from a read of its own
+  // in that language, which the server judges for that language and each row.
+  const {
+    enabled: multilingual,
+    locales = [],
+    defaultLocale = "",
+  } = useLocalization();
+  const offersTitleLanguage =
+    multilingual && locales.length > 1 && collectionLocalized;
+  const chosenTitleCode = choiceInForce(
+    chosenTitleLanguage,
+    collectionSlug,
+    undefined,
+    defaultLocale
+  );
+  // A language the site no longer configures is not read in: the titles
+  // return to the default language.
+  const titleLanguage =
+    offersTitleLanguage && locales.some(l => l.code === chosenTitleCode)
+      ? chosenTitleCode
+      : defaultLocale;
+  const titleField = useMemo(
+    () => getEntryTitleField(collectionForColumns),
+    [collectionForColumns]
+  );
+  const entryIds = useMemo(
+    () => entries.map(entry => String(entry.id)),
+    [entries]
+  );
+  const titlesInLanguage = useTitlesInLanguage({
+    collectionSlug,
+    locale: titleLanguage,
+    titleField,
+    ids: entryIds,
+    enabled: offersTitleLanguage && titleLanguage !== defaultLocale,
+  });
+  const handleTitleLanguageChange = useCallback(
+    (code: string) => setChosenTitleLanguage({ collectionSlug, value: code }),
+    [collectionSlug]
+  );
+  const titleLanguageChoice = useMemo(
+    (): TitleLanguageChoice | undefined =>
+      offersTitleLanguage
+        ? {
+            languages: locales,
+            defaultLocale,
+            value: titleLanguage,
+            onChange: handleTitleLanguageChange,
+            titles: titlesInLanguage.titles,
+            failed: titlesInLanguage.failed,
+          }
+        : undefined,
+    [
+      offersTitleLanguage,
+      locales,
+      defaultLocale,
+      titleLanguage,
+      handleTitleLanguageChange,
+      titlesInLanguage.titles,
+      titlesInLanguage.failed,
+    ]
+  );
 
   // What a plugin's block, column or bulk action on this list is told: who is
   // looking, at which collection. Held while the viewer is not known yet, so
@@ -689,16 +776,6 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       writePluginFilterParams(pluginFilters, next);
     },
     [chosenPluginFilterOptions, pluginFilters]
-  );
-
-  const handleTranslationFilterChange = useCallback(
-    (value: TranslationListFilter | null) => {
-      setTranslationFilter(value);
-      // Reset to the first page: the filtered result set shrinks, so a later
-      // page could otherwise fall beyond it and show an empty table.
-      setPage(1);
-    },
-    []
   );
 
   const handleCreatedFromChange = useCallback((value: string) => {
@@ -985,8 +1062,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
                     onSelectionChange={handleSelectionChange}
                     status={status}
                     onStatusChange={handleStatusChange}
-                    translationFilter={translationFilter}
-                    onTranslationFilterChange={handleTranslationFilterChange}
+                    titleLanguage={titleLanguageChoice}
                     pluginFilters={pluginFilters}
                     chosenPluginFilters={chosenPluginFilterOptions}
                     onPluginFilterChange={handlePluginFilterChange}
