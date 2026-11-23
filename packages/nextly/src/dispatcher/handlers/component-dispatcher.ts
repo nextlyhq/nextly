@@ -112,6 +112,7 @@ import {
 } from "../helpers/di";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { readRequestedMoves } from "../helpers/request-moves";
+import { respondTypeChangeTargets } from "../helpers/type-change-targets";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
@@ -551,6 +552,23 @@ export const COMPONENTS_METHODS: Record<
 
   // Preview component schema changes — dry-run diff returning rename candidates
   // and classification. Mirrors previewSchemaChanges in collection-dispatcher.
+  // The type picker's answer for a saved field of a field group, its values kept on component rows.
+  componentTypeChangeTargets: {
+    execute: async (svc, p, body) => {
+      const slug = requireParam(p, "slug", "Component slug");
+      const component = await svc.registry.getComponent(slug);
+      if (!component) {
+        throw NextlyError.notFound({ message: "Field group not found" });
+      }
+      refuseChangeDefinedInCode(component, "component", slug);
+      return respondTypeChangeTargets({
+        fields: (component.fields ?? []) as unknown as FieldDefinition[],
+        body,
+        builtBy: "fieldGroup",
+        componentRow: true,
+      });
+    },
+  },
   previewComponentSchemaChanges: {
     execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Component slug");
@@ -963,7 +981,8 @@ export const COMPONENTS_METHODS: Record<
               fields: {
                 tableName,
                 builtBy: "fieldGroup",
-                oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
+                oldFields: (component.fields ??
+                  []) as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
                 wasLocalized,
                 isLocalized,

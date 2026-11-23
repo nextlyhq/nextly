@@ -165,6 +165,7 @@ import {
   offsetPaginationToMeta,
   unwrapServiceResult,
 } from "../helpers/service-envelope";
+import { respondTypeChangeTargets } from "../helpers/type-change-targets";
 import {
   parseRichTextFormat,
   parseRichTextStyles,
@@ -1414,6 +1415,21 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     },
   },
 
+  // The type picker's answer for a saved field of a Single, as a collection's (`respondTypeChangeTargets`).
+  singleTypeChangeTargets: {
+    execute: async (svc, p, body) => {
+      const slug = requireParam(p, "slug", "Single slug");
+      const single = await svc.registry.getSingleBySlug(slug);
+      if (!single) throw NextlyError.notFound({ message: "Single not found" });
+      refuseChangeDefinedInCode(single, "Single", slug);
+      // A Single's table is made by the same builder as a collection's.
+      return respondTypeChangeTargets({
+        fields: (single.fields ?? []) as unknown as FieldDefinition[],
+        body,
+        builtBy: "collection",
+      });
+    },
+  },
   previewSingleSchemaChanges: {
     execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Single slug");
@@ -1859,7 +1875,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               fields: {
                 tableName,
                 builtBy: "collection",
-                oldFields: (single.fields ?? []) as unknown as FieldDefinition[],
+                oldFields: (single.fields ??
+                  []) as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
                 wasLocalized,
                 isLocalized,

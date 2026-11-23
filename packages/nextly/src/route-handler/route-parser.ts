@@ -689,6 +689,23 @@ function parseCollectionRoutes(
     };
   }
 
+  // POST /api/collections/schema/{slug}/type-change-targets → what each other type would do to a
+  // saved field's values, as the Builder's type picker lists them
+  if (
+    id === "schema" &&
+    subresource &&
+    subId === "type-change-targets" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.collectionName = subresource;
+    return {
+      service: "collections",
+      operation: "single",
+      method: "typeChangeTargets",
+      routeParams,
+    };
+  }
+
   // POST /api/collections/schema/{slug}/apply → apply confirmed schema changes
   if (
     id === "schema" &&
@@ -1684,6 +1701,23 @@ function parseSingleRoutes(
     };
   }
 
+  // POST /api/singles/schema/[slug]/type-change-targets → the Builder type picker's answer for a
+  // saved field, as a collection's
+  if (
+    id === "schema" &&
+    subresource &&
+    subId === "type-change-targets" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.slug = subresource;
+    return {
+      service: "singles",
+      operation: "single",
+      method: "singleTypeChangeTargets",
+      routeParams,
+    };
+  }
+
   // POST /api/singles/schema/[slug]/preview → preview single schema changes (dry-run diff)
   if (
     id === "schema" &&
@@ -1838,6 +1872,12 @@ const COMPONENT_SCHEMA_ROUTES: Readonly<Record<string, ComponentRoute>> = {
   "POST preview": {
     operation: "single",
     method: "previewComponentSchemaChanges",
+  },
+  // POST /api/field-groups/schema/[slug]/type-change-targets → the Builder type picker's answer for
+  // a saved field, as a collection's
+  "POST type-change-targets": {
+    operation: "single",
+    method: "componentTypeChangeTargets",
   },
   // POST /api/field-groups/schema/[slug]/apply → apply confirmed component schema changes
   "POST apply": { operation: "update", method: "applyComponentSchemaChanges" },
