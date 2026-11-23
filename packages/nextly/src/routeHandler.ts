@@ -162,6 +162,7 @@ import {
   widgetAudience,
   type WidgetAudience,
 } from "./domains/widgets/visibility";
+import { readableAttachedEntities } from "./domains/workflows/readable-attached";
 import { genericPublicMessage } from "./errors/error-codes";
 import { NextlyError } from "./errors/nextly-error";
 import { retryAfterHeader } from "./errors/retry-after";
@@ -2677,6 +2678,12 @@ async function handleAdminMetaWorkspaceRequest(
   const { workspace } = await withCurrentLanguages(() =>
     buildAdminMeta(audience, offerTo)
   );
+  // The collections and Singles a workflow holds that this reader may read, by slug: the admin
+  // asks for a document's review state, and whether anything can wait for its reader, only where
+  // one can. Answered from the registered workflows with no read at all when none is attached.
+  workspace.workflowEntities = [
+    ...(await readableAttachedEntities(caller)),
+  ].sort();
   return withSessionCacheHeaders(respondAdminMeta(workspace));
 }
 

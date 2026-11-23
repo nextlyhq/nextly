@@ -23,6 +23,10 @@ import {
 } from "@tanstack/react-query";
 
 import {
+  useWorkflowEntities,
+  workflowMayHold,
+} from "@admin/hooks/useWorkflowEntities";
+import {
   assignWorkflowParts,
   fetchReviewState,
   takeWorkflowStep,
@@ -67,22 +71,39 @@ function namedDocument(
   return workflowDocument(document);
 }
 
+/** The answer for a document no workflow can hold, as the route would give it. */
+const NOT_ATTACHED: ReviewStateAnswer = { attached: false };
+
 /**
  * The review state of one document, or nothing asked before it exists.
  * Asked again on return to the tab: a colleague's step moves it, and no
  * write in this browser would tell this one.
+ *
+ * Not asked where the server's workspace answer says no workflow holds the
+ * document's collection or Single: it is then answered not attached, as the
+ * route would answer it, so every surface draws exactly what it draws for that
+ * answer. A placeholder rather than a stored answer, so a workflow attached
+ * later (the workspace answer read again) asks the route at once.
  */
 export function useReviewState(
   document: ReleaseDocumentRef | undefined
 ): UseQueryResult<ReviewStateAnswer, Error> {
+  const entities = useWorkflowEntities();
+  const asked =
+    document !== undefined && workflowMayHold(entities, document.scopeSlug);
+  // Known not held: the server said which entities a workflow holds, and this is not one.
+  const notHeld = !asked && typeof entities === "object";
   return useQuery({
     queryKey:
       document === undefined
         ? (["workflow-review", "none"] as const)
         : reviewKeys.document(document),
     queryFn: () => fetchReviewState(namedDocument(document)),
-    enabled: document !== undefined,
+    enabled: asked,
     refetchOnWindowFocus: true,
+    ...(notHeld && document !== undefined
+      ? { placeholderData: NOT_ATTACHED }
+      : {}),
   });
 }
 

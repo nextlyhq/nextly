@@ -14,6 +14,10 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { waitingForWords } from "@admin/components/features/entries/review/review-words";
 import { useEveryNavCollection } from "@admin/hooks/queries/useCollections";
 import { useEverySingle } from "@admin/hooks/queries/useSingles";
+import {
+  useWorkflowEntities,
+  workflowMayHold,
+} from "@admin/hooks/useWorkflowEntities";
 import { documentAddress } from "@admin/lib/navigation/document-address";
 import {
   fetchWaitingForMe,
@@ -32,15 +36,20 @@ export const waitingKeys = {
 /**
  * Whether anything can ever wait for the reader's review: how many stages' next step they may take.
  * Kept for five minutes, as the navigation lists are: it changes only with grants and workflows.
+ * Not asked where the server's workspace answer says no workflow holds anything this reader may
+ * read: nothing can wait for them then, and the panel and the list show no review link or move,
+ * exactly as an answer of no stages would have them.
  */
 export function useWaitingScope(): UseQueryResult<
   { reviews: boolean; stages: number },
   Error
 > {
+  const entities = useWorkflowEntities();
   return useQuery({
     queryKey: waitingKeys.scope(),
     queryFn: fetchWaitingScope,
     staleTime: 5 * 60 * 1000,
+    enabled: workflowMayHold(entities),
   });
 }
 
