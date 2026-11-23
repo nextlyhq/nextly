@@ -16,6 +16,7 @@ const LINK_PAGES = [
   "reset",
   "confirmAddress",
   "cancelAddressChange",
+  "acceptInvitation",
 ] as const satisfies readonly (keyof AccountsSettings["pages"])[];
 
 /**

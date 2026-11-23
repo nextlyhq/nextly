@@ -33,6 +33,7 @@
 
 import type { BeforeOperationHandler, HookHandler } from "@nextly/hooks/types";
 
+import type { CollectionGrants } from "../../auth/preset-reach";
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
 import type { CollectionDbOptions } from "../../domains/collections/services/collection-db-options";
 import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
@@ -1037,6 +1038,39 @@ export interface CollectionConfig {
    * ```
    */
   access?: CollectionAccessControl;
+
+  /**
+   * Refuses this collection's entries to every caller holding super-admin
+   * authority: a super-admin person, and a full-access API key carrying its
+   * maker's super-admin authority, at every way in, whatever other
+   * permissions they hold. For data the site's administrators must not read
+   * through the admin, such as health or pay records. Trusted server code
+   * (`overrideAccess: true`) is not a caller and is unaffected.
+   *
+   * Set here, it is shown in the admin and cannot be changed there; left
+   * out, a super-admin can set it in the admin, entering their password
+   * again, and every change is written to the audit log.
+   *
+   * @default undefined (open to super-admin)
+   * @experimental
+   */
+  closedToSuperAdmin?: boolean;
+
+  /**
+   * Which built-in preset roles (Admin, Editor, Author, Viewer) this
+   * collection is opened to. A collection reaches a preset only once it is
+   * opened to it by name, so adding one never widens what an existing role
+   * can do; super-admins reach every collection whatever this says, except one
+   * closed to them (`closedToSuperAdmin`).
+   *
+   * @example
+   * ```typescript
+   * grants: { presets: ["admin", "editor", "author", "viewer"] }
+   * ```
+   *
+   * @experimental
+   */
+  grants?: CollectionGrants;
 
   /**
    * Collection-level lifecycle hooks.

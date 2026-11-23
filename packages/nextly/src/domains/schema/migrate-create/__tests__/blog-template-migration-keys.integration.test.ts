@@ -78,10 +78,12 @@ function statementsFor(dialect: TestDialect) {
     `VALUES (${columns.map((_, i) => value(i + 1)).join(", ")})`;
   const byId = `WHERE ${name("id")} = ${value(1)}`;
   return {
-    insertAuthor: insert("dc_authors", ["id", "title", "name", "slug"]),
-    insertPost: insert("dc_posts", ["id", "title", "slug", "byline"]),
+    // The rows' own tables only: a title or slug is kept in each one's
+    // translations table, which the key under test does not touch.
+    insertAuthor: insert("dc_authors", ["id"]),
+    insertPost: insert("dc_posts", ["id", "byline"]),
     deleteAuthor: `DELETE FROM ${name("dc_authors")} ${byId}`,
-    readPost: `SELECT ${name("title")}, ${name("byline")} FROM ${name("dc_posts")} ${byId}`,
+    readPost: `SELECT ${name("id")}, ${name("byline")} FROM ${name("dc_posts")} ${byId}`,
   };
 }
 
@@ -93,28 +95,18 @@ describe.each(getConfiguredTestDialects())(
       const sql = statementsFor(dialect);
       const post = async () =>
         (
-          await t.adapter.executeQuery<{ title: string; byline: unknown }>(
+          await t.adapter.executeQuery<{ id: string; byline: unknown }>(
             sql.readPost,
             ["post-1"]
           )
         )[0];
-      await t.adapter.executeQuery(sql.insertAuthor, [
-        "author-1",
-        "Ada",
-        "Ada",
-        "ada",
-      ]);
-      await t.adapter.executeQuery(sql.insertPost, [
-        "post-1",
-        "Notes",
-        "notes",
-        "author-1",
-      ]);
+      await t.adapter.executeQuery(sql.insertAuthor, ["author-1"]);
+      await t.adapter.executeQuery(sql.insertPost, ["post-1", "author-1"]);
       expect((await post())?.byline).toBe("author-1");
 
       await t.adapter.executeQuery(sql.deleteAuthor, ["author-1"]);
       const after = await post();
-      expect(after?.title).toBe("Notes");
+      expect(after?.id).toBe("post-1");
       expect(after?.byline ?? null).toBeNull();
     });
   }

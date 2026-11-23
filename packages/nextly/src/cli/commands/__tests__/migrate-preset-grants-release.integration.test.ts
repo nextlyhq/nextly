@@ -45,6 +45,7 @@ import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database
 import {
   ROLE_PRESETS,
   resolvePreset,
+  type PresetReach,
   type RolePreset,
 } from "../../../auth/role-presets";
 import { defineCollection, defineConfig, text } from "../../../config";
@@ -125,12 +126,20 @@ vi.mock("../../../domains/meta/preset-grants-release", async importOriginal => {
   };
 });
 
+/** Every permission reaching every preset: the collection is opened to all four. */
+const EVERY_PRESET: PresetReach = { presetsFor: () => undefined };
+
 const OLD = "0.9.0";
 const NEW = "0.10.0";
 
 const CONFIG = defineConfig({
   collections: [
-    defineCollection({ slug: "pgr-posts", fields: [text({ name: "title" })] }),
+    // Opened to every preset, so each preset's own rule decides its grants.
+    defineCollection({
+      slug: "pgr-posts",
+      fields: [text({ name: "title" })],
+      grants: { presets: ["admin", "editor", "author", "viewer"] },
+    }),
   ],
   // The app's own permission, which only the older release's viewer grants.
   permissions: [{ action: "export", resource: "pgr-posts" }],
@@ -374,12 +383,16 @@ describe.each(getConfiguredTestDialects())(
           const [action, ...rest] = slug.split("-");
           return { action, resource: rest.join("-"), owner: null };
         });
-      const olderViewer = resolvePreset(preset("viewer"), stored).map(
-        p => `${p.action}-${p.resource}`
-      );
-      const olderAuthor = resolvePreset(preset("author"), stored).map(
-        p => `${p.action}-${p.resource}`
-      );
+      const olderViewer = resolvePreset(
+        preset("viewer"),
+        stored,
+        EVERY_PRESET
+      ).map(p => `${p.action}-${p.resource}`);
+      const olderAuthor = resolvePreset(
+        preset("author"),
+        stored,
+        EVERY_PRESET
+      ).map(p => `${p.action}-${p.resource}`);
       expect(olderViewer).toContain("export-pgr-posts");
       expect(olderAuthor).not.toContain("delete-pgr-posts");
 

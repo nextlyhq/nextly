@@ -6,7 +6,7 @@
  *
  * - The shipped total — every chunk a browser can load from an entry an
  *   application or a plugin imports, test-only entries left out — stays at
- *   most 1,300 KB gzipped.
+ *   most 1,430 KB gzipped.
  * - The shell every route shares (the first screen's set) stays at most
  *   155 KB gzipped.
  * - Each route's own code — what its direct visit adds to the shell — stays
@@ -48,7 +48,11 @@ export const BUDGETS = {
   // `./testing` entry, and comment annotations an application's minifier
   // strips. Gzip tracks what is transferred. What a visitor's first load
   // downloads is the consumer check's report (`check-consumer-bundle.mjs`).
-  totalGzipKB: 1300,
+  // Measured again at 1,409.9 KB on 2026-11-22, the growth of the features
+  // since (the review workflow, version diffs, the entity dialog of the schema
+  // builder, the written email editor, loaded only when a written email is
+  // opened), so 1,430 by the same rule.
+  totalGzipKB: 1430,
   // The shared shell, measured at 140.3 KB gzipped on 2026-11-13 once the
   // root entry exported only what an application mounts (it was 331 KB), the
   // form library and zod's classic API left it, and the packages

@@ -52,9 +52,15 @@ const ANA = { id: "user-sv-ana", name: "Ana Ruiz", email: "ana-sv@x.test" };
 
 type Doc = Record<string, unknown>;
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  { perLanguageStorage = false }: { perLanguageStorage?: boolean } = {}
+): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // Where a test asks for it, the layout every installation runs; this
+    // file's other tests run the earlier one (`__tests__/storage-layout`).
+    ...(perLanguageStorage ? { perLanguageStorage: true } : {}),
     collections: [
       defineCollection({
         slug: POSTS,
@@ -269,6 +275,53 @@ describe.each(getConfiguredTestDialects())(
           )
       );
       expect(point).not.toHaveProperty("changedSince");
+    });
+
+    it("names who changed an untranslated document's text since a point saved in no language", async () => {
+      const t = await boot(dialect, { perLanguageStorage: true });
+      const key = await authorKey(t);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: NOTES, overrideAccess: true },
+        { team: "public", note: "first" }
+      );
+      const id = String((created.data as Doc).id);
+      const noteRev = async () =>
+        String(
+          (
+            (await t.nextly.findByID({
+              collection: NOTES as never,
+              id,
+              overrideAccess: true,
+            } as never)) as Doc
+          )._rev
+        );
+      const startedFrom = await noteRev();
+      const path = ["collections", NOTES, "entries", id, "versions", "autosave"];
+
+      // Saved and read as the editor does for a collection not marked
+      // translated: no language on either request.
+      const saved = await call("PUT", path, key, "", {
+        note: "typing",
+        _rev: startedFrom,
+      });
+      expect(saved.status, JSON.stringify(saved.json)).toBeLessThan(300);
+      // The note lives in the default language's row, so Ana's save moves
+      // that row's counter and not the document's own.
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: NOTES,
+          entryId: id,
+          overrideAccess: true,
+          user: ANA as never,
+        },
+        { note: "Ana's change", _overwrite: true }
+      );
+      const read = await call("GET", path, key, "");
+      expect(read.status, JSON.stringify(read.json)).toBe(200);
+      expect(read.json?.changedSince).toMatchObject({
+        currentVersion: await noteRev(),
+        changedBy: { kind: "person", name: ANA.name },
+      });
     });
 
     it("says the starting version is unknown for a point saved without one", async () => {

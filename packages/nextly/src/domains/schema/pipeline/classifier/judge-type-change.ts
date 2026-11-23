@@ -21,6 +21,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import type { ValidatableField } from "../../../../shared/lib/entry-validation";
 import { rowKeyText } from "../../repair-columns/clearing";
 import { fieldsByColumnOf } from "../../required-column-registries";
 import {
@@ -284,8 +285,11 @@ async function fieldVerdict(
  * field whose type stays.
  */
 function withoutOwnValidate<C extends { to: FieldDefinition }>(change: C): C {
-  if (typeof change.to.validate !== "function") return change;
-  const { validate: _left, ...to } = change.to;
+  // `validate` is declared on the shape the validator reads (`ValidatableField`), not on the
+  // stored definition, so the field is read through that shape to find and leave it out.
+  const field: FieldDefinition & Pick<ValidatableField, "validate"> = change.to;
+  if (typeof field.validate !== "function") return change;
+  const { validate: _left, ...to } = field;
   return { ...change, to };
 }
 

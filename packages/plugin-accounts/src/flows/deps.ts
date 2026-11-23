@@ -1,4 +1,5 @@
 import type {
+  PluginAuditApi,
   PluginContext,
   PluginDatabase,
   PluginTransaction,
@@ -8,6 +9,7 @@ import type { AccountsCore } from "../core/ports";
 import type { AccountsSettings } from "../settings";
 import type { SessionLimits } from "../storage/sessions";
 
+import type { InvitationData } from "./invitations";
 import type { AccountsMail } from "./mail";
 import type { PasswordPacer } from "./pacer";
 
@@ -22,6 +24,12 @@ export interface FlowDeps {
   readonly events: AccountsEvents;
   /** Core's record of the plugin's people, told of each account deleted. */
   readonly principals: AccountPrincipals;
+  /**
+   * Core's audit log, where the site's own code's actions on an account are
+   * recorded; absent on a core that lends the plugin none, which refuses
+   * those actions rather than take them unrecorded.
+   */
+  readonly audit?: PluginAuditApi;
   /** Password checks, timed, and waits as long as one takes. */
   readonly pacer: PasswordPacer;
   readonly logger: {
@@ -37,10 +45,18 @@ export interface FlowDeps {
 export interface AccountsEventPayloads {
   /** An account is gone: other plugins remove or anonymise what they hold for it. */
   "nextlyhq-plugin-accounts.account.deleted": { accountId: string };
-  /** Staff deactivated an account: it signs in nowhere until reactivated. */
+  /** Staff, or the site's own code, deactivated an account: it signs in nowhere until reactivated. */
   "nextlyhq-plugin-accounts.account.deactivated": { accountId: string };
-  /** Staff reactivated a deactivated account. */
+  /** Staff, or the site's own code, reactivated a deactivated account. */
   "nextlyhq-plugin-accounts.account.reactivated": { accountId: string };
+  /**
+   * An invitation was accepted and its account made: the site's own code
+   * ties the account to its records by the data it invited with.
+   */
+  "nextlyhq-plugin-accounts.invitation.accepted": {
+    accountId: string;
+    data: InvitationData | null;
+  };
 }
 
 /** The events the plugin declares, one per name it emits. */
@@ -48,10 +64,12 @@ export const ACCOUNTS_EVENTS: readonly [
   "nextlyhq-plugin-accounts.account.deleted",
   "nextlyhq-plugin-accounts.account.deactivated",
   "nextlyhq-plugin-accounts.account.reactivated",
+  "nextlyhq-plugin-accounts.invitation.accepted",
 ] = [
   "nextlyhq-plugin-accounts.account.deleted",
   "nextlyhq-plugin-accounts.account.deactivated",
   "nextlyhq-plugin-accounts.account.reactivated",
+  "nextlyhq-plugin-accounts.invitation.accepted",
 ] as const satisfies ReadonlyArray<keyof AccountsEventPayloads>;
 
 export interface AccountsEvents {

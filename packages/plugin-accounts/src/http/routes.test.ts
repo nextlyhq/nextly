@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { ACCOUNT_PRINCIPAL, accountsRoutes } from "./routes";
+import { ACCOUNT_PRINCIPAL } from "./principal";
+import { accountsRoutes } from "./routes";
 
 /** The routes only a signed-in holder may reach. */
 const HOLDER_ROUTES = [
@@ -31,7 +32,7 @@ describe("the accounts routes", () => {
       route => !HOLDER_ROUTES.includes(named(route))
     );
 
-    expect(others).toHaveLength(11);
+    expect(others).toHaveLength(12);
     for (const route of others) expect(route.public).toBe(true);
     for (const route of routes)
       expect(route.public === true && route.principal !== undefined).toBe(

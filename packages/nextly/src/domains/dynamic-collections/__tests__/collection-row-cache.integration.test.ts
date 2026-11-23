@@ -3,7 +3,7 @@
  *
  * - reads are the same with the cache warm as with it cold;
  * - a warm read sends the database 3 statements for an entry and 4 for a page,
- *   where the same read without the cache sends 11 and 13;
+ *   where the same read without the cache sends 13 and 15;
  * - every registry write a registry service makes is seen at once, and so is
  *   a Builder schema save's own write, past a read made during the save;
  * - a change made elsewhere, which moves the stored count of registry writes
@@ -223,9 +223,11 @@ describe.each(getConfiguredTestDialects())(
     });
 
     // The card component's registry row comes from the cache as well, a statement off each read.
-    // Without the cache, a read asks for that row twice since field groups placed in field groups
-    // are read at any depth: the cache answers both.
-    it("sends a warm read 3 statements for an entry and 4 for a page, where without the cache it sends 12 and 14", async () => {
+    // Without the cache, a read asks for that row three times: field groups placed in field groups
+    // are read at any depth, and a related document's field hooks are run inside components
+    // (measured: the walk that reaches a relationship inside a component reads the card's row once
+    // more, one statement on each read, entry and page). The cache answers all three.
+    it("sends a warm read 3 statements for an entry and 4 for a page, where without the cache it sends 13 and 15", async () => {
       const { t, articleId } = await bootSite(dialect);
       const reads = readsOf(t, articleId);
       const counted = async (read: () => Promise<unknown>) => {
@@ -244,7 +246,7 @@ describe.each(getConfiguredTestDialects())(
       };
       expect({ warm, cold }).toEqual({
         warm: { detail: 3, list: 4 },
-        cold: { detail: 12, list: 14 },
+        cold: { detail: 13, list: 15 },
       });
     });
 

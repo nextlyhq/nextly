@@ -992,4 +992,16 @@ describe("SEO on every content type, where the site names none", () => {
       seoPlugin({ sitemap: { collections: ["posts"] } })
     ).not.toThrow();
   });
+
+  it("opens each collection it contributes to every preset role, as before collections started closed to them", () => {
+    const collections =
+      seoPlugin({ collections: ["pages"] }).contributes?.collections ?? [];
+    expect(collections.length).toBeGreaterThan(0);
+    for (const collection of collections) {
+      expect({ slug: collection.slug, grants: collection.grants }).toEqual({
+        slug: collection.slug,
+        grants: { presets: ["admin", "editor", "author", "viewer"] },
+      });
+    }
+  });
 });

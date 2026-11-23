@@ -20,10 +20,6 @@
 -- Posts collection
 CREATE TABLE IF NOT EXISTS `dc_posts` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
-  `title` varchar(255) NOT NULL,
-  `slug` varchar(255) NOT NULL,
-  `content` text,
-  `excerpt` text,
   `featured_image` varchar(36),
   `author` varchar(191),
   `byline` varchar(36),
@@ -38,57 +34,40 @@ CREATE TABLE IF NOT EXISTS `dc_posts` (
   `word_count` integer,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  `created_by` text,
-  UNIQUE KEY `uq_posts_slug` (`slug`)
+  `created_by` text
 ) ENGINE=InnoDB;
 
 -- Categories collection
 CREATE TABLE IF NOT EXISTS `dc_categories` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
-  `title` varchar(255) NOT NULL,
-  `name` varchar(255) NOT NULL,
-  `slug` varchar(255) NOT NULL,
-  `icon` text,
-  `description` text,
   `status` varchar(20) NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   `first_published_at` timestamp NULL DEFAULT NULL,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  `created_by` text,
-  UNIQUE KEY `uq_categories_slug` (`slug`)
+  `created_by` text
 ) ENGINE=InnoDB;
 
 -- Tags collection
 CREATE TABLE IF NOT EXISTS `dc_tags` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
-  `title` varchar(255) NOT NULL,
-  `name` varchar(255) NOT NULL,
-  `slug` varchar(255) NOT NULL,
-  `description` text,
   `status` varchar(20) NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   `first_published_at` timestamp NULL DEFAULT NULL,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  `created_by` text,
-  UNIQUE KEY `uq_tags_slug` (`slug`)
+  `created_by` text
 ) ENGINE=InnoDB;
 
 -- Authors collection: the public profiles a post's byline credits. A post's
 -- `author` is the account that owns it; its `byline` is one of these.
 CREATE TABLE IF NOT EXISTS `dc_authors` (
   `id` varchar(36) PRIMARY KEY DEFAULT (UUID()),
-  `title` varchar(255) NOT NULL,
-  `name` varchar(255) NOT NULL,
-  `slug` varchar(255) NOT NULL,
-  `bio` text,
   `avatar` varchar(36),
   `account` varchar(191),
   `status` varchar(20) NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   `first_published_at` timestamp NULL DEFAULT NULL,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  `created_by` text,
-  UNIQUE KEY `uq_authors_slug` (`slug`)
+  `created_by` text
 ) ENGINE=InnoDB;
 
 -- ============ USER EXTENSION TABLE ============
@@ -147,9 +126,6 @@ CREATE TABLE `single_site_settings` (
   `slug` varchar(255) NOT NULL DEFAULT 'site-settings',
   `status` varchar(20) NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   `first_published_at` timestamp NULL DEFAULT NULL,
-  `site_name` varchar(255) NOT NULL DEFAULT 'My Blog',
-  `tagline` varchar(500) DEFAULT 'Thoughts on web development',
-  `site_description` text,
   `logo` varchar(36),
   `social` json,
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
@@ -180,21 +156,135 @@ CREATE TABLE `single_homepage` (
   `slug` varchar(255) NOT NULL DEFAULT 'homepage',
   `status` varchar(20) NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
   `first_published_at` timestamp NULL DEFAULT NULL,
-  `hero_title` varchar(500) NOT NULL DEFAULT 'Ideas on building, shipping, and surviving software.',
-  `hero_subtitle` varchar(500) DEFAULT 'Essays and notes from our engineering team.',
   `show_featured_post` tinyint(1) DEFAULT 1,
-  `featured_section_title` varchar(100) DEFAULT 'Featured',
   `show_latest_posts` tinyint(1) DEFAULT 1,
-  `latest_section_title` varchar(100) DEFAULT 'Latest',
   `latest_posts_count` integer DEFAULT 3,
   `show_category_strip` tinyint(1) DEFAULT 1,
   `show_newsletter_cta` tinyint(1) DEFAULT 1,
-  `newsletter_heading` varchar(255) DEFAULT 'Get new posts in your inbox',
-  `newsletter_subheading` varchar(255) DEFAULT 'No spam. Unsubscribe anytime.',
   `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_by` text
 ) ENGINE=InnoDB;
+
+-- ============ TRANSLATIONS TABLES ============
+-- Every installation keeps its translatable fields (text, rich text) per language, each
+-- entity's in a `<table>_locales` table: one row per document and language, keyed by
+-- `_parent` and `_locale`. The main tables above hold the shared fields only. These
+-- statements are the ones `nextly migrate:create` writes for the same fields; a slug is
+-- unique within each language. The Navigation single has no translatable field, so it
+-- has no translations table.
+
+CREATE TABLE IF NOT EXISTS `dc_posts_locales` (
+  `_parent` VARCHAR(36) NOT NULL,
+  `_locale` VARCHAR(20) NOT NULL,
+  `_updated_at` DATETIME(3),
+  `_revision` int DEFAULT 1 NOT NULL,
+  `_changed_by_kind` varchar(16),
+  `_changed_by_id` varchar(255),
+  `_changed_by_principal_kind` varchar(64),
+  `_changed_at` timestamp,
+  `title` TEXT,
+  `slug` VARCHAR(255),
+  `content` TEXT,
+  `excerpt` TEXT,
+  PRIMARY KEY (`_parent`, `_locale`),
+  FOREIGN KEY (`_parent`) REFERENCES `dc_posts` (`id`) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX `uq_dc_posts_locales_slug__locale_1mvq6jl` ON `dc_posts_locales` ((SHA2(WEIGHT_STRING(NULLIF(`slug`, '')), 256)), `_locale`);
+
+CREATE TABLE IF NOT EXISTS `dc_categories_locales` (
+  `_parent` VARCHAR(36) NOT NULL,
+  `_locale` VARCHAR(20) NOT NULL,
+  `_updated_at` DATETIME(3),
+  `_revision` int DEFAULT 1 NOT NULL,
+  `_changed_by_kind` varchar(16),
+  `_changed_by_id` varchar(255),
+  `_changed_by_principal_kind` varchar(64),
+  `_changed_at` timestamp,
+  `title` TEXT,
+  `name` TEXT,
+  `slug` VARCHAR(255),
+  `icon` TEXT,
+  `description` TEXT,
+  PRIMARY KEY (`_parent`, `_locale`),
+  FOREIGN KEY (`_parent`) REFERENCES `dc_categories` (`id`) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX `uq_dc_categories_locales_slug__locale_1mvq6jl` ON `dc_categories_locales` ((SHA2(WEIGHT_STRING(NULLIF(`slug`, '')), 256)), `_locale`);
+
+CREATE TABLE IF NOT EXISTS `dc_tags_locales` (
+  `_parent` VARCHAR(36) NOT NULL,
+  `_locale` VARCHAR(20) NOT NULL,
+  `_updated_at` DATETIME(3),
+  `_revision` int DEFAULT 1 NOT NULL,
+  `_changed_by_kind` varchar(16),
+  `_changed_by_id` varchar(255),
+  `_changed_by_principal_kind` varchar(64),
+  `_changed_at` timestamp,
+  `title` TEXT,
+  `name` TEXT,
+  `slug` VARCHAR(255),
+  `description` TEXT,
+  PRIMARY KEY (`_parent`, `_locale`),
+  FOREIGN KEY (`_parent`) REFERENCES `dc_tags` (`id`) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX `uq_dc_tags_locales_slug__locale_1mvq6jl` ON `dc_tags_locales` ((SHA2(WEIGHT_STRING(NULLIF(`slug`, '')), 256)), `_locale`);
+
+CREATE TABLE IF NOT EXISTS `dc_authors_locales` (
+  `_parent` VARCHAR(36) NOT NULL,
+  `_locale` VARCHAR(20) NOT NULL,
+  `_updated_at` DATETIME(3),
+  `_revision` int DEFAULT 1 NOT NULL,
+  `_changed_by_kind` varchar(16),
+  `_changed_by_id` varchar(255),
+  `_changed_by_principal_kind` varchar(64),
+  `_changed_at` timestamp,
+  `title` TEXT,
+  `name` TEXT,
+  `slug` VARCHAR(255),
+  `bio` TEXT,
+  PRIMARY KEY (`_parent`, `_locale`),
+  FOREIGN KEY (`_parent`) REFERENCES `dc_authors` (`id`) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX `uq_dc_authors_locales_slug__locale_1mvq6jl` ON `dc_authors_locales` ((SHA2(WEIGHT_STRING(NULLIF(`slug`, '')), 256)), `_locale`);
+
+CREATE TABLE `single_site_settings_locales` (
+  `_parent` VARCHAR(36) NOT NULL,
+  `_locale` VARCHAR(20) NOT NULL,
+  `_updated_at` DATETIME(3),
+  `_revision` int DEFAULT 1 NOT NULL,
+  `_changed_by_kind` varchar(16),
+  `_changed_by_id` varchar(255),
+  `_changed_by_principal_kind` varchar(64),
+  `_changed_at` timestamp,
+  `site_name` TEXT,
+  `tagline` TEXT,
+  `site_description` TEXT,
+  PRIMARY KEY (`_parent`, `_locale`),
+  FOREIGN KEY (`_parent`) REFERENCES `single_site_settings` (`id`) ON DELETE CASCADE
+);
+
+CREATE TABLE `single_homepage_locales` (
+  `_parent` VARCHAR(36) NOT NULL,
+  `_locale` VARCHAR(20) NOT NULL,
+  `_updated_at` DATETIME(3),
+  `_revision` int DEFAULT 1 NOT NULL,
+  `_changed_by_kind` varchar(16),
+  `_changed_by_id` varchar(255),
+  `_changed_by_principal_kind` varchar(64),
+  `_changed_at` timestamp,
+  `hero_title` TEXT,
+  `hero_subtitle` TEXT,
+  `featured_section_title` TEXT,
+  `latest_section_title` TEXT,
+  `newsletter_heading` TEXT,
+  `newsletter_subheading` TEXT,
+  PRIMARY KEY (`_parent`, `_locale`),
+  FOREIGN KEY (`_parent`) REFERENCES `single_homepage` (`id`) ON DELETE CASCADE
+);
 
 -- ============ INDEXES ============
 
@@ -206,13 +296,10 @@ CREATE INDEX `idx_posts_author` ON `dc_posts`(`author`);
 CREATE INDEX `idx_posts_byline` ON `dc_posts`(`byline`);
 
 -- Categories indexes
-CREATE INDEX `idx_categories_slug` ON `dc_categories`(`slug`);
 
 -- Tags indexes
-CREATE INDEX `idx_tags_slug` ON `dc_tags`(`slug`);
 
 -- Authors indexes
-CREATE INDEX `idx_authors_slug` ON `dc_authors`(`slug`);
 -- One profile per account: a new post is credited to its writer's profile.
 CREATE UNIQUE INDEX `uq_authors_account` ON `dc_authors`(`account`);
 
@@ -262,14 +349,18 @@ FOREIGN KEY (`logo`) REFERENCES `media`(`id`) ON DELETE SET NULL;
 -- does not have to ask for consent before writing them.
 -- Insert default documents for each single so they're accessible immediately
 -- MySQL uses INSERT IGNORE instead of ON CONFLICT DO NOTHING
-INSERT IGNORE INTO `single_site_settings` (`id`, `title`, `slug`, `status`, `site_name`, `tagline`, `created_at`, `updated_at`)
-VALUES (UUID(), 'Site Settings', 'site-settings', 'published', 'My Blog', 'Thoughts on web development', NOW(), NOW());
+INSERT IGNORE INTO `single_site_settings` (`id`, `title`, `slug`, `status`, `created_at`, `updated_at`)
+VALUES (UUID(), 'Site Settings', 'site-settings', 'published', NOW(), NOW());
+INSERT IGNORE INTO `single_site_settings_locales` (`_parent`, `_locale`, `site_name`, `tagline`)
+SELECT `id`, 'en', 'My Blog', 'Thoughts on web development' FROM `single_site_settings` WHERE `slug` = 'site-settings';
 
 INSERT IGNORE INTO `single_navigation` (`id`, `title`, `slug`, `status`, `show_theme_toggle`, `show_search_icon`, `created_at`, `updated_at`)
 VALUES (UUID(), 'Navigation', 'navigation', 'published', 1, 1, NOW(), NOW());
 
-INSERT IGNORE INTO `single_homepage` (`id`, `title`, `slug`, `status`, `hero_title`, `hero_subtitle`, `show_featured_post`, `featured_section_title`, `show_latest_posts`, `latest_section_title`, `latest_posts_count`, `show_category_strip`, `show_newsletter_cta`, `newsletter_heading`, `newsletter_subheading`, `created_at`, `updated_at`)
-VALUES (UUID(), 'Homepage', 'homepage', 'published', 'Ideas on building, shipping, and surviving software.', 'Essays and notes from our engineering team.', 1, 'Featured', 1, 'Latest', 3, 1, 1, 'Get new posts in your inbox', 'No spam. Unsubscribe anytime.', NOW(), NOW());
+INSERT IGNORE INTO `single_homepage` (`id`, `title`, `slug`, `status`, `show_featured_post`, `show_latest_posts`, `latest_posts_count`, `show_category_strip`, `show_newsletter_cta`, `created_at`, `updated_at`)
+VALUES (UUID(), 'Homepage', 'homepage', 'published', 1, 1, 3, 1, 1, NOW(), NOW());
+INSERT IGNORE INTO `single_homepage_locales` (`_parent`, `_locale`, `hero_title`, `hero_subtitle`, `featured_section_title`, `latest_section_title`, `newsletter_heading`, `newsletter_subheading`)
+SELECT `id`, 'en', 'Ideas on building, shipping, and surviving software.', 'Essays and notes from our engineering team.', 'Featured', 'Latest', 'Get new posts in your inbox', 'No spam. Unsubscribe anytime.' FROM `single_homepage` WHERE `slug` = 'homepage';
 
 -- ============================================
 -- DOWN: Rollback all changes
@@ -312,6 +403,14 @@ DROP TABLE IF EXISTS `dc_posts_tags`;
 DROP TABLE IF EXISTS `user_ext`;
 
 -- Drop tables (singles first, then collections)
+-- Drop the translations tables (depend on their main tables)
+DROP TABLE IF EXISTS `single_homepage_locales`;
+DROP TABLE IF EXISTS `single_site_settings_locales`;
+DROP TABLE IF EXISTS `dc_tags_locales`;
+DROP TABLE IF EXISTS `dc_authors_locales`;
+DROP TABLE IF EXISTS `dc_categories_locales`;
+DROP TABLE IF EXISTS `dc_posts_locales`;
+
 DROP TABLE IF EXISTS `single_homepage`;
 DROP TABLE IF EXISTS `single_navigation`;
 DROP TABLE IF EXISTS `single_site_settings`;

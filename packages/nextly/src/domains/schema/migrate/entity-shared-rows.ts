@@ -45,7 +45,7 @@ import {
   type CoveredEntity,
   type EntityOwners,
 } from "./entity-coverage";
-import { readMigrationSnapshot } from "./rollback-to-record";
+import { readMigrationSnapshot } from "./migration-snapshot-file";
 
 /**
  * Where an entity's field-group values are listed before the tables holding
