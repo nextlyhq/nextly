@@ -455,17 +455,26 @@ describe.each(getConfiguredTestDialects())(
 
       const refused = await migrate();
 
+      // "12" stays a text inside the JSON, which the number reads only once rewritten; "abc" no
+      // number reads.
       expect(NextlyError.is(refused)).toBe(true);
-      expect(
-        (refused as { publicData?: { errors?: unknown[] } }).publicData?.errors
-      ).toEqual([
+      const errors = (
+        refused as { publicData?: { errors?: { message: string }[] } }
+      ).publicData?.errors;
+      expect(errors).toEqual([
         expect.objectContaining({
-          code: "TYPE_CHANGE_LOSES_VALUES",
+          code: "TYPE_CHANGE_BLOCKED",
           message: expect.stringMatching(
-            /Collection 'kits' \(migration .+\.sql\): field 'details\.price' cannot change from text to number .*would be cleared \(1 row: id k2\)/
+            /^Collection 'kits' \(migration .+\.sql\): field 'details\.price' cannot change from text to number /
           ),
         }),
       ]);
+      expect(errors?.[0]?.message).toContain(
+        "rewritten into its form, which a save does not do yet (1 row: id k1)"
+      );
+      expect(errors?.[0]?.message).toContain(
+        "values that are not a number would be cleared (1 row: id k2)"
+      );
       const rows = (await adapter.executeQuery(
         `SELECT ${q("id")} AS id, ${q("details")} AS details FROM ${q("dc_kits")} ORDER BY ${q("id")}`
       )) as Array<{ details: unknown }>;

@@ -9,6 +9,7 @@
  */
 import { sql } from "drizzle-orm";
 
+import { isVirtualField } from "../../../../collections/fields/virtual";
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import {
@@ -35,7 +36,7 @@ import {
   fieldTypeOnDialect,
 } from "./field-type";
 import {
-  collectTypeChange,
+  collectNestedTypeChange,
   FIRST_KEYS,
   fieldAccepts,
   judgeStoredTypeChange,
@@ -73,11 +74,17 @@ function changedFieldName(change: FieldTypeChange): string {
 /** The field types that hold their own fields inside one JSON value of the row. */
 const CONTAINERS = new Set(["group", "repeater"]);
 
-/** A container field's own fields, by name, a group with no name inside it read through. */
+/**
+ * A container field's own fields that hold a value, by name, a group with no name inside it read
+ * through. A virtual field, or a container's whole subtree when it is virtual, stores nothing,
+ * as a virtual field on the row has no column.
+ */
 function containedFields(field: FieldDefinition): FieldDefinition[] {
   const fields = (field as { fields?: unknown }).fields;
   return Array.isArray(fields)
-    ? fieldsStoredOnRow(fields as FieldDefinition[])
+    ? fieldsStoredOnRow(fields as FieldDefinition[]).filter(
+        inner => !isVirtualField(inner)
+      )
     : [];
 }
 
@@ -360,8 +367,9 @@ async function judgeOnRow(
 
 /**
  * A change of a field held inside its container's JSON, judged over each row's values of it there
- * (`nestedValues`), read from the container's column. Its container's column keeps its type, so
- * nothing of the translations table's flags applies. Undefined where neither table holds it.
+ * (`nestedValues`, `collectNestedTypeChange`), read from the container's column. Its container's
+ * column keeps its type, so nothing of the translations table's flags applies. Undefined where
+ * neither table holds it.
  */
 async function judgeNestedChange(
   change: FieldTypeChange,
@@ -380,7 +388,7 @@ async function judgeNestedChange(
     ...change,
     table,
     column,
-    result: await collectTypeChange(
+    result: await collectNestedTypeChange(
       change.fromType,
       change.toType,
       nestedValues({
@@ -390,8 +398,6 @@ async function judgeNestedChange(
         column,
         keyedBy: table === args.translationsTable ? "translation" : "id",
         path: within.path,
-        from: change.fromType,
-        to: change.toType,
       }),
       fieldAccepts(change.toType, change.to)
     ),

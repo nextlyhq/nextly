@@ -103,6 +103,24 @@ describe("fieldTypeChangesOf, for fields held inside JSON", () => {
     expect(changesOf([group("text")], [group("number")], false)).toEqual([]);
   });
 
+  it("gives none for a virtual field, or a field of a virtual container, which stores nothing", () => {
+    const group = (inner: FieldDefinition) =>
+      field("details", "group", { fields: [inner] });
+    const virtual = (type: string) => field("when", type, { virtual: true });
+    expect(
+      changesOf([group(virtual("date"))], [group(virtual("email"))])
+    ).toEqual([]);
+    // A virtual group inside a stored one: nothing below it is stored either.
+    const inVirtual = (type: string) =>
+      field("meta", "group", {
+        options: { virtual: true },
+        fields: [field("when", type)],
+      });
+    expect(
+      changesOf([group(inVirtual("date"))], [group(inVirtual("email"))])
+    ).toEqual([]);
+  });
+
   it("reads a value held inside JSON with no column bound: a long text keeps its type", () => {
     // A short text and a long one differ only by their column, which a value inside JSON has not.
     const group = (extra: object) =>

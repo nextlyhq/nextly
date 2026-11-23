@@ -19,12 +19,11 @@ import type {
   StoredValue,
 } from "../types";
 
-import { decodeStored } from "./decode-stored";
+import { decodeStored, itemOf } from "./decode-stored";
 import type { FieldTypeOnDialect } from "./field-type";
 import {
   classOf,
   judgeValue,
-  type OldValue,
   type ValueVerdict,
   type OutcomeReason,
   pairBlocked,
@@ -93,48 +92,114 @@ const REPORTED_AS: Record<
 export async function collectTypeChange(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect,
-  values: AsyncIterable<
-    Pick<StoredValue, "key" | "text" | "exactReal"> & {
-      /**
-       * The value already read as the old field reads it, where it is held inside a JSON value (a
-       * named group's or a repeater's field, `nestedValues`): judged as it is, with no column cast
-       * applied, since a type change converts nothing held inside JSON.
-       */
-      old?: OldValue;
-    }
-  >,
+  values: AsyncIterable<Pick<StoredValue, "key" | "text" | "exactReal">>,
   accepts?: (readsAs: string) => Promise<boolean>,
   options: CollectOptions = {}
 ): Promise<StoredTypeChangeJudgement> {
-  // A pair blocked whatever its values hold is one reason of the types, with no rows. A
-  // relationship's change is judged by its rows instead: one holding no link has nothing for the
-  // change to carry, so only the rows holding one block it, each counted (`link-not-carried`).
-  const blocked = pairBlocked(from, to);
-  if (blocked !== null && blocked !== "relationship") {
-    return {
-      judgement: {
-        class: "blocked",
-        reasons: [{ kind: "pair-blocked", class: "blocked" }],
-      },
-      cleared: [],
-      counts: { kept: 0, changed: 0, lost: 0, blocked: 0 },
-    };
-  }
+  const blocked = blockedPairJudgement(from, to);
+  if (blocked !== null) return blocked;
   const read = storedAsRead(from, to);
   const tally = new TypeChangeTally(options, read);
   for await (const value of values) {
     const stored = value.exactReal ?? value.text;
-    const verdict =
-      value.old === undefined
-        ? asConverted(
-            judgeValue(from, to, decodeStored(from, value)),
-            stored,
-            read
-          )
-        : judgeValue(from, to, value.old);
-    tally.add(value.key, await withFieldRule(verdict, accepts), stored);
+    tally.add(
+      value.key,
+      await withFieldRule(
+        asConverted(
+          judgeValue(from, to, decodeStored(from, value)),
+          stored,
+          read
+        ),
+        accepts
+      ),
+      stored
+    );
   }
   return tally.result();
+}
+
+/** How bad each outcome is, so a row holding several values is counted by its worst. */
+const SEVERITY: Record<ValueOutcome, number> = {
+  kept: 0,
+  changed: 1,
+  lost: 2,
+  blocked: 3,
+};
+
+/**
+ * The judgement of a field held inside JSON: a named group's or a repeater's field, its values
+ * read row by row from the container's column (`nestedValues`). Each value is judged by the same
+ * rules and the new field's own validation as a value on the row, but a type change converts
+ * nothing held inside JSON: a value is kept only where the new field reads it as it is stored, and
+ * one the rules would write in the new type's form stays in its old form, which the new field reads
+ * only once it is rewritten (`needs-rewrite`). A row is counted once, by the worst of its values,
+ * each asked in full before the worst is chosen.
+ */
+export async function collectNestedTypeChange(
+  from: FieldTypeOnDialect,
+  to: FieldTypeOnDialect,
+  rows: AsyncIterable<{ key: RowKey; values: readonly unknown[] }>,
+  accepts?: (readsAs: string) => Promise<boolean>
+): Promise<StoredTypeChangeJudgement> {
+  const blocked = blockedPairJudgement(from, to);
+  if (blocked !== null) return blocked;
+  const tally = new TypeChangeTally({}, heldInJson(from, to));
+  for await (const row of rows) {
+    let worst: { verdict: ValueVerdict; stored: string | null } | null = null;
+    let worstRank = -1;
+    for (const value of row.values) {
+      // The value's JSON writing, as the container keeps it; a missing or null one is no value.
+      const stored =
+        value === null || value === undefined ? null : JSON.stringify(value);
+      const verdict = await withFieldRule(
+        judgeValue(from, to, itemOf(from, value)),
+        accepts
+      );
+      const rank = SEVERITY[tally.outcomeAsStored(verdict, stored)];
+      if (rank > worstRank) {
+        worst = { verdict, stored };
+        worstRank = rank;
+      }
+    }
+    if (worst !== null) tally.add(row.key, worst.verdict, worst.stored);
+  }
+  return tally.result();
+}
+
+/**
+ * How a value held inside JSON compares with what `to` reads: as its JSON writing stands, since no
+ * conversion rewrites it. A stored empty list is an empty value where the new type keeps a list.
+ */
+function heldInJson(
+  from: FieldTypeOnDialect,
+  to: FieldTypeOnDialect
+): StoredAsRead {
+  return {
+    value: (stored, readsAs) =>
+      stored !== null && stored === JSON.stringify(valueOf(to, readsAs)),
+    emptyListHeld: storedAsRead(from, to).emptyListHeld,
+  };
+}
+
+/**
+ * A pair blocked whatever its values hold, as one reason of the types with no rows; null where its
+ * values decide. A relationship's change is judged by its rows instead: one holding no link has
+ * nothing for the change to carry, so only the rows holding one block it (`link-not-carried`).
+ */
+function blockedPairJudgement(
+  from: FieldTypeOnDialect,
+  to: FieldTypeOnDialect
+): StoredTypeChangeJudgement | null {
+  const blocked = pairBlocked(from, to);
+  if (blocked === null || blocked === "relationship") return null;
+  return {
+    judgement: {
+      class: "blocked",
+      reasons: [{ kind: "pair-blocked", class: "blocked" }],
+    },
+    cleared: [],
+    counts: { kept: 0, changed: 0, lost: 0, blocked: 0 },
+  };
 }
 
 /**
@@ -239,11 +304,31 @@ class TypeChangeTally {
     verdict: ValueVerdict,
     stored: string | null
   ): boolean {
-    if (verdict.reason !== "empty" || stored === null) return false;
-    if (this.read.emptyListHeld && stored.trim() === "[]") return false;
-    if (writtenAsNone(this.read, stored)) return false;
+    if (verdict.reason !== "empty" || !this.emptyStoredAsValue(stored)) {
+      return false;
+    }
     this.note("needs-rewrite", key);
     return true;
+  }
+
+  /** Whether a value the rules read as empty is stored as something the new type does not. */
+  private emptyStoredAsValue(stored: string | null): boolean {
+    if (stored === null) return false;
+    if (this.read.emptyListHeld && stored.trim() === "[]") return false;
+    return !writtenAsNone(this.read, stored);
+  }
+
+  /**
+   * The outcome a value is counted under once held to its stored form, asking nothing of the other
+   * rows: blocked where it is stored as other than its reading (`needs-rewrite`), else as judged.
+   */
+  outcomeAsStored(verdict: ValueVerdict, stored: string | null): ValueOutcome {
+    const unread =
+      verdict.reason === "empty"
+        ? this.emptyStoredAsValue(stored)
+        : verdict.readsAs !== undefined &&
+          !this.read.value(stored, verdict.readsAs, verdict.outcome);
+    return unread ? "blocked" : verdict.outcome;
   }
 
   /**

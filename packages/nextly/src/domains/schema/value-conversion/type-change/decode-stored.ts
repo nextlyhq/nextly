@@ -180,7 +180,7 @@ function listOf(from: FieldTypeOnDialect, text: string): OldValue {
 
 /**
  * One value held inside a JSON value, as its JSON value reads for `item`: a list's item, or a named
- * group's or a repeater's field (`nestedValues`).
+ * group's or a repeater's field (`collectNestedTypeChange`).
  */
 export function itemOf(
   item: FieldTypeOnDialect | undefined,
