@@ -106,6 +106,28 @@ import { bundleAndRequire } from "./config-bundler";
 const UNREAD_BUILDER_ENTITIES: BuilderEntities = Object.freeze({});
 
 /**
+ * Why each definition file read as `UNREAD_BUILDER_ENTITIES` could not be read, by the object
+ * returned for it: a command that reads the entities reports it with the configuration's problems.
+ */
+const unreadReasons = new WeakMap<BuilderEntities, unknown>();
+
+/** Whether `entities` stands for a definition file that could not be read. */
+function isUnread(entities: BuilderEntities): boolean {
+  return entities === UNREAD_BUILDER_ENTITIES || unreadReasons.has(entities);
+}
+
+/**
+ * What a problem in the Builder's definitions does for `options`: `builderDefinitions` where it is
+ * given, else refused where the caller refuses a missing configuration and warned of otherwise.
+ */
+function builderPolicyOf(options: LoadConfigOptions): "refuse" | "warn" {
+  return (
+    options.builderDefinitions ??
+    (options.missing === "refuse" ? "refuse" : "warn")
+  );
+}
+
+/**
  * The Builder's entities from the app's ui-schema file, empty when there is none. A malformed file
  * is surfaced by migrate:create and migrate:check, which load it again; loading the configuration
  * for any other command does not fail on it, and gets `UNREAD_BUILDER_ENTITIES`.
@@ -118,8 +140,11 @@ async function readBuilderEntities(
     return manifestToBuilderEntities(
       await loadUiSchema({ projectRoot, uiSchemaFile })
     );
-  } catch {
-    return UNREAD_BUILDER_ENTITIES;
+  } catch (error) {
+    // Its own object, so the reason travels with it (`unreadReasons`).
+    const unread: BuilderEntities = Object.freeze({});
+    unreadReasons.set(unread, error);
+    return unread;
   }
 }
 
@@ -136,7 +161,7 @@ async function refuseLostBuilderDefinitions(
   config: SanitizedNextlyConfig,
   builderEntities: BuilderEntities
 ): Promise<void> {
-  if (builderEntities === UNREAD_BUILDER_ENTITIES) return;
+  if (isUnread(builderEntities)) return;
   let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
     latest = await loadLatestSnapshot(
@@ -171,6 +196,24 @@ const UNKNOWN_TARGET_CODES: ReadonlySet<string> = new Set([
 /** Whether `error` refuses a target nothing declares, which may be an entity the file lost. */
 function namesAnUnknownTarget(error: unknown): boolean {
   return NextlyError.is(error) && UNKNOWN_TARGET_CODES.has(error.code);
+}
+
+/** The problem an unreadable definition file is, at the file, in the shared report's shape. */
+function unreadDefinitionProblems(
+  unread: BuilderEntities,
+  definitionFile: string
+): ReturnType<typeof builderDefinitionProblems> {
+  const reason = unreadReasons.get(unread);
+  return [
+    {
+      path: definitionFile.replace(/^\.\//, ""),
+      code: NextlyError.is(reason) ? reason.code : "NEXTLY_UI_SCHEMA_INVALID",
+      message: NextlyError.is(reason)
+        ? reason.publicMessage
+        : "The Builder's definition file could not be read.",
+      declaredByDefine: false,
+    },
+  ];
 }
 
 /** Builder collection slugs (the only valid relationTo targets among Builder entities). */
@@ -402,6 +445,8 @@ export interface LoadConfigResult {
 export type ConfigChangeCallback = (result: LoadConfigResult) => void;
 
 let cachedConfig: LoadConfigResult | null = null;
+/** What the cached load did with a problem in the Builder's definitions (`builderPolicyOf`). */
+let cachedBuilderPolicy: "refuse" | "warn" = "warn";
 
 let fileWatcher: FSWatcher | null = null;
 
@@ -969,23 +1014,18 @@ async function loadConfigInternal(
       cwd,
       config.db?.uiSchemaFile
     );
-    if (builderEntitiesRead !== UNREAD_BUILDER_ENTITIES) {
-      const builderProblems = builderDefinitionProblems(
-        builderEntitiesRead,
-        config,
-        config.db?.uiSchemaFile ?? "ui-schema.json"
-      );
-      const refuses =
-        (options.builderDefinitions ??
-          (options.missing === "refuse" ? "refuse" : "warn")) === "refuse";
-      if (refuses) {
-        problems.push(...builderProblems);
-      } else {
-        for (const problem of builderProblems) {
-          consoleLogger.warn(
-            `[Nextly] Problem in the Builder's definitions at ${problem.path}: ${problem.message}`
-          );
-        }
+    const definitionFile = config.db?.uiSchemaFile ?? "ui-schema.json";
+    // A file that could not be read is that one problem: its entries were not read to be judged.
+    const builderProblems = isUnread(builderEntitiesRead)
+      ? unreadDefinitionProblems(builderEntitiesRead, definitionFile)
+      : builderDefinitionProblems(builderEntitiesRead, config, definitionFile);
+    if (builderPolicyOf(options) === "refuse") {
+      problems.push(...builderProblems);
+    } else {
+      for (const problem of builderProblems) {
+        consoleLogger.warn(
+          `[Nextly] Problem in the Builder's definitions at ${problem.path}: ${problem.message}`
+        );
       }
     }
     if (problems.length > 0) {
@@ -1144,10 +1184,14 @@ export async function loadConfig(
   // cached default, given where no configuration file was found, is no answer to a caller that
   // refuses to act without one: it is asked again, and refused.
   const wanted = configFileFor(options);
+  // Nor is one loaded where the Builder's problems were only warned of, for a caller that refuses
+  // them.
   const cachedElsewhere =
     cachedConfig !== null &&
     (cachedConfig.configPath !== wanted ||
-      (wanted === undefined && options.missing === "refuse"));
+      (wanted === undefined && options.missing === "refuse") ||
+      (builderPolicyOf(options) === "refuse" &&
+        cachedBuilderPolicy !== "refuse"));
   if (cachedConfig && !options.watch && !cachedElsewhere) {
     debugLog(options, "Returning cached config");
     return cachedConfig;
@@ -1160,6 +1204,7 @@ export async function loadConfig(
     const loaded = await loadConfigInternal(options);
 
     cachedConfig = loaded;
+    cachedBuilderPolicy = builderPolicyOf(options);
     // This config is now the installed one, so its registry is what a
     // superseded reload has to put back if it finishes after the swap.
     markInstalledFieldTypes(loaded);

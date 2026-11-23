@@ -439,3 +439,43 @@ describe("the Builder's definitions, judged with the same rules", () => {
     ]);
   });
 });
+
+describe("a Builder relationship stored in the earlier spelling, its target in options", () => {
+  // The Builder still reads `options.target` where a field names no `relationTo`, so the field
+  // is judged with its target as the Builder reads it.
+  it("has no problem", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [
+          {
+            slug: "posts",
+            fields: [
+              {
+                name: "author",
+                type: "relationship",
+                options: { target: "users" },
+              },
+              {
+                name: "meta",
+                type: "group",
+                fields: [
+                  {
+                    name: "editor",
+                    type: "relationship",
+                    options: { target: "users" },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(problems).toEqual([]);
+  });
+});

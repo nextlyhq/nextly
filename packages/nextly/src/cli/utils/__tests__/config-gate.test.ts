@@ -365,3 +365,80 @@ describe("a Builder definition with a problem the same rules refuse", () => {
     ).toBe(true);
   });
 });
+
+describe("a Builder definition file the load cannot read", () => {
+  // A file with an entry the definition format refuses (here, one with no slug) cannot be read
+  // into entities at all; a command that reads the entities says so with the rest.
+  it("is refused, naming the file, by a command that reads the entities", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const cwd = project();
+    writeFileSync(
+      join(cwd, "ui-schema.json"),
+      JSON.stringify({
+        collections: [{ fields: [] }],
+        singles: [],
+        components: [],
+      })
+    );
+
+    const refused = await loadConfig({ cwd, missing: "refuse" }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path);
+    expect(paths).toEqual(["ui-schema.json"]);
+  });
+});
+
+describe("a load that warns of the Builder's problems, then one that refuses them", () => {
+  // The cached load warned; a caller that refuses is not answered by it.
+  it("refuses on the second load", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const cwd = project();
+    writeFileSync(
+      join(cwd, "ui-schema.json"),
+      JSON.stringify({
+        collections: [
+          {
+            slug: "cases",
+            fields: [
+              { name: "body", type: "text" },
+              { name: "body", type: "text" },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await loadConfig({ cwd, builderDefinitions: "warn" });
+
+    const refused = await loadConfig({
+      cwd,
+      builderDefinitions: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    vi.restoreAllMocks();
+
+    expect(refused).toMatchObject({ logContext: { reason: "config-invalid" } });
+  });
+});

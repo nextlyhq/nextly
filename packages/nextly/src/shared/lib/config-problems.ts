@@ -15,6 +15,7 @@ import { crossEntityProblems } from "../../collections/config/cross-entity-probl
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { validateCollectionConfig } from "../../collections/config/validate-config";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
+import { relationshipTargetSlug } from "../../domains/schema/services/relationship-key-target";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { validateFieldGroupConfig } from "../../field-groups/config/validate-field-group";
 import type { SingleConfig } from "../../singles/config/types";
@@ -387,6 +388,36 @@ const BUILDER_ALLOWS: ReadonlySet<string> = new Set([
   "SLUG_SAME_SNAKE_CASE",
 ]);
 
+/**
+ * `entity` with each relationship's target as the Builder reads it (`relationshipTargetSlug`):
+ * a field the earlier Builder stored with its target in `options.target` and no `relationTo` is
+ * judged as naming that target, nested ones included.
+ */
+function withTargetsAsBuilderReads(entity: unknown): unknown {
+  if (typeof entity !== "object" || entity === null) return entity;
+  const fields = (entity as { fields?: unknown }).fields;
+  return Array.isArray(fields)
+    ? { ...entity, fields: fieldsWithTargetsAsBuilderReads(fields) }
+    : entity;
+}
+
+function fieldsWithTargetsAsBuilderReads(
+  fields: readonly unknown[]
+): unknown[] {
+  return fields.map(field => {
+    if (typeof field !== "object" || field === null) return field;
+    const record = field as Record<string, unknown> & { relationTo?: unknown };
+    const named =
+      (typeof record.relationTo === "string" && record.relationTo !== "") ||
+      Array.isArray(record.relationTo);
+    const target = named ? null : relationshipTargetSlug(record);
+    const read = target === null ? record : { ...record, relationTo: target };
+    return Array.isArray(read.fields)
+      ? { ...read, fields: fieldsWithTargetsAsBuilderReads(read.fields) }
+      : read;
+  });
+}
+
 /** The Builder's definitions, as the definition file holds them. */
 export interface BuilderDefinitionEntities {
   collections?: readonly unknown[];
@@ -425,7 +456,15 @@ export function builderDefinitionProblems(
     const slug = slugOf(lists[kind][Number(match[2])]);
     return slug !== undefined && codeSlugs[kind].has(slug);
   };
-  return configurationProblems(lists, undefined, { acrossEntities: false })
+  return configurationProblems(
+    {
+      collections: lists.collections.map(withTargetsAsBuilderReads),
+      singles: lists.singles.map(withTargetsAsBuilderReads),
+      fieldGroups: lists.fieldGroups.map(withTargetsAsBuilderReads),
+    },
+    undefined,
+    { acrossEntities: false }
+  )
     .filter(
       problem => !BUILDER_ALLOWS.has(problem.code) && !shadowed(problem.path)
     )
