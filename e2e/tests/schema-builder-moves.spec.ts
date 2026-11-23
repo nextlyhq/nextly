@@ -3,8 +3,9 @@
  * width), by key, by Move to… and by Duplicate, each judged by the one move
  * rule and announced. A saved field moves into and out of a group, and the
  * save keeps every entry's value; a move into or out of repeating rows is
- * refused for now, saying it is not available yet. Reorders within a
- * container go ahead and are saved.
+ * refused for now, saying it is not available yet, and a move the save
+ * refuses is marked at its field. Reorders within a container go ahead and
+ * are saved.
  *
  * The collection is made at runtime, since the playground's own collections
  * are code-first and open read-only.
@@ -137,7 +138,10 @@ test.describe("moving fields in the Builder outline", () => {
 
   test.beforeEach(async ({ page }) => {
     await createRuntimeCollection(page.request, slug, [
-      plain("summary_a", "Summary A"),
+      // Kept once for every language, so it moves into a group: a text field
+      // is translatable by default, kept per language, and does not move into
+      // a group yet (the save says why).
+      plain("summary_a", "Summary A", { localized: false }),
       plain("summary_b", "Summary B"),
       plain("half_left", "Half left", { admin: { width: "50%" } }),
       plain("half_right", "Half right", { admin: { width: "50%" } }),
@@ -225,9 +229,34 @@ test.describe("moving fields in the Builder outline", () => {
       .toBe("the value before the moves");
   });
 
+  test("a move the save refuses is marked at its field, and nothing is saved", async ({
+    page,
+  }) => {
+    await gotoAdmin(page, `/builder/collections/${slug}`);
+    await expect(row(page, "sections")).toBeVisible();
+    // Summary B is translatable, kept per language: the outline lets it into
+    // the group, and the save refuses the move, which would lose languages.
+    await drag(page, "summary_b", "meta", { levels: 1 });
+    await expect(row(page, "meta/summary_b")).toBeVisible();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    // The server's reason, as written, is the field's error: on its row, and
+    // counted beside Save.
+    await expect(
+      row(page, "meta/summary_b").getByText("Has an error", { exact: true })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "1 error: show the next" })
+    ).toBeVisible();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    expect(await storedOrder(page, slug)).toContain("summary_b");
+  });
+
   test("a drag into repeating rows says why it is refused, and nothing moves", async ({
     page,
   }) => {
+    // Tall enough to draw every row, the repeating rows' last among them: a
+    // drag reaches only a row on screen, as a person's does.
+    await page.setViewportSize({ width: 1280, height: 1200 });
     await gotoAdmin(page, `/builder/collections/${slug}`);
     // Read once the outline is drawn, so it is the order a drag starts from.
     await expect(row(page, "sections")).toBeVisible();
