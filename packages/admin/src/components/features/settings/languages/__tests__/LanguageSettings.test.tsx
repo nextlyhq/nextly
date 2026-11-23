@@ -567,6 +567,28 @@ describe("Settings › Languages", () => {
     );
   });
 
+  it("gives focus to Add language once a removal is saved, the removed row's menu button being gone", async () => {
+    await open();
+    api.changeLanguages.mockResolvedValueOnce({
+      lockedByConfig: false,
+      languages: [ENGLISH, { ...SPANISH, active: false }, ARABIC],
+    });
+    const user = await choose("Spanish", "Remove…");
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Remove Spanish" })
+    );
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+    // The row moved to the removed list, and its menu button with it.
+    expect(
+      screen.queryByRole("button", { name: "Actions for Spanish" })
+    ).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add language" })).toHaveFocus()
+    );
+  });
+
   it("counts a language the server lists no translations for as holding none", async () => {
     // The server's summary names only the languages that hold translation
     // rows; on a site with no translated content it names none at all.

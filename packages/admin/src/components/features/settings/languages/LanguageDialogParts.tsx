@@ -35,17 +35,27 @@ export interface LanguageDialogSave {
   onClose: () => void;
   /** The control that opened the dialog, given focus back when it closes. */
   opener: HTMLElement | null;
+  /**
+   * Given focus instead when the opener has gone by then, as a removed
+   * language's menu button has once the removal is saved.
+   */
+  openerGone: HTMLElement | null;
 }
 
 /**
- * Gives focus back to the dialog's opener as it closes. Radix gives it to a
- * dialog's own trigger, and these dialogs are opened from a button or a menu
- * without one, so focus would otherwise fall to the page.
+ * Gives focus back to the dialog's opener as it closes, or to `openerGone`
+ * when the opener is no longer on the page. Radix gives it to a dialog's own
+ * trigger, and these dialogs are opened from a button or a menu without one,
+ * so focus would otherwise fall to the page.
  */
-function returnFocusTo(opener: HTMLElement | null) {
+function returnFocusTo(
+  opener: HTMLElement | null,
+  openerGone: HTMLElement | null
+) {
   return (event: Event): void => {
     event.preventDefault();
     if (opener?.isConnected) opener.focus();
+    else if (openerGone?.isConnected) openerGone.focus();
   };
 }
 
@@ -92,6 +102,7 @@ export function LanguageConfirmDialog({
   onSave,
   onClose,
   opener,
+  openerGone,
 }: LanguageConfirmDialogProps): React.JSX.Element {
   return (
     <AlertDialog
@@ -100,7 +111,7 @@ export function LanguageConfirmDialog({
         if (!open && !saving) onClose();
       }}
     >
-      <AlertDialogContent onCloseAutoFocus={returnFocusTo(opener)}>
+      <AlertDialogContent onCloseAutoFocus={returnFocusTo(opener, openerGone)}>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription asChild>
@@ -155,6 +166,7 @@ export function LanguageFormDialog({
   onSave,
   onClose,
   opener,
+  openerGone,
   children,
 }: LanguageFormDialogProps): React.JSX.Element {
   return (
@@ -164,7 +176,10 @@ export function LanguageFormDialog({
         if (!open && !saving) onClose();
       }}
     >
-      <DialogContent size="md" onCloseAutoFocus={returnFocusTo(opener)}>
+      <DialogContent
+        size="md"
+        onCloseAutoFocus={returnFocusTo(opener, openerGone)}
+      >
         <form
           className="space-y-4"
           onSubmit={event => {

@@ -83,6 +83,7 @@ export function LanguageSettings({
   ).data?.translationsPerLanguage;
   const changeLanguages = useChangeLanguages();
   const [open, setOpen] = useState<OpenDialogFrom | null>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
 
   const save = async (change: LanguageChange): Promise<boolean> => {
     try {
@@ -107,6 +108,7 @@ export function LanguageSettings({
     onSave: save,
     onClose: () => setOpen(null),
     opener: open?.opener ?? null,
+    openerGone: addButton.current,
   };
   const move = (language: LanguageView, step: -1 | 1) => {
     const codes = movedOrder(active, language.code, step);
@@ -157,6 +159,7 @@ export function LanguageSettings({
           </h2>
           {mayChange && (
             <Button
+              ref={addButton}
               type="button"
               size="sm"
               onClick={event =>
