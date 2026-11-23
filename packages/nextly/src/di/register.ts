@@ -4349,8 +4349,9 @@ export async function registerConfigTablesInResolver(
 
   // A collection a demote handed to the Schema Builder keeps the runtime table the registry pass
   // registered from its record: its entry, while still in the configuration, describes columns the
-  // table no longer follows (`withoutHandedToBuilder`). A registry that cannot be read leaves every
-  // entry in, as before.
+  // table no longer follows (`withoutHandedToBuilder`). Only a record whose table that pass did
+  // register counts, so where it failed (the case this registration is the fallback for) the entry
+  // is still registered, as before; so is every entry when the registry cannot be read here.
   const { CollectionRegistryService: RegistryService } = await import(
     "../domains/collections/services/collection-registry-service"
   );
@@ -4360,7 +4361,10 @@ export async function registerConfigTablesInResolver(
     .catch(() => []);
   const collections = withoutHandedToBuilder(
     (config.collections ?? []) as readonly { slug?: string | null }[],
-    registered,
+    registered.filter(
+      row =>
+        typeof row.tableName === "string" && registry.hasTable(row.tableName)
+    ),
     pluginCollectionSources(config.plugins ?? [])
   );
 
