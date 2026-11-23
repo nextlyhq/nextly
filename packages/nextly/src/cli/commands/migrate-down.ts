@@ -98,6 +98,7 @@ import {
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { refuseUniqueIndexesOverRepeats } from "../../domains/schema/migrate/unique-column-guard";
+import { refuseDropsOfUsedEntities } from "../../domains/schema/migrate/used-entity-drops";
 import {
   assertNoForeignDrops,
   columnsAfter,
@@ -380,6 +381,12 @@ export interface MigrateDownCoreDeps {
    * applied, before a DOWN rolls the file back and makes its table again.
    */
   settleRetirements?: () => Promise<void>;
+  /**
+   * Under the lock, once the DOWNs are planned and before the first runs: refuses a rollback whose
+   * DOWNs drop a collection or Single that something still uses once they have run, as
+   * `nextly migrate` refuses such a drop (`used-entity-drops.ts`).
+   */
+  refuseUsedEntityDrops?: (planned: readonly PlannedDown[]) => Promise<void>;
   execDown: (
     statements: readonly string[],
     unit: MigrationUnit,
@@ -1158,6 +1165,7 @@ export async function migrateDownCore(
         deps.logger.info("Nothing to roll back.");
         return;
       }
+      await deps.refuseUsedEntityDrops?.(current);
       for (const [at, p] of current.entries()) {
         // The last target is the one that reaches the point the rollback
         // leaves, so the bookkeeping there commits with its DOWN. A DOWN that
@@ -1410,6 +1418,7 @@ export async function downDatabaseDeps(args: {
     | "listFileApplies"
     | "execDown"
     | "settleRetirements"
+    | "refuseUsedEntityDrops"
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
     | "recordSchemaVersion"
@@ -1483,6 +1492,21 @@ export async function downDatabaseDeps(args: {
       await refuseUniqueIndexesOverRepeats(db, dialect, statements, source);
     },
     settleRetirements: settlerOf(adapter, args.logger),
+    // An app's rollback only: a plugin's modules retire no app entity.
+    refuseUsedEntityDrops:
+      plugin === undefined
+        ? planned =>
+            refuseDropsOfUsedEntities({
+              adapter,
+              db,
+              dialect,
+              units: planned.map(p => ({
+                label: p.filename,
+                statements: p.statements,
+              })),
+              extensionSchema: () => Promise.resolve(null),
+            })
+        : undefined,
     execDown: async (statements, unit, after) => {
       const ran = await runDownSection(adapter, args.busyTable, rolledBack, {
         statements,

@@ -913,6 +913,53 @@ describe.each(LOCK_DIALECTS)(
       expect(await captures()).toBe(0);
     }, 180_000);
 
+    it("judges a drop against the keys the plugins' modules the run applies first add or remove", async () => {
+      /** The refusal over `posts`' drop, after the plugins' modules' `preceding` statements. */
+      const afterModules = (preceding: string[]) =>
+        refuseDropsOfUsedEntities({
+          adapter: adapter as never,
+          db: adapter.getDrizzle(),
+          dialect,
+          units: [{ label: "x.sql", statements: POSTS_DROPPED }],
+          preceding,
+          migrationsDir,
+          extensionSchema: () => Promise.resolve(null),
+        });
+      const key = `${P}_pages_mod`;
+
+      // A module adds a key into `posts`.
+      await expect(
+        afterModules(
+          dialect === "sqlite"
+            ? [
+                `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36) REFERENCES ${posts} (id)`,
+              ]
+            : [
+                `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36)`,
+                `ALTER TABLE ${pages} ADD CONSTRAINT ${key} FOREIGN KEY (post_id) REFERENCES ${posts} (id)`,
+              ]
+        )
+      ).rejects.toThrow(new RegExp(pages));
+
+      // SQLite drops a key only by rebuilding its table.
+      if (dialect === "sqlite") return;
+      // A key the database holds, which a module drops first.
+      await adapter.executeQuery(
+        `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36)`
+      );
+      await adapter.executeQuery(
+        `ALTER TABLE ${pages} ADD CONSTRAINT ${key} FOREIGN KEY (post_id) REFERENCES ${posts} (id)`
+      );
+      await expect(afterModules([])).rejects.toThrow(new RegExp(pages));
+      await expect(
+        afterModules([
+          dialect === "mysql"
+            ? `ALTER TABLE ${pages} DROP FOREIGN KEY ${key}`
+            : `ALTER TABLE ${pages} DROP CONSTRAINT ${key}`,
+        ])
+      ).resolves.toBeUndefined();
+    }, 180_000);
+
     /**
      * `nextly migrate` as a real process over this database, as a deploy runs it, killing itself at
      * `killAt` where one is named (`stop-points.ts`). Each run clears the lock a killed one left.
@@ -1208,6 +1255,44 @@ describe.each(LOCK_DIALECTS)(
           EACH_ONCE
         );
         expect(await captures(), said).toBe(0);
+      },
+      2 * PROCESS_TIMEOUT
+    );
+
+    it(
+      "refuses migrate:down whose DOWN drops a collection a foreign key still points into",
+      async () => {
+        await extraApplied();
+        // `pages` keeps a key into `extra`, which no field declares.
+        if (dialect === "sqlite") {
+          await adapter.executeQuery(
+            `ALTER TABLE ${pages} ADD COLUMN extra_id varchar(36) REFERENCES ${extra} (id)`
+          );
+        } else {
+          await adapter.executeQuery(
+            `ALTER TABLE ${pages} ADD COLUMN extra_id varchar(36)`
+          );
+          await adapter.executeQuery(
+            `ALTER TABLE ${pages} ADD CONSTRAINT ${P}_pages_extra FOREIGN KEY (extra_id) REFERENCES ${extra} (id)`
+          );
+        }
+        const before = await ledger();
+
+        const down = await nextlyProcess([
+          "migrate:down",
+          "--step",
+          "1",
+          "--accept-data-loss",
+          "--non-interactive",
+          "--force-unlock",
+        ]);
+
+        const said = `${down.stdout}\n${down.stderr}`;
+        expect(down.status, said).not.toBe(0);
+        // Refused by the check, before the DOWN, not by the database part-way.
+        expect(said).toMatch(/still points into/);
+        expect(await adapter.tableExists(extra), said).toBe(true);
+        expect(await ledger(), said).toBe(before);
       },
       2 * PROCESS_TIMEOUT
     );

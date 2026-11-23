@@ -67,9 +67,18 @@ export interface UsedEntityDropsArgs {
   adapter: DependentsAdapter;
   db: unknown;
   dialect: SupportedDialect;
-  /** The app files this run applies, in order. */
+  /** The app files this run applies, in order, or the DOWNs it rolls back. */
   units: readonly RunFile[];
-  migrationsDir: string;
+  /**
+   * What the run applies before `units`, the plugins' modules: what they do to foreign keys counts,
+   * and they retire no app entity.
+   */
+  preceding?: readonly string[];
+  /**
+   * The app's migrations, whose newest snapshot applied or about to apply gives the fields; absent
+   * for a rollback, whose fields are the registry's.
+   */
+  migrationsDir?: string;
   extensionSchema: () => Promise<ExtensionSchemaRecord | null>;
 }
 
@@ -96,13 +105,15 @@ export async function refuseDropsOfUsedEntities(
       retires(entity.table)
   );
   if (retiring.length === 0) return;
+  // The keys the run leaves are read from everything it runs, the plugins' modules first.
+  const run = [...(args.preceding ?? []), ...statements];
   await assertNothingDependsOn(
     retiring.map(entity => ({
       kind: entity.kind,
       slug: entity.slug,
       tables: entity.tables,
     })),
-    sourcesAfterRun(args, statements),
+    sourcesAfterRun(args, run),
     // The fields of the collections dropped together go with them.
     {
       fieldsGoWith: retiring
@@ -110,7 +121,7 @@ export async function refuseDropsOfUsedEntities(
         .map(entity => entity.slug),
     }
   );
-  await refuseKeysIntoRetiredCollections(args, retiring, statements);
+  await refuseKeysIntoRetiredCollections(args, retiring, run);
 }
 
 /**
@@ -261,6 +272,7 @@ async function fieldOwnersAfter(
   owners: readonly FieldOwner[],
   args: UsedEntityDropsArgs
 ): Promise<FieldOwner[]> {
+  if (args.migrationsDir === undefined) return [...owners];
   const running = new Set(args.units.map(unit => unit.label));
   const ledger = new SchemaEventsRepository(args.db, args.dialect);
   const source = await readRegistrySource({

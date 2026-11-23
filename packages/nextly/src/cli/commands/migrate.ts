@@ -4009,6 +4009,8 @@ async function judgeFileDeletions(
       appStepAfter(deps.step, modules.length),
       deps.dialect
     ),
+    // The plugins' modules the run applies first: a key one adds or removes counts.
+    preceding: modules.flatMap(unit => unit.statements),
     migrationsDir: deps.migrationsDir,
     // The extension schema the run compiled, as the command and the boot hand it.
     extensionSchema: () => Promise.resolve(deps.extensionSchema ?? null),
