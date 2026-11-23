@@ -193,14 +193,14 @@ describe("the boot sequence in registerServices", () => {
    * for; where it runs them, after them, which record their own expiries.
    */
   it("publishes the tag expiry ledger before the schema reads, or after the migrations at start", () => {
-    const decided = boot.indexOf(
-      "const ledgerAfterMigrations =\n    structure.migratesAtStart || config.db?.runMigrationsOnBoot === true;"
-    );
     const early = boot.indexOf(
-      "if (!ledgerAfterMigrations) installTagExpiryLedger(adapter);"
+      'publishLedgerIfAt("before the schema reads", ledgerAt, adapter);'
     );
     const late = boot.indexOf(
-      "if (ledgerAfterMigrations) installTagExpiryLedger(adapter);"
+      'publishLedgerIfAt("after migrations at start", ledgerAt, adapter);'
+    );
+    const decided = boot.indexOf(
+      "const ledgerAt = ledgerPublicationOf(structure, config);"
     );
     for (const at of [decided, early, late]) expect(at).toBeGreaterThan(-1);
     expect(decided).toBeLessThan(early);
@@ -209,8 +209,15 @@ describe("the boot sequence in registerServices", () => {
       boot.indexOf("await assertBootPluginInstallStates(")
     );
     expect(late).toBeGreaterThan(boot.indexOf("await runBootMigrations("));
-    // Published once whichever way: no other call in the start.
-    expect(boot.split("installTagExpiryLedger(").length - 1).toBe(2);
+    // Published nowhere else in the start, and only where the decision says.
+    expect(boot).not.toContain("installTagExpiryLedger(");
+    expect(bodyOf("publishLedgerIfAt")).toContain(
+      "if (at === publication) installTagExpiryLedger(adapter);"
+    );
+    // After the migrations wherever the app opts into them, before otherwise.
+    expect(bodyOf("ledgerPublicationOf")).toContain(
+      'structure.migratesAtStart || config.db?.runMigrationsOnBoot === true\n    ? "after migrations at start"\n    : "before the schema reads"'
+    );
   });
 
   it("runs the boot migrations inside the migration phase", () => {
