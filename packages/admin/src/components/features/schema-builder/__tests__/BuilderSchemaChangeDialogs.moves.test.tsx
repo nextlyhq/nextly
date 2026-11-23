@@ -61,7 +61,12 @@ describe("the review of a save that moves a field", () => {
         entityName="posts"
         onConfirm={vi.fn()}
         draftMoves={[
-          { label: "summary", from: ["summary"], to: ["meta", "summary"] },
+          {
+            fieldId: "summary",
+            label: "summary",
+            from: ["summary"],
+            to: ["meta", "summary"],
+          },
         ]}
       />
     );

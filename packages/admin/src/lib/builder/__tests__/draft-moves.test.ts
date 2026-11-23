@@ -131,7 +131,12 @@ describe("the moves a draft makes", () => {
     expect(movesHints([])).toBeUndefined();
     expect(
       movesHints([
-        { label: "summary", from: ["summary"], to: ["a", "summary"] },
+        {
+          fieldId: "summary",
+          label: "summary",
+          from: ["summary"],
+          to: ["a", "summary"],
+        },
       ])
     ).toEqual({ moves: [{ from: ["summary"], to: ["a", "summary"] }] });
   });
@@ -164,7 +169,12 @@ const base: SchemaPreviewResponse = {
 describe("the review of a save with moves", () => {
   it("does not read a field moved into a group as a removed column", () => {
     const reviewed = previewWithMoves(base, [
-      { label: "summary", from: ["summary"], to: ["address", "summary"] },
+      {
+        fieldId: "summary",
+        label: "summary",
+        from: ["summary"],
+        to: ["address", "summary"],
+      },
     ]);
     expect(reviewed.changes.removed).toEqual([]);
     expect(reviewed.hasDestructiveChanges).toBe(false);
@@ -173,7 +183,12 @@ describe("the review of a save with moves", () => {
 
   it("keeps a removal no move accounts for", () => {
     const reviewed = previewWithMoves(base, [
-      { label: "street", from: ["address", "street"], to: ["street"] },
+      {
+        fieldId: "street",
+        label: "street",
+        from: ["address", "street"],
+        to: ["street"],
+      },
     ]);
     expect(reviewed.changes.removed.map(r => r.name)).toEqual(["summary"]);
     expect(reviewed.classification).toBe("destructive");
@@ -190,6 +205,7 @@ describe("the review of a save with moves", () => {
     expect(
       previewWithMoves(unchanged, [
         {
+          fieldId: "street",
           label: "street",
           from: ["address", "street"],
           to: ["billing", "street"],
