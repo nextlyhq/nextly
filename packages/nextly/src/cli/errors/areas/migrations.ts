@@ -1299,6 +1299,10 @@ export const MIGRATION_CODES = defineCodes({
     cause:
       "An entity's settings changed in the configuration, and no migration records the change.",
   },
+  BUILDER_DEFINITION_IGNORED: {
+    cause:
+      "The Schema Builder's definition file is one git ignores, so `migrate:check` cannot tell the changes not yet in a migration from what the project commits.",
+  },
   DATABASE_BEHIND_MIGRATIONS: {
     cause:
       "The database lacks a table or column that the migrations it records as applied created.",
@@ -1425,6 +1429,18 @@ export function schemaChangeWithoutMigration(
     what: `${count} pending schema change(s) detected.`,
     why: lines.join("\n"),
     next: CREATE_MIGRATION,
+  });
+}
+
+/**
+ * `migrate:check`'s refusal of a Schema Builder definition file git ignores: it computes the
+ * changes not yet in a migration from what the project commits, and an ignored file is not.
+ */
+export function builderDefinitionIgnored(file: string): CliError {
+  return new CliError("BUILDER_DEFINITION_IGNORED", {
+    what: `The Schema Builder's definition file, \`${file}\`, is ignored by git.`,
+    why: "`migrate:check` compares what the project commits with its migrations, and an ignored file is not committed, so the check would pass on one machine and fail on another.",
+    next: `Commit \`${file}\`: remove the line in \`.gitignore\` that ignores it, then \`git add\` it.`,
   });
 }
 

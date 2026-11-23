@@ -54,6 +54,7 @@
  * docs/guides/production-migrations.mdx.
  */
 
+import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -109,6 +110,7 @@ import {
   judgeBuilderDefinitions,
   readBuilderDefinitions,
 } from "../../domains/schema/ui-schema/builder-definitions";
+import { ignoredByGit } from "../../domains/schema/ui-schema/committed-definition";
 import { addressRefusalsError } from "../../shared/address-rule";
 import {
   type CliError,
@@ -120,13 +122,11 @@ import {
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
   snapshotWithoutMigration,
+  builderDefinitionIgnored,
 } from "../errors/areas/migrations";
 import { createContext, type CommandContext } from "../program";
 import type { SupportedDialect } from "../utils/adapter";
-import {
-  loadDeclaredConfigOrExit,
-  requireDatabaseEnv,
-} from "../utils/command-prerequisites";
+import { loadDeclaredConfigOrExit } from "../utils/command-prerequisites";
 import {
   discoverMigrationGroups,
   type DeclaredNames,
@@ -136,6 +136,7 @@ import {
   readMigrationFolder,
   selectVariant,
 } from "../utils/migration-discovery";
+import { projectDialect } from "../utils/project-dialect";
 
 // ============================================================================
 // Types
@@ -145,9 +146,13 @@ import {
 // (--config, --cwd, --verbose, --quiet) are inherited from the program.
 // `Record<string, never>` is the idiomatic "intentionally empty" shape;
 // avoids the `_placeholder?: never` workaround the first draft used.
-export type MigrateCheckCommandOptions = Record<string, never>;
+export interface MigrateCheckCommandOptions {
+  /** The dialect the migrations are for, where nothing else says (`projectDialect`). */
+  dialect?: SupportedDialect;
+}
 
 interface ResolvedMigrateCheckOptions {
+  dialect?: SupportedDialect;
   config?: string;
   verbose?: boolean;
   quiet?: boolean;
@@ -166,13 +171,6 @@ export async function runMigrateCheck(
 
   logger.header("Migrate Check");
 
-  // F11 PR 4: dialect comes from DATABASE_URL but we don't connect —
-  // we just need to know which SQL flavor the diff engine should target
-  // when computing the desired snapshot. Without this, drift-check
-  // results would be inconsistent across dialects.
-  const dbValidation = requireDatabaseEnv(logger);
-  const dialect = dbValidation.dialect;
-
   // Load config.
   // The configuration with its plugin field declarations checked; an invalid
   // one is reported and the check exits, like every other check failure.
@@ -188,6 +186,28 @@ export async function runMigrateCheck(
 
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
+
+  // The check reads no database: the dialect comes from `--dialect`, the migration history or the
+  // environment, without connecting (`projectDialect`).
+  let dialect: SupportedDialect;
+  try {
+    dialect = await projectDialect({
+      ...(options.dialect !== undefined ? { flag: options.dialect } : {}),
+      migrationsDir,
+    });
+  } catch (error) {
+    return exitWithError(logger, error);
+  }
+
+  // The changes are computed from what the project commits: a Builder definition file git ignores
+  // would make this check pass on one machine and fail on another, so it is refused.
+  const definitionFile = configResult.config.db.uiSchemaFile;
+  if (
+    existsSync(resolve(cwd, definitionFile)) &&
+    (await ignoredByGit(cwd, definitionFile))
+  ) {
+    return exitWithError(logger, builderDefinitionIgnored(definitionFile));
+  }
 
   // A Builder save this machine left part-way against this database refuses the check: the
   // migrations it reads do not describe the database until the save is settled. Asked before the
@@ -774,13 +794,16 @@ export type { SupportedDialect };
  * The action of `nextly migrate:check`, loaded when it runs.
  */
 export async function migrateCheckAction(
-  _cmdOptions: MigrateCheckCommandOptions,
+  cmdOptions: MigrateCheckCommandOptions,
   cmd: Command
 ): Promise<void> {
   const globalOpts = cmd.optsWithGlobals();
   const context = createContext(globalOpts);
 
   const resolvedOptions: ResolvedMigrateCheckOptions = {
+    ...(cmdOptions.dialect !== undefined
+      ? { dialect: cmdOptions.dialect }
+      : {}),
     config: globalOpts.config,
     verbose: globalOpts.verbose,
     quiet: globalOpts.quiet,

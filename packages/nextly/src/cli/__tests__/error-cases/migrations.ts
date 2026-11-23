@@ -54,6 +54,7 @@ import {
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
   resolveModeRequired,
+  builderDefinitionIgnored,
   schemaChangeWithoutMigration,
   settingsChangeWithoutMigration,
   databaseBehindMigrations,
@@ -562,6 +563,7 @@ export const MIGRATION_CASES = {
     ]),
   SETTINGS_CHANGE_WITHOUT_MIGRATION: () =>
     settingsChangeWithoutMigration(1, ["~ posts: labels.singular"]),
+  BUILDER_DEFINITION_IGNORED: () => builderDefinitionIgnored("ui-schema.json"),
   DATABASE_BEHIND_MIGRATIONS: () =>
     databaseBehindMigrations(2, [
       "- table dc_posts (created by 20261116_120000_000_create_posts)",

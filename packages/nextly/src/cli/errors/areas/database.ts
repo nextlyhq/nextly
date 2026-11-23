@@ -28,6 +28,10 @@ export const DATABASE_CODES = defineCodes({
   DATABASE_DIALECT_INVALID: {
     cause: "`DB_DIALECT` names a database Nextly does not support.",
   },
+  DIALECT_NOT_STATED: {
+    cause:
+      "A command that reads no database could not tell which one its migrations are for: no `--dialect`, no migration file naming one, and no `DB_DIALECT` or `DATABASE_URL`.",
+  },
   DATABASE_VERSION_UNSUPPORTED: {
     cause:
       "The database server is older than the oldest version Nextly supports for its dialect.",
@@ -43,6 +47,18 @@ export const DATABASE_CODES = defineCodes({
 });
 
 const DIALECTS = "`postgresql`, `mysql` or `sqlite`";
+
+/**
+ * The refusal of a command that reads no database (`migrate:check`, `migrate:create`) where nothing
+ * says which dialect its migrations are for, and nobody is at a terminal to ask.
+ */
+export function dialectNotStated(): CliError {
+  return new CliError("DIALECT_NOT_STATED", {
+    what: "The command could not tell which database the migrations are for.",
+    why: "It reads no database, no migration file names its dialect yet, and neither `DB_DIALECT` nor `DATABASE_URL` is set.",
+    next: `Pass \`--dialect\` with ${DIALECTS}, or set \`DB_DIALECT\`.`,
+  });
+}
 
 /** The error for a failed environment check, naming the first thing to fix. */
 export function databaseEnvError(validation: DatabaseEnvValidation): CliError {
