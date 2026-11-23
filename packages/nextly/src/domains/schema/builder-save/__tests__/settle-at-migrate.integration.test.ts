@@ -58,7 +58,7 @@ import { recordAlreadyApplied } from "../../migrate/drift-reconcile";
 import { setNonInteractive } from "../../migrate/can-prompt";
 import { newestSnapshotName } from "../../migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
-import { withSchemaLock } from "../../pipeline/schema-lock";
+import { SCHEMA_LOCK_TABLE, withSchemaLock } from "../../pipeline/schema-lock";
 
 /** The configuration the commands load: the project the instance runs. */
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
@@ -442,31 +442,31 @@ describe.each(getConfiguredTestDialects())(
     // `--force-unlock` clears a lock a stopped run left before the settle takes it.
     it("clears a stale lock with --force-unlock before the settle takes it", async () => {
       const t = await boot();
-      let release!: () => void;
-      const released = new Promise<void>(resolve => {
-        release = resolve;
-      });
-      let holding!: () => void;
-      const held = new Promise<void>(resolve => {
-        holding = resolve;
-      });
-      const holder = withSchemaLock(
+      // The lock's row as a run that stopped leaves it: its claim and lease, taken by a real run of
+      // the lock and written back once that run has let go. Nothing holds it any more (on MySQL,
+      // no connection holds its named lock), yet the row says it is held.
+      type LockRow = Record<string, unknown>;
+      const where = { and: [{ column: "id", op: "=" as const, value: 1 }] };
+      let claimed: LockRow | undefined;
+      await withSchemaLock(
         {
           adapter: t.adapter as never,
           command: "test: a run that stopped",
           whenHeld: "wait",
         },
         async () => {
-          holding();
-          await released;
+          [claimed] = await t.adapter.select<LockRow>(SCHEMA_LOCK_TABLE, {
+            columns: ["owner", "command", "acquired_at", "expires_at"],
+            where,
+          });
         }
-      ).catch(() => undefined);
-      await held;
+      );
+      expect(claimed?.owner, "the stopped run's claim").toEqual(
+        expect.any(String)
+      );
+      await t.adapter.update(SCHEMA_LOCK_TABLE, claimed ?? {}, where);
 
-      const run = await migrate({ forceUnlock: true }).finally(async () => {
-        release();
-        await holder;
-      });
+      const run = await migrate({ forceUnlock: true });
 
       expect(run.code, run.said).toBeUndefined();
     }, 300_000);
@@ -556,9 +556,12 @@ describe.each(getConfiguredTestDialects())(
       expect(run.code, run.said).toBeUndefined();
       expect(sqlFiles().filter(file => written.includes(file))).toEqual([]);
       expect(definitionText()).toBe(before);
-      expect(run.said, "the run names the withdrawn create").not.toContain(
-        fresh
-      );
+      // Read from the declarations before the settle, the run would report the withdrawn create
+      // as declared with no registry row.
+      expect(
+        run.said,
+        "the run reads the withdrawn create as still declared"
+      ).not.toContain(`"${fresh}" is declared in the configuration`);
     }, 300_000);
 
     it("refuses a production start that migrates, leaving the files and the definition as they are", async () => {
