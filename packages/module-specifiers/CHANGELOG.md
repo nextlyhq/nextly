@@ -1,5 +1,17 @@
 # @nextlyhq/module-specifiers
 
+## 0.0.2-alpha.80
+
+### Patch Changes
+
+- [#5101](https://github.com/nextlyhq/nextly/pull/5101) [`9e3ae0f`](https://github.com/nextlyhq/nextly/commit/9e3ae0f8ece6e320f722f2f54dfbd7ca61ec7915) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A field group's delete asked again after one stopped part-way on MySQL answers as deleted. The Builder settles the stopped delete first, removing the registry row, so the delete asked again has nothing left to do; it no longer answers that the field group was not found. A field group that never existed is still not found.
+
+- [#5104](https://github.com/nextlyhq/nextly/pull/5104) [`8f91771`](https://github.com/nextlyhq/nextly/commit/8f917711d414126d2e5082648f1d0693d119afb1) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A `nextly migrate:create` run that turns translation on for a collection or Single and, in the same run, changes its table in a way SQLite applies by rebuilding it (a field made required, for one) no longer loses that entity's translated values on SQLite. The rebuild now keeps the columns whose values the run's translation file moves into the translations table, and that file moves them and then drops the columns, as on PostgreSQL and MySQL. Before, the rebuild dropped them first and the translation file then failed. `migrate:create` now refuses, before writing anything, any plan in which a file deletes a table or column whose values a later file of the same run reads.
+
+  The form builder keeps the fields that describe a submission once for every language rather than per language: a submission's spam reason, notes, IP address, user agent, page, editor and title, and every text field of its notification sends, resend requests and uploads. They describe the record, not content written in a language. An installation upgrading from a release before per-language storage keeps them where they are. An installation that has run the previous alpha holds them per language: its next `nextly migrate:create` writes the move back, which keeps each value as the field's shared value and copies any other language's value to the localization archive, as when any field stops being translated.
+
+  A submission's `form` column stays nullable. The form builder refuses a submission created without its form, or a change that empties it, when it is written. An installation from an earlier release that holds a submission without a form can still upgrade and still handle that submission.
+
 ## 0.0.2-alpha.79
 
 ### Patch Changes

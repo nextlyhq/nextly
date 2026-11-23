@@ -74,7 +74,29 @@ export type {
   IStorageAdapter,
   BulkDeleteResult,
   StoredFileEntry,
+  // Private files (experimental)
+  StoredObjectHead,
+  StorageStreamOptions,
+  PrivateDownloadUrlOptions,
+  PrivateUploadUrlOptions,
 } from "./types";
+
+// ============================================================
+// Private files (experimental)
+// ============================================================
+
+export {
+  keepsFilesPrivate,
+  attachmentDisposition,
+  PRIVATE_UPLOAD_URL_MAX_SECONDS,
+  PRIVATE_DOWNLOAD_URL_MAX_SECONDS,
+} from "./private-files";
+
+export type {
+  PrivateFileStore,
+  PrivateFileStorage,
+  RecordWrite,
+} from "./private-files";
 
 // ============================================================
 // MediaStorage Manager

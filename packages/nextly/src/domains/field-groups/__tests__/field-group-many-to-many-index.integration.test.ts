@@ -119,6 +119,7 @@ async function pushGroup(
   const result = await builderSchemaPush({
     dialect,
     db: t.adapter.getDrizzle(),
+    adapter: t.adapter,
     databaseName:
       dialect === "mysql"
         ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)

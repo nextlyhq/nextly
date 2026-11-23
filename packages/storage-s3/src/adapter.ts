@@ -74,12 +74,31 @@ import type {
   FileMetadata,
   BulkDeleteResult,
   StoredFileEntry,
+  StoredObjectHead,
+  StorageStreamOptions,
+  PrivateDownloadUrlOptions,
+  PrivateUploadUrlOptions,
 } from "nextly/storage";
 import { resolveReadBounds } from "nextly/storage/fetch-stored-bytes";
 import { StorageReadTooLargeError } from "nextly/storage/read-errors";
 
 import { generateStorageKey, sanitizeFilename } from "./storage-key";
-import type { S3StorageConfig, ResolvedS3Config } from "./types";
+import type { S3ObjectACL, S3StorageConfig, ResolvedS3Config } from "./types";
+
+/**
+ * The Cache-Control a private object is stored and answered with: no cache,
+ * shared or the browser's own, may keep a copy, so every later request has to
+ * come back through Nextly's checked route.
+ */
+const PRIVATE_CACHE_CONTROL = "private, no-store";
+
+/** What a signed direct upload writes, besides its key and type. */
+interface PresignedPut {
+  cacheControl: string;
+  acl: S3ObjectACL;
+  expiresIn: number | undefined;
+  contentLength: number | undefined;
+}
 
 // ============================================================
 // S3 Storage Adapter
@@ -277,6 +296,11 @@ export class S3StorageAdapter implements IStorageAdapter {
       "original-filename": options.filename,
     };
 
+    // The address is formed BEFORE the write: a bucket with no public URL
+    // (an R2 bucket without one) refuses here, rather than after the object is
+    // stored, which left it in the bucket with nothing pointing at it.
+    const url = this.getPublicUrl(key);
+
     // Use Upload for automatic multipart handling
     const upload = new Upload({
       client,
@@ -285,10 +309,7 @@ export class S3StorageAdapter implements IStorageAdapter {
 
     await upload.done();
 
-    return {
-      url: this.getPublicUrl(key),
-      path: key,
-    };
+    return { url, path: key };
   }
 
   /**
@@ -318,8 +339,90 @@ export class S3StorageAdapter implements IStorageAdapter {
     if (!this.isR2) {
       params.ACL = this.resolvedConfig.acl;
     }
+    // Formed before the write, as for an upload, so a refusal stores nothing.
+    const url = this.getPublicUrl(filePath);
     await client.send(new PutObjectCommand(params));
-    return { url: this.getPublicUrl(filePath), path: filePath };
+    return { url, path: filePath };
+  }
+
+  /**
+   * Store a private file at exactly `key`, the key core made for it.
+   *
+   * Unlike {@link upload}: no public address is formed (so an R2 bucket needs
+   * no `publicUrl`), the original file name goes into neither the key nor the
+   * object's metadata, the object is stored never to be cached, and its ACL is
+   * `private` whatever the adapter's own `acl` says (R2 has no ACLs, and keeps
+   * a bucket private unless public access is turned on for it).
+   *
+   * @experimental
+   */
+  async putPrivate(
+    key: string,
+    buffer: Buffer,
+    options: { mimeType: string }
+  ): Promise<void> {
+    const client = this.ensureClient();
+    const params: PutObjectCommandInput = {
+      Bucket: this.resolvedConfig.bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: options.mimeType,
+      CacheControl: PRIVATE_CACHE_CONTROL,
+    };
+    if (!this.isR2) {
+      params.ACL = "private";
+    }
+    await new Upload({ client, params }).done();
+  }
+
+  /**
+   * A pre-signed URL a browser sends one private file to, at exactly `key`.
+   * Binds the type and exact length as {@link getPresignedUploadUrl} does,
+   * and writes the object private and never cached.
+   *
+   * @experimental
+   */
+  async getPrivateUploadUrl(
+    key: string,
+    mimeType: string,
+    options: PrivateUploadUrlOptions
+  ): Promise<ClientUploadData> {
+    return this.presignPut(key, mimeType, {
+      cacheControl: PRIVATE_CACHE_CONTROL,
+      acl: "private",
+      expiresIn: options.expiresIn,
+      contentLength: options.contentLength,
+    });
+  }
+
+  /**
+   * A link to a private file that lasts `options.expiresIn` seconds (at most
+   * the configured `signedUrlExpiresIn`). The bucket answers it with the
+   * given Content-Disposition and type, and with a Cache-Control that lets no
+   * cache keep it, whatever the object itself was stored with.
+   *
+   * @experimental
+   */
+  async getPrivateDownloadUrl(
+    key: string,
+    options: PrivateDownloadUrlOptions
+  ): Promise<string> {
+    const client = this.ensureClient();
+    const command = new GetObjectCommand({
+      Bucket: this.resolvedConfig.bucket,
+      Key: key,
+      ResponseContentDisposition: options.contentDisposition,
+      ResponseCacheControl: PRIVATE_CACHE_CONTROL,
+      ...(options.contentType !== undefined
+        ? { ResponseContentType: options.contentType }
+        : {}),
+    });
+    return getSignedUrl(client, command, {
+      expiresIn: Math.min(
+        options.expiresIn,
+        this.resolvedConfig.signedUrlExpiresIn
+      ),
+    });
   }
 
   /**
@@ -472,7 +575,8 @@ export class S3StorageAdapter implements IStorageAdapter {
           "R2 does not have default public URLs like AWS S3. Configure one of:\n" +
           "1. Public bucket URL: publicUrl: 'https://pub-xxx.r2.dev'\n" +
           "2. Custom domain: publicUrl: 'https://cdn.example.com'\n\n" +
-          "Set up public access in the Cloudflare R2 dashboard."
+          "Set up public access in the Cloudflare R2 dashboard. A collection " +
+          "of private files needs none: its files have no public address."
       );
     }
 
@@ -506,6 +610,14 @@ export class S3StorageAdapter implements IStorageAdapter {
       name: "S3StorageAdapter",
       supportsSignedUrls: true,
       supportsClientUploads: true,
+      /*
+       * Private files only where nothing public is configured in front of
+       * the bucket. A `publicUrl` (an R2 public bucket URL, a custom domain, a
+       * CDN) serves every key in the bucket, so a private file stored behind
+       * one would have a public address after all. Such a site keeps private
+       * collections in a second `s3Storage` with no `publicUrl`.
+       */
+      supportsPrivateFiles: !this.resolvedConfig.publicUrl,
     };
   }
 
@@ -633,6 +745,89 @@ export class S3StorageAdapter implements IStorageAdapter {
   }
 
   /**
+   * The stored object's size and type, without reading it, or `null` when the
+   * key is not in the bucket. A missing bucket throws rather than reading as a
+   * missing key, as for {@link read}.
+   *
+   * @experimental
+   */
+  async head(filePath: string): Promise<StoredObjectHead | null> {
+    const client = this.ensureClient();
+    try {
+      const response = await client.send(
+        new HeadObjectCommand({
+          Bucket: this.resolvedConfig.bucket,
+          Key: filePath,
+        })
+      );
+      // A size the bucket did not report is not a size of zero: a caller
+      // checks an upload against it, and must not be told it matched.
+      if (response.ContentLength === undefined) {
+        throw new Error(
+          "@nextly/storage-s3: the bucket did not report the object's size"
+        );
+      }
+      return {
+        size: response.ContentLength,
+        ...(response.ContentType !== undefined
+          ? { contentType: response.ContentType }
+          : {}),
+        ...(response.LastModified !== undefined
+          ? { lastModified: response.LastModified }
+          : {}),
+      };
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === "NoSuchBucket") throw error;
+      if (this.isNotFoundError(error)) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * The stored object as a stream, or `null` when the key is not in the
+   * bucket, for a response that should not buffer a whole file.
+   *
+   * The deadline covers the bucket's answer only, then is cleared: the body
+   * flows as fast as its reader takes it, and a deadline on the whole
+   * transfer would cut off a slow but healthy download.
+   *
+   * @experimental
+   */
+  async readStream(
+    filePath: string,
+    options?: StorageStreamOptions
+  ): Promise<ReadableStream<Uint8Array> | null> {
+    const client = this.ensureClient();
+    const answered = new AbortController();
+    const timer = setTimeout(
+      () => answered.abort(),
+      resolveReadBounds(options).timeoutMs
+    );
+    try {
+      const response = await client.send(
+        new GetObjectCommand({
+          Bucket: this.resolvedConfig.bucket,
+          Key: filePath,
+        }),
+        { abortSignal: answered.signal }
+      );
+      // An empty object is an empty stream, not a missing one.
+      if (response.Body === undefined) {
+        return new ReadableStream<Uint8Array>({
+          start: controller => controller.close(),
+        });
+      }
+      return response.Body.transformToWebStream();
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === "NoSuchBucket") throw error;
+      if (this.isNotFoundError(error)) return null;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
    * Generate signed URL for temporary private file access.
    *
    * Creates a pre-signed GetObject URL that grants temporary read access
@@ -684,24 +879,43 @@ export class S3StorageAdapter implements IStorageAdapter {
     expiresIn?: number,
     options?: { contentLength?: number }
   ): Promise<ClientUploadData> {
+    return this.presignPut(key, mimeType, {
+      cacheControl: this.resolvedConfig.cacheControl,
+      acl: this.resolvedConfig.acl,
+      expiresIn,
+      contentLength: options?.contentLength,
+    });
+  }
+
+  /**
+   * Sign one direct upload at exactly `key`: the type, the length when given,
+   * and the Cache-Control are signed, so S3 refuses a body that differs. The
+   * one signer for public and private uploads alike, which differ only in the
+   * caching and access they write.
+   */
+  private async presignPut(
+    key: string,
+    mimeType: string,
+    put: PresignedPut
+  ): Promise<ClientUploadData> {
     const client = this.ensureClient();
     const longest = this.resolvedConfig.signedUrlExpiresIn;
-    const expiration = Math.min(expiresIn ?? longest, longest);
+    const expiration = Math.min(put.expiresIn ?? longest, longest);
 
     // Build PutObject command parameters
     const commandParams: PutObjectCommandInput = {
       Bucket: this.resolvedConfig.bucket,
       Key: key,
       ContentType: mimeType,
-      CacheControl: this.resolvedConfig.cacheControl,
-      ...(options?.contentLength !== undefined
-        ? { ContentLength: options.contentLength }
+      CacheControl: put.cacheControl,
+      ...(put.contentLength !== undefined
+        ? { ContentLength: put.contentLength }
         : {}),
     };
 
     // Add ACL if not R2
     if (!this.isR2) {
-      commandParams.ACL = this.resolvedConfig.acl;
+      commandParams.ACL = put.acl;
     }
 
     const command = new PutObjectCommand(commandParams);
@@ -730,7 +944,7 @@ export class S3StorageAdapter implements IStorageAdapter {
       // length and the host.
       headers: {
         "Content-Type": mimeType,
-        "Cache-Control": this.resolvedConfig.cacheControl,
+        "Cache-Control": put.cacheControl,
       },
       expiresAt: new Date(Date.now() + expiration * 1000),
     };
