@@ -52,4 +52,10 @@ installing it.
 - **Ending access** from the site's own code: ending an account's sessions, and deactivating
   and reactivating it, each recorded in the audit log.
 
+The accounts live in the plugin's own tables rather than a collection, so no built-in role is
+opened to them as one: staff reach them through the plugin's `read-accounts` and
+`manage-accounts` permissions. Of the [preset roles](/docs/plugins/permissions#the-preset-roles),
+only Admin holds them by default; Editor, Author and Viewer hold neither, since the accounts are
+people's private details. Grant either to any other role in the Roles screen.
+
 The package's README lists every option, function and error code.

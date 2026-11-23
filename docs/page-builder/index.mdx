@@ -69,6 +69,12 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 | Status     | Alpha. The block model, the registries, the render pipeline and the editor can all still change |
 | Permission | Editing a page requires update access to the collection holding it                              |
 
+Its collections (pages, header & footer sets, saved sections, components, templates and its
+own records) are open to the built-in Admin, Editor, Author and Viewer roles, each by its own
+rule (an Author does not publish or delete, a Viewer reads);
+[`presetGrants`](/docs/permissions#the-preset-roles-reach-a-collection-only-once-it-is-opened-to-them)
+in the config changes that.
+
 ## Install
 
 ```bash

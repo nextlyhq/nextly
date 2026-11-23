@@ -1463,14 +1463,21 @@ export async function isSuperAdmin(
  * when the roles cannot be read: for a reader on the pool that must tell "not
  * a super-admin" from "could not tell", such as one that answers many
  * questions from a single read and would otherwise answer them all as a
- * non-admin. The same decision `isSuperAdmin` asks, from the same actor.
+ * non-admin, or one that refuses a super-admin, for which "not one" would let
+ * them through. The same decision `isSuperAdmin` asks, from the same actor on
+ * the pool, or on the caller's transaction where `executor` is given.
  *
  * @throws NextlyError when the roles cannot be read.
  */
-export async function isSuperAdminOrRefuse(userId: string): Promise<boolean> {
+export async function isSuperAdminOrRefuse(
+  userId: string,
+  executor?: unknown
+): Promise<boolean> {
   if (!userId) return false;
   try {
-    return await superAdminForRequest(userId);
+    return executor === undefined
+      ? await superAdminForRequest(userId)
+      : await decideSuperAdmin(userId, executor);
   } catch (cause) {
     throw unreadable(cause, { reason: "roles-unreadable", userId });
   }

@@ -102,7 +102,7 @@ import {
   respondData,
   respondMutation,
 } from "./api/response-shapes";
-import { getRolesScreen } from "./api/roles-screen";
+import { getRolesScreen, setClosedToSuperAdmin } from "./api/roles-screen";
 import { getSchemaJournal } from "./api/schema-journal";
 import { getTranslationWorklist } from "./api/translations";
 import {
@@ -1820,10 +1820,14 @@ async function serveServiceRequest(
   }
 
   // ==================== ROLES SCREEN DIRECT DISPATCH ====================
-  // Owns its auth (the `read-roles` permission the roles list asks). Read-only
-  // GET, so there is no body to consume.
+  // Each handler owns its auth: the listing asks the `read-roles` permission
+  // the roles list asks; the change of a collection's closed-to-super-admin
+  // mark asks a super-admin's session, the site's origin and their password,
+  // and reads its own body.
   if (service === "rolesScreen") {
-    return getRolesScreen(req);
+    return method === "setClosedToSuperAdmin"
+      ? setClosedToSuperAdmin(req)
+      : getRolesScreen(req);
   }
 
   // ==================== AUTHENTICATION & AUTHORIZATION ====================
