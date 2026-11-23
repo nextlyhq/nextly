@@ -122,7 +122,7 @@ async function lastChange(
   // site's default where the read names none, so a save of translated
   // fields alone, which moves only that language's row, is still seen.
   const locales =
-    shape.localized && (await isCompanionReady(adapter, languagesTable))
+    shape.perLanguage && (await isCompanionReady(adapter, languagesTable))
       ? versionLanguagesFor({
           localized: true,
           localization:

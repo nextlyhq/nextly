@@ -98,7 +98,11 @@ describe.each(getConfiguredTestDialects())("the review tools (%s)", dialect => {
   /** A key's headers, holding exactly the permissions named. */
   async function key(label: string, slugs: string[]) {
     const minted = await keyGranting(handle, label, slugs);
-    return { headers: bearer(minted.key), id: minted.id };
+    return {
+      headers: bearer(minted.key),
+      id: minted.id,
+      roleId: minted.roleId,
+    };
   }
 
   describe("get_workflow", () => {
@@ -161,7 +165,13 @@ describe.each(getConfiguredTestDialects())("the review tools (%s)", dialect => {
       );
 
       expect(posts.code).toBe("NOT_FOUND");
-      expect(missing).toEqual(posts);
+      // Alike in everything but the request each names: every refusal carries an id of its own,
+      // which the log line for it names too, so two answers never share one.
+      const { requestId: postsRequest, ...postsAnswer } = posts;
+      const { requestId: missingRequest, ...missingAnswer } = missing;
+      expect(missingAnswer).toEqual(postsAnswer);
+      expect(postsRequest).toEqual(expect.any(String));
+      expect(missingRequest).toEqual(expect.any(String));
       // The control: the same key is told the workflow of what it may read.
       expect(
         dataOf(
@@ -248,13 +258,37 @@ describe.each(getConfiguredTestDialects())("the review tools (%s)", dialect => {
   });
 
   describe("list_waiting_for_review", () => {
-    it("M7: lists what waits for the key's owner, only where the key may read and take the step", async () => {
+    it("M7: lists what waits for the key's role, only where the key may read and take the step", async () => {
       await boot();
-      const post = await draft(handle, "posts");
-      await trustedAssign(handle, post, "en", await ownerOf(handle));
       const writer = await key("writer", ["read-posts", "update-posts"]);
       const reader = await key("reader", ["read-posts"]);
       const updater = await key("updater", ["update-posts"]);
+      // A key stands for the role it acts as, never for its owner in person: work assigned to the
+      // writer's role waits for the writer's key, and work assigned to the owner by name waits for
+      // the owner signed in, not for any key.
+      const post = await draft(handle, "posts");
+      await trustedAssign(handle, post, "en", writer.roleId, "role");
+      await trustedAssign(
+        handle,
+        await draft(handle, "posts"),
+        "en",
+        await ownerOf(handle)
+      );
+      // Work whose assignee lost the step waits for everyone who may take it: the one part each
+      // of the three keys could be shown, so what decides is the key's own read and step.
+      const desk = await key("desk", ["read-posts", "update-posts"]);
+      const open = await draft(handle, "posts");
+      await trustedAssign(handle, open, "en", desk.roleId, "role");
+      await (
+        handle.nextly as unknown as {
+          roles: {
+            setPermissions(a: {
+              roleId: string;
+              permissionIds: string[];
+            }): Promise<unknown>;
+          };
+        }
+      ).roles.setPermissions({ roleId: desk.roleId, permissionIds: [] });
 
       const forWriter = dataOf(
         await callTool<Waiting>(
@@ -281,21 +315,29 @@ describe.each(getConfiguredTestDialects())("the review tools (%s)", dialect => {
         )
       );
 
-      expect(forWriter.items).toEqual([
-        expect.objectContaining({
-          // The reference get_review_state takes, not the store's own key for the document.
-          document: { collection: "posts", id: post.id },
-          part: "en",
-          stage: "writing",
-        }),
-      ]);
+      expect(forWriter.items).toHaveLength(2);
+      expect(forWriter.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            // The reference get_review_state takes, not the store's own key for the document.
+            document: { collection: "posts", id: post.id },
+            part: "en",
+            stage: "writing",
+          }),
+          expect.objectContaining({
+            document: { collection: "posts", id: open.id },
+            part: "en",
+            stage: "writing",
+          }),
+        ])
+      );
       expect(forWriter.meta).toMatchObject({ page: 1, limit: 20 });
       // The documented flow: what is listed is read as listed.
       const read = await callTool(
         handlers,
         writer.headers,
         "get_review_state",
-        { document: forWriter.items[0]!.document }
+        { document: { collection: "posts", id: post.id } }
       );
       expect(read.error, JSON.stringify(read.error)).toBeUndefined();
       expect(read.result?.isError, JSON.stringify(read.result)).toBeFalsy();
@@ -304,8 +346,8 @@ describe.each(getConfiguredTestDialects())("the review tools (%s)", dialect => {
           expect.objectContaining({ part: "en" }),
         ]),
       });
-      // Assigned to the owner, but the reader's key cannot take the stage's step, and the
-      // updater's cannot read the document.
+      // The part waiting for everyone who may take it, but the reader's key cannot take the
+      // stage's step, and the updater's cannot read the document.
       expect(forReader.items).toEqual([]);
       expect(forUpdater.items).toEqual([]);
     });
@@ -314,10 +356,10 @@ describe.each(getConfiguredTestDialects())("the review tools (%s)", dialect => {
       await boot();
       const letter = await draft(handle, "letters");
       await saveIn(handle, letter, "es");
-      const owner = await ownerOf(handle);
-      await trustedAssign(handle, letter, "en", owner);
-      await trustedAssign(handle, letter, "es", owner);
       const writer = await key("letters", ["read-letters", "update-letters"]);
+      // Both parts assigned to the role the key acts as, so only the language decides.
+      await trustedAssign(handle, letter, "en", writer.roleId, "role");
+      await trustedAssign(handle, letter, "es", writer.roleId, "role");
 
       const { items } = dataOf(
         await callTool<Waiting>(

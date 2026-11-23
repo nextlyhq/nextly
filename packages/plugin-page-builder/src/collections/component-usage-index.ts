@@ -96,26 +96,38 @@ export function componentUsageIndexCollection(): CollectionConfig {
     // it sets `admin.hidden` and stops there — so the access rules below are
     // what keep it out of everything else.
     internal: true,
+    // Kept once for every language (`localized: false`): each field is an
+    // id, key or language code the index writes, never translated text.
     fields: [
-      text({ name: "scope", label: "Scope" }),
-      text({ name: "entity", label: "Entity" }),
+      text({ name: "scope", localized: false, label: "Scope" }),
+      text({ name: "entity", localized: false, label: "Entity" }),
       // Indexed because every maintenance pass filters on it and it is the most
       // selective column in that filter: `scope` has two values and `entity`
       // one per collection, while a document id is unique. A composite index
       // over the whole subject would be better and cannot be declared — a
       // collection's `indexes` never reach the schema pipeline, which builds a
       // table's indexes from its FIELDS.
-      text({ name: "entityKey", label: "Entity key", index: true }),
-      text({ name: "field", label: "Field" }),
-      text({ name: "locale", label: "Locale" }),
-      text({ name: "variant", label: "Variant" }),
-      text({ name: "kind", label: "Kind" }),
+      text({
+        name: "entityKey",
+        localized: false,
+        label: "Entity key",
+        index: true,
+      }),
+      text({ name: "field", localized: false, label: "Field" }),
+      text({ name: "locale", localized: false, label: "Locale" }),
+      text({ name: "variant", localized: false, label: "Variant" }),
+      text({ name: "kind", localized: false, label: "Kind" }),
       // Indexed because this is the column the library filters on: the count is
       // shown beside every component tile, so "which documents use this one" is
       // asked once per component per render. Declared on the FIELD rather than
       // as a collection-level index, which is the form the pipeline
       // materialises.
-      text({ name: "componentId", label: "Component id", index: true }),
+      text({
+        name: "componentId",
+        localized: false,
+        label: "Component id",
+        index: true,
+      }),
     ],
     access: {
       // Derived from documents on every write and rebuilt from them on demand.

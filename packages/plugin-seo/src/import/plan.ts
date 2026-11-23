@@ -1780,7 +1780,7 @@ async function writeAll(
         );
       }
     } catch (error) {
-      throw refusalAbout(error, page.label);
+      throw refusalAbout(publishRefusalAbout(error, page), page.label);
     }
   }
   for (const redirect of plan.redirects) {
@@ -1928,6 +1928,42 @@ export function refusalAfterUndo(error: unknown, restored: boolean): unknown {
   });
 }
 
+/**
+ * Whether `error` is core's refusal of a publish: its publish gate answers
+ * the person in the words of the action it refused ("You can't publish this
+ * note."), and nothing else a save refuses is worded so. A field rule that
+ * keeps a value out, or the import's own check of what was stored, refuses
+ * in other words and is not this.
+ */
+function refusedPublish(error: unknown): boolean {
+  return (
+    NextlyError.isCode(error, "FORBIDDEN") &&
+    error instanceof NextlyError &&
+    error.publicMessage.startsWith("You can't publish ")
+  );
+}
+
+/**
+ * A published version's write refused for want of the publish permission,
+ * said as that. Where a type keeps working drafts, a save naming its
+ * published state writes the live row, which core lets only someone who may
+ * publish the type do; the import writes such a version so, and never as a
+ * draft or as the site in its place. Any other refusal is answered as it was.
+ */
+export function publishRefusalAbout(
+  error: unknown,
+  page: { write: VersionWrite; label: string }
+): unknown {
+  if (page.write !== "live" || !refusedPublish(error)) return error;
+  return new NextlyError({
+    code: "FORBIDDEN",
+    statusCode: 403,
+    publicMessage: `Importing into the published version of “${page.label}” needs permission to publish it. Nothing was imported.`,
+    logContext: { reason: "seo-import-publish-needed" },
+    ...(error instanceof Error ? { cause: error } : {}),
+  });
+}
+
 /** Refusals a save answers before it stores anything. */
 const BEFORE_STORING = [
   "STALE_VERSION",
@@ -1981,7 +2017,7 @@ async function writeStep(
     );
   } catch (error) {
     if (refusedBeforeStoring(error)) written.pop();
-    throw refusalAbout(error, page.label);
+    throw refusalAbout(publishRefusalAbout(error, page), page.label);
   }
   revs.set(revKey(page), rev);
   refuseDroppedValues(await storedVersion(page), page.writes, page.id);

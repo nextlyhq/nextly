@@ -66,10 +66,15 @@ const RENAMED = [
   { name: "views", type: "number" },
 ];
 /**
- * The save: the rename, and Draft/Published turned on, which changes the main table without
- * adding a field (an added field beside the rename would read as a drop and two adds).
+ * The save: the rename, answered as one, and Draft/Published turned on, which changes the main
+ * table without adding a field (an added field beside the rename would read as a drop and two
+ * adds). Unanswered, the save would be refused before it reached any migration.
  */
-const RENAME_AND_STATUS = { fields: RENAMED, status: true };
+const RENAME_AND_STATUS = {
+  fields: RENAMED,
+  status: true,
+  renames: [{ from: "heading", to: "title2", choice: "rename" }],
+};
 
 /** A dialect's identifier quoting, for the raw reads below. */
 function quote(dialect: TestDialect, name: string): string {
