@@ -2004,6 +2004,13 @@ it keeps working drafts can't be read from the plugin; change its SEO in its own
    where a page can't be put back, the screen says **Part of the import may be in place** instead. Once it is applied, the screen says how many values were imported on how many
    pages, and offers the report, one row per version, to download.
 
+Importing published versions needs permission to publish. Where a type keeps working drafts, the
+import writes a page's published version as a save of that version, as publishing does, so the
+person importing needs the type's publish permission as well as its update permission. Without it
+the import is refused with **Importing into the published version of "…" needs permission to
+publish it**, and nothing is imported. Its drafts are never written in place of the published
+version.
+
 Pages in a file are matched by their address, in the language that address is served in, or by
 their slug, in the default language, where the file names no address. A share image is matched to
 the media library by its file name.

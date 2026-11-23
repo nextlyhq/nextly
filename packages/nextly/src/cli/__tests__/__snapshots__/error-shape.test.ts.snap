@@ -1008,11 +1008,25 @@ exports[`each code, as a command ends with it > MIGRATE_EVENTS_TABLE_TAKEN 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/migrate-events-table-taken  (MIGRATE_EVENTS_TABLE_TAKEN)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATE_LANGUAGE_CODES_COLLIDE 1`] = `
+"✗ The configuration names "pt_BR" and "pt-br" (both "pt-BR"): one language under two codes once written in standard form.
+  Why:  \`nextly migrate\` keeps every language under its standard code, and these two would become one, putting two languages' values in one place. Nothing was changed.
+  Next: Keep one of them in the configuration and run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-language-codes-collide  (MIGRATE_LANGUAGE_CODES_COLLIDE)"
+`;
+
 exports[`each code, as a command ends with it > MIGRATE_LEDGER_UNREADABLE 1`] = `
 "✗ The table "nextly_migrations" holds records \`nextly migrate\` cannot read: the record of 0001_init.sql has the status "rolled_back".
   Why:  \`nextly migrate\` moves the records an earlier release kept in \`nextly_migrations\` into \`nextly_schema_events\`, and reads every one before writing any. One of them it cannot read, so nothing was changed.
   Next: Rename the table if Nextly did not create it, then run \`nextly migrate\` again.
   Docs: https://nextlyhq.com/docs/cli/errors/migrate-ledger-unreadable  (MIGRATE_LEDGER_UNREADABLE)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATE_LOCALIZATION_UNRESOLVED 1`] = `
+"✗ More than one pending change was saved at the same moment for the collection "posts" entry 42 in fr (7, 8), so which one to keep cannot be told.
+  Why:  \`nextly migrate\` moves stored translations into the layout this release keeps, and moves nothing it would have to guess at. Nothing was changed.
+  Next: Delete all but one of them from nextly_versions (by the ids named), then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-localization-unresolved  (MIGRATE_LOCALIZATION_UNRESOLVED)"
 `;
 
 exports[`each code, as a command ends with it > MIGRATION_APPLY_FAILED 1`] = `

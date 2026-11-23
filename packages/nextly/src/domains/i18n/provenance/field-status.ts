@@ -25,6 +25,7 @@ import {
   type ProvenanceScopeKind,
 } from "../../../schemas/translation-provenance";
 import { toSnakeCase } from "../../schema/services/field-column-descriptor";
+import { nonBlankColumnSql } from "../non-blank-sql";
 
 /** Where one field's value in one language came from, and whether its source moved since. */
 export interface FieldProvenance {
@@ -49,6 +50,26 @@ export interface ProvenanceScope {
    * a translation made before origins were recorded, is judged by its language-level stamp.
    */
   fields: readonly string[];
+  /**
+   * Those of `fields` whose storage is not text (a number, a boolean, a date, a decimal or JSON):
+   * holding a value when not null, never compared with an empty string.
+   */
+  nonTextFields: readonly string[];
+}
+
+/**
+ * A scope's fields, from the translatable fields a translation table keeps: their names, and
+ * which of them do not store text. The one derivation every reader's scope is built by.
+ */
+export function provenanceFieldsOf(
+  localizedFields: readonly { name: string; nonText?: boolean }[]
+): Pick<ProvenanceScope, "fields" | "nonTextFields"> {
+  return {
+    fields: localizedFields.map(field => field.name),
+    nonTextFields: localizedFields
+      .filter(field => field.nonText === true)
+      .map(field => field.name),
+  };
 }
 
 /** A table alias as `sql.identifier` produces it. */
@@ -130,11 +151,13 @@ function fieldUnrecordedSql(
 ): SQL {
   if (scope.fields.length === 0) return sql`1=0`;
   // A field counts only where the language holds a value of it: one made before origins were
-  // recorded. A field the language never translated holds none; it is missing, not out of date,
-  // so a change at its source says nothing of the language.
+  // recorded. A field the language never translated, or cleared, holds none (blank, as every
+  // read of a translation counts it); it is missing, not out of date, so a change at its source
+  // says nothing of the language.
+  const nonText = new Set(scope.nonTextFields);
   return sql`(${sql.join(
     scope.fields.map(
-      field => sql`(${row}.${sql.identifier(toSnakeCase(field))} IS NOT NULL
+      field => sql`(${nonBlankColumnSql(row, toSnakeCase(field), nonText.has(field))}
     AND NOT EXISTS (SELECT 1 FROM ${PROVENANCE} ${COVERED}
       WHERE ${liveRowsOfSql(COVERED, scope, entryId, locale)}
       AND ${column(COVERED, "field_path")} = ${field}))`

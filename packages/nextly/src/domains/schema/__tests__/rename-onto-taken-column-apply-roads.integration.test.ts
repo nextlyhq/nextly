@@ -58,10 +58,14 @@ describeEachDialect(
 
     beforeEach(async () => {
       vi.stubEnv("NODE_ENV", "development");
+      // On the earlier layout, translatable values on the main table, named rather than left to
+      // the harness: it keeps the layout of a file's latest boot, so the per-language boot below
+      // would otherwise carry into the next dialect's cases.
       current = await createTestNextly({
         dialect,
         collections: [],
         localization,
+        perLanguageStorage: false,
       });
     });
 

@@ -16,8 +16,6 @@
  *
  * @module __tests__/storage-layout
  */
-import { pathToFileURL } from "node:url";
-
 import {
   _resetPerLanguageStorage,
   setPerLanguageStorage,
@@ -75,8 +73,9 @@ export function layoutForBoot(perLanguageStorage: unknown): void {
 }
 
 /** The preload that puts a CLI child on the earlier layout (`earlier-layout-preload.ts`). */
-const EARLIER_LAYOUT_PRELOAD = pathToFileURL(
-  new URL("./earlier-layout-preload.ts", import.meta.url).pathname
+const EARLIER_LAYOUT_PRELOAD = new URL(
+  "./earlier-layout-preload.ts",
+  import.meta.url
 ).href;
 
 /**

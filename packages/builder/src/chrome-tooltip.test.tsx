@@ -6,7 +6,7 @@
  * tooltip the builder's chrome draws.
  */
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { moduleSpecifierRefs } from "@nextlyhq/module-specifiers";
@@ -23,7 +23,7 @@ import type { Node as AstNode } from "oxc-parser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChromeTooltip } from "./chrome-tooltip";
-import { TEST_MODULE, collectModules } from "./source-modules";
+import { TEST_MODULE, collectModules, modulePath } from "./source-modules";
 
 afterEach(cleanup);
 
@@ -136,6 +136,8 @@ describe("ChromeTooltip", () => {
  */
 describe("the builder's chrome tooltips", () => {
   const SRC_DIR = dirname(fileURLToPath(import.meta.url));
+  const fromSrc = (file: string): string =>
+    modulePath(SRC_DIR, file, relative, sep);
   const PARTS = new Set(["Tooltip", "TooltipTrigger", "TooltipContent"]);
 
   /** A module-export name's text, an identifier or a string literal. */
@@ -205,7 +207,7 @@ describe("the builder's chrome tooltips", () => {
   ).filter(file => !TEST_MODULE.test(file));
   const importers = files
     .filter(file => partsImported(readFileSync(file, "utf8"), file).length > 0)
-    .map(file => relative(SRC_DIR, file));
+    .map(file => fromSrc(file));
 
   it("are drawn by ChromeTooltip alone", () => {
     expect(importers).toEqual(["chrome-tooltip.tsx"]);
@@ -215,7 +217,7 @@ describe("the builder's chrome tooltips", () => {
     // The positive control: a scan that read nothing would also find no
     // other importer.
     expect(importers).toContain("chrome-tooltip.tsx");
-    expect(files.map(file => relative(SRC_DIR, file))).toEqual(
+    expect(files.map(file => fromSrc(file))).toEqual(
       expect.arrayContaining([
         "shell/editor-rail.tsx",
         "inspector/style-inspector/icon-choice-field.tsx",
