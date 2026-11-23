@@ -14,6 +14,7 @@ import {
   forgetCompanionReadiness,
   isCompanionReady,
   resolveCompanionReadiness,
+  resolveCompanionsReady,
 } from "./companion-readiness";
 
 /** Counts what actually reached the database, which is the property under test. */
@@ -44,6 +45,18 @@ describe("companion readiness", () => {
     // trip per entity, now pays none.
     expect(await isCompanionReady(adapter, "dc_posts_locales")).toBe(true);
     expect(await isCompanionReady(adapter, "dc_posts_locales")).toBe(true);
+    expect(adapter.queries).toHaveLength(1);
+  });
+
+  it("sends one probe for reads that ask together", async () => {
+    // A document and the relations it populates, or two requests of one screen, arrive at once
+    // after a verdict expired: they share the probe on its way rather than each sending one.
+    const adapter = countingAdapter(["dc_tags_locales"]);
+    const answers = await Promise.all([
+      isCompanionReady(adapter, "dc_tags_locales"),
+      isCompanionReady(adapter, "dc_tags_locales"),
+    ]);
+    expect(answers).toEqual([true, true]);
     expect(adapter.queries).toHaveLength(1);
   });
 
@@ -123,6 +136,65 @@ describe("companion readiness", () => {
     ).toBeUndefined();
     // And the second connection's miss did not disturb the first's verdict.
     expect(cachedCompanionReadiness(first, "dc_posts_locales")).toBe("ready");
+  });
+});
+
+describe("resolveCompanionsReady", () => {
+  /** A counting adapter that also lists its tables, as every database adapter does. */
+  function listingAdapter(present: string[]) {
+    const counting = countingAdapter(present);
+    const listings: number[] = [];
+    return {
+      ...counting,
+      listings,
+      listTables: () => {
+        listings.push(1);
+        return Promise.resolve([...present, "users"]);
+      },
+    };
+  }
+
+  it("answers every companion from one listing, with no probe of its own", async () => {
+    const adapter = listingAdapter(["dc_posts_locales", "dc_tags_locales"]);
+
+    await resolveCompanionsReady(adapter, [
+      "dc_posts_locales",
+      "dc_tags_locales",
+      "dc_pages_locales",
+    ]);
+
+    expect(adapter.listings).toHaveLength(1);
+    expect(adapter.queries).toEqual([]);
+    // What a write in a transaction reads: the listed companions are ready, the missing one is
+    // still unknown, so it fails closed rather than writing to a table that is not there.
+    expect(cachedCompanionReadiness(adapter, "dc_posts_locales")).toBe("ready");
+    expect(cachedCompanionReadiness(adapter, "dc_tags_locales")).toBe("ready");
+    expect(
+      cachedCompanionReadiness(adapter, "dc_pages_locales")
+    ).toBeUndefined();
+  });
+
+  it("asks nothing when every verdict is fresh", async () => {
+    const adapter = listingAdapter(["dc_posts_locales"]);
+    await resolveCompanionsReady(adapter, ["dc_posts_locales"]);
+    await resolveCompanionsReady(adapter, ["dc_posts_locales"]);
+    expect(adapter.listings).toHaveLength(1);
+  });
+
+  it("probes one at a time where the adapter cannot list, every one even after a failure", async () => {
+    const adapter = countingAdapter(["dc_tags_locales"]);
+    const failing = {
+      ...adapter,
+      executeQuery: (sql: string) =>
+        sql.includes("dc_posts_locales")
+          ? Promise.reject(new Error("connection reset"))
+          : adapter.executeQuery(sql),
+    };
+
+    await expect(
+      resolveCompanionsReady(failing, ["dc_posts_locales", "dc_tags_locales"])
+    ).rejects.toThrow("connection reset");
+    expect(cachedCompanionReadiness(failing, "dc_tags_locales")).toBe("ready");
   });
 });
 

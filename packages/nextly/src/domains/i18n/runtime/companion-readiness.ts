@@ -199,6 +199,25 @@ export async function isCompanionReady(
 ): Promise<boolean> {
   const tables = readyTables(adapter);
   if (isFresh(tables.get(companionTableName))) return true;
+  // One probe per table at a time: reads arriving together (a document and the relations it
+  // populates, two requests of one screen) wait for the probe already on its way rather than each
+  // sending its own for the same answer.
+  const probes = probesInFlight(adapter);
+  const inFlight = probes.get(companionTableName);
+  if (inFlight !== undefined) return inFlight;
+  const probe = probeCompanion(adapter, companionTableName, tables).finally(
+    () => probes.delete(companionTableName)
+  );
+  probes.set(companionTableName, probe);
+  return probe;
+}
+
+/** The probe {@link isCompanionReady} sends, recording what it finds. */
+async function probeCompanion(
+  adapter: CompanionIntrospectAdapter,
+  companionTableName: string,
+  tables: Map<string, number>
+): Promise<boolean> {
   const { companionTableExists } = await import("./companion-io");
   if (!(await companionTableExists(adapter, companionTableName))) {
     // Checked and gone. Dropping it here is what stops an expired verdict lingering as a
@@ -208,6 +227,68 @@ export async function isCompanionReady(
   }
   tables.set(companionTableName, Date.now());
   return true;
+}
+
+/** The probes on their way, per connection as the verdicts are, by companion table name. */
+const inFlightProbes = new WeakMap<object, Map<string, Promise<boolean>>>();
+
+function probesInFlight(given: ReadinessScope): Map<string, Promise<boolean>> {
+  const scope = connectionOf(given);
+  let probes = inFlightProbes.get(scope);
+  if (probes === undefined) {
+    probes = new Map();
+    inFlightProbes.set(scope, probes);
+  }
+  return probes;
+}
+
+/** An adapter that can list its database's tables in one catalogue read. */
+function hasListTables(
+  adapter: object
+): adapter is { listTables(): Promise<string[]> } {
+  return typeof (adapter as { listTables?: unknown }).listTables === "function";
+}
+
+/**
+ * {@link isCompanionReady} for many companions at once, remembering each `ready` verdict.
+ *
+ * Where the adapter lists its tables, one catalogue read answers them all: every companion it
+ * names is `ready`, and one it does not name is left unresolved, as a failed probe leaves it.
+ * One probe per companion made a start's statements grow with the number of translated entities,
+ * which is every collection and Single once every installation keeps its translatable fields per
+ * language. An adapter that cannot list its tables is probed one companion at a time, as before.
+ *
+ * Fresh verdicts are not asked again. MUST NOT be called inside an open transaction, like
+ * {@link isCompanionReady}.
+ */
+export async function resolveCompanionsReady(
+  adapter: CompanionIntrospectAdapter,
+  companionTableNames: readonly string[]
+): Promise<void> {
+  const tables = readyTables(adapter);
+  const unknown = [...new Set(companionTableNames)].filter(
+    name => !isFresh(tables.get(name))
+  );
+  if (unknown.length === 0) return;
+  if (!hasListTables(adapter)) {
+    // A probe that fails does not stop the others; the first failure is thrown once all ran.
+    let failure: { error: unknown } | undefined;
+    for (const name of unknown) {
+      try {
+        await isCompanionReady(adapter, name);
+      } catch (error) {
+        failure ??= { error };
+      }
+    }
+    if (failure !== undefined) throw failure.error;
+    return;
+  }
+  const present = new Set(await adapter.listTables());
+  const verifiedAt = Date.now();
+  for (const name of unknown) {
+    if (present.has(name)) tables.set(name, verifiedAt);
+    else tables.delete(name);
+  }
 }
 
 /**
