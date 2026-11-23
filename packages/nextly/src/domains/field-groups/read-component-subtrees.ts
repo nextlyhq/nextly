@@ -23,6 +23,7 @@ import type { FieldGroupDataService } from "../../services/field-groups/field-gr
 import { EXACT_STORED_LANGUAGE } from "../i18n/locale-selector";
 
 import { directFieldGroupFields } from "./field-group-write-access";
+import { isStorageMovingRefusal } from "./migration/moved-storage";
 
 export interface ReadComponentSubtreesArgs {
   /** Absent when no component service is registered; the result is then empty. */
@@ -149,6 +150,9 @@ export async function readComponentSubtreesByLocale({
       byLocale.set(locale, components);
     });
   } catch (err) {
+    // A write that met field-group storage moving under it is refused to be retried: passed on as
+    // it is, so its caller is told to retry rather than of an internal error.
+    if (isStorageMovingRefusal(err)) throw err;
     onReadFailure?.(err);
     throw NextlyError.internal({
       cause: err instanceof Error ? err : undefined,

@@ -24,6 +24,7 @@ import { resolveComponentTableName } from "../../schema/utils/resolve-table-name
 import { registerComponentRuntimeSchema } from "../services/field-group-table-provisioning";
 import {
   forgetFieldGroupStorageNames,
+  resolveRegistryTableName,
   resolveTableColumns,
 } from "../storage/resolve-storage-names";
 
@@ -95,6 +96,12 @@ export function hasMovedStorageCause(error: unknown): boolean {
  * names and runs once more, so it reads the registry under the name it holds now. The migration
  * renames the registry last, after the tables, so a name re-resolved between the two goes stale
  * again; this is where that is caught, whichever lookup meets it first.
+ *
+ * A lookup on a write's transaction cannot always run once more: the failure has aborted that
+ * transaction on PostgreSQL, and the second try fails for that alone. Then the first failure
+ * decides: the write is refused to be retried (`storageMovingRefusal`) when the registry's name
+ * really did change under this process, and the first failure is raised as it was otherwise, never
+ * the second, which says nothing about storage.
  */
 export function followingMovedRegistry<T extends object>(
   registry: T,
@@ -108,15 +115,54 @@ export function followingMovedRegistry<T extends object>(
         const run = (): unknown => Reflect.apply(value, target, args);
         const first = run();
         if (!(first instanceof Promise)) return first;
-        return first.catch((error: unknown) => {
+        return first.catch(async (error: unknown) => {
           if (!hasMovedStorageCause(error)) throw error;
+          const before = await registryNameOf(adapter);
           forgetFieldGroupStorageNames(adapter);
           clearRegistryRowCache();
-          return run();
+          try {
+            return await run();
+          } catch {
+            const after = await registryNameOf(adapter);
+            if (
+              before !== undefined &&
+              after !== undefined &&
+              before !== after
+            ) {
+              throw storageMovingRefusal(after);
+            }
+            throw error;
+          }
         });
       };
     },
   });
+}
+
+/** The registry's name as this process resolves it, or undefined where it cannot be read. */
+async function registryNameOf(
+  adapter: DrizzleAdapter
+): Promise<string | undefined> {
+  try {
+    return await resolveRegistryTableName(adapter);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether `error` is the refusal a write meeting moved storage is answered with: one a caller is
+ * meant to see as it is, to retry the write, never wrapped into another error.
+ */
+export function isStorageMovingRefusal(error: unknown): boolean {
+  if (!NextlyError.is(error)) return false;
+  const data = error.publicData as
+    | { errors?: readonly { code?: unknown }[] }
+    | undefined;
+  return (
+    data?.errors?.some(issue => issue.code === FIELD_GROUP_STORAGE_MOVING) ===
+    true
+  );
 }
 
 /** What a field group's registry rows are read through: this process's registry service. */
