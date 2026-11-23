@@ -17,7 +17,8 @@
  * - a value of another language: that column of the entry's row for the
  *   language, or, for a field that stopped being translated, the
  *   localization archive (`nextly_i18n_archive`), which keeps it under the
- *   entry and the language.
+ *   entry, the language, its collection or Single and its field, as a
+ *   restore reads it.
  *
  * A value found nowhere it may be kept is lost.
  *
@@ -223,20 +224,41 @@ export async function seedContent(
   return seeded;
 }
 
-/** Whether the localization archive keeps `value` for the entry `id` in `locale`. */
+/**
+ * Whether the localization archive keeps `value` for the entry `id` in
+ * `locale`, under the owner and field a restore reads it by: the collection
+ * or Single whose table is `table`, and the field whose column is `column`.
+ * A row under another owner or field would not be restored to this one.
+ */
 async function archived(
   query: Query,
   dialect: Dialect,
-  id: string,
-  locale: string,
-  value: string
+  seed: { table: string; id: string; column: string; value: string },
+  locale: string
 ): Promise<boolean> {
   const q = (name: string) => quote(dialect, name);
   const rows = await query(
-    `SELECT COUNT(*) AS n FROM ${q("nextly_i18n_archive")} WHERE ${q("entry_id")} = ? AND ${q("locale")} = ? AND ${q("value")} = ?`,
-    [id, locale, value]
+    `SELECT ${q("collection")} AS owner, ${q("entity_kind")} AS kind, ${q("field")} AS field FROM ${q("nextly_i18n_archive")} WHERE ${q("entry_id")} = ? AND ${q("locale")} = ? AND ${q("value")} = ?`,
+    [seed.id, locale, seed.value]
   );
-  return Number(rows[0]?.n ?? 0) > 0;
+  return rows.some(
+    row =>
+      tableOf(String(row.kind), String(row.owner)) === seed.table &&
+      columnOf(String(row.field)) === seed.column
+  );
+}
+
+/** The table a collection's or Single's slug names, as Nextly names it. */
+function tableOf(kind: string, slug: string): string | undefined {
+  const name = slug.replace(/-/g, "_");
+  if (kind === "collection") return `dc_${name}`;
+  if (kind === "single") return `single_${name}`;
+  return undefined;
+}
+
+/** The column a field's name is stored in: its name, snake-cased. */
+function columnOf(field: string): string {
+  return field.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
 }
 
 /**
@@ -274,7 +296,12 @@ export async function lostValues(
           ? (await read(table, `${quote(dialect, "id")} = ?`, [id])) ===
               value || (await inLanguage(DEFAULT_LOCALE)) === value
           : (await inLanguage(locale)) === value ||
-            (await archived(query, dialect, id, locale, value));
+            (await archived(
+              query,
+              dialect,
+              { table, id, column, value },
+              locale
+            ));
       if (!kept) {
         lost.push(`${table}.${column}${locale ? ` (${locale})` : ""}`);
       }
