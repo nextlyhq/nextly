@@ -1126,9 +1126,11 @@ async function registerServicesOnce(
   // setup: a production start sets one up only to run the migrations at start, so it takes the
   // names their history keeps field groups under; every other start begins a new site on the
   // current names. The compile uses it only where the database has no registry yet.
-  const newSiteFieldGroupNaming = structure.productionStart
-    ? await historyNamingAtStart(resolvedBasePath, transformedConfig)
-    : ("current" as const);
+  const newSiteFieldGroupNaming = await newSiteNamingAtStart(
+    structure.productionStart,
+    resolvedBasePath,
+    transformedConfig
+  );
   const bootExtensionSchema = await prepareBootSchema(
     adapter,
     transformedConfig,
@@ -3925,6 +3927,16 @@ export async function createSchemaRegistry(
  * no migrations folder, the folder has no snapshot, or it cannot be read (the migrations at start
  * report a folder they cannot read).
  */
+async function newSiteNamingAtStart(
+  productionStart: boolean,
+  projectRoot: string,
+  config: { db?: { migrationsDir?: string } }
+): Promise<"legacy" | "current"> {
+  return productionStart
+    ? historyNamingAtStart(projectRoot, config)
+    : "current";
+}
+
 async function historyNamingAtStart(
   projectRoot: string,
   config: { db?: { migrationsDir?: string } }
