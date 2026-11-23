@@ -69,6 +69,13 @@ export interface UpdateCollectionOptions {
    * of an earlier release. A plugin's row is refused as any other change to it is.
    */
   handOver?: "builder";
+  /**
+   * Gives the row to the declaration the code-first sync writes (`source`) where the row records
+   * another owner the declaration takes it from (`declarationClaims`): its source, lock and
+   * config path written together, as a hand-over writes them. Set by the code-first sync alone,
+   * whose `source` is the declaration's origin.
+   */
+  claim?: true;
 }
 
 /**
@@ -84,6 +91,26 @@ function handsOverToBuilder(
     options?.handOver === "builder" &&
     (existing.source === "code" || existing.source === "ui")
   );
+}
+
+/**
+ * Whether the configuration's declaration of a collection, by `declared` (`code` or
+ * `plugin:<name>`), takes a row that records another owner. What the configuration declares owns
+ * the row, at a start and a reload alike:
+ * - a row code or a plugin owns takes the declaration's origin, so a plugin's collection an earlier
+ *   reload recorded as the app's own (`code`) is recorded as the plugin's, and the other way round;
+ * - a row a demote handed to the Schema Builder is taken by a plugin's declaration, which registers
+ *   its collection at every start whoever holds the address; the app's own entry over it is
+ *   ignored instead (`builderOwnsDeclared`);
+ * - a row made in the Schema Builder, without the demote's mark, keeps its owner.
+ */
+function declarationClaims(
+  declared: CollectionSource,
+  existing: Pick<DynamicCollectionRecord, "source" | "configPath">
+): boolean {
+  if (existing.source === declared) return false;
+  if (isPipelineSource(existing.source)) return true;
+  return isHandedToBuilder(existing) && declared.startsWith("plugin:");
 }
 
 /**
@@ -106,6 +133,20 @@ function builderOwnsDeclared(
     !!existing &&
     isHandedToBuilder(existing) &&
     (config.source ?? "code") === "code"
+  );
+}
+
+/**
+ * Whether the code-first sync's decision for `config` leaves the row unchanged although its owner
+ * differs from the declaration's (`declarationClaims`): a write of its owner alone is owed.
+ */
+function ownerOnlyChange(
+  config: Pick<CodeFirstCollectionConfig, "source">,
+  decision: CodeFirstSyncStep
+): boolean {
+  return (
+    decision.step === "unchanged" &&
+    declarationClaims(config.source ?? "code", decision.existing)
   );
 }
 
@@ -917,6 +958,18 @@ export class CollectionRegistryService extends BaseRegistryService<
       updateData.locked = false;
       // Marked as handed over, whatever path the caller sent: what a later sync knows it by.
       updateData.config_path = DEMOTED_FROM_CODE;
+    } else if (
+      options?.claim === true &&
+      options.source !== undefined &&
+      isPipelineSource(options.source) &&
+      declarationClaims(options.source, existing)
+    ) {
+      // The other move between owners: the declaration takes the row (`declarationClaims`). Its
+      // source and lock together, and its config path, so a handed-over row loses the demote's mark
+      // and is not taken for the Builder's again.
+      updateData.source = options.source;
+      updateData.locked = true;
+      updateData.config_path = data.configPath ?? null;
     } else if (data.configPath !== undefined) {
       updateData.config_path = data.configPath;
     }
@@ -1229,7 +1282,11 @@ export class CollectionRegistryService extends BaseRegistryService<
         planned.unchanged.push(config.slug);
         continue;
       }
-      const { step } = this.codeFirstSyncStep(config, existing);
+      const decision = this.codeFirstSyncStep(config, existing);
+      // As the sync writes it: a row whose owner alone differs is written (`ownerOnlyChange`).
+      const step = ownerOnlyChange(config, decision)
+        ? "metadata"
+        : decision.step;
       if (step === "create") planned.created.push(config.slug);
       else if (step === "unchanged") planned.unchanged.push(config.slug);
       else planned.updated.push(config.slug);
@@ -1356,6 +1413,11 @@ export class CollectionRegistryService extends BaseRegistryService<
         }
         const decision = this.codeFirstSyncStep(config, held);
         const { schemaHash, desiredTableName } = decision;
+        // A row whose only difference is its owner is written too, its owner alone
+        // (`declarationClaims`): the field-level comparison never asks who owns the row.
+        const step = ownerOnlyChange(config, decision)
+          ? "metadata"
+          : decision.step;
 
         if (decision.step === "create") {
           await this.registerCollection(
@@ -1389,15 +1451,19 @@ export class CollectionRegistryService extends BaseRegistryService<
               configPath: config.configPath,
               locked: true,
             },
-            { source: config.source ?? "code" }
+            { source: config.source ?? "code", claim: true }
           );
           result.updated.push(config.slug);
           await seedFor(config.slug);
-        } else if (decision.step === "metadata") {
+        } else if (step === "metadata") {
           await this.updateCollection(
             config.slug,
-            { ...declaredMetadata(config), locked: true },
-            { source: config.source ?? "code" }
+            {
+              ...declaredMetadata(config),
+              configPath: config.configPath,
+              locked: true,
+            },
+            { source: config.source ?? "code", claim: true }
           );
           result.updated.push(config.slug);
         } else {

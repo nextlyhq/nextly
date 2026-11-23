@@ -442,6 +442,11 @@ for (const dialect of getConfiguredTestDialects()) {
         )
       ).toBe("finished");
       expect(await recordFields(database.adapter)).toContain("extra");
+      // And the row is the plugin's from then on, locked, no longer marked as handed over.
+      expect(await recordOf(database.adapter, POSTS.slug)).toMatchObject({
+        source: "plugin:@test/dcr",
+        locked: true,
+      });
     });
 
     it("is registered with the hash the registry compares fields by, so the Builder's first save of the same fields changes nothing", async () => {
