@@ -140,7 +140,9 @@ async function refuseKeysIntoRetiredCollections(
   const collections = retiring.filter(entity => entity.kind === "collection");
   if (collections.length === 0) return;
   const own = new Set(
-    retiring.flatMap(entity => entity.tables.map(table => table.toLowerCase()))
+    retiring.flatMap(entity =>
+      entity.tables.map(table => tableKey(table, args.dialect))
+    )
   );
   const database = databaseDependentsSources(
     args.adapter,
@@ -151,7 +153,7 @@ async function refuseKeysIntoRetiredCollections(
   const left = [
     ...(await keysLeftAfter(live, args.db, args.dialect, statements)),
     ...keysAddedInto(tables, args.dialect, statements),
-  ].filter(key => !own.has(key.table.toLowerCase()));
+  ].filter(key => !own.has(tableKey(key.table, args.dialect)));
   if (left.length === 0) return;
   throw NextlyError.conflict({
     reason: "state",
@@ -230,6 +232,32 @@ function keysAddedInto(
     referencesTable: key.referencesTable,
     owner: null,
   }));
+}
+
+/**
+ * How a table's name is compared on `dialect`: as the catalog spells it on PostgreSQL, which keeps
+ * a quoted name's case (`"Pages"` and `pages` are two tables), lower-cased elsewhere.
+ */
+function tableKey(name: string, dialect: SupportedDialect): string {
+  return dialect === "postgresql" ? name : name.toLowerCase();
+}
+
+/**
+ * Whether `statements` drop a table, named as the catalog spells it. On PostgreSQL a mixed-case
+ * table only by a drop spelling it so (`postgresTableSpellings`), a lower-case one also through a
+ * rename the drop guard follows; elsewhere without regard to case.
+ */
+function droppedTableTest(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): (table: string) => boolean {
+  const dropped = tablesTheStatementsDrop(statements, dialect);
+  if (dialect !== "postgresql") {
+    return table => dropped.has(table.toLowerCase());
+  }
+  const spelled = postgresTableSpellings(statements).dropped;
+  return table =>
+    spelled.has(table) || (table === table.toLowerCase() && dropped.has(table));
 }
 
 /** The database's dependents, read as they will be once `statements` have run. */
@@ -317,12 +345,12 @@ async function keysLeftAfter(
   statements: readonly string[]
 ): Promise<LiveKeyInto[]> {
   if (keys.length === 0) return [];
-  const dropped = tablesTheStatementsDrop(statements, dialect);
+  const isDropped = droppedTableTest(statements, dialect);
   const removed = elementsDroppedBy(statements, dialect);
   const left: LiveKeyInto[] = [];
   for (const key of keys) {
     const table = key.table.toLowerCase();
-    if (dropped.has(table)) continue;
+    if (isDropped(key.table)) continue;
     if (!removed.tables.has(table)) {
       left.push(key);
       continue;

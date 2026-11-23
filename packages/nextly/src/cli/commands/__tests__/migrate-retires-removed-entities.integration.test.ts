@@ -959,6 +959,22 @@ describe.each(LOCK_DIALECTS)(
       ).resolves.toBeUndefined();
     }, 180_000);
 
+    it("refuses a drop a key from a surviving table differing only in case points into", async () => {
+      // Only PostgreSQL keeps a quoted name's case apart.
+      if (dialect !== "postgresql") return;
+      const survivor = `${P}_Posts`;
+      await adapter.executeQuery(
+        `CREATE TABLE "${survivor}" (id varchar(36) PRIMARY KEY, post_id varchar(36))`
+      );
+      await adapter.executeQuery(
+        `ALTER TABLE "${survivor}" ADD CONSTRAINT ${P}_survivor_post FOREIGN KEY (post_id) REFERENCES ${posts} (id)`
+      );
+
+      await expect(
+        judge([{ label: "x.sql", statements: POSTS_DROPPED }])
+      ).rejects.toThrow(new RegExp(survivor));
+    }, 180_000);
+
     /**
      * `nextly migrate` as a real process over this database, as a deploy runs it, killing itself at
      * `killAt` where one is named (`stop-points.ts`). Each run clears the lock a killed one left.
