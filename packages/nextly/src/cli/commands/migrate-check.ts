@@ -60,7 +60,6 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
-import { movedColumnNote } from "../../domains/i18n/per-language-move-guidance";
 import { refuseWhileSaveLeftPartWay } from "../../domains/schema/builder-save/save-in-progress";
 import {
   describeDeletion,
@@ -85,28 +84,12 @@ import {
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import {
-  permissionDifferences,
+  type UnwrittenChanges,
   unwrittenChangesError,
+  unwrittenChangesOf,
 } from "../../domains/schema/migrate/unwritten-changes";
 import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
-import {
-  appStreamSnapshots,
-  compileAppStreamTables,
-  NO_APP_STREAM_TABLES,
-  type AppStreamTables,
-} from "../../domains/schema/migrate-create/app-stream";
-import {
-  declaredPermissionsOf,
-  type PermissionRecord,
-} from "../../domains/schema/migrate-create/declared-permissions";
-import {
-  describeSettingsChange,
-  settingsChangesFor,
-  type EntitySettingsRecord,
-} from "../../domains/schema/migrate-create/entity-settings";
 import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
-import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-create/generate";
-import { perLanguageMovesIn } from "../../domains/schema/migrate-create/per-language-moves";
 import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
 import {
   EMPTY_SNAPSHOT,
@@ -118,8 +101,7 @@ import {
   verifyMigrationHash,
 } from "../../domains/schema/migrate-create/snapshot-io";
 import { templateStartFor } from "../../domains/schema/migrate-create/template-start";
-import { describeOp } from "../../domains/schema/pipeline/diff/describe-operation";
-import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
+import { SETTINGS_NOT_RECORDED_NOTICE } from "../../domains/schema/pending/pending-changes";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 import {
@@ -137,8 +119,6 @@ import {
   migrationFileEdited,
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
-  schemaChangeWithoutMigration,
-  settingsChangeWithoutMigration,
   snapshotWithoutMigration,
 } from "../errors/areas/migrations";
 import { createContext, type CommandContext } from "../program";
@@ -245,29 +225,6 @@ export async function runMigrateCheck(
   }
   const { merged } = definitions;
 
-  // Built once the latest snapshot is read, as `migrate:create` builds it:
-  // a field a plugin holds back from a type switched off keeps its column
-  // while that snapshot has it.
-  const desiredSnapshot = (existing: NextlySchemaSnapshot) =>
-    buildDesiredSnapshotFromConfig(
-      merged.collections,
-      merged.singles,
-      merged.components,
-      dialect,
-      existing
-    );
-
-  // The app stream's extension schema, compiled exactly as `migrate:create`
-  // compiles it. Without it every table an app declared through
-  // `db.schema.extend` was in the latest snapshot and absent from this side,
-  // so the check reported a drop of each one — on every run, for every app
-  // that used the documented hook.
-  const appStream = await compileAppStreamTables({
-    config: configResult.config,
-    dialect,
-    logger: { warn: m => logger.warn(m) },
-  });
-
   // Read as `nextly migrate` reads the folder.
   const declared = await declaredNamesOf({
     ...configResult,
@@ -276,8 +233,20 @@ export async function runMigrateCheck(
 
   await runChecks({
     migrationsDir,
-    desiredSnapshot,
-    appStream,
+    // The changes not yet in a migration, as `migrate:create` plans them from the inputs it reads:
+    // the configuration, the plugins, the Builder's definitions and the app's extension tables.
+    // This check reads no database, so settings an earlier snapshot never recorded are a notice.
+    unwritten: () =>
+      unwrittenChangesOf({
+        config: configResult.config,
+        ...(configResult.deferredExtends === undefined
+          ? {}
+          : { deferredExtends: configResult.deferredExtends }),
+        projectRoot: cwd,
+        migrationsDir,
+        dialect,
+        logger,
+      }),
     dialect,
     declared,
     // Each entity with its settings, as `migrate:create` records them; the
@@ -292,12 +261,6 @@ export async function runMigrateCheck(
       dialect,
     }),
     definitions,
-    // Every permission the configuration declares, as `migrate:create` records them, so a plugin
-    // release that only adds or removes one is named here as `nextly migrate` names it.
-    permissions: declaredPermissionsOf(configResult.config, {
-      collections: merged.collections,
-      singles: merged.singles,
-    }),
     // Asked again, its notices already given once.
     beforePass: () => refuseLeftSave(() => undefined),
     logger,
@@ -399,15 +362,10 @@ function groupFileOf(sqlName: string): string {
 export async function runChecks(args: {
   migrationsDir: string;
   /**
-   * What the entities alone describe; the extension schema is `appStream`.
-   * Or how to build it from the latest snapshot's tables, which keep the
-   * columns of fields a plugin holds back from a type switched off.
+   * The changes not yet in a migration, as `migrate:create` plans them from the same inputs
+   * (`unwrittenChangesOf`). Omitted, none are checked.
    */
-  desiredSnapshot:
-    | NextlySchemaSnapshot
-    | ((existing: NextlySchemaSnapshot) => NextlySchemaSnapshot);
-  /** The app stream's extension schema. Omitted, there is none. */
-  appStream?: AppStreamTables;
+  unwritten?: () => Promise<UnwrittenChanges>;
   /**
    * The dialect the files will run on, for the statement check. Omitted, the
    * check is skipped.
@@ -437,11 +395,6 @@ export async function runChecks(args: {
    * checked.
    */
   definitions?: BuilderDefinitions;
-  /**
-   * The permissions the configuration declares, compared with the newest
-   * snapshot's record of them. Omitted, permissions are not checked.
-   */
-  permissions?: PermissionRecord;
   /**
    * Asked once every check has read what it reads, before the check reports a pass: a Builder save
    * that started while the check read the folder refuses it then. Omitted, nothing is asked.
@@ -523,28 +476,12 @@ export async function runChecks(args: {
     );
   }
 
-  // Check 4: schema drift (config vs latest snapshot).
-  //
-  // Both sides come from `appStreamSnapshots`, the function `migrate:create`
-  // diffs through, so a change the generator has written is never reported
-  // here as pending.
-  let previousSnapshot: NextlySchemaSnapshot;
-  let desiredSnapshot: NextlySchemaSnapshot;
+  // Check 4: the changes not yet in a migration. The newest snapshot is read here for the checks
+  // of the definitions and the addresses; the changes themselves are `migrate:create`'s own plan
+  // (`unwritten`), so a change it has written is never reported here as pending.
   let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
     latest = await loadLatestSnapshot(metaDir, args.templateStart);
-    const existing = latest?.data.snapshot ?? EMPTY_SNAPSHOT;
-    const stream = appStreamSnapshots({
-      previous: existing,
-      previousContributions: latest?.data.contributions ?? {},
-      desired:
-        typeof args.desiredSnapshot === "function"
-          ? args.desiredSnapshot(existing)
-          : args.desiredSnapshot,
-      tables: args.appStream ?? NO_APP_STREAM_TABLES,
-    });
-    previousSnapshot = stream.previous;
-    desiredSnapshot = stream.desired;
   } catch (err) {
     // F11 PR 4 review fix #3: see INVALID_SNAPSHOT comment above.
     if (err instanceof SnapshotFileError) {
@@ -586,54 +523,20 @@ export async function runChecks(args: {
     return exitWithError(logger, siblingClashesErrorFor(refusedSiblings));
   }
 
-  const ops = diffSnapshots(previousSnapshot, desiredSnapshot);
-  if (ops.length > 0) {
-    // Text-like fields moving to their per-language table, named as moves rather than drops, as
-    // `nextly migrate` names them. Judged only where the entities and the dialect are given.
-    const moves =
-      args.entities !== undefined && args.dialect !== undefined
-        ? perLanguageMovesIn(ops, args.entities, args.dialect)
-        : [];
-    // Cap the listed ops at 10 to keep CI logs readable on large drifts.
-    const listed = ops
-      .slice(0, 10)
-      .map(
-        op =>
-          `+ ${describeOp(op)}${
-            op.type === "drop_column"
-              ? movedColumnNote(moves, op.tableName, op.columnName)
-              : ""
-          }`
-      );
-    if (ops.length > 10) listed.push(`... and ${ops.length - 10} more`);
-    return exitWithError(
-      logger,
-      schemaChangeWithoutMigration(ops.length, listed, moves)
-    );
-  }
-
-  const settingsDrift = settingsInStep(args.entities, latest?.data.entities);
-  if (settingsDrift !== undefined) return exitWithError(logger, settingsDrift);
-
-  // An app's or a plugin's permission added or removed with no migration, judged by the one
-  // comparison `nextly migrate` makes (`permissionDifferences`). This check reads no database,
-  // so a snapshot that predates the record, or none at all, names nothing.
-  const permissionDrift =
-    args.permissions === undefined
-      ? undefined
-      : unwrittenChangesError({
-          tables: [],
-          beside: [],
-          settings: [],
-          permissions: permissionDifferences(
-            args.permissions,
-            latest,
-            undefined
-          ),
-          noSnapshot: latest === null,
-        });
-  if (permissionDrift !== undefined) {
-    return exitWithError(logger, permissionDrift);
+  if (args.unwritten !== undefined) {
+    let changes: UnwrittenChanges;
+    try {
+      changes = await args.unwritten();
+    } catch (error) {
+      // A declaration `migrate:create` would refuse ends the check with its message.
+      return exitWithError(logger, error);
+    }
+    const drift = unwrittenChangesError(changes);
+    if (drift !== undefined) return exitWithError(logger, drift);
+    // Settings an earlier snapshot never recorded: a notice, as `migrate:create` gives it.
+    if (changes.settingsNotRecorded === true) {
+      logger.warn(SETTINGS_NOT_RECORDED_NOTICE);
+    }
   }
 
   try {
@@ -705,35 +608,6 @@ async function withoutOldBuilderFiles(
     logger.warn(partialBuilderFileLine(file));
   }
   return sqlFiles.filter(f => !ignored.has(f));
-}
-
-/**
- * Check 6: settings changed with no migration for them, as the error the
- * check ends with; undefined when there are none.
- *
- * The delta is the one `migrate:create` writes a migration for. A newest
- * snapshot written before settings were recorded says nothing about them, so
- * its silence is never a difference: there is nothing to compare until the
- * first `migrate:create` after upgrading records them.
- */
-function settingsInStep(
-  entities:
-    | {
-        collections: readonly MinimalConfigEntity[];
-        singles: readonly MinimalConfigEntity[];
-        components: readonly MinimalConfigEntity[];
-      }
-    | undefined,
-  recorded: EntitySettingsRecord | undefined
-): CliError | undefined {
-  if (entities === undefined || recorded === undefined) return undefined;
-  const changes = settingsChangesFor(entities, recorded);
-  if (changes.length === 0) return undefined;
-  const listed = changes
-    .slice(0, 10)
-    .map(change => `~ ${describeSettingsChange(change)}`);
-  if (changes.length > 10) listed.push(`... and ${changes.length - 10} more`);
-  return settingsChangeWithoutMigration(changes.length, listed);
 }
 
 /**

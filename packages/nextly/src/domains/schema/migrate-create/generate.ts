@@ -101,7 +101,12 @@ import type { Deletion } from "../migrate/data-loss-consent";
 import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
 import { mergedBy } from "../migrate/history-line";
 import { compareMigrationBaseNames } from "../migrate/migration-order";
-import { nothingToWrite, pendingChangesOf } from "../pending/pending-changes";
+import {
+  nothingToWrite,
+  pendingChangesOf,
+  recordsForTheFirstTime,
+  SETTINGS_NOT_RECORDED_NOTICE,
+} from "../pending/pending-changes";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -1018,11 +1023,14 @@ export async function planRun(requested: GenerateArgs) {
     previous: previous?.data.snapshot ?? EMPTY_SNAPSHOT,
     previousContributions: previous?.data.contributions ?? {},
     desired: withTablesAsTheyStand(
+      // Read beside the tables the last migration left: a field group's discriminator is the column
+      // its table was recorded with, which its name alone cannot say.
       buildDesiredSnapshotFromConfig(
         args.collections,
         args.singles,
         args.components,
-        args.dialect
+        args.dialect,
+        previous?.data.snapshot
       ),
       args.tablesAsTheyStand
     ),
@@ -1310,7 +1318,12 @@ export async function generateMigration(
   });
   if (recorded !== undefined) return recorded;
   // Nothing to write: the same answer every report of the changes not yet in a migration reads.
-  if (nothingToWrite(pendingChangesOf(planned))) return null;
+  const pending = pendingChangesOf(planned);
+  if (nothingToWrite(pending)) return null;
+  // Settings an earlier snapshot never recorded are recorded now, as `migrate:check` says.
+  if (recordsForTheFirstTime(pending)) {
+    args.onWarning?.(SETTINGS_NOT_RECORDED_NOTICE);
+  }
 
   // 4-6. Rename detection + prompt + apply — only meaningful when the main table
   //      itself changed. A localization-only run has no main-table ops to rename.

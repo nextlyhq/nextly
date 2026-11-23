@@ -54,6 +54,7 @@ import {
   type BesideFile,
   pendingChangeLines,
   type PendingChanges,
+  recordsForTheFirstTime,
 } from "../pending/pending-changes";
 import { pendingChanges } from "../pending/plan-pending";
 import type { Operation } from "../pipeline/diff/types";
@@ -106,6 +107,11 @@ export interface UnwrittenChanges {
    * not values removed (`perLanguageMovesIn`). Absent or empty, no drop is such a move.
    */
   perLanguageMoves?: readonly PerLanguageMove[];
+  /**
+   * Whether `migrate:create` would record settings or permissions the newest snapshot predates
+   * recording (`recordsForTheFirstTime`): a notice, never a change.
+   */
+  settingsNotRecorded?: boolean;
 }
 
 /** Whether `changes` names nothing. */
@@ -408,7 +414,11 @@ export async function unwrittenChangesOf(
         }
       : {}),
   });
-  return args.comparePermissions === false
-    ? { ...changes, permissions: [] }
+  // Settings the newest snapshot never recorded are a notice of their own, never a change.
+  const noticed = recordsForTheFirstTime(pending)
+    ? { ...changes, settingsNotRecorded: true }
     : changes;
+  return args.comparePermissions === false
+    ? { ...noticed, permissions: [] }
+    : noticed;
 }

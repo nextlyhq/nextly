@@ -279,7 +279,6 @@ for (const dialect of getConfiguredTestDialects()) {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: tables,
         entities: {
           collections: [
             {

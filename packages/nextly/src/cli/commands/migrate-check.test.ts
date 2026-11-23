@@ -36,6 +36,8 @@ import type { MinimalConfigField } from "../../domains/schema/migrate-create/gen
 import { writeSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 
+import type { UnwrittenChanges } from "../../domains/schema/migrate/unwritten-changes";
+
 import { runChecks } from "./migrate-check";
 
 function makeLogger() {
@@ -68,6 +70,22 @@ const POSTS_TABLE = {
 };
 
 const POSTS_DESIRED: NextlySchemaSnapshot = { tables: [POSTS_TABLE] };
+
+/**
+ * The changes not yet in a migration as the comparison answers them (`unwrittenChangesOf`),
+ * naming `tables` as added: what the check reports, the comparison itself being
+ * `migrate:create`'s plan, tested on its own (`pending-changes.test.ts`).
+ */
+const driftOf =
+  (tables: NextlySchemaSnapshot["tables"], noSnapshot = false) =>
+  (): Promise<UnwrittenChanges> =>
+    Promise.resolve({
+      tables: tables.map(table => ({ type: "add_table" as const, table })),
+      beside: [],
+      settings: [],
+      permissions: [],
+      noSnapshot,
+    });
 const EMPTY_DESIRED: NextlySchemaSnapshot = { tables: [] };
 
 describe("runChecks (F11 PR 4)", () => {
@@ -111,61 +129,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: POSTS_DESIRED,
-        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
-      });
-
-      expect(exitSpy).not.toHaveBeenCalled();
-      expect(logger.success).toHaveBeenCalledWith(
-        expect.stringContaining("migrate:check OK")
-      );
-    });
-
-    it("exits 0 when the config carries the per-document columns a snapshot from before them lacks", async () => {
-      // A site's latest snapshot predates the version counter and the last
-      // changer, while the config now declares them on every content table.
-      // `nextly migrate` adds them itself, so this is no schema drift.
-      const sqlContent = "-- placeholder";
-      await writeFile(
-        join(migrationsDir, "20260101_120000_001_initial.sql"),
-        sqlContent,
-        "utf-8"
-      );
-      await writeSnapshot(
-        join(migrationsDir, "meta"),
-        "20260101_120000_001_initial",
-        POSTS_DESIRED,
-        sqlContent
-      );
-      const withDocumentColumns: NextlySchemaSnapshot = {
-        tables: [
-          {
-            ...POSTS_TABLE,
-            columns: [
-              ...POSTS_TABLE.columns,
-              {
-                name: "_revision",
-                type: "int4",
-                nullable: false,
-                default: "1",
-              },
-              { name: "_changed_by_kind", type: "varchar", nullable: true },
-              { name: "_changed_by_id", type: "text", nullable: true },
-              {
-                name: "_changed_by_principal_kind",
-                type: "varchar",
-                nullable: true,
-              },
-              { name: "_changed_at", type: "timestamp", nullable: true },
-            ],
-          },
-        ],
-      };
-
-      const logger = makeLogger();
-      await runChecks({
-        migrationsDir,
-        desiredSnapshot: withDocumentColumns,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -179,7 +142,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
       expect(exitSpy).not.toHaveBeenCalled();
@@ -202,17 +164,12 @@ describe("runChecks (F11 PR 4)", () => {
       await writeSnapshot(join(migrationsDir, "meta"), name, snapshot, content);
     }
 
-    // The dialect and desired schema default to PostgreSQL with no tables; a
-    // SQLite rebuild test passes its own, the desired one matching the latest
-    // snapshot so no drift is reported.
-    const run = async (
-      dialect: "postgresql" | "sqlite" = "postgresql",
-      desiredSnapshot: NextlySchemaSnapshot = EMPTY_DESIRED
-    ) => {
+    // The dialect defaults to PostgreSQL; a SQLite rebuild test passes its own. No comparison is
+    // asked, so no drift is reported.
+    const run = async (dialect: "postgresql" | "sqlite" = "postgresql") => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot,
         dialect,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
@@ -266,7 +223,7 @@ describe("runChecks (F11 PR 4)", () => {
         rebuildNotes(["id", "title"]),
         notesWith("id", "title")
       );
-      const logger = await run("sqlite", notesWith("id", "title"));
+      const logger = await run("sqlite");
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringMatching(
           /DESTRUCTIVE: 20260101_120000_002_drop_body\.sql \(UP\) deletes data: column notes\.body\. nextly migrate runs it only with --accept-data-loss/
@@ -282,7 +239,7 @@ describe("runChecks (F11 PR 4)", () => {
         rebuildNotes(["id", "title", "body"]),
         notesWith("id", "title", "body")
       );
-      const logger = await run("sqlite", notesWith("id", "title", "body"));
+      const logger = await run("sqlite");
       expect(logger.warn).not.toHaveBeenCalledWith(
         expect.stringContaining("DESTRUCTIVE")
       );
@@ -366,7 +323,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
         // `admin` is a reserved slug, and with no migrations yet it is new.
         entities: {
           collections: [{ slug: "admin", tableName: "dc_admin", fields: [] }],
@@ -421,7 +377,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: POSTS_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -444,7 +399,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -491,7 +445,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -530,7 +483,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -548,7 +500,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -568,7 +519,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -599,7 +549,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: POSTS_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -623,7 +572,6 @@ describe("runChecks (F11 PR 4)", () => {
         const logger = makeLogger();
         await runChecks({
           migrationsDir,
-          desiredSnapshot: EMPTY_DESIRED,
           logger: logger as unknown as Parameters<
             typeof runChecks
           >[0]["logger"],
@@ -646,7 +594,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -664,7 +611,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -696,7 +642,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -731,7 +676,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -766,7 +710,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: POSTS_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -791,7 +734,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: POSTS_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -821,7 +763,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -858,7 +799,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: EMPTY_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -884,7 +824,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: POSTS_DESIRED,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -897,12 +836,11 @@ describe("runChecks (F11 PR 4)", () => {
 
   describe("SCHEMA_DRIFT", () => {
     it("exits 1 when config has uncommitted changes (no snapshots at all)", async () => {
-      // Empty migrations + meta. desiredSnapshot has the posts table, so
-      // the diff is non-empty (add_table dc_posts).
+      // Empty migrations + meta, and a comparison naming the posts table added.
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: POSTS_DESIRED,
+        unwritten: driftOf([POSTS_TABLE], true),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -916,7 +854,7 @@ describe("runChecks (F11 PR 4)", () => {
     });
 
     it("exits 1 when config diverges from the latest snapshot", async () => {
-      // Seed a snapshot with EMPTY tables; pass desiredSnapshot with posts.
+      // Seed a snapshot with EMPTY tables; the comparison names posts added.
       const sqlContent = "-- placeholder";
       await writeFile(
         join(migrationsDir, "20260101_120000_001_initial.sql"),
@@ -933,7 +871,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: POSTS_DESIRED,
+        unwritten: driftOf([POSTS_TABLE]),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -946,9 +884,8 @@ describe("runChecks (F11 PR 4)", () => {
       );
     });
 
-    it("caps drift output at 10 ops with a 'and X more' indicator", async () => {
-      // Seed an empty snapshot; pass a desired snapshot with 15 tables to
-      // produce 15 add_table ops.
+    it("names every change, as `nextly migrate` names them", async () => {
+      // Seed an empty snapshot; the comparison names 15 tables added.
       const sqlContent = "-- placeholder";
       await writeFile(
         join(migrationsDir, "20260101_120000_001_initial.sql"),
@@ -972,13 +909,16 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: manyTables,
+        unwritten: driftOf(manyTables.tables),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(printed).toHaveBeenCalledWith(
-        expect.stringContaining("... and 5 more")
+        expect.stringContaining("15 changes in the configuration")
+      );
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("add_table dc_t14")
       );
     });
   });
@@ -1013,7 +953,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: { tables: [ADMIN_TABLE] },
         entities: {
           collections: [entity("admin", "dc_admin")],
           singles: [],
@@ -1037,7 +976,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: { tables: [POSTS_TABLE, CASCADE_TABLE] },
+        unwritten: driftOf([CASCADE_TABLE]),
         entities: {
           collections: [
             entity("posts", "dc_posts"),
@@ -1108,7 +1047,6 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        desiredSnapshot: POSTS_DESIRED,
         entities: {
           collections: [postsWith(fields)],
           singles: [],

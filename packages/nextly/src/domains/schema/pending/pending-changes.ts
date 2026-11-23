@@ -104,26 +104,22 @@ export function nothingToWrite(changes: PendingChanges): boolean {
 }
 
 /**
- * Whether a newest snapshot written before snapshots recorded settings and permissions is the
- * only reason a run would write: each entity's settings and the permissions are then recorded for
- * the first time, which changes nothing they declared before. A notice rather than a pending
- * change: such a snapshot's silence is never a difference, and the next `migrate:create` records
- * them.
+ * The notice both commands give where the newest snapshot was written before snapshots recorded
+ * settings and permissions: what is declared now is recorded for the first time, which is no
+ * change of what was declared before, so it is never a pending change, and `migrate:create`
+ * records it.
  */
-export function onlyFirstRecordings(changes: PendingChanges): boolean {
-  return (
-    changes.tables.length === 0 &&
-    changes.beside.length === 0 &&
-    !changes.movesValues &&
-    changes.settings.every(isFirstRecording) &&
-    changes.permissions.every(change => change.kind === "recorded") &&
-    changes.settings.length + changes.permissions.length > 0
-  );
-}
+export const SETTINGS_NOT_RECORDED_NOTICE =
+  "Settings not yet recorded in a migration: the newest snapshot was written before snapshots " +
+  "recorded each entity's settings and the permissions. `nextly migrate:create` records them in " +
+  "its next migration; until then they are not compared.";
 
-/** Whether nothing is pending: a run would write nothing, or only the first recordings. */
-export function nothingPending(changes: PendingChanges): boolean {
-  return nothingToWrite(changes) || onlyFirstRecordings(changes);
+/** Whether a run records settings or permissions an earlier snapshot never recorded. */
+export function recordsForTheFirstTime(changes: PendingChanges): boolean {
+  return (
+    changes.settings.some(isFirstRecording) ||
+    changes.permissions.some(change => change.kind === "recorded")
+  );
 }
 
 function isFirstRecording(change: EntitySettingsChange): boolean {
