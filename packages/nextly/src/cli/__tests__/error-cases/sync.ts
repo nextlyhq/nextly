@@ -11,6 +11,7 @@ import {
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   demoteCollectionNotFound,
+  demotePluginCollection,
   promoteCollectionNotFound,
   restoreCollectionRequired,
   restoreEntityRefusal,
@@ -52,6 +53,8 @@ function restoreRefusal(
 export const SYNC_CASES = {
   PROMOTE_COLLECTION_NOT_FOUND: () => promoteCollectionNotFound("posts"),
   DEMOTE_COLLECTION_NOT_FOUND: () => demoteCollectionNotFound("posts"),
+  DEMOTE_PLUGIN_COLLECTION: () =>
+    demotePluginCollection("posts", "@acme/forms"),
   SYNC_CONFIRMATION_REQUIRED: () =>
     syncConfirmationRequired("--promote", "posts"),
   I18N_RESTORE_COLLECTION_REQUIRED: () => restoreCollectionRequired(),
