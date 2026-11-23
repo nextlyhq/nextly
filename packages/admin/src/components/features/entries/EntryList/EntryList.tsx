@@ -20,6 +20,7 @@ import {
   DialogTitle,
   PageHeader,
 } from "@nextlyhq/ui";
+import { isFieldLocalized } from "nextly/config";
 import { useState, useCallback, useId, useMemo, useRef } from "react";
 import type { JSX } from "react";
 
@@ -85,6 +86,7 @@ import {
   getAvailableColumns,
   getDefaultVisibleColumns,
   getEntryTitleField,
+  findTopLevelField,
   choiceInForce,
   linkedSortFor,
   linkedStatusFor,
@@ -556,17 +558,40 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // Title language
   // ---------------------------------------------------------------------------
 
-  // "Titles in" is offered where a document has languages to choose among: a
-  // site with two languages or more and a collection whose content is per
-  // language. Each title in the chosen language comes from a read of its own
-  // in that language, which the server judges for that language and each row.
+  // "Titles in" is offered where a title has languages to choose among: a
+  // site with two languages or more, and a title field translated per
+  // language. A title kept once for every language (a built-in title, or a
+  // field marked shared) reads the same in each, and shown "in Spanish" it
+  // would be marked as Spanish text that it is not. Each title in the chosen
+  // language comes from a read of its own in that language, which the server
+  // judges for that language and each row.
   const {
     enabled: multilingual,
     locales = [],
     defaultLocale = "",
   } = useLocalization();
+  const titleField = useMemo(
+    () => getEntryTitleField(collectionForColumns),
+    [collectionForColumns]
+  );
+  const titleTranslated = useMemo(() => {
+    const field = titleField
+      ? findTopLevelField(collectionForColumns.fields, titleField)
+      : undefined;
+    return (
+      field !== undefined &&
+      isFieldLocalized(
+        {
+          type: field.type,
+          name: field.name,
+          localized: (field as { localized?: boolean }).localized,
+        },
+        collectionLocalized
+      )
+    );
+  }, [collectionForColumns.fields, titleField, collectionLocalized]);
   const offersTitleLanguage =
-    multilingual && locales.length > 1 && collectionLocalized;
+    multilingual && locales.length > 1 && titleTranslated;
   const chosenTitleCode = choiceInForce(
     chosenTitleLanguage,
     collectionSlug,
@@ -579,10 +604,6 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     offersTitleLanguage && locales.some(l => l.code === chosenTitleCode)
       ? chosenTitleCode
       : defaultLocale;
-  const titleField = useMemo(
-    () => getEntryTitleField(collectionForColumns),
-    [collectionForColumns]
-  );
   const entryIds = useMemo(
     () => entries.map(entry => String(entry.id)),
     [entries]

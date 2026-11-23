@@ -21,7 +21,7 @@ import { LANGUAGE_FILTER } from "../language-list-filters";
 import type { ListFilter } from "../plugin-filters";
 import type { TitleLanguageChoice } from "../TitleLanguageSelect";
 
-const { useEntries, tableProps, table, site, access, find, LANGUAGES } =
+const { useEntries, tableProps, table, site, access, title, find, LANGUAGES } =
   vi.hoisted(() => ({
     useEntries: vi.fn(
       (_options: {
@@ -39,6 +39,8 @@ const { useEntries, tableProps, table, site, access, find, LANGUAGES } =
     site: { languages: 3 },
     // The reader's access as the capabilities answer gives it, and whether that answer is in.
     access: { readTranslations: true, loading: false },
+    // Whether the title field is kept once for every language (`localized: false`).
+    title: { shared: false },
     // The read of titles in a chosen language.
     find: vi.fn(),
     LANGUAGES: [
@@ -72,7 +74,14 @@ vi.mock("@admin/hooks/queries/useCollections", () => ({
       name: "posts",
       label: "Posts",
       localized: true,
-      fields: [{ type: "text", name: "title", label: "Title" }],
+      fields: [
+        {
+          type: "text",
+          name: "title",
+          label: "Title",
+          ...(title.shared ? { localized: false } : {}),
+        },
+      ],
     },
     isLoading: false,
   }),
@@ -180,6 +189,7 @@ beforeEach(() => {
   find.mockReset();
   table.real = false;
   site.languages = 3;
+  title.shared = false;
   access.readTranslations = true;
   access.loading = false;
   at("");
@@ -236,6 +246,18 @@ describe("the entry list on a site with several languages", () => {
     expect(lastTable().titleLanguage?.value).toBe("es");
     // The rows a read in Spanish did not return are not handed over as Spanish titles.
     expect(lastTable().titleLanguage?.titles?.has("p2")).toBe(false);
+  });
+});
+
+describe("the title language", () => {
+  it("is not offered where the title is kept once for every language", () => {
+    // A shared title reads the same in every language: shown "in Spanish", it would be marked
+    // as Spanish text that it is not.
+    title.shared = true;
+    render(<EntryList collectionSlug="posts" />);
+    expect(lastTable().titleLanguage).toBeUndefined();
+    // The languages column and filter still are: the content is per language.
+    expect(lastTable().collection?.localized).toBe(true);
   });
 });
 
