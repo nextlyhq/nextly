@@ -34,6 +34,72 @@ const CASES = "seoc_cases";
 const NOTES = "seoc_notes";
 const TESTIMONIALS = "seoc_testimonials";
 
+/**
+ * The fields of the SEO group the plugin adds to a type, by their path and
+ * marked as its: a structured data detail may be read from one, so each is
+ * offered for mapping, after the type's own fields.
+ */
+const SEO_GROUP_FIELDS = [
+  { name: "seo.metaTitle", label: "SEO › Meta Title", kind: "seo" },
+  {
+    name: "seo.metaDescription",
+    label: "SEO › Meta Description",
+    kind: "seo",
+  },
+  { name: "seo.socialTitle", label: "SEO › Title when shared", kind: "seo" },
+  {
+    name: "seo.socialDescription",
+    label: "SEO › Description when shared",
+    kind: "seo",
+  },
+  { name: "seo.ogImage", label: "SEO › Social Share Image", kind: "seo" },
+  { name: "seo.canonical", label: "SEO › Canonical URL", kind: "seo" },
+  {
+    name: "seo.canonicalElsewhere",
+    label: "SEO › This page first appeared on another site",
+    kind: "seo",
+  },
+  { name: "seo.noindex", label: "SEO › Hide from search engines", kind: "seo" },
+  {
+    name: "seo.structuredDataType",
+    label: "SEO › Structured data type",
+    kind: "seo",
+  },
+  {
+    name: "seo.maxImagePreview",
+    label: "SEO › Image preview size",
+    kind: "seo",
+  },
+  {
+    name: "seo.maxSnippet",
+    label: "SEO › Text under the link, characters at most",
+    kind: "seo",
+  },
+  { name: "seo.nosnippet", label: "SEO › No text under the link", kind: "seo" },
+  {
+    name: "seo.noimageindex",
+    label: "SEO › Keep this page's images out of image search",
+    kind: "seo",
+  },
+  {
+    name: "seo.unavailableAfter",
+    label: "SEO › Drop from search after",
+    kind: "seo",
+  },
+  { name: "seo.noarchive", label: "SEO › noarchive", kind: "seo" },
+  { name: "seo.nocache", label: "SEO › nocache", kind: "seo" },
+];
+
+/**
+ * The dates every entry holds by itself, which a detail may be read from
+ * too, last. Neither type has the Draft/Published lifecycle, so the first
+ * publication is not among them.
+ */
+const ENTRY_DATES = [
+  { name: "createdAt", label: "Created", kind: "built-in" },
+  { name: "updatedAt", label: "Updated", kind: "built-in" },
+];
+
 let current: TestNextly | undefined;
 
 afterEach(async () => {
@@ -185,12 +251,15 @@ describe.each(getConfiguredTestDialects())(
             { name: "category", token: "Category" },
             { name: "excerpt", token: "Excerpt" },
           ],
-          // Every field a structured data detail may be read from.
+          // Every field a structured data detail may be read from: the
+          // type's own, its SEO group's, and the entry's own dates.
           mappableFields: [
             { name: "title", label: "Title" },
             { name: "slug", label: "Slug" },
             { name: "category", label: "Category" },
             { name: "excerpt", label: "Excerpt" },
+            ...SEO_GROUP_FIELDS,
+            ...ENTRY_DATES,
           ],
           example: {
             title: "Surfer SEO vs Rext AI",
@@ -217,6 +286,8 @@ describe.each(getConfiguredTestDialects())(
             { name: "title", label: "Title" },
             { name: "slug", label: "Slug" },
             { name: "name", label: "Name" },
+            ...SEO_GROUP_FIELDS,
+            ...ENTRY_DATES,
           ],
           count: 0,
           public: false,
