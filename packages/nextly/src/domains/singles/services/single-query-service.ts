@@ -1513,7 +1513,11 @@ export class SingleQueryService extends BaseService {
     });
     // A read that needs a column a Builder save left part-way moved is answered with that save's
     // refusal, never a database error.
-    await refuseReadOverLeftSave({ adapter: this.adapter, kind: "single", slug });
+    await refuseReadOverLeftSave({
+      adapter: this.adapter,
+      kind: "single",
+      slug,
+    });
 
     // ONE instant for this read. Both visibility checks below resolve releases
     // against it, so a release becoming due between them cannot admit the row

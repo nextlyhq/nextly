@@ -94,7 +94,11 @@ async function fromResponse(
 
 /** The outcome of a Direct API call that threw: its code and its public message. */
 function fromError(operation: Operation, error: unknown): Outcome {
-  const e = error as { code?: string; publicMessage?: string; message?: string };
+  const e = error as {
+    code?: string;
+    publicMessage?: string;
+    message?: string;
+  };
   return {
     ...operation,
     ok: false,

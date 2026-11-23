@@ -180,8 +180,7 @@ const altersColumn = (statement: string | undefined, column: string) =>
  * prepares (a rename, a column made required).
  */
 const schemaStatement = (statement: string | undefined) =>
-  statement !== undefined &&
-  /^\s*(ALTER\s+TABLE|EXECUTE)\b/i.test(statement);
+  statement !== undefined && /^\s*(ALTER\s+TABLE|EXECUTE)\b/i.test(statement);
 
 /** After the statement that adds `column`. */
 const afterAdding =
@@ -613,7 +612,12 @@ describe.each(
         const before = sqlFiles();
         await killSave(
           t,
-          [field("heading"), text("subtitle"), text("summary"), text("caption")],
+          [
+            field("heading"),
+            text("subtitle"),
+            text("summary"),
+            text("caption"),
+          ],
           afterAdding("summary")
         );
         const killedAt = await liveColumns(t);

@@ -573,6 +573,13 @@ exports[`each code, as a command ends with it > BUILDER_SAVE_EARLIER_LEFT 1`] = 
   Docs: https://nextlyhq.com/docs/cli/errors/builder-save-earlier-left  (BUILDER_SAVE_EARLIER_LEFT)"
 `;
 
+exports[`each code, as a command ends with it > BUILDER_SAVE_FIELD_UNSETTLED 1`] = `
+"✗ A Builder save of the collection "posts" was left part-way, and it changed the field "heading" without recording it yet.
+  Why:  A Builder save left part-way changed a field this write or read reaches, and the save is not settled yet.
+  Next: Start the app in development (\`next dev\`), or save the same collection, Single or field group in the Schema Builder: either settles it. Then try again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-save-field-unsettled  (BUILDER_SAVE_FIELD_UNSETTLED)"
+`;
+
 exports[`each code, as a command ends with it > BUILDER_SAVE_LEFT_PART_WAY 1`] = `
 "✗ A Builder save was left part-way, so the database does not match its migrations yet.
   Why:  Left part-way: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio.

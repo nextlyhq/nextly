@@ -88,7 +88,9 @@ vi.mock("../../busy-table/run-unit", async original => {
 // keeps each schema statement as it runs.
 vi.mock("../../services/drizzle-statement-executor", async original => {
   const actual =
-    await original<typeof import("../../services/drizzle-statement-executor")>();
+    await original<
+      typeof import("../../services/drizzle-statement-executor")
+    >();
   class StoppingExecutor extends actual.DrizzleStatementExecutor {
     override async executeStatements(
       tx: unknown,
@@ -328,7 +330,10 @@ describe.each(
     /** What the killed process held, cleared as its lapse would clear it. */
     async function clearStoppedHolds(t: TestNextly): Promise<void> {
       await t.adapter.executeQuery(`DELETE FROM ${SCHEMA_LOCK_TABLE}`);
-      for (const earlier of [MIGRATION_LOCK_TABLE, EARLIER_MIGRATE_LOCK_TABLE]) {
+      for (const earlier of [
+        MIGRATION_LOCK_TABLE,
+        EARLIER_MIGRATE_LOCK_TABLE,
+      ]) {
         if (await t.adapter.tableExists(earlier)) {
           await t.adapter.executeQuery(`DELETE FROM ${earlier}`);
         }
@@ -485,17 +490,21 @@ describe.each(
     // Killed before its file starts: a save that runs its file has a point there. One that pushes
     // (values kept per language) has none before its first statement; the comparison the hold
     // makes is the same on both, nothing changed and nothing held.
-    it.runIf(!perLanguage)("refuses no write where the save was killed before its file ran", async () => {
-      const t = await boot();
-      // Before the save's first file runs, whichever file that is.
-      await killRename(t, point => point.startsWith("unit:"));
-      expect(await liveColumns(t)).toContain("heading");
+    it.runIf(!perLanguage)(
+      "refuses no write where the save was killed before its file ran",
+      async () => {
+        const t = await boot();
+        // Before the save's first file runs, whichever file that is.
+        await killRename(t, point => point.startsWith("unit:"));
+        expect(await liveColumns(t)).toContain("heading");
 
-      const outcomes = await fromAnotherProcess(operations("heading", 1));
+        const outcomes = await fromAnotherProcess(operations("heading", 1));
 
-      for (const outcome of outcomes) {
-        expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
-      }
-    }, 600_000);
+        for (const outcome of outcomes) {
+          expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+        }
+      },
+      600_000
+    );
   }
 );

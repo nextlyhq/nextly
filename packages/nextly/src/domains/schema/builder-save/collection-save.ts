@@ -77,6 +77,7 @@ import {
   fieldGroupRegistryUnreadable,
   readStoredFieldGroupTables,
 } from "../../field-groups/services/field-group-stored-tables";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 import {
   COMPANION_KEY_COLUMNS,
   COMPANION_LOCALE_COLUMN,
@@ -84,7 +85,6 @@ import {
   COMPANION_PARENT_COLUMN,
   COMPANION_STRUCTURAL_COLUMNS,
 } from "../../i18n/companion-columns";
-import { isFieldLocalized } from "../../i18n/classify-fields";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import {
