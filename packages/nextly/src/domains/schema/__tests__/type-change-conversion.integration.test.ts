@@ -444,7 +444,8 @@ describe.each(getConfiguredTestDialects())(
     });
 
     // Each language's value is judged before the save changes anything: a value no number reads in
-    // one language alone refuses the change, naming that language's row, and nothing changes.
+    // one language alone refuses the change, naming that language's row, until its clear is
+    // confirmed, and nothing changes.
     it("refuses a translated change over a value one language holds that cannot convert, and changes nothing", async () => {
       const t = await boot([{ name: "v", type: "text", localized: true }], {
         localized: true,
@@ -463,10 +464,22 @@ describe.each(getConfiguredTestDialects())(
         { localized: true }
       );
 
-      expect(refused).toMatchObject(
-        refusedAs("TYPE_CHANGE_LOSES_VALUES", "Clearing the values")
-      );
+      expect(refused).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.v",
+              code: "TYPE_CHANGE_LOSES_VALUES",
+              message: expect.stringContaining(
+                "Confirm clearing the values that cannot convert"
+              ),
+            }),
+          ],
+        },
+      });
       expect(JSON.stringify(refused)).not.toMatch(/kept per language/);
+      expect(JSON.stringify(refused)).not.toContain("can't be deployed yet");
       expect(JSON.stringify(refused)).toMatch(/\bes\b/);
       expect(await read(t, "v", "en")).toEqual({ a: "12" });
       expect(await read(t, "v", "es")).toEqual({ a: "abc" });

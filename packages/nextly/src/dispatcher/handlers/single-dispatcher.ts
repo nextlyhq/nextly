@@ -136,6 +136,7 @@ import {
   checkBuilderSaveHistory,
   entityDialogQuestions,
   entityPushReason,
+  readConfirmedClears,
   reviewBuilderSchemaChange,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
@@ -1598,6 +1599,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         localized?: boolean;
         acknowledgedConversions?: string[];
       };
+      const confirmedClears = readConfirmedClears(body);
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
       if (!sentFields) throw new Error("fields is required in request body");
@@ -1859,7 +1861,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               fields: {
                 tableName,
                 builtBy: "collection",
-                oldFields: (single.fields ?? []) as unknown as FieldDefinition[],
+                oldFields: (single.fields ??
+                  []) as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
                 wasLocalized,
                 isLocalized,
@@ -1991,6 +1994,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 ...(acknowledgedConversions === undefined
                   ? {}
                   : { acknowledgedConversions }),
+                // The values the person confirmed clearing, with each field's count, as the
+                // collection's apply reads them.
+                ...(confirmedClears === undefined ? {} : { confirmedClears }),
               },
               // Its junction tables and relationship keys, which the writer does not derive itself.
               ...(builderSave === undefined

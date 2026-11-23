@@ -14,6 +14,9 @@
  *
  * @module dispatcher/helpers/builder-save-change
  */
+import { z } from "zod";
+
+import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import { container } from "../../di/container";
 import type {
   BuilderSaveSetup,
@@ -345,4 +348,34 @@ export function reviewOf(preview: CollectionSavePreview): BuilderSaveReview {
     conversions: preview.conversions,
     clears: preview.clears,
   };
+}
+
+/**
+ * The counts of values the person confirmed clearing for fields changing type, as an apply's body
+ * sends them: each field's name and a whole number of values that cannot convert. Absent where the
+ * body sends none, and a change that loses values is then refused as it always has been
+ * (`CollectionSave.confirmedClears`). One reading for the collection's, the Single's and the field group's
+ * apply, so the three take the same consent.
+ */
+const ConfirmedClearsBody = z.object({
+  confirmedClears: z
+    .array(
+      z.object({
+        field: z.string().min(1),
+        count: z.number().int().min(0),
+      })
+    )
+    .max(500)
+    .optional(),
+});
+
+export function readConfirmedClears(
+  body: unknown
+): z.infer<typeof ConfirmedClearsBody>["confirmedClears"] {
+  try {
+    return ConfirmedClearsBody.parse(body ?? {}).confirmedClears;
+  } catch (error) {
+    if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+    throw error;
+  }
 }

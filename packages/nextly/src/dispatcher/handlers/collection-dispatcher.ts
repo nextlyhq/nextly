@@ -129,6 +129,7 @@ import {
 } from "../helpers/authenticated-user";
 import {
   NOTHING_TO_REVIEW,
+  readConfirmedClears,
   reviewOf,
   type BuilderSaveReview,
 } from "../helpers/builder-save-change";
@@ -380,35 +381,6 @@ function readConfirmedDeletions(
 ): z.infer<typeof ConfirmedDeletionsBody>["confirmedDeletions"] {
   try {
     return ConfirmedDeletionsBody.parse(body ?? {}).confirmedDeletions;
-  } catch (error) {
-    if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
-    throw error;
-  }
-}
-
-/**
- * The counts of values the person confirmed clearing for fields changing type, as an apply's body
- * sends them: each field's name and a whole number of values that cannot convert. Absent where the
- * body sends none, and a change that loses values is then refused as it always has been
- * (`CollectionSave.confirmedClears`).
- */
-const ConfirmedClearsBody = z.object({
-  confirmedClears: z
-    .array(
-      z.object({
-        field: z.string().min(1),
-        count: z.number().int().min(0),
-      })
-    )
-    .max(500)
-    .optional(),
-});
-
-function readConfirmedClears(
-  body: unknown
-): z.infer<typeof ConfirmedClearsBody>["confirmedClears"] {
-  try {
-    return ConfirmedClearsBody.parse(body ?? {}).confirmedClears;
   } catch (error) {
     if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
     throw error;

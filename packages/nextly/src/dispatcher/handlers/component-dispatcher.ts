@@ -91,6 +91,7 @@ import {
   checkBuilderSaveHistory,
   entityDialogQuestions,
   entityPushReason,
+  readConfirmedClears,
   reviewBuilderSchemaChange,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
@@ -700,6 +701,7 @@ export const COMPONENTS_METHODS: Record<
         localized?: boolean;
         acknowledgedConversions?: string[];
       };
+      const confirmedClears = readConfirmedClears(body);
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
       if (!fields) throw new Error("fields is required in request body");
@@ -963,7 +965,8 @@ export const COMPONENTS_METHODS: Record<
               fields: {
                 tableName,
                 builtBy: "fieldGroup",
-                oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
+                oldFields: (component.fields ??
+                  []) as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
                 wasLocalized,
                 isLocalized,
@@ -1065,6 +1068,9 @@ export const COMPONENTS_METHODS: Record<
                 ...(acknowledgedConversions === undefined
                   ? {}
                   : { acknowledgedConversions }),
+                // The values the person confirmed clearing, with each field's count, as the
+                // collection's apply reads them.
+                ...(confirmedClears === undefined ? {} : { confirmedClears }),
               },
               // What the push moves beside the table, as a collection's save writes it: a renamed
               // nested field group's rows moved to its new name, and any junction tables.
