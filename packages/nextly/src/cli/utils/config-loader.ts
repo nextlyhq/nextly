@@ -750,6 +750,7 @@ async function loadDefaultConfig(
   // and then lost its config file would otherwise keep the removed plugins'
   // types registered, and Builder saves would go on recognizing them and
   // running their `validate` and `validateOptions`.
+  const previousFieldTypes = snapshotFieldTypes();
   clearFieldTypes();
   const appConfig = defineConfig({});
   // The Builder's definitions beside the default configuration are judged as they are beside a
@@ -761,6 +762,8 @@ async function loadDefaultConfig(
     options
   );
   if (builderProblems.length > 0) {
+    // A refused load installs nothing: the running configuration keeps the field types it had.
+    restoreFieldTypes(previousFieldTypes);
     throw NextlyError.validation({
       errors: builderProblems,
       logContext: { configPath: undefined, reason: "config-invalid" },
@@ -1257,10 +1260,12 @@ export async function loadConfig(
   // refuses to act without one: it is asked again, and refused.
   const wanted = configFileFor(options);
   // Nor is one loaded where the Builder's problems were only warned of, for a caller that refuses
-  // them.
+  // them. Nor one from another project root: two projects with no configuration file share the
+  // default, but not their definition files.
   const cachedElsewhere =
     cachedConfig !== null &&
     (cachedConfig.configPath !== wanted ||
+      cachedConfig.projectRoot !== resolve(options.cwd ?? process.cwd()) ||
       (wanted === undefined && options.missing === "refuse") ||
       (builderPolicyOf(options) === "refuse" &&
         cachedBuilderPolicy !== "refuse"));

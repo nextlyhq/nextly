@@ -9,6 +9,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  clearFieldTypes,
+  hasFieldType,
+  registerFieldType,
+} from "../../../domains/schema/field-types/field-type-registry";
 import { clearConfigCache, loadConfig } from "../config-loader";
 
 const exported = vi.hoisted(() => ({ config: {} as unknown }));
@@ -557,5 +562,90 @@ describe("a Builder definition with a problem, in a project with no configuratio
       ),
       warned.join("\n")
     ).toBe(true);
+  });
+});
+
+describe("default configurations of two projects with no configuration file", () => {
+  // The cached default is the first project's: the second's definitions are judged, and its root
+  // is its own.
+  it("judges the second project's definitions, not the first's cached answer", async () => {
+    const bare = (prefix: string) => {
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+      made.push(dir);
+      return dir;
+    };
+    const first = bare("nextly-config-gate-first-");
+    await loadConfig({ cwd: first, builderDefinitions: "refuse" });
+    const second = bare("nextly-config-gate-second-");
+    writeFileSync(
+      join(second, "ui-schema.json"),
+      JSON.stringify({
+        collections: [
+          {
+            slug: "cases",
+            fields: [
+              { name: "body", type: "text" },
+              { name: "body", type: "text" },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+
+    const refused = await loadConfig({
+      cwd: second,
+      builderDefinitions: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({ logContext: { reason: "config-invalid" } });
+  });
+});
+
+describe("a default configuration refused for the Builder's definitions", () => {
+  afterEach(() => {
+    clearFieldTypes();
+  });
+
+  // The load installs nothing: the field types the running configuration registered stay.
+  it("leaves the registered field types as they were", async () => {
+    registerFieldType({ type: "rating", storage: "json" } as Parameters<
+      typeof registerFieldType
+    >[0]);
+    const dir = realpathSync(
+      mkdtempSync(join(tmpdir(), "nextly-config-gate-registry-"))
+    );
+    made.push(dir);
+    writeFileSync(
+      join(dir, "ui-schema.json"),
+      JSON.stringify({
+        collections: [
+          {
+            slug: "cases",
+            fields: [
+              { name: "body", type: "text" },
+              { name: "body", type: "text" },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+
+    const refused = await loadConfig({
+      cwd: dir,
+      builderDefinitions: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({ logContext: { reason: "config-invalid" } });
+    expect(hasFieldType("rating")).toBe(true);
   });
 });
