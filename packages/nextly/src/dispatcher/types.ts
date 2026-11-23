@@ -33,6 +33,8 @@ export type ServiceType =
   | "previewUrl"
   | "dashboard"
   | "documentLock"
+  // A collection's private files: upload start and confirm (@experimental).
+  | "files"
   | "translations"
   | "notices"
   | "email"

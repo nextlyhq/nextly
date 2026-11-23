@@ -192,6 +192,7 @@ describe.each(getConfiguredTestDialects())(
           expiresAt: issued.expiresAt.toISOString(),
           expiresAtText: expect.any(String),
           timeZone: "UTC",
+          refs: { link: expect.any(String) },
         },
       ]);
 

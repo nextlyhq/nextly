@@ -320,9 +320,9 @@ function clearedTypeChanges(args: {
  * consent named that still gives a reason to clear is cleared, by its key: a row corrected since
  * keeps its value, and a value written since is never cleared under a consent given for others.
  * On PostgreSQL and MySQL the conversion then refuses such a value, naming the column. SQLite's
- * rebuild refuses nothing and has already run, so there the consented rows are cleared and the
- * apply then ends with an error naming the rows written since: the column was converted, and they
- * hold a value the new field cannot read, which no later run would look at again.
+ * rebuild refuses nothing and has already run, so there the apply ends with an error naming the
+ * rows written since, which hold a value the new field cannot read, and its one transaction takes
+ * the rebuild and every clearing back.
  */
 export async function clearConsentedValues(args: {
   tx: unknown;
@@ -364,8 +364,8 @@ export async function clearConsentedValues(args: {
       left.push(lateValuesLeft(event, late));
     }
   }
-  // Only now: the rebuild converted every column, so a failure at the first would leave the
-  // later columns' consented values where no later run offers to clear them.
+  // Only now, once every consented column is judged again: the refusal names each column's rows
+  // written since, rather than the first column's alone.
   if (left.length > 0) {
     throw NextlyError.validation({
       errors: left.map(column => column.error),
@@ -409,8 +409,9 @@ const rowName = (key: RowKey) =>
 
 /**
  * What a SQLite apply that converted a column, and then found values written after the column was
- * judged, says of that column when it fails. It says what landed, since nothing can be undone there: the column has its
- * new type, the consented values were cleared, and the named rows still hold what they held.
+ * judged, says of that column when it fails. The apply runs in one transaction, which this failure
+ * rolls back whole: the column keeps its type, no consented value is cleared, and the message says
+ * so, naming the rows written since.
  */
 function lateValuesLeft(
   event: {
@@ -429,7 +430,7 @@ function lateValuesLeft(
     error: {
       path: `schema.${column}`,
       code: "CONVERSION_LEFT_A_LATER_VALUE",
-      message: `${column}: ${event.fromType} -> ${event.toType} was made, and the values consented to were cleared. ${late.length === 1 ? "One row holds" : `${String(late.length)} rows hold`} a value written after the column was checked, which the new field cannot read: ${late.map(rowName).join(", ")}. Correct or clear ${late.length === 1 ? "that value" : "those values"}.`,
+      message: `${column}: ${event.fromType} -> ${event.toType} was not made. ${late.length === 1 ? "One row holds" : `${String(late.length)} rows hold`} a value written after the column was checked, which the new field cannot read: ${late.map(rowName).join(", ")}. The whole change was rolled back, and nothing of it was applied: correct or clear ${late.length === 1 ? "that value" : "those values"}, then save again.`,
     },
     log: { column, late: late.map(rowKeyText) },
   };
@@ -691,8 +692,9 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
       await runRecorded(args, stmt, false);
     }
     // A lossy type change consented to, cleared ahead of the conversion (`clearConsentedValues`).
-    // SQLite applies without a transaction, so there the clearing waits until its rebuild has
-    // succeeded: a rebuild that fails then leaves every value as it was.
+    // On SQLite the clearing runs after its rebuild instead, judging the column again on the
+    // rebuilt table (`clearConsentedValues`). The apply's one transaction takes both back where
+    // either fails.
     if (args.dialect !== "sqlite") await clearConsentedValues(args);
     // make_optional is handled via snapshot patching below.
 

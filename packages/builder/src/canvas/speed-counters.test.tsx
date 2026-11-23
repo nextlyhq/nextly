@@ -10,7 +10,9 @@
  * - the page drawn again, per selection and hover;
  * - the whole document walked by the engine's safety measurement, per
  *   selection;
- * - a trial insert run to decide the Add panel's tiles, when it opens.
+ * - a trial insert run to decide the Add panel's tiles, when it opens;
+ * - the Add panel's places read again, per render that changed neither the
+ *   page nor the selection.
  *
  * The editor is the real one (`useEditorState`) driving the real canvas,
  * keyboard layer and Add panel; only what is counted is wrapped, and passed
@@ -58,7 +60,25 @@ const counted = vi.hoisted(() => ({
   pageDraws: 0,
   regionDraws: 0,
   sheetCompiles: 0,
+  placeReads: 0,
 }));
+
+/*
+ * The places an insert may use, read by the Add panel for each kind of block:
+ * counted as the panel reads them, through the module it imports them from.
+ */
+vi.mock("../panels/add/inserter", async importOriginal => {
+  const real = await importOriginal<typeof import("../panels/add/inserter")>();
+  return {
+    ...real,
+    insertionCandidates: (
+      ...args: Parameters<typeof real.insertionCandidates>
+    ) => {
+      counted.placeReads += 1;
+      return real.insertionCandidates(...args);
+    },
+  };
+});
 
 vi.mock("@nextlyhq/blocks-react", async importOriginal => {
   const real = await importOriginal<typeof import("@nextlyhq/blocks-react")>();
@@ -571,5 +591,37 @@ describe("the trial inserts the Add panel costs", () => {
     expect(editor().document.nodes[0]?.id).toBe("elsewhere");
     expect(view.getByRole("option", { name: "Text" })).toBeTruthy();
     expectWithinBudget(trials.count);
+  });
+});
+
+describe("the places the Add panel reads", () => {
+  it("a render of the open Add panel with the page and selection unchanged reads no places: budget none", () => {
+    const trials = { count: 0 };
+    const view = openAddPanel(trials);
+    // The control: opening it read the places its tiles are offered at.
+    expect(counted.placeReads).toBeGreaterThan(0);
+    counted.placeReads = 0;
+    // A query typed into its search draws it again over the same page.
+    fireEvent.change(view.getByRole("combobox"), { target: { value: "Te" } });
+    // The control: the panel drew the query's tiles.
+    expect(view.getByRole("option", { name: "Text" })).toBeTruthy();
+    expectWithinBudget(counted.placeReads);
+  });
+
+  it("an edit to the page reads the places again, against the page as it now is", () => {
+    const trials = { count: 0 };
+    const view = openAddPanel(trials);
+    counted.placeReads = 0;
+    act(() => {
+      editor().apply({
+        kind: "insert",
+        node: text("elsewhere", "Elsewhere"),
+        at: { index: 0 },
+      });
+    });
+    view.rerender(<AddPanelHost trials={trials} open />);
+    // Kept places would name the page before the insert, one index short.
+    expect(editor().document.nodes[0]?.id).toBe("elsewhere");
+    expect(counted.placeReads).toBeGreaterThan(0);
   });
 });

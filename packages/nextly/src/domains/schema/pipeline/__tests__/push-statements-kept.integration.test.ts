@@ -5,7 +5,8 @@
  *
  * - MySQL commits each schema statement as it runs: an apply whose first statement fails keeps
  *   none, and says so, with the table as it was; one whose second fails keeps the first.
- * - SQLite, on an in-memory database, keeps each statement as it runs, the same way.
+ * - SQLite, on an in-memory database, runs an apply that changes a table in one transaction that a
+ *   failure rolls back whole: it keeps none, and says so, wherever the failing statement falls.
  * - PostgreSQL's apply runs in one transaction that a failure rolls back whole, so it says nothing.
  *
  * The apply adds two columns to a table it made, with nothing before the executor's statements that
@@ -113,6 +114,7 @@ function pipelineFailingAt(
       preCleanupExecutor: noopPreCleanupExecutor,
       migrationJournal: noopMigrationJournal,
       notifier: noopNotifier,
+      adapter: undefined,
     }),
     sent: () => sent,
   };
@@ -163,6 +165,7 @@ function fillingPipeline(
     preCleanupExecutor: new RealPreCleanupExecutor(),
     migrationJournal: noopMigrationJournal,
     notifier: noopNotifier,
+    adapter: undefined,
   });
 }
 
@@ -285,6 +288,7 @@ function classifyingPipeline(db: unknown): PushSchemaPipeline {
     preCleanupExecutor: new RealPreCleanupExecutor(),
     migrationJournal: noopMigrationJournal,
     notifier: noopNotifier,
+    adapter: undefined,
   });
 }
 
@@ -523,7 +527,7 @@ describe("a failed apply's kept statements (sqlite)", () => {
     expect(await columns()).toEqual(before);
   });
 
-  it("keeps the first where the second fails", async () => {
+  it("keeps none where the second fails, the first rolled back with it", async () => {
     const before = await columns();
 
     const { result, sent } = await apply(
@@ -531,11 +535,11 @@ describe("a failed apply's kept statements (sqlite)", () => {
       2
     );
 
+    // Positive control: the first statement ran before the second failed.
     expect(sent).toBe(2);
     expect(result.success).toBe(false);
-    expect(result.statementsKept).toBe(1);
-    // The statement that stayed changed the table.
-    expect(await columns()).not.toEqual(before);
+    expect(result.statementsKept).toBe(0);
+    expect(await columns()).toEqual(before);
   });
 });
 

@@ -33,10 +33,12 @@ import {
   withDecidedRenames,
 } from "@admin/lib/builder/rename-answers";
 import type { SettingChange } from "@admin/lib/builder/settings-changes";
-import type {
-  FieldResolution,
-  SchemaPreviewResponse,
-  SchemaRenameResolution,
+import {
+  type ConfirmedDeletion,
+  confirmedDeletionsOf,
+  type FieldResolution,
+  type SchemaPreviewResponse,
+  type SchemaRenameResolution,
 } from "@admin/services/schemaApi";
 import type { FieldDefinition } from "@admin/types/collection";
 
@@ -125,7 +127,9 @@ export interface UseSchemaSaveOptions {
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[],
     /** The keys of the conversions the reviewed preview listed, which its Save confirmed. */
-    acknowledgedConversions: string[]
+    acknowledgedConversions: string[],
+    /** The values of each field the reviewed preview removes, as it counted them, confirmed. */
+    confirmedDeletions: ConfirmedDeletion[]
   ) => Promise<SchemaApplyOutcome>;
   /**
    * The preview found nothing to migrate: persist the settings. Run at once
@@ -368,7 +372,9 @@ export function useSchemaSave({
               previewed.renamed ?? []
             ),
             // Every conversion the dialog listed: its Save confirms them all.
-            acknowledgedConversionsOf(previewed)
+            acknowledgedConversionsOf(previewed),
+            // The counts the dialog showed for each field it removes: its Save confirms them.
+            confirmedDeletionsOf(previewed)
           );
           if (!result.success) {
             stopRestart(

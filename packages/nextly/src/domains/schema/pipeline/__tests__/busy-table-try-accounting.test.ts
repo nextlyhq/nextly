@@ -33,7 +33,7 @@ describe("the statements a MySQL try left applied", () => {
     expect(committedOf([false, false], "mysql", false)).toBe(0);
   });
 
-  it("keeps every statement on SQLite, where each committed as it ran", () => {
+  it("keeps every statement of a SQLite try run outside a transaction, where each committed as it ran", () => {
     expect(committedOf([true, false], "sqlite", false)).toBe(2);
   });
 

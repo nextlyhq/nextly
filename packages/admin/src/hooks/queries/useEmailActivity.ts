@@ -15,7 +15,9 @@
 
 import {
   useInfiniteQuery,
+  useMutation,
   useQuery,
+  useQueryClient,
   type InfiniteData,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -32,10 +34,12 @@ import {
   type TimeWindow,
 } from "@admin/components/features/email-hub/activity/activity-model";
 import {
+  cancelQueuedEmail,
   getDeliveryDetail,
   getQueuedEmailDetail,
   getQueuedEmailOverdue,
   listActivity,
+  retryQueuedEmail,
   searchActivityByAddress,
   type DeliveryDetail,
   type QueuedEmailDetail,
@@ -308,5 +312,23 @@ export function useActivityDetail(
         ? UNSETTLED_POLL_MS
         : false;
     },
+  });
+}
+
+/** A retry or cancel of a queued email from its sheet. */
+export type QueuedEmailAction = "retry" | "cancel";
+
+/**
+ * Retry or cancel a queued email. Once it has settled, every Activity read is
+ * read again, the list and the open sheet alike, so both show where the email
+ * stands now; the server records the action in the activity log.
+ */
+export function useQueuedEmailAction() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ action, id }: { action: QueuedEmailAction; id: string }) =>
+      action === "retry" ? retryQueuedEmail(id) : cancelQueuedEmail(id),
+    onSettled: () =>
+      client.invalidateQueries({ queryKey: emailActivityKeys.all() }),
   });
 }

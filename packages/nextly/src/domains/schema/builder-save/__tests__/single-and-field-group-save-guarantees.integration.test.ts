@@ -886,17 +886,19 @@ describe.each(getConfiguredTestDialects())(
           ).toEqual(before);
         }, 60_000);
 
-        // MySQL commits each schema statement as it runs, and SQLite's push keeps the statements
-        // that ran before one that fails. A push whose second statement fails after its first
-        // ran stopped part way: its files stay, recorded applied nowhere, so the next
-        // `nextly migrate` names them. The failure comes through the test's seam on the push's
+        // MySQL commits each schema statement as it runs. A push whose second statement fails after
+        // its first ran stopped part way: its files stay, recorded applied nowhere, so the next
+        // `nextly migrate` names them; SQLite's push, run in one transaction, takes the first back
+        // with the second and keeps no file. The failure comes through the test's seam on the push's
         // statement executor, which runs the first statement and then fails. A Single's settings
         // save runs its service's own statements, which that seam does not reach.
         it.runIf(
           (dialect === "mysql" || dialect === "sqlite") &&
             kind.name !== "a Single's settings save"
         )(
-          "keeps the files of a push whose second statement failed after its first committed",
+          dialect === "mysql"
+            ? "keeps the files of a push whose second statement failed after its first committed"
+            : "takes back the whole of a push whose second statement failed, and keeps no file",
           async () => {
             const t = await boot();
             await kind.create([text("heading")]);
@@ -944,6 +946,17 @@ describe.each(getConfiguredTestDialects())(
             expect(refused).toBeInstanceOf(Error);
 
             expect(sent.length, sent.join("\n")).toBeGreaterThan(1);
+            if (dialect === "sqlite") {
+              // The first statement ran and was rolled back with the second: nothing is kept.
+              expect(await definitionOf()).toEqual(tableBefore);
+              expect(
+                migrationFiles().filter(f => !filesBefore.includes(f))
+              ).toEqual([]);
+              expect(
+                (refused as { publicMessage?: string }).publicMessage
+              ).not.toContain("The database now holds part of this change");
+              return;
+            }
             // The first statement stayed: the table is no longer as it was.
             expect(await definitionOf()).not.toEqual(tableBefore);
             const kept = migrationFiles().filter(f => !filesBefore.includes(f));
@@ -966,8 +979,8 @@ describe.each(getConfiguredTestDialects())(
         // A push refused at its first question ran nothing, and keeps nothing: a column on the
         // table that no field describes, beside the field the save adds, reads as a rename the
         // save never answered, and the dialog's prompt refuses the apply rather than drop it. The
-        // type change keeps the save on the push. MySQL and SQLite keep what a push ran, so this
-        // one counts as having changed nothing only because it stopped at that first question.
+        // type change keeps the save on the push. MySQL keeps what a push ran, so there this one
+        // counts as having changed nothing only because it stopped at that first question.
         it.runIf(kind.name !== "a Single's settings save")(
           "leaves nothing when the push refuses at its first question",
           async () => {

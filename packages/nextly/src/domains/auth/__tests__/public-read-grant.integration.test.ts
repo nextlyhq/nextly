@@ -23,6 +23,11 @@ import { defineCollection, defineSingle, text } from "../../../config";
 import { getDialectTables } from "../../../database";
 import { seedRolePresets } from "../../../database/seeders/role-presets";
 import {
+  readPresetGrantsRelease,
+  withPresetGrantsRecorded,
+} from "../../../domains/meta/preset-grants-release";
+import { MetaService } from "../../../domains/meta/services/meta-service";
+import {
   seedAllPermissions,
   seedPermissionsAndRolePresets,
 } from "../../../init/seed-permissions";
@@ -362,6 +367,29 @@ describe.each(getConfiguredTestDialects())(
       expect(notices()).toEqual([]);
       // The startup listing is still logged at this boot.
       expect(listing()).toContain("create-guestbook");
+    });
+
+    it("tells a site migrated but never started by a release with the Public role nothing of reads lost", async () => {
+      const nextly = await boot(dialect);
+      // What `nextly migrate` of 0.0.2-alpha.75 leaves: permissions, and the
+      // preset roles with the record of the release that set their grants,
+      // and no Public role, which that command did not make.
+      await seedAllPermissions();
+      await withPresetGrantsRecorded("0.0.2-alpha.75", () =>
+        seedRolePresets(nextly.adapter, logger)
+      );
+      expect(
+        await readPresetGrantsRelease(new MetaService(nextly.adapter, logger))
+      ).toBe("0.0.2-alpha.75");
+      warnings = [];
+
+      await seedPermissionsAndRolePresets();
+
+      expect(notices()).toEqual([]);
+      // The boot reached the Public role's steps: the startup listing is
+      // logged, and "ruleless" is still not Public's to read.
+      expect(listing()).toContain("create-guestbook");
+      expect(await publicHolds(nextly)).not.toContain("read-ruleless");
     });
 
     it("tells a new install nothing of reads lost, at its first boot or later", async () => {

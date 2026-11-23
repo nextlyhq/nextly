@@ -2,16 +2,19 @@
 /**
  * The detail sheet: its state first, then its details and every attempt;
  * "Fix template" only for a queued email whose failure came from its
- * template, and only where the reader may open that template; and the whole
- * screen on a phone.
+ * template, and only where the reader may open that template; a queued
+ * email's Retry and Cancel only for a reader who may do them, only while the
+ * server allows them, Cancel only once confirmed; and the whole screen on a
+ * phone.
  *
  * @module components/features/email-hub/activity/__tests__/ActivityDetailSheet.test
  */
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   useActivityDetail,
+  useQueuedEmailAction,
   type ActivityDetail,
 } from "@admin/hooks/queries/useEmailActivity";
 import type {
@@ -23,7 +26,43 @@ import { ActivityDetailSheet } from "../ActivityDetailSheet";
 
 vi.mock("@admin/hooks/queries/useEmailActivity", () => ({
   useActivityDetail: vi.fn(),
+  useQueuedEmailAction: vi.fn(),
 }));
+const { toastSuccess } = vi.hoisted(() => ({ toastSuccess: vi.fn() }));
+vi.mock("@admin/components/ui", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/components/ui")>()),
+  toast: { success: toastSuccess },
+}));
+
+/** What Retry or Cancel asked, and how the server answers it. */
+const mutate = vi.fn();
+let answer: { ok: boolean; message: string } = { ok: true, message: "Done." };
+
+beforeEach(() => {
+  mutate.mockReset();
+  toastSuccess.mockReset();
+  answer = { ok: true, message: "Done." };
+  mutate.mockImplementation(
+    (
+      _vars: unknown,
+      on: {
+        onSuccess: (a: { message: string }) => void;
+        onError: (e: Error) => void;
+      }
+    ) =>
+      answer.ok
+        ? on.onSuccess({ message: answer.message })
+        : on.onError(new Error(answer.message))
+  );
+  vi.mocked(useQueuedEmailAction).mockReturnValue({
+    mutate,
+    isPending: false,
+  } as unknown as ReturnType<typeof useQueuedEmailAction>);
+});
+
+/** A reader who may manage email deliveries, and one who may only read them. */
+const MANAGES = { retry: true, cancel: true };
+const READS = { retry: false, cancel: false };
 vi.mock("@admin/hooks/useAdminDateFormatter", () => ({
   formatDateWithAdminTimezone: (value: string) => `AT ${value}`,
 }));
@@ -84,7 +123,8 @@ function showing(data: ActivityDetail) {
 function renderSheet(
   fixTemplateHref: (slug: string) => string | undefined = slug =>
     `/edit/${slug}`,
-  onClose: () => void = vi.fn()
+  onClose: () => void = vi.fn(),
+  queuedActions: { retry: boolean; cancel: boolean } = READS
 ) {
   render(
     <ActivityDetailSheet
@@ -93,6 +133,7 @@ function renderSheet(
       names={{ template: () => undefined, provider: () => undefined }}
       now={NOW}
       fixTemplateHref={fixTemplateHref}
+      queuedActions={queuedActions}
     />
   );
 }
@@ -196,6 +237,7 @@ describe("the detail sheet", () => {
         }}
         now={NOW}
         fixTemplateHref={() => undefined}
+        queuedActions={READS}
       />
     );
     const items = screen
@@ -356,5 +398,123 @@ describe("the detail sheet", () => {
     const state = screen.getAllByRole("status")[0];
     expect(state.textContent).not.toMatch(/direct send/i);
     expect(state.textContent).toMatch(/one attempt of a queued email/i);
+  });
+});
+
+describe("a queued email's Retry and Cancel", () => {
+  const managing = (over: Partial<QueuedEmailDetail> = {}) => {
+    showing(queuedDetail({ templateCaused: false, ...over }));
+    renderSheet(undefined, undefined, MANAGES);
+  };
+  const button = (name: string) => screen.queryByRole("button", { name });
+
+  it("tries a failed email again at once, and says what the server said", () => {
+    managing();
+    fireEvent.click(button("Try again now")!);
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate.mock.calls[0][0]).toEqual({ action: "retry", id: "q1" });
+    expect(toastSuccess).toHaveBeenCalledWith("Done.");
+  });
+
+  it("cancels only once the reader confirms", () => {
+    managing({ state: "waiting", lastFailure: null, attempts: 0 });
+    fireEvent.click(button("Cancel email")!);
+    expect(mutate).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog").textContent).toContain(
+      "can’t be tried again"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    expect(mutate).not.toHaveBeenCalled();
+    fireEvent.click(button("Cancel email")!);
+    const dialog = screen.getByRole("alertdialog");
+    const confirm = screen
+      .getAllByRole("button", { name: "Cancel email" })
+      .find(b => dialog.contains(b));
+    fireEvent.click(confirm!);
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate.mock.calls[0][0]).toEqual({ action: "cancel", id: "q1" });
+  });
+
+  it("offers neither to a reader who may not manage email deliveries, and says nothing of them", () => {
+    showing(queuedDetail({ templateCaused: false, state: "sending" }));
+    renderSheet(undefined, undefined, READS);
+    expect(button("Try again now")).toBeNull();
+    expect(button("Cancel email")).toBeNull();
+    expect(screen.queryByText(/with the provider now/)).toBeNull();
+  });
+
+  it("offers only Cancel while an attempt is with the provider, saying it holds only if that attempt fails", () => {
+    managing({ state: "sending" });
+    expect(button("Try again now")).toBeNull();
+    expect(
+      screen.getByText(/can’t be tried again until that attempt ends/)
+    ).toBeTruthy();
+    fireEvent.click(button("Cancel email")!);
+    expect(screen.getByRole("alertdialog").textContent).toContain(
+      "cancelled only if this attempt fails"
+    );
+  });
+
+  it("offers only Cancel once the message was cleared, and says why", () => {
+    managing({ messageHeld: false });
+    expect(button("Try again now")).toBeNull();
+    expect(button("Cancel email")).toBeTruthy();
+    expect(
+      screen.getByText("Its message was cleared, so it can’t be tried again.")
+    ).toBeTruthy();
+  });
+
+  it.each(["sent", "cancelled"] as const)(
+    "offers neither once the email is %s",
+    state => {
+      managing({ state, lastFailure: null });
+      expect(button("Try again now")).toBeNull();
+      expect(button("Cancel email")).toBeNull();
+    }
+  );
+
+  it("offers both to a retrying email", () => {
+    managing({ state: "retrying" });
+    expect(button("Try again now")).toBeTruthy();
+    expect(button("Cancel email")).toBeTruthy();
+  });
+
+  it("shows a refusal with the server's reason, and no success", () => {
+    answer = {
+      ok: false,
+      message: "This email has already been sent or cancelled.",
+    };
+    managing();
+    fireEvent.click(button("Try again now")!);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "This email has already been sent or cancelled."
+    );
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it("offers neither on a delivery's sheet, which has no queued email of its own to act on", () => {
+    showing({
+      source: "delivery",
+      detail: {
+        id: "d1",
+        createdAt: "2026-11-16T11:00:00.000Z",
+        outcome: "failed",
+        templateSlug: null,
+        provider: { id: null, type: "resend", origin: "code" },
+        recipientKind: "to",
+        failureReason: "Resend answered 503",
+        namedPerson: false,
+        erased: false,
+        queuedId: null,
+        templateVersion: "none",
+        failureKind: "retryable",
+        failureStatus: 503,
+        timeline: [],
+        timelineTruncated: false,
+      },
+    });
+    renderSheet(undefined, undefined, MANAGES);
+    expect(button("Try again now")).toBeNull();
+    expect(button("Cancel email")).toBeNull();
   });
 });
