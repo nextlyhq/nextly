@@ -59,7 +59,9 @@ column. There are two safe ways forward. Pick one before you run step 3.
   Nextly's own plugins do for fields that are not content:
 
   ```ts
-  defineCollection({
+  import { defineCollection, text, textarea } from "nextly/config";
+
+  export const Posts = defineCollection({
     slug: "posts",
     fields: [
       text({ name: "title", localized: false }),

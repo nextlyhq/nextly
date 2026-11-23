@@ -42,7 +42,7 @@ export function perLanguageMovesIn(
     )
   );
   if (dropped.size === 0) return [];
-  const tagged: [MinimalConfigEntity, I18nTransitionKind][] = [
+  const tagged: (readonly [MinimalConfigEntity, I18nTransitionKind])[] = [
     ...entities.collections.map(e => [e, "collection"] as const),
     ...entities.singles.map(e => [e, "single"] as const),
     ...entities.components.map(e => [e, "fieldGroup"] as const),

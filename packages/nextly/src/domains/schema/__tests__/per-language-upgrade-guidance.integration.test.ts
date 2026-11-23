@@ -245,6 +245,11 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(refused.exit, refused.text).toBe(1);
       expect(refused.text).toContain("INPUT_REFUSED");
       expectMoveExplained(refused.text);
+      // The ways forward are its Next line, not the generic "correct what the message names".
+      expect(refused.text).toContain(
+        "Next: Choose one of two safe ways forward:"
+      );
+      expect(refused.text).toContain("then run `nextly migrate:create` again.");
       // Refused, it wrote nothing.
       expect((await readdir(migrationsDir)).sort()).toEqual(filesBefore);
 
