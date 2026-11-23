@@ -166,9 +166,6 @@ function ContentColumn({
   );
 }
 
-/** The test data's declared variables while the form declares none yet. */
-const NO_VARIABLES: ReadonlyArray<{ name: string }> = [];
-
 /** The saved template's id: a template not yet created has none. */
 function savedIdOf(
   mode: EmailTemplateFormProps["mode"],
@@ -311,7 +308,9 @@ export function EmailTemplateForm({
     [form, insertCodedVariable]
   );
 
-  const sampleEditing = useSampleEdits(variables ?? NO_VARIABLES);
+  // The declared variables, none while the form holds none.
+  const declaredVariables = useMemo(() => variables ?? [], [variables]);
+  const sampleEditing = useSampleEdits(declaredVariables);
   const derived = useDerivedTemplateState({
     variables,
     sampleEdits: sampleEditing.sampleEdits,
@@ -333,7 +332,7 @@ export function EmailTemplateForm({
     // From address and Reply-To are always rendered by the Liquid engine,
     // even when the body is kept on the previous one.
     liquidSources: [fromOverride, replyTo],
-    declared: variables ?? [],
+    declared: declaredVariables,
     data: derived.sampleData,
     isLayoutRow,
     liquid: !keptOnOldEngine,
@@ -355,8 +354,8 @@ export function EmailTemplateForm({
   // What the editors complete: the declared variables, and the test data's
   // shape for their properties.
   const completion = useMemo(
-    () => ({ declared: variables ?? [], sample: derived.sampleData }),
-    [variables, derived.sampleData]
+    () => ({ declared: declaredVariables, sample: derived.sampleData }),
+    [declaredVariables, derived.sampleData]
   );
 
   const toggleSheet = (panel: SheetPanel) =>
@@ -445,7 +444,7 @@ export function EmailTemplateForm({
                 completion,
                 chips: (
                   <VariableChips
-                    declared={variables ?? []}
+                    declared={declaredVariables}
                     onInsert={insertVariable}
                   />
                 ),
@@ -467,7 +466,7 @@ export function EmailTemplateForm({
               <DataRail
                 sampleText={derived.sampleText}
                 sampleData={derived.sampleData}
-                variables={variables ?? []}
+                variables={declaredVariables}
                 onFieldChange={sampleEditing.onFieldChange}
                 onJsonChange={sampleEditing.onJsonChange}
                 onReset={sampleEditing.onReset}
@@ -487,7 +486,7 @@ export function EmailTemplateForm({
               isLayoutRow={isLayoutRow}
               providers={providersData?.data ?? []}
               layouts={layouts}
-              declared={variables ?? []}
+              declared={declaredVariables}
               onInsert={insertVariable}
               ownsContent={owns}
               carriesSecret={template?.carriesSecret === true}
