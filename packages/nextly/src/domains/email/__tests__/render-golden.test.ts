@@ -7,7 +7,7 @@
  * sends these emails today, and none of them may change.
  *
  * Covered: every core built-in template and the default layout (read from
- * their source), the accounts plugin's ten templates (frozen below, since this
+ * their source), the accounts plugin's twelve templates (frozen below, since this
  * package cannot import the plugin), and one template that exercises the
  * subject, preheader and plain-text paths. Each is rendered with four sets of
  * data: typical values, hostile values, nothing at all, and values that are
@@ -78,6 +78,16 @@ const ACCOUNTS_TEMPLATES: Array<
     slug: "accounts-password-changed",
     subject: "Your password changed",
     htmlContent: `<p>Your account's password changed. If you didn't do this, reset it now.</p>`,
+  },
+  {
+    slug: "accounts-invitation",
+    subject: "You're invited to make an account",
+    htmlContent: `<p>You're invited to make an account with this address. <a href="{{link}}">Choose a password</a> to start.</p><p>If you weren't expecting this, you can ignore this email.</p>`,
+  },
+  {
+    slug: "accounts-invitation-has-account",
+    subject: "You're invited to sign in",
+    htmlContent: `<p>You're invited to use your account here, and this address already has one. <a href="{{signInLink}}">Sign in</a>, or <a href="{{resetLink}}">reset your password</a> if you've forgotten it. If your account was closed, contact us.</p>`,
   },
 ];
 
@@ -207,7 +217,7 @@ describe("every template renders exactly as before", () => {
         ...ACCOUNTS_TEMPLATES.map(t => t.slug),
       ])
     );
-    expect(ACCOUNTS_TEMPLATES).toHaveLength(10);
+    expect(ACCOUNTS_TEMPLATES).toHaveLength(12);
   });
 
   it("pins the accounts plugin's templates as its source holds them now", async () => {

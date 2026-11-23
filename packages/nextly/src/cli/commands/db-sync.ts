@@ -117,8 +117,8 @@ import {
   syncUserFields,
 } from "./dev-build";
 import { ensureCoreTables, productionSyncRefusal } from "./dev-server";
-import { planWithStoredData, storedDataOfRun } from "./stored-data-of-run";
 import { createDebouncedSync } from "./dev-watcher";
+import { planWithStoredData, storedDataOfRun } from "./stored-data-of-run";
 import { syncSchemaInOrder } from "./sync-schema";
 import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 
@@ -450,6 +450,16 @@ export async function runDbSync(
             registered,
             table => liveAdapter.tableExists(table)
           );
+          // A Builder save left part-way refuses the sync before it reads or writes any schema,
+          // asked under the schema lock so a save that started while the sync waited is seen: the
+          // sync's push would change the tables the save's record is judged against. Another
+          // host's save made outside development changed no table, and is named only.
+          const { refuseWhileSaveInProgress } = await import(
+            "../../domains/schema/builder-save/save-in-progress"
+          );
+          await refuseWhileSaveInProgress(liveAdapter, {
+            notice: line => logger.warn(line),
+          });
 
           // Step 3.6: Register the runtime schema of every component in the database. The registry
           // built above holds STATIC system tables only, so `comp_` tables are unaddressable by

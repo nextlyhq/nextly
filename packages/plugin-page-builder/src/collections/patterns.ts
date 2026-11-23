@@ -67,8 +67,9 @@ export function patternsCollection(): CollectionConfig {
       // per collection: patterns and components are separate tables, so a
       // component may share a slug with a pattern without either being
       // ambiguous, since nothing resolves a slug without knowing which of the
-      // two it is asking about.
-      text({ name: "slug", required: true, unique: true }),
+      // two it is asking about. Kept once for every language: an identifier
+      // code and other documents name, not a translated address.
+      text({ name: "slug", localized: false, required: true, unique: true }),
       // What the browser shows under the title, and what an agent reads to
       // choose between patterns. Required by neither, because a pattern saved
       // from a selection mid-edit is worth keeping before it is worth

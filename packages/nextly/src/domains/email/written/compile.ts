@@ -89,24 +89,45 @@ function plain(parts: ReadonlyArray<PlainInline>, target: Target): string {
 
 /** Rich text: plain text with bold, italic and links. */
 function rich(parts: ReadonlyArray<Inline>, target: Target): string {
+  if (target === "text") return richText(parts);
   return parts
     .map(part => {
       let out =
         part.type === "text" ? literal(part.text, target) : chip(part, target);
-      if (target === "html") {
-        if (part.bold) out = `<strong>${out}</strong>`;
-        if (part.italic) out = `<em>${out}</em>`;
-        if (part.link) {
-          // The class is what keeps the link readable on the default
-          // layout's dark card (`brand-settings` darkModeRules).
-          out = `<a class="${WRITTEN_LINK_CLASS}" href="${href(part.link)}" style="color: {{ nextly_brand.accentColor }}; text-decoration: underline;">${out}</a>`;
-        }
-      } else if (part.link) {
-        out = `${out} (${textHref(part.link)})`;
+      if (part.bold) out = `<strong>${out}</strong>`;
+      if (part.italic) out = `<em>${out}</em>`;
+      if (part.link) {
+        // The class is what keeps the link readable on the default
+        // layout's dark card (`brand-settings` darkModeRules).
+        out = `<a class="${WRITTEN_LINK_CLASS}" href="${href(part.link)}" style="color: {{ nextly_brand.accentColor }}; text-decoration: underline;">${out}</a>`;
       }
       return out;
     })
     .join("");
+}
+
+/**
+ * Rich text as plain text: a link's words, then its address once. A link
+ * across a bold word, a chip or a line break is stored as several runs that
+ * share it, and they read as one phrase, so the address follows the last.
+ */
+function richText(parts: ReadonlyArray<Inline>): string {
+  let out = "";
+  let i = 0;
+  while (i < parts.length) {
+    const link = parts[i].link;
+    let j = i + 1;
+    while (link && j < parts.length && sameLink(parts[j].link, link)) j++;
+    out += plain(parts.slice(i, j), "text");
+    if (link) out += ` (${textHref(link)})`;
+    i = j;
+  }
+  return out;
+}
+
+/** Whether two links are the same: one address, or one variable and fallback. */
+function sameLink(a: WrittenLink | undefined, b: WrittenLink): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b);
 }
 
 /** A link's address in the plain-text body, checked but not escaped. */

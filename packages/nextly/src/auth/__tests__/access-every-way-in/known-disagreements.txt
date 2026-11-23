@@ -963,3 +963,25 @@ public visitor update collection publish-false at bulk
 public visitor update collection returns-true at bulk
 public visitor update collection role-screen-spelling at bulk
 public visitor update collection true at bulk
+
+# Collections closed to super-admin give `service`'s answers to every caller
+# without super-admin authority; these cells disagree there for the same
+# reasons, the mark aside.
+closed custom-role update collection async-filter at lock  # filter-not-applied
+closed custom-role update collection returns-filter at lock  # filter-not-applied
+closed key-full-access update collection async-filter at lock  # filter-not-applied
+closed key-full-access update collection returns-filter at lock  # filter-not-applied
+closed key-partial update collection async-filter at lock  # filter-not-applied
+closed key-partial update collection returns-filter at lock  # filter-not-applied
+closed key-role-based update collection async-filter at lock  # filter-not-applied
+closed key-role-based update collection returns-filter at lock  # filter-not-applied
+closed key-role-based-super-admin update collection async-filter at lock  # filter-not-applied
+closed key-role-based-super-admin update collection returns-filter at lock  # filter-not-applied
+closed key-without-rows read collection async-filter at entity  # key-slug-string-match, filter-not-applied
+closed key-without-rows read collection returns-filter at entity  # key-slug-string-match, filter-not-applied
+closed key-without-rows read related async-filter at population  # key-slug-string-match, filter-not-applied
+closed key-without-rows read related returns-filter at population  # key-slug-string-match, filter-not-applied
+closed user-partial update collection async-filter at lock  # filter-not-applied
+closed user-partial update collection returns-filter at lock  # filter-not-applied
+closed user-with update collection async-filter at lock  # filter-not-applied
+closed user-with update collection returns-filter at lock  # filter-not-applied

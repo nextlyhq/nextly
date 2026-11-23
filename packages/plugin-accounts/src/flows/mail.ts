@@ -83,6 +83,25 @@ export type AccountsEmail =
       kind: "password-changed";
       accountId: string;
       to: string;
+    }
+  | {
+      /**
+       * The site invited an address that has no account: the link that
+       * makes it. No account is named, since none exists until the link is
+       * used.
+       */
+      kind: "invitation";
+      accountId: null;
+      to: string;
+      link: string;
+    }
+  | {
+      /** The site invited an address that already has an account: sign in instead. */
+      kind: "invitation-has-account";
+      accountId: string;
+      to: string;
+      signInLink: string;
+      resetLink: string;
     };
 
 export interface AccountsMail {

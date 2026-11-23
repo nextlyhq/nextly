@@ -104,4 +104,12 @@ describe("commerce()", () => {
       expect(route.rateLimit).toBeDefined();
     }
   });
+
+  it("opens its products to every preset role, as before collections started closed to them", () => {
+    const collections =
+      commerce({ currency: "USD" }).contributes?.collections ?? [];
+    expect(collections.map(collection => collection.grants)).toEqual([
+      { presets: ["admin", "editor", "author", "viewer"] },
+    ]);
+  });
 });

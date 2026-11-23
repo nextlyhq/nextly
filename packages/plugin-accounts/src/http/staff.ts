@@ -1,6 +1,7 @@
 import {
   respondAction,
   respondDoc,
+  type PluginAuditApi,
   type PluginAuditDeclaration,
   type PluginPermission,
   type PluginRoute,
@@ -21,7 +22,7 @@ import type { FlowDeps } from "../flows/deps";
 import { runStaffAction } from "../flows/staff-actions";
 import { accountForStaff, listAccountsForStaff } from "../flows/staff-reads";
 
-import { ACCOUNT_PRINCIPAL } from "./routes";
+import { ACCOUNT_PRINCIPAL } from "./principal";
 
 /** Staff who hold it see the list of accounts and each account's page. */
 export const READ_ACCOUNTS = "read-accounts";
@@ -32,6 +33,10 @@ export const MANAGE_ACCOUNTS = "manage-accounts";
 /**
  * The plugin's two permissions, which a site grants through its roles: no
  * staff member needs to be a super-admin to look after accounts.
+ *
+ * Of the preset roles, only Admin holds them on its own: the accounts are
+ * people's addresses and names, private data no other preset is handed. A
+ * site grants them to any other role by name.
  */
 export const STAFF_PERMISSIONS: PluginPermission[] = [
   {
@@ -40,6 +45,7 @@ export const STAFF_PERMISSIONS: PluginPermission[] = [
     label: "Read accounts",
     description:
       "See the site's accounts: their addresses, names and states, never a password",
+    presets: ["admin"],
   },
   {
     action: "manage",
@@ -49,6 +55,7 @@ export const STAFF_PERMISSIONS: PluginPermission[] = [
       "Deactivate, reactivate and delete accounts, end their sessions, and send them verification and reset emails",
     // Deleting an account cannot be undone.
     danger: true,
+    presets: ["admin"],
   },
 ];
 
@@ -63,6 +70,26 @@ const AUDIT_KINDS: Record<StaffAction, string> = {
 };
 
 /**
+ * The staff actions the site's own server code may also take, through the
+ * server functions: those an app needs when someone's access ends.
+ */
+export type AppAccountAction = Extract<
+  StaffAction,
+  "deactivate" | "reactivate" | "end-sessions"
+>;
+
+/**
+ * The audit kind each action is recorded under when the site's own code
+ * takes it: kinds of their own, so the audit log never shows a staff action
+ * no staff member took.
+ */
+const APP_AUDIT_KINDS: Record<AppAccountAction, string> = {
+  deactivate: "nextlyhq-plugin-accounts.app.deactivated",
+  reactivate: "nextlyhq-plugin-accounts.app.reactivated",
+  "end-sessions": "nextlyhq-plugin-accounts.app.sessions-ended",
+};
+
+/**
  * What a staff action's audit row carries in metadata beside the staff
  * member: nothing. The account is named as the row's target person, by its
  * kind and id, never its address or its name, so core erases it from the
@@ -71,10 +98,10 @@ const AUDIT_KINDS: Record<StaffAction, string> = {
 const AUDIT_METADATA_KEYS: string[] = [];
 
 export const STAFF_AUDIT: PluginAuditDeclaration = {
-  kinds: STAFF_ACTIONS.map(action => ({
-    kind: AUDIT_KINDS[action],
-    metadataKeys: AUDIT_METADATA_KEYS,
-  })),
+  kinds: [
+    ...STAFF_ACTIONS.map(action => AUDIT_KINDS[action]),
+    ...Object.values(APP_AUDIT_KINDS),
+  ].map(kind => ({ kind, metadataKeys: AUDIT_METADATA_KEYS })),
 };
 
 /** What each action answers once it is done. */
@@ -173,7 +200,7 @@ async function accountEndpoint(
   deps: FlowDeps,
   ctx: PluginRouteContext
 ): Promise<Response> {
-  const account = await accountForStaff(deps, accountIdOf(ctx));
+  const account = await accountForStaff(deps, accountIdOf(ctx.params.id));
   if (account === null) throw accountsError("ACCOUNTS_NOT_FOUND");
 
   const body: StaffAccountBody = {
@@ -191,9 +218,50 @@ async function actionEndpoint(
   request: Request,
   action: StaffAction
 ): Promise<Response> {
-  const accountId = accountIdOf(ctx);
-  // Read before acting: an action must never happen without its record.
-  const audit = auditOf(ctx);
+  const accountId = accountIdOf(ctx.params.id);
+  await actOnAccount(deps, ctx.audit, action, accountId, {
+    kind: AUDIT_KINDS[action],
+    actorUserId: ctx.user?.id ?? null,
+    request,
+  });
+
+  return respondAction(DONE[action], { accountId });
+}
+
+/**
+ * Takes an action the site's own server code asked for, recorded under the
+ * app's audit kind with no staff member, and answers what staff are told.
+ *
+ * @throws `ACCOUNTS_NOT_FOUND`, `ACCOUNTS_NOT_APPLICABLE` (`data.reason`),
+ *   `ACCOUNTS_CORE_MISSING` on a core that lends no audit writer
+ */
+export async function appAccountAction(
+  deps: FlowDeps,
+  action: AppAccountAction,
+  accountId: unknown
+): Promise<string> {
+  await actOnAccount(deps, deps.audit, action, accountIdOf(accountId), {
+    kind: APP_AUDIT_KINDS[action],
+    actorUserId: null,
+  });
+
+  return DONE[action];
+}
+
+/**
+ * One action on an account, by staff or by the site's code alike: the
+ * audit writer found before anything is done, since an action must never
+ * happen without its record, then the action, refused as missing or not
+ * applicable, then its row, naming the account as the person it is about.
+ */
+async function actOnAccount(
+  deps: FlowDeps,
+  audit: PluginAuditApi | undefined,
+  action: StaffAction,
+  accountId: string,
+  record: { kind: string; actorUserId: string | null; request?: Request }
+): Promise<void> {
+  const writer = auditOf(audit);
   const result = await runStaffAction(deps, action, accountId);
   if (result.status === "missing") throw accountsError("ACCOUNTS_NOT_FOUND");
   if (result.status === "refused")
@@ -203,20 +271,17 @@ async function actionEndpoint(
       { reason: result.reason }
     );
 
-  await audit.write({
-    kind: AUDIT_KINDS[action],
-    actorUserId: ctx.user?.id ?? null,
-    request,
+  await writer.write({
+    ...record,
     // Named as the person it is, not in metadata, so core erases it from the
     // row when the account is reported deleted.
     targetPrincipal: { kind: ACCOUNT_PRINCIPAL, id: accountId },
   });
-
-  return respondAction(DONE[action], { accountId });
 }
 
-function accountIdOf(ctx: PluginRouteContext): string {
-  const parsed = ACCOUNT_ID.safeParse(ctx.params.id);
+/** An account's id as a path or a caller names it; anything else is no account. */
+function accountIdOf(id: unknown): string {
+  const parsed = ACCOUNT_ID.safeParse(id);
   if (!parsed.success) throw accountsError("ACCOUNTS_NOT_FOUND");
   return parsed.data;
 }
@@ -225,10 +290,8 @@ function accountIdOf(ctx: PluginRouteContext): string {
  * The plugin's audit writer, which core lends a plugin that declares its
  * kinds; one that does not is a core this plugin cannot run on.
  */
-function auditOf(
-  ctx: PluginRouteContext
-): NonNullable<PluginRouteContext["audit"]> {
-  if (ctx.audit === undefined)
+function auditOf(audit: PluginAuditApi | undefined): PluginAuditApi {
+  if (audit === undefined)
     throw accountsError("ACCOUNTS_CORE_MISSING", { missing: "audit" });
-  return ctx.audit;
+  return audit;
 }

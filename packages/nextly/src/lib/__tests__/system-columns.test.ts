@@ -32,6 +32,7 @@ import {
   IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY,
 } from "../immutable-system-fields";
 import {
+  entryDateFieldNames,
   isReservedSystemColumn,
   reservedSystemFieldNames,
   SYSTEM_COLUMNS,
@@ -44,6 +45,40 @@ import {
 } from "../system-columns";
 
 const sorted = (names: Iterable<string>): string[] => [...names].sort();
+
+describe("entry date projection", () => {
+  // Pinned: the dates a plugin may read from an entry it was handed, as responses spell them.
+  it("names the two timestamps on every entity, and the first publication only with the lifecycle", () => {
+    for (const entity of ["collection", "single"] as const) {
+      expect(entryDateFieldNames(entity, { statusLifecycle: false })).toEqual([
+        "createdAt",
+        "updatedAt",
+      ]);
+      expect(entryDateFieldNames(entity, { statusLifecycle: true })).toEqual([
+        "createdAt",
+        "updatedAt",
+        "firstPublishedAt",
+      ]);
+    }
+  });
+
+  // Property: whatever is added later, a name listed here is a timestamp a response carries
+  // under that very name, so a reader of the entry finds it there.
+  it("lists only timestamps responses publish under the listed name", () => {
+    const listed = new Set(
+      entryDateFieldNames("collection", { statusLifecycle: true })
+    );
+    const published = SYSTEM_COLUMNS.filter(
+      column =>
+        column.publishedUnderCamelName &&
+        !column.strippedFromResponses &&
+        column.shape.postgresql.kind === "timestamp"
+    ).map(column => column.camelName);
+    expect(sorted(listed)).toEqual(sorted(published));
+    // The change stamp is a timestamp too, but responses drop it.
+    expect(listed.has("_changed_at")).toBe(false);
+  });
+});
 
 describe("immutability projections", () => {
   it("closes exactly the provenance columns on a collection", () => {

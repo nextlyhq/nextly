@@ -591,6 +591,18 @@ describe.each(getConfiguredTestDialects())(
         await adapter.executeQuery(
           "UPDATE dynamic_collections SET slug = 'writers' WHERE slug = 'people'"
         );
+        // And in the Builder's definition file, which a save judges a relationship's target
+        // against: a rename leaves the collection declared under its new slug there too.
+        const definitionPath = join(t.basePath, "schema", "builder.json");
+        const definition = JSON.parse(
+          readFileSync(definitionPath, "utf-8")
+        ) as {
+          collections: { slug: string }[];
+        };
+        for (const entry of definition.collections) {
+          if (entry.slug === "people") entry.slug = "writers";
+        }
+        writeFileSync(definitionPath, JSON.stringify(definition, null, 2));
 
         await service.createCollection(
           {

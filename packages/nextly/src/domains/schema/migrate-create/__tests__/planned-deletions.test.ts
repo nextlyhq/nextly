@@ -12,7 +12,11 @@ import {
   type CoveredEntity,
 } from "../../migrate/entity-coverage";
 import { entityRowsOf } from "../../migrate/entity-shared-rows";
-import { judgedDeletions, type DeletionPlan } from "../planned-deletions";
+import {
+  judgedDeletions,
+  refuseDeletionsBeforeReads,
+  type DeletionPlan,
+} from "../planned-deletions";
 
 const POSTS: MinimalConfigEntity = {
   slug: "posts",
@@ -246,5 +250,53 @@ describe("judgedDeletions for a main table the plan does not retire", () => {
   it("lists no rows in shared tables for it", () => {
     const { all } = judge([['DROP TABLE "dc_posts"']], { entities: [renamed] });
     expect(all).toEqual([{ kind: "table", table: "dc_posts" }]);
+  });
+});
+
+describe("a deletion before a later file reads the values", () => {
+  const dropped = [
+    [{ kind: "column" as const, table: "dc_posts", column: "title" }],
+    [],
+  ];
+
+  it("refuses a column an earlier file drops and a later file reads", () => {
+    expect(() =>
+      refuseDeletionsBeforeReads(dropped, [
+        { file: 1, table: "dc_posts", column: "title" },
+      ])
+    ).toThrow(/deletes dc_posts\.title before a later file/);
+  });
+
+  it("refuses a table an earlier file drops and a later file reads a column of", () => {
+    expect(() =>
+      refuseDeletionsBeforeReads(
+        [[{ kind: "table", table: "dc_posts_locales" }], []],
+        [{ file: 1, table: "dc_posts_locales", column: "title" }]
+      )
+    ).toThrow(/deletes dc_posts_locales before/);
+  });
+
+  it("lets a file drop what it read itself, or what a file before it read", () => {
+    // The control for each refusal above: the same deletion, read by the file that deletes it or
+    // by one that ran before it, loses nothing.
+    expect(() =>
+      refuseDeletionsBeforeReads(dropped, [
+        { file: 0, table: "dc_posts", column: "title" },
+      ])
+    ).not.toThrow();
+    expect(() =>
+      refuseDeletionsBeforeReads(
+        [[], dropped[0]],
+        [{ file: 0, table: "dc_posts", column: "title" }]
+      )
+    ).not.toThrow();
+  });
+
+  it("lets an earlier file drop another column of the table", () => {
+    expect(() =>
+      refuseDeletionsBeforeReads(dropped, [
+        { file: 1, table: "dc_posts", column: "summary" },
+      ])
+    ).not.toThrow();
   });
 });

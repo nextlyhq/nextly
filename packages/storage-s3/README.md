@@ -101,7 +101,7 @@ s3Storage({
 });
 ```
 
-With `clientUploads`, the browser asks for a pre-signed URL with the file's name, type and exact size. Nextly checks them first (name, extension, type allowlist, size; never an SVG), and the URL binds the type and the exact size, so S3 refuses any other file. The bytes themselves don't pass through Nextly, so their content is not checked.
+With `clientUploads`, the browser asks for a pre-signed URL with the file's name, type and exact size. Nextly checks them first (name, extension, type allowlist, size; never an SVG), and the URL binds the type and the exact size, so S3 refuses any other file. It binds the configured `cacheControl` too, so a direct upload is cached as a server upload is: send every header in the response's `headers`, as it is (a bucket CORS rule that lists its allowed headers must allow `content-type` and `cache-control`). The bytes themselves don't pass through Nextly, so their content is not checked.
 
 ## Main exports
 

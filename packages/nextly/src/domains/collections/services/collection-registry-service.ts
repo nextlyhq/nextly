@@ -513,6 +513,19 @@ export class CollectionRegistryService extends BaseRegistryService<
   }
 
   /**
+   * A collection's record, or null, from the registry row cache outside a transaction
+   * (`getRecordBySlugForRead`): for a read that decides no write. A write decides from
+   * `getCollectionBySlug`, which reads the row as stored.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getCollectionBySlugForRead(
+    slug: string
+  ): Promise<DynamicCollectionRecord | null> {
+    return this.getRecordBySlugForRead(slug);
+  }
+
+  /**
    * Every collection's slug and labels, read without the rest of its record:
    * what a screen naming every collection needs.
    */

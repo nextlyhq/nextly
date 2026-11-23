@@ -27,6 +27,7 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../__tests__/helpers/fresh-database";
+import { childLayoutArgs } from "../../__tests__/storage-layout";
 import { superAdminUser } from "../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
@@ -177,6 +178,10 @@ describe.each(getConfiguredTestDialects())(
         [
           "--import",
           "tsx",
+          // The other copy runs on this file's storage layout, as this copy
+          // does: started on another, it would read the collection this copy
+          // made as one still to move into per-language tables.
+          ...childLayoutArgs(),
           OTHER_COPY,
           dialect,
           url,
