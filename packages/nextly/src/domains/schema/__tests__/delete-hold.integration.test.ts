@@ -40,6 +40,7 @@ import {
 } from "../builder-save/__tests__/helpers/older-table";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { namedCollectionLockNames } from "../../dynamic-collections/services/dynamic-collection-registry-service";
+import { withStopPoints } from "../migrate/stop-points";
 import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
 
 // A gate before each migration file's first statement on the file road (`runWritten` asks the
@@ -1247,6 +1248,174 @@ describe.each(getConfiguredTestDialects())(
         await writer;
 
         expect(await applying).toMatchObject(refusedWith(4));
+        expect(await hasNoteColumn(t)).toBe(true);
+        expect(await notesHeld(t)).toBe(4);
+      },
+      60_000
+    );
+
+    /** Whether `work` ends within `ms`. */
+    const endsWithin = (work: Promise<unknown>, ms: number) =>
+      Promise.race([
+        work.then(
+          () => true,
+          () => true
+        ),
+        new Promise<boolean>(resolve => setTimeout(() => resolve(false), ms)),
+      ]);
+
+    // The save holds the table against writes from its count until it commits, never against
+    // reads: on PostgreSQL its lock (`SHARE ROW EXCLUSIVE`) and the advisory lock leave another
+    // connection reading; on SQLite the one connection reads outside the save's transaction turn.
+    it.runIf(dialect !== "mysql")(
+      "lets a reader read the table from the save's count until it commits",
+      async () => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        const { paused, release } = gated(afterCount);
+        const applying = apply(t, 3, REMAINING, {
+          note: { action: "confirm_drop" },
+        }).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+        const reached = await Promise.race([
+          paused.then(() => true),
+          applying.then(() => false),
+        ]);
+        expect(reached || (await applying)).toBe(true);
+        try {
+          expect(await endsWithin(notesHeld(t), 1_000)).toBe(true);
+        } finally {
+          release();
+        }
+        expect(await applying).toBe("applied");
+      },
+      60_000
+    );
+
+    // A save whose table another session keeps busy past its tries stops as a busy table does,
+    // with nothing deleted and the count as it was. On SQLite's one connection in memory nothing
+    // else holds the table.
+    it.runIf(dialect !== "sqlite")(
+      "stops a save whose table stays busy past its tries, deleting nothing",
+      async () => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
+        vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "3");
+        // Another session's write to the table, not yet committed, which the save's statements wait
+        // behind.
+        let letGo: () => void = () => undefined;
+        const goes = new Promise<void>(resolve => {
+          letGo = resolve;
+        });
+        let holding: () => void = () => undefined;
+        const isHolding = new Promise<void>(resolve => {
+          holding = resolve;
+        });
+        const holder = t.adapter.transaction(async tx => {
+          await tx.execute(insertStatement(null));
+          holding();
+          await goes;
+        });
+        await isHolding;
+        try {
+          expect(
+            await apply(t, 3, REMAINING, {
+              note: { action: "confirm_drop" },
+            }).then(
+              () => "applied",
+              (error: unknown) => error
+            )
+          ).toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+        } finally {
+          letGo();
+          await holder;
+        }
+        expect(await hasNoteColumn(t)).toBe(true);
+        expect(await notesHeld(t)).toBe(3);
+      },
+      60_000
+    );
+
+    // A failure between the count and the save's first statement, at the runner's stop point there,
+    // deletes nothing and lets the collection go: a write after it lands at once.
+    it("deletes nothing when the save fails between its count and its first statement, and lets the collection go", async () => {
+      const t = await boot();
+      for (const note of ["a", "b", "c"]) await insert(t, note);
+      const outcome = await withStopPoints(
+        point => {
+          if (/: before statement 1$/.test(point)) {
+            throw new Error("stopped between the count and the delete");
+          }
+        },
+        () =>
+          apply(t, 3, REMAINING, { note: { action: "confirm_drop" } }).then(
+            () => "applied",
+            (error: unknown) => error
+          )
+      );
+      expect(outcome).not.toBe("applied");
+      expect(await hasNoteColumn(t)).toBe(true);
+      expect(await notesHeld(t)).toBe(3);
+      expect(
+        await endsWithin(
+          t.nextly.create({
+            collection: SLUG,
+            data: { label: "after", note: "written after the stop" },
+          }),
+          5_000
+        )
+      ).toBe(true);
+      expect(await notesHeld(t)).toBe(4);
+    }, 60_000);
+
+    // The save's connection killed between its count and its delete (MySQL): its named locks end
+    // with it, so an entry write goes ahead, and the save is told it stopped, with nothing deleted.
+    it.runIf(dialect === "mysql")(
+      "lets the collection go when the save's connection is killed between its count and its delete",
+      async () => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        const { paused, release } = gated(afterCount);
+        const applying = apply(t, 3, REMAINING, {
+          note: { action: "confirm_drop" },
+        }).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+        const reached = await Promise.race([
+          paused.then(() => true),
+          applying.then(() => false),
+        ]);
+        expect(reached || (await applying)).toBe(true);
+        // The connection holding the collection's named locks, killed from another.
+        const [database] = await sql<{ name: string }>(
+          t,
+          "SELECT DATABASE() AS name"
+        );
+        const [name] = namedCollectionLockNames(String(database?.name), [SLUG]);
+        const [holder] = await sql<{ id: number | string | null }>(
+          t,
+          `SELECT IS_USED_LOCK('${String(name)}') AS id`
+        );
+        expect(holder?.id).not.toBeNull();
+        await sql(t, `KILL ${String(holder?.id)}`);
+        try {
+          expect(
+            await endsWithin(
+              t.nextly.create({
+                collection: SLUG,
+                data: { label: "after", note: "written after the kill" },
+              }),
+              5_000
+            )
+          ).toBe(true);
+        } finally {
+          release();
+        }
+        expect(await applying).not.toBe("applied");
         expect(await hasNoteColumn(t)).toBe(true);
         expect(await notesHeld(t)).toBe(4);
       },
