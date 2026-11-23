@@ -74,6 +74,9 @@ function namedDocument(
 /** The answer for a document no workflow can hold, as the route would give it. */
 const NOT_ATTACHED: ReviewStateAnswer = { attached: false };
 
+/** Reads any answer held for such a document as not attached. */
+const asNotAttached = (): ReviewStateAnswer => NOT_ATTACHED;
+
 /**
  * The review state of one document, or nothing asked before it exists.
  * Asked again on return to the tab: a colleague's step moves it, and no
@@ -83,7 +86,9 @@ const NOT_ATTACHED: ReviewStateAnswer = { attached: false };
  * document's collection or Single: it is then answered not attached, as the
  * route would answer it, so every surface draws exactly what it draws for that
  * answer. A placeholder rather than a stored answer, so a workflow attached
- * later (the workspace answer read again) asks the route at once.
+ * later (the workspace answer read again) asks the route at once; and an
+ * answer held from before a workflow was detached is read as not attached
+ * too, so its steps and its hold on Publish do not outlive the workflow.
  */
 export function useReviewState(
   document: ReleaseDocumentRef | undefined
@@ -102,7 +107,7 @@ export function useReviewState(
     enabled: asked,
     refetchOnWindowFocus: true,
     ...(notHeld && document !== undefined
-      ? { placeholderData: NOT_ATTACHED }
+      ? { placeholderData: NOT_ATTACHED, select: asNotAttached }
       : {}),
   });
 }

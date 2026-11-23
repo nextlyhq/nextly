@@ -40,7 +40,7 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   }),
 }));
 
-import { useReviewState } from "../useReviewState";
+import { reviewKeys, useReviewState } from "../useReviewState";
 import { useWaitingScope } from "../useWaitingForMe";
 
 const post = {
@@ -74,6 +74,25 @@ describe("workflow reads follow the workspace answer", () => {
   it("answers a document no workflow holds as not attached, without asking", async () => {
     workspace.entities = ["notes"];
     const { result } = renderHook(() => useReviewState(post), { wrapper });
+    expect(result.current.data).toEqual({ attached: false });
+    await settle();
+    expect(reviewSpy).not.toHaveBeenCalled();
+  });
+
+  it("reads an answer held from before the workflow was detached as not attached", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    client.setQueryData(reviewKeys.document(post), {
+      attached: true,
+      review: { workflow: "review", parts: [] },
+    });
+    workspace.entities = [];
+    const { result } = renderHook(() => useReviewState(post), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    });
     expect(result.current.data).toEqual({ attached: false });
     await settle();
     expect(reviewSpy).not.toHaveBeenCalled();
