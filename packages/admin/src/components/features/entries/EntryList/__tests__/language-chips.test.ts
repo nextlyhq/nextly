@@ -69,7 +69,7 @@ describe("languageChipFacts", () => {
     ).toEqual({ state: "outOfDate", live: false, pendingChange: false });
   });
 
-  it("follows the document's own status where the language carries none", () => {
+  it("is live only where both the document and the language are public", () => {
     // A collection with the lifecycle but no status per language: every language follows the
     // document's.
     expect(languageChipFacts({ translated: true }, "draft").state).toBe(
@@ -78,9 +78,24 @@ describe("languageChipFacts", () => {
     expect(languageChipFacts({ translated: true }, "published").state).toBe(
       "live"
     );
-    // The language's own status, where it has one, wins over the document's.
+    // Neither stands in for the other: a language published in a document still in draft is
+    // not served, so it is not live.
     expect(
       languageChipFacts({ translated: true, status: "published" }, "draft")
+    ).toEqual({ state: "draft", live: false, pendingChange: false });
+    expect(
+      languageChipFacts(
+        { translated: true, status: "published", pendingChange: true },
+        "draft"
+      ).state
+    ).toBe("draft");
+    // And a draft language in a published document is not live either.
+    expect(
+      languageChipFacts({ translated: true, status: "draft" }, "published")
+        .state
+    ).toBe("draft");
+    expect(
+      languageChipFacts({ translated: true, status: "published" }, "published")
         .state
     ).toBe("live");
   });

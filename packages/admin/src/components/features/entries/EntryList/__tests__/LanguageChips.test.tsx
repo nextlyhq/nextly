@@ -128,6 +128,25 @@ describe("LanguageChips", () => {
     ).toBe("draft");
   });
 
+  it("does not call a published language live while its document is a draft", () => {
+    // The server serves a language only where the document is public too.
+    render(
+      <LanguageChips
+        translations={{
+          en: { translated: true, status: "published" },
+          es: { translated: true, status: "published" },
+        }}
+        documentStatus="draft"
+        onOpenLocale={vi.fn()}
+      />
+    );
+    expect(
+      chipState(
+        screen.getByRole("button", { name: "Open in Spanish, ES, draft" })
+      )
+    ).toBe("draft");
+  });
+
   it("opens the row in the language whose chip was pressed", async () => {
     const onOpenLocale = vi.fn();
     render(

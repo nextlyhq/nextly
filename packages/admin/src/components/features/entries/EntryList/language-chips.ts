@@ -58,9 +58,12 @@ export interface LanguageChipFacts {
  * What one language of one document is, for its chip.
  *
  * `documentStatus` is the document's own Draft / Published status, passed only for a collection
- * with that lifecycle: where a collection keeps no status per language, every language follows
- * the document's, and the overview then carries none. Without either, the content has no
- * lifecycle and is shown to readers once written, so it is live.
+ * with that lifecycle. A language is live only where both are public, as the server serves it
+ * (`publishedInLanguageCondition`): the document's own row within the read's lifecycle, and the
+ * language's own row published. Neither status stands in for the other: a language published
+ * in a document still in draft is not shown to anyone. A status absent from either side (no
+ * lifecycle, or no status kept per language) bounds nothing on that side; with neither, the
+ * content is shown to readers once written, so it is live.
  *
  * The order of the checks is the order of what needs work first: a language with nothing is
  * missing whatever else is true; one whose source moved is out of date even while live, since
@@ -73,10 +76,11 @@ export function languageChipFacts(
   if (!meta?.translated) {
     return { state: "missing", live: false, pendingChange: false };
   }
-  const lifecycle =
-    meta.status ??
-    (typeof documentStatus === "string" ? documentStatus : undefined);
-  const live = lifecycle === undefined || lifecycle === "published";
+  const documentPublic =
+    typeof documentStatus !== "string" || documentStatus === "published";
+  const languagePublic =
+    meta.status === undefined || meta.status === "published";
+  const live = documentPublic && languagePublic;
   const pendingChange = meta.pendingChange === true;
   const state: LanguageChipState =
     meta.stale === true
