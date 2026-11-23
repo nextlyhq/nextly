@@ -38,7 +38,7 @@ export interface CollectionFilesConfig {
    */
   accept: readonly string[];
 
-  /** The largest file accepted, in bytes. */
+  /** The largest file accepted, in bytes, at most 2,147,483,647 (just under 2 GiB). */
   maxSize: number;
 
   /**
@@ -60,6 +60,13 @@ export interface CollectionFilesConfig {
 
 /** The states a file's entry passes through. */
 const FILE_STATUSES = ["pending", "ready", "rejected"] as const;
+
+/**
+ * The largest `maxSize` a collection may set: the largest value the `size`
+ * column holds on every supported database (a 32-bit integer on PostgreSQL
+ * and MySQL), so every accepted file's size can be recorded. Just under 2 GiB.
+ */
+const LARGEST_MAX_SIZE = 2_147_483_647;
 
 /** The longest and shortest wait for a confirm that a collection may set. */
 const PENDING_TIMEOUT_BOUNDS = { min: 60, max: 7 * 24 * 60 * 60 } as const;
@@ -220,10 +227,10 @@ function wholeNumberWithin(value: unknown, min: number, max: number): boolean {
 /** Each problem with the size, delivery and wait the option sets. */
 function limitProblems(files: Record<string, unknown>): FilesProblem[] {
   const problems: FilesProblem[] = [];
-  if (!wholeNumberWithin(files.maxSize, 1, Number.MAX_SAFE_INTEGER)) {
+  if (!wholeNumberWithin(files.maxSize, 1, LARGEST_MAX_SIZE)) {
     problems.push({
       path: "files.maxSize",
-      message: "files.maxSize must be a whole number of bytes above 0.",
+      message: `files.maxSize must be a whole number of bytes from 1 to ${LARGEST_MAX_SIZE}.`,
     });
   }
   const { delivery } = files;

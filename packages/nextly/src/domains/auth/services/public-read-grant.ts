@@ -475,6 +475,48 @@ async function withdrawUndeclared(
   }
 }
 
+/**
+ * Takes off the Public role every permission it holds on a collection of
+ * private files, however it came to hold it: granted by an earlier boot while
+ * the collection had no `files` option, declared by a plugin, or given by an
+ * owner. Everyone holding one would let a visitor reach the files wherever the
+ * collection's rule answers `true`. The record of what boot granted is left
+ * as it is, so taking `files` away again does not hand the read back; an owner
+ * gives it again if it is wanted. Each removal is logged as an error.
+ */
+async function withdrawFromFiles(
+  roleId: string,
+  found: readonly AccessTarget[],
+  ids: ReadonlyMap<string, string>,
+  {
+    holdsFiles,
+    withdraw,
+    logger,
+  }: Pick<PublicReadGrantSeeding, "withdraw" | "logger"> & {
+    holdsFiles: (slug: string) => boolean;
+  }
+): Promise<void> {
+  const unwanted = found
+    .filter(({ kind, slug }) => kind === "collection" && holdsFiles(slug))
+    .flatMap(({ slug }) =>
+      (["read", ...WRITES.collection] as const).flatMap(action => {
+        const id = ids.get(permissionSlug(action, slug));
+        return id === undefined ? [] : [{ id, action, resource: slug }];
+      })
+    );
+  if (unwanted.length === 0) return;
+  // Every one still held is taken back.
+  const removed = new Set(
+    await withdraw(roleId, unwanted, held => Promise.resolve(held))
+  );
+  for (const { id, action, resource } of unwanted) {
+    if (!removed.has(id)) continue;
+    logger.error(
+      `[Nextly] Removed "${permissionSlug(action, resource)}" from the Public role: the collection "${resource}" holds private files, which are never opened to everyone.`
+    );
+  }
+}
+
 /** A target, with what its rules said about a visitor. */
 interface Asked {
   target: AccessTarget;
@@ -743,6 +785,9 @@ async function decide(
       logger,
     });
   }
+  // Whatever else this seeding does or does not take back, a collection of
+  // private files keeps no permission of Public's.
+  await withdrawFromFiles(roleId, found, ids, { holdsFiles, withdraw, logger });
   return { roleId, ids, asked, wanted, declaring };
 }
 

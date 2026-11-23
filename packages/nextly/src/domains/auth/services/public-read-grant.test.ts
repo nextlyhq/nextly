@@ -726,6 +726,58 @@ describe("seedPublicReadGrants on a collection holding private files", () => {
     expect(ordinary.granted).toEqual(["media", "posts"]);
   });
 
+  it("takes back a permission Public already holds on it, logging it", async () => {
+    /** A Public role holding `held`, and a seeding taking from it. */
+    const holding = (held: string[], holdsFiles: (slug: string) => boolean) => {
+      const role = storedRole(held);
+      const { seeding } = site(memoryMeta(), role);
+      const { errors, logger } = listening();
+      return {
+        role,
+        errors,
+        seeding: {
+          ...seeding,
+          targets: async () => [
+            {
+              kind: "collection" as const,
+              slug: "posts",
+              access: { read: () => true },
+            },
+          ],
+          holdsFiles,
+          logger,
+          withdraw: async (
+            _roleId: string,
+            unwanted: ReadonlyArray<{ id: string }>,
+            pick: (
+              ids: readonly string[],
+              executor: unknown
+            ) => Promise<readonly string[]>
+          ) => {
+            const removed = await pick(
+              unwanted.map(({ id }) => id).filter(id => role.held.has(id)),
+              TX
+            );
+            for (const id of removed) role.held.delete(id);
+            return removed;
+          },
+        },
+      };
+    };
+
+    // Granted by an earlier boot, before the collection held files.
+    const files = holding(["p-media", "p-posts"], slug => slug === "posts");
+    await seedPublicReadGrants(files.seeding);
+    expect([...files.role.held]).toEqual(["p-media"]);
+    expect(files.errors.join("\n")).toContain('Removed "read-posts"');
+
+    // Control: the same holding on a collection without files is kept.
+    const ordinary = holding(["p-media", "p-posts"], () => false);
+    await seedPublicReadGrants(ordinary.seeding);
+    expect([...ordinary.role.held].sort()).toEqual(["p-media", "p-posts"]);
+    expect(ordinary.errors).toEqual([]);
+  });
+
   it("grants nothing on it that a plugin declares", async () => {
     const declaring = site();
     const { errors, logger } = listening();

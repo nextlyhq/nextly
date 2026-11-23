@@ -146,6 +146,9 @@ describe("the files option is judged", () => {
         files: { ...FILES, delivery: "redirect", pendingTimeout: 600 },
       })
     ).toEqual([]);
+    expect(
+      filesErrors({ files: { ...FILES, maxSize: 2_147_483_647 } })
+    ).toEqual([]);
   });
 
   it.each([
@@ -177,6 +180,11 @@ describe("the files option is judged", () => {
     ["a size of zero", { ...FILES, maxSize: 0 }, "files.maxSize"],
     ["a size that is not whole", { ...FILES, maxSize: 1.5 }, "files.maxSize"],
     ["a size given as text", { ...FILES, maxSize: "10mb" }, "files.maxSize"],
+    [
+      "a size larger than the size column holds",
+      { ...FILES, maxSize: 2_147_483_648 },
+      "files.maxSize",
+    ],
     ["an unknown delivery", { ...FILES, delivery: "inline" }, "files.delivery"],
     [
       "too short a wait for a confirm",
