@@ -58,6 +58,7 @@ import { BulkActionBar } from "./BulkActionBar";
 import {
   buildEntryColumns,
   getEntryTitleField,
+  listTitleMayBeAnotherLanguages,
   type CollectionForColumns,
   type TitlesShownIn,
 } from "./EntryTableColumns";
@@ -566,6 +567,16 @@ export const EntryTable: ForwardRefExoticComponent<
     (columnsControl?.isColumnVisible("translations") ?? true);
   const titleLanguageFailed =
     titlesIn !== undefined && titleLanguage?.failed === true;
+  // Where the titles are when those in the chosen language couldn't be read: the default
+  // language's only where no title on the page may be another language's.
+  const titlesUnreadNote =
+    titleLanguageFailed && titlesIn
+      ? `Titles in ${titlesIn.language.label} couldn't be read, so ${
+          entries.some(row => listTitleMayBeAnotherLanguages(row, titlesIn))
+            ? "each row shows its own title"
+            : `each title is shown in ${titlesIn.defaultLanguage.label}`
+        }.`
+      : undefined;
 
   const clearDateFilters = () => {
     onCreatedFromChange?.("");
@@ -608,16 +619,12 @@ export const EntryTable: ForwardRefExoticComponent<
                 beforeTable: (
                   <div className="space-y-2">
                     {showsLanguageKey && <LanguageChipKey />}
-                    {titleLanguageFailed && titlesIn && (
-                      // Said where the titles are, so a reader knows the
-                      // titles below are the default language's.
+                    {titlesUnreadNote && (
                       <p
                         role="status"
                         className="text-xs text-muted-foreground"
                       >
-                        Titles in {titlesIn.language.label} couldn&apos;t be
-                        read, so each title is shown in{" "}
-                        {titlesIn.defaultLanguage.label}.
+                        {titlesUnreadNote}
                       </p>
                     )}
                   </div>

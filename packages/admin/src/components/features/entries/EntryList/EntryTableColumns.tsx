@@ -458,6 +458,22 @@ export interface TitlesShownIn {
   defaultMayFallBack?: boolean;
 }
 
+/**
+ * Whether a row's own title, from the list's read, may be another language's than the default:
+ * where the default may fall back to another language, or the row says its default language
+ * holds nothing. Such a title is never presented as the default language's.
+ */
+export function listTitleMayBeAnotherLanguages(
+  row: Record<string, unknown>,
+  shownIn: Pick<TitlesShownIn, "defaultLanguage" | "defaultMayFallBack">
+): boolean {
+  if (shownIn.defaultMayFallBack === true) return true;
+  const defaultMeta = (
+    row._translations as Record<string, { translated?: boolean }> | undefined
+  )?.[shownIn.defaultLanguage.code];
+  return defaultMeta?.translated === false;
+}
+
 /** The `dir` a language's text is written in. */
 const dirOf = (language: TitleLanguage): "rtl" | "ltr" =>
   language.rtl ? "rtl" : "ltr";
@@ -502,20 +518,8 @@ function titleInLanguageCell(
         </span>
       );
     }
-    // The list's own title is marked as the default language's only where it can only be that:
-    // where the default may fall back to another language, or the row says its default language
-    // holds nothing, the title shown may be another language's, so it is left unmarked.
-    const defaultMeta = (
-      ctx.row._translations as
-        | Record<string, { translated?: boolean }>
-        | undefined
-    )?.[shownIn.defaultLanguage.code];
-    if (
-      shownIn.defaultMayFallBack === true ||
-      defaultMeta?.translated === false
-    ) {
-      return base(ctx);
-    }
+    // The list's own title is marked as the default language's only where it can only be that.
+    if (listTitleMayBeAnotherLanguages(ctx.row, shownIn)) return base(ctx);
     return (
       <span className="inline-flex flex-wrap items-baseline gap-x-1.5">
         <span

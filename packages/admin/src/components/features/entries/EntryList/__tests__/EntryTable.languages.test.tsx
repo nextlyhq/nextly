@@ -4,7 +4,8 @@
  *
  * A title is shown in the chosen language only where the read in that language returned one,
  * marked with that language's `lang` and `dir`; every other row keeps its default-language title,
- * marked as such, and a read that failed is said so above the table.
+ * marked as such, and a read that failed is said so above the table, naming the default language
+ * only where no title on the page may be another language's.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -244,6 +245,43 @@ describe("EntryTable — titles in a chosen language", () => {
       )
     ).toHaveAttribute("role", "status");
     expect(entriesTable().getByText("One")).toBeInTheDocument();
+  });
+
+  it("says each row shows its own title when the default language may fall back to another", () => {
+    renderTable({
+      titleLanguage: choice({
+        value: "es",
+        titles: undefined,
+        failed: true,
+        defaultMayFallBack: true,
+      }),
+    });
+    expect(
+      screen.getByText(
+        "Titles in Spanish couldn't be read, so each row shows its own title."
+      )
+    ).toHaveAttribute("role", "status");
+    expect(screen.queryByText(/shown in English/)).toBeNull();
+  });
+
+  it("says each row shows its own title when a row's default language holds nothing", () => {
+    renderTable({
+      entries: [
+        ...ROWS,
+        {
+          id: "p9",
+          title: "Nueve",
+          _translations: { en: { translated: false } },
+        },
+      ],
+      titleLanguage: choice({ value: "es", titles: undefined, failed: true }),
+    });
+    expect(
+      screen.getByText(
+        "Titles in Spanish couldn't be read, so each row shows its own title."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/shown in English/)).toBeNull();
   });
 
   it("changes nothing while the default language is chosen", () => {
