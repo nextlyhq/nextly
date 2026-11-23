@@ -1120,6 +1120,16 @@ async function registerServicesOnce(
     structure,
     "before migrations at start"
   );
+  // The cache handlers read expiries from this adapter's ledger, and writes
+  // made outside a request record theirs into it, for every instance. A
+  // stored page is served only once it is published, so it is published as
+  // soon as nothing this start does can expire a tag first: here, where the
+  // app does not opt into migrations at start, and after them where it does,
+  // below. The steps between change no content, and each of their round trips
+  // held the admin page's first byte.
+  const ledgerAfterMigrations =
+    structure.migratesAtStart || config.db?.runMigrationsOnBoot === true;
+  if (!ledgerAfterMigrations) installTagExpiryLedger(adapter);
   await refuseUnmigratedDatabaseInBuildPhase(adapter);
 
   const bootExtensionSchema = await prepareBootSchema(
@@ -1168,11 +1178,10 @@ async function registerServicesOnce(
         },
       })
   );
-  // The cache handlers read expiries from this adapter's ledger, and writes
-  // made outside a request record theirs into it, for every instance. After
-  // the migrations at start, which record theirs through the ledger they lend
-  // themselves, on their own transaction, as `nextly migrate` does.
-  installTagExpiryLedger(adapter);
+  // After the migrations at start where they run, which record their
+  // expiries through the ledger they lend themselves, on their own
+  // transaction, as `nextly migrate` does.
+  if (ledgerAfterMigrations) installTagExpiryLedger(adapter);
 
   // A run that failed before it set the database up leaves it as it was.
   await refuseDatabaseNotSetUp(adapter, structure, "after migrations at start");
