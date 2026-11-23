@@ -956,7 +956,6 @@ const COLLECTIONS_METHODS: Record<
       return withSessionCacheHeaders(respondData({ impact }));
     },
   },
-  // Preview schema changes (dry-run diff with row-count impact)
   // The type picker's answer for a saved field: what each other type would do to its values, read
   // from the conversion rules (`respondTypeChangeTargets`).
   typeChangeTargets: {
@@ -972,9 +971,15 @@ const COLLECTIONS_METHODS: Record<
         fields: (collection.fields ?? []) as unknown as FieldDefinition[],
         body,
         builtBy: "collection",
+        // A collection's save file retypes a translated field's translations column.
+        layout: {
+          perLanguage: storesPerLanguage(collection),
+          fileRetypes: true,
+        },
       });
     },
   },
+  // Preview schema changes (dry-run diff with row-count impact)
   previewSchemaChanges: {
     execute: async (_svc, p, body) => {
       requireParam(p, "collectionName");

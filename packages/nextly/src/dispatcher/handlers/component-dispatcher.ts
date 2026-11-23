@@ -561,11 +561,16 @@ export const COMPONENTS_METHODS: Record<
         throw NextlyError.notFound({ message: "Field group not found" });
       }
       refuseChangeDefinedInCode(component, "component", slug);
+      // A field group's save is applied by its push, which retypes no translations column.
       return respondTypeChangeTargets({
         fields: (component.fields ?? []) as unknown as FieldDefinition[],
         body,
         builtBy: "fieldGroup",
         componentRow: true,
+        layout: {
+          perLanguage: storesPerLanguage(component),
+          fileRetypes: false,
+        },
       });
     },
   },
