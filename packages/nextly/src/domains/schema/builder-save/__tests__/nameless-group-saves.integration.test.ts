@@ -154,11 +154,21 @@ async function keysOf(t: TestNextly, table: string) {
 describe.each(getConfiguredTestDialects())(
   "a Builder save of an entity holding a group with no name (%s)",
   dialect => {
+    /**
+     * The collections the case's app defines in code. The save judges a relationship's target
+     * against its configuration, so it is handed the app's own: `people`, where `singleApp`
+     * defines it.
+     */
+    let codeCollections: ReturnType<typeof defineCollection>[] = [];
+    beforeEach(() => {
+      codeCollections = [];
+    });
+
     function deps(t: TestNextly): CollectionSaveDeps {
       return {
         adapter: t.adapter as unknown as DrizzleAdapter,
         config: defineConfig({
-          collections: [],
+          collections: codeCollections,
           db: { migrationsDir: "./migrations" },
         }),
         projectRoot: dir,
@@ -351,16 +361,17 @@ describe.each(getConfiguredTestDialects())(
     async function singleApp(
       extra: Partial<Parameters<typeof createTestNextly>[0]> = {}
     ): Promise<TestNextly> {
+      codeCollections = [
+        defineCollection({
+          slug: "people",
+          fields: [textField({ name: "name" })],
+        }),
+      ];
       const t = await boot(dialect, {
         ...extra,
         db: { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" },
         basePath: dir,
-        collections: [
-          defineCollection({
-            slug: "people",
-            fields: [textField({ name: "name" })],
-          }),
-        ],
+        collections: codeCollections,
       });
       vi.stubEnv("NODE_ENV", "development");
       return t;

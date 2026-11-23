@@ -25,6 +25,10 @@ vi.mock("../stale-version", async importOriginal => ({
   changesSinceVersion: changesSince,
 }));
 
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../i18n/per-language-storage";
 import { changesSinceStartedFrom } from "../recovery-point-changes";
 
 const adapter = { dialect: "sqlite" } as never;
@@ -33,6 +37,7 @@ const CHANGED = { currentVersion: "8.en:3" };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  _resetPerLanguageStorage();
   registry.mockResolvedValue({ tableName: "dc_posts", localized: true });
   ready.mockResolvedValue(true);
   changesSince.mockResolvedValue(CHANGED);
@@ -61,6 +66,34 @@ describe("changesSinceStartedFrom", () => {
           table: "dc_posts",
           languages: { table: "dc_posts_locales", locales: ["en"] },
         },
+      })
+    );
+  });
+
+  it("judges the copy's language for a collection not marked translated, whose values are kept per language", async () => {
+    // Every installation keeps translatable values per language, so a save
+    // of an untranslated post's text moves its default language's row alone.
+    registry.mockResolvedValue({ tableName: "dc_posts", localized: false });
+    await since({ main: 7, languages: { en: 2 } });
+    expect(changesSince).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        at: {
+          table: "dc_posts",
+          languages: { table: "dc_posts_locales", locales: ["en"] },
+        },
+      })
+    );
+  });
+
+  it("judges the own row alone for an untranslated collection laid out as an earlier release kept it", async () => {
+    setPerLanguageStorage(false);
+    registry.mockResolvedValue({ tableName: "dc_posts", localized: false });
+    await since({ main: 7, languages: { en: 2 } });
+    expect(changesSince).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        at: { table: "dc_posts", languages: undefined },
       })
     );
   });

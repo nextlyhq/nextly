@@ -11,6 +11,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * A process environment holding exactly `vars`, `NODE_ENV` left out where a case leaves it unset.
+ * The declared type has `NODE_ENV` always set, which a real environment need not be, so the
+ * object is passed as that type.
+ */
+const envOf = (vars: Record<string, string | undefined>): NodeJS.ProcessEnv =>
+  vars as NodeJS.ProcessEnv;
+
 /** `process.kill`, watched and kept from killing the test's own process. */
 const watchKill = () =>
   vi.spyOn(process, "kill").mockImplementation(() => true);
@@ -28,10 +36,13 @@ describe("a stop point", () => {
   it("ignores the variable unless NODE_ENV is test, so it never stops a production run", async () => {
     const kill = watchKill();
     for (const NODE_ENV of ["production", "development", undefined]) {
-      await reachStopPoint("removed fieldGroupValues", {
-        ...(NODE_ENV === undefined ? {} : { NODE_ENV }),
-        [KILL_AT_VARIABLE]: "removed fieldGroupValues",
-      });
+      await reachStopPoint(
+        "removed fieldGroupValues",
+        envOf({
+          ...(NODE_ENV === undefined ? {} : { NODE_ENV }),
+          [KILL_AT_VARIABLE]: "removed fieldGroupValues",
+        })
+      );
     }
     expect(kill).not.toHaveBeenCalled();
   });
@@ -51,9 +62,9 @@ describe("a stop point", () => {
       point => {
         reached.push(point);
       },
-      () => reachStopPoint("inside", {})
+      () => reachStopPoint("inside", envOf({}))
     );
-    await reachStopPoint("after", {});
+    await reachStopPoint("after", envOf({}));
     expect(reached).toEqual(["inside"]);
   });
 
@@ -63,8 +74,8 @@ describe("a stop point", () => {
         if (point === "there") throw new Error("stopped there");
       },
       async () => {
-        await reachStopPoint("before", {});
-        await reachStopPoint("there", {});
+        await reachStopPoint("before", envOf({}));
+        await reachStopPoint("there", envOf({}));
       }
     ).then(
       () => undefined,

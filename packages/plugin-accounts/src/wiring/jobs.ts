@@ -54,7 +54,9 @@ export function sweepJob(sweep: (now: Date) => Promise<void>): JobDefinition {
 
 /**
  * The plugin's own queued email, read back from the job's row. Only the
- * plugin queues this job, so a check of its shape is enough.
+ * plugin queues this job, so a check of its shape is enough: every email
+ * names its account, but an invitation to an address with no account,
+ * which names none.
  */
 function isQueuedEmail(value: unknown): value is AccountsEmail {
   if (typeof value !== "object" || value === null) return false;
@@ -63,6 +65,6 @@ function isQueuedEmail(value: unknown): value is AccountsEmail {
   return (
     typeof kind === "string" &&
     typeof to === "string" &&
-    typeof accountId === "string"
+    (kind === "invitation" ? accountId === null : typeof accountId === "string")
   );
 }

@@ -102,7 +102,12 @@ const PLUGIN = definePlugin({
 
 const CONFIG = defineConfig({
   collections: [
-    defineCollection({ slug: "msp-posts", fields: [text({ name: "title" })] }),
+    // Opened to the admin preset, so its rule decides what it holds here.
+    defineCollection({
+      slug: "msp-posts",
+      fields: [text({ name: "title" })],
+      grants: { presets: ["admin"] },
+    }),
   ],
   singles: [
     defineSingle({ slug: "msp-site", fields: [text({ name: "name" })] }),
@@ -341,7 +346,11 @@ describe.each(getConfiguredTestDialects())(
         // The admin preset's set, resolved by its own rule over what is
         // stored, and named outright for the cases that decide it.
         const admin = ROLE_PRESETS.find(preset => preset.slug === "admin");
-        const expected = resolvePreset(admin!, stored)
+        // Every permission here reaches the admin preset: the collection is
+        // opened to it, and the rest are not collections.
+        const expected = resolvePreset(admin!, stored, {
+          presetsFor: () => undefined,
+        })
           .map(p => p.slug)
           .sort();
         const held = await grantsOf(adapter, "admin");

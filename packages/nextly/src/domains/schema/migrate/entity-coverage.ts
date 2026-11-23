@@ -20,6 +20,8 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import { chooseRegistryTable } from "../../field-groups/storage/resolve-storage-names";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectTableNames } from "../pipeline/diff/introspect-live";
@@ -247,8 +249,8 @@ const REGISTRIES = [
   { kind: "single", table: "dynamic_singles" },
   // A database holds the field-group registry under one of two names, as its storage migration
   // left it.
-  { kind: "fieldGroup", table: "dynamic_components" },
-  { kind: "fieldGroup", table: "dynamic_field_groups" },
+  { kind: "fieldGroup", table: STORAGE_FORMAT.registryTable },
+  { kind: "fieldGroup", table: MIGRATION_TARGET.registryTable },
 ] as const;
 
 /**

@@ -291,6 +291,70 @@ function recordModeReader(
 }
 
 /**
+ * What the file is written against for an older unique index a field that stops being unique
+ * leaves holding its column (`liveUniqueIndexes`): the database `DATABASE_URL` names, opened
+ * read-only on the first read, as the deletion counts open it, and closed by `close`. Nothing is
+ * opened for a run with no field that stops being unique. One that cannot be read within the counts'
+ * connect limit answers undefined, which the run says, and the file drops only Nextly's own index.
+ */
+function uniqueIndexReader(dialect: SupportedDialect): {
+  read: (
+    tableName: string
+  ) => Promise<ReadonlyMap<string, readonly (string | null)[]> | undefined>;
+  close: () => Promise<void>;
+} {
+  let opening: Promise<CLIDatabaseAdapter | MissingDatabase> | undefined;
+  let opened: CLIDatabaseAdapter | undefined;
+  const open = async (): Promise<CLIDatabaseAdapter | undefined> => {
+    if (opening === undefined) {
+      opening = openDryRunAdapter({ dialect });
+      const within = await Promise.race([
+        opening.then(
+          result => ("missing" in result ? undefined : result),
+          () => undefined
+        ),
+        new Promise<"timed-out">(resolve =>
+          setTimeout(() => resolve("timed-out"), COUNT_CONNECT_MS).unref()
+        ),
+      ]);
+      if (within === "timed-out") {
+        // An open that arrives late is closed, so it holds the process open no longer than it must.
+        opening.then(
+          late => ("missing" in late ? undefined : late.disconnect()),
+          () => undefined
+        );
+      } else {
+        opened = within;
+      }
+    }
+    return opened;
+  };
+  return {
+    read: async tableName => {
+      const adapter = await open();
+      if (adapter === undefined) return undefined;
+      const { readUniqueIndexesByColumn } = await import(
+        "../../domains/schema/pipeline/live-table-facts"
+      );
+      try {
+        // The CLI adapter is the Drizzle adapter its factory made, as every command that reads
+        // with it treats it.
+        return await readUniqueIndexesByColumn(
+          (adapter as unknown as DrizzleAdapter).getDrizzle(),
+          dialect,
+          tableName
+        );
+      } catch {
+        return undefined;
+      }
+    },
+    close: async () => {
+      await opened?.disconnect().catch(() => undefined);
+    },
+  };
+}
+
+/**
  * The errors a plan's own checks raise when the real run would refuse: a
  * declaration or a change the checks reject, a plugin module that may not be
  * written, and the bookkeeping `migrate:baseline` must not adopt over. A dry
@@ -844,6 +908,9 @@ export async function runMigrateCreate(
     // `--record-snapshot` records which fields are translated as the database holds them, so it reads
     // the translations tables, connecting only once it has one to check. Every other run stays offline.
     const live = recordModeReader(options.recordSnapshot, options.dryRun);
+    // An older unique index a field that stops being unique leaves holding its column is read from
+    // the database, and only then (`uniqueIndexReader`).
+    const uniques = uniqueIndexReader(dialect);
     // The deletions as judged, with their counts where the database could be read, listed again
     // once the file is written.
     let counted: readonly Deletion[] = [];
@@ -873,6 +940,7 @@ export async function runMigrateCreate(
         recordSnapshot: options.recordSnapshot === true,
         fieldGroupTransition: options.fieldGroupNames === "current",
         liveCompanionColumns: live.read,
+        liveUniqueIndexes: uniques.read,
         dryRun: options.dryRun === true,
         releaseHeldBack: options.releaseHeldBack === true,
         judgeDeletions: deletions =>
@@ -901,6 +969,7 @@ export async function runMigrateCreate(
       );
     } finally {
       await live.close();
+      await uniques.close();
     }
 
     if (result === null && options.recordSnapshot === true) {
