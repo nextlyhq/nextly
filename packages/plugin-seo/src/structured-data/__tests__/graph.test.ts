@@ -937,9 +937,30 @@ describe("a detail read from one of the entry's own dates", () => {
     ]);
   });
 
+  /** The same site, its collections with the Draft/Published lifecycle. */
+  function withLifecycle(): PluginContext {
+    const ctx = context();
+    const read = ctx.services.collections.getCollection.bind(
+      ctx.services.collections
+    );
+    return {
+      ...ctx,
+      services: {
+        ...ctx.services,
+        collections: {
+          ...ctx.services.collections,
+          getCollection: async (...args: Parameters<typeof read>) => ({
+            ...(await read(...args)),
+            status: true,
+          }),
+        },
+      },
+    } as PluginContext;
+  }
+
   it("says the first publication sets it, for the date a page was first published", async () => {
     const { problems } = await buildStructuredData(
-      context(),
+      withLifecycle(),
       postInput(undated),
       ANSWER,
       rules({
@@ -955,6 +976,33 @@ describe("a detail read from one of the entry's own dates", () => {
       expect.objectContaining({
         message: "The date published is set when the page is first published.",
         fix: "save",
+        field: "firstPublishedAt",
+      }),
+    ]);
+  });
+});
+
+describe("the first publication date, on a type without drafts and publishing", () => {
+  it("is a mapping to change, since no publication ever sets it", async () => {
+    const { publishedAt: _declared, ...undated } = POST;
+    const { problems } = await buildStructuredData(
+      context(),
+      postInput(undated),
+      ANSWER,
+      rules({
+        posts: {
+          type: "article",
+          details: {
+            article: { datePublished: "firstPublishedAt", author: "writer" },
+          },
+        },
+      })
+    );
+    expect(problems).toEqual([
+      expect.objectContaining({
+        detail: "datePublished",
+        message: "Missing: date published.",
+        fix: "mapping",
         field: "firstPublishedAt",
       }),
     ]);

@@ -15,6 +15,7 @@ import {
   addressOfRequest,
   entryDateFieldNames,
   languageAddressOf,
+  NextlyError,
   type PageMetadataAnswer,
   type PageMetadataImage,
   type PageMetadataInput,
@@ -532,23 +533,65 @@ async function fixFor(
 ): Promise<StructuredDataProblem["fix"]> {
   if (read.field === undefined)
     return detail === "image" ? "content" : "mapping";
-  // One of the entry's own dates: saving or publishing fills it, but only a detail such a date
-  // stands for is then supplied; any other detail mapped to one is a mapping to change.
-  if (isEntryDate(facts.input, read.field)) {
-    const unset = read.value === undefined || read.value === null;
-    return unset && ENTRY_DATE_DETAILS.has(detail) ? "save" : "mapping";
-  }
+  const ownDate = await entryDateFix(facts, detail, read.field, read.value);
+  if (ownDate !== undefined) return ownDate;
   return (await heldUnread(facts.ctx, facts.input, read)) ? "route" : "content";
 }
 
 /**
- * Whether `field` is one of the dates an entry holds by itself, which core
- * names (`entryDateFieldNames`): set by Nextly when the page is saved or
- * published, so an empty one is filled by doing that, not by typing.
+ * Where a detail read from one of the names core gives an entry's own dates
+ * (`entryDateFieldNames`) is fixed; nothing for any other field. Saving or
+ * publishing fills such a date, so it fixes a detail an entry date stands
+ * for (`ENTRY_DATE_DETAILS`) while the date is unset. Every other case is a
+ * mapping to change: a detail no date supplies, such as a price, or the first
+ * publication on a type without the Draft/Published lifecycle, which never
+ * sets it. The lifecycle is read only for such a name.
  */
-function isEntryDate(input: PageMetadataInput, field: string): boolean {
-  const entity = input.source.kind === "entry" ? "collection" : "single";
-  return entryDateFieldNames(entity, { statusLifecycle: true }).includes(field);
+async function entryDateFix(
+  facts: PageFacts,
+  detail: StructuredDataDetail,
+  field: string,
+  value: unknown
+): Promise<StructuredDataProblem["fix"] | undefined> {
+  const entity = facts.input.source.kind === "entry" ? "collection" : "single";
+  if (!entryDateFieldNames(entity, { statusLifecycle: true }).includes(field)) {
+    return undefined;
+  }
+  const held = entryDateFieldNames(entity, {
+    statusLifecycle: await hasStatusLifecycle(facts),
+  }).includes(field);
+  const unset = value === undefined || value === null;
+  return held && unset && ENTRY_DATE_DETAILS.has(detail) ? "save" : "mapping";
+}
+
+/**
+ * Whether the page's type has the Draft/Published lifecycle (`status: true`),
+ * as the sitemap reads it. Asked only while a missing detail is classified,
+ * so a page whose details are all present reads nothing more. A type that is
+ * gone has none.
+ */
+async function hasStatusLifecycle(facts: PageFacts): Promise<boolean> {
+  const { source } = facts.input;
+  try {
+    if (source.kind === "entry") {
+      const collection: unknown =
+        await facts.ctx.services.collections.getCollection(
+          source.collection,
+          {}
+        );
+      return isRecord(collection) && collection.status === true;
+    }
+    const singles = await facts.ctx.services.singles.list({
+      slugAllowlist: [source.slug],
+    });
+    const single: unknown = singles.data.find(
+      each => each.slug === source.slug
+    );
+    return isRecord(single) && single.status === true;
+  } catch (error) {
+    if (NextlyError.isCode(error, "NOT_FOUND")) return false;
+    throw error;
+  }
 }
 
 /**
