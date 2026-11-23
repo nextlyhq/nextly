@@ -698,7 +698,7 @@ describe.each(getConfiguredTestDialects())(
             landed = true;
           });
         await new Promise(resolve => setTimeout(resolve, 1_000));
-        expect(landed).toBe(dialect !== "mysql");
+        expect(landed).toBe(false);
 
         release();
         expect(await applying).toBe("applied");
@@ -706,6 +706,60 @@ describe.each(getConfiguredTestDialects())(
         expect(releaseFails.holds).toBe(dialect === "mysql" ? 1 : 0);
         await writing;
         expect(landed).toBe(true);
+        expect(await hasNoteColumn(t)).toBe(false);
+      },
+      60_000
+    );
+
+    // An entry write sent between a push road's count and its push, setting the field the save
+    // removes, made for the definition that still has it. On every database it waits while the
+    // save holds the collection, through the save's registry write, then is refused naming the
+    // field: never written into the field just before the push drops it uncounted, nor sent to a
+    // table the field has left.
+    it(
+      "keeps an entry write sent between a push road's count and its push waiting until the save is recorded, then refuses its value for the removed field",
+      async () => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        pushRoad.forced = true;
+        const { paused, release } = gated(afterCount);
+        const applying = apply(t, 3, REMAINING, {
+          note: { action: "confirm_drop" },
+        }).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+        const reached = await Promise.race([
+          paused.then(() => true),
+          applying.then(() => false),
+        ]);
+        expect(reached || (await applying)).toBe(true);
+
+        // Another writer's create through the Direct API, setting `note`.
+        let settled = false;
+        const writing = t.nextly
+          .create({
+            collection: SLUG,
+            data: { label: "between", note: "written after the count" },
+          })
+          .then(
+            () => "created",
+            (error: unknown) => error
+          )
+          .finally(() => {
+            settled = true;
+          });
+        await new Promise(resolve => setTimeout(resolve, 1_000));
+        expect(settled).toBe(false);
+
+        release();
+        expect(await applying).toBe("applied");
+        expect(await writing).toMatchObject({
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [expect.objectContaining({ path: "fields.note" })],
+          },
+        });
         expect(await hasNoteColumn(t)).toBe(false);
       },
       60_000
