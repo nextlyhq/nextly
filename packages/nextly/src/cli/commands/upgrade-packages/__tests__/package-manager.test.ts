@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   installArgs,
@@ -85,6 +85,21 @@ describe("what a registry's answer is read as", () => {
 });
 
 describe("a package manager's run", () => {
+  // On Windows a manager runs through a shell, which reads `<`, `>`, `(` and spaces in an argument
+  // as its own syntax, so a script whose output is read is a file, named by a path with none.
+  let scripts: string;
+  beforeAll(() => {
+    scripts = mkdtempSync(join(tmpdir(), "nextly-manager-run-"));
+  });
+  afterAll(() => {
+    rmSync(scripts, { recursive: true, force: true });
+  });
+  const script = (name: string, source: string): string => {
+    const path = join(scripts, name);
+    writeFileSync(path, source);
+    return path;
+  };
+
   it("is stopped when asked, and its end is waited for", async () => {
     const stop = new AbortController();
     const started = Date.now();
@@ -104,16 +119,13 @@ describe("a package manager's run", () => {
   }, 45_000);
 
   it("keeps the end of what was printed, not all of it", async () => {
+    const prints = script(
+      "prints.mjs",
+      "for (let i = 0; i < 4000; i++) console.error('x'.repeat(1000) + i);\nconsole.error('the last line');\n"
+    );
     const run = await runManager(
       "npm",
-      [
-        "exec",
-        "--offline",
-        "--",
-        "node",
-        "-e",
-        "for (let i = 0; i < 4000; i++) console.error('x'.repeat(1000) + i); console.error('the last line')",
-      ],
+      ["exec", "--offline", "--", "node", prints],
       process.cwd()
     );
 

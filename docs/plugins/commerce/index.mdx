@@ -44,7 +44,10 @@ production boot refuses a database that has not applied them, with
 ## The catalogue
 
 Without a `catalogue` option, commerce adds a **Products** collection to the admin and
-sells from it. Each product has a name, an optional SKU, a price and its stock:
+sells from it. The collection is open to the built-in Admin, Editor, Author and Viewer roles,
+each by its own rule (an Author does not delete, a Viewer reads);
+[`presetGrants`](/docs/permissions#the-preset-roles-reach-a-collection-only-once-it-is-opened-to-them) in the config changes that. Each product has a name, an optional SKU, a
+price and its stock:
 
 | Field        | Notes                                                                                            |
 | ------------ | ------------------------------------------------------------------------------------------------ |

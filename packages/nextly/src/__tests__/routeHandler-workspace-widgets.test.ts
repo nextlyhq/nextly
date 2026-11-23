@@ -153,6 +153,14 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
   });
 });
 
+describe("the workflows a reader's content may be held by", () => {
+  it("are said to be none where no workflow is attached", async () => {
+    // An empty list, not an absent key: the admin reads an absent key as a
+    // server that did not say, and asks every review state as it always did.
+    expect((await workspaceBody()).workflowEntities).toEqual([]);
+  });
+});
+
 afterAll(() => {
   if (ORIGINAL_DB_DIALECT === undefined) delete process.env.DB_DIALECT;
   else process.env.DB_DIALECT = ORIGINAL_DB_DIALECT;

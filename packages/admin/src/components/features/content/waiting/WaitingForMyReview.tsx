@@ -8,7 +8,7 @@
  * @experimental
  */
 
-import { Button } from "@nextlyhq/ui";
+import { Button, PageHeader } from "@nextlyhq/ui";
 import { useState, type JSX } from "react";
 
 import { Link } from "@admin/components/ui/link";
@@ -38,15 +38,11 @@ export function WaitingForMyReview(): JSX.Element {
 
   return (
     <div className="space-y-4 p-6">
-      <div>
-        <h1 className="text-xl font-semibold text-foreground">
-          Waiting for my review
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Waiting for you or for one of your roles, where you can take the next
-          step, across collections and Singles.
-        </p>
-      </div>
+      {/* The shared page header, so the title reads and looks as every page's does. */}
+      <PageHeader
+        title="Waiting for my review"
+        description="Waiting for you or for one of your roles, where you can take the next step, across collections and Singles."
+      />
 
       {/* A list that could not be read says so, never that nothing waits. */}
       {error ? (

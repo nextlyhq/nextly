@@ -25,6 +25,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { SQL } from "drizzle-orm";
 
+import {
+  declareClosedToSuperAdmin,
+  declaredClosedMarks,
+} from "../auth/access/closed-to-super-admin";
 import type {
   CollectionConfig,
   CollectionHooks,
@@ -173,6 +177,11 @@ import { consoleLogger } from "../shared/types";
 import type { SanitizedNextlyConfig } from "../shared/types/config";
 import type { SingleHooks } from "../singles/config/types";
 
+import {
+  movesHeldBack,
+  reloadedEntities,
+  withMovesHeldBack,
+} from "./code-first-moves";
 import {
   type TypeChangedEntity,
   typeChangesHeldBack,
@@ -2193,6 +2202,11 @@ async function applyReloadHolding(
   reloadUndo.push(() => {
     if (declaredPublished) restoreDeclaredEntities(previousDeclared);
   });
+  // Which collections the code closes to super-admin, likewise: published at
+  // commit, so a mark saved under `next dev` holds without a restart, and the
+  // marks in force when the reload started put back when it does not land.
+  const previousClosedMarks = declaredClosedMarks();
+  reloadUndo.push(() => declareClosedToSuperAdmin(previousClosedMarks));
   // The workflows in force when the reload started, put back if it does not
   // land, as the db options are.
   const previousWorkflows = publishedWorkflows();
@@ -2237,6 +2251,12 @@ async function applyReloadHolding(
     );
     previousDeclared = publishDeclaredEntities(newConfig);
     declaredPublished = true;
+    declareClosedToSuperAdmin(
+      (newConfig.collections ?? []) as ReadonlyArray<{
+        slug: string;
+        closedToSuperAdmin?: boolean;
+      }>
+    );
     // Published here rather than when the file is read. A reload that is later
     // refused still parsed a valid config, and publishing early would leave a
     // policy the process explicitly rejected in force — deleting on windows
@@ -2957,6 +2977,17 @@ async function applyReloadHolding(
     undoOptimisticReloadWork();
     return;
   }
+  // A field that looks moved into or out of a group is held back too, whatever the consent: the
+  // push would delete its values or leave them where nothing reads them, and only migrate:create
+  // asks whether it is a move (`movesHeldBack`). Its reasons join any the entity's type change has.
+  heldBack = withMovesHeldBack(
+    heldBack,
+    movesHeldBack([
+      ...reloadedEntities("collection", desiredCollections),
+      ...reloadedEntities("single", desiredSingles),
+      ...reloadedEntities("fieldGroup", desiredComponents),
+    ])
+  );
   for (const { kind, slug, reasons } of heldBack) {
     logger?.warn(
       `[Nextly HMR] Code-first change for ${KIND_NOUN[kind]}'${slug}' was not applied: ${reasons.join(" ")}`
@@ -3339,6 +3370,8 @@ async function applyReloadHolding(
         // F10 PR 3: HMR applies print a terminal box + write the
         // NDJSON line. Same singleton across HMR cycles.
         notifier: getProductionNotifier(),
+        // The adapter `db` belongs to: a SQLite push runs in its transaction.
+        adapter: liveAdapter,
       });
       return pipeline.apply({
         desired: desiredArg,

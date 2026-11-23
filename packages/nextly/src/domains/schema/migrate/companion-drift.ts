@@ -74,9 +74,12 @@ const keyOf = ({ entity, spec }: LocalizationMigrationIntent): string =>
 
 /**
  * Whether a companion file renames a column of its table. Its header names no column it renames,
- * so the statement is the only record of it.
+ * so the statement is the only record of it. A `retypes` file renames none: its header names each
+ * column it gives a new type, and on SQLite it renames only a column of the new type it made into
+ * that column's own place, so every column of the table keeps its name.
  */
 const renamesColumn = (file: CompanionFileRef): boolean =>
+  file.localization?.kind !== "retypes" &&
   /\bRENAME\s+COLUMN\b/i.test(file.upSql ?? "");
 
 /**
@@ -93,6 +96,10 @@ const LEFT_TO_FILE: Record<Kind, { columns: boolean; table: boolean }> = {
   shared: { columns: false, table: false },
   archive: { columns: false, table: false },
   unique: { columns: false, table: false },
+  // It changes the type of columns the table already has, and adds none: a column it names that
+  // the table lacks was taken by hand, not by a stopped run of the file, whose statements run in
+  // one transaction (SQLite, PostgreSQL) or as one statement per column (MySQL's MODIFY).
+  retypes: { columns: false, table: false },
 };
 
 /** The snapshot of the last of `files` that has one, or null when none has. */

@@ -1123,10 +1123,20 @@ describe.each(getConfiguredTestDialects())(
         seam.lock();
         const outcome = await write;
 
-        // The edit waited on the lock the write took with its first read, so
-        // the write landed first and the edit after it, the value kept.
+        // The edit waited on the lock the write took with its first read. The
+        // write's values were judged against the Single it had built, not the
+        // row it adopted, so under the lock it finds the Single moved, rolls
+        // its attempt back and is judged again in a new one. The waiting edit
+        // lands in between, and the new attempt, finding the body it expected
+        // absent now stored, is refused for that, writing nothing: the edit's
+        // value is kept.
         expect(progress).toBe("waiting");
-        expect(outcome).toBe("landed");
+        expect(outcome).toMatchObject({
+          code: "CONFLICT",
+          cause: {
+            logContext: { cause: "stored-value-changed", field: "body" },
+          },
+        });
         expect(await edit).toBe("saved");
         expect(await bodyOf("adoptrace")).toEqual({
           kind: "found",

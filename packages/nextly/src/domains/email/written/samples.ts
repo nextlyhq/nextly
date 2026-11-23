@@ -38,6 +38,61 @@ export const WRITTEN_SAMPLES: Record<string, WrittenBlock> = {
       { type: "text", text: "." },
     ],
   },
+  // One link across a bold word, across a chip and across a line break: its
+  // words are one phrase however many runs they take, so the plain text
+  // gives the address once, after them.
+  linkAcrossBold: {
+    type: "text",
+    text: [
+      { type: "text", text: "See " },
+      {
+        type: "text",
+        text: "your ",
+        link: { url: "https://shop.example/orders/1" },
+      },
+      {
+        type: "text",
+        text: "order",
+        bold: true,
+        link: { url: "https://shop.example/orders/1" },
+      },
+      { type: "text", text: " today." },
+    ],
+  },
+  linkAcrossChip: {
+    type: "text",
+    text: [
+      {
+        type: "text",
+        text: "Track order ",
+        link: { chip: { variable: "trackUrl" } },
+      },
+      {
+        type: "chip",
+        variable: "order.number",
+        fallback: "pending",
+        link: { chip: { variable: "trackUrl" } },
+      },
+      { type: "text", text: " now." },
+    ],
+  },
+  linkAcrossBreak: {
+    type: "text",
+    text: [
+      {
+        type: "text",
+        text: "Read our\n",
+        link: { url: "https://shop.example/help" },
+      },
+      {
+        type: "text",
+        text: "help pages",
+        italic: true,
+        link: { url: "https://shop.example/help" },
+      },
+      { type: "text", text: "." },
+    ],
+  },
   button: {
     type: "button",
     label: [{ type: "text", text: "View your order" }],

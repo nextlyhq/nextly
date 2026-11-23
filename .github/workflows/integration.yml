@@ -127,13 +127,20 @@ jobs:
             Integration (postgres) shard (1)
             Integration (postgres) shard (2)
             Integration (postgres) shard (3)
+            Integration (postgres) shard (4)
+            Integration (postgres) shard (5)
+            Integration (postgres) shard (6)
             Integration (mysql) shard (1)
             Integration (mysql) shard (2)
             Integration (mysql) shard (3)
             Integration (mysql) shard (4)
             Integration (mysql) shard (5)
+            Integration (mysql) shard (6)
+            Integration (mysql) shard (7)
             Integration (sqlite) shard (1)
             Integration (sqlite) shard (2)
+            Integration (sqlite) shard (3)
+            Integration (sqlite) shard (4)
           token: ${{ github.token }}
       - name: Decide
         id: decide
@@ -163,7 +170,7 @@ jobs:
     # Not a required check: `Integration (postgres)` below is, and it passes
     # only when every shard did. GitHub appends the matrix value to a name
     # with no expression in it, so the shards report as `... shard (1)` to
-    # `... shard (3)`, and a skipped run as one `... shard`.
+    # `... shard (6)`, and a skipped run as one `... shard`.
     name: Integration (postgres) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
@@ -191,12 +198,17 @@ jobs:
       # count is read from `strategy.job-total`; the `changes` job's list and
       # scripts/main-catch-up.mjs name each shard, and tests hold both to this.
       #
-      # Three, because two are not enough here: on a database per worker, two
-      # shards project to 43 minutes on the slowest run measured, inside
-      # INTEGRATION_SUITE_BUDGET but without the quarter of it every leg keeps
-      # spare (the rule is beside the sqlite leg's matrix, below).
+      # Six. The leg runs the nextly suite beside the plugin suites on one
+      # runner and one PostgreSQL server, and the slowest of three shards grew
+      # to the whole of INTEGRATION_SUITE_BUDGET: every run measured from
+      # 2026-11-20 to 11-22 had one stopped at 55 minutes short of its last
+      # files, its slowest files taking the same time on each, so no file was
+      # hanging. Five, on 744cda849f, took 31, 35, 50, 28 and 47 minutes,
+      # about 190 between them, the slowest past the quarter every leg keeps
+      # spare. Six project to about 32, and 41 at the slowest (the rule is
+      # beside the sqlite leg's matrix, below).
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5, 6]
     # A BACKSTOP now, not the bound that should ever fire.
     #
     # 25 minutes until the suite outgrew it. The MySQL leg's last GREEN run
@@ -350,7 +362,7 @@ jobs:
     # Not a required check: `Integration (mysql)` below is, and it passes
     # only when every shard did. GitHub appends the matrix value to a name
     # with no expression in it, so the shards report as `... shard (1)` to
-    # `... shard (5)`, and a skipped run as one `... shard`.
+    # `... shard (7)`, and a skipped run as one `... shard`.
     name: Integration (mysql) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
@@ -372,14 +384,17 @@ jobs:
     strategy:
       # Each shard's verdict is its own, as on the postgres leg.
       fail-fast: false
-      # Five, because three are no longer enough: the leg runs the nextly suite
-      # beside the plugin suites on one runner and one MySQL server, and each
-      # shard of three grew to about 55 minutes, the whole of
-      # INTEGRATION_SUITE_BUDGET, so a slow runner stopped every shard short of
-      # its last files. Five project to about 33, inside the quarter every leg
-      # keeps spare (the rule is beside the sqlite leg's matrix, below).
+      # Seven. Three were not enough once the leg's nextly suite and the
+      # plugin suites beside it, on one runner and one MySQL server, took
+      # about 55 minutes a shard, the whole of INTEGRATION_SUITE_BUDGET. Five
+      # were not enough a month later: nextly's integration files went from
+      # 644 (2026-10-27) to 1,338 (11-23), and on 744cda849f the five shards
+      # took 50, 45, 49 and 50 minutes, with the first stopped at 55 and 20 of
+      # its 268 nextly files to go, about 250 minutes between them. Seven
+      # project to about 36, and 41 at the slowest, inside the quarter every
+      # leg keeps spare (the rule is beside the sqlite leg's matrix, below).
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     # The same backstop as the postgres leg, for the same reasons.
     timeout-minutes: 75
 
@@ -578,8 +593,8 @@ jobs:
   integration-sqlite-shards:
     # Not a required check: `Integration (sqlite)` below is, and it passes
     # only when every shard did. GitHub appends the matrix value to a name
-    # with no expression in it, so the shards report as `... shard (1)` and
-    # `... shard (2)`, and a skipped run as one `... shard`.
+    # with no expression in it, so the shards report as `... shard (1)` to
+    # `... shard (4)`, and a skipped run as one `... shard`.
     name: Integration (sqlite) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
@@ -606,12 +621,13 @@ jobs:
       # not fire it, and stays shorter than the slowest shard of the leg that
       # finishes last, so a pull request never waits longer for a runner start
       # saved. Measured over 65 runs of this leg on two workers (2026-10-25 to
-      # 10-27), its whole suite took 22 to 40 minutes: two shards project to
-      # about 19 minutes typically and 27 at the slowest, under the postgres
-      # leg's 21 typical. One shard would fit the budget but become the slowest
-      # job of every run.
+      # 10-27), its whole suite took 22 to 40 minutes, and two shards fit. By
+      # 744cda849f nextly's integration files had gone from 644 to 1,338, and
+      # both shards were stopped at 55 minutes, one with 114 of its 669 nextly
+      # files to go and the other with 45: about 125 minutes of suite. Four
+      # project to about 31 minutes, and 36 at the slowest.
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     # The same backstop as the database legs, for the same reasons: the bound
     # that should ever fire is INTEGRATION_SUITE_BUDGET on the step, which
     # reports as a failure. It moves with its siblings so there is one rule to

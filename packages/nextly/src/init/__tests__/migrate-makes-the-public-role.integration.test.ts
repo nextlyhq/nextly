@@ -568,6 +568,10 @@ describe.each(getConfiguredTestDialects())(
     }, 240_000);
 
     it("asks a read rule in the stored languages in the first run's one commit", async () => {
+      // A site whose languages are stored in Settings alone keeps its content
+      // per language, as every installation does, rather than on the earlier
+      // layout this file's other cases run on.
+      _resetPerLanguageStorage();
       const config = storedLanguagesConfig();
       await migrateCreate("initial", config);
       asEarlierRelease();
@@ -586,6 +590,10 @@ describe.each(getConfiguredTestDialects())(
     }, 240_000);
 
     it("asks a read rule in the stored languages at a plugin's install", async () => {
+      // A site whose languages are stored in Settings alone keeps its content
+      // per language, as every installation does, rather than on the earlier
+      // layout this file's other cases run on.
+      _resetPerLanguageStorage();
       const without = storedLanguagesConfig();
       await migrateCreate("initial", without);
       await migrate(without);
@@ -639,6 +647,10 @@ describe.each(getConfiguredTestDialects())(
     }, 240_000);
 
     it("asks a read rule in the stored languages when migrations run at start", async () => {
+      // A site whose languages are stored in Settings alone keeps its content
+      // per language, as every installation does, rather than on the earlier
+      // layout this file's other cases run on.
+      _resetPerLanguageStorage();
       const site = {
         experimental: { perLanguageStorage: true },
       } as const;

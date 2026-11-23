@@ -74,8 +74,7 @@ export function storedPasswordsNotice(count: number): string | null {
 const sourceOf = (context: UpgradeStepContext) =>
   storedPasswordsOn(context.adapter as unknown as DrizzleAdapter);
 
-export const storedPasswordsStep: UpgradeStep = {
-  title: "hash passwords stored before this release",
+export const storedPasswordsWork: Pick<UpgradeStep, "pending" | "run"> = {
   pending: async context =>
     storedPasswordTotal(await countPasswordsStoredAsGiven(sourceOf(context))),
   run: async context => {

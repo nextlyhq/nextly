@@ -123,6 +123,25 @@ const configWithViews = (
     ],
   });
 
+/** A translated `title`, and a translated `price` of `priceType`. */
+const configPriced = (priceType: "text" | "number") =>
+  defineConfig({
+    localization: { locales: ["en", "es"], defaultLocale: "en" },
+    db: { migrationsDir: "./migrations" },
+    collections: [
+      defineCollection({
+        slug: SLUG,
+        localized: true,
+        fields: [
+          { name: "title", type: "text" as const, localized: true },
+          priceType === "text"
+            ? { name: "price", type: "text" as const, localized: true }
+            : { name: "price", type: "number" as const, localized: true },
+        ],
+      }),
+    ],
+  });
+
 /** Two text fields, `kept` and `moved`, each translated or not. */
 const configMoving = (keptTranslated: boolean, movedTranslated: boolean) =>
   defineConfig({
@@ -337,6 +356,53 @@ describeEachDialect(
       // Nothing applied: every file is still pending, and the new column is not there.
       expect((await pendingFiles()).map(file => file.name)).toEqual(pending);
       expect(await companionColumns()).not.toContain("summary");
+    }, 240_000);
+
+    /** `price` applied as a text, then made a number in files not yet applied: a `retypes` file and its main file. */
+    async function priceRetypedPending(): Promise<string> {
+      await migrateCreate(configPriced("text"), "posts");
+      expect((await migrate(configPriced("text"))).code).toBeUndefined();
+      // The change written a while after, as two runs are: its `retypes` file is dated just ahead
+      // of its own file, which a clock a millisecond on would put among the first run's files.
+      clock += 100;
+      await migrateCreate(configPriced("number"), "price", {
+        acceptDataLoss: true,
+      });
+      const pending = (await pendingFiles()).map(file => file.name);
+      const retypes = pending.find(name => /_retypes_localization_/.test(name));
+      expect(retypes, pending.join(", ")).toBeDefined();
+      return String(retypes);
+    }
+
+    // A translated field's type change writes its translations column's change as a companion
+    // file of its own: the check reads that file's header as about this table, so a column it
+    // retypes, taken by hand, is drift for that file before anything applies.
+    it("a column a pending retypes file changes, taken by hand, is drift for that file", async () => {
+      const retypes = await priceRetypedPending();
+      await adapter().executeQuery(
+        `ALTER TABLE ${q(COMPANION)} DROP COLUMN ${q("price")}`
+      );
+
+      const run = await migrate(configPriced("number"), {
+        acceptDataLoss: true,
+      });
+
+      expect(run.code, run.said).toBe(1);
+      expect(run.said).toContain("(MIGRATION_DRIFT)");
+      expect(run.said).toContain(retypes.replace(/\.sql$/, ""));
+      expect(run.said).toMatch(/- .*price/);
+    }, 240_000);
+
+    it("a pending retypes file over a table that matches applies, with no missing-snapshot warning", async () => {
+      await priceRetypedPending();
+
+      const run = await migrate(configPriced("number"), {
+        acceptDataLoss: true,
+      });
+
+      expect(run.code, run.said).toBeUndefined();
+      expect(run.said).not.toMatch(MISSING_SNAPSHOT);
+      expect(await pendingFiles()).toEqual([]);
     }, 240_000);
 
     /** One translated field applied, a second captured in files not yet applied. */

@@ -36,6 +36,28 @@ made assignable to roles (super-admin can always assign them). On uninstall they
 removed with the rest of your plugin's footprint — see
 [Schema & data lifecycle](/docs/plugins/schema).
 
+### The preset roles
+
+The preset roles (Admin, Editor, Author, Viewer) apply their own rules to a declared
+permission: Admin takes every plugin permission, and Viewer a plugin's `read`. A permission
+that opens private data names the presets that may hold it instead, `presets: []` for none,
+so only a role an administrator grants it to holds it (`@experimental`):
+
+```ts
+definePlugin({
+  // ...
+  contributes: {
+    permissions: [
+      { action: "access", resource: "private-records", presets: [] },
+    ],
+  },
+});
+```
+
+A collection your plugin contributes reaches no preset role until it is opened to one by
+name, by its own `grants.presets` or by the app's `presetGrants` (see
+[Roles and Permissions](/docs/permissions#the-preset-roles-reach-a-collection-only-once-it-is-opened-to-them)).
+
 ## Gate a route (server)
 
 Routes are **secure by default**. Set `requiredPermission` to the slug and the

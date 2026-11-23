@@ -28,6 +28,7 @@ import {
   type FieldGroupStorageNames,
 } from "../../field-groups/services/field-group-storage-names";
 import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
+import { refuseForkedHistory } from "../migrate/history-line";
 import {
   judgeBuilderDefinitions,
   readBuilderDefinitions,
@@ -54,8 +55,6 @@ import {
   type LatestSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
-import { refuseForkedHistory } from "../migrate/history-line";
-
 import { templateStartFor } from "./template-start";
 import { holdInBuilderChange } from "./writer-hold";
 

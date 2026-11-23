@@ -346,8 +346,8 @@ s3Storage({
 
 | Option               | Type      | Default | Description                                              |
 |----------------------|-----------|---------|----------------------------------------------------------|
-| `prefix`             | `string`  | --      | Folder prefix for this collection's uploads.             |
-| `clientUploads`      | `boolean` | `false` | Enable client-side direct uploads (bypasses serverless body limits). S3 only. The file's name, type and size are checked before the URL is signed, and the URL binds the type and exact size; SVGs always go through the standard upload. See [Media upload security](/docs/configuration/media-upload-security). |
+| `prefix`             | `string`  | --      | Folder prefix for this collection's uploads. `private` and `private/` name the same folder. |
+| `clientUploads`      | `boolean` | `false` | Enable client-side direct uploads (bypasses serverless body limits). S3 only. The file's name, type and size are checked before the URL is signed, and the URL binds the type, the exact size and the configured `cacheControl`; SVGs always go through the standard upload. Send every header the upload URL comes with, as it is: a bucket CORS rule that lists its allowed headers must allow `content-type` and `cache-control`. See [Media upload security](/docs/configuration/media-upload-security). |
 | `signedDownloads`    | `boolean` | `false` | Issue signed URLs for download.                          |
 | `signedUrlExpiresIn` | `number`  | `3600`  | Signed-URL expiry in seconds.                            |
 
