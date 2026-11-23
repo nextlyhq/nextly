@@ -551,7 +551,12 @@ async function idKeys(
   prefix: string
 ): Promise<string[]> {
   const { nextlyMeta } = loadedDialect(dialect).tables;
-  const rows = await metaRows(db, dialect, like(nextlyMeta.key, `${prefix}%`));
+  // The keys alone: each row's ids are read when its turn comes, a row at a time.
+  const rows = await querySqlRows<{ key: unknown }>(
+    db,
+    dialect,
+    sql`SELECT ${nextlyMeta.key} AS ${sql.identifier("key")} FROM ${nextlyMeta} WHERE ${like(nextlyMeta.key, `${prefix}%`)}`
+  );
   return rows
     .map(row => String(row.key))
     .filter(key => !key.endsWith(`:${HEAD}`));

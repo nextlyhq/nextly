@@ -6,7 +6,7 @@
  * Hand-written files here: one creates a translated collection and a translated Single, each with
  * a junction, and a collection that stays; a later one drops the first two. The documents of the
  * two are captured before the drop, in the file's transaction, and their deletion events recorded
- * once the file is recorded applied, in rows of at most `CHUNK` ids. A run stopped once the files
+ * once the file is recorded applied, in rows of at most 500 ids. A run stopped once the files
  * are recorded, or while it records the events, is finished by the next with nothing pending and
  * no event twice, as a real process killed there is; one stopped inside the file (PostgreSQL and
  * SQLite) removes nothing, and the next run applies the file whole. A table rebuilt in place, a
@@ -28,12 +28,10 @@ import {
   resolveDataLossConsent,
   type DataLossConsent,
 } from "../../../domains/schema/migrate/data-loss-consent";
-import {
-  captureRetiredDocuments,
-  CHUNK,
-} from "../../../domains/schema/migrate/retired-documents";
+import { captureRetiredDocuments } from "../../../domains/schema/migrate/retired-documents";
 import {
   KILL_AT_VARIABLE,
+  KILLED_AT,
   withStopPoints,
 } from "../../../domains/schema/migrate/stop-points";
 import { refuseDropsOfUsedEntities } from "../../../domains/schema/migrate/used-entity-drops";
@@ -368,9 +366,11 @@ describe.each(LOCK_DIALECTS)(
     }, 180_000);
 
     it("keeps every row of ids within a row's size, and finishes a run stopped between rows", async () => {
+      // The most ids a stored row may hold, as the capture promises it.
+      const ROW = 500;
       // `posts` holds more documents than two rows of ids.
       const many = Array.from(
-        { length: 2 * CHUNK + 1 },
+        { length: 2 * ROW + 1 },
         (_, n) => `m${String(n).padStart(5, "0")}`
       );
       for (let at = 0; at < many.length; at += 100) {
@@ -396,18 +396,17 @@ describe.each(LOCK_DIALECTS)(
       );
       expect(stopped).toBeDefined();
       const stored = await captureRows();
-      expect(Math.max(...stored.map(row => row.ids))).toBeLessThanOrEqual(
-        CHUNK
-      );
+      expect(Math.max(...stored.map(row => row.ids))).toBeLessThanOrEqual(ROW);
       expect(
         Object.keys(await deletionsOf("collection", "posts"))
-      ).toHaveLength(CHUNK);
+      ).toHaveLength(ROW);
 
       await migrate();
 
-      const deletions = await deletionsOf("collection", "posts");
-      expect(Object.keys(deletions)).toHaveLength(many.length + 2);
-      expect(Object.values(deletions).every(count => count === 1)).toBe(true);
+      // Every document, each once, and no other.
+      expect(await deletionsOf("collection", "posts")).toEqual(
+        Object.fromEntries(["e1", "e2", ...many].map(id => [id, 1]))
+      );
       expect(await deletionsOf("single", "home")).toEqual(EACH_ONCE);
       expect(await captures()).toBe(0);
     }, 300_000);
@@ -1020,7 +1019,8 @@ describe.each(LOCK_DIALECTS)(
         ]) {
           const killed = await migrateProcess(at);
           const seen = `${at}\n${killed.stdout}\n${killed.stderr}`;
-          expect(killed.status, seen).not.toBe(0);
+          // Killed at the point named, not ended any other way.
+          expect(killed.stderr, seen).toContain(`${KILLED_AT}${at}\n`);
           // Killed with the file recorded: its tables gone, no event recorded, no ledger row added.
           expect(await adapter.tableExists(posts), seen).toBe(false);
           expect(await deletionsOf("collection", "posts"), seen).toEqual({});
@@ -1049,7 +1049,9 @@ describe.each(LOCK_DIALECTS)(
         const name = dropBoth();
         const killed = await migrateProcess(`${name}: after statement 5`);
         const said = `${killed.stdout}\n${killed.stderr}`;
-        expect(killed.status, said).not.toBe(0);
+        expect(killed.stderr, said).toContain(
+          `${KILLED_AT}${name}: after statement 5\n`
+        );
         // The file rolled back, the capture with it.
         expect(await adapter.tableExists(posts), said).toBe(true);
         expect(await captures(), said).toBe(0);
@@ -1132,7 +1134,8 @@ describe.each(LOCK_DIALECTS)(
         (error: unknown) => error
       );
       expect(stopped).toBeDefined();
-      const deps = await downDatabaseDeps({ adapter, dialect, logger });
+      // With no logger, as a plugin's uninstall rolls back: the settling is there all the same.
+      const deps = await downDatabaseDeps({ adapter, dialect });
       expect(deps.settleRetirements).toBeDefined();
 
       await eventsAway();

@@ -1331,14 +1331,22 @@ interface ResolvedDownOptions extends MigrateDownCommandOptions {
  * no owner rows, as it does for `nextly migrate`'s own guard, and has no
  * owner rows for a schema version to be written onto.
  */
-/** The step recording what earlier runs left to record (`settleRetirements`); none without a logger. */
+/** Where a rollback run without a logger (a plugin's uninstall) says what it records: nowhere. */
+const QUIET: ReconcileLogger = {
+  info: () => undefined,
+  warn: () => undefined,
+  debug: () => undefined,
+};
+
+/**
+ * The step recording what earlier runs left to record (`settleRetirements`), with or without a
+ * logger: an UP's capture a DOWN would lose is settled whoever rolls back.
+ */
 function settlerOf(
   adapter: DrizzleAdapter,
-  logger: ReconcileLogger | undefined
-): (() => Promise<void>) | undefined {
-  return logger === undefined
-    ? undefined
-    : () => settleRetiredDocumentEvents({ adapter, logger }, "up");
+  logger: ReconcileLogger = QUIET
+): () => Promise<void> {
+  return () => settleRetiredDocumentEvents({ adapter, logger }, "up");
 }
 
 /**
@@ -1516,18 +1524,16 @@ export async function downDatabaseDeps(args: {
       // The documents of an entity the DOWN dropped end with their events, now it is rolled back.
       // After the DOWN's commit: nothing here may report it failed, so what cannot be recorded now
       // is said and left for the next run, which records it before it applies a file.
-      const { logger } = args;
-      if (logger !== undefined) {
-        await deletionEventsOfRetiredDocuments({ adapter, logger }).catch(
-          (error: unknown) => {
-            logger.warn(
-              `${unit.source} is rolled back; the deletion events of what it dropped were not recorded (${
-                error instanceof Error ? error.message : String(error)
-              }). The next \`nextly migrate\` records them.`
-            );
-          }
-        );
-      }
+      const logger = args.logger ?? QUIET;
+      await deletionEventsOfRetiredDocuments({ adapter, logger }).catch(
+        (error: unknown) => {
+          logger.warn(
+            `${unit.source} is rolled back; the deletion events of what it dropped were not recorded (${
+              error instanceof Error ? error.message : String(error)
+            }). The next \`nextly migrate\` records them.`
+          );
+        }
+      );
       return ran;
     },
     recordRolledBack: async (filename, handle) => {

@@ -12,6 +12,8 @@
  * @module domains/schema/migrate/stop-points
  */
 
+import { writeSync } from "node:fs";
+
 import { NextlyError } from "../../../errors/nextly-error";
 import { isSchemaLockLost } from "../pipeline/schema-lock";
 
@@ -20,6 +22,9 @@ export type StopPointHook = (point: string) => void | Promise<void>;
 
 /** The variable naming the point where a `nextly migrate` process run by a test kills itself. */
 export const KILL_AT_VARIABLE = "NEXTLY_TEST_KILL_AT";
+
+/** What such a process writes to standard error, before the point's name, as it kills itself. */
+export const KILLED_AT = "nextly test: killed at ";
 
 let installed: StopPointHook | undefined;
 
@@ -71,6 +76,8 @@ export async function reachStopPoint(
     });
   }
   if (env.NODE_ENV === "test" && env[KILL_AT_VARIABLE] === point) {
+    // Said first, written through at once, so the test tells this kill from any other ending.
+    writeSync(2, `${KILLED_AT}${point}\n`);
     process.kill(process.pid, "SIGKILL");
   }
 }
