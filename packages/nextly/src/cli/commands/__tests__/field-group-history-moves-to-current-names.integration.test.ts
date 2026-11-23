@@ -529,9 +529,10 @@ describe.each(getConfiguredTestDialects())(
     });
 
     // A release before the naming record could write a snapshot on the current names after the
-    // storage moved, with nothing in it to say so. Read as legacy, the next file would drop the fg_
-    // tables and create comp_ copies: it is refused, naming the re-baseline, and nothing is written.
-    it("refuses an unmarked snapshot an earlier release wrote on the current names, pointing at a baseline", async () => {
+    // storage moved, with nothing in it to say so. Its field-group tables hold the current type
+    // column, which only a moved database has: it is read as on the current names, and the next
+    // file is planned against the fg_ tables rather than dropping them for comp_ copies.
+    it("reads an unmarked snapshot an earlier release wrote on the current names as current", async () => {
       const url = await legacyProject();
       await migrateStorage(dialect, url);
       expect(
@@ -548,18 +549,14 @@ describe.each(getConfiguredTestDialects())(
       writeFileSync(snapshot, JSON.stringify(file, null, 2));
       loaded.config = configOf(WITH_SUBTITLE);
 
-      const refused = await create("add_subtitle");
+      const edit = await create("add_subtitle");
 
-      expect(refused.exit, refused.said).not.toBeUndefined();
-      expect(refused.said).toContain(
-        "keeps field groups under the current names (fg_fh_card with _field_group_type) and does not record that it does"
-      );
-      expect(refused.said).toContain("nextly migrate:baseline");
-      expect(
-        readdirSync(join(dir, "migrations")).filter(f =>
-          f.endsWith("_add_subtitle.sql")
-        )
-      ).toEqual([]);
+      expect(edit.exit, edit.said).toBeUndefined();
+      const editSql = await readFile(written("add_subtitle").sql, "utf-8");
+      expect(editSql).toMatch(/fg_fh_card/);
+      expect(editSql).not.toMatch(/comp_fh_card/);
+      const applied = await migrate();
+      expect(applied.exit, applied.said).toBeUndefined();
     });
 
     // A field group an earlier release created after the move keeps the legacy type column, and

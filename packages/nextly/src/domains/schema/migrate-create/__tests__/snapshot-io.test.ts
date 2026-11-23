@@ -253,10 +253,10 @@ describe("snapshot-io", () => {
     });
 
     // A release before the record could write the current names into a version 1 snapshot after
-    // the site's storage moved. Read as legacy, it would plan a drop of each fg_ table.
-    it("refuses an unmarked snapshot that records the current type column", () => {
-      let thrown: unknown;
-      try {
+    // the site's storage moved. Only a moved database's field-group tables hold the current type
+    // column, so such a snapshot is on the current names, and is read so.
+    it("reads an unmarked snapshot whose field-group tables hold the current type column as current", () => {
+      expect(
         snapshotFieldGroupNaming({
           migration: "20261101_120000_000_add_banner",
           snapshot: {
@@ -273,6 +273,41 @@ describe("snapshot-io", () => {
               },
             ],
           } as never,
+        })
+      ).toBe("current");
+    });
+
+    // A slug-derived legacy table beside them cannot be on the same names: no reading of the
+    // snapshot plans against the tables the database holds, so it is refused.
+    it("refuses an unmarked snapshot that holds field groups under both namings", () => {
+      let thrown: unknown;
+      try {
+        snapshotFieldGroupNaming({
+          migration: "20261101_120000_000_add_banner",
+          snapshot: {
+            tables: [
+              {
+                name: "fg_banner",
+                columns: [
+                  { name: "_parent_id", type: "text", nullable: false },
+                  { name: "_parent_table", type: "text", nullable: false },
+                  { name: "_parent_field", type: "text", nullable: false },
+                  { name: "_order", type: "integer", nullable: false },
+                  { name: "_field_group_type", type: "text", nullable: true },
+                ],
+              },
+              {
+                name: "comp_card",
+                columns: [
+                  { name: "_parent_id", type: "text", nullable: false },
+                  { name: "_parent_table", type: "text", nullable: false },
+                  { name: "_parent_field", type: "text", nullable: false },
+                  { name: "_order", type: "integer", nullable: false },
+                  { name: "_component_type", type: "text", nullable: true },
+                ],
+              },
+            ],
+          } as never,
         });
       } catch (error) {
         thrown = error;
@@ -280,7 +315,8 @@ describe("snapshot-io", () => {
       expect((thrown as { logContext?: unknown }).logContext).toMatchObject({
         reason: "field-group-history-names-unrecorded",
         migration: "20261101_120000_000_add_banner",
-        tables: ["fg_banner"],
+        current: ["fg_banner"],
+        legacy: ["comp_card"],
       });
     });
 
