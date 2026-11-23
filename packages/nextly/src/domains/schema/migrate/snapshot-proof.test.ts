@@ -1758,6 +1758,23 @@ describe("what a hand-made database can hold under the names a file writes", () 
         'ALTER TABLE "dc_posts" ADD CONSTRAINT "u" UNIQUE NULLS NOT DISTINCT ("slug")',
         "postgresql",
       ],
+      // The same key declared on its column, in a body or added with the column.
+      [
+        'CREATE TABLE "dc_posts" ("id" text PRIMARY KEY, "slug" text UNIQUE NULLS NOT DISTINCT)',
+        "postgresql",
+      ],
+      [
+        'ALTER TABLE "dc_posts" ADD COLUMN "slug" text UNIQUE NULLS NOT DISTINCT',
+        "postgresql",
+      ],
+      [
+        'ALTER TABLE "dc_posts" ADD COLUMN "slug" text CONSTRAINT "u" UNIQUE NULLS NOT DISTINCT',
+        "postgresql",
+      ],
+      [
+        'CREATE TABLE "dc_posts" ("id" integer PRIMARY KEY DESC, "slug" text)',
+        "sqlite",
+      ],
     ];
     expect(unshown.filter(([s, d]) => shown(s, d))).toEqual([]);
     // A plain key stays shown on every road and dialect.
@@ -1774,6 +1791,21 @@ describe("what a hand-made database can hold under the names a file writes", () 
         'ALTER TABLE "dc_posts" ADD CONSTRAINT "u" UNIQUE ("slug")',
         "postgresql",
       ],
+      // Plain keys on their column, and a column PostgreSQL lets be named `exclude`.
+      [
+        'CREATE TABLE "dc_posts" ("id" text PRIMARY KEY, "slug" text UNIQUE NOT NULL)',
+        "postgresql",
+      ],
+      [
+        'CREATE TABLE "dc_posts" ("id" integer PRIMARY KEY AUTOINCREMENT, "slug" text)',
+        "sqlite",
+      ],
+      ['ALTER TABLE "dc_posts" ADD COLUMN "slug" text UNIQUE', "postgresql"],
+      [
+        'CREATE TABLE "dc_posts" ("id" text PRIMARY KEY, exclude text)',
+        "postgresql",
+      ],
+      ['ALTER TABLE "dc_posts" ADD exclude boolean', "postgresql"],
     ];
     expect(plain.filter(([s, d]) => !shown(s, d))).toEqual([]);
   });
@@ -1789,6 +1821,8 @@ describe("what a hand-made database can hold under the names a file writes", () 
       "ALTER TABLE `dc_posts` ADD INDEX nulls (`slug`(191))",
       "ALTER TABLE `dc_posts` ADD UNIQUE KEY nulls (`slug`(191))",
       "ALTER TABLE `dc_posts` ADD CONSTRAINT `u` UNIQUE INDEX nulls (`slug`(191))",
+      // A foreign key's own index may be named too.
+      "ALTER TABLE `dc_posts` ADD CONSTRAINT `fk` FOREIGN KEY nulls (`title`) REFERENCES `dc_posts` (`id`)",
     ];
     expect(named.filter(statement => !shown(statement, "mysql"))).toEqual([]);
     // What follows the name is still read.
@@ -1796,6 +1830,8 @@ describe("what a hand-made database can hold under the names a file writes", () 
       create("INDEX nulls (`slug` DESC)"),
       "ALTER TABLE `dc_posts` ADD INDEX nulls USING HASH (`slug`)",
       "ALTER TABLE `dc_posts` ADD CONSTRAINT `u` UNIQUE nulls (`slug` DESC)",
+      // `CONSTRAINT` with no name before the key it opens.
+      create("CONSTRAINT UNIQUE (`slug` DESC)"),
     ];
     expect(stating.filter(statement => shown(statement, "mysql"))).toEqual([]);
   });

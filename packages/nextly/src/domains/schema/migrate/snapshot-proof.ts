@@ -691,14 +691,24 @@ function mysqlIndexElement(
   clause: StatementCursor,
   table: string
 ): NamedObject[] {
-  const unique = clause.accept("UNIQUE");
-  const index = clause.accept("INDEX") || clause.accept("KEY");
-  if (!unique && !index) return [];
-  const name = clause.name();
-  return name === undefined
+  const { kinds, name } = indexHeadOf(clause, "mysql");
+  const plain =
+    kinds.length > 0 && kinds.every(kind => MYSQL_NAMED_INDEX_KINDS.has(kind));
+  return !plain || name === undefined
     ? []
-    : [{ kind: "index", table, name, tail: clause.rest(), unique }];
+    : [
+        {
+          kind: "index",
+          table,
+          name,
+          tail: clause.rest(),
+          unique: kinds.includes("UNIQUE"),
+        },
+      ];
 }
+
+/** The kind words of a MySQL index asked about by its name: a plain or unique index or key. */
+const MYSQL_NAMED_INDEX_KINDS = new Set(["UNIQUE", "INDEX", "KEY"]);
 
 /** The index a `CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] n ON [ONLY] t` creates. */
 function createdIndexOf(
@@ -1538,7 +1548,12 @@ function statementShown(statement: string, file: FileContext): boolean {
   const cursor = cursorOf(statement, file.dialect, EXACT);
   const reader = STATEMENT_READERS.find(([words]) => cursor.accept(...words));
   if (reader !== undefined) return reader[1](cursor, file, statement);
-  if (cursor.accept("ALTER", "TABLE")) return alterTableShown(cursor, file);
+  if (cursor.accept("ALTER", "TABLE")) {
+    return (
+      alterTableShown(cursor, file) &&
+      !addsColumnKeyStatingMore(statement, file.dialect)
+    );
+  }
   return isSessionSetting(cursor, file.dialect);
 }
 
@@ -1582,6 +1597,7 @@ const UNRECORDED_INDEX_KINDS = new Set(["FULLTEXT", "SPATIAL", "EXCLUDE"]);
 
 /** Words naming an index's kind, before its name and definition. */
 const INDEX_KIND_WORDS = new Set([
+  "FOREIGN",
   "UNIQUE",
   "PRIMARY",
   "KEY",
@@ -1600,8 +1616,40 @@ function declaresIndexBeyondSnapshot(
   statement: string,
   dialect: SupportedDialect
 ): boolean {
-  return (createdBodyOf(statement, dialect)?.clauses ?? []).some(clause =>
-    tableIndexStatesMore(clause, dialect)
+  const elements = createdBodyOf(statement, dialect)?.clauses ?? [];
+  return (
+    elements.some(clause => tableIndexStatesMore(clause, dialect)) ||
+    columnDefinitions(statement, dialect).some(([, definition]) =>
+      columnKeyStatesMore(definition)
+    )
+  );
+}
+
+/**
+ * Whether a column's definition declares on the column a unique or primary key that states a
+ * direction, a NULL order (`NULLS NOT DISTINCT`) or a method: `c text UNIQUE NULLS NOT DISTINCT`,
+ * SQLite's `id integer PRIMARY KEY DESC`. Each key's words run from its kind to the column's next
+ * constraint.
+ */
+function columnKeyStatesMore(definition: readonly StatementToken[]): boolean {
+  const opened = topLevelPositions(definition, at =>
+    opensColumnConstraint(definition, at)
+  );
+  return opened.some((at, k) => {
+    const kind = definition[at];
+    if (kind !== "UNIQUE" && kind !== "PRIMARY") return false;
+    const end = opened[k + 1] ?? definition.length;
+    return statesIndexOrder(definition.slice(at + 1, end));
+  });
+}
+
+/** Whether a statement adds a column whose definition declares such a key (`columnKeyStatesMore`). */
+function addsColumnKeyStatingMore(
+  statement: string,
+  dialect: SupportedDialect
+): boolean {
+  return columnsAdded(statement, dialect).some(([, , definition]) =>
+    columnKeyStatesMore(definition)
   );
 }
 
@@ -1614,15 +1662,42 @@ function tableIndexStatesMore(
   clause: StatementCursor,
   dialect: SupportedDialect
 ): boolean {
-  if (clause.accept("CONSTRAINT")) clause.name();
-  const opens = clause.peek();
-  if (typeof opens !== "string" || !TABLE_INDEX_WORDS[dialect].has(opens)) {
-    return false;
-  }
+  if (clause.accept("CONSTRAINT")) skipConstraintName(clause);
+  const opens = tableIndexOpening(clause, dialect);
+  if (opens === undefined) return false;
   return (
     UNRECORDED_INDEX_KINDS.has(opens) ||
     statesIndexOrder(indexDefinitionOf(clause, dialect))
   );
+}
+
+/**
+ * The word a table element opens with where it is an index, key or exclusion on `dialect`, or
+ * undefined for a column. PostgreSQL lets a column be named `exclude`: an exclusion is
+ * `EXCLUDE USING ...` or `EXCLUDE (...)`.
+ */
+function tableIndexOpening(
+  clause: StatementCursor,
+  dialect: SupportedDialect
+): string | undefined {
+  const opens = clause.peek();
+  if (typeof opens !== "string" || !TABLE_INDEX_WORDS[dialect].has(opens)) {
+    return undefined;
+  }
+  const after = clause.peek(1);
+  if (opens === "EXCLUDE" && after !== "USING" && after !== "(") {
+    return undefined;
+  }
+  return opens;
+}
+
+/**
+ * Reads past the name after `CONSTRAINT`, where there is one: MySQL lets it be left out
+ * (`CONSTRAINT UNIQUE (c)`), so a kind word next is the key's own unless another kind word
+ * follows it.
+ */
+function skipConstraintName(clause: StatementCursor): void {
+  if (!isIndexKind(clause.peek()) || isIndexKind(clause.peek(1))) clause.name();
 }
 
 /**
@@ -1635,18 +1710,30 @@ function indexDefinitionOf(
   clause: StatementCursor,
   dialect: SupportedDialect
 ): StatementToken[] {
-  let kinds = 0;
+  indexHeadOf(clause, dialect);
+  return clause.rest();
+}
+
+/**
+ * Reads an index's kind words and, on MySQL, the index's own optional name after them
+ * (`UNIQUE KEY n`, `FOREIGN KEY n`): the one reading of both, for the named-object reader and the
+ * definition reader alike. The name is undefined where none is written.
+ */
+function indexHeadOf(
+  clause: StatementCursor,
+  dialect: SupportedDialect
+): { kinds: string[]; name?: string } {
+  const kinds: string[] = [];
   for (let next = clause.peek(); isIndexKind(next); next = clause.peek()) {
     clause.accept(next);
-    kinds += 1;
+    kinds.push(next);
   }
   const named =
     dialect === "mysql" &&
-    kinds > 0 &&
+    kinds.length > 0 &&
     clause.peek() !== "(" &&
     !clause.isWord("USING");
-  if (named) clause.name();
-  return clause.rest();
+  return { kinds, name: named ? clause.name() : undefined };
 }
 
 /** Whether a token is a word naming an index's kind (`INDEX_KIND_WORDS`). */

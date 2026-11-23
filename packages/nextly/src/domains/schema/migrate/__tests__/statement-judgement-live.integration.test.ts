@@ -532,6 +532,10 @@ describe.each(LOCK_DIALECTS)(
         for (const [table, key] of [
           [`${P}_tablekey`, "PRIMARY KEY (id AUTOINCREMENT)"],
           [`${P}_tablekeyd`, "PRIMARY KEY (id DESC AUTOINCREMENT)"],
+          [
+            `${P}_tablekeyc`,
+            "PRIMARY KEY (id COLLATE BINARY DESC AUTOINCREMENT)",
+          ],
         ] as const) {
           await adapter.executeQuery(
             `CREATE TABLE ${table} (id INTEGER, label text, ${key})`
