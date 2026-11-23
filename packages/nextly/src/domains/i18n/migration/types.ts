@@ -158,6 +158,13 @@ export interface CompanionMigrationSpec {
    */
   unique?: { field: string; column: string }[];
   /**
+   * The translated fields a `retypes` file gives a new column type, each with its companion
+   * column, whose new type `columns` records. Recorded so `nextly migrate` knows the change it is
+   * judging carries its translations column, and judges each language's value before it runs.
+   * Present only on a `retypes` file.
+   */
+  retyped?: { field: string; column: string }[];
+  /**
    * The settings fields leaving translation take on once their default language's values are on
    * the main table: the Required ones, and those a one-column unique index covers, each with its
    * companion column. Recorded so `nextly migrate` can refuse the move, before its first file runs,
