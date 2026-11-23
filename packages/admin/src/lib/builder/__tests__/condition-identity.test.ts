@@ -323,7 +323,7 @@ describe("a condition a type change leaves comparing in a way its source can't",
   it("an older equality condition on a checkbox is not broken", () => {
     const broken = brokenConditions([
       field("teaser", {
-        admin: { condition: { field: "featured", equals: true } },
+        admin: { condition: { field: "featured", equals: "true" } },
       }),
       field("featured", { type: "checkbox" }),
     ]);

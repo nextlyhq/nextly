@@ -19,6 +19,7 @@ import type { JSX, ReactNode } from "react";
 import { useMemo } from "react";
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
+import { SavedFieldsProvider } from "@admin/components/field-ui/settings-panel/saved-fields-context";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
@@ -171,10 +172,11 @@ export function BuilderPageLayout(props: Props): JSX.Element {
       ...builderFieldErrors(
         builder.fields.filter(field => !field.isSystem),
         builder.fields,
-        refusedMoves
+        refusedMoves,
+        pending.saved
       ).keys(),
     ],
-    [builder.fields, refusedMoves]
+    [builder.fields, refusedMoves, pending.saved]
   );
   // While changes are pending, every way out asks first: an in-app link, the
   // field group's editor, the browser's back, a reload and closing the tab.
@@ -209,7 +211,10 @@ export function BuilderPageLayout(props: Props): JSX.Element {
         />
         {/* The field's row and its settings read the refused moves from here. */}
         <RefusedMovesProvider value={refusedMoves}>
-          <BuilderWorkspace {...props} />
+          {/* The panel's conditions are judged against the saved definition too. */}
+          <SavedFieldsProvider value={pending.saved}>
+            <BuilderWorkspace {...props} />
+          </SavedFieldsProvider>
         </RefusedMovesProvider>
 
         <BuilderOverlays
