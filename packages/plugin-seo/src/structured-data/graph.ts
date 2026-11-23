@@ -13,7 +13,9 @@
  */
 import {
   addressOfRequest,
+  entryDateFieldNames,
   languageAddressOf,
+  NextlyError,
   type PageMetadataAnswer,
   type PageMetadataImage,
   type PageMetadataInput,
@@ -31,6 +33,8 @@ import { TITLE_FIELDS } from "../settings/patterns";
 
 import {
   DETAIL_LABELS,
+  ENTRY_DATE_DETAILS,
+  isSaveStamp,
   isStructuredDataTypeKey,
   REVIEWED_ITEM_TYPES,
   STRUCTURED_DATA_TYPES,
@@ -84,10 +88,11 @@ export interface StructuredDataProblem {
    * Where it is fixed: on the page (`content`, the field is empty), in the
    * content type's mapping (`mapping`, no field holds it), by the route
    * (`route`, it reads the relationship holding it without the entry it
-   * names, as at `depth: 0`), or in the SEO settings (`settings`, the site's
-   * address).
+   * names, as at `depth: 0`), in the SEO settings (`settings`, the site's
+   * address), or by saving or publishing the page (`save`, the field is one
+   * of the entry's own dates, which Nextly sets and nobody types).
    */
-  fix: "content" | "mapping" | "route" | "settings";
+  fix: "content" | "mapping" | "route" | "settings" | "save";
   /** The page's field the detail is read from, where one is. */
   field?: string;
 }
@@ -528,7 +533,80 @@ async function fixFor(
 ): Promise<StructuredDataProblem["fix"]> {
   if (read.field === undefined)
     return detail === "image" ? "content" : "mapping";
+  const ownDate = await entryDateFix(facts, detail, read.field, read.value);
+  if (ownDate !== undefined) return ownDate;
   return (await heldUnread(facts.ctx, facts.input, read)) ? "route" : "content";
+}
+
+/**
+ * Where a detail read from one of the names core gives an entry's own dates
+ * (`entryDateFieldNames`) is fixed; nothing for any other field. Saving or
+ * publishing fills such a date, so it fixes a detail an entry date stands
+ * for (`ENTRY_DATE_DETAILS`) while the date is unset. Every other case is a
+ * mapping to change: a detail no date supplies, such as a price, or the first
+ * publication on a type without the Draft/Published lifecycle, which never
+ * sets it. The lifecycle is read only for such a name.
+ */
+async function entryDateFix(
+  facts: PageFacts,
+  detail: StructuredDataDetail,
+  field: string,
+  value: unknown
+): Promise<StructuredDataProblem["fix"] | undefined> {
+  const entity = facts.input.source.kind === "entry" ? "collection" : "single";
+  if (!entryDateFieldNames(entity, { statusLifecycle: true }).includes(field)) {
+    return undefined;
+  }
+  const held = entryDateFieldNames(entity, {
+    statusLifecycle: await hasStatusLifecycle(facts),
+  }).includes(field);
+  const unset = value === undefined || value === null;
+  return held && unset && ENTRY_DATE_DETAILS.has(detail) ? "save" : "mapping";
+}
+
+/**
+ * Whether the page's type has the Draft/Published lifecycle (`status: true`),
+ * as the sitemap reads it. Asked only while a missing detail is classified,
+ * so a page whose details are all present reads nothing more. A type that is
+ * gone has none.
+ */
+async function hasStatusLifecycle(facts: PageFacts): Promise<boolean> {
+  const { source } = facts.input;
+  try {
+    if (source.kind === "entry") {
+      const collection: unknown =
+        await facts.ctx.services.collections.getCollection(
+          source.collection,
+          {}
+        );
+      return isRecord(collection) && collection.status === true;
+    }
+    const singles = await facts.ctx.services.singles.list({
+      slugAllowlist: [source.slug],
+    });
+    const single: unknown = singles.data.find(
+      each => each.slug === source.slug
+    );
+    return isRecord(single) && single.status === true;
+  } catch (error) {
+    if (NextlyError.isCode(error, "NOT_FOUND")) return false;
+    throw error;
+  }
+}
+
+/**
+ * What a problem says of a missing detail: that it is missing, or, for one
+ * of the entry's own dates, when Nextly sets it, since nothing on the page
+ * can be filled in.
+ */
+function missingMessage(
+  detail: StructuredDataDetail,
+  fix: StructuredDataProblem["fix"],
+  field: string | undefined
+): string {
+  if (fix !== "save") return `Missing: ${DETAIL_LABELS[detail]}.`;
+  const when = field === "firstPublishedAt" ? "first published" : "first saved";
+  return `The ${DETAIL_LABELS[detail]} is set when the page is ${when}.`;
 }
 
 /** The details a type is described with, and the ones it is missing. */
@@ -551,23 +629,16 @@ async function detailsOf(
       continue;
     }
     if (!needs.includes(detail)) continue;
+    const fix = await fixFor(facts, detail, read);
     missing.push({
       type,
       detail,
-      message: `Missing: ${DETAIL_LABELS[detail]}.`,
-      fix: await fixFor(facts, detail, read),
+      message: missingMessage(detail, fix, read.field),
+      fix,
       ...(read.field === undefined ? {} : { field: read.field }),
     });
   }
   return { values, missing };
-}
-
-/**
- * Whether `field` is the row's own save stamp, which every save moves, an
- * SEO-only one included: not a date a page's content changed.
- */
-function isSaveStamp(field: string): boolean {
-  return field.toLowerCase().replace(/[^a-z0-9]/g, "") === "updatedat";
 }
 
 /**
