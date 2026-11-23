@@ -26,7 +26,13 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import type { CollectionService } from "../../../collections/services/collection-service";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
+import { perLanguageStorageSuite } from "../../../../__tests__/storage-layout";
 import { withStopPoints } from "../../migrate/stop-points";
+
+// Written for per-language storage as every installation runs it (`storage-layout`). The moved fields
+// are shared, kept on the entry's own row in every language: a translated field's move goes through
+// its language table, which these statements do not cover.
+perLanguageStorageSuite();
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const SLUG = "mhw_posts";
@@ -34,7 +40,7 @@ const SLUG = "mhw_posts";
 type Field = Record<string, unknown>;
 
 const NOTE: Field = { name: "note", type: "text" };
-const SUMMARY: Field = { name: "summary", type: "text" };
+const SUMMARY: Field = { name: "summary", type: "text", localized: false };
 const group = (fields: Field[]): Field => ({
   name: "meta",
   type: "group",
