@@ -1425,10 +1425,25 @@ describe("what a hand-made database can hold under the names a file writes", () 
         { deferrability: "deferred" },
         "shown",
       ],
-      [CREATE_KEY(""), "postgresql", { deferrability: "immediate" }, "not-done"],
+      [
+        CREATE_KEY(""),
+        "postgresql",
+        { deferrability: "immediate" },
+        "not-done",
+      ],
       [CREATE_KEY(""), "postgresql", { deferrability: "not" }, "shown"],
-      [ADD_KEY(" DEFERRABLE"), "postgresql", { deferrability: "not" }, "not-done"],
-      [ADD_KEY(" DEFERRABLE"), "postgresql", { deferrability: "immediate" }, "shown"],
+      [
+        ADD_KEY(" DEFERRABLE"),
+        "postgresql",
+        { deferrability: "not" },
+        "not-done",
+      ],
+      [
+        ADD_KEY(" DEFERRABLE"),
+        "postgresql",
+        { deferrability: "immediate" },
+        "shown",
+      ],
       // Words of the column's next constraint are not the key's: SET NULL is its action.
       [
         ADD_KEY(" ON DELETE SET NULL DEFERRABLE"),
@@ -1460,18 +1475,20 @@ describe("what a hand-made database can hold under the names a file writes", () 
       "ALTER TABLE `dc_posts` DROP KEY `dc_posts_title_ck`",
       "ALTER TABLE `dc_posts` DROP FOREIGN KEY `dc_posts_title_ck`",
     ]) {
-      expect(await one(CHECK, "mysql", { enforced: false }, [later]), later).toBe(
-        "not-done"
-      );
+      expect(
+        await one(CHECK, "mysql", { enforced: false }, [later]),
+        later
+      ).toBe("not-done");
     }
     // A drop of its own kind ends it, a drop of any constraint included.
     for (const later of [
       "ALTER TABLE `dc_posts` DROP CHECK `dc_posts_title_ck`",
       "ALTER TABLE `dc_posts` DROP CONSTRAINT `dc_posts_title_ck`",
     ]) {
-      expect(await one(CHECK, "mysql", { enforced: false }, [later]), later).toBe(
-        "shown"
-      );
+      expect(
+        await one(CHECK, "mysql", { enforced: false }, [later]),
+        later
+      ).toBe("shown");
     }
     // PostgreSQL: an index of a foreign key's name is another object.
     const KEY =

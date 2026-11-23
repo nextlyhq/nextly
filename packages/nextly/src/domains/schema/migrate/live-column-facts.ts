@@ -432,8 +432,7 @@ function declaresAutoincrement(createSql: unknown): boolean {
   if (typeof createSql !== "string") return false;
   const words = cursorOf(createSql, "sqlite").rest();
   return words.some(
-    (word, at) =>
-      word === "AUTOINCREMENT" && keyWordsBefore(words.slice(0, at))
+    (word, at) => word === "AUTOINCREMENT" && keyWordsBefore(words.slice(0, at))
   );
 }
 

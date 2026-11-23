@@ -995,7 +995,10 @@ function constraintAsDeclared(
     );
   }
   // A key named inside a column's definition opens with `REFERENCES`.
-  if (dialect === "postgresql" && ["FOREIGN", "REFERENCES"].includes(String(declared[0]))) {
+  if (
+    dialect === "postgresql" &&
+    ["FOREIGN", "REFERENCES"].includes(String(declared[0]))
+  ) {
     return (
       schema.keyDeferrability(end.table, end.name) ===
       declaredDeferrability(object.tail)
@@ -1549,7 +1552,9 @@ function tableIndexStatesMore(clause: StatementCursor): boolean {
     return false;
   }
   return (
-    opens === "FULLTEXT" || opens === "SPATIAL" || statesIndexOrder(clause.rest())
+    opens === "FULLTEXT" ||
+    opens === "SPATIAL" ||
+    statesIndexOrder(clause.rest())
   );
 }
 
