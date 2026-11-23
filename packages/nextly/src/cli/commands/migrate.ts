@@ -173,6 +173,7 @@ import {
 } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import {
   asServiceLogger,
+  deletionEventsOfRetiredDocuments,
   reconcileMigrationMetadata,
 } from "../../domains/schema/migrate/reconcile-metadata";
 import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
@@ -3187,7 +3188,14 @@ export async function migrateCore(
       const firstRun = firstRunSteps(
         deps,
         await refuseMigrationsOutOfOrder(deps),
-        { commitFirstRun, commitRecordBefore, recordMetadata, seedAccess }
+        {
+          commitFirstRun,
+          commitRecordBefore,
+          recordMetadata,
+          seedAccess,
+          retiredDocumentEvents: () =>
+            deletionEventsOfRetiredDocuments(metadataArgs()),
+        }
       );
       // A file that deletes data runs only with consent covering each
       // deletion, judged from the database this run holds the lock on. The
@@ -3426,6 +3434,12 @@ function firstRunSteps(
     recordMetadata: () => Promise<void>;
     /** The run's own Phase 4. */
     seedAccess: () => Promise<void>;
+    /**
+     * The deletion events a retired entity's documents owe (`retired-documents.ts`), which Phase 3
+     * records once its registry write commits: after the first run's commit, which stands in for
+     * it, they are recorded on their own.
+     */
+    retiredDocumentEvents: () => Promise<void>;
   }
 ): {
   beforeFiles: () => Promise<void>;
@@ -3472,6 +3486,7 @@ function firstRunSteps(
       if (configurationRows !== undefined && (await fromConfiguration())) {
         await commits.commitFirstRun(standings, configurationRows());
         committed = true;
+        await commits.retiredDocumentEvents();
         return;
       }
       await commits.recordMetadata();
@@ -3798,7 +3813,13 @@ async function judgeFileDeletions(
     adapter: deps.adapter as unknown as DrizzleAdapter,
     db: deps.db,
     dialect: deps.dialect,
-    units: fileUnits,
+    // The app files the step leaves the run after the modules, as the rename refusal above judges.
+    units: appFileUnits(
+      listed,
+      appStepAfter(deps.step, modules.length),
+      deps.dialect
+    ),
+    migrationsDir: deps.migrationsDir,
     // The extension schema the run compiled, as the command and the boot hand it.
     extensionSchema: () => Promise.resolve(deps.extensionSchema ?? null),
   });

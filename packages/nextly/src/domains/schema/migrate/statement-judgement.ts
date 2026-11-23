@@ -738,6 +738,46 @@ export function judgeStatements(
   }));
 }
 
+/** The columns and constraints a list of statements drops, by table (`elementsDroppedBy`). */
+export interface DroppedElements {
+  /** Every table, lower-cased, a column or a constraint is dropped from. */
+  readonly tables: ReadonlySet<string>;
+  /** Whether the statements drop `name`, a column or a constraint, from `table`. */
+  has(table: string, kind: "column" | "constraint", name: string): boolean;
+}
+
+/**
+ * The columns and constraints `statements` drop, as their ALTER TABLE DROP clauses name them
+ * (`readDropClause`): a column, a constraint, MySQL's foreign key or check. Names compare
+ * lower-cased. A statement not read here drops nothing it names.
+ */
+export function elementsDroppedBy(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): DroppedElements {
+  const tables = new Set<string>();
+  const dropped = new Set<string>();
+  for (const statement of statements) {
+    const reading = readStatement(statement, dialect);
+    if (reading.kind !== "schema") continue;
+    for (const { object, present } of reading.claims) {
+      if (present) continue;
+      if (object.kind === "column") {
+        tables.add(object.table.toLowerCase());
+        dropped.add(`column\u0000${within(object.table, object.column)}`);
+      } else if (object.kind === "constraint") {
+        tables.add(object.table.toLowerCase());
+        dropped.add(`constraint\u0000${within(object.table, object.name)}`);
+      }
+    }
+  }
+  return {
+    tables,
+    has: (table, kind, name) =>
+      dropped.has(`${kind}\u0000${within(table, name)}`),
+  };
+}
+
 /** Lower-cased names, each once. */
 function distinct(names: Iterable<string>): string[] {
   return [...new Set([...names].map(name => name.toLowerCase()))];

@@ -28,7 +28,8 @@ export const NEXTLY_RUN_TIMEOUT = 120_000;
 
 /**
  * Runs `nextly <args>` in `cwd` with this process's environment, telemetry
- * off, and `env` over it; a variable given as `undefined` is removed.
+ * off, and `env` over it; a variable given as `undefined` is removed. It is
+ * stopped after `timeoutMs`, `NEXTLY_RUN_TIMEOUT` unless said.
  *
  * Asynchronous, so the test worker keeps answering its runner while the CLI
  * compiles and runs, which can take tens of seconds.
@@ -36,7 +37,8 @@ export const NEXTLY_RUN_TIMEOUT = 120_000;
 export function runNextly(
   args: string[],
   cwd: string,
-  env: Record<string, string | undefined> = {}
+  env: Record<string, string | undefined> = {},
+  timeoutMs: number = NEXTLY_RUN_TIMEOUT
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   const merged: NodeJS.ProcessEnv = {
     ...process.env,
@@ -51,7 +53,7 @@ export function runNextly(
     const child = spawn(process.execPath, ["--import", TSX, ENTRY, ...args], {
       cwd,
       env: merged,
-      timeout: NEXTLY_RUN_TIMEOUT,
+      timeout: timeoutMs,
     });
     let stdout = "";
     let stderr = "";

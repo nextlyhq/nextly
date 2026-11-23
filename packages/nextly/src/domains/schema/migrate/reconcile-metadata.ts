@@ -571,10 +571,11 @@ async function holdersInPlace(deps: ReconcileMetadataDeps): Promise<boolean> {
  * The deletion events the documents of entities an applied migration dropped still owe
  * (`retired-documents.ts`), recorded once the registry write has committed, every run, so a run
  * stopped part-way is finished by the next. A failure costs only this step, which the next run
- * tries again; a lost lock or a test's stop ends the run.
+ * tries again; a lost lock or a test's stop ends the run. Nothing while a registry write is open:
+ * the first run's commit, which writes the registry instead, records them once it lands.
  */
-async function deletionEventsOfRetiredDocuments(
-  deps: ReconcileMetadataDeps
+export async function deletionEventsOfRetiredDocuments(
+  deps: Pick<ReconcileMetadataDeps, "adapter" | "logger">
 ): Promise<void> {
   if (registryWriteOpen()) return;
   try {

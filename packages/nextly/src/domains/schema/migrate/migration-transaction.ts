@@ -34,7 +34,10 @@ import {
 
 import { commitsOnMysql } from "./mysql-implicit-commit";
 import { requiredColumnCheckpoint } from "./required-column-guard";
-import { captureRetiredDocuments } from "./retired-documents";
+import {
+  captureRetiredDocuments,
+  forgetCapturesOfStandingTables,
+} from "./retired-documents";
 import { leadingWords } from "./split-sql";
 import {
   refusingNewDanglingReferences,
@@ -851,7 +854,14 @@ async function runUnitStatements(
         if (from === 0) await bound?.before?.(tx.db);
         // The documents of each entity whose main table the unit drops, named before the drop and
         // committed or rolled back with it (`retired-documents.ts`).
-        await captureRetiredDocuments(tx.db, dialect, unit, statements, from);
+        await captureRetiredDocuments(
+          tx.db,
+          dialect,
+          unit,
+          statements,
+          from,
+          true
+        );
         // Whether the ledger write is left outside the unit's transaction (MySQL only).
         let outside = await commitBeforeLedgerOnlyTry(
           tx,
@@ -888,6 +898,8 @@ async function runUnitStatements(
           await reachStopPoint(`${unit.source}: after statement ${index + 1}`);
         }
         bound?.onStatement?.(statements.length);
+        // A capture whose table the drop left standing goes with the unit's own commit.
+        await forgetCapturesOfStandingTables(tx.db, dialect, unit, statements);
         // A unit may rewrite registry rows (a schema save's upsert of its own
         // row): what the transaction read of them before is read again.
         clearRegistryRowCache();
@@ -926,12 +938,14 @@ async function runUnitStatements(
     // there. A try resumed past statements that committed as they ran skips it: what it read is
     // already changed by them, and a refusal now would undo none of them.
     if (from === 0) await bound?.before?.(checkpointDb);
+    // Outside a transaction nothing holds the table between the capture and the drop: best effort.
     await captureRetiredDocuments(
       checkpointDb,
       dialect,
       unit,
       statements,
-      from
+      from,
+      false
     );
     for (const [offset, statement] of statements.slice(from).entries()) {
       const index = from + offset;
@@ -960,6 +974,12 @@ async function runUnitStatements(
       await reachStopPoint(`${unit.source}: after statement ${index + 1}`);
     }
     bound?.onStatement?.(statements.length);
+    await forgetCapturesOfStandingTables(
+      checkpointDb,
+      dialect,
+      unit,
+      statements
+    );
     await bound?.settle?.();
   };
   const onPool = (statement: string) => adapter.executeQuery(statement);

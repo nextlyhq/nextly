@@ -6,13 +6,15 @@
  * Hand-written files here: one creates a translated collection and a translated Single, each with
  * a junction, and a collection that stays; a later one drops the first two. The documents of the
  * two are captured before the drop, in the file's transaction, and their deletion events recorded
- * once the file is recorded applied. A run stopped once the files are recorded, or while it records
- * the events, is finished by the next with nothing pending and no event twice; one stopped inside
- * the file (PostgreSQL and SQLite) removes nothing, and the next run applies the file whole. And a
- * drop of a collection another one's field still names is refused, with nothing removed.
+ * once the file is recorded applied, in rows of at most `CHUNK` ids. A run stopped once the files
+ * are recorded, or while it records the events, is finished by the next with nothing pending and
+ * no event twice, as a real process killed there is; one stopped inside the file (PostgreSQL and
+ * SQLite) removes nothing, and the next run applies the file whole. A table rebuilt in place and a
+ * file run outside a transaction are covered too. And a drop of a collection another one's field
+ * still names is refused, with nothing removed, unless the run itself removes what uses it.
  */
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,11 +27,18 @@ import {
   resolveDataLossConsent,
   type DataLossConsent,
 } from "../../../domains/schema/migrate/data-loss-consent";
+import { CHUNK } from "../../../domains/schema/migrate/retired-documents";
+import { KILL_AT_VARIABLE } from "../../../domains/schema/migrate/stop-points";
+import { refuseDropsOfUsedEntities } from "../../../domains/schema/migrate/used-entity-drops";
 import {
   LOCK_DIALECTS,
   lockWorld,
   type LockWorld,
 } from "../../../domains/schema/pipeline/__tests__/helpers/schema-lock-world";
+import {
+  NEXTLY_RUN_TIMEOUT,
+  runNextly,
+} from "../../__tests__/helpers/run-nextly";
 import { createLogger } from "../../utils/logger";
 import { migrateCore } from "../migrate";
 
@@ -156,28 +165,64 @@ describe.each(LOCK_DIALECTS)(
       });
     }
 
-    /** A hand-written migration file, after the ones before it, with no snapshot. */
-    function file(up: string[]): string {
+    /**
+     * A hand-written migration file, after the ones before it, with no snapshot; run outside a
+     * transaction where `noTransaction` says.
+     */
+    function file(up: string[], noTransaction = false): string {
       seq += 1;
       const name = `20261120_${String(seq).padStart(6, "0")}_${P}`;
       writeFileSync(
         join(migrationsDir, `${name}.sql`),
-        `-- Migration: ${name}\n\n-- UP\n${up.map(s => `${s};`).join("\n")}\n\n-- DOWN\n`,
+        `${noTransaction ? "-- nextly:no-transaction\n" : ""}-- Migration: ${name}\n\n-- UP\n${up.map(s => `${s};`).join("\n")}\n\n-- DOWN\n`,
         "utf8"
       );
       return `${name}.sql`;
     }
 
-    /** The migration that drops both entities: junctions, then translation tables, then main tables. */
-    function dropBoth(): string {
-      return file([
-        `DROP TABLE ${posts}_tags`,
-        `DROP TABLE ${home}_links`,
-        `DROP TABLE ${posts}_locales`,
-        `DROP TABLE ${home}_locales`,
-        `DROP TABLE ${posts}`,
-        `DROP TABLE ${home}`,
+    /** The statements dropping both entities: junctions, then translation tables, then main tables. */
+    const BOTH_DROPPED = [
+      `DROP TABLE ${posts}_tags`,
+      `DROP TABLE ${home}_links`,
+      `DROP TABLE ${posts}_locales`,
+      `DROP TABLE ${home}_locales`,
+      `DROP TABLE ${posts}`,
+      `DROP TABLE ${home}`,
+    ];
+
+    /** The migration that drops both entities. */
+    function dropBoth(noTransaction = false): string {
+      return file(BOTH_DROPPED, noTransaction);
+    }
+
+    /** The statements dropping `posts` alone. */
+    const POSTS_DROPPED = [
+      `DROP TABLE ${posts}_tags`,
+      `DROP TABLE ${posts}_locales`,
+      `DROP TABLE ${posts}`,
+    ];
+
+    /** `pages` registered again with a relationship field naming `posts`. */
+    async function pagesNamePosts() {
+      await adapter.delete("dynamic_collections", {
+        and: [{ column: "slug", op: "=", value: "pages" }],
+      });
+      await register("collection", "pages", pages, `${pages}_refs`, [
+        { name: "post", type: "relationship", options: { target: "posts" } },
       ]);
+    }
+
+    /** A `deleted` event of `posts`' document `id`, as a delete recorded at `occurredAt`. */
+    async function postDeleted(id: string, occurredAt: Date) {
+      await adapter.insert("nextly_content_events", {
+        id: randomUUID(),
+        subjectKind: "collection",
+        subjectSlug: "posts",
+        subjectId: id,
+        kind: "deleted",
+        actorKind: "system",
+        occurredAt,
+      });
     }
 
     const bothConsent = () =>
@@ -207,11 +252,25 @@ describe.each(LOCK_DIALECTS)(
       return counts;
     }
 
-    /** The captures waiting in `nextly_meta`. */
+    /** The capture rows waiting in `nextly_meta`. */
     async function captures(): Promise<number> {
-      const rows = await adapter.select<{ key: string }>("nextly_meta", {});
-      return rows.filter(row => row.key.startsWith("retired_documents:"))
-        .length;
+      return (await captureRows()).length;
+    }
+
+    /** Each capture row waiting in `nextly_meta`, with how many ids it holds. */
+    async function captureRows(): Promise<{ key: string; ids: number }[]> {
+      const rows = await adapter.select<{ key: string; value: unknown }>(
+        "nextly_meta",
+        {}
+      );
+      return rows
+        .filter(row => row.key.startsWith("retired_documents:"))
+        .map(row => {
+          const value = (
+            typeof row.value === "string" ? JSON.parse(row.value) : row.value
+          ) as { ids?: unknown[] };
+          return { key: row.key, ids: value.ids?.length ?? 0 };
+        });
     }
 
     const ledger = async () =>
@@ -225,11 +284,17 @@ describe.each(LOCK_DIALECTS)(
     const EACH_ONCE = { e1: 1, e2: 1 };
 
     it("ends every document of the dropped entities with one deletion event, and none of the one that stays", async () => {
+      // `e2` of `posts` was deleted once before, in a life of its own that ended long ago: its
+      // retirement ends the life it has now with an event of its own.
+      await postDeleted("e2", new Date(Date.now() - 86_400_000));
       dropBoth();
       const run = await migrate(bothConsent());
 
       expect(run.applied).toBe(1);
-      expect(await deletionsOf("collection", "posts")).toEqual(EACH_ONCE);
+      expect(await deletionsOf("collection", "posts")).toEqual({
+        e1: 1,
+        e2: 2,
+      });
       expect(await deletionsOf("single", "home")).toEqual(EACH_ONCE);
       expect(await deletionsOf("collection", "pages")).toEqual({});
       expect(await captures()).toBe(0);
@@ -252,16 +317,9 @@ describe.each(LOCK_DIALECTS)(
         expect(await deletionsOf("collection", "posts")).toEqual({});
         const recorded = await ledger();
         // A document deleted on its own since the capture, as another instance can on MySQL
-        // between the capture and the drop: its event already names it.
-        await adapter.insert("nextly_content_events", {
-          id: randomUUID(),
-          subjectKind: "collection",
-          subjectSlug: "posts",
-          subjectId: "e1",
-          kind: "deleted",
-          actorKind: "system",
-          occurredAt: new Date(),
-        });
+        // between the capture and the drop, by a host whose clock runs an hour behind this one's:
+        // its event already names it, whenever it says it happened.
+        await postDeleted("e1", new Date(Date.now() - 3_600_000));
 
         const finished = await migrate();
 
@@ -297,19 +355,260 @@ describe.each(LOCK_DIALECTS)(
       expect(await deletionsOf("single", "home")).toEqual(EACH_ONCE);
     }, 180_000);
 
+    it("keeps every row of ids within a row's size, and finishes a run stopped between rows", async () => {
+      // `posts` holds more documents than two rows of ids.
+      const many = Array.from(
+        { length: 2 * CHUNK + 1 },
+        (_, n) => `m${String(n).padStart(5, "0")}`
+      );
+      for (let at = 0; at < many.length; at += 100) {
+        const values = many
+          .slice(at, at + 100)
+          .map(id => `('${id}', 'm')`)
+          .join(", ");
+        await adapter.executeQuery(
+          `INSERT INTO ${posts} (id, title) VALUES ${values}`
+        );
+      }
+      dropBoth();
+      let rows = 0;
+      const stopped = await migrate(bothConsent(), point => {
+        // Stopped in the second row's transaction: the first row's events are in.
+        if (point === "collection posts: recorded deletion events") {
+          rows += 1;
+          if (rows === 2) throw new Error("stopped");
+        }
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(stopped).toBeDefined();
+      const stored = await captureRows();
+      expect(Math.max(...stored.map(row => row.ids))).toBeLessThanOrEqual(
+        CHUNK
+      );
+      expect(
+        Object.keys(await deletionsOf("collection", "posts"))
+      ).toHaveLength(CHUNK);
+
+      await migrate();
+
+      const deletions = await deletionsOf("collection", "posts");
+      expect(Object.keys(deletions)).toHaveLength(many.length + 2);
+      expect(Object.values(deletions).every(count => count === 1)).toBe(true);
+      expect(await deletionsOf("single", "home")).toEqual(EACH_ONCE);
+      expect(await captures()).toBe(0);
+    }, 300_000);
+
+    it("leaves a table rebuilt in place, and what names it, as they are: nothing is retired", async () => {
+      // `pages` names `posts`; a rebuild of `posts` keeps it, so nothing is refused.
+      await pagesNamePosts();
+      file([
+        `CREATE TABLE ${posts}_rebuilt (id varchar(36) PRIMARY KEY, title varchar(64))`,
+        `INSERT INTO ${posts}_rebuilt (id, title) SELECT id, title FROM ${posts}`,
+        `DROP TABLE ${posts}`,
+        `ALTER TABLE ${posts}_rebuilt RENAME TO ${posts}`,
+      ]);
+
+      const run = await migrate(bothConsent());
+
+      expect(run.applied).toBe(1);
+      expect(await adapter.tableExists(posts)).toBe(true);
+      expect(await deletionsOf("collection", "posts")).toEqual({});
+      expect(await captures()).toBe(0);
+    }, 180_000);
+
+    it("ends each document once when the dropping file runs outside a transaction", async () => {
+      dropBoth(true);
+
+      const run = await migrate(bothConsent());
+
+      expect(run.applied).toBe(1);
+      expect(await deletionsOf("collection", "posts")).toEqual(EACH_ONCE);
+      expect(await deletionsOf("single", "home")).toEqual(EACH_ONCE);
+      expect(await captures()).toBe(0);
+    }, 180_000);
+
+    /** Whether the refusal lets `files` through, each with its statements. */
+    function judge(files: { label: string; statements: string[] }[]) {
+      return refuseDropsOfUsedEntities({
+        adapter: adapter as never,
+        db: adapter.getDrizzle(),
+        dialect,
+        units: files,
+        migrationsDir,
+        extensionSchema: () => Promise.resolve(null),
+      });
+    }
+
+    it("judges the fields naming a dropped collection as the run's own snapshot leaves them", async () => {
+      await pagesNamePosts();
+      const label = file(POSTS_DROPPED);
+      const run = [{ label, statements: POSTS_DROPPED }];
+      // No snapshot: the registry is what the run goes by, and `pages` still names `posts`.
+      await expect(judge(run)).rejects.toThrow(/posts/);
+
+      // The file's snapshot records `pages` without the field: the run removes it.
+      mkdirSync(join(migrationsDir, "meta"), { recursive: true });
+      writeFileSync(
+        join(migrationsDir, "meta", label.replace(/\.sql$/, ".snapshot.json")),
+        JSON.stringify({
+          version: 1,
+          migrationHash: "0".repeat(64),
+          snapshot: { tables: [] },
+          entities: {
+            collections: {
+              pages: {
+                source: "code",
+                settings: { fields: [{ name: "title", type: "text" }] },
+              },
+            },
+            singles: {},
+            fieldGroups: {},
+          },
+        })
+      );
+      await expect(judge(run)).resolves.toBeUndefined();
+    }, 180_000);
+
+    it("judges a foreign key into a dropped Single as the run's statements leave it", async () => {
+      // SQLite drops a key only by rebuilding its table, which is judged as keeping it.
+      if (dialect === "sqlite") return;
+      const key = `${P}_pages_home`;
+      await adapter.executeQuery(
+        `ALTER TABLE ${pages} ADD COLUMN home_id varchar(36)`
+      );
+      await adapter.executeQuery(
+        `ALTER TABLE ${pages} ADD CONSTRAINT ${key} FOREIGN KEY (home_id) REFERENCES ${home} (id)`
+      );
+      const homeDropped = [
+        `DROP TABLE ${home}_links`,
+        `DROP TABLE ${home}_locales`,
+        `DROP TABLE ${home}`,
+      ];
+      const run = (first: string[]) => [
+        { label: "x.sql", statements: [...first, ...homeDropped] },
+      ];
+
+      await expect(judge(run([]))).rejects.toThrow(/home/);
+      await expect(
+        judge(
+          run([
+            dialect === "mysql"
+              ? `ALTER TABLE ${pages} DROP FOREIGN KEY ${key}`
+              : `ALTER TABLE ${pages} DROP CONSTRAINT ${key}`,
+          ])
+        )
+      ).resolves.toBeUndefined();
+      await expect(
+        judge(run([`ALTER TABLE ${pages} DROP COLUMN home_id`]))
+      ).resolves.toBeUndefined();
+    }, 180_000);
+
+    /**
+     * `nextly migrate` as a real process over this database, as a deploy runs it, killing itself at
+     * `killAt` where one is named (`stop-points.ts`). Each run clears the lock a killed one left.
+     */
+    function migrateProcess(killAt?: string) {
+      const project = mkdtempSync(join(tmpdir(), "nextly-retire-project-"));
+      writeFileSync(
+        join(project, "nextly.config.ts"),
+        `export default ${JSON.stringify({
+          collections: [],
+          db: { migrationsDir },
+        })};\n`
+      );
+      const url =
+        dialect === "sqlite" && !world.url.startsWith("file:")
+          ? `file:${world.url}`
+          : world.url;
+      return runNextly(
+        [
+          "migrate",
+          `--accept-data-loss=${posts},${home}`,
+          "--non-interactive",
+          "--force-unlock",
+        ],
+        project,
+        {
+          DATABASE_URL: url,
+          DB_DIALECT: dialect,
+          NODE_ENV: "test",
+          [KILL_AT_VARIABLE]: killAt,
+        },
+        PROCESS_TIMEOUT
+      ).finally(() => rmSync(project, { recursive: true, force: true }));
+    }
+
+    /** How long one real process may take: each compiles the CLI, on a machine other runs share. */
+    const PROCESS_TIMEOUT = 2.5 * NEXTLY_RUN_TIMEOUT;
+
+    it(
+      "finishes, with nothing pending, a run whose process was killed after the files were recorded",
+      async () => {
+        // The database's first run is recorded first, so the drop meets Phase 3 itself.
+        const first = await migrateProcess();
+        expect(first.status, `${first.stdout}\n${first.stderr}`).toBe(0);
+        dropBoth();
+        let recorded: number | undefined;
+        for (const at of [
+          "files recorded",
+          "collection posts: recorded deletion events",
+        ]) {
+          const killed = await migrateProcess(at);
+          const seen = `${at}\n${killed.stdout}\n${killed.stderr}`;
+          expect(killed.status, seen).not.toBe(0);
+          // Killed with the file recorded: its tables gone, no event recorded, no ledger row added.
+          expect(await adapter.tableExists(posts), seen).toBe(false);
+          expect(await deletionsOf("collection", "posts"), seen).toEqual({});
+          recorded ??= await ledger();
+          expect(await ledger(), seen).toBe(recorded);
+        }
+
+        const finished = await migrateProcess();
+        const seen = `${finished.stdout}\n${finished.stderr}`;
+        expect(finished.status, seen).toBe(0);
+        expect(await deletionsOf("collection", "posts"), seen).toEqual(
+          EACH_ONCE
+        );
+        expect(await deletionsOf("single", "home"), seen).toEqual(EACH_ONCE);
+        expect(await captures(), seen).toBe(0);
+        expect(await ledger(), seen).toBe(recorded);
+      },
+      4 * PROCESS_TIMEOUT
+    );
+
+    it(
+      "removes nothing when the process is killed inside the file, and records each event once on the first run that applies it",
+      async () => {
+        // On MySQL each drop commits as it runs; the attempt's resolution is the runner's own test.
+        if (dialect === "mysql") return;
+        const name = dropBoth();
+        const killed = await migrateProcess(`${name}: after statement 5`);
+        const said = `${killed.stdout}\n${killed.stderr}`;
+        expect(killed.status, said).not.toBe(0);
+        // The file rolled back, the capture with it.
+        expect(await adapter.tableExists(posts), said).toBe(true);
+        expect(await captures(), said).toBe(0);
+
+        // The database's first run: its commit writes the registry, then the events go.
+        const finished = await migrateProcess();
+        const seen = `${finished.stdout}\n${finished.stderr}`;
+        expect(finished.status, seen).toBe(0);
+        expect(await adapter.tableExists(posts), seen).toBe(false);
+        expect(await deletionsOf("collection", "posts"), seen).toEqual(
+          EACH_ONCE
+        );
+        expect(await deletionsOf("single", "home"), seen).toEqual(EACH_ONCE);
+        expect(await captures(), seen).toBe(0);
+      },
+      2 * PROCESS_TIMEOUT
+    );
+
     it("refuses a drop of a collection another one's field still names, removing nothing", async () => {
       // `pages` relates to `posts`: dropping `posts` would leave its field pointing at nothing.
-      await adapter.delete("dynamic_collections", {
-        and: [{ column: "slug", op: "=", value: "pages" }],
-      });
-      await register("collection", "pages", pages, `${pages}_refs`, [
-        { name: "post", type: "relationship", options: { target: "posts" } },
-      ]);
-      file([
-        `DROP TABLE ${posts}_tags`,
-        `DROP TABLE ${posts}_locales`,
-        `DROP TABLE ${posts}`,
-      ]);
+      await pagesNamePosts();
+      file(POSTS_DROPPED);
       const before = await ledger();
 
       const refused = await migrate(

@@ -92,6 +92,30 @@ applied with:
 
 The Schema Builder's delete in development removes the same rows, before its drops.
 
+Every document a deleted collection or Single held ends its history with one `deleted` event,
+whether `migrate:create` wrote the drop or you did. Before the file's first statement, `nextly
+migrate` notes the id of every document in the entity's table, and once the file is recorded
+applied it records one `deleted` event for each. A document deleted some other way meanwhile
+keeps the one event it already has. A table the file rebuilds in place (created under another
+name, filled, dropped, and the copy renamed back) is not deleted, and its documents get no event.
+
+How sure that list is depends on the database:
+
+- On PostgreSQL, the file runs in a transaction, and the table is locked before the ids are read.
+  A save from another instance waits for the drop, then fails, so no document is missed.
+- SQLite has one writer at a time, which gives the same.
+- On MySQL each drop commits as it runs, so nothing holds the table between reading the ids and
+  dropping it. A document another instance saves in that moment gets no event. The same holds
+  for a file [run outside a transaction](#running-a-file-outside-a-transaction) on any database.
+  Stop the other instances' writes to the entity before the deploy if that matters.
+
+The run refuses to drop a collection or Single that something still uses, as the Schema Builder's
+delete does: a relationship or upload field naming it, a foreign key into its tables, or another
+owner's index or constraint on them. It refuses before any statement runs, naming what uses it.
+What uses the entity is judged as it will be after the run's migrations: a migration that removes
+the field (its snapshot no longer records it) or drops the foreign key, and then drops the
+entity, is applied.
+
 The consent naming the entity's table covers these rows (`--accept-data-loss=dc_posts`), and
 `nextly migrate` lists each before asking. A run that stops part-way is finished by the next
 `nextly migrate`, even with nothing pending, without running any drop again or recording anything
