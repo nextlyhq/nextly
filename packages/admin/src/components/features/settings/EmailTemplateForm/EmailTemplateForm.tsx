@@ -22,7 +22,11 @@ import { EnvelopeBar } from "./EnvelopeBar";
 import { InboxStrip, shownInboxLine } from "./InboxStrip";
 import { OwnershipNotices } from "./OwnershipNotices";
 import { regionsForRefusal } from "./refusal-routing";
-import { suppliedNamesFor } from "./sample-data";
+import {
+  editedValues,
+  suppliedNamesFor,
+  type SampleEdits,
+} from "./sample-data";
 import {
   DEFAULT_VALUES,
   EMAIL_TEMPLATE_FORM_ID,
@@ -184,7 +188,7 @@ export function EmailTemplateForm({
   });
   const reveal = (panel: RevealRequest["panel"]) =>
     setRevealRequest(previous => ({ panel, seq: previous.seq + 1 }));
-  const [sampleOverride, setSampleOverride] = useState<string | null>(null);
+  const [sampleEdits, setSampleEdits] = useState<SampleEdits | null>(null);
   const [sendTestOpen, setSendTestOpen] = useState(false);
 
   // The row being edited keeps its kind; layouts are wrappers, not bodies.
@@ -302,7 +306,7 @@ export function EmailTemplateForm({
 
   const derived = useDerivedTemplateState({
     variables,
-    sampleOverride,
+    sampleEdits,
     subject,
     htmlContent,
     plainTextContent,
@@ -454,8 +458,18 @@ export function EmailTemplateForm({
             isLayoutRow ? null : (
               <DataRail
                 sampleText={derived.sampleText}
-                onSampleChange={setSampleOverride}
-                onReset={() => setSampleOverride(null)}
+                sampleData={derived.sampleData}
+                variables={variables ?? []}
+                onFieldChange={(variableName, value) =>
+                  setSampleEdits(current => ({
+                    values: {
+                      ...editedValues(current),
+                      [variableName]: value,
+                    },
+                  }))
+                }
+                onJsonChange={json => setSampleEdits({ json })}
+                onReset={() => setSampleEdits(null)}
                 sampleError={derived.sampleError}
                 check={variableCheck}
                 onDeclare={owns ? declareVariable : undefined}
