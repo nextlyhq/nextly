@@ -169,21 +169,7 @@ export class LanguageSettingsService {
     if (change.kind === "setDefault") {
       await this.refusePendingDefaultChanges();
     }
-    // With nothing stored the locked read locks no row, so a change made at the same moment also
-    // planned from the implicit English list, and its insert of English met this one's: a
-    // duplicate on PostgreSQL and SQLite, a deadlock on MySQL (`lostToFirstChange`). Run
-    // again, in a transaction of its own now the failed one has rolled back, it plans from what
-    // the other stored and is locked behind it as every later change is.
-    const written =
-      (await this.writeChange(change, draftsKept)) ??
-      (await this.writeChange(change, draftsKept));
-    if (!written) {
-      throw NextlyError.conflict({
-        reason: "state",
-        message:
-          "Another change to the languages was being saved at the same moment. Try again.",
-      });
-    }
+    const written = await this.writeChange(change, draftsKept);
     // The rows are committed: a failure from here on must not read as the change failing, since
     // a retried add would then be refused as a duplicate of itself. The answer is the list as
     // written, and an instance that cannot read it again now does so within its interval.
@@ -218,65 +204,93 @@ export class LanguageSettingsService {
    * Plans `change` against the stored rows, locked, and writes the rows it changes, in one
    * transaction.
    *
-   * @returns the stored list as the change left it, or null when, with nothing stored, another
-   *   change stored the list first (rolled back, nothing written)
+   * With nothing stored the locked read locks no row, so a change made at the same moment also
+   * plans from the implicit English list, and its insert of English meets this one's: a duplicate
+   * on PostgreSQL and SQLite, a deadlock on MySQL. The loser is run again, in a transaction of its
+   * own now the failed one has rolled back, and plans from what the winner stored. On MySQL that
+   * second attempt can deadlock as well, at its locked read: it waits behind the winner's
+   * uncommitted English row, and the winner's next insert, of a language that sorts before
+   * English, falls in the gap that waiting read covers. So every attempt that loses either way is
+   * run again, a bounded number of times, each after a short wait that lets the winner commit
+   * (`LOST_RACE_RETRIES`).
+   *
+   * @returns the stored list as the change left it
+   * @throws NextlyError `CONFLICT` when every attempt lost to a change made at the same moment
    */
   private async writeChange(
     change: LanguageChange,
     draftsKept: boolean
-  ): Promise<LanguageRow[] | null> {
+  ): Promise<LanguageRow[]> {
+    // Of the attempt running now: set again by each one.
     let wasEmpty = false;
     try {
-      return await this.adapter.transaction(async tx => {
-        // Locked, so a second change made at the same moment plans from this one's result:
-        // planned from the same rows, both would write the same next revision, and the
-        // fingerprint would stay where the first left it, hiding the second from every other
-        // instance. SQLite takes no row lock and needs none, as its writers already run one at
-        // a time.
-        const rows = await tx.select<LanguageRow>(LANGUAGES_TABLE, {
-          columns: [...COLUMNS],
-          forUpdate: true,
-        });
-        wasEmpty = rows.length === 0;
-        // Asked again where the change is written: the admin confirms from a summary that can
-        // stay open for minutes, and a draft saved meanwhile in the current default would be
-        // left behind.
-        if (draftsKept) {
-          const current = defaultCodeOf(rows);
-          refuseWhenPending(current, await countPendingChangesIn(tx, current));
-        }
-        const planned = planLanguageChange(rows, change);
-        const was = new Map(rows.map(row => [row.code, row]));
-        const now = new Date();
-        for (const row of planned) {
-          const old = was.get(row.code);
-          if (old && old.revision === row.revision) continue;
-          const values = {
-            label: row.label,
-            direction: row.direction,
-            fallback: row.fallback,
-            position: row.position,
-            isDefault: row.isDefault,
-            active: row.active,
-            revision: row.revision,
-            updatedAt: now,
-          };
-          if (old) {
-            await tx.update(LANGUAGES_TABLE, values, {
-              and: [{ column: "code", op: "=", value: row.code }],
-            });
-          } else {
-            await tx.insert(LANGUAGES_TABLE, {
-              code: row.code,
-              ...values,
-              createdAt: now,
-            });
+      return await this.adapter.transaction(
+        async tx => {
+          wasEmpty = false;
+          // Locked, so a second change made at the same moment plans from this one's result:
+          // planned from the same rows, both would write the same next revision, and the
+          // fingerprint would stay where the first left it, hiding the second from every other
+          // instance. SQLite takes no row lock and needs none, as its writers already run one at
+          // a time.
+          const rows = await tx.select<LanguageRow>(LANGUAGES_TABLE, {
+            columns: [...COLUMNS],
+            forUpdate: true,
+          });
+          wasEmpty = rows.length === 0;
+          // Asked again where the change is written: the admin confirms from a summary that can
+          // stay open for minutes, and a draft saved meanwhile in the current default would be
+          // left behind.
+          if (draftsKept) {
+            const current = defaultCodeOf(rows);
+            refuseWhenPending(
+              current,
+              await countPendingChangesIn(tx, current)
+            );
           }
+          const planned = planLanguageChange(rows, change);
+          const was = new Map(rows.map(row => [row.code, row]));
+          const now = new Date();
+          for (const row of planned) {
+            const old = was.get(row.code);
+            if (old && old.revision === row.revision) continue;
+            const values = {
+              label: row.label,
+              direction: row.direction,
+              fallback: row.fallback,
+              position: row.position,
+              isDefault: row.isDefault,
+              active: row.active,
+              revision: row.revision,
+              updatedAt: now,
+            };
+            if (old) {
+              await tx.update(LANGUAGES_TABLE, values, {
+                and: [{ column: "code", op: "=", value: row.code }],
+              });
+            } else {
+              await tx.insert(LANGUAGES_TABLE, {
+                code: row.code,
+                ...values,
+                createdAt: now,
+              });
+            }
+          }
+          return planned;
+        },
+        {
+          retryCount: LOST_RACE_RETRIES,
+          // MySQL runs a deadlock again of its own accord; a duplicate of English is asked here.
+          retryWhen: error => wasEmpty && isUniqueViolation(error),
         }
-        return planned;
-      });
+      );
     } catch (error) {
-      if (wasEmpty && lostToFirstChange(this.adapter, error)) return null;
+      if (lostToChangeAtSameMoment(this.adapter, wasEmpty, error)) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "Another change to the languages was being saved at the same moment. Try again.",
+        });
+      }
       throw error;
     }
   }
@@ -325,13 +339,27 @@ function refuseWhenPending(current: string, pending: number): void {
 }
 
 /**
- * Whether, with nothing stored, a change lost to another that stored the list first. PostgreSQL
- * and SQLite refuse the second insert of English as a duplicate. MySQL's locked read of an empty
- * table takes a gap lock in each transaction, so each insert waits on the other's, and MySQL
- * rolls one back as a deadlock instead.
+ * How many times a change that lost to one made at the same moment is run again. Each runs after
+ * the adapter's wait, longer each time, by when the winner has committed; more than one is needed
+ * only when MySQL picks the same change as the loser again.
  */
-function lostToFirstChange(adapter: DrizzleAdapter, error: unknown): boolean {
-  if (isUniqueViolation(error)) return true;
+const LOST_RACE_RETRIES = 3;
+
+/**
+ * Whether a change failed for losing to one made at the same moment. With nothing stored,
+ * PostgreSQL and SQLite refuse the second insert of English as a duplicate. MySQL's locked read of
+ * an empty table takes a gap lock in each transaction, so each insert waits on the other's, and
+ * MySQL rolls one back as a deadlock instead, as it does for a deadlock at the loser's next
+ * locked read (`writeChange`).
+ */
+function lostToChangeAtSameMoment(
+  adapter: DrizzleAdapter,
+  wasEmpty: boolean,
+  error: unknown
+): boolean {
+  // A change refused for what it asks (`planLanguageChange`) lost no race.
+  if (NextlyError.is(error)) return false;
+  if (wasEmpty && isUniqueViolation(error)) return true;
   return (
     toDbError(adapter.getCapabilities().dialect, error).kind === "deadlock"
   );
