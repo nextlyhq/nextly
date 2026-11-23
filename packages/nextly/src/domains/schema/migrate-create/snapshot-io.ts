@@ -24,6 +24,7 @@ import { mkdir, readdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import type { FieldGroupNaming } from "../../field-groups/services/field-group-storage-names";
 import { normalizeContributions } from "../pipeline/diff/contributions";
@@ -135,25 +136,37 @@ export interface SnapshotFile {
  * otherwise legacy, which is what every snapshot written before the record existed was on. The
  * one reading of the record, for every command that follows the history's naming.
  *
- * Refused for an unmarked snapshot that records the current type column (`_field_group_type`):
- * an earlier release wrote it after the site's field groups moved, when the record did not exist
- * yet, so it is on the current names and does not say so. Read as legacy, the next migration
- * would plan to drop each `fg_` table and create a `comp_` copy.
+ * Refused for an unmarked snapshot whose field-group tables (those with a field group's system
+ * columns) record the current type column (`_field_group_type`): an earlier release wrote it after
+ * the site's field groups moved, when the record did not exist yet, so it is on the current names
+ * and does not say so. Read as legacy, the next migration would plan to drop each `fg_` table and
+ * create a `comp_` copy. Another table's own column of that name says nothing about the names.
  */
 export function snapshotFieldGroupNaming(
   file: Pick<SnapshotFile, "fieldGroupStorage" | "snapshot" | "migration">
 ): FieldGroupNaming {
   if (file.fieldGroupStorage === "current") return "current";
   const onCurrentNames = file.snapshot.tables
-    .filter(table =>
-      table.columns.some(column => column.name === MIGRATION_TARGET.columnType)
-    )
+    .filter(table => {
+      const columns = new Set(table.columns.map(column => column.name));
+      return [...FIELD_GROUP_SYSTEM_COLUMNS, MIGRATION_TARGET.columnType].every(
+        column => columns.has(column)
+      );
+    })
     .map(table => table.name);
   if (onCurrentNames.length > 0) {
     throw fieldGroupHistoryNamesUnrecordedError(file.migration, onCurrentNames);
   }
   return "legacy";
 }
+
+/** The columns every field group's table carries, whatever its names: what tells one apart. */
+const FIELD_GROUP_SYSTEM_COLUMNS = [
+  STORAGE_FORMAT.columns.parentId,
+  STORAGE_FORMAT.columns.parentTable,
+  STORAGE_FORMAT.columns.parentField,
+  STORAGE_FORMAT.columns.order,
+];
 
 /**
  * The refusal of a snapshot an earlier release wrote on the current field-group names without
