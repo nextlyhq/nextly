@@ -476,10 +476,39 @@ export async function fetchAllRegistryStates(manifest) {
  * cross means "look again later" rather than "something is wrong" — which is
  * the kind of red that teaches a reader to wave the next one through.
  *
- * Ten minutes is roughly three times the longest settle observed, and the job
- * that runs it allows forty-five.
+ * The lag grows with the size of the package, and the largest one sets the
+ * budget. `nextly` (about 24 MB unpacked) became readable 11m10s after the
+ * publish step finished for 0.0.2-alpha.79 and 10m09s after it for
+ * 0.0.2-alpha.80, while packages of about 15 MB took around five minutes. A
+ * ten-minute budget missed both by seconds to a minute and withheld the tag
+ * and the GitHub release from two complete releases.
+ *
+ * Thirty minutes is roughly three times the longest settle observed, and the
+ * job that runs it allows sixty, which leaves room for a build that misses the
+ * cache before the publish starts.
  */
-const SETTLE_BUDGET_MS = 10 * 60 * 1000;
+export const SETTLE_BUDGET_MS = 30 * 60 * 1000;
+
+/*
+ * How many still-unsettled packages the waiting line names. A release short of
+ * one or two packages is the case worth reading at a glance; a whole train still
+ * settling is a count, not a list.
+ */
+const NAMED_WAITING_LIMIT = 5;
+
+/**
+ * The line printed while waiting: how many packages are not yet fully
+ * released, which ones when there are few, and how much budget is left.
+ */
+export function describeWaiting(problems, attempts, remainingMs) {
+  const names = problems.map(problem => problem.name);
+  const which =
+    names.length <= NAMED_WAITING_LIMIT ? `: ${names.join(", ")}` : "";
+  return (
+    `Waiting for ${problems.length} package(s) to settle on the registry${which} ` +
+    `(attempt ${attempts}, ${Math.round(remainingMs / 1000)}s of budget left)...`
+  );
+}
 
 /*
  * Backoff rather than a fixed interval: a release that settles immediately is
@@ -584,10 +613,7 @@ export async function waitForCompleteRelease({
     if (remaining <= 0) break;
 
     const pause = Math.min(delay, remaining);
-    console.log(
-      `Waiting for ${problems.length} package(s) to settle on the registry ` +
-        `(attempt ${attempts}, ${Math.round(remaining / 1000)}s of budget left)...`
-    );
+    console.log(describeWaiting(problems, attempts, remaining));
     await wait(pause);
     delay = Math.min(delay * 2, maxDelayMs);
   }

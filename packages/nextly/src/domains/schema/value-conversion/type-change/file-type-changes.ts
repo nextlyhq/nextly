@@ -65,6 +65,12 @@ export interface FileTypeChangeSource {
    */
   statements: readonly string[];
   dialect: SupportedDialect;
+  /**
+   * The fields each translations table's columns are retyped for by the change's own `retypes`
+   * files, by the table's name lower-cased: a translated change is refused for its column only
+   * where none of them gives it the new type.
+   */
+  retyped?: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /** One refusal of a file's type changes, with the entity it is of. */
@@ -441,10 +447,23 @@ function entityTypeChange(args: {
         ...(renamed.size > 0 ? { renamed } : {}),
         ...(relationsShaped.size > 0 ? { ignore: relationsShaped } : {}),
         ...(builtByBefore !== at.builtBy ? { builtByBefore } : {}),
+        ...retypedOf(source, [translationsTable, `${table}_locales`]),
         ...at,
       },
     },
   ];
+}
+
+/** The fields the change's `retypes` files retype in the first of `tables` they name. */
+function retypedOf(
+  source: FileTypeChangeSource,
+  tables: readonly string[]
+): Pick<EntityTypeChangeInput, "retypedTranslations"> {
+  for (const table of tables) {
+    const fields = source.retyped?.get(table.toLowerCase());
+    if (fields !== undefined) return { retypedTranslations: fields };
+  }
+  return {};
 }
 
 /**
