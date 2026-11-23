@@ -19,8 +19,9 @@
  * 2. `nextly migrate --backup-confirmed`, which reconciles the core tables,
  *    applies that migration and any plugin module, and brings stored data up
  *    to date, asking the same consent again for this database;
- * 3. `nextly migrate:check`, which must then find the migrations whole and
- *    the configuration recorded.
+ * 3. `nextly migrate:status`, which must then find nothing pending, failed or
+ *    unfinished in the database, and `nextly migrate:check`, which must find
+ *    the migrations whole and the configuration recorded.
  *
  * Before the first step the install is given content (`values.ts`): one entry
  * in each content table, a distinct value in every free-text column. After the
@@ -197,6 +198,20 @@ describe.each(dialects())(
       // The control: the install was given values to keep.
       expect(seeded.length).toBeGreaterThan(0);
       expect(await lostValues(dialect, database.url, seeded)).toEqual([]);
+    });
+
+    it("leaves migrate:status nothing pending, failed or unfinished", async () => {
+      // `migrate:check` reads the migration files and the configuration;
+      // this reads the database the upgrade ran on.
+      const outcome = await nextly("migrate:status", "--json");
+      expect(outcome.code, outcome.output).toBe(0);
+      for (const count of ["pending", "failed", "unfinished"]) {
+        expect(outcome.output, outcome.output).toMatch(
+          new RegExp(`"${count}":\\s*0\\b`)
+        );
+      }
+      // The control: the summary is there, so the matches above read it.
+      expect(outcome.output).toMatch(/"applied":\s*[1-9]/);
     });
 
     it("leaves migrate:check nothing to report", async () => {

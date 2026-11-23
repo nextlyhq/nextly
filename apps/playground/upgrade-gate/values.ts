@@ -8,12 +8,18 @@
  * therefore writes one entry into each content table first, with a distinct
  * value in every free-text column a person writes, in the table itself and,
  * where the install keeps the entity's translatable fields per language, in
- * the entry's default-language row of its translations table (`seedContent`);
- * after
- * the upgrade looks for each value where Nextly now keeps it: the same column
- * of the same row, or that column of the row's default-language row in the
- * table's translations table (`<table>_locales`). A value found in neither is
- * lost (`lostValues`).
+ * the entry's rows of its translations table (`<table>_locales`) for the
+ * default language and for another (`seedContent`). After the upgrade it
+ * looks for each value where Nextly now keeps it (`lostValues`):
+ *
+ * - a value of the table itself or of the default language: the same column
+ *   of the same row, or that column of the entry's default-language row;
+ * - a value of another language: that column of the entry's row for the
+ *   language, or, for a field that stopped being translated, the
+ *   localization archive (`nextly_i18n_archive`), which keeps it under the
+ *   entry and the language.
+ *
+ * A value found nowhere it may be kept is lost.
  *
  * Content tables are the collections' and Singles' own (`dc_`, `single_`), not
  * their translations tables and not a table with a foreign key, whose rows
@@ -33,7 +39,13 @@ export interface SeededValue {
   id: string;
   column: string;
   value: string;
+  /** The language row of `<table>_locales` it was written to; absent for the table itself. */
+  locale?: string;
 }
+
+/** The playground's default language, and another it declares. */
+const DEFAULT_LOCALE = "en";
+const OTHER_LOCALE = "es";
 
 /** Runs one statement with positional parameters, returning its rows. */
 type Query = (
@@ -178,34 +190,53 @@ export async function seedContent(
         values
       );
       // Where the install already keeps the entity's translatable fields per
-      // language, the entry's default-language row holds them.
+      // language, the entry has a row for the default language and one for
+      // another, each with values of its own.
       const companion = `${table}_locales`;
       if (catalog[companion] === undefined) continue;
-      const localeColumns: string[] = ["_parent", "_locale"];
-      const localeValues: unknown[] = [id, "en"];
-      for (const [column, line] of Object.entries(
-        catalog[companion].columns
-      ).sort()) {
-        if (column.startsWith("_")) continue;
-        const required = /\bnot null\b/i.test(line);
-        const defaulted = /\bdefault\b/i.test(line);
-        if (!defaulted && isText(line)) {
-          const value = `v${++counter}`.slice(0, maxLength(line) ?? 64);
-          localeColumns.push(column);
-          localeValues.push(value);
-          seeded.push({ table, id, column, value });
-        } else if (required && !defaulted) {
-          localeColumns.push(column);
-          localeValues.push(filler(line, dialect));
+      for (const locale of [DEFAULT_LOCALE, OTHER_LOCALE]) {
+        const localeColumns: string[] = ["_parent", "_locale"];
+        const localeValues: unknown[] = [id, locale];
+        for (const [column, line] of Object.entries(
+          catalog[companion].columns
+        ).sort()) {
+          if (column.startsWith("_")) continue;
+          const required = /\bnot null\b/i.test(line);
+          const defaulted = /\bdefault\b/i.test(line);
+          if (!defaulted && isText(line)) {
+            const value = `v${++counter}`.slice(0, maxLength(line) ?? 64);
+            localeColumns.push(column);
+            localeValues.push(value);
+            seeded.push({ table, id, column, value, locale });
+          } else if (required && !defaulted) {
+            localeColumns.push(column);
+            localeValues.push(filler(line, dialect));
+          }
         }
+        await query(
+          `INSERT INTO ${quote(dialect, companion)} (${localeColumns.map(c => quote(dialect, c)).join(", ")}) VALUES (${localeColumns.map(() => "?").join(", ")})`,
+          localeValues
+        );
       }
-      await query(
-        `INSERT INTO ${quote(dialect, companion)} (${localeColumns.map(c => quote(dialect, c)).join(", ")}) VALUES (${localeColumns.map(() => "?").join(", ")})`,
-        localeValues
-      );
     }
   });
   return seeded;
+}
+
+/** Whether the localization archive keeps `value` for the entry `id` in `locale`. */
+async function archived(
+  query: Query,
+  dialect: Dialect,
+  id: string,
+  locale: string,
+  value: string
+): Promise<boolean> {
+  const q = (name: string) => quote(dialect, name);
+  const rows = await query(
+    `SELECT COUNT(*) AS n FROM ${q("nextly_i18n_archive")} WHERE ${q("entry_id")} = ? AND ${q("locale")} = ? AND ${q("value")} = ?`,
+    [id, locale, value]
+  );
+  return Number(rows[0]?.n ?? 0) > 0;
 }
 
 /**
@@ -219,7 +250,7 @@ export async function lostValues(
 ): Promise<string[]> {
   return withQuery(dialect, url, async query => {
     const lost: string[] = [];
-    for (const { table, id, column, value } of seeded) {
+    for (const { table, id, column, value, locale } of seeded) {
       const read = async (from: string, where: string, params: unknown[]) => {
         try {
           const [row] = await query(
@@ -232,14 +263,20 @@ export async function lostValues(
           return undefined;
         }
       };
-      const onMain = await read(table, `${quote(dialect, "id")} = ?`, [id]);
-      const perLanguage = await read(
-        `${table}_locales`,
-        `${quote(dialect, "_parent")} = ? AND ${quote(dialect, "_locale")} = 'en'`,
-        [id]
-      );
-      if (onMain !== value && perLanguage !== value) {
-        lost.push(`${table}.${column}`);
+      const inLanguage = (code: string) =>
+        read(
+          `${table}_locales`,
+          `${quote(dialect, "_parent")} = ? AND ${quote(dialect, "_locale")} = ?`,
+          [id, code]
+        );
+      const kept =
+        locale === undefined || locale === DEFAULT_LOCALE
+          ? (await read(table, `${quote(dialect, "id")} = ?`, [id])) ===
+              value || (await inLanguage(DEFAULT_LOCALE)) === value
+          : (await inLanguage(locale)) === value ||
+            (await archived(query, dialect, id, locale, value));
+      if (!kept) {
+        lost.push(`${table}.${column}${locale ? ` (${locale})` : ""}`);
       }
     }
     return lost;

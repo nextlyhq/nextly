@@ -23,7 +23,7 @@ the entity's translations table, `<table>_locales`, where each document's values
 of your default language. For example, `dc_posts.title` moves to `dc_posts_locales.title`.
 
 Fields marked `localized: false` stay where they are. So do numbers, dates, checkboxes,
-relationships and JSON. See [Choose what gets translated](/docs/localization#choose-what-gets-translated).
+relationships and JSON, unless a field is declared `localized: true`, in which case it moves too. See [Choose what gets translated](/docs/localization#choose-what-gets-translated).
 
 The move copies every value first and only then removes the old column, but it does remove the
 old column. That is why the upgrade asks you to confirm a backup and to consent to each column
@@ -147,11 +147,20 @@ describes.
 
 ## 5. Check the upgrade
 
+Against the database you upgraded, run:
+
+```bash
+npx nextly migrate:status
+```
+
+It should list no migration as pending, failed or unfinished. Then run:
+
 ```bash
 npx nextly migrate:check
 ```
 
-It should report nothing pending. Then:
+It reads your migration files and configuration, not the database, and should report nothing
+to fix. Then:
 
 - open a few entries of each collection and Single in the admin, and check that their titles,
   slugs and text read as before;
