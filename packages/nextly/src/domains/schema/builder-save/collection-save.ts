@@ -48,6 +48,10 @@ import { sql } from "drizzle-orm";
 
 import { serializeUiSchema } from "../../../cli/utils/ui-schema-writer";
 import { NextlyError } from "../../../errors/nextly-error";
+import type {
+  RefusedPartwayPublicData,
+  ValidationPublicData,
+} from "../../../errors/public-data";
 import {
   type UiSchemaEntity,
   type UiSchemaManifest,
@@ -4395,15 +4399,20 @@ function triedHoldOf(
     },
     beforeResume: async db => {
       // A resumed try runs past statements an earlier try made durable, so a refusal here comes
-      // after part of the file landed, schema or data: told as part-way (`refusedPartway`), so the
-      // file is kept rather than withdrawn. Any other failure, a wait that ends the try among them,
-      // goes on as it is.
+      // after part of the file landed, schema or data: told as part-way (`refusedPartway`), with
+      // the step to settle it, so the file is kept rather than withdrawn. Any other failure, a
+      // wait that ends the try among them, goes on as it is.
       try {
         held = await holdCollectionOnConnection(deps.adapter, db, slug);
         await standing(db);
       } catch (error) {
         const refusal = holdRefusalOf(error);
-        throw NextlyError.is(refusal) ? refusedPartway(refusal) : error;
+        throw NextlyError.is(refusal)
+          ? refusedPartway(
+              refusal,
+              "What of its migration file ran stayed applied, so the file is kept: settle it with `nextly migrate:resolve` before saving again."
+            )
+          : error;
       }
     },
     settled: async () => {
@@ -4508,7 +4517,8 @@ export async function countedThroughApply<T>(
 
 /**
  * The failure of a save's file after an earlier file of the save applied: a hold's refusal
- * (`holdRefusalOf`) told as part-way (`refusedPartway`), any other failure as it is.
+ * (`holdRefusalOf`) told as part-way (`refusedPartway`), any other failure as it is. The files
+ * kept and the steps to settle them follow it (`partlyAppliedChange`).
  */
 function laterFileFailure(error: unknown): unknown {
   const refusal = holdRefusalOf(error);
@@ -4517,21 +4527,62 @@ function laterFileFailure(error: unknown): unknown {
 
 /**
  * A hold's refusal met where part of the save's change has already landed, told as the part-way
- * failure it is: `NEXTLY_MIGRATION_PARTIALLY_APPLIED`, with the refusal's own words and public data
- * and the refusal as its cause. Its own code (`COLLECTION_BEING_CHANGED`, refused before anything
- * changed; or a count that changed) is then never read for a save the database holds part of.
+ * failure it is: `NEXTLY_MIGRATION_PARTIALLY_APPLIED`, with the refusal as its cause. Its message
+ * says why the save stopped and never the refusal's own "save again" or "try again in a moment":
+ * what ran stayed applied, and a save made before that is settled meets it. The refusal's code and
+ * issues go under `publicData.refused`, not at the top, where a client shows them in the message's
+ * place. `then`, the step to settle it, follows where the caller adds none after it.
  */
-function refusedPartway(refusal: NextlyError): NextlyError {
+function refusedPartway(refusal: NextlyError, then?: string): NextlyError {
+  const issues = (
+    refusal.publicData as Partial<ValidationPublicData> | undefined
+  )?.errors;
+  const publicData: RefusedPartwayPublicData = {
+    refused: {
+      code: refusal.code,
+      ...(issues === undefined ? {} : { errors: issues }),
+    },
+  };
   return new NextlyError({
     code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
-    publicMessage: refusal.publicMessage,
-    ...(refusal.publicData === undefined
-      ? {}
-      : { publicData: refusal.publicData }),
+    publicMessage: `The save stopped part way, after part of it had applied: ${refusedBecause(refusal)}.${then === undefined ? "" : ` ${then}`}`,
+    publicData,
     logMessage: refusal.logMessage,
     logContext: { reason: "partially-applied", refusedAs: refusal.code },
     cause: refusal,
   });
+}
+
+/**
+ * Why a hold refused a save (`holdRefusalOf`), in words that hold once part of it applied: each
+ * field whose count changed, by the counts its refusal logged, or the collection held elsewhere.
+ */
+function refusedBecause(refusal: NextlyError): string {
+  if (!isDeletionCountRefusal(refusal)) {
+    return "the collection was being changed elsewhere";
+  }
+  const fields =
+    (
+      refusal.logContext as
+        | {
+            fields?: readonly {
+              field: string;
+              counted: number | null;
+              confirmed: number;
+            }[];
+          }
+        | undefined
+    )?.fields ?? [];
+  if (fields.length === 0) {
+    return "the count of what it deletes changed, so those values were not deleted";
+  }
+  return fields
+    .map(({ field, counted, confirmed }) =>
+      counted === null
+        ? `the values of ${field} could not be counted again, so they were not deleted`
+        : `${field} now holds ${String(counted)} value(s), not the ${String(confirmed)} confirmed, so they were not deleted`
+    )
+    .join("; ");
 }
 
 /**

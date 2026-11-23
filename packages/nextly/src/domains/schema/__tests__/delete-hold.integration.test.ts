@@ -446,6 +446,19 @@ describe.each(getConfiguredTestDialects())(
       return existsSync(dir) ? readdirSync(dir).sort() : [];
     };
 
+    // What a client shows for a failed save, read as the admin reads it: the issues the error's data
+    // carries at its top, where it carries any, in place of its message.
+    const shownOf = (outcome: unknown): string => {
+      const { publicMessage, publicData } = outcome as {
+        publicMessage?: string;
+        publicData?: { errors?: readonly { message?: unknown }[] };
+      };
+      const issues = (publicData?.errors ?? []).flatMap(issue =>
+        typeof issue.message === "string" ? [issue.message] : []
+      );
+      return issues.length > 0 ? issues.join(" ") : (publicMessage ?? "");
+    };
+
     const refusedWith = (count: number) => ({
       code: "VALIDATION_ERROR",
       publicData: {
@@ -923,6 +936,13 @@ describe.each(getConfiguredTestDialects())(
           "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
         );
         expect(historyFiles(t).length).toBeGreaterThan(filesBefore.length);
+        // What the person is shown says the save stopped part way, why, and how to settle it.
+        const shown = shownOf(outcome);
+        expect(shown).toContain("The save stopped part way");
+        expect(shown).toContain(
+          "note now holds 4 value(s), not the 3 confirmed"
+        );
+        expect(shown).toContain("nextly migrate:resolve");
       },
       60_000
     );
@@ -997,20 +1017,32 @@ describe.each(getConfiguredTestDialects())(
           name => !filesBefore.includes(name)
         );
         expect(written.length, written.join(", ")).toBeGreaterThan(1);
+        // The refusal travels in the data, under `refused`, not as issues at its top, which a
+        // client shows in the message's place.
         expect(outcome).toMatchObject({
           code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
           publicData: {
-            errors: [
-              expect.objectContaining({
-                path: "fields.note",
-                code: "DELETION_COUNT_CHANGED",
-              }),
-            ],
+            refused: {
+              code: "VALIDATION_ERROR",
+              errors: [
+                expect.objectContaining({
+                  path: "fields.note",
+                  code: "DELETION_COUNT_CHANGED",
+                }),
+              ],
+            },
           },
         });
-        expect(
-          (outcome as { publicMessage?: string }).publicMessage ?? ""
-        ).toContain("The database now holds part of this change");
+        // What the person is shown says the save stopped part way, why, and how to settle it,
+        // never to save again as a refusal that changed nothing would.
+        const shown = shownOf(outcome);
+        expect(shown).toContain("The save stopped part way");
+        expect(shown).toContain(
+          "note now holds 4 value(s), not the 3 confirmed"
+        );
+        expect(shown).toContain("The database now holds part of this change");
+        expect(shown).toContain("nextly migrate:resolve");
+        expect(shown).not.toContain("save again");
         expect(await hasNoteColumn(t)).toBe(true);
         expect(await notesHeld(t)).toBe(4);
       },
