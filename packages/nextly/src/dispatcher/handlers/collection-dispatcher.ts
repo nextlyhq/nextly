@@ -2630,7 +2630,7 @@ async function saveThroughWriter(
         : beforeWrite;
   const result = await writeCollectionSave(prepared.deps, prepared.save, {
     ...roadOptions,
-    ...(change.holdScope === undefined ? {} : { holdScope: change.holdScope }),
+    holdScope: change.holdScope,
   });
   if (runsFile) await afterTheFile(change, prepared.fields);
   return {

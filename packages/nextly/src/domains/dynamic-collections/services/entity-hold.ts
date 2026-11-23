@@ -32,13 +32,10 @@ export function entityHoldKey(entity: EntityRef): string {
  * How long a write or a save waits for the other side of an entity's hold before it is refused
  * with nothing changed, as long as MySQL's named locks wait (`takeNamedCollectionLocks`).
  */
-export const ENTITY_HOLD_WAIT_MS = 30_000;
+const ENTITY_HOLD_WAIT_MS = 30_000;
 
 /** The refusal of a hold not had in time, or held by a save where waiting is not possible. */
-export function entityBeingChanged(
-  entity: EntityRef,
-  reason: string
-): NextlyError {
+function entityBeingChanged(entity: EntityRef, reason: string): NextlyError {
   return new NextlyError({
     code: "COLLECTION_BEING_CHANGED",
     publicMessage:
@@ -98,23 +95,6 @@ export function shareEntityOnPostgres(
         sql`pg_try_advisory_xact_lock_shared(${advisoryKeysOf(entity)})`
       ),
     () => entityBeingChanged(entity, "entity-share-timeout"),
-    waitMs
-  );
-}
-
-/**
- * A deleting save's hold of `entity` on PostgreSQL inside its migration file's transaction
- * (`rows` runs there): exclusive, waiting out the writes that share it, and let go when that
- * transaction commits or rolls back, after the registry row the transaction writes.
- */
-export function holdEntityInTransactionOnPostgres(
-  rows: RowsOn,
-  entity: EntityRef,
-  waitMs = ENTITY_HOLD_WAIT_MS
-): Promise<void> {
-  return attemptUntil(
-    () => got(rows, sql`pg_try_advisory_xact_lock(${advisoryKeysOf(entity)})`),
-    () => entityBeingChanged(entity, "entity-hold-timeout"),
     waitMs
   );
 }

@@ -507,7 +507,7 @@ export async function writeCollectionSave(
      * kept past this save until the caller has written the registry row, and let go by it. Absent,
      * the save keeps its own, let go when it returns.
      */
-    holdScope?: SaveHoldScope;
+    holdScope?: SaveHoldScope | undefined;
   } = {}
 ): Promise<CollectionSaveResult> {
   // A drift refusal leaves the save's files withdrawn, so it is told with the Builder's way on.
@@ -596,15 +596,7 @@ async function writeCollectionSaveHeld(
           );
         }
         const hold = deletionHoldOfSave(deps, save, written.table);
-        // On PostgreSQL and SQLite the collection is held from before the file's count until the
-        // caller has written the registry row, so an entry write that waited meets the definition
-        // the save recorded. On MySQL the file's try holds it on its own connection (`runHeld`).
-        if (
-          hold !== undefined &&
-          deps.adapter.getCapabilities().dialect !== "mysql"
-        ) {
-          await scope.take(deps.adapter, save.slug);
-        }
+        await heldForFileRoad(deps, save.slug, hold, scope);
         await runWritten(
           deps,
           written.files,
@@ -4549,6 +4541,23 @@ async function runHeld<T>(
       await closeHoldingConnection(deps.adapter, connection);
     }
   }
+}
+
+/**
+ * The save's hold for its file road, taken through `scope` where it deletes values (`hold`): on
+ * PostgreSQL and SQLite the collection is held from before the file's count until the caller has
+ * written the registry row, so an entry write that waited meets the definition the save recorded.
+ * On MySQL the file's try holds it on its own connection instead (`runHeld`).
+ */
+async function heldForFileRoad(
+  deps: CollectionSaveDeps,
+  slug: string,
+  hold: SaveDeletionHold | undefined,
+  scope: SaveHoldScope
+): Promise<void> {
+  if (hold === undefined) return;
+  if (deps.adapter.getCapabilities().dialect === "mysql") return;
+  await scope.take(deps.adapter, slug);
 }
 
 /**
