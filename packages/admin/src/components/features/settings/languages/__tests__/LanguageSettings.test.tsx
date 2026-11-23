@@ -250,6 +250,45 @@ describe("Settings › Languages", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
+  it("names each fallback choice with its code, so two languages sharing a name can be told apart", async () => {
+    await open({
+      lockedByConfig: false,
+      languages: [
+        language("en-GB", "English", 0, { isDefault: true }),
+        language("en-US", "English", 1),
+      ],
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Add language" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Add a language",
+    });
+    await user.click(
+      within(dialog).getByRole("combobox", { name: "Falls back to" })
+    );
+
+    const options = await screen.findAllByRole("option");
+    expect(options.map(option => option.textContent)).toEqual([
+      "None",
+      "English (en-GB)",
+      "English (en-US)",
+    ]);
+    await user.click(screen.getByRole("option", { name: "English (en-US)" }));
+    await user.type(within(dialog).getByLabelText("Code"), "en-AU");
+    await user.type(
+      within(dialog).getByLabelText("Name"),
+      "Australian English"
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add language" })
+    );
+    await waitFor(() =>
+      expect(api.changeLanguages).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "en-AU", fallback: ["en-US"] })
+      )
+    );
+  });
+
   it("confirms a remove, saying what readers and editors lose and that the content is kept", async () => {
     await open();
     await waitFor(() =>

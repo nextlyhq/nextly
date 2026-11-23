@@ -117,7 +117,8 @@ export function LanguageFields({
               <SelectItem value={NO_FALLBACK}>None</SelectItem>
               {fallbackChoices.map(language => (
                 <SelectItem key={language.code} value={language.code}>
-                  {language.label}
+                  {/* With its code: two languages may share a name. */}
+                  {`${language.label} (${language.code})`}
                 </SelectItem>
               ))}
             </SelectContent>
