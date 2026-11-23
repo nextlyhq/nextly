@@ -461,9 +461,57 @@ describe("a define* entity whose own top-level field takes a system field's exac
     ]);
   });
 
-  // A name of another letter case is another document key, and a field inside a group lives
-  // under the group's key: neither shares one with the system field.
-  it("is accepted when the name differs in case or the field is nested", () => {
+  // A group with no name only lays fields out: the fields inside it are stored at the top level
+  // under their own names (`fieldsStoredOnRow`, the view `define*` decides by), so one there
+  // shares the system field's key as one beside it would.
+  it("is refused inside a group with no name", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [
+            {
+              type: "group",
+              fields: [{ name: "slug", type: "component", component: "seo" }],
+            },
+          ] as never,
+        }),
+      ],
+    };
+
+    expect(configurationProblems(declared)).toContainEqual(
+      expect.objectContaining({
+        path: "collections[0].fields[2].fields[0].name",
+        code: "FIELD_NAME_RESERVED",
+      })
+    );
+  });
+
+  // An entry that is not a field is the entity validators' to report; this check passes it by.
+  it("passes by an entry that is not a field, which a plugin's setup adds", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "notes",
+          fields: [{ name: "body", type: "text" }],
+        }),
+      ],
+    };
+    const [notes] = setupTransformerInput(declared, []).collections;
+    const effective = {
+      collections: [{ ...notes, fields: [...notes.fields, null] }],
+    };
+
+    expect(
+      configurationProblems(declared, effective as never).map(
+        problem => problem.code
+      )
+    ).not.toContain("FIELD_NAME_RESERVED");
+  });
+
+  // A name of another letter case is another document key, and a field inside a named group
+  // lives under the group's key: neither shares one with the system field.
+  it("is accepted when the name differs in case or the field is in a named group", () => {
     const declared = {
       collections: [
         defineCollection({
