@@ -6,7 +6,8 @@
  *
  * A read-only row offers nothing that changes the definition: only its
  * settings, shown without letting them change, the field group it comes from,
- * and where it is defined.
+ * and where it is defined. A field group's own field offers Move to… as well,
+ * disabled, with the move rule's reason it stays.
  */
 import {
   DropdownMenu,
@@ -17,12 +18,13 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import { extractFieldGroupReferences } from "nextly/field-group-type";
-import type { JSX } from "react";
+import { type JSX, useId } from "react";
 
 import { MoreHorizontal } from "@admin/components/icons";
 import { canFocus } from "@admin/lib/builder/outline/focus-view";
 import {
   describeReadOnly,
+  isFieldGroupOwnRow,
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
 
@@ -65,6 +67,11 @@ export function OutlineRowMenu({
   const subject = field.label || field.name || "this field";
   const group = fieldGroupOf(node);
   const holdsFields = container === "group" || container === "repeater";
+  const reasonId = useId();
+  // Asked only while the menu is open: the rule's reason a field group's own field stays, whatever
+  // place it is moved to.
+  const stays =
+    open && isFieldGroupOwnRow(node) ? actions.judgeMoveTo(id, {}) : undefined;
 
   return (
     <DropdownMenu
@@ -112,8 +119,18 @@ export function OutlineRowMenu({
         {readOnly ? (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel className="font-normal text-muted-foreground">
-              {describeReadOnly(readOnly)}
+            {stays && !stays.allowed && (
+              <DropdownMenuItem disabled aria-describedby={reasonId}>
+                Move to…
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuLabel
+              id={reasonId}
+              className="font-normal text-muted-foreground"
+            >
+              {stays && !stays.allowed
+                ? stays.message
+                : describeReadOnly(readOnly)}
             </DropdownMenuLabel>
           </>
         ) : (

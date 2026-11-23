@@ -15,7 +15,10 @@ import { useMemo } from "react";
 
 import type { BuilderFieldError } from "@admin/lib/builder/field-validators";
 import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
-import type { VisibleRow } from "@admin/lib/builder/outline/outline-model";
+import {
+  isFieldGroupOwnRow,
+  type VisibleRow,
+} from "@admin/lib/builder/outline/outline-model";
 import { isPendingDelete } from "@admin/lib/builder/outline/pending-rows";
 
 import { AddPlace, withAddPlaces, type AddPlaceItem } from "./AddPlace";
@@ -98,9 +101,11 @@ export function OutlineTree({
               tabStop={node.id === tabStopId}
               draggable={
                 !finding &&
-                node.own &&
-                node.readOnly === null &&
-                !isPendingDelete(node)
+                !isPendingDelete(node) &&
+                // A field group's own field is dragged too, so a person who tries learns why it
+                // stays: the move rule refuses it for the field group's sake.
+                ((node.own && node.readOnly === null) ||
+                  isFieldGroupOwnRow(node))
               }
               movesDescribedBy={movesDescribedBy}
               onSelect={actions.select}

@@ -310,7 +310,9 @@ function RowItem({
       aria-setsize={row.setsize}
       aria-expanded={expanded}
       aria-selected={selected}
-      aria-describedby={draggable ? movesDescribedBy : undefined}
+      // The keys that move a field are named only where they move it: a field group's own field
+      // may be dragged, to be told why it stays, but no key moves it.
+      aria-describedby={draggable && node.own ? movesDescribedBy : undefined}
       tabIndex={tabStop ? 0 : -1}
       onClick={() => onSelect(node.id)}
       className={cn(
