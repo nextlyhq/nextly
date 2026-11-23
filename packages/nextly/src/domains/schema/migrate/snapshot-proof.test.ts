@@ -1463,6 +1463,23 @@ describe("what a hand-made database can hold under the names a file writes", () 
     ] as const) {
       expect(await one(statement, dialect, facts), statement).toBe(status);
     }
+    // A name that is itself a word opening a column constraint still names the constraint.
+    expect(
+      await one(
+        `ALTER TABLE "dc_posts" ADD COLUMN "author" text CONSTRAINT generated REFERENCES "dc_posts" ("id") DEFERRABLE INITIALLY DEFERRED`,
+        "postgresql",
+        { deferrability: "not" }
+      )
+    ).toBe("not-done");
+    // A column a later statement drops takes its constraints with it: nothing is asked of them.
+    expect(
+      await one(
+        ADD_KEY(" DEFERRABLE"),
+        "postgresql",
+        { deferrability: "not" },
+        ['ALTER TABLE "dc_posts" DROP COLUMN "author"']
+      )
+    ).toBe("shown");
   });
 
   it("a later drop ends only an object of its own kind under the name", async () => {
@@ -1537,6 +1554,48 @@ describe("what a hand-made database can hold under the names a file writes", () 
         ["ALTER TABLE `dc_posts` DROP CHECK `dc_posts_slug_idx`"]
       )
     ).toBe("not-done");
+    for (const plain of [
+      "ALTER TABLE `dc_posts` ADD INDEX `dc_posts_slug_idx` (`slug`)",
+      "CREATE INDEX `dc_posts_slug_idx` ON `dc_posts` (`slug`)",
+    ]) {
+      expect(
+        await one(plain, "mysql", { index: null }, [
+          "ALTER TABLE `dc_posts` DROP CONSTRAINT `dc_posts_slug_idx`",
+        ]),
+        plain
+      ).toBe("not-done");
+    }
+    // A MySQL unique index is a constraint too, which a constraint's drop removes.
+    for (const unique of [
+      "ALTER TABLE `dc_posts` ADD UNIQUE INDEX `dc_posts_slug_uq` (`slug`)",
+      "CREATE UNIQUE INDEX `dc_posts_slug_uq` ON `dc_posts` (`slug`)",
+    ]) {
+      expect(
+        await one(unique, "mysql", { index: null }, [
+          "ALTER TABLE `dc_posts` DROP CONSTRAINT `dc_posts_slug_uq`",
+        ]),
+        unique
+      ).toBe("shown");
+    }
+  });
+
+  it("MySQL's RENAME INDEX moves an index and not a check of the same name", async () => {
+    const asked: string[] = [];
+    await statusesAgainst(
+      [
+        "ALTER TABLE `dc_posts` ADD CONSTRAINT `dc_posts_title_ck` CHECK (`title` <> '')",
+        "ALTER TABLE `dc_posts` RENAME INDEX `dc_posts_title_ck` TO `renamed`",
+      ],
+      "mysql",
+      {
+        ...liveWith({}),
+        checkEnforced: (table, name) => {
+          asked.push(`${table}.${name}`);
+          return true;
+        },
+      }
+    );
+    expect(asked).toEqual(["dc_posts.dc_posts_title_ck"]);
   });
 
   it("an index a file creates must be a plain one in the database", async () => {
