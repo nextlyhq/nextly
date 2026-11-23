@@ -55,9 +55,11 @@ export function formUploadsCollection(): CollectionConfig {
       // and the submission's id are indexed, and an index is built on the
       // main table, so they are kept once for every language.
       text({ name: "media", required: true, localized: false }),
-      // The form's id and the file field's name it was uploaded for.
+      // The form's id and the file field's name it was uploaded for. The
+      // field's name is a key, not content written in a language, so it is
+      // kept once for every language too.
       text({ name: "form", required: true, localized: false }),
-      text({ name: "field", required: true }),
+      text({ name: "field", required: true, localized: false }),
       // The submission's id once one claims it; empty until then.
       text({ name: "submission", localized: false }),
       // When it stopped being claimable, its file to be deleted.
