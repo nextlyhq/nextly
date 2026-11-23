@@ -977,7 +977,7 @@ describe.each(getConfiguredTestDialects())(
       const found = (await t.nextly.find({
         collection: SLUG,
         limit: 10,
-      } as never)) as {
+      } as never)) as unknown as {
         items: Array<{ title: string; box?: { v?: unknown } }>;
       };
       expect(

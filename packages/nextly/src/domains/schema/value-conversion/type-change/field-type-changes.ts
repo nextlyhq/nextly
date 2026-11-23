@@ -30,6 +30,7 @@ import type { RowKey } from "../types";
 
 import {
   columnDescriptorAt,
+  type Family,
   type FieldTypeOnDialect,
   fieldTypeOnDialect,
 } from "./field-type";
@@ -164,6 +165,67 @@ export interface JudgedFieldTypeChange extends FieldTypeChange {
    * A field that alone stops being translated is the save's check of a field leaving translation.
    */
   leavesWithEntity?: true;
+  /**
+   * Each kept or changed value as the new type reads it, by row, where the save rewrites the
+   * values (`rewrites`): what the save's conversion writes. Absent where the database's cast is
+   * left to reach them.
+   */
+  readings?: readonly { key: RowKey; readsAs: string }[];
+  /**
+   * The save writes this change's values itself, as the new type reads them (`rewrites`), here and
+   * in the migration file that deploys it, so no database's cast is left to reach them: a value
+   * that cannot convert is cleared where the person confirmed it, never refused as undeployable.
+   */
+  converted?: true;
+}
+
+/**
+ * The families a save that rewrites the values converts between (`rewrites`): a text, an email, a
+ * choice or a number from any of those, and a list into one of them, its one item. Any other pair
+ * keeps the answer the database's cast gives, so a change this conversion does not write is judged
+ * exactly as before, never written half way.
+ */
+const REWRITTEN_FROM: ReadonlySet<Family> = new Set([
+  "text",
+  "email",
+  "choice",
+  "number",
+  "list",
+]);
+const REWRITTEN_TO: ReadonlySet<Family> = new Set([
+  "text",
+  "email",
+  "choice",
+  "number",
+]);
+
+/**
+ * What the stored-value judgement is asked to hand over: each value's reading, gathered into
+ * `readings`, where a unique MySQL text weighs them after the scan (`collated`) or the save writes
+ * them (`rewritten`); and, for the latter, that it judges the values as rewritten.
+ */
+function readingOptions(
+  collated: boolean,
+  rewritten: boolean,
+  readings: { key: RowKey; readsAs: string }[]
+): { onReading?: (key: RowKey, readsAs: string) => void; rewrites?: true } {
+  return {
+    ...(collated || rewritten
+      ? {
+          onReading: (key: RowKey, readsAs: string) =>
+            readings.push({ key, readsAs }),
+        }
+      : {}),
+    ...(rewritten ? { rewrites: true as const } : {}),
+  };
+}
+
+/** Whether a save that rewrites the values writes `from`'s values as `to` reads them. */
+function rewritesPair(
+  from: FieldTypeOnDialect,
+  to: FieldTypeOnDialect
+): boolean {
+  return REWRITTEN_FROM.has(from.family) && REWRITTEN_TO.has(to.family);
 }
 
 /**
@@ -190,6 +252,11 @@ export async function judgeFieldTypeChanges(args: {
   /** The fields whose translations column the road's own statements retype (`retypedTranslations`). */
   retyped?: ReadonlySet<string>;
   changes: readonly FieldTypeChange[];
+  /**
+   * The save rewrites each value of a pair it converts (`rewritesPair`) as the new type reads it,
+   * so each change of such a pair is judged that way and hands over its readings.
+   */
+  rewrites?: boolean;
 }): Promise<JudgedFieldTypeChange[]> {
   const judged: JudgedFieldTypeChange[] = [];
   const columnsOf = liveColumnReader(args.db, args.dialect);
@@ -207,6 +274,8 @@ export async function judgeFieldTypeChanges(args: {
       change.to.unique === true &&
       COLLATED_FAMILIES.has(change.toType.family);
     const readings: { key: RowKey; readsAs: string }[] = [];
+    const rewritten =
+      args.rewrites === true && rewritesPair(change.fromType, change.toType);
     const judgedHere = await judgeStoredTypeChange({
       db: args.db,
       dialect: args.dialect,
@@ -220,9 +289,7 @@ export async function judgeFieldTypeChanges(args: {
       accepts: fieldAccepts(change.toType, change.to),
       // A unique field holds each value once: two that read as one value of the new type block.
       unique: change.to.unique === true && !collated,
-      ...(collated
-        ? { onReading: (key, readsAs) => readings.push({ key, readsAs }) }
-        : {}),
+      ...readingOptions(collated, rewritten, readings),
     });
     const result =
       collated && text !== undefined
@@ -237,6 +304,7 @@ export async function judgeFieldTypeChanges(args: {
       column,
       result,
       ...(perLanguage ? translationsTableFlags(change, args) : {}),
+      ...(rewritten ? { readings, converted: true as const } : {}),
     });
   }
   return judged;
@@ -561,6 +629,7 @@ function refusalOf(
     leaving,
     lossy,
     rewritten: judgement.reasons.some(r => r.kind === "needs-rewrite"),
+    converted: change.converted === true,
   });
   const values = blocked || lossy ? ` (${describeClassed(judgement)})` : "";
   return {
@@ -580,12 +649,15 @@ function refusalOf(
 /**
  * Why a refused change can't go ahead as it stands, beyond its values' own reasons: its translations
  * column, its entity leaving translation, and a value the deploying cast would not clear or rewrite.
+ * A change the save converts itself (`converted`) is deployed by its own file, so a value it would
+ * clear waits only for the person's confirmation.
  */
 function refusalReasons(of: {
   translated: boolean;
   leaving: boolean;
   lossy: boolean;
   rewritten: boolean;
+  converted: boolean;
 }): string[] {
   const why: string[] = [];
   if (of.translated) {
@@ -598,11 +670,15 @@ function refusalReasons(of: {
       "Its entity stops being translated in the same save, which moves each language's value out of the translations table as it is stored: turn off translation and save first, then change the field's type."
     );
   }
-  if (of.lossy) {
+  if (of.lossy && of.converted) {
+    why.push(
+      "Confirm clearing the values that cannot convert, with the count the review shows, and the save clears them, here and on every database its migration deploys to."
+    );
+  } else if (of.lossy) {
     why.push(
       `Clearing the values that cannot convert can't be deployed yet: ${DEPLOYED_BY_CAST}.`
     );
-  } else if (of.rewritten) {
+  } else if (of.rewritten && !of.converted) {
     why.push(
       `Rewriting values into the new type's form can't be deployed yet: ${DEPLOYED_BY_CAST}.`
     );
@@ -718,6 +794,8 @@ export interface EntityTypeChangeInput {
   ignore?: ReadonlySet<string>;
   /** The creator of the entity's table before the change, where its ownership moves (`fieldTypeChangesOf`). */
   builtByBefore?: ColumnOrigin;
+  /** The save rewrites the values of each pair it converts (`judgeFieldTypeChanges`' `rewrites`). */
+  rewrites?: boolean;
 }
 
 /**
@@ -730,6 +808,23 @@ export async function fieldTypeChangeRefusals(
   dialect: SupportedDialect,
   entity: EntityTypeChangeInput
 ): Promise<TypeChangeRefusal[]> {
+  return (await judgeEntityTypeChanges(db, dialect, entity)).refusals;
+}
+
+/**
+ * `entity`'s field type changes judged over the values their columns hold, with the refusals they
+ * give (`fieldTypeChangeRefusals`): a save that converts the values reads each one's readings and
+ * the values it clears from the same judgement. None judged where the definition awaits its
+ * migration, which is refused before any value is read.
+ */
+export async function judgeEntityTypeChanges(
+  db: unknown,
+  dialect: SupportedDialect,
+  entity: EntityTypeChangeInput
+): Promise<{
+  refusals: TypeChangeRefusal[];
+  judged: JudgedFieldTypeChange[];
+}> {
   const changes = fieldTypeChangesOf({
     previous: entity.previous,
     next: entity.next,
@@ -741,36 +836,37 @@ export async function fieldTypeChangeRefusals(
       : {}),
     ...(entity.componentRow === true ? { componentRow: true } : {}),
   }).filter(change => entity.ignore?.has(change.to.name) !== true);
-  if (changes.length === 0) return [];
+  if (changes.length === 0) return { refusals: [], judged: [] };
   const pending =
     entity.migrationStatus === undefined
       ? null
       : pendingMigrationRefusal(entity.label, entity.migrationStatus, changes);
-  if (pending !== null) return [pending];
-  return typeChangeRefusals(
-    entity.label,
-    await judgeFieldTypeChanges({
-      db,
-      dialect,
-      builtBy: entity.builtBy,
-      ...(entity.componentRow === true ? { componentRow: true } : {}),
-      table: entity.table,
-      ...(entity.translationsTable !== undefined
-        ? { translationsTable: entity.translationsTable }
-        : {}),
-      ...(entity.translatedBefore !== undefined
-        ? { translated: entity.translatedBefore }
-        : {}),
-      ...(entity.translatedAfter !== undefined
-        ? { translatedAfter: entity.translatedAfter }
-        : {}),
-      ...(entity.retypedTranslations !== undefined
-        ? { retyped: entity.retypedTranslations }
-        : {}),
-      changes,
-    }),
-    entity.acknowledged
-  );
+  if (pending !== null) return { refusals: [pending], judged: [] };
+  const judged = await judgeFieldTypeChanges({
+    db,
+    dialect,
+    builtBy: entity.builtBy,
+    ...(entity.componentRow === true ? { componentRow: true } : {}),
+    table: entity.table,
+    ...(entity.translationsTable !== undefined
+      ? { translationsTable: entity.translationsTable }
+      : {}),
+    ...(entity.translatedBefore !== undefined
+      ? { translated: entity.translatedBefore }
+      : {}),
+    ...(entity.translatedAfter !== undefined
+      ? { translatedAfter: entity.translatedAfter }
+      : {}),
+    ...(entity.retypedTranslations !== undefined
+      ? { retyped: entity.retypedTranslations }
+      : {}),
+    changes,
+    ...(entity.rewrites === true ? { rewrites: true } : {}),
+  });
+  return {
+    refusals: typeChangeRefusals(entity.label, judged, entity.acknowledged),
+    judged,
+  };
 }
 
 /** A refusal as a validation error lists it: by the field's path under `fields`. */
@@ -799,12 +895,27 @@ export async function refuseFieldTypeChanges(
   dialect: SupportedDialect,
   entity: EntityTypeChangeInput
 ): Promise<void> {
-  const refusals = await fieldTypeChangeRefusals(db, dialect, entity);
+  throwTypeChangeRefusals(
+    entity.label,
+    await fieldTypeChangeRefusals(db, dialect, entity)
+  );
+}
+
+/**
+ * Throw `refusals` of `entity`'s type changes as one validation error, each by its field, where
+ * there are any: every refusal at once, so the owner sees them all in one save.
+ *
+ * @throws {NextlyError} a validation error listing each refusal by its field
+ */
+export function throwTypeChangeRefusals(
+  entity: string,
+  refusals: readonly TypeChangeRefusal[]
+): void {
   if (refusals.length === 0) return;
   throw NextlyError.validation({
     errors: refusals.map(typeChangeError),
     logContext: {
-      entity: entity.label,
+      entity,
       fields: refusals.map(refusal => refusal.path),
     },
   });
