@@ -26,6 +26,14 @@ import { rejectFile } from "./file-uploads";
 /** The sweep's job slug. */
 const FILE_UPLOAD_SWEEP_JOB = "files:sweep-abandoned";
 
+/**
+ * How much longer than its collection's wait the sweep leaves an upload, in
+ * seconds. A confirm refuses at the wait itself, so one that began in time is
+ * still checking bytes for at most a storage read's deadline; leaving it this
+ * long means the sweep never deletes bytes a confirm is about to keep.
+ */
+const CONFIRM_GRACE_SECONDS = 600;
+
 /** How many waiting uploads of one collection a pass handles at most. */
 const PER_PASS = 50;
 
@@ -54,7 +62,7 @@ export async function sweepAbandonedUploads(
     if (collection.files === undefined) continue;
     const { pendingTimeout } = resolveFilesPolicy(collection.files);
     const cutoff = new Date(
-      now.getTime() - pendingTimeout * 1000
+      now.getTime() - (pendingTimeout + CONFIRM_GRACE_SECONDS) * 1000
     ).toISOString();
     const waiting = unwrapServiceResult<{
       docs?: Array<Record<string, unknown>>;

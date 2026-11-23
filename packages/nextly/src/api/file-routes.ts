@@ -26,7 +26,7 @@ import {
   type StartUploadBody,
 } from "../domains/files/file-uploads";
 import { NextlyError } from "../errors/nextly-error";
-import { getCachedNextly } from "../init";
+import { ensureServicesInitialized } from "../route-handler";
 
 import { PRIVATE_NO_STORE_HEADERS } from "./authenticated-read";
 import { respondMutation } from "./response-shapes";
@@ -75,8 +75,9 @@ export const handleFileRoute: (
     // Before the body is read or anyone recognised.
     refuseCrossSiteWrite(request);
     // A signed-in person's request carries no staff credential, which is
-    // what boots the app for other routes, so this one boots it itself.
-    await getCachedNextly();
+    // what boots the app for other routes, so this one boots it itself, from
+    // the handler's own configuration, as the router would.
+    await ensureServicesInitialized();
     const slug = routeParams.slug ?? "";
     switch (method) {
       case "startFileUpload": {

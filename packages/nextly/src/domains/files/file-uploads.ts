@@ -469,9 +469,17 @@ export async function completeUpload(
     throw rejectedError(slug, "type-mismatch");
   }
 
+  // The checked bytes are kept under a key of their own, which the upload
+  // link cannot write: the link stays usable until it expires, and a second
+  // PUT through it must never replace a file already confirmed. The entry is
+  // pointed at the new key before the upload's own object is removed.
+  const finalKey = files.newKey();
+  await files.put(finalKey, bytes, { mimeType: String(entry.mimeType) });
   await writeFileFields(slug, entry.id, {
     fileStatus: "ready",
     sha256: createHash("sha256").update(bytes).digest("hex"),
+    storageKey: finalKey,
   });
+  await files.delete(key);
   return confirmed(entry);
 }

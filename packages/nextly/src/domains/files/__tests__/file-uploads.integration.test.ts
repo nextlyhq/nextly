@@ -312,6 +312,54 @@ describe.each(getConfiguredTestDialects())(
       expect(again.body.item).toEqual(done.body.item);
     });
 
+    it("keeps confirmed bytes where the upload link cannot write", async () => {
+      const bytes = pdf("kept as checked");
+      const { id, upload } = started(
+        await start(await staff("uploader"), claimFor(bytes))
+      );
+      const uploadKey = String((await entry(id))!.storageKey);
+      storage.browserPut(upload, bytes);
+      expect((await complete(await staff("uploader"), id)).status).toBe(200);
+
+      const ready = (await entry(id))!;
+      const keptKey = String(ready.storageKey);
+      expect(keptKey).not.toBe(uploadKey);
+      expect(keptKey).toMatch(/^files\/contracts\/[0-9a-f-]{36}$/);
+      expect(storage.objects.has(uploadKey)).toBe(false);
+
+      // The link is still within its five minutes: content of the same
+      // length sent through it again never reaches the confirmed file.
+      const swap = Buffer.alloc(bytes.length, 0x41);
+      expect(storage.browserPut(upload, swap).ok).toBe(true);
+      expect(storage.objects.get(keptKey)?.bytes.equals(bytes)).toBe(true);
+      expect((await entry(id))!.storageKey).toBe(keptKey);
+    });
+
+    it("removes a file's bytes when its entry is deleted, confirmed or not", async () => {
+      const bytes = pdf("deleted with its entry");
+      const done = started(
+        await start(await staff("uploader"), claimFor(bytes))
+      );
+      storage.browserPut(done.upload, bytes);
+      await complete(await staff("uploader"), done.id);
+      const doneKey = String((await entry(done.id))!.storageKey);
+
+      const waiting = started(
+        await start(await staff("uploader"), claimFor(bytes))
+      );
+      storage.browserPut(waiting.upload, bytes);
+      const waitingKey = String((await entry(waiting.id))!.storageKey);
+
+      expect(storage.objects.has(doneKey)).toBe(true);
+      expect(storage.objects.has(waitingKey)).toBe(true);
+      for (const id of [done.id, waiting.id]) {
+        await new Nextly().delete({ collection: CONTRACTS, id } as never);
+      }
+      await expect(entry(done.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(storage.objects.has(doneKey)).toBe(false);
+      expect(storage.objects.has(waitingKey)).toBe(false);
+    });
+
     it("refuses staff without the permission before anything is written", async () => {
       const before = await entryCount();
       const objects = storage.objects.size;
@@ -591,8 +639,10 @@ describe.each(getConfiguredTestDialects())(
           },
           now
         );
-      // Now, within the hour, nothing is swept.
+      // Now, within the hour, nothing is swept; nor just past it, while a
+      // confirm that began in time may still be checking the bytes.
       await sweep(new Date());
+      await sweep(new Date(Date.now() + 3600_000 + 60_000));
       expect((await entry(old.id))!.fileStatus).toBe("pending");
       expect(storage.objects.has(key)).toBe(true);
 

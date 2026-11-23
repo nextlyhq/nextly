@@ -87,6 +87,7 @@ import {
   resolveKnownTableColumns,
   resolveTableColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
+import { registerStoredFileDeletion } from "../domains/files/delete-stored-file";
 import { stopGrantsExpiryRetry } from "../domains/flush-content-change";
 import type {
   LanguageAddressRule,
@@ -3427,6 +3428,9 @@ function registerGlobalHooks(
   );
   hookRegistry.register("beforeCreate", "*", sanitizationHandler);
   hookRegistry.register("beforeUpdate", "*", sanitizationHandler);
+  // A private file's bytes go with its entry: deleting the entry first would
+  // leave them in storage with nothing pointing at them.
+  registerStoredFileDeletion(hookRegistry);
   logger.info?.(
     `Input sanitization hook registered (enabled: ${transformedConfig.security?.sanitization?.enabled !== false})`
   );
