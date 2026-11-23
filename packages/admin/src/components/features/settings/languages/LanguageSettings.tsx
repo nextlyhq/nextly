@@ -23,7 +23,7 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import type React from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { MoreHorizontal } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
@@ -60,6 +60,9 @@ type OpenDialog =
   | { kind: "add" }
   | { kind: "edit" | "remove" | "default"; language: LanguageView };
 
+/** A dialog asked for, and the control it was asked from. */
+type OpenDialogFrom = OpenDialog & { opener: HTMLElement | null };
+
 export interface LanguageSettingsProps {
   list: LanguageList;
 }
@@ -79,7 +82,7 @@ export function LanguageSettings({
     list.lockedByConfig ? undefined : defaultCode
   ).data?.translationsPerLanguage;
   const changeLanguages = useChangeLanguages();
-  const [open, setOpen] = useState<OpenDialog | null>(null);
+  const [open, setOpen] = useState<OpenDialogFrom | null>(null);
 
   const save = async (change: LanguageChange): Promise<boolean> => {
     try {
@@ -89,9 +92,9 @@ export function LanguageSettings({
       return false;
     }
   };
-  const openDialog = (dialog: OpenDialog) => {
+  const openDialog = (dialog: OpenDialog, opener: HTMLElement | null) => {
     changeLanguages.reset();
-    setOpen(dialog);
+    setOpen({ ...dialog, opener });
   };
   const dialogSave: LanguageDialogSave = {
     saving: changeLanguages.isPending,
@@ -103,6 +106,7 @@ export function LanguageSettings({
       : undefined,
     onSave: save,
     onClose: () => setOpen(null),
+    opener: open?.opener ?? null,
   };
   const move = (language: LanguageView, step: -1 | 1) => {
     const codes = movedOrder(active, language.code, step);
@@ -151,7 +155,9 @@ export function LanguageSettings({
             <Button
               type="button"
               size="sm"
-              onClick={() => openDialog({ kind: "add" })}
+              onClick={event =>
+                openDialog({ kind: "add" }, event.currentTarget)
+              }
             >
               Add language
             </Button>
@@ -173,12 +179,16 @@ export function LanguageSettings({
                     language={language}
                     first={index === 0}
                     last={index === active.length - 1}
-                    onEdit={() => openDialog({ kind: "edit", language })}
-                    onMove={step => move(language, step)}
-                    onMakeDefault={() =>
-                      openDialog({ kind: "default", language })
+                    onEdit={opener =>
+                      openDialog({ kind: "edit", language }, opener)
                     }
-                    onRemove={() => openDialog({ kind: "remove", language })}
+                    onMove={step => move(language, step)}
+                    onMakeDefault={opener =>
+                      openDialog({ kind: "default", language }, opener)
+                    }
+                    onRemove={opener =>
+                      openDialog({ kind: "remove", language }, opener)
+                    }
                   />
                 ) : undefined
               }
@@ -391,10 +401,11 @@ interface LanguageActionsProps {
   language: LanguageView;
   first: boolean;
   last: boolean;
-  onEdit: () => void;
+  /** Each given the menu's button, which the dialog gives focus back to. */
+  onEdit: (opener: HTMLElement | null) => void;
   onMove: (step: -1 | 1) => void;
-  onMakeDefault: () => void;
-  onRemove: () => void;
+  onMakeDefault: (opener: HTMLElement | null) => void;
+  onRemove: (opener: HTMLElement | null) => void;
 }
 
 /**
@@ -410,10 +421,12 @@ function LanguageActions({
   onMakeDefault,
   onRemove,
 }: LanguageActionsProps): React.JSX.Element {
+  const trigger = useRef<HTMLButtonElement>(null);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
+          ref={trigger}
           type="button"
           variant="ghost"
           size="icon"
@@ -423,7 +436,9 @@ function LanguageActions({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={onEdit}>Edit…</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onEdit(trigger.current)}>
+          Edit…
+        </DropdownMenuItem>
         {!first && (
           <DropdownMenuItem onSelect={() => onMove(-1)}>
             Move up
@@ -436,11 +451,14 @@ function LanguageActions({
         )}
         {!language.isDefault && (
           <>
-            <DropdownMenuItem onSelect={onMakeDefault}>
+            <DropdownMenuItem onSelect={() => onMakeDefault(trigger.current)}>
               Make default…
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-destructive" onSelect={onRemove}>
+            <DropdownMenuItem
+              className="text-destructive"
+              onSelect={() => onRemove(trigger.current)}
+            >
               Remove…
             </DropdownMenuItem>
           </>

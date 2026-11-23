@@ -395,6 +395,29 @@ describe("Settings › Languages", () => {
     );
   });
 
+  it("gives focus back to the control that opened a dialog when it closes", async () => {
+    await open();
+    const user = userEvent.setup();
+
+    const add = screen.getByRole("button", { name: "Add language" });
+    await user.click(add);
+    await screen.findByRole("dialog", { name: "Add a language" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(add).toHaveFocus());
+
+    // From a row's menu, focus goes back to that row's menu button.
+    await choose("Spanish", "Make default…");
+    await screen.findByRole("alertdialog");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Actions for Spanish" })
+      ).toHaveFocus()
+    );
+  });
+
   it("counts a language the server lists no translations for as holding none", async () => {
     // The server's summary names only the languages that hold translation
     // rows; on a site with no translated content it names none at all.

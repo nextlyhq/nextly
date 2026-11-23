@@ -33,6 +33,20 @@ export interface LanguageDialogSave {
   /** Makes the change; resolves true once it is saved. */
   onSave: (change: LanguageChange) => Promise<boolean>;
   onClose: () => void;
+  /** The control that opened the dialog, given focus back when it closes. */
+  opener: HTMLElement | null;
+}
+
+/**
+ * Gives focus back to the dialog's opener as it closes. Radix gives it to a
+ * dialog's own trigger, and these dialogs are opened from a button or a menu
+ * without one, so focus would otherwise fall to the page.
+ */
+function returnFocusTo(opener: HTMLElement | null) {
+  return (event: Event): void => {
+    event.preventDefault();
+    if (opener?.isConnected) opener.focus();
+  };
 }
 
 /** A refused change's message, announced where the change was asked. */
@@ -77,6 +91,7 @@ export function LanguageConfirmDialog({
   error,
   onSave,
   onClose,
+  opener,
 }: LanguageConfirmDialogProps): React.JSX.Element {
   return (
     <AlertDialog
@@ -85,7 +100,7 @@ export function LanguageConfirmDialog({
         if (!open && !saving) onClose();
       }}
     >
-      <AlertDialogContent>
+      <AlertDialogContent onCloseAutoFocus={returnFocusTo(opener)}>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription asChild>
@@ -139,6 +154,7 @@ export function LanguageFormDialog({
   error,
   onSave,
   onClose,
+  opener,
   children,
 }: LanguageFormDialogProps): React.JSX.Element {
   return (
@@ -148,7 +164,7 @@ export function LanguageFormDialog({
         if (!open && !saving) onClose();
       }}
     >
-      <DialogContent size="md">
+      <DialogContent size="md" onCloseAutoFocus={returnFocusTo(opener)}>
         <form
           className="space-y-4"
           onSubmit={event => {
