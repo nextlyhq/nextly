@@ -15,7 +15,7 @@ import { crossEntityProblems } from "../../collections/config/cross-entity-probl
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { validateCollectionConfig } from "../../collections/config/validate-config";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
-import { relationshipTargetSlug } from "../../domains/schema/services/relationship-key-target";
+import { relationshipTargetSlug } from "../../domains/schema/services/relationship-target-slug";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { validateFieldGroupConfig } from "../../field-groups/config/validate-field-group";
 import type { SingleConfig } from "../../singles/config/types";
