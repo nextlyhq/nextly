@@ -21,7 +21,10 @@ import { moveCandidates } from "../field-moves/move-candidates";
 import { workingDraftsStop } from "../field-moves/move-statements";
 import type { EntityMoves } from "../field-moves/plan-moves";
 import type { Operation } from "../pipeline/diff/types";
-import type { ColumnOrigin } from "../services/field-column-descriptor";
+import {
+  toSnakeCase,
+  type ColumnOrigin,
+} from "../services/field-column-descriptor";
 
 import {
   recordedSettingsOf,
@@ -37,6 +40,11 @@ export interface CodeMovesPlan {
   valueMoves: { table: string; column: string; reason: string }[];
   refilledColumns: { table: string; column: string }[];
   valuesMovedIn: string[];
+  /**
+   * The row columns each declined move drops or adds: the person said it is not a move, so its
+   * drop and add stay a delete and an add, never paired as a rename (`withoutMovedColumns`).
+   */
+  declined: { table: string; column: string }[];
 }
 
 export const NO_CODE_MOVES: CodeMovesPlan = {
@@ -44,6 +52,7 @@ export const NO_CODE_MOVES: CodeMovesPlan = {
   valueMoves: [],
   refilledColumns: [],
   valuesMovedIn: [],
+  declined: [],
 };
 
 /** The fields a recorded declaration lists, or none where it lists none. */
@@ -99,11 +108,22 @@ interface CodeMovesRun {
   warn: (message: string) => void;
 }
 
-/** One entity's accepted moves, with its fields on both sides. */
+/** One entity's accepted moves, with its fields on both sides, and its declined moves' row columns. */
 interface AcceptedMoves {
   before: FieldDefinition[];
   after: FieldDefinition[];
   moves: { from: readonly string[]; to: readonly string[] }[];
+  declined: CodeMovesPlan["declined"];
+}
+
+/** The row column a place on the entity's row is kept in, or none for a place inside a group. */
+function rowColumnsOf(
+  table: string,
+  places: readonly (readonly string[])[]
+): CodeMovesPlan["declined"] {
+  return places.flatMap(place =>
+    place.length === 1 ? [{ table, column: toSnakeCase(place[0]) }] : []
+  );
 }
 
 /**
@@ -140,7 +160,15 @@ async function acceptedMovesOf(
   const moves = decisions
     .filter(decision => decision.accepted)
     .map(({ candidate }) => ({ from: candidate.from, to: candidate.to }));
-  return moves.length === 0 ? undefined : { before, after, moves };
+  const declined = rowColumnsOf(
+    entity.tableName,
+    decisions
+      .filter(decision => !decision.accepted)
+      .flatMap(({ candidate }) => [candidate.from, candidate.to])
+  );
+  return moves.length + declined.length === 0
+    ? undefined
+    : { before, after, moves, declined };
 }
 
 /**
@@ -233,10 +261,13 @@ export async function planCodeMoves(run: CodeMovesRun): Promise<CodeMovesPlan> {
   const stops: { up: string[]; down: string[] } = { up: [], down: [] };
   const planned: { moves: EntityMoves; table: string }[] = [];
   const unrecorded: string[] = [];
+  const declined: CodeMovesPlan["declined"] = [];
   for (const { kind, entity } of run.entities) {
     const accepted = await acceptedMovesOf(run, kind, entity);
     if (accepted === "unrecorded") unrecorded.push(entity.slug);
     if (accepted === undefined || accepted === "unrecorded") continue;
+    declined.push(...accepted.declined);
+    if (accepted.moves.length === 0) continue;
     refuseMovesIntoRenamedTable(run, entity, accepted.moves);
     const drafts = draftsStopsOf(run, kind, entity.slug, accepted.moves);
     stops.up.push(...drafts.up);
@@ -247,7 +278,9 @@ export async function planCodeMoves(run: CodeMovesRun): Promise<CodeMovesPlan> {
         {
           kind,
           slug: entity.slug,
-          ...accepted,
+          before: accepted.before,
+          after: accepted.after,
+          moves: accepted.moves,
           // Where the values are stored, not whether the entity is translated.
           localized: storesPerLanguage(entity),
           renames: [],
@@ -285,21 +318,30 @@ export async function planCodeMoves(run: CodeMovesRun): Promise<CodeMovesPlan> {
     valueMoves: facts.flatMap(f => f.valueMoves),
     refilledColumns: facts.flatMap(f => f.refilledColumns),
     valuesMovedIn: facts.flatMap(f => f.valuesMovedIn),
+    declined,
   };
 }
 
 /**
- * The operations the rename detector judges, without the columns the accepted moves drop or add:
- * a moved column's values travel with the move, so pairing it with another column as a rename
- * would carry them twice, or into the wrong field.
+ * The operations the rename detector judges, without the columns any move drops or adds: an
+ * accepted move's values travel with the move, so pairing its column with another as a rename
+ * would carry them twice, or into the wrong field; and a declined move was answered as a delete
+ * and an add, which `--accept-renames` must not turn into a rename that rewrites its values.
  */
 export function withoutMovedColumns(
   operations: readonly Operation[],
-  plan: Pick<CodeMovesPlan, "valueMoves" | "refilledColumns">
+  plan: Pick<CodeMovesPlan, "valueMoves" | "refilledColumns" | "declined">
 ): Operation[] {
   const key = (table: string, column: string) => `${table}\u0000${column}`;
-  const dropped = new Set(plan.valueMoves.map(m => key(m.table, m.column)));
-  const added = new Set(plan.refilledColumns.map(c => key(c.table, c.column)));
+  const declined = plan.declined.map(c => key(c.table, c.column));
+  const dropped = new Set([
+    ...plan.valueMoves.map(m => key(m.table, m.column)),
+    ...declined,
+  ]);
+  const added = new Set([
+    ...plan.refilledColumns.map(c => key(c.table, c.column)),
+    ...declined,
+  ]);
   return operations.filter(op =>
     op.type === "drop_column"
       ? !dropped.has(key(op.tableName, op.columnName))

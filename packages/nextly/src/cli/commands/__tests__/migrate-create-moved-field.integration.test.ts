@@ -51,8 +51,11 @@ vi.mock("../../utils/config-loader", async importOriginal => ({
   loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
 }));
 
-/** The posts with `subtitle` on the row (`row`) or inside the `meta` group (`grouped`). */
-function posts(where: "row" | "grouped") {
+/**
+ * The posts with `subtitle` on the row (`row`), inside the `meta` group (`grouped`), or inside an
+ * `extra` group the same change adds (`newGroup`), whose column arrives as `subtitle`'s goes.
+ */
+function posts(where: Where) {
   const subtitle = text({ name: "subtitle" });
   return [
     defineCollection({
@@ -60,6 +63,9 @@ function posts(where: "row" | "grouped") {
       fields: [
         text({ name: "title" }),
         ...(where === "row" ? [subtitle] : []),
+        ...(where === "newGroup"
+          ? [group({ name: "extra", fields: [subtitle] })]
+          : []),
         group({
           name: "meta",
           fields: [
@@ -72,7 +78,9 @@ function posts(where: "row" | "grouped") {
   ];
 }
 
-const configOf = (where: "row" | "grouped") =>
+type Where = "row" | "grouped" | "newGroup";
+
+const configOf = (where: Where) =>
   defineConfig({
     collections: posts(where),
     db: { migrationsDir: "./migrations" },
@@ -175,8 +183,8 @@ async function exiting(fn: () => Promise<void>): Promise<number | undefined> {
  */
 async function createOnly(
   name: string,
-  where: "row" | "grouped",
-  options: { acceptMoves?: boolean } = {}
+  where: Where,
+  options: { acceptMoves?: boolean; acceptRenames?: boolean } = {}
 ): Promise<string> {
   loaded.config = configOf(where);
   setNonInteractive(true);
@@ -278,8 +286,8 @@ async function rollBack(): Promise<{ code: number | undefined; said: string }> {
 /** `createOnly`, then `migrate`, which must apply the file; what `migrate:create` said. */
 async function createAndApply(
   name: string,
-  where: "row" | "grouped",
-  options: { acceptMoves?: boolean } = {}
+  where: Where,
+  options: { acceptMoves?: boolean; acceptRenames?: boolean } = {}
 ): Promise<string> {
   const said = await createOnly(name, where, options);
   const applied = await apply();
@@ -517,6 +525,23 @@ describe.each(getConfiguredTestDialects())(
       expect(await subtitles(await start(dialect, url, "grouped"), id)).toEqual(
         { row: undefined, grouped: "Kept subtitle" }
       );
+    });
+
+    // Declined, a move is a delete and an add, whatever else the run accepts: `--accept-renames`
+    // does not pair its drop with the new group's column, which would rewrite its values as JSON.
+    it("with --accept-renames but not --accept-moves, writes a declined move as a delete and an add, never a rename", async () => {
+      const url = await openDatabase(dialect);
+      await start(dialect, url);
+      await createAndApply("create_posts", "row");
+
+      const said = await createOnly("move_subtitle_into_extra", "newGroup", {
+        acceptRenames: true,
+      });
+      const file = await migrationFile("move_subtitle_into_extra");
+      // No rename of `subtitle`, on any dialect: before declined moves were kept out of rename
+      // detection, this run renamed it onto the new group's column.
+      expect(file).not.toMatch(/RENAME\s+COLUMN/i);
+      expect(said).toContain("--accept-moves");
     });
 
     it("without --accept-moves and no terminal, makes no move and says which and how", async () => {
