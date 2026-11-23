@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { DEMOTED_FROM_CODE } from "../demoted-from-code";
 import {
+  configTheCodeOwns,
   isHandedToBuilder,
   mergeRegisteredCollections,
   mergeRegisteredCollectionsSafely,
@@ -210,5 +211,32 @@ describe("a collection a demote handed to the Schema Builder", () => {
     ]);
     expect(merged.posts.builderOwned).toBe(true);
     expect(merged.posts.fields).toEqual([{ name: "subtitle", type: "text" }]);
+  });
+
+  it("is left out of the configuration code still owns, with every other part kept", () => {
+    const config = {
+      collections: coded,
+      singles: [{ slug: "home" }],
+      localization: { defaultLocale: "en" },
+    };
+    expect(configTheCodeOwns(config, [handedOver, madeInBuilder])).toEqual({
+      ...config,
+      collections: [{ slug: "pages" }, { slug: "tags" }],
+    });
+    // The caller's configuration is left as it was.
+    expect(config.collections).toEqual(coded);
+  });
+
+  it("stays in the configuration code owns where a plugin contributes the address", () => {
+    const config = {
+      collections: coded,
+      plugins: [
+        {
+          name: "@acme/blog",
+          contributes: { collections: [{ slug: "posts" }] },
+        },
+      ],
+    };
+    expect(configTheCodeOwns(config, [handedOver])).toBe(config);
   });
 });

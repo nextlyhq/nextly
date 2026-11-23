@@ -18,6 +18,18 @@
  * standing in for a Schema Builder save: what is under test is which definition the road applies
  * afterwards.
  *
+ * The passes that read the configuration's entities themselves ignore the entry too:
+ * - the translations-table pass (a reload, and `db:sync`, whose pass `nextly migrate` and a
+ *   production start run as well) makes no translations table for the entry's `localized`
+ *   (before, it made one beside the Builder's collection);
+ * - a start judges the configuration's pairs of fields against the registry without it (before, a
+ *   pair added to the entry stopped the start).
+ *
+ * And around it: a reload records a plugin's collection as the plugin's, as a start does (before,
+ * as the app's own, so a plugin's declaration over a handed-over address was skipped); a demote
+ * registers a collection with the registry's own hash of its fields (before, the Builder's first
+ * save of the same fields read as a schema change).
+ *
  * Each case owns its database: a throwaway database on PostgreSQL and MySQL, a temporary file on
  * SQLite.
  */
@@ -58,7 +70,10 @@ import {
 } from "../../../database/test-database-ddl";
 import { clearServices } from "../../../di/register";
 import { getService } from "../../../di/service-access";
-import { reloadNextlyConfig } from "../../../init/reload-config";
+import {
+  reloadNextlyConfig,
+  type ReloadOutcome,
+} from "../../../init/reload-config";
 import {
   clearCachedSnapshot,
   clearLiveSnapshots,
@@ -92,6 +107,79 @@ const POSTS_EDITED = defineCollection({
 });
 
 const TABLE = "dc_dcr_posts";
+
+/** The site's languages, for the edits below that make a collection translatable. */
+const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
+
+/** Its entry, edited since the demote to make it translatable. */
+const POSTS_TRANSLATED = defineCollection({
+  slug: "dcr_posts",
+  localized: true,
+  fields: [text({ name: "headline", localized: true })],
+});
+
+/** A collection code still owns, made translatable in the same edit: the control. */
+const NOTES_TRANSLATED = defineCollection({
+  slug: "dcr_notes",
+  localized: true,
+  fields: [text({ name: "body", localized: true })],
+});
+
+/**
+ * Its entry, edited since the demote to add two fields that become one column, written as a plain
+ * object. A `define*` entry with such a pair is refused by the configuration's own rules
+ * (`configurationProblems`) on every road, whoever owns the collection; a plain object is only
+ * warned about at a start, which then judges the pair against the registry.
+ */
+const POSTS_CLASHING = {
+  slug: "dcr_posts",
+  fields: [
+    { name: "headline", type: "text" },
+    { name: "fooBar", type: "text" },
+    { name: "foo_bar", type: "text" },
+  ],
+};
+
+/** The same pair on a collection code still owns: the control. */
+const NOTES_CLASHING = {
+  slug: "dcr_notes",
+  fields: [
+    { name: "fooBar", type: "text" },
+    { name: "foo_bar", type: "text" },
+  ],
+};
+
+/** A collection a plugin contributes. */
+const EVENTS = defineCollection({
+  slug: "dcr_events",
+  fields: [text({ name: "title" })],
+});
+
+/** A plugin contributing the collections `slugs`, as the loader's configuration carries it. */
+function contributing(...slugs: string[]) {
+  return {
+    name: "@test/dcr",
+    version: "1.0.0",
+    nextly: ">=0.0.0",
+    contributes: { collections: slugs.map(slug => ({ slug })) },
+  };
+}
+
+/** Whether `table` exists. */
+async function hasTable(
+  adapter: DrizzleAdapter,
+  table: string
+): Promise<boolean> {
+  return adapter.tableExists(table);
+}
+
+/** The registry record of `slug`. */
+async function recordOf(adapter: DrizzleAdapter, slug: string) {
+  return new CollectionRegistryService(
+    adapter,
+    quiet as never
+  ).getCollectionBySlug(slug);
+}
 
 const quiet = {
   info: () => {},
@@ -203,19 +291,24 @@ for (const dialect of getConfiguredTestDialects()) {
     let projectRoot: string;
     let app: Awaited<ReturnType<typeof createTestNextly>>;
 
+    /** A reload of `config`, as a saved edit triggers it; how it ended. */
+    async function reloadConfig(config: unknown): Promise<ReloadOutcome> {
+      vi.stubEnv("NODE_ENV", "development");
+      loaded.config = config;
+      return reloadNextlyConfig({
+        resolver: name =>
+          name === "logger"
+            ? { ...consoleLogger, ...quiet }
+            : getService(name as Parameters<typeof getService>[0]),
+      });
+    }
+
     /** A reload of `collection`, as a saved edit triggers it. */
     async function reload(
       collection: ReturnType<typeof defineCollection>
     ): Promise<void> {
-      vi.stubEnv("NODE_ENV", "development");
-      loaded.config = defineConfig({ collections: [collection] });
       expect(
-        await reloadNextlyConfig({
-          resolver: name =>
-            name === "logger"
-              ? { ...consoleLogger, ...quiet }
-              : getService(name as Parameters<typeof getService>[0]),
-        })
+        await reloadConfig(defineConfig({ collections: [collection] }))
       ).toBe("finished");
     }
 
@@ -276,6 +369,118 @@ for (const dialect of getConfiguredTestDialects()) {
       })) as Record<string, unknown>;
       expect(read.subtitle).toBe("From the Builder");
     });
+
+    it("provisions no translations table for the code entry's translation setting", async () => {
+      // The Builder's record is not translatable: the entry's `localized` decides nothing, so no
+      // translations table is made beside the Builder's collection. Code's own collection, made
+      // translatable in the same edit, gets its table, so the pass did run.
+      expect(
+        await reloadConfig(
+          defineConfig({
+            localization: LOCALIZATION,
+            collections: [POSTS_TRANSLATED, NOTES_TRANSLATED],
+          })
+        )
+      ).toBe("finished");
+
+      expect(await hasTable(database.adapter, "dc_dcr_notes_locales")).toBe(
+        true
+      );
+      expect(await hasTable(database.adapter, `${TABLE}_locales`)).toBe(false);
+      expect((await recordOf(database.adapter, POSTS.slug))?.localized).toBe(
+        false
+      );
+    });
+
+    it("starts with a pair of fields added to the code entry that become one column", async () => {
+      // A start judges the configuration's pairs against the registry: the ignored entry's pair is
+      // never made, so it stops nothing. The same pair on code's own collection still stops it.
+      clearServices();
+      await expect(
+        createTestNextly({
+          adapter: database.adapter as never,
+          collections: [POSTS_CLASHING as never],
+        })
+      ).resolves.toBeDefined();
+
+      clearServices();
+      await expect(
+        createTestNextly({
+          adapter: database.adapter as never,
+          collections: [POSTS as never, NOTES_CLASHING as never],
+        })
+      ).rejects.toMatchObject({
+        logContext: { reason: "sibling-fields" },
+      });
+    });
+
+    it("records a collection a plugin adds under next dev as the plugin's", async () => {
+      // The origin a start gives it (`plugin:<name>`), not the app's own: a record keeps the origin
+      // it is created with.
+      expect(
+        await reloadConfig(
+          defineConfig({
+            collections: [POSTS, EVENTS],
+            plugins: [contributing(EVENTS.slug)] as never,
+          })
+        )
+      ).toBe("finished");
+      expect((await recordOf(database.adapter, EVENTS.slug))?.source).toBe(
+        "plugin:@test/dcr"
+      );
+    });
+
+    it("writes a plugin's collection under a handed-over address, as a start does", async () => {
+      // A plugin registers its own collection at every start, whoever holds the address: the
+      // reload writes its declaration too, rather than taking it for the app's ignored entry.
+      expect(
+        await reloadConfig(
+          defineConfig({
+            collections: [POSTS_EDITED],
+            plugins: [contributing(POSTS.slug)] as never,
+          })
+        )
+      ).toBe("finished");
+      expect(await recordFields(database.adapter)).toContain("extra");
+      // And the row is the plugin's from then on, locked, no longer marked as handed over.
+      expect(await recordOf(database.adapter, POSTS.slug)).toMatchObject({
+        source: "plugin:@test/dcr",
+        locked: true,
+      });
+    });
+
+    it("is registered with the hash the registry compares fields by, so the Builder's first save of the same fields changes nothing", async () => {
+      // A collection the registry does not hold yet: the demote registers it.
+      const fresh = defineCollection({
+        slug: "dcr_fresh",
+        fields: [text({ name: "headline" })],
+      });
+      const registry = new CollectionRegistryService(
+        database.adapter,
+        quiet as never
+      );
+      expect(
+        await demoteCollection({
+          collection: fresh as never,
+          logger: createLogger({ quiet: true }),
+          registry,
+          adapter: database.adapter,
+          confirm: async () => true,
+        })
+      ).toBe("demoted");
+      const registered = await registry.getCollectionBySlug(fresh.slug);
+      expect(registered).toMatchObject({ source: "ui" });
+
+      // A Schema Builder save that keeps every field as it is.
+      await registry.updateCollection(fresh.slug, {
+        fields: registered!.fields,
+        schemaHash: calculateSchemaHash(registered!.fields as never),
+      });
+
+      const saved = await registry.getCollectionBySlug(fresh.slug);
+      expect(saved?.schemaVersion).toBe(registered!.schemaVersion);
+      expect(saved?.migrationStatus).toBe(registered!.migrationStatus);
+    });
   });
 }
 
@@ -285,11 +490,14 @@ describe("a demoted collection still declared in code — db:sync (sqlite)", () 
 
   const adapterOf = () => target!.adapter as unknown as DrizzleAdapter;
 
-  /** `nextly db:sync` over `collection`; what it threw, if anything. */
+  /** `nextly db:sync` over `collection`, or over a whole configuration; what it threw, if anything. */
   async function dbSync(
-    collection: ReturnType<typeof defineCollection>
+    collection: ReturnType<typeof defineCollection> | { config: unknown }
   ): Promise<unknown> {
-    loaded.config = defineConfig({ collections: [collection] });
+    loaded.config =
+      "config" in collection
+        ? collection.config
+        : defineConfig({ collections: [collection] });
     // The command runs in a process of its own, so nothing cached about another database's
     // tables may reach it.
     clearCachedSnapshot();
@@ -341,5 +549,22 @@ describe("a demoted collection still declared in code — db:sync (sqlite)", () 
     expect(columns).not.toContain("extra");
     expect(await recordFields(adapterOf())).toContain("subtitle");
     expect(await recordFields(adapterOf())).not.toContain("extra");
+  });
+
+  it("provisions no translations table for the code entry's translation setting", async () => {
+    // The translations-table pass `nextly migrate` and a production start run too: the entry's
+    // `localized` decides nothing for the Builder's collection. Code's own collection, made
+    // translatable in the same edit, gets its table, so the pass did run.
+    expect(
+      await dbSync({
+        config: defineConfig({
+          localization: LOCALIZATION,
+          collections: [POSTS_TRANSLATED, NOTES_TRANSLATED],
+        }),
+      })
+    ).toBeUndefined();
+
+    expect(await hasTable(adapterOf(), "dc_dcr_notes_locales")).toBe(true);
+    expect(await hasTable(adapterOf(), `${TABLE}_locales`)).toBe(false);
   });
 });

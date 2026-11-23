@@ -24,7 +24,10 @@ import {
 } from "../domains/field-groups/storage/resolve-storage-names";
 import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import { tableExistsAtStart } from "../domains/schema/pipeline/diff/start-catalog-scope";
-import { isCodeOwned } from "../domains/schema/pipeline/registered-collections";
+import {
+  configTheCodeOwns,
+  isCodeOwned,
+} from "../domains/schema/pipeline/registered-collections";
 import { NextlyError } from "../errors/nextly-error";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
@@ -48,6 +51,11 @@ export type DynamicTableRow = {
    */
   source?: string | null;
   locked?: boolean | number | null;
+  /**
+   * Where the row's definition came from. `demoted-from-code` on a Schema Builder row marks a
+   * collection a demote handed over (`isHandedToBuilder`), whose code entry is then ignored.
+   */
+  config_path?: string | null;
 };
 
 /**
@@ -429,6 +437,26 @@ export interface LoadedBuilderEntity {
    * row an uninstalled plugin left behind still names that plugin.
    */
   source?: string;
+  /**
+   * Where the row's definition came from, where the registry records it. With `source`, it tells a
+   * collection a demote handed to the Schema Builder (`isHandedToBuilder`): the checks a start, a
+   * reload and `db:sync` make of the configuration leave such a collection's code entry out.
+   */
+  configPath?: string;
+}
+
+/**
+ * `config` as code still owns it (`configTheCodeOwns`), judged from the registry's collections as
+ * the configuration checks read them (`loadBuilderEntities`): a collection a demote handed to the
+ * Schema Builder is left out, so a pass reading the configuration's entities ignores its code entry
+ * as the schema syncs do. A registry that cannot be read yields no rows, which leaves every entry
+ * in.
+ */
+export async function configTheCodeOwnsIn<
+  C extends Parameters<typeof configTheCodeOwns>[0],
+>(adapter: DrizzleAdapter, config: C): Promise<C> {
+  const registered = await loadBuilderEntities(adapter);
+  return configTheCodeOwns(config, registered.collections);
 }
 
 export interface LoadedBuilderEntities {
@@ -438,10 +466,30 @@ export interface LoadedBuilderEntities {
 }
 
 /**
- * Every row of a registry table, with `localized` and `source` where the
- * registry has them. Each is dropped only when the registry has no such
- * column, so an older registry still yields its entities rather than none;
- * any other failure is not a missing column and is thrown.
+ * The columns a registry read keeps where the registry has them, each independent of the others.
+ * A registry too old to have one still yields its entities, without it.
+ */
+const OPTIONAL_REGISTRY_COLUMNS = ["localized", "source", "config_path"];
+
+/**
+ * Each set of the optional columns, as the `, a, b` a SELECT appends, largest first: a read keeps
+ * every one the registry has, dropping only those it lacks.
+ */
+function optionalColumnTries(optional: readonly string[]): string[] {
+  let sets: string[][] = [[]];
+  for (const column of optional) {
+    sets = [...sets, ...sets.map(set => [...set, column])];
+  }
+  return sets
+    .sort((a, b) => b.length - a.length)
+    .map(set => set.map(column => `, ${column}`).join(""));
+}
+
+/**
+ * Every row of a registry table, with each optional column (`OPTIONAL_REGISTRY_COLUMNS`) where the
+ * registry has it. Each is dropped only when the registry has no such column, so an older registry
+ * still yields its entities rather than none; any other failure is not a missing column and is
+ * thrown.
  */
 async function readRegistryRows(
   adapter: DrizzleAdapter,
@@ -449,17 +497,16 @@ async function readRegistryRows(
   columns: string,
   registry: StartRegistry | undefined
 ): Promise<DynamicTableRow[]> {
-  // Each optional column kept where the registry has it, as the tries below settle on:
-  // `localized` and `source` are independent of each other.
+  // Each optional column kept where the registry has it, as the tries below settle on.
   const shared = registry
     ? await startRegistryRows(registry, table, has => {
         const required = columns.split(",").map(column => column.trim());
         if (!required.every(has)) return undefined;
-        return [...required, ...["localized", "source"].filter(has)];
+        return [...required, ...OPTIONAL_REGISTRY_COLUMNS.filter(has)];
       })
     : undefined;
   if (shared !== undefined) return shared;
-  const tries = [", localized, source", ", localized", ", source", ""];
+  const tries = optionalColumnTries(OPTIONAL_REGISTRY_COLUMNS);
   for (const [at, extra] of tries.entries()) {
     try {
       return await adapter.executeQuery<DynamicTableRow>(
@@ -468,7 +515,7 @@ async function readRegistryRows(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const missingColumn =
-        /localized|source|no such column|does not exist|unknown column/i.test(
+        /localized|source|config_path|no such column|does not exist|unknown column/i.test(
           msg
         );
       if (!missingColumn || at === tries.length - 1) throw err;
@@ -515,6 +562,9 @@ export async function loadBuilderEntities(
             status: row.status === 1 || row.status === true,
             localized: row.localized === 1 || row.localized === true,
             ...(typeof row.source === "string" ? { source: row.source } : {}),
+            ...(typeof row.config_path === "string"
+              ? { configPath: row.config_path }
+              : {}),
           });
         } catch {
           // Skip a row whose fields JSON is malformed.
