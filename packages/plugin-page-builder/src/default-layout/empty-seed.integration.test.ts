@@ -43,6 +43,7 @@ import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageDuplicatePath } from "../pages-write-contract";
 import { pageBuilder } from "../plugin";
 import { siteOptions } from "../schema/tables";
+import { settleDefaultLayout } from "../__tests__/settle-default-layout";
 
 import {
   EMPTY_SEED_MOVED_OPTION,
@@ -167,14 +168,18 @@ describe.each(getConfiguredTestDialects())(
       if (probe.db === undefined || probe.dialect === undefined) {
         throw new Error("the probe did not boot");
       }
-      // Joins the boot's own run, which `onReady` starts without awaiting.
-      await ensureDefaultLayout({
-        nextly: t.nextly,
-        slugs: SLUGS,
-        pagesSlug: PAGES_SLUG,
-        removals: layoutRemovalStore(probe.db, probe.dialect),
-        warn: () => {},
-      });
+      // The boot's own run, which `onReady` starts without awaiting, waited
+      // out, and the default then settled (`settleDefaultLayout`).
+      const { db: probeDb, dialect: probeDialect } = probe;
+      await settleDefaultLayout(() =>
+        ensureDefaultLayout({
+          nextly: t.nextly,
+          slugs: SLUGS,
+          pagesSlug: PAGES_SLUG,
+          removals: layoutRemovalStore(probeDb, probeDialect),
+          warn: () => {},
+        })
+      );
       await vi.waitFor(
         async () => expect(await parts().mark.read()).not.toBeNull(),
         { timeout: 20_000, interval: 100 }
