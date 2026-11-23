@@ -25,6 +25,9 @@ export const liveCard = defineFieldGroup({
 
 export const livePosts = defineCollection({
   slug: LIVE_COLLECTION,
+  // Each save keeps a version, whose snapshot carries the group under its wire key: rows the
+  // storage migration's content rewrite has to rewrite.
+  versions: true,
   fields: [
     text({ name: "title" }),
     fieldGroup({ name: "card", component: LIVE_GROUP }),

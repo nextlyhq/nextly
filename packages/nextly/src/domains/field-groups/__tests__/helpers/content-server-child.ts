@@ -25,7 +25,7 @@ const [dialect, url, layout] = process.argv.slice(2) as [
 ];
 
 // A server's environment, set before nextly loads, so nothing it reads at load sees the suite's.
-process.env.NODE_ENV = "test";
+Object.assign(process.env, { NODE_ENV: "test" });
 process.env.DB_DIALECT = dialect;
 if (dialect !== "sqlite") process.env.DATABASE_URL = url;
 

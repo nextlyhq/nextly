@@ -81,6 +81,7 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
+import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   containedComponentResolver,
   type ComponentFieldResolver,
@@ -89,6 +90,11 @@ import {
   applyInlineFieldGroupWriteAccess,
   directFieldGroupFields,
 } from "../field-group-write-access";
+import {
+  followMovedFieldGroupTable,
+  isMissingTableError,
+  storageMovingRefusal,
+} from "../migration/moved-storage";
 import {
   isFieldGroupFieldType,
   withResolvedFieldGroupReferences,
@@ -1269,6 +1275,7 @@ export class FieldGroupMutationService extends BaseService {
         { locale, req, write: params.write, assembledFromStorage }
       );
     } catch (error) {
+      await this.refuseIfStorageMoved([componentSlug], error);
       // Rethrow already-mapped NextlyErrors (and ServiceError shims, which
       // share the cross-realm brand) so factory-thrown errors aren't
       // double-wrapped. Anything else is treated as a raw DB error. Normalise
@@ -1404,6 +1411,7 @@ export class FieldGroupMutationService extends BaseService {
         false
       );
     } catch (error) {
+      await this.refuseIfStorageMoved([componentSlug], error);
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
       // map raw DB errors via fromDatabaseError. Normalise raw driver errors
       // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
@@ -1524,6 +1532,7 @@ export class FieldGroupMutationService extends BaseService {
         count: instances.length,
       });
     } catch (error) {
+      await this.refuseIfStorageMoved([componentSlug], error);
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
       // map raw DB errors via fromDatabaseError. Normalise raw driver errors
       // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
@@ -1684,6 +1693,7 @@ export class FieldGroupMutationService extends BaseService {
         incomingIds
       );
     } catch (error) {
+      await this.refuseIfStorageMoved([componentSlug], error);
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
       // map raw DB errors via fromDatabaseError. Normalise raw driver errors
       // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
@@ -1855,6 +1865,7 @@ export class FieldGroupMutationService extends BaseService {
         count: instances.length,
       });
     } catch (error) {
+      await this.refuseIfStorageMoved(allowedSlugs, error);
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
       // map raw DB errors via fromDatabaseError. Normalise raw driver errors
       // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
@@ -2039,6 +2050,7 @@ export class FieldGroupMutationService extends BaseService {
         incomingIds
       );
     } catch (error) {
+      await this.refuseIfStorageMoved(allowedSlugs, error);
       // See saveSingleComponent — preserve already-mapped NextlyErrors and
       // map raw DB errors via fromDatabaseError. Normalise raw driver errors
       // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
@@ -2127,6 +2139,29 @@ export class FieldGroupMutationService extends BaseService {
           error: error instanceof Error ? error.message : String(error),
         });
       }
+    }
+  }
+
+  /**
+   * Throws the storage-moving refusal when `error` is a save meeting a field-group table the storage
+   * migration moved under this process (`followMovedFieldGroupTable`), the process now addressing
+   * the table under its current name, so the same save succeeds when retried. Nothing otherwise:
+   * the caller maps `error` as it always has.
+   */
+  private async refuseIfStorageMoved(
+    slugs: readonly string[],
+    error: unknown
+  ): Promise<void> {
+    // A NextlyError is an answer already decided, a refusal among them; only the database's own
+    // missing-table error is a table that may have moved.
+    if (NextlyError.is(error) || !isMissingTableError(error)) return;
+    for (const slug of slugs) {
+      const moved = await followMovedFieldGroupTable({
+        adapter: this.adapter,
+        rows: this.registryService,
+        tableName: resolveComponentTableName(slug),
+      });
+      if (moved !== undefined) throw storageMovingRefusal(moved);
     }
   }
 

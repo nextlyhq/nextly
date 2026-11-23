@@ -19,7 +19,7 @@ const [dialect, url, layout, lease] = process.argv.slice(2) as [
 ];
 
 // Stop points act only under the test environment, as in the suite's own process.
-process.env.NODE_ENV = "test";
+Object.assign(process.env, { NODE_ENV: "test" });
 process.env.DB_DIALECT = dialect;
 if (dialect !== "sqlite") process.env.DATABASE_URL = url;
 

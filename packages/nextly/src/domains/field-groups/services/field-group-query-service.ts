@@ -49,6 +49,10 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
 import { directFieldGroupFields } from "../field-group-write-access";
+import {
+  followMovedFieldGroupTable,
+  isMissingOrUnregisteredTableError,
+} from "../migration/moved-storage";
 import { passwordReachOf } from "../password-reach";
 import {
   isFieldGroupFieldType,
@@ -2003,6 +2007,19 @@ export class FieldGroupQueryService extends BaseService {
       );
       return this.withoutServerOnlyColumns(rows, tableName);
     } catch (error) {
+      // The storage migration may have moved the table since this process resolved its name: read
+      // it again under the name it holds now, rather than reading the group as empty.
+      const moved = await this.movedTable(tableName, error, executor);
+      if (moved !== undefined) {
+        return this.instancesAlone(
+          moved,
+          parentId,
+          parentTable,
+          fieldName,
+          executor,
+          strict
+        );
+      }
       // The comp_* table may not exist yet (a component before its migration
       // runs) — tolerate that and read as empty. In strict mode a real failure
       // (transient/permission/schema) instead propagates.
@@ -2019,6 +2036,26 @@ export class FieldGroupQueryService extends BaseService {
 
   // Results are ordered by `(_parent_id ASC, _order ASC)` so grouped
   // results maintain correct array ordering.
+  /**
+   * The name `tableName` has now, when a read of it failed because the storage migration moved it
+   * (`followMovedFieldGroupTable`), registered in this process; `undefined` otherwise. Never on a
+   * transaction: a failed statement has aborted it on PostgreSQL, so the caller's error stands.
+   */
+  private async movedTable(
+    tableName: string,
+    error: unknown,
+    executor: unknown
+  ): Promise<string | undefined> {
+    if (executor !== undefined || !isMissingOrUnregisteredTableError(error)) {
+      return undefined;
+    }
+    return followMovedFieldGroupTable({
+      adapter: this.adapter,
+      rows: this.registryService,
+      tableName,
+    });
+  }
+
   private async batchGetInstances(
     tableName: string,
     parentIds: string[],
@@ -2062,6 +2099,17 @@ export class FieldGroupQueryService extends BaseService {
       );
       return this.withoutServerOnlyColumns(rows, tableName);
     } catch (error) {
+      // As `instancesAlone`: a table the storage migration moved is read under its name now.
+      const moved = await this.movedTable(tableName, error, read.executor);
+      if (moved !== undefined) {
+        return this.batchGetInstances(
+          moved,
+          parentIds,
+          parentTable,
+          fieldName,
+          read
+        );
+      }
       // On a transaction a failed statement has aborted it on PostgreSQL, so
       // reading on as though the table were empty is possible on the other
       // dialects only: every dialect refuses alike instead.

@@ -117,7 +117,6 @@ describe.each(cases)(
         });
         headings.set(id, `kept-${n}`);
       }
-      await first.destroy();
 
       // The run, killed at the point.
       vi.stubEnv(KILL_AT_VARIABLE, point);
@@ -127,7 +126,14 @@ describe.each(cases)(
         perLanguageStorageEnabled() ? "on" : "off",
         String(LEASE_SECONDS),
       ]);
-      expect(await run.exited, run.lines().join("\n")).toBe("SIGKILL");
+      // Killed at the point: it ended without saying so, and not as a finished run ends. A process
+      // that kills itself reports SIGKILL, or exit code 1 on Windows, which has no signals.
+      const exited = await run.exited;
+      expect(
+        run.lines().filter(line => line.startsWith("ended")),
+        `exited ${String(exited)}`
+      ).toEqual([]);
+      expect(exited).not.toBe(0);
       vi.unstubAllEnvs();
 
       // The next preview reports the stopped run.
