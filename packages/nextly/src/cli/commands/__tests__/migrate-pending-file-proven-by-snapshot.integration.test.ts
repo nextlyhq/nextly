@@ -771,7 +771,9 @@ describe.each(getConfiguredTestDialects())(
       "a file adding a column whose key references a table named generated: %s",
       async (_case, made) => {
         await dbSync(true);
-        // An unquoted table name that is also a word opening a column constraint.
+        // An unquoted table name that is also a word opening a column constraint. It cannot take
+        // the file's prefix: the case is the bare word itself. Each worker has a database of its
+        // own and runs its files in turn, and the table is dropped below.
         await query("CREATE TABLE generated (id varchar(36) PRIMARY KEY)");
         try {
           const inline = `${q("owner")} varchar(36) CONSTRAINT ${q(`${TABLE}_owner_fk`)} REFERENCES generated (id)`;

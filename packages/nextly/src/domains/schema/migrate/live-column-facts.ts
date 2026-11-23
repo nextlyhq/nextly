@@ -444,10 +444,11 @@ function declaresAutoincrement(createSql: unknown): boolean {
 
 /**
  * Whether the words before an `AUTOINCREMENT` end in a table's own key over one column:
- * `PRIMARY KEY (`, the column's name, and an `ASC` or `DESC` read past.
+ * `PRIMARY KEY (`, the column's name, and a `COLLATE <name>` and an `ASC` or `DESC` read past.
  */
 function tableKeyWordsBefore(before: readonly unknown[]): boolean {
-  const end = withoutDirection(before, before.length);
+  let end = withoutDirection(before, before.length);
+  if (before[end - 2] === "COLLATE") end -= 2;
   return (
     before[end - 2] === "(" &&
     before[end - 3] === "KEY" &&
