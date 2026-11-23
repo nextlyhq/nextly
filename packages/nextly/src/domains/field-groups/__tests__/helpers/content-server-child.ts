@@ -74,7 +74,8 @@ async function answer(command: string, args: string[]): Promise<string> {
     await instance.nextly.update({
       collection: LIVE_COLLECTION as never,
       id: args[0]!,
-      data: { card: { heading: args[1] } } as never,
+      // Last write wins: a server saving what its form holds, as the suite asks it to.
+      data: { card: { heading: args[1] }, _overwrite: true } as never,
     });
     return "OK";
   }
