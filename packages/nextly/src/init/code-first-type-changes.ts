@@ -12,6 +12,10 @@
  * A safe change, a lossy one its consent covers and a widening go on into the apply, which judges
  * them again on the rows as they are then.
  *
+ * Before that rule, each code-first entity is judged as a Schema Builder save judges it
+ * (`configuredTypeChangeRefusals`), a field inside a group's or a repeater's JSON included, and an
+ * entity that judgement refuses is held with its refusals in the Builder's words.
+ *
  * @module init/code-first-type-changes
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -31,6 +35,7 @@ import type {
   TableSpec,
 } from "../domains/schema/pipeline/diff/types";
 import type { DesiredSchema } from "../domains/schema/pipeline/types";
+import { configuredTypeChangeRefusals } from "../domains/schema/pipeline/ui-type-changes";
 import { consentForColumn } from "../domains/schema/repair-columns/consent";
 import type { NextlyError } from "../errors/nextly-error";
 
@@ -88,8 +93,28 @@ export async function typeChangesHeldBack(args: {
     env: args.env,
     honours: ["NEXTLY_ALLOW_CODE_FIRST_DROPS"],
   });
-  const held: HeldBackTypeChange[] = [];
+  // The Schema Builder's judgement first, over every code-first entity the reload states its old
+  // fields for, a field inside a group's or a repeater's JSON included, held in the Builder's words.
+  // Only stricter: an entity it holds is held whatever the rule below says, every other entity still
+  // meets that rule, and a lossy change the consent naming its column covers is left to the rule.
+  const held: HeldBackTypeChange[] = (
+    await configuredTypeChangeRefusals(
+      args.schema,
+      args.db,
+      args.dialect,
+      (table, column) =>
+        consentForColumn(consent, table, column, "a type change").covered
+    )
+  ).map(({ kind, slug, refusals }) => ({
+    kind,
+    slug,
+    reasons: refusals.map(refusal => refusal.message),
+  }));
+  const heldByJudgement = new Set(
+    held.map(({ kind, slug }) => `${kind}:${slug}`)
+  );
   for (const entity of args.entities) {
+    if (heldByJudgement.has(`${entity.kind}:${entity.slug}`)) continue;
     const judge = typeChangeJudge({
       db: args.db,
       dialect: args.dialect,

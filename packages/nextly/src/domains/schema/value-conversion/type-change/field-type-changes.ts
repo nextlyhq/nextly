@@ -91,7 +91,8 @@ function containedFields(field: FieldDefinition): FieldDefinition[] {
 /**
  * The type changes of the fields a pair of containers holds, the same kind before and after (a
  * group stays a group, a repeater a repeater), paired by name, at any depth: each field held inside
- * JSON whose type, as a value held there reads (`fieldTypeInJson`), changes.
+ * JSON whose type, as a value held there reads (`fieldTypeInJson`), changes, a container held there
+ * that changes kind included.
  */
 function nestedTypeChangesOf(
   container: { from: FieldDefinition; to: FieldDefinition },
@@ -106,7 +107,10 @@ function nestedTypeChangesOf(
   return containedFields(to).flatMap(inner => {
     const was = before.get(inner.name);
     if (was === undefined) return [];
-    if (CONTAINERS.has(inner.type)) {
+    // A container that stays the same kind keeps its fields where they were, each asked in turn;
+    // one that changes kind, or a field that becomes or stops being one, is a change of its own,
+    // as a container on the row is.
+    if (CONTAINERS.has(inner.type) && was.type === inner.type) {
       return nestedTypeChangesOf(container, was, inner, here, args);
     }
     const fromType = fieldTypeInJson(was, args.dialect, args.builtBy);

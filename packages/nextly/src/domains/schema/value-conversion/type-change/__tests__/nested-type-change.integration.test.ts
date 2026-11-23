@@ -228,6 +228,21 @@ describe.each(getConfiguredTestDialects())(
       }, 120_000);
     }
 
+    // The objects a group held stay objects inside the JSON, which a repeater reads as no list.
+    it("refuses a group held inside a container that becomes a repeater over the objects it holds", async () => {
+      const meta = (type: string) =>
+        leaf("meta", type, { fields: [{ name: "note", type: "text" }] });
+      const t = await boot("writer", meta("group"));
+      await entry(t, { meta: { note: "n" } }, []);
+      const before = await stored(t);
+
+      const answer = await save(t, "dialog", meta("repeater"));
+
+      expect(told(answer)).toContain("TYPE_CHANGE_BLOCKED");
+      expect(told(answer)).toContain("field 'details.meta'");
+      expect(await stored(t)).toEqual(before);
+    }, 120_000);
+
     it("asks the new field's own validation of every item of a repeater", async () => {
       const t = await boot("writer");
       // Both of this entry's emails are emails; only the second is longer than the new field allows.

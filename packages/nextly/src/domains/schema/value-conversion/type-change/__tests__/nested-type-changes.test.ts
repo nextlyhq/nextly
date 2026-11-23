@@ -103,6 +103,35 @@ describe("fieldTypeChangesOf, for fields held inside JSON", () => {
     expect(changesOf([group("text")], [group("number")], false)).toEqual([]);
   });
 
+  it("names a container held inside another that changes kind, or a field that becomes one", () => {
+    const outer = (inner: FieldDefinition) =>
+      field("details", "group", { fields: [inner] });
+    const meta = (type: string) =>
+      field(
+        "meta",
+        type,
+        type === "text" ? {} : { fields: [field("note", "text")] }
+      );
+    expect(
+      changesOf([outer(meta("group"))], [outer(meta("repeater"))])
+    ).toEqual([
+      {
+        label: "details.meta",
+        path: [
+          { name: "details", repeated: false },
+          { name: "meta", repeated: false },
+        ],
+        from: "group",
+        to: "repeater",
+      },
+    ]);
+    expect(
+      changesOf([outer(meta("text"))], [outer(meta("group"))]).map(
+        change => change.label
+      )
+    ).toEqual(["details.meta"]);
+  });
+
   it("gives none for a virtual field, or a field of a virtual container, which stores nothing", () => {
     const group = (inner: FieldDefinition) =>
       field("details", "group", { fields: [inner] });

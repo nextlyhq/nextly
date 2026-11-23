@@ -9,9 +9,19 @@
  * field the save renames is judged once the renames are answered (`refuseRenamedUiTypeChanges`),
  * since only the answers say which old column the new field's values come from.
  *
+ * A code-first apply (a reload under `next dev`, `nextly db:sync`, a development start) states its
+ * old fields too, from each entity's registry row, and its field type changes are judged by the
+ * same judgement in the same words (`configuredTypeChangeRefusals`), a field held inside a group's
+ * or a repeater's JSON included. Only stricter: a change it allows still meets the code-first rule
+ * after it, and a lossy change of a field on the row that the data-loss consent or a terminal
+ * answers for is left to that rule, which clears values only so.
+ *
  * @module domains/schema/pipeline/ui-type-changes
  */
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { canPrompt } from "../migrate/can-prompt";
+import { resolveDataLossConsent } from "../migrate/data-loss-consent";
+import { consentForColumn } from "../repair-columns/consent";
 import {
   fieldsStoredOnRow,
   type SupportedDialect,
@@ -23,9 +33,11 @@ import {
 import {
   entityLabel,
   type EntityTypeChangeInput,
+  fieldTypeChangeRefusals,
   perLanguageAfter,
   perLanguageBefore,
   refuseFieldTypeChanges,
+  type TypeChangeRefusal,
 } from "../value-conversion/type-change/field-type-changes";
 
 import { introspectLiveSnapshot } from "./diff/introspect-live";
@@ -48,8 +60,14 @@ interface SavedEntity {
   next: FieldDefinition[];
 }
 
-/** The entities the save states its old fields for and may change: none of code's. */
-function builderSaved(desired: DesiredSchema): SavedEntity[] {
+/**
+ * The entities an apply states its old fields for and may change: a Schema Builder save's (none of
+ * code's, which are locked), or a code-first apply's (none of the Builder's), as `owner` says.
+ */
+function savedEntities(
+  desired: DesiredSchema,
+  owner: "builder" | "configured"
+): SavedEntity[] {
   const all: { kind: EntityKind; entity: SavedEntity["entity"] }[] = [
     ...Object.values(desired.collections).map(entity => ({
       kind: "collection" as const,
@@ -64,8 +82,10 @@ function builderSaved(desired: DesiredSchema): SavedEntity[] {
       entity,
     })),
   ];
+  const changes = (entity: SavedEntity["entity"]): boolean =>
+    owner === "builder" ? entity.locked !== true : entity.builderOwned !== true;
   return all.flatMap(({ kind, entity }) =>
-    entity.recordedFields === undefined || entity.locked === true
+    entity.recordedFields === undefined || !changes(entity)
       ? []
       : [
           {
@@ -111,7 +131,7 @@ export async function refuseUiTypeChanges(
   db: unknown,
   dialect: SupportedDialect
 ): Promise<void> {
-  for (const saved of builderSaved(desired)) {
+  for (const saved of savedEntities(desired, "builder")) {
     const input = entityInput(saved);
     const renamed = await landedRenames(saved, input, db, dialect);
     await refuseFieldTypeChanges(db, dialect, {
@@ -121,6 +141,107 @@ export async function refuseUiTypeChanges(
       ...(renamed.size > 0 ? { renamed } : {}),
     });
   }
+}
+
+/** One code-first entity's refused field type changes. */
+export interface ConfiguredTypeChangeRefusals {
+  kind: EntityKind;
+  slug: string;
+  refusals: TypeChangeRefusal[];
+}
+
+/**
+ * Whether the code-first rule answers for a lossy type change of the column `table`.`column`, which
+ * the judgement then leaves to it: the data-loss consent naming the column, or a terminal that asks.
+ */
+export type ConfiguredLossAnswered = (table: string, column: string) => boolean;
+
+/**
+ * Each code-first entity's field type changes, judged as a Schema Builder save judges them, over the
+ * values its columns and its containers' JSON hold, with each refusal in the Builder's words
+ * (`fieldTypeChangeRefusals`). A lossy change of a field on the row that `answered` covers is left to
+ * the code-first rule, which clears its values only under that answer. A value held inside JSON is
+ * never cleared, so no answer covers its change.
+ */
+export async function configuredTypeChangeRefusals(
+  desired: DesiredSchema,
+  db: unknown,
+  dialect: SupportedDialect,
+  answered: ConfiguredLossAnswered
+): Promise<ConfiguredTypeChangeRefusals[]> {
+  const refused: ConfiguredTypeChangeRefusals[] = [];
+  for (const saved of savedEntities(desired, "configured")) {
+    const refusals = await fieldTypeChangeRefusals(
+      db,
+      dialect,
+      configuredInput(saved, dialect, answered)
+    );
+    if (refusals.length > 0) {
+      refused.push({ kind: saved.kind, slug: saved.entity.slug, refusals });
+    }
+  }
+  return refused;
+}
+
+/**
+ * Refuse a code-first apply's refused field type changes (`configuredTypeChangeRefusals`), entity by
+ * entity, before it plans anything: a lossy change of a field on the row is left to the code-first
+ * rule where the data-loss consent names its column or a terminal will ask.
+ *
+ * @throws {NextlyError} a validation error naming each refused field of the first entity that has
+ *   one
+ */
+export async function refuseConfiguredTypeChanges(
+  desired: DesiredSchema,
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<void> {
+  const answered = configuredLossAnswer(canPrompt());
+  for (const saved of savedEntities(desired, "configured")) {
+    await refuseFieldTypeChanges(
+      db,
+      dialect,
+      configuredInput(saved, dialect, answered)
+    );
+  }
+}
+
+/**
+ * The code-first rule's answer for a lossy type change: the data-loss consent naming its column, as
+ * `db:sync` and the development push read it, or, where `asks`, the terminal's question.
+ */
+export function configuredLossAnswer(asks: boolean): ConfiguredLossAnswered {
+  const consent = resolveDataLossConsent({
+    env: process.env,
+    honours: ["NEXTLY_ALLOW_CODE_FIRST_DROPS"],
+  });
+  return (table, column) =>
+    asks || consentForColumn(consent, table, column, "a type change").covered;
+}
+
+/**
+ * What the judgement reads of one code-first entity: its fields before and after, and, as
+ * acknowledged, each field on the row whose column's lossy change `answered` covers.
+ */
+function configuredInput(
+  saved: SavedEntity,
+  dialect: SupportedDialect,
+  answered: ConfiguredLossAnswered
+): EntityTypeChangeInput {
+  const input = entityInput(saved);
+  const acknowledged = new Set<string>();
+  for (const field of fieldsStoredOnRow(saved.next)) {
+    const column = columnDescriptorAt(field, dialect, input)?.name;
+    if (column !== undefined && answered(saved.entity.tableName, column)) {
+      acknowledged.add(field.name);
+    }
+  }
+  return {
+    ...input,
+    previous: saved.previous,
+    next: saved.next,
+    acknowledged,
+  };
 }
 
 /**
@@ -188,7 +309,7 @@ export async function refuseRenamedUiTypeChanges(
 ): Promise<void> {
   // A code-first apply's type changes are judged by its own rule, in the classifier.
   if (source !== "ui" || renames.length === 0) return;
-  for (const saved of builderSaved(desired)) {
+  for (const saved of savedEntities(desired, "builder")) {
     const input = entityInput(saved);
     const columnOf = (field: FieldDefinition) =>
       columnDescriptorAt(field, dialect, input)?.name.toLowerCase();
