@@ -322,6 +322,30 @@ describe.each(getConfiguredTestDialects())(
       expect(again.body.item).toEqual(done.body.item);
     });
 
+    it("keeps one confirmed copy when two confirms of one upload overlap", async () => {
+      const bytes = pdf("confirmed twice at once");
+      const { id, upload } = started(
+        await start(await staff("uploader"), claimFor(bytes))
+      );
+      storage.browserPut(upload, bytes);
+      const before = new Set(storage.objects.keys());
+
+      // Both confirms read the bytes before either keeps them.
+      storage.holdReadsUntil(2);
+      const [first, second] = await Promise.all([
+        complete(await staff("uploader"), id),
+        complete(await staff("uploader"), id),
+      ]);
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+
+      // Every object the two confirms left is the one the entry points at.
+      const kept = String((await entry(id))!.storageKey);
+      const added = [...storage.objects.keys()].filter(key => !before.has(key));
+      expect(added).toEqual([kept]);
+      expect(storage.objects.get(kept)?.bytes.equals(bytes)).toBe(true);
+    });
+
     it("keeps confirmed bytes where the upload link cannot write", async () => {
       const bytes = pdf("kept as checked");
       const { id, upload } = started(

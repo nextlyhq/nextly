@@ -1,0 +1,188 @@
+---
+title: Private Files
+description: Collections whose entries are private files, reached only through Nextly's checked routes, never through a public address. Uploading, confirming, downloading, the audit trail and clean-up.
+---
+
+<Callout type="warn">
+  Private files are **experimental**. The options and routes below may change
+  before they are stable.
+</Callout>
+
+A collection can hold files that no public address ever serves: documents only certain people may open. Each entry of such a collection is one file. Its bytes live in storage that is never public, and every way in goes through Nextly, where the collection's own access rules decide who may upload or open a file.
+
+This is separate from the [media library](/docs/guides/media-storage), which is built for public website assets.
+
+## Declare the collection
+
+```ts title="nextly.config.ts"
+import { defineCollection, defineConfig, relationship } from "nextly/config";
+import { s3Storage } from "@nextlyhq/storage-s3";
+
+const contracts = defineCollection({
+  slug: "contracts",
+  files: {
+    visibility: "private",
+    accept: ["application/pdf", "image/png", "image/jpeg"],
+    maxSize: 10 * 1024 * 1024, // bytes
+    delivery: "stream", // or "redirect"
+    pendingTimeout: 3600, // seconds an upload may wait for its confirm
+  },
+  access: {
+    // Who may upload, and who may open a file: your rules, as for any
+    // collection. Narrow `read` to the people who may open a contract.
+    create: ({ user }) => user !== null,
+    read: ({ user }) => user !== null,
+  },
+  fields: [relationship({ name: "client", relationTo: "clients" })],
+});
+
+export default defineConfig({
+  collections: [contracts],
+  storage: [
+    // A storage plugin with NO public URL in front of its bucket.
+    s3Storage({
+      bucket: process.env.PRIVATE_BUCKET!,
+      region: "auto",
+      endpoint: process.env.R2_ENDPOINT,
+      accessKeyId: process.env.R2_ACCESS_KEY_ID,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+      collections: { contracts: true },
+    }),
+  ],
+});
+```
+
+`defineCollection` adds the fields every file needs: `filename`, `mimeType`, `size`, `sha256`, `storageKey`, `uploadKey`, `fileStatus` (`pending`, `ready` or `rejected`), `rejectReason`, `uploadedByKind` and `uploadedById`. Nextly alone writes them. `storageKey` and `uploadKey`, which say where the bytes are, are never returned to any caller.
+
+| Option           | Meaning                                                                                                                                                        |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `visibility`     | Always `"private"`.                                                                                                                                            |
+| `accept`         | The MIME types accepted, each written exactly. A file is checked against this list by its bytes, not only by its name. SVG, HTML and script types are refused. |
+| `maxSize`        | The largest file, in bytes, at most 2,147,483,647.                                                                                                             |
+| `delivery`       | `"stream"` (default): the bytes pass through Nextly. `"redirect"`: a link to the file in storage that lasts at most 60 seconds.                                |
+| `pendingTimeout` | How long an upload may wait for its confirm, 60 seconds to 7 days. Default 3600.                                                                               |
+| `principals`     | The kinds of plugin-defined signed-in person (`<plugin>:<name>`) these routes recognise beside staff. Default: none.                                           |
+
+Such a collection has no drafts, versions, localization or public address, and a read rule of `true` is refused. It is hidden in the admin, which has no screen for files yet.
+
+### Storage
+
+The storage that takes the collection must be able to keep files private. With `@nextlyhq/storage-s3` that means **no `publicUrl`**: a public URL serves every key in its bucket, so a site that has one for its media keeps private files in a second `s3Storage` without one, ideally on its own bucket. On Cloudflare R2, keep public access off for that bucket. An app whose private collection has no such storage refuses to start, rather than writing the files to the local disk, which serves everything publicly.
+
+Keys name no file and no person: `files/<collection>/<random id>`, or `<prefix>/<collection>/<random id>` under the collection's storage `prefix`.
+
+## Who may call
+
+Staff sessions and API keys are recognised as on every route, and an API key is judged by its own scope. A signed-in person of a plugin-defined kind, an accounts plugin's member for instance, is recognised only when the collection lists the kind in `files.principals`, and is judged by the collection's rules alone. A request carrying a staff credential is judged as staff.
+
+A write carrying a session cookie must come from your site or an origin in `NEXTLY_ALLOWED_ORIGINS`; a request with a `Bearer` token is exempt.
+
+## Uploading
+
+An upload takes three steps, so the bytes can go straight to storage, whatever the size limit of your host's requests.
+
+**1. Start.** `POST /admin/api/files/:slug/uploads`
+
+```json
+{
+  "filename": "contract.pdf",
+  "mimeType": "application/pdf",
+  "size": 48213,
+  "data": { "client": "c_123" }
+}
+```
+
+The caller must be allowed to create in the collection. The name, type and size are checked against its `files` options before anything is written, then the entry is created as the caller (so `data`, the collection's own fields, goes through its field rules) with `fileStatus: "pending"`. The answer, `201`:
+
+```json
+{
+  "message": "Upload started.",
+  "item": {
+    "id": "8c0d…",
+    "upload": {
+      "url": "https://…",
+      "method": "PUT",
+      "headers": {
+        "Content-Type": "application/pdf",
+        "Cache-Control": "private, no-store"
+      },
+      "expiresAt": "…"
+    }
+  }
+}
+```
+
+**2. Send the bytes.** The browser sends the file to `upload.url` with `upload.method` and every header in `upload.headers`. The link lasts at most five minutes and binds the type and exact size.
+
+**3. Confirm.** `POST /admin/api/files/:slug/uploads/:id/complete`
+
+Only the caller who started the upload may confirm it. Nextly reads the stored bytes back and checks their size and their content against the claim, then keeps them under a key of their own that the upload link cannot write. The answer, `200`:
+
+```json
+{
+  "message": "Upload confirmed.",
+  "item": {
+    "id": "8c0d…",
+    "fileStatus": "ready",
+    "filename": "contract.pdf",
+    "mimeType": "application/pdf",
+    "size": 48213
+  }
+}
+```
+
+| Answer                    | Meaning                                                                                                                                                                                                         |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400` `FILE_REJECTED`     | The bytes are not the claimed size or type, or the confirm came after `pendingTimeout`. The bytes are deleted and the entry is `rejected`, with `rejectReason` `size-mismatch`, `type-mismatch` or `abandoned`. |
+| `400` `FILE_NOT_UPLOADED` | Nothing has arrived yet. The upload stays pending: send the bytes and confirm again.                                                                                                                            |
+| `404`                     | No such upload, or not the caller's.                                                                                                                                                                            |
+
+## Downloading
+
+`GET /admin/api/files/:slug/:id/download`
+
+The entry is read as the caller, through the collection's read rule and permissions. A file they may not read, one that does not exist and one not yet confirmed are all answered with the same `404`, so nothing is learned about files a caller cannot open.
+
+- With `delivery: "stream"`, the answer is `200` with the bytes, the stored type, and `Content-Disposition: attachment`.
+- With `delivery: "redirect"`, it is `303` to a link that lasts at most 60 seconds and answers as an attachment.
+
+Every answer carries `Cache-Control: private, no-store`, `Pragma: no-cache`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox` and `Referrer-Policy: no-referrer`, so no cache keeps a file and none is ever rendered on your site's origin.
+
+### From server code
+
+```ts
+import { nextly } from "nextly";
+
+export async function openContract(contractId: string, userId: string) {
+  const file = await nextly.files.download({
+    collection: "contracts",
+    id: contractId,
+    // Or `principal`, a signed-in person from `nextly.principals.fromRequest`.
+    user: { id: userId },
+  });
+  // `stream` for "stream" delivery, `url` for "redirect".
+  return {
+    body: file.stream ?? file.url,
+    name: file.filename,
+    type: file.mimeType,
+  };
+}
+```
+
+The same checks apply. A call that names neither a `user` nor a `principal` is refused; trusted code opening a file for nobody must say `overrideAccess: true`.
+
+## The audit trail
+
+Every download writes an [audit log](/docs/audit-log) row of kind `file.downloaded`, naming who opened the file (a staff user, an API key by its maker with the key's id, a signed-in person, or core) and, in its metadata, the `collection`, the file's `id` and the `delivery`. Never the link or where the file is stored.
+
+## Clean-up
+
+- **Uploads never confirmed** are rejected once their collection's `pendingTimeout` has passed (and a ten-minute margin for a confirm still in progress): their bytes are deleted and the entry is marked `abandoned`. This runs on every pass of the [job runner](/docs/jobs), so schedule `/admin/api/jobs/run` as your host's cron.
+- **Bytes sent through a link after its file was confirmed or rejected** are removed once the link has expired.
+- **Deleting an entry** deletes its bytes, after the deletion commits. Should storage refuse, the delete is queued as a job and retried.
+
+Add a lifecycle rule on your bucket as a backstop if your storage offers one.
+
+## Not yet
+
+There is no admin screen for files, and no hooks for transforming or scanning bytes (encryption, virus scanning). A file's own encryption, where you need it, is your application's for now.

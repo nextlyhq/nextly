@@ -58,6 +58,8 @@ export type FileCaller =
   | {
       type: "staff";
       uploader: FileUploader;
+      /** The person, or the key's maker for an API key. */
+      userId: string;
       /** The person or key, with the key's own scope (`readCaller`). */
       read: ReadCaller;
       /** Who a write is recorded as. */
@@ -107,6 +109,7 @@ export async function fileCaller(
         auth.authMethod === "api-key" && auth.apiKeyId !== undefined
           ? { kind: "apiKey", id: auth.apiKeyId }
           : { kind: "user", id: auth.userId },
+      userId: auth.userId,
       read: await readCaller(auth),
       actor: actorFromAuthContext(auth),
     };
