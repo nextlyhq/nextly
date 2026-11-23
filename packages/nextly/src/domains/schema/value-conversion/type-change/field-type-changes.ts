@@ -83,7 +83,11 @@ const CONTAINERS = new Set(["group", "repeater"]);
 function containedFields(field: FieldDefinition): FieldDefinition[] {
   return (
     addressableFields((field as { fields?: unknown }).fields, {
-      descendInto: container => !isVirtualField(container),
+      descendInto: container =>
+        !isVirtualField({
+          virtual: container.virtual,
+          options: container.options,
+        }),
     }) as unknown as FieldDefinition[]
   ).filter(inner => !isVirtualField(inner));
 }
