@@ -97,12 +97,16 @@ describe("createDefaultDocument initial version + localized default seeding", ()
     capturedCalls.length = 0;
     // The probe hits a not-yet-migrated table → missing-table error → companion
     // absent, so the seed no-ops and v1 must not carry the localized default.
+    // The table is missing from the catalog too: the probe asks the catalog
+    // instead of querying the table while the adapter reports a transaction
+    // open in the calling flow, as this mock adapter does.
     const adapter = createMockAdapter({
       executeQuery: vi
         .fn()
         .mockRejectedValue(
           new Error('relation "single_site_settings_locales" does not exist')
         ),
+      tableExists: vi.fn().mockResolvedValue(false),
       execute: vi.fn().mockResolvedValue([]),
     });
     const service = createService(adapter);

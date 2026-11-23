@@ -726,8 +726,16 @@ describe.each(getConfiguredTestDialects())(
 
     it("a fresh project made from the blog template with the Schema Builder approach: its migration is applied and nothing is named", async () => {
       // As the scaffold makes it: the template's migrations folder beside a
-      // configuration that declares no collection and no Single.
+      // configuration that declares no collection and no Single. Each
+      // translations table comes before the table it keys to, so a drop on
+      // MySQL is not refused over its foreign key.
       const TEMPLATE_TABLES = [
+        "dc_posts_locales",
+        "dc_categories_locales",
+        "dc_tags_locales",
+        "dc_authors_locales",
+        "single_site_settings_locales",
+        "single_homepage_locales",
         "dc_posts_categories",
         "dc_posts_tags",
         "dc_posts",
@@ -772,9 +780,13 @@ describe.each(getConfiguredTestDialects())(
         ).getDrizzle();
         const live = await liveColumnNames(drizzle, dialect, [
           "dc_posts",
+          "dc_posts_locales",
           "single_homepage",
         ]);
-        expect(live.get("dc_posts")?.has("title")).toBe(true);
+        // A post's title is text, which every installation keeps per
+        // language, in the posts' translations table.
+        expect(live.get("dc_posts")).toBeDefined();
+        expect(live.get("dc_posts_locales")?.has("title")).toBe(true);
         expect(live.get("single_homepage")).toBeDefined();
 
         const again = await migrate(scaffolded);

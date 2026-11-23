@@ -7,10 +7,10 @@
 import { getService } from "../di/service-access";
 import { buildAuditLogWriter } from "../domains/audit/audit-log-writer";
 import {
-  collectPluginAuditKinds,
   projectPluginAuditEvent,
   type PluginAuditEvent,
 } from "../domains/audit/plugin-audit";
+import { collectPluginAuditKinds } from "../domains/audit/plugin-audit-kinds";
 import { getNextlyLogger } from "../observability/logger";
 import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
 import { readProxyTrustSettings } from "../utils/proxy-trust";

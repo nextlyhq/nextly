@@ -7,10 +7,8 @@ import {
   publishPrincipalKinds,
 } from "../../../plugins/principals/registry";
 import { auditLog as postgresAuditLog } from "../../../schemas/audit/postgres";
-import {
-  collectPluginAuditKinds,
-  projectPluginAuditEvent,
-} from "../plugin-audit";
+import { projectPluginAuditEvent } from "../plugin-audit";
+import { collectPluginAuditKinds } from "../plugin-audit-kinds";
 
 vi.mock("../../../observability/logger", () => ({
   getNextlyLogger: () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn() }),

@@ -287,8 +287,18 @@ export const WRITING_DOORS: readonly Door[] = [
  * `public` asks a visitor what `service` asks one, of targets of its own on
  * which the Public role holds {@link PUBLIC_HOLDS}; in every other setup the
  * Public role holds what boot seeding grants it (`publicHolds`).
+ *
+ * `closed` asks what `service` asks of a collection and a related row, every
+ * caller, of rule collections of its own marked closed to super-admin
+ * (`closedToSuperAdmin`), at every door that reads or writes entries. The
+ * doors that answer about a permission alone (`route`, `can`, `widget`,
+ * `schema`, `capabilities`) are not asked: the mark refuses entries, not
+ * permissions. Its answers are `service`'s, except that super-admin
+ * authority is refused (`oneAnswer`): a super-admin person and a full-access
+ * key carrying it. A super-admin's read-only key holds the catalogue's reads
+ * without that authority, so it reads a closed collection as it reads any.
  */
-export type Setup = "service" | "no-service" | "bound" | "public";
+export type Setup = "service" | "no-service" | "bound" | "public" | "closed";
 
 export interface Row {
   setup: Setup;
@@ -507,6 +517,17 @@ const REACH_BY_SETUP: Record<Setup, Partial<Record<Door, Reach>>> = {
     system: REACH.system,
     bulk: REACH.bulk,
   },
+  // Every door that reads or writes entries of a collection, and population.
+  closed: {
+    rest: REACH.rest,
+    direct: REACH.direct,
+    website: REACH.website,
+    service: REACH.service,
+    entity: REACH.entity,
+    population: REACH.population,
+    lock: REACH.lock,
+    bulk: REACH.bulk,
+  },
 };
 
 /** Whether a door asks a case, so a row is never sent where it cannot be. */
@@ -589,11 +610,24 @@ export function rows(): Row[] {
   );
   // A visitor again, with the Public role holding what it can be granted.
   const publicRole = cross("public", TARGETS, rulesOf, ACTIONS, ["visitor"]);
+  // Every caller again, of collections closed to super-admin. Last, so every
+  // row already in the answers file keeps its place.
+  const closed = cross(
+    "closed",
+    ["collection", "related"],
+    rulesOf,
+    ACTIONS,
+    CALLERS
+  );
   // A visitor's create, update and delete are rows like any other: judged by
   // what the Public role holds, then by a rule naming the write.
-  return [...withService, ...withoutService, ...bound, ...publicRole].filter(
-    row => DOORS.some(door => asks(door, row))
-  );
+  return [
+    ...withService,
+    ...withoutService,
+    ...bound,
+    ...publicRole,
+    ...closed,
+  ].filter(row => DOORS.some(door => asks(door, row)));
 }
 
 export function doorsAsking(row: Row): Door[] {
@@ -954,7 +988,9 @@ export function oneAnswer(row: Row): Verdict {
     caller === "super-admin-inherited" ||
     caller === "key-super-admin"
   ) {
-    return "allow";
+    // Past every rule, except on a collection closed to super-admin, which
+    // refuses super-admin authority whatever else the caller holds.
+    return row.setup === "closed" ? "refuse" : "allow";
   }
   if (!holdsPermission(caller, action, target)) return "refuse";
   return answerFor(row, rulesLet(rule, action, caller, target));

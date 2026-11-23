@@ -277,6 +277,42 @@ function seedOf(
   };
 }
 
+/** What declares an extension schema: the plugins' contributions, and the app's own hooks. */
+function declaredSchemaSources(
+  input: Pick<PublishInput, "plugins" | "config">
+): {
+  plugins: SchemaContribution[];
+  appHooks: unknown[];
+  afterDrizzle: DrizzleSchemaHook[];
+} {
+  const schemaConfig = (
+    input.config.db as
+      | { schema?: { extend?: unknown[]; afterDrizzle?: DrizzleSchemaHook[] } }
+      | undefined
+  )?.schema;
+  return {
+    plugins: contributionsOf(input.plugins),
+    appHooks: schemaConfig?.extend ?? [],
+    // Counted with the others: an app that declares ONLY afterDrizzle still has something to
+    // compile, and clearing the schema there would drop the tables its hook was written to
+    // reshape.
+    afterDrizzle: schemaConfig?.afterDrizzle ?? [],
+  };
+}
+
+/**
+ * Whether the plugins and the configuration declare an extension schema to compile: where none
+ * does, `compileExtensionSchema` answers undefined without reading the inputs a compile seeds its
+ * tables with, so a caller can leave those unread (a start reads each field group's stored table
+ * only where it is needed).
+ */
+export function declaresExtensionSchema(
+  input: Pick<PublishInput, "plugins" | "config">
+): boolean {
+  const { plugins, appHooks, afterDrizzle } = declaredSchemaSources(input);
+  return plugins.length > 0 || appHooks.length > 0 || afterDrizzle.length > 0;
+}
+
 /**
  * Compile the extension schema WITHOUT making it the active one.
  *
@@ -288,25 +324,8 @@ function seedOf(
 export async function compileExtensionSchema(
   input: PublishInput
 ): Promise<ExtensionSchema | undefined> {
-  const plugins = contributionsOf(input.plugins);
-  const schemaConfig = (
-    input.config.db as
-      | { schema?: { extend?: unknown[]; afterDrizzle?: DrizzleSchemaHook[] } }
-      | undefined
-  )?.schema;
-  const appHooks = schemaConfig?.extend ?? [];
-  // Counted in the early return below: an app that declares ONLY afterDrizzle
-  // still has something to compile, and clearing the schema there would drop
-  // the tables its hook was written to reshape.
-  const afterDrizzle = schemaConfig?.afterDrizzle ?? [];
-
-  if (
-    plugins.length === 0 &&
-    appHooks.length === 0 &&
-    afterDrizzle.length === 0
-  ) {
-    return undefined;
-  }
+  if (!declaresExtensionSchema(input)) return undefined;
+  const { plugins, appHooks, afterDrizzle } = declaredSchemaSources(input);
 
   // All three entity kinds, not collections alone. A hook may index or extend
   // a single or a field group exactly as it may a collection — the draft

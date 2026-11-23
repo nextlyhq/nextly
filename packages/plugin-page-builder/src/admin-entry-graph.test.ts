@@ -16,12 +16,20 @@
  * @module admin-entry-graph.test
  */
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * A reached module's path from `src`, written with "/" whatever the platform,
+ * as the paths asserted below are: on Windows a resolved path uses "\\".
+ */
+function fromSrc(file: string): string {
+  return relative(SRC_DIR, file).split(sep).join("/");
+}
 
 /** The browser entries the package publishes. */
 const BROWSER_ENTRIES = [
@@ -102,7 +110,7 @@ function namingTheSdkRoot(entry: string): string[] {
     .filter(([, external]) =>
       external.some(specifier => SERVER_ROOTS.includes(specifier))
     )
-    .map(([file]) => file.slice(SRC_DIR.length + 1))
+    .map(([file]) => fromSrc(file))
     .sort();
 }
 
@@ -116,9 +124,7 @@ describe("what the browser entries reach", () => {
   it("CONTROL: the walk reaches the shared site-style modules from the admin entry", () => {
     // A walk that stopped at the entry would satisfy the assertions above for
     // ever; the admin reaches these only through other modules.
-    const reached = [...graphOf("admin/index.ts").keys()].map(file =>
-      file.slice(SRC_DIR.length + 1)
-    );
+    const reached = [...graphOf("admin/index.ts").keys()].map(fromSrc);
     expect(reached).toContain("site-style.ts");
     expect(reached).toContain("site-style-storage.ts");
     expect(reached.length).toBeGreaterThan(50);

@@ -720,6 +720,10 @@ describe.each(getConfiguredTestDialects())(
           createdAt: now,
           updatedAt: now,
         });
+        // A reader of the posts, as the others are: a mark is judged by the
+        // document's read gate first, so without the grant it would be
+        // refused there and never reach the lock this race is about.
+        await grantTo(current!, "leaving", "read", ["posts"]);
         const where = {
           and: [{ column: "id", op: "=" as const, value: "leaving" }],
         };
