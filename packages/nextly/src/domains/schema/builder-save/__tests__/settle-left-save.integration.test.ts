@@ -1388,14 +1388,21 @@ describe.each(getConfiguredTestDialects())(
       }
     }, 300_000);
 
-    /** A save stopped before its first file ran: its files, and the last as a migration name. */
+    /**
+     * A save stopped as its file is put in place, before any of it ran or was recorded on any
+     * dialect (MySQL records a file's attempt before its statements, so a later stop leaves the
+     * record for the stopped-save step): its files, and the last as a migration name.
+     */
     async function stoppedBeforeItsFiles(
       t: TestNextly
     ): Promise<{ written: string[]; last: string }> {
       await created(t);
       const filesBefore = sqlFiles();
-      await stopSave(t, [text("heading"), text("alpha")], point =>
-        point.startsWith("unit:")
+      await stopSave(
+        t,
+        [text("heading"), text("alpha")],
+        point =>
+          point.startsWith(`file:${HISTORY_DIR()}`) && point.endsWith(".sql")
       );
       const written = sqlFiles().filter(f => !filesBefore.includes(f));
       expect(written.length).toBeGreaterThan(0);
