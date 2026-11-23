@@ -39,7 +39,9 @@ export const LANGUAGE_CHIP_WORD: Record<LanguageChipState, string> = {
 export const LANGUAGE_CHIP_MEANING: Record<LanguageChipState, string> = {
   live: "published, as readers see it",
   changes: "published, with saved changes not yet published",
-  outOfDate: "the default language changed after this one was written",
+  // The text it was made from, which is not always the default language's: a translation
+  // copied from another language goes out of date when that one changes.
+  outOfDate: "the text it was translated from changed since",
   draft: "written, not yet published",
   missing: "not translated yet",
 };

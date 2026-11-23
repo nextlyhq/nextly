@@ -268,8 +268,12 @@ describe("LanguageChipKey", () => {
     render(<LanguageChipKey />);
     const key = screen.getByRole("list", { name: "Language key" });
     expect(key).toHaveTextContent(
-      "Out of date: the default language changed after this one was written"
+      "Out of date: the text it was translated from changed since"
     );
+    // The source is the text the translation was made from, which need not be the default
+    // language's: a translation copied from another language goes out of date when that one
+    // changes.
+    expect(key).not.toHaveTextContent(/default language/);
   });
 
   it("renders nothing on a site with one language", () => {
