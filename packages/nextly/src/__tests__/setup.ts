@@ -4,6 +4,7 @@ import { loadDialectTables } from "../database/dialect-tables";
 import { describeAbortedTransactions } from "../plugins/aborted-transaction-sightings";
 
 import {
+  endTest,
   layoutForBoot,
   migrateDataStepsView,
   startTest,
@@ -32,7 +33,7 @@ beforeEach(() => startTest());
 // And after each test, after the file's own hooks: a file whose tests move the hook ends as it
 // began, so the shared-module guard finds the singleton as the file found it, and the next file
 // in a shared worker starts from the setup's layout rather than the last test's.
-afterEach(() => startTest());
+afterEach(() => endTest());
 // An older suite's `nextly migrate` runs without the localisation data steps on the earlier
 // layout, as it ran on dev before they existed (`migrateDataStepsView`).
 vi.mock("../cli/commands/upgrade-steps", async importActual => {
