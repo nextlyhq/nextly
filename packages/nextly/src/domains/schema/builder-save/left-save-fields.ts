@@ -3,10 +3,11 @@
  * MySQL, a schema statement of the save may have committed apart from the registry row that
  * describes it: the row still describing a field the tables have changed, or already describing one
  * they have not caught up with. A write that sets such a field is refused, naming it, with nothing
- * of it applied, and a read that needs a column the tables do not hold under the registry's name
- * gets the same answer, never a database error. Writes that set no such field go on. Only the
- * settle lifts it, at the next development start or save of the entity: the record stands for every
- * process on the database, whatever became of the save's own.
+ * of it applied. Writes that set no such field go on, and reads are answered from the tables: this
+ * process's running tables for the entity leave out each column the tables do not hold, so no
+ * statement names one, until the record no longer stands, when they are the registry's again.
+ * Only the settle lifts it, at the next development start or save of the entity: the record stands
+ * for every process on the database, whatever became of the save's own.
  *
  * Which fields: those of the registry row whose columns the tables do not hold as the row declares
  * them (`fieldsNotServedOf`), the main table and the translations table both, whichever road the
@@ -25,6 +26,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getService } from "../../../di/service-access";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { isProductionRuntime } from "../../../shared/builder-refusal";
 import { toSnakeCase } from "../field-rules";
 import { readSchemaLockState } from "../pipeline/schema-lock";
@@ -42,10 +44,22 @@ type EntryKind = Extract<SaveInProgressKind, "collection" | "single">;
 interface HeldFields {
   /** The fields a write may not set. */
   readonly fields: ReadonlySet<string>;
-  /** Of them, those with a column the tables do not hold at all, which a read would select. */
-  readonly missing: ReadonlySet<string>;
+  /**
+   * Whether they are the comparison's: false where it could not be made (an unreadable record, a
+   * transaction open before it was), so every field is held and the running tables are left as
+   * they are, a read refused rather than answered from a shape not known.
+   */
+  readonly compared: boolean;
   /** The refusal, naming the held fields and what settles them. */
   readonly refusal: NextlyError;
+}
+
+/** An entity's registry row, as far as its running tables are built from it. */
+interface RegistryRow {
+  tableName: string;
+  fields: FieldDefinition[];
+  status: boolean;
+  localized: boolean;
 }
 
 /** What one record's comparison found, by field (`fieldsNotServedOf`). */
@@ -59,6 +73,12 @@ interface Unserved {
  * runs changes nothing more, and a settle clears its record, so a later record has its own id.
  */
 const comparedById = new Map<string, Unserved>();
+
+/**
+ * The entities whose running tables this process has narrowed (`shapeRunningTables`), by kind and
+ * slug, with the id of the record they were narrowed under.
+ */
+const narrowedBy = new Map<string, string>();
 
 /**
  * Refuses a write to an entry of `kind` `slug` that sets a field a left save holds: a key of
@@ -82,8 +102,9 @@ export async function refuseWriteOverLeftSave(args: {
 }
 
 /**
- * Refuses a read of the entries of `kind` `slug` while a left save holds a field whose column the
- * tables do not hold at all: the read would select it.
+ * Readies a read of the entries of `kind` `slug` while a left save stands: answered from the tables,
+ * the running tables leaving out each column they do not hold (`heldFieldsOf`). Refused where the
+ * comparison could not be made, as what the tables hold is then not known.
  */
 export async function refuseReadOverLeftSave(args: {
   adapter: DrizzleAdapter;
@@ -91,7 +112,7 @@ export async function refuseReadOverLeftSave(args: {
   slug: string;
 }): Promise<void> {
   const held = await heldFieldsOf(args);
-  if (held !== undefined && held.missing.size > 0) throw held.refusal;
+  if (held !== undefined && !held.compared) throw held.refusal;
 }
 
 /**
@@ -115,26 +136,100 @@ async function heldFieldsOf(args: {
     args.kind,
     args.slug
   );
-  if (row === undefined) return undefined;
   // A save made outside development leaves its files for `nextly migrate` and changes no table.
-  if ("record" in row && row.record.applies === false) return undefined;
-  const registryFields = await registryFieldsOf(args);
-  const every = registryFields.flatMap(field => {
-    const name = (field as { name?: unknown } | null)?.name;
-    return typeof name === "string" ? [name] : [];
-  });
+  if (row === undefined || ("record" in row && row.record.applies === false)) {
+    await restoreRunningTables(args);
+    return undefined;
+  }
+  const registry = await registryRowOf(args);
+  if (registry === null) return undefined;
   // A record that cannot be read could be any save's: every field is held, failing closed.
   const unserved =
     "record" in row
-      ? await unservedOf(args, row.record, registryFields)
+      ? await unservedOf(args, row.record, registry.fields)
       : undefined;
-  const { fields, missing } = unserved ?? { fields: every, missing: every };
+  if (unserved !== undefined && "record" in row) {
+    await shapeRunningTables(args, row.record.id, registry, unserved.missing);
+  }
+  const fields =
+    unserved?.fields ??
+    registry.fields.flatMap(field =>
+      typeof field.name === "string" ? [field.name] : []
+    );
   if (fields.length === 0) return undefined;
   return {
     fields: new Set(fields),
-    missing: new Set(missing),
+    compared: unserved !== undefined,
     refusal: heldFieldsRefusal(args.kind, args.slug, fields),
   };
+}
+
+/**
+ * Brings this process's running tables for the entity (the main table and its translations table,
+ * in both caches the dispatcher keeps) to its registry row less the fields whose columns the
+ * tables do not hold, once per record; with none missing, to the row as it is.
+ */
+async function shapeRunningTables(
+  args: { adapter: DrizzleAdapter; kind: EntryKind; slug: string },
+  recordId: string,
+  registry: RegistryRow,
+  missing: readonly string[]
+): Promise<void> {
+  const key = `${args.kind}:${args.slug}`;
+  if (missing.length === 0) {
+    await restoreRunningTables(args);
+    return;
+  }
+  if (narrowedBy.get(key) === recordId) return;
+  const gone = new Set(missing);
+  await registerRunningTables(args, {
+    ...registry,
+    fields: registry.fields.filter(
+      field => typeof field.name !== "string" || !gone.has(field.name)
+    ),
+  });
+  narrowedBy.set(key, recordId);
+}
+
+/** Puts back the registry's own running tables for an entity this process narrowed, if it did. */
+async function restoreRunningTables(args: {
+  adapter: DrizzleAdapter;
+  kind: EntryKind;
+  slug: string;
+}): Promise<void> {
+  const key = `${args.kind}:${args.slug}`;
+  if (!narrowedBy.has(key)) return;
+  const registry = await registryRowOf(args);
+  if (registry !== null) await registerRunningTables(args, registry);
+  narrowedBy.delete(key);
+}
+
+/**
+ * Registers the entity's running tables for `registry` as the shared registration builds them
+ * (`registerEntityRuntimeTables`), in the adapter's cache and, for a collection, the reads' own.
+ */
+async function registerRunningTables(
+  args: { adapter: DrizzleAdapter; kind: EntryKind; slug: string },
+  registry: RegistryRow
+): Promise<void> {
+  // Loaded only where a left save narrows or puts back a shape: never on an ordinary write.
+  const [{ registerEntityRuntimeTables }, di] = await Promise.all([
+    import("../../../di/register-runtime-tables"),
+    import("../../../dispatcher/helpers/di"),
+  ]);
+  const schemas = di.getSchemaRegistryFromDI();
+  const reads =
+    args.kind === "collection" ? di.getCollectionsHandlerFromDI() : undefined;
+  registerEntityRuntimeTables(
+    {
+      registerDynamicSchema: (name, table) => {
+        schemas?.registerDynamicSchema(name, table);
+        reads?.refreshCollectionSchema(name, table);
+      },
+    },
+    { slug: args.slug, ...registry },
+    args.adapter.getCapabilities().dialect
+  );
 }
 
 /**
@@ -162,12 +257,12 @@ async function unservedOf(
   return unserved;
 }
 
-/** The entity's registry row's fields, read on the write's transaction where it has one. */
-async function registryFieldsOf(args: {
+/** The entity's registry row, read on the write's transaction where it has one; null where none. */
+async function registryRowOf(args: {
   kind: EntryKind;
   slug: string;
   tx?: unknown;
-}): Promise<readonly unknown[]> {
+}): Promise<RegistryRow | null> {
   const row =
     args.kind === "single"
       ? await getService("singleRegistryService").getSingleBySlug(
@@ -178,8 +273,23 @@ async function registryFieldsOf(args: {
           args.slug,
           args.tx
         );
-  const fields: unknown = row?.fields;
-  return Array.isArray(fields) ? fields : [];
+  if (row === null || row === undefined) return null;
+  const read = row as {
+    tableName?: unknown;
+    fields?: unknown;
+    status?: unknown;
+    localized?: unknown;
+  };
+  return typeof read.tableName === "string"
+    ? {
+        tableName: read.tableName,
+        fields: Array.isArray(read.fields)
+          ? (read.fields as FieldDefinition[])
+          : [],
+        status: read.status === true,
+        localized: read.localized === true,
+      }
+    : null;
 }
 
 /**

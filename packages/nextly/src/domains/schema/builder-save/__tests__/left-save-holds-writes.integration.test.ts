@@ -122,6 +122,17 @@ const EDITOR = "left-save-editor";
 type Field = Record<string, unknown>;
 const text = (name: string): Field => ({ name, type: "text" });
 
+/** What a save that ended before its kill point answered, with each cause it carries. */
+function causesOf(answer: unknown): string {
+  const chain: string[] = [];
+  let cause: unknown = answer;
+  for (let depth = 0; depth < 6 && cause !== undefined; depth++) {
+    chain.push(cause instanceof Error ? cause.message : String(cause));
+    cause = cause instanceof Error ? cause.cause : undefined;
+  }
+  return chain.join(" <- ");
+}
+
 /** What one of the other process's operations came to (`helpers/left-save-writer.ts`). */
 type Outcome = {
   kind: "write" | "read";
@@ -184,6 +195,13 @@ describe.each(
     perLanguage: boolean;
   }) => {
     const slug = `held_notes_${dialect.slice(0, 2)}`;
+    /**
+     * A text field kept on the main table in either layout: shared where values are kept per
+     * language (`localized: false`), as the rename this suite kills is a main-table rename there
+     * too, made by the collection's push.
+     */
+    const field = (name: string): Field =>
+      perLanguage ? { ...text(name), localized: false } : text(name);
     const table = `dc_${slug}`;
     let url: string;
     let cookie: string;
@@ -225,7 +243,7 @@ describe.each(
         {} as ServiceContainer,
         "createCollection",
         {},
-        { name: slug, label: slug, fields: [text("heading"), text("note")] }
+        { name: slug, label: slug, fields: [field("heading"), field("note")] }
       );
       await current.nextly.create({
         collection: slug,
@@ -285,14 +303,12 @@ describe.each(
             "applySchemaChanges",
             { collectionName: slug },
             {
-              fields: [text("headline"), text("note")],
+              fields: [field("headline"), field("note")],
               confirmed: true,
               schemaVersion,
               renameResolutions: [
                 {
-                  // A translatable field's column is in the translations table where values
-                  // are kept per language.
-                  tableName: perLanguage ? `${table}_locales` : table,
+                  tableName: table,
                   fromColumn: "heading",
                   toColumn: "headline",
                   choice: "rename",
@@ -303,7 +319,7 @@ describe.each(
       ).catch((error: unknown) => error);
       const outcome = await Promise.race([
         reached.then(() => "reached"),
-        stopped.then(answer => `the save ended first: ${String(answer)}`),
+        stopped.then(answer => `the save ended first: ${causesOf(answer)}`),
       ]);
       expect(outcome, "the save never reached the kill point").toBe("reached");
       await clearStoppedHolds(t);

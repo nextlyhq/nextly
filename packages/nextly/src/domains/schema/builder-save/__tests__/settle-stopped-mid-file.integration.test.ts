@@ -600,29 +600,33 @@ describe.each(
       );
     }, 300_000);
 
-    // With values kept per language, a Single's translatable fields change in a file of their own
-    // after the one that writes its registry row: a stop there is not one file's, and is not judged
-    // yet. It stays as it stopped, refusing, rather than settled wrongly.
+    // With values kept per language, a Single's translatable fields change in a file of their own,
+    // after the one that writes its registry row: a stop there is not one file's, and is not
+    // judged yet. It stays as it stopped, refusing, rather than settled wrongly; the registry row
+    // already names the field the translations table does not hold.
     it.runIf(perLanguage)(
       "leaves a save of translatable fields stopped in its translations file as it stands",
       async () => {
         const t = await boot();
+        // The translations table made first, by a save that lands whole.
+        await save(t, [field("heading"), text("subtitle")]);
         const before = sqlFiles();
         await killSave(
           t,
-          [field("heading"), text("subtitle"), text("summary")],
-          afterAdding("subtitle")
+          [field("heading"), text("subtitle"), text("summary"), text("caption")],
+          afterAdding("summary")
         );
         const killedAt = await liveColumns(t);
-        expect(killedAt).toContain("subtitle");
-        expect(killedAt).not.toContain("summary");
+        expect(killedAt).toContain("summary");
+        expect(killedAt).not.toContain("caption");
+        expect(await registryFieldNames(t)).toContain("caption");
         await clearStoppedHolds(t);
 
         const settled = await settle(t);
 
         expect(settled.map(s => s.outcome)).toEqual(["left"]);
         expect(await recordRow(t), "the record stays").toBeDefined();
-        expect(sqlFiles().filter(f => !before.includes(f)).length).toBe(2);
+        expect(sqlFiles().filter(f => !before.includes(f))).toHaveLength(2);
       },
       300_000
     );
