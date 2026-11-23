@@ -42,7 +42,7 @@ import {
   recordAlreadyApplied,
   snapshotsEquivalent,
 } from "../migrate/drift-reconcile";
-import { blankWrittenFrom } from "../migrate/history-line";
+import { blankMigrationsWrittenFrom } from "../migrate/history-line";
 import { splitSqlStatements } from "../migrate/split-sql";
 import { parseSqlSections } from "../migrate/sql-sections";
 import { tablesChangedIn } from "../migrate/statement-targets";
@@ -556,15 +556,16 @@ async function dependentsOf(
       dependents.push(own);
     }
   }
-  // And each blank migration (a file with no snapshot, written by hand after `migrate:create
-  // --blank`), whose header states the migration it was written after.
-  for (const file of await sqlFilesIn(deps.migrationsDir)) {
-    const own = baseName(file);
-    if (saves.has(own) || withSnapshot.has(own)) continue;
-    const content = await readIfPresent(join(deps.migrationsDir, file));
-    if (blankWrittenFrom(content ?? "").some(parent => saves.has(parent))) {
-      dependents.push(own);
-    }
+  // And each blank migration (no snapshot, written by hand after `migrate:create --blank`),
+  // whose header states the migration it was written after: read once with its dialect variants
+  // and named by its migration, as the history reads the folder. Where its files state different
+  // places, any of them naming one of the save's files keeps it, so nothing is removed under it.
+  for (const [own, from] of await blankMigrationsWrittenFrom(
+    deps.migrationsDir,
+    withSnapshot
+  )) {
+    if (saves.has(own)) continue;
+    if (from.some(parent => saves.has(parent))) dependents.push(own);
   }
   return dependents.sort();
 }

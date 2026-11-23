@@ -524,5 +524,41 @@ describe.each(LOCK_DIALECTS)(
         expect(await covers()).toBe(false);
       }
     );
+
+    it.runIf(dialect === "sqlite")(
+      "reads a key declared AUTOINCREMENT at the table's level",
+      async () => {
+        const wrong: string[] = [];
+        for (const [table, key] of [
+          [`${P}_tablekey`, "PRIMARY KEY (id AUTOINCREMENT)"],
+          [`${P}_tablekeyd`, "PRIMARY KEY (id DESC AUTOINCREMENT)"],
+          [
+            `${P}_tablekeyc`,
+            "PRIMARY KEY (id COLLATE BINARY DESC AUTOINCREMENT)",
+          ],
+        ] as const) {
+          await adapter.executeQuery(
+            `CREATE TABLE ${table} (id INTEGER, label text, ${key})`
+          );
+          await adapter.executeQuery(
+            `INSERT INTO ${table} (label) VALUES ('a'), ('b'), ('c')`
+          );
+          const covers = async () =>
+            (
+              await readLiveSchema(adapter.getDrizzle(), dialect, [
+                `CREATE TABLE ${table} (id integer)`,
+              ])
+            ).counterCovers(table);
+          if (!(await covers())) wrong.push(`${key}: not read as covering`);
+          // Held to the same check as the column form: a counter below the highest key.
+          await adapter.executeQuery(
+            `UPDATE sqlite_sequence SET seq = 1 WHERE name = '${table}'`
+          );
+          if (await covers())
+            wrong.push(`${key}: a low counter read as covering`);
+        }
+        expect(wrong).toEqual([]);
+      }
+    );
   }
 );
