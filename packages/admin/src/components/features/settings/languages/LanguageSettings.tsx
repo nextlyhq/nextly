@@ -99,12 +99,7 @@ export function LanguageSettings({
   };
   const dialogSave: LanguageDialogSave = {
     saving: changeLanguages.isPending,
-    error: changeLanguages.error
-      ? apiErrorMessage(
-          changeLanguages.error,
-          "The languages could not be saved."
-        )
-      : undefined,
+    error: saveError(changeLanguages.error),
     onSave: save,
     onClose: () => setOpen(null),
     opener: open?.opener ?? null,
@@ -206,13 +201,7 @@ export function LanguageSettings({
             />
           ))}
         </ul>
-        {mayChange && (
-          <p className="text-xs text-muted-foreground">
-            {active.length === 1
-              ? "This site has one language. Add another to translate content into it."
-              : "The default language can't be removed. Make another language the default first."}
-          </p>
-        )}
+        {mayChange && <ChangeHint languages={active.length} />}
       </section>
 
       {removed.length > 0 && (
@@ -234,6 +223,24 @@ export function LanguageSettings({
         />
       )}
     </div>
+  );
+}
+
+/** A refused change's message, or nothing while none was refused. */
+function saveError(error: Error | null): string | undefined {
+  return error
+    ? apiErrorMessage(error, "The languages could not be saved.")
+    : undefined;
+}
+
+/** What an admin can do next with the list, under it. */
+function ChangeHint({ languages }: { languages: number }): React.JSX.Element {
+  return (
+    <p className="text-xs text-muted-foreground">
+      {languages === 1
+        ? "This site has one language. Add another to translate content into it."
+        : "The default language can't be removed. Make another language the default first."}
+    </p>
   );
 }
 
