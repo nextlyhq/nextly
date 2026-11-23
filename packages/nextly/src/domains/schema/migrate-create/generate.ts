@@ -976,14 +976,13 @@ async function renameDecisions(
 }
 
 /**
- * Run the migrate:create orchestration. Returns null if no operations
- * remain (config matches latest snapshot; the CLI exits 0 for that).
+ * What one run of `migrate:create` plans before it asks about a rename or writes a file: the latest
+ * snapshot and the configuration's desired one, the diff between them with every companion,
+ * translation and move file planned around it, and the settings and permissions that change. One
+ * computation, so a report of the changes not yet in a migration names what this run would write.
+ * Null where a `--record-snapshot` run has nothing to record.
  */
-export async function generateMigration(
-  requested: GenerateArgs
-): Promise<GenerateResult | null> {
-  // Before anything is planned: a writer another has overtaken stops here.
-  await refuseStaleStart(requested);
+export async function planRun(requested: GenerateArgs) {
   // Scoped, every planner below sees the scoped entity alone.
   const scoped = withScopedEntities(requested);
   const metaDir = resolve(scoped.migrationsDir, "meta");
@@ -1204,6 +1203,70 @@ export async function generateMigration(
   // whose columns both stand.
   const changesBeyondTables =
     hasSettingsChanges || changedPermissions.length > 0 || movesValues(args);
+  return {
+    args,
+    metaDir,
+    now,
+    previous,
+    stream,
+    previousSnapshot,
+    desiredSnapshot,
+    entities,
+    written,
+    companionPlans,
+    codeMoves,
+    operations,
+    fieldLeavesPlans,
+    fieldJoinsPlans,
+    uniquePlans,
+    retypesPlans,
+    hasCompanions,
+    settingsRecord,
+    changedSettings,
+    permissionRecord,
+    changedPermissions,
+    changesBeyondTables,
+  };
+}
+
+/** What `planRun` plans for a run that writes something. */
+export type PlannedRun = NonNullable<Awaited<ReturnType<typeof planRun>>>;
+
+/**
+ * Run the migrate:create orchestration. Returns null if no operations
+ * remain (config matches latest snapshot; the CLI exits 0 for that).
+ */
+export async function generateMigration(
+  requested: GenerateArgs
+): Promise<GenerateResult | null> {
+  // Before anything is planned: a writer another has overtaken stops here.
+  await refuseStaleStart(requested);
+  const planned = await planRun(requested);
+  if (planned === null) return null;
+  let { operations } = planned;
+  const {
+    args,
+    metaDir,
+    now,
+    previous,
+    stream,
+    previousSnapshot,
+    desiredSnapshot,
+    entities,
+    written,
+    companionPlans,
+    codeMoves,
+    fieldLeavesPlans,
+    fieldJoinsPlans,
+    uniquePlans,
+    retypesPlans,
+    hasCompanions,
+    settingsRecord,
+    changedSettings,
+    permissionRecord,
+    changedPermissions,
+    changesBeyondTables,
+  } = planned;
 
   const recorded = await recordedUnlessChanged(args, {
     // Not the per-language unique indexes: a snapshot from before the record has none of them, so
