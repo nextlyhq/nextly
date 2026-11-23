@@ -20,7 +20,9 @@ import { fileURLToPath } from "node:url";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
+import { perLanguageStorageSuite } from "../../../../__tests__/storage-layout";
 import { MIGRATE_STEP_COLUMN_NAMES } from "../../../../lib/system-columns";
+import { deriveCompanionSpec } from "../../../i18n/migration/derive-companion-spec";
 import { media } from "../../../../schemas/media/mysql";
 import { users } from "../../../../schemas/users/mysql";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
@@ -32,6 +34,11 @@ import {
   buildDesiredSnapshotFromConfig,
   type MinimalConfigEntity,
 } from "../generate";
+
+// The layout every installation runs, which keeps translatable fields per
+// language: the template's tables are held to it, not to the earlier layout
+// most suites still run on (`__tests__/storage-layout`).
+perLanguageStorageSuite();
 
 // The template imports nextly by its published names, which vitest.config.ts
 // resolves to this package's source for template files: `nextly/config` to the
@@ -96,6 +103,42 @@ function createdTables(sql: string): Map<string, SqlColumn[]> {
 }
 
 /**
+ * The key list of a `CREATE INDEX` statement, from what follows the table
+ * name: the text inside its first parentheses, so a partial index's `WHERE`
+ * is left out. Each inner pair of parentheses (an expression's arguments) is
+ * spelled with brackets and its commas as `;`, innermost first, so the list
+ * splits at its own commas alone.
+ */
+function indexKeyList(rest: string): string {
+  let list = rest.slice(rest.indexOf("(") + 1);
+  const inner = /\(([^()]*)\)/;
+  while (inner.test(list))
+    list = list.replace(
+      inner,
+      (_, args: string) => `[${args.replaceAll(",", ";")}]`
+    );
+  return list.slice(0, list.indexOf(")"));
+}
+
+/**
+ * The parts of a `CREATE INDEX` statement's key, each with the column it
+ * names. A part may be an expression (PostgreSQL's `NULLIF("slug", '')`,
+ * MySQL's hash of it), which keys a value of that column rather than the
+ * column itself, so it is not `plain`.
+ */
+function indexKeyParts(rest: string): { column: string; plain: boolean }[] {
+  return indexKeyList(rest)
+    .split(",")
+    .map(part => part.trim())
+    .flatMap(part => {
+      const names = [...part.matchAll(/[`"]([^`"]+)[`"]/g)].map(m => m[1]);
+      if (names.length !== 1) return [];
+      const plain = /^[`"][^`"]+[`"](\s+(ASC|DESC))?$/i.test(part);
+      return [{ column: names[0], plain }];
+    });
+}
+
+/**
  * Each unique key a migration file creates, as `table(column, ...)`: a column
  * declared `UNIQUE`, a table's `UNIQUE KEY` line, and a `CREATE UNIQUE INDEX`.
  */
@@ -116,10 +159,14 @@ function uniqueKeys(sql: string): string[] {
       const key = /^\s*UNIQUE\b(?:\s+KEY)?[^(]*\(([^)]*)\)/i.exec(line);
       if (key) keys.push(`${table}(${names(key[1])})`);
     }
-  for (const [, table, list] of sql.matchAll(
-    /CREATE UNIQUE INDEX\s+(?:IF NOT EXISTS\s+)?[`"][^`"]+[`"]\s+ON\s+[`"]([^`"]+)[`"]\s*\(([^)]*)\)/gi
+  for (const [, table, rest] of sql.matchAll(
+    /CREATE UNIQUE INDEX\s+(?:IF NOT EXISTS\s+)?[`"][^`"]+[`"]\s+ON\s+[`"]([^`"]+)[`"]\s*([^;]*);/gi
   ))
-    keys.push(`${table}(${names(list)})`);
+    keys.push(
+      `${table}(${indexKeyParts(rest)
+        .map(p => p.column)
+        .join(", ")})`
+    );
   return [...new Set(keys)].sort();
 }
 
@@ -190,6 +237,37 @@ async function visualStatus(): Promise<Map<string, boolean>> {
       ...newestApplied(loaded, s => s.singles),
     ].map(entry => [entry.tableName, registeredStatus(entry)])
   );
+}
+
+/**
+ * What a visual blog registers from the template's migration snapshot, as the
+ * entities the desired schema is built from: each with its recorded table, and
+ * Draft/Published as registration resolves it. The SQL is the visual blog's
+ * alone (a code-first blog writes its first migration from its config), so
+ * these, not the code-first config, are what its tables are held to.
+ */
+async function visualEntities(): Promise<{
+  collections: MinimalConfigEntity[];
+  singles: MinimalConfigEntity[];
+}> {
+  const loaded = await loadSnapshots({
+    migrationsDir: fileURLToPath(new URL("migrations", TEMPLATE)),
+  });
+  const minimal = (
+    entries: { slug: string; tableName: string; status?: boolean }[]
+  ): MinimalConfigEntity[] => {
+    const tables = new Map(entries.map(e => [e.slug, e.tableName]));
+    return toMinimalEntities(entries, e => tables.get(e.slug) ?? "").map(
+      (entity, index) => ({
+        ...entity,
+        status: registeredStatus(entries[index]),
+      })
+    );
+  };
+  return {
+    collections: minimal(newestApplied(loaded, s => s.collections)),
+    singles: minimal(newestApplied(loaded, s => s.singles)),
+  };
 }
 
 describe("the blog template's code, as this test loads it", () => {
@@ -268,6 +346,47 @@ describe("the blog template's migration", () => {
     }
   });
 
+  // Every installation keeps translatable fields per language, so a value on a
+  // main table is one an earlier release stored: a fresh visual blog would
+  // need a confirmed backup at its first `nextly migrate` to move it.
+  for (const dialect of Object.keys(MIGRATION_FILES) as SupportedDialect[]) {
+    it(`keeps each translatable field in its translations table, not its main table (${dialect})`, async () => {
+      const created = createdTables(
+        readFileSync(new URL(MIGRATION_FILES[dialect], TEMPLATE), "utf8")
+      );
+      const { collections, singles } = await visualEntities();
+      const wrong: string[] = [];
+      let translated = 0;
+      for (const entity of [...collections, ...singles]) {
+        const spec = deriveCompanionSpec({
+          slug: entity.slug,
+          dbName: entity.tableName,
+          fields: entity.fields,
+          dialect,
+          defaultLocale: "en",
+          collectionLocalized: true,
+          builtBy: "collection",
+        });
+        if (!spec) continue;
+        translated++;
+        const main = new Set(
+          (created.get(entity.tableName) ?? []).map(c => c.name)
+        );
+        const companion = new Set(
+          (created.get(spec.companionTable) ?? []).map(c => c.name)
+        );
+        for (const { name } of spec.columns) {
+          if (main.has(name)) wrong.push(`${entity.tableName}.${name}`);
+          if (!companion.has(name))
+            wrong.push(`${spec.companionTable}.${name} (missing)`);
+        }
+      }
+      // The blog has translatable fields to hold to this at all.
+      expect(translated).toBeGreaterThan(0);
+      expect(wrong).toEqual([]);
+    });
+  }
+
   for (const dialect of Object.keys(MIGRATION_FILES) as SupportedDialect[]) {
     it(`creates every table and column nextly expects (${dialect})`, async () => {
       const sql = readFileSync(
@@ -275,19 +394,12 @@ describe("the blog template's migration", () => {
         "utf8"
       );
       const created = createdTables(sql);
-      // A table is Draft/Published when the code-first config says so, or when
-      // a visual blog registers it so. Both approaches run this one migration,
-      // so it must carry every column nextly adds with status for either, which
-      // the builder below decides, not this test.
-      const visual = await visualStatus();
-      const withStatus = (e: MinimalConfigEntity): MinimalConfigEntity => ({
-        ...e,
-        status: e.status === true || visual.get(e.tableName) === true,
-      });
-      const { collections, singles } = await blogEntities();
+      // The entities a visual blog registers, the only project that runs this
+      // file; the builder below decides every column they need, not this test.
+      const { collections, singles } = await visualEntities();
       const expected = buildDesiredSnapshotFromConfig(
-        collections.map(withStatus),
-        singles.map(withStatus),
+        collections,
+        singles,
         [],
         dialect
       );
@@ -426,14 +538,20 @@ describe("the blog template's MySQL migration", () => {
     ).toEqual([
       "dc_authors.account -> users.id",
       "dc_authors.avatar -> media.id",
+      "dc_authors_locales._parent -> dc_authors.id",
+      "dc_categories_locales._parent -> dc_categories.id",
       "dc_posts.author -> users.id",
       "dc_posts.byline -> dc_authors.id",
       "dc_posts.featured_image -> media.id",
       "dc_posts_categories.category_id -> dc_categories.id",
       "dc_posts_categories.post_id -> dc_posts.id",
+      "dc_posts_locales._parent -> dc_posts.id",
       "dc_posts_tags.post_id -> dc_posts.id",
       "dc_posts_tags.tag_id -> dc_tags.id",
+      "dc_tags_locales._parent -> dc_tags.id",
+      "single_homepage_locales._parent -> single_homepage.id",
       "single_site_settings.logo -> media.id",
+      "single_site_settings_locales._parent -> single_site_settings.id",
       "user_ext.user_id -> users.id",
     ]);
     const expected = (target: string, targetColumn: string) =>
@@ -466,10 +584,13 @@ describe("the blog template's MySQL migration", () => {
           for (const c of columnsOf(key[2])) keyed.push([table, c, key[1]]);
       }
     }
-    for (const [, table, list] of sql.matchAll(
-      /CREATE (?:UNIQUE )?INDEX\s+(?:IF NOT EXISTS\s+)?`[^`]+`\s+ON\s+`([^`]+)`\s*\(([^)]*)\)/g
+    // A plain key part keys the column; an expression keys its value, which
+    // MySQL takes from a column of any type.
+    for (const [, table, rest] of sql.matchAll(
+      /CREATE (?:UNIQUE )?INDEX\s+(?:IF NOT EXISTS\s+)?`[^`]+`\s+ON\s+`([^`]+)`\s*([^;]*);/g
     )) {
-      for (const c of columnsOf(list)) keyed.push([table, c, "index"]);
+      for (const p of indexKeyParts(rest))
+        if (p.plain) keyed.push([table, p.column, "index"]);
     }
     // MySQL indexes a foreign key's column for it, so that column is keyed too.
     for (const [, table, list] of sql.matchAll(

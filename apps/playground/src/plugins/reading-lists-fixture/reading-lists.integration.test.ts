@@ -501,16 +501,30 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
     );
     expect(outcome.code, outcome.output).toBe(0);
 
-    const files = readdirSync(site.migrationsDir).filter(name =>
-      name.endsWith(".sql")
-    );
-    expect(files).toHaveLength(1);
-    const sql = readFileSync(join(site.migrationsDir, files[0]), "utf8");
+    const files = readdirSync(site.migrationsDir)
+      .filter(name => name.endsWith(".sql"))
+      .sort();
+    // The posts table's migration, and the two that make its per-language
+    // table for the translatable title and slug, as every site keeps them.
+    expect(files.map(name => name.replace(/^\d{8}_\d{6}_\d{3}_/, ""))).toEqual([
+      "init.sql",
+      "create_localization_posts.sql",
+      "unique_localization_posts.sql",
+    ]);
+    const read = (name: string) =>
+      readFileSync(join(site.migrationsDir, name), "utf8");
+    const [app, ...localization] = files;
     // A plugin's addition to a collection's table travels with the app's
     // migrations, and its own tables with its own modules.
+    const sql = read(app);
     expect(sql).toMatch(/last_saved_at/);
     expect(sql).toMatch(/dc_posts_last_saved_at/);
     expect(sql).not.toMatch(/reading__/);
+    // The hidden column is the plugin's, not a translatable field: it stays
+    // on the posts table and is in no per-language table.
+    for (const name of localization) {
+      expect(read(name)).not.toMatch(/last_saved_at|reading__/);
+    }
   });
 
   it("migrate applies the plugin's module and the app's migration, but does not install the plugin", async () => {

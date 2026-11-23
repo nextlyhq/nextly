@@ -39,6 +39,7 @@ import {
   providerLabel,
 } from "./activity-model";
 import type { ActivityNames } from "./ActivityList";
+import { QueuedEmailActionBar } from "./QueuedEmailActionBar";
 
 export interface ActivityDetailSheetProps {
   /** The row whose sheet is open, or null when none is. */
@@ -51,6 +52,8 @@ export interface ActivityDetailSheetProps {
    * this reader may not edit it or it is not in the hub's list.
    */
   fixTemplateHref: (slug: string) => string | undefined;
+  /** Whether this reader may try a queued email again, or cancel it. */
+  queuedActions: { retry: boolean; cancel: boolean };
 }
 
 /** How many attempts the sheet draws, the newest; the rest are counted. */
@@ -333,6 +336,7 @@ export function ActivityDetailSheet({
   names,
   now,
   fixTemplateHref,
+  queuedActions,
 }: ActivityDetailSheetProps): JSX.Element {
   const detail = useActivityDetail(open);
   const data = detail.data;
@@ -394,6 +398,13 @@ export function ActivityDetailSheet({
                 <Button asChild variant="outline" size="sm">
                   <Link href={fixHref}>Fix template</Link>
                 </Button>
+              )}
+              {data.source === "queued" && (
+                <QueuedEmailActionBar
+                  id={data.detail.id}
+                  email={data.detail}
+                  can={queuedActions}
+                />
               )}
               <Details data={data} names={names} now={now} />
               <Timeline data={data} names={names} />

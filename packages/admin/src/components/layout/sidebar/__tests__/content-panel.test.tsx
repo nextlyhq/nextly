@@ -31,6 +31,7 @@ type FixtureCollection = {
   name: string;
   label: string;
   admin?: { sidebarGroup?: string; icon?: string; order?: number };
+  workflow?: { slug: string; label: string } | null;
 };
 type FixtureSingle = {
   id: string;
@@ -90,6 +91,10 @@ vi.mock("@admin/hooks/useSidebarContentLists", async () => {
     }),
   };
 });
+const scope = vi.hoisted(() => ({ reviews: false }));
+vi.mock("@admin/hooks/queries/useWaitingForMe", () => ({
+  useWaitingScope: () => ({ data: { reviews: scope.reviews, stages: 0 } }),
+}));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => lists.branding,
 }));
@@ -208,9 +213,33 @@ beforeEach(() => {
   lists.singlesComplete = true;
   lists.collectionsComplete = true;
   lists.branding = {};
+  scope.reviews = false;
 });
 
 afterEach(cleanup);
+
+describe("ContentPanel — Waiting for my review", () => {
+  it("leads with Waiting for my review where anything can wait for the reader, opening the waiting view", () => {
+    scope.reviews = true;
+    renderPanel();
+
+    expect(outline()[0]).toBe("Waiting for my review");
+    expect(
+      within(contentNav()).getByRole("link", { name: "Waiting for my review" })
+    ).toHaveAttribute("href", "/admin/content/waiting");
+  });
+
+  it("draws no Waiting for my review where nothing can wait for the reader", () => {
+    scope.reviews = false;
+    renderPanel();
+
+    expect(
+      within(contentNav()).queryByRole("link", {
+        name: "Waiting for my review",
+      })
+    ).not.toBeInTheDocument();
+  });
+});
 
 describe("ContentPanel", () => {
   it("lists Collections, then Singles, each heading with its count, and no segmented control", () => {

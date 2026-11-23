@@ -9,6 +9,8 @@ A migration that runs outside a transaction failed part-way, now or in its newes
 
 A migration marked `-- nextly:no-transaction` runs statement by statement, so a failure part-way leaves the statements before it applied. `nextly migrate` stops on such a failure, and refuses to run that migration again, or to record it as applied, while its newest attempt is one. The Why line names the failing statement and how many before it stayed applied.
 
+A Schema Builder save on MySQL can end here too. MySQL commits each schema statement as it runs, so a save that stops part-way through a change it cannot settle on its own, such as turning Draft/Published on for a collection, keeps the columns it already added. The save keeps its migration file unrecorded, and the next save of that collection is refused until the attempt is resolved as below.
+
 ## Fix
 
 - Look at what the statements before the failure changed, and complete or undo them by hand.

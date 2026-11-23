@@ -120,7 +120,7 @@ function savesLeftPartWay(error: NextlyError): CliErrorParts {
     return {
       what: message,
       why: "A Builder save stopped before its outcome was recorded.",
-      next: "Start the app in development (`next dev`) on this project: its start settles the save.",
+      next: "Run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save.",
     };
   }
   return {

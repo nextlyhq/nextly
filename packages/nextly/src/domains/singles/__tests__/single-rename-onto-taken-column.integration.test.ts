@@ -170,15 +170,23 @@ describeEachDialect(
       return { main: main.map(row => row.heading), companion };
     }
 
-    /** The Builder's schema save, as the dispatcher makes it. */
+    /**
+     * The Single's schema save, as the dispatcher makes it. A save that drops `heading` and adds
+     * `headline` says it is a rename, as this road requires.
+     */
     function save(
       fields: Record<string, unknown>[],
       extra: Record<string, unknown> = {}
     ): Promise<unknown> {
+      const names = fields.map(field => field.name);
+      const renames =
+        names.includes("headline") && !names.includes("heading")
+          ? [{ from: "heading", to: "headline", choice: "rename" }]
+          : [];
       return dispatchSingles(
         "updateSingleSchema",
         { slug: "hero" },
-        { fields, ...extra }
+        { fields, renames, ...extra }
       );
     }
 

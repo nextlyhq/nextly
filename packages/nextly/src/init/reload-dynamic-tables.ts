@@ -261,7 +261,11 @@ async function registerConfigEntities(
   label: string
 ): Promise<void> {
   if (deps.config === undefined) return;
-  const { registerConfigTablesQuietly } = await import("../di/register");
+  // From the step's own module rather than `di/register`, which would load
+  // the whole service registry for this one function.
+  const { registerConfigTablesQuietly } = await import(
+    "../di/register-config-tables"
+  );
   await registerConfigTablesQuietly(
     deps.registry,
     deps.config,

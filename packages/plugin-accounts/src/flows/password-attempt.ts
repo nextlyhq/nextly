@@ -19,8 +19,8 @@ import {
 import type { FlowDeps } from "./deps";
 import { ADDRESS } from "./input";
 import { validTokens } from "./known-tokens";
-import { pageLink } from "./links";
 import { mintResetLink } from "./reset-request";
+import { secretFields } from "./secret-fields";
 
 /** A known-browser token an attempt carries, charged with the attempt. */
 export interface CarriedToken {
@@ -301,14 +301,14 @@ async function emailResetRequired(
     !(await claimResetRequiredEmail(deps.db, account.id, now))
   )
     return;
-  const token = await deps.db.transaction(tx =>
+  const minted = await deps.db.transaction(tx =>
     mintResetLink(deps, tx, account)
   );
-  if (token === null) return;
+  if (minted === null) return;
   await deps.mail.queue({
     kind: "reset-required",
     accountId: account.id,
     to: account.address,
-    link: pageLink(deps.settings, "reset", token),
+    ...secretFields(deps.settings, "reset-required", { link: minted }),
   });
 }

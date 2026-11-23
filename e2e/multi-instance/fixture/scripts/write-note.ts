@@ -24,8 +24,11 @@ if (flag === "--raw") {
   await client.connect();
   try {
     startedAt = Date.now();
+    // A text field's value is kept per language, in the collection's
+    // `_locales` table, so the raw write changes it there; the note is written
+    // in the default language only, so one row holds it.
     const updated = await client.query(
-      "UPDATE dc_notes SET value = $1 WHERE slug = $2",
+      "UPDATE dc_notes_locales SET value = $1 WHERE slug = $2",
       [value, NOTE_SLUG]
     );
     if (updated.rowCount !== 1) throw new Error("no note row to change");

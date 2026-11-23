@@ -1764,8 +1764,10 @@ export class CollectionBulkService extends BaseService {
       // in-transaction handler that serializes an entry's write with a row
       // lock then reads what committed before it took it. MySQL's default,
       // REPEATABLE READ, would answer each later read from the snapshot the
-      // batch's first read took.
-      await this.adapter.transaction(
+      // batch's first read took. Opened through `entryTransaction`, so the batch holds the
+      // collection once, before its first item, against a Builder save deleting its values.
+      await this.mutationService.entryTransaction(
+        params.collectionName,
         async tx => {
           await this.runCreateBatch(
             tx,
@@ -2060,8 +2062,10 @@ export class CollectionBulkService extends BaseService {
       // entry's components, many-to-many ids, working draft and versions
       // would be read as they stood before another writer's committed
       // change, though the batch holds that entry's lock. PostgreSQL already
-      // reads committed, and SQLite runs one writer at a time.
-      await this.adapter.transaction(
+      // reads committed, and SQLite runs one writer at a time. Opened through `entryTransaction`, so
+      // the batch holds the collection once, before its first item.
+      await this.mutationService.entryTransaction(
+        params.collectionName,
         async tx => {
           await this.runUpdateBatch(
             tx,
@@ -2389,7 +2393,9 @@ export class CollectionBulkService extends BaseService {
     let callbackThrew = false;
     let committed = false;
     try {
-      await this.adapter.transaction(async tx => {
+      // Opened through `entryTransaction`, so the batch holds the collection once, before its first
+      // item, against a Builder save deleting its values.
+      await this.mutationService.entryTransaction(params.collectionName, async tx => {
         try {
           await this.runDeleteBatch(
             tx,
@@ -2582,7 +2588,9 @@ export class CollectionBulkService extends BaseService {
    * with one generic error per index (the public contract maps errors to
    * input indices, and the raw operational detail stays in the log); a
    * stopOnError abort clears the provisional successes and annotates the
-   * first recorded error with how many were rolled back.
+   * first recorded error with how many were rolled back. An abort before any
+   * item recorded anything (the collection's hold refused, say) reports every
+   * requested item as failed with the abort's code, whatever stopOnError says.
    */
   private rewriteCreateUpdateRollback(
     state: LegacyBatchState,
@@ -2623,7 +2631,7 @@ export class CollectionBulkService extends BaseService {
       // carries the abort's code.
       const { code } = failureFieldsOf(error);
       state.errors = items.map((_, index) => ({ index, error: message, code }));
-    } else if (stopOnError) {
+    } else if (stopOnError && itemRecorded(state)) {
       if (state.successful > 0) {
         this.logger.warn(`${operationLabel} rolled back due to stopOnError`, {
           collectionName,
@@ -2926,4 +2934,9 @@ function everyItemRefused(
     })),
     ids: [],
   };
+}
+
+/** Whether an item of the batch recorded anything before its transaction rolled back. */
+function itemRecorded(state: LegacyBatchState): boolean {
+  return state.successful > 0 || state.failed > 0 || state.errors.length > 0;
 }

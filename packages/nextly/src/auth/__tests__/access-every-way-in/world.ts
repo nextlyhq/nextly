@@ -60,14 +60,24 @@ export const ORIGIN = "http://localhost";
  * `PUBLIC_HOLDS`, so that grant never reaches the targets every other setup
  * asks; `no-service` and `bound` ask `service`'s.
  */
-const TARGET_SETS = ["service", "public"] as const;
+const TARGET_SETS = ["service", "public", "closed"] as const;
 type TargetSet = (typeof TARGET_SETS)[number];
 
+/**
+ * A `closed` row asks collections of its own, marked closed to super-admin,
+ * so the mark never reaches the targets every other setup asks.
+ */
 const setOf = (setup: Setup): TargetSet =>
-  setup === "public" ? "public" : "service";
+  setup === "public" ? "public" : setup === "closed" ? "closed" : "service";
 
 /** What a set's slugs start with, so no slug names a target of two sets. */
-const prefixOf = (setup: Setup) => (setOf(setup) === "public" ? "p" : "");
+const prefixOf = (setup: Setup) =>
+  ({ service: "", public: "p", closed: "x" })[setOf(setup)];
+
+/** The sets with Singles: a Single cannot be closed, so `closed` has none. */
+const SINGLE_SETS: readonly TargetSet[] = TARGET_SETS.filter(
+  set => set !== "closed"
+);
 
 /** The slug of the collection, and of the Single, declaring `rule`. */
 export const collectionOf = (rule: Rule, setup: Setup) =>
@@ -79,7 +89,7 @@ export const pubSingleOf = (rule: Rule, setup: Setup) =>
   `${prefixOf(setup)}s_pub_${rule.replace(/-/g, "_")}`;
 /** The slug of the collection whose relationships a setup's rows populate. */
 export const refsOf = (setup: Setup) =>
-  setOf(setup) === "public" ? "p_refs" : "refs";
+  `${prefixOf(setup)}${prefixOf(setup) ? "_" : ""}refs`;
 
 /**
  * The filter a `list` and a `count` ask with: it matches the two published
@@ -251,6 +261,7 @@ function ruleCollections(setup: TargetSet) {
     const config = defineCollection({
       slug: collectionOf(rule, setup),
       status: true,
+      ...(setup === "closed" ? { closedToSuperAdmin: true } : {}),
       access: accessFor(rule, COLLECTION_OPERATIONS) as never,
       fields: [
         text({ name: "title" }),
@@ -590,10 +601,10 @@ async function permissionIds(t: TestNextly, keep: (slug: string) => boolean) {
 /** Every permission `user-with` and `custom-role` hold: all but users'. */
 function heldByStaff(slug: string): boolean {
   return (
-    /^(create|read|update|delete|publish|unpublish)-(c|s)_/.test(slug) ||
+    /^(create|read|update|delete|publish|unpublish)-(x?c|s)_/.test(slug) ||
     /^(create|read|update|delete)-(roles|email-providers)$/.test(slug) ||
     slug === "read-email-deliveries" ||
-    slug === "read-refs" ||
+    /^read-(x_)?refs$/.test(slug) ||
     slug === "read-media"
   );
 }
@@ -601,10 +612,10 @@ function heldByStaff(slug: string): boolean {
 /** What `user-partial` holds: read, update and publish, and nothing else. */
 function heldByPartial(slug: string): boolean {
   return (
-    /^(read|update|publish)-(c|s)_/.test(slug) ||
+    /^(read|update|publish)-(x?c|s)_/.test(slug) ||
     /^(read|update)-(roles|email-providers)$/.test(slug) ||
     slug === "read-email-deliveries" ||
-    slug === "read-refs" ||
+    /^read-(x_)?refs$/.test(slug) ||
     slug === "read-media"
   );
 }
@@ -689,6 +700,7 @@ async function inBatches<T, R>(
 const CALLERS_OF: Record<TargetSet, readonly Caller[]> = {
   service: CALLERS,
   public: ["visitor"],
+  closed: CALLERS,
 };
 
 async function seedCollections(
@@ -754,7 +766,7 @@ async function seedCollections(
       own,
     });
   }
-  for (const rule of RULES) {
+  for (const rule of SINGLE_SETS.includes(setup) ? RULES : []) {
     // Seeded over whatever each Single holds.
     await t.nextly.updateSingle({
       slug: singleOf(rule, setup),
@@ -802,7 +814,7 @@ async function seedUsers(t: TestNextly) {
   const chiefRole = await makeRole(
     t,
     "chief",
-    await permissionIds(t, slug => slug === "read-refs"),
+    await permissionIds(t, slug => /^read-(x_)?refs$/.test(slug)),
     [superAdminRole]
   );
   // `user-without` holds nothing on any target the table judges, but may read
@@ -812,7 +824,7 @@ async function seedUsers(t: TestNextly) {
   const refsReaderRole = await makeRole(
     t,
     "refs-reader",
-    await permissionIds(t, slug => slug === "read-refs")
+    await permissionIds(t, slug => /^read-(x_)?refs$/.test(slug))
   );
 
   const users: Record<string, SeededUser> = {
@@ -867,7 +879,10 @@ const PERMISSION_ACTIONS: readonly Action[] = [
  */
 function publicPermissions(setup: TargetSet): Set<Slug> {
   const held = new Set<Slug>([`read-${refsOf(setup)}`]);
-  for (const target of TARGETS) {
+  // `closed` holds collections alone; its related rows are theirs.
+  const targets: readonly Target[] =
+    setup === "closed" ? ["collection", "related", "media"] : TARGETS;
+  for (const target of targets) {
     for (const rule of RULES) {
       for (const action of PERMISSION_ACTIONS) {
         if (publicHolds(setup, target, rule, action)) {
@@ -1198,7 +1213,7 @@ export async function boot(dialect: TestDialect): Promise<World> {
       ...ruleCollections(set),
       refsCollection(set),
     ]),
-    singles: TARGET_SETS.flatMap(set => ruleSingles(set)),
+    singles: SINGLE_SETS.flatMap(set => ruleSingles(set)),
     // The boot's seeding: every target's permissions, the preset roles, the
     // Public role and what boot grants it.
     seedPublic: true,

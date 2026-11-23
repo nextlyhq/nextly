@@ -560,6 +560,68 @@ describe("a written email's blocks", () => {
     expect(screen.getByRole("button", { name: "name" })).toBeDefined();
   });
 
+  it("shows a block only when a variable is yes, labels it, and removes the condition", async () => {
+    const user = userEvent.setup();
+    const seen = vi.fn<(doc: WrittenDocument) => void>();
+    function Body() {
+      const [value, setValue] = useState(doc(heading("Thanks, VIP")));
+      return (
+        <WrittenBody
+          value={value}
+          variables={[
+            {
+              name: "customer",
+              description: "",
+              required: true,
+              presentation: {
+                label: "Customer",
+                fields: [{ name: "vip", label: "VIP", type: "boolean" }],
+              },
+            },
+          ]}
+          onChange={next => {
+            seen(next);
+            setValue(next);
+          }}
+        />
+      );
+    }
+    render(<Body />);
+    await user.click(
+      screen.getByRole("button", { name: "Actions for this heading block" })
+    );
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Show only when…" })
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Show only when",
+    });
+    // A nested field is offered by its friendly name.
+    await user.selectOptions(
+      within(dialog).getByLabelText("Variable"),
+      "Customer › VIP"
+    );
+    await user.click(within(dialog).getByLabelText("is yes"));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save condition" })
+    );
+    expect(seen.mock.calls[seen.mock.calls.length - 1]?.[0].blocks[0]).toEqual({
+      ...heading("Thanks, VIP"),
+      show: { variable: "customer.vip", when: "yes" },
+    });
+    expect(
+      screen.getByText("Shown only when Customer › VIP is yes")
+    ).toBeDefined();
+
+    await user.click(
+      screen.getByRole("button", { name: "Remove the condition" })
+    );
+    expect(seen.mock.calls[seen.mock.calls.length - 1]?.[0].blocks[0]).toEqual(
+      heading("Thanks, VIP")
+    );
+    expect(screen.queryByText(/Shown only when/)).toBeNull();
+  });
+
   it("opens no fallback dialog while the email is read-only", () => {
     render(
       <WrittenBody

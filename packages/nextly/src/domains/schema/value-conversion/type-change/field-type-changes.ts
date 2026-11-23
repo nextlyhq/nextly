@@ -91,6 +91,12 @@ export function fieldTypeChangesOf(args: {
   renamed?: ReadonlyMap<string, string>;
   dialect: SupportedDialect;
   builtBy: ColumnOrigin;
+  /**
+   * The creator of the table the previous fields' columns were made by, where it is not
+   * `builtBy`'s: an entity whose ownership the change moves between the Schema Builder and code
+   * has its old columns as the old owner made them.
+   */
+  builtByBefore?: ColumnOrigin;
   /** Whether the fields are kept on a field group's row (`columnDescriptorAt`). */
   componentRow?: boolean;
 }): FieldTypeChange[] {
@@ -98,6 +104,7 @@ export function fieldTypeChangesOf(args: {
     builtBy: args.builtBy,
     ...(args.componentRow === true ? { componentRow: true } : {}),
   };
+  const atBefore = { ...at, builtBy: args.builtByBefore ?? args.builtBy };
   const oldNameOf = new Map(
     [...(args.renamed ?? new Map<string, string>())].map(([from, to]) => [
       to,
@@ -112,15 +119,23 @@ export function fieldTypeChangesOf(args: {
   for (const to of fieldsStoredOnRow(args.next)) {
     const from = byName.get(oldNameOf.get(to.name) ?? to.name);
     if (from === undefined) continue;
-    if (
-      columnDescriptorAt(from, args.dialect, at) === null ||
-      columnDescriptorAt(to, args.dialect, at) === null
-    ) {
-      continue;
-    }
-    const fromType = fieldTypeOnDialect(from, args.dialect, args.builtBy, at);
+    const columnBefore = columnDescriptorAt(from, args.dialect, atBefore);
+    const columnAfter = columnDescriptorAt(to, args.dialect, at);
+    if (columnBefore === null || columnAfter === null) continue;
+    const fromType = fieldTypeOnDialect(
+      from,
+      args.dialect,
+      atBefore.builtBy,
+      atBefore
+    );
     const toType = fieldTypeOnDialect(to, args.dialect, args.builtBy, at);
-    if (!sameType(fromType, toType)) {
+    // Where the entity changes owner, one field type is made as two columns (the Builder's
+    // unbounded text, code's bounded one on MySQL): the column the new owner makes is a change too,
+    // which the judgement of its values, reading each one's bound, then weighs.
+    const columnChanges =
+      args.builtByBefore !== undefined &&
+      columnBefore.dialectType !== columnAfter.dialectType;
+    if (!sameType(fromType, toType) || columnChanges) {
       changes.push({ to, from, fromType, toType });
     }
   }
@@ -134,8 +149,9 @@ export interface JudgedFieldTypeChange extends FieldTypeChange {
   result: StoredTypeChangeJudgement;
   /**
    * The field is kept per language before the save and after it (`translatedAfter`), and its
-   * column in the entity's translations table takes another type: a column a type change leaves in
-   * the old type, values or none (`typeChangeRefusals`). A field the save stops translating, or
+   * column in the entity's translations table takes another type that the save's or file's own
+   * statements do not give it (`retyped`): a column a type change leaves in the old type, values or
+   * none (`typeChangeRefusals`). A field the save stops translating, or
    * whose entity it stops translating, is not: its values leave that table, and the save's own
    * check of a field leaving translation answers for them. Nor is one whose translations column
    * keeps its type (a long text becoming code), which that column holds as it is.
@@ -171,6 +187,8 @@ export async function judgeFieldTypeChanges(args: {
   translated?: ReadonlySet<string>;
   /** The names of the fields kept per language after the save: none where absent. */
   translatedAfter?: ReadonlySet<string>;
+  /** The fields whose translations column the road's own statements retype (`retypedTranslations`). */
+  retyped?: ReadonlySet<string>;
   changes: readonly FieldTypeChange[];
 }): Promise<JudgedFieldTypeChange[]> {
   const judged: JudgedFieldTypeChange[] = [];
@@ -235,6 +253,7 @@ function translationsTableFlags(
     dialect: SupportedDialect;
     builtBy: ColumnOrigin;
     translatedAfter?: ReadonlySet<string>;
+    retyped?: ReadonlySet<string>;
   }
 ): Pick<
   JudgedFieldTypeChange,
@@ -242,7 +261,10 @@ function translationsTableFlags(
 > {
   if (args.translatedAfter === undefined) return {};
   if (args.translatedAfter.has(change.to.name)) {
-    return translationsColumnChanges(change.from, change.to, args.builtBy)
+    // A column the save's or file's own statements give the new type is no column left behind:
+    // its values are judged in each language, as the entity's own column's are.
+    return translationsColumnChanges(change.from, change.to, args.builtBy) &&
+      args.retyped?.has(change.to.name) !== true
       ? { changesTranslationsColumn: true }
       : {};
   }
@@ -674,6 +696,12 @@ export interface EntityTypeChangeInput {
   translatedBefore?: ReadonlySet<string>;
   /** The fields translated after the save (`perLanguageAfter`). */
   translatedAfter?: ReadonlySet<string>;
+  /**
+   * The fields, by their new name, whose translations column the road's own statements give the
+   * new type: the save's file's or the deployed change's `retypes` statements. A translated change
+   * is refused for its column only where it is not among them (`changesTranslationsColumn`).
+   */
+  retypedTranslations?: ReadonlySet<string>;
   /** The fields as the database holds them before the save: the registry row's. */
   previous: readonly FieldDefinition[];
   /** The fields as the save leaves them. */
@@ -686,6 +714,10 @@ export interface EntityTypeChangeInput {
   componentRow?: boolean;
   /** The fields whose lost values the owner consented to clearing, by name. */
   acknowledged?: ReadonlySet<string>;
+  /** Fields whose change another check answers for, by their new name: not judged here. */
+  ignore?: ReadonlySet<string>;
+  /** The creator of the entity's table before the change, where its ownership moves (`fieldTypeChangesOf`). */
+  builtByBefore?: ColumnOrigin;
 }
 
 /**
@@ -704,8 +736,11 @@ export async function fieldTypeChangeRefusals(
     ...(entity.renamed !== undefined ? { renamed: entity.renamed } : {}),
     dialect,
     builtBy: entity.builtBy,
+    ...(entity.builtByBefore !== undefined
+      ? { builtByBefore: entity.builtByBefore }
+      : {}),
     ...(entity.componentRow === true ? { componentRow: true } : {}),
-  });
+  }).filter(change => entity.ignore?.has(change.to.name) !== true);
   if (changes.length === 0) return [];
   const pending =
     entity.migrationStatus === undefined
@@ -728,6 +763,9 @@ export async function fieldTypeChangeRefusals(
         : {}),
       ...(entity.translatedAfter !== undefined
         ? { translatedAfter: entity.translatedAfter }
+        : {}),
+      ...(entity.retypedTranslations !== undefined
+        ? { retyped: entity.retypedTranslations }
         : {}),
       changes,
     }),

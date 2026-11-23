@@ -113,6 +113,23 @@ const TEMPLATES: Record<Kind, Template> = {
     subject: "Your password changed",
     html: `<p>Your account's password changed. If you didn't do this, reset it now.</p>`,
   },
+  invitation: {
+    name: "An invitation",
+    description:
+      "Sent when the site invites an address that has no account, with the link that makes one.",
+    sentBy: ["The site invites someone to make an account"],
+    carriesSecret: true,
+    subject: "You're invited to make an account",
+    html: `<p>You're invited to make an account with this address. <a href="{{link}}">Choose a password</a> to start.</p><p>If you weren't expecting this, you can ignore this email.</p>`,
+  },
+  "invitation-has-account": {
+    name: "An invitation to an address that has an account",
+    description:
+      "Sent when the site invites an address that already has an account, which signs in instead.",
+    sentBy: ["The site invites someone whose address already has an account"],
+    subject: "You're invited to sign in",
+    html: `<p>You're invited to use your account here, and this address already has one. <a href="{{signInLink}}">Sign in</a>, or <a href="{{resetLink}}">reset your password</a> if you've forgotten it. If your account was closed, contact us.</p>`,
+  },
 };
 
 /**
@@ -181,11 +198,20 @@ export function accountsEmailTemplates(): PluginEmailTemplate[] {
   );
 }
 
-/** An email's fields as its template's variables: everything but its kind, its account and its recipient. */
-export function emailVariables(email: AccountsEmail): Record<string, string> {
+/** What an email holds that is never one of its template's variables. */
+const NOT_VARIABLES = new Set(["kind", "accountId", "to", "refs"]);
+
+/**
+ * An email's fields as its template's variables: everything but its kind,
+ * its account, its recipient and the refs its secrets are sent by. Takes the
+ * email a send rebuilt from its queued form as well as one a flow built.
+ */
+export function emailVariables(
+  email: AccountsEmail | Readonly<Record<string, unknown>>
+): Record<string, string> {
   const variables: Record<string, string> = {};
   for (const [name, value] of Object.entries(email)) {
-    if (name === "kind" || name === "accountId" || name === "to") continue;
+    if (NOT_VARIABLES.has(name)) continue;
     variables[name] = String(value);
   }
 

@@ -350,6 +350,37 @@ function parseUserRoutes(
 }
 
 /**
+ * The roles screen's own routes under `/api/roles/screen`:
+ * - `GET /api/roles/screen` → what the roles screen shows for each collection
+ *   and Single;
+ * - `PATCH /api/roles/screen/closed-to-super-admin` → close a collection to
+ *   super-admin, or open it again (a super-admin, password entered again).
+ */
+function parseRolesScreenRoute(
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (!subresource && httpMethod === "GET") {
+    return {
+      service: "rolesScreen",
+      operation: "list",
+      method: "getRolesScreen",
+      routeParams,
+    };
+  }
+  if (subresource === "closed-to-super-admin" && httpMethod === "PATCH") {
+    return {
+      service: "rolesScreen",
+      operation: "update",
+      method: "setClosedToSuperAdmin",
+      routeParams,
+    };
+  }
+  return null;
+}
+
+/**
  * A user's external identities, nested under the user as the role
  * assignments are: the listing, and the unlink of one. Null for anything
  * else, which is the users routes' own answer for a path they do not name.
@@ -420,16 +451,11 @@ function parseRoleRoutes(
     };
   }
 
-  if (id === "screen" && !subresource && httpMethod === "GET") {
-    // GET /api/roles/screen → what the roles screen shows for each collection
-    // and Single. Ahead of the role-by-id branch, which would otherwise read
-    // "screen" as a role id.
-    return {
-      service: "rolesScreen",
-      operation: "list",
-      method: "getRolesScreen",
-      routeParams,
-    };
+  if (id === "screen") {
+    // Ahead of the role-by-id branch, which would otherwise read "screen" as
+    // a role id.
+    const screen = parseRolesScreenRoute(subresource, httpMethod, routeParams);
+    if (screen) return screen;
   }
 
   if (id && !subresource && httpMethod === "GET") {
@@ -2197,28 +2223,65 @@ const EMAIL_DELIVERY_READS: Record<string, string> = {
  * - GET /api/email-deliveries/overdue → whether queued email is overdue
  * - GET /api/email-deliveries/[id] → one delivery's detail and timeline
  * - GET /api/email-deliveries/queued/[id] → one queued email's detail
+ * - POST /api/email-deliveries/queued/[id]/retry → retry a queued email now
+ * - POST /api/email-deliveries/queued/[id]/cancel → cancel a queued email
  * - POST /api/email-deliveries/search → the merged Activity for one exact
  *   address, sent in the body so it is never in a URL, a log line or a
  *   browser's history
  */
+/** The queued-email actions a POST names, by their last segment. */
+const QUEUED_EMAIL_ACTIONS: Record<string, string> = {
+  retry: "retryQueuedEmail",
+  cancel: "cancelQueuedEmail",
+};
+
+/**
+ * What a POST under `/api/email-deliveries` names, or null for none:
+ * - the search, a read sent as a POST so its address is in the body;
+ * - `queued/[id]/retry` and `queued/[id]/cancel`, which act on one queued
+ *   email, asking `manage-email-deliveries`.
+ */
+function emailDeliveryPostMethod(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined
+): { operation: OperationType; method: string; queuedId?: string } | null {
+  if (id === "search" && subresource === undefined && subId === undefined) {
+    return { operation: "list", method: "searchByAddress" };
+  }
+  // Own keys only: a segment such as `constructor` names no action.
+  const action =
+    subId !== undefined && Object.hasOwn(QUEUED_EMAIL_ACTIONS, subId)
+      ? QUEUED_EMAIL_ACTIONS[subId]
+      : undefined;
+  if (id === "queued" && subresource && action) {
+    return { operation: "update", method: action, queuedId: subresource };
+  }
+  return null;
+}
+
 function parseEmailDeliveryRoutes(
   id: string | undefined,
   subresource: string | undefined,
   subId: string | undefined,
   httpMethod: string,
-  routeParams: Record<string, string>
+  routeParams: Record<string, string>,
+  additionalParams: readonly string[] = []
 ): ParsedRoute | null {
+  // No route here has a segment past its own: a longer path names none,
+  // rather than doing what the shorter one does.
+  if (additionalParams.length > 0) return null;
   const read = (operation: OperationType, method: string): ParsedRoute => ({
     service: "email",
     operation,
     method,
     routeParams,
   });
-  // The search is a read sent as a POST: its address is in the body.
   if (httpMethod === "POST") {
-    return id === "search" && subresource === undefined && subId === undefined
-      ? read("list", "searchByAddress")
-      : null;
+    const posted = emailDeliveryPostMethod(id, subresource, subId);
+    if (!posted) return null;
+    if (posted.queuedId !== undefined) routeParams.queuedId = posted.queuedId;
+    return read(posted.operation, posted.method);
   }
   // Every other route here is a read, and none has a segment past its id.
   if (httpMethod !== "GET" || subId !== undefined) return null;
@@ -2740,6 +2803,13 @@ const WORKFLOW_ROUTES: readonly {
     verb: "GET",
     operation: "list",
     method: "listWaiting",
+  },
+  // Whether anything can ever wait for the caller's review: the admin's sidebar asks it.
+  {
+    path: ["waiting", "scope"],
+    verb: "GET",
+    operation: "single",
+    method: "getWaitingScope",
   },
   {
     path: ["steps", null],
@@ -3365,6 +3435,48 @@ function parseDocumentLockRoutes(
 }
 
 // ============================================================================
+// File Routes Parser
+// ============================================================================
+
+/**
+ * The file routes of a collection with `files` (@experimental):
+ *
+ *   POST /files/:slug/uploads               → startFileUpload
+ *   POST /files/:slug/uploads/:id/complete  → completeFileUpload
+ *
+ * Exact paths only: anything longer or of another method is no route, so a
+ * mistyped path 404s rather than being taken for a near one. The handler owns
+ * its authentication, which judges staff and signed-in people alike.
+ */
+function parseFileRoutes(
+  slug: string | undefined,
+  subresource: string | undefined,
+  uploadId: string | undefined,
+  rest: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (httpMethod !== "POST" || !slug || subresource !== "uploads") return null;
+  if (uploadId === undefined && rest.length === 0) {
+    return {
+      service: "files",
+      operation: "create",
+      method: "startFileUpload",
+      routeParams: { ...routeParams, slug },
+    };
+  }
+  if (uploadId !== undefined && rest.length === 1 && rest[0] === "complete") {
+    return {
+      service: "files",
+      operation: "update",
+      method: "completeFileUpload",
+      routeParams: { ...routeParams, slug, uploadId },
+    };
+  }
+  return null;
+}
+
+// ============================================================================
 // Schema Routes Parser
 // ============================================================================
 
@@ -3632,7 +3744,8 @@ export function parseRestRoute(
       subresource,
       subId,
       httpMethod,
-      routeParams
+      routeParams,
+      additionalParams
     );
     if (result) return result;
   }
@@ -3705,6 +3818,19 @@ export function parseRestRoute(
   // Handle Webhook endpoint management
   if (resource === "webhooks") {
     const result = parseWebhookRoutes(
+      id,
+      subresource,
+      subId,
+      additionalParams,
+      httpMethod,
+      routeParams
+    );
+    if (result) return result;
+  }
+
+  // A collection's private files
+  if (resource === "files") {
+    const result = parseFileRoutes(
       id,
       subresource,
       subId,

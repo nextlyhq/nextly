@@ -37,6 +37,7 @@ export type {
 
 export type {
   FindArgs,
+  RowReviewState,
   FindByIDArgs,
   CreateArgs,
   UpdateArgs,
@@ -172,6 +173,7 @@ export type {
   QueuedEmail,
   QueuedEmailState,
   CancelQueuedEmailArgs,
+  RetryQueuedEmailArgs,
   FindEmailActivityArgs,
   FindEmailDeliveriesArgs,
   FindQueuedEmailsArgs,

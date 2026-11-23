@@ -78,6 +78,16 @@ export const EMAIL_PROVIDER_DELETE_PERMISSIONS: readonly string[] = slugsOf(
  */
 export const EMAIL_DELIVERIES_READ_PERMISSION = "read-email-deliveries";
 
+/** Trying a queued email again now, from its detail sheet. */
+export const EMAIL_DELIVERY_RETRY_PERMISSIONS: readonly string[] = slugsOf(
+  SYSTEM_WRITE_POLICY.emailDeliveries.retry
+);
+
+/** Cancelling a queued email, from its detail sheet. */
+export const EMAIL_DELIVERY_CANCEL_PERMISSIONS: readonly string[] = slugsOf(
+  SYSTEM_WRITE_POLICY.emailDeliveries.cancel
+);
+
 /** The hub's tabs, in the order they appear. */
 export type EmailHubTab = "messages" | "design" | "sending" | "activity";
 
