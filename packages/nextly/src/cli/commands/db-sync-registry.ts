@@ -75,9 +75,9 @@ export function collectionRegistryOn(
  * - A held lock is waited for, about a minute, and then the command stops naming the holder.
  * - A field-group storage migration in flight refuses it with the error `db:sync` gives, because
  *   mid-run the registry describes storage neither configuration does.
- * - The lock table is made only where it is missing (`registryWriteLocked`), so a role with DML
- *   but no DDL rights keeps the command it had on every database a run of this version has made
- *   the table on.
+ * - The lock tables are made only where the schema lock's is missing (`registryWriteMakingTheLock`),
+ *   so a role with DML but no DDL rights keeps the command it had: on a database a run of this
+ *   version has made the table on, and, where its rights refuse the creation, everywhere else.
  * - An interrupt does not hand the claim away while the write is still running: the snippet append
  *   and the registry write are not atomic, and a migration taking the row in between is the
  *   overlap the lock exists to prevent.
@@ -108,8 +108,11 @@ interface RegistryWriteArgs {
  * started beside the write, which makes the table and takes the row, would interleave with it:
  * the write makes the table first, as those runs do, and then holds the row.
  *
- * Where the table still could not be made, before any of the work ran, the role may not create
- * tables: the write goes on as before, holding the earlier locks only, and says so once.
+ * Where the database refuses the role the creation, before any of the work ran, the lock is taken
+ * as such a role takes it, creating nothing: that holds the row where another run has made the
+ * table meanwhile, and, where it is still missing, the earlier locks only, as before, which the
+ * write says once. Any other failure (a busy database, a lost connection, a held lock) is thrown
+ * as it came, so the write never runs without a lock it could have held.
  */
 async function registryWriteMakingTheLock<T>(
   args: RegistryWriteArgs,
@@ -122,13 +125,73 @@ async function registryWriteMakingTheLock<T>(
       return work();
     });
   } catch (error) {
-    if (started || (await args.adapter.tableExists(SCHEMA_LOCK_TABLE))) {
-      throw error;
+    if (started || !refusedForRights(error)) throw error;
+    if (!(await lockTablePresent(args.adapter, error))) {
+      args.logger.warn(
+        `The schema lock's table (${SCHEMA_LOCK_TABLE}) could not be created with this database role, so ${args.label} runs without it, as before: a development start, a sync or a migration run at the same time is not held off. Run \`nextly migrate\`, \`nextly db:sync\` or a development start once with a role that can create tables to make it.`
+      );
     }
-    args.logger.warn(
-      `The schema lock's table (${SCHEMA_LOCK_TABLE}) could not be created, so ${args.label} runs without it, as before: a development start, a sync or a migration run at the same time is not held off. Run \`nextly migrate\`, \`nextly db:sync\` or a development start once with a role that can create tables to make it.`
-    );
     return registryWriteLocked(args, false, work);
+  }
+}
+
+/**
+ * The codes a database refuses a statement with for the role's rights: PostgreSQL's
+ * `insufficient_privilege`, and MySQL's table, database and global access refusals, by name and
+ * by number. SQLite has no roles, so nothing it raises is among them.
+ */
+const RIGHTS_REFUSALS: ReadonlySet<string> = new Set([
+  "42501",
+  "ER_TABLEACCESS_DENIED_ERROR",
+  "ER_DBACCESS_DENIED_ERROR",
+  "ER_SPECIFIC_ACCESS_DENIED_ERROR",
+  "1142",
+  "1044",
+  "1227",
+]);
+
+/**
+ * Whether `error`, or an error it was raised from, is the database refusing the role a statement.
+ * Read through the cause chain, since the adapter and the lock wrap the driver's own error, and
+ * through the code a converted database error keeps (`dbCode`).
+ */
+function refusedForRights(error: unknown): boolean {
+  let at: unknown = error;
+  for (
+    let depth = 0;
+    depth < 8 && typeof at === "object" && at !== null;
+    depth++
+  ) {
+    if (carriesRightsRefusal(at)) return true;
+    at = (at as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/** Whether one error in the chain names a refusal for the role's rights. */
+function carriesRightsRefusal(error: object): boolean {
+  const { code, errno, logContext } = error as {
+    code?: unknown;
+    errno?: unknown;
+    logContext?: { dbCode?: unknown };
+  };
+  return [code, errno, logContext?.dbCode].some(
+    value => value !== undefined && RIGHTS_REFUSALS.has(String(value))
+  );
+}
+
+/**
+ * Whether the schema lock's table is there, asked after `refusal`. A question that fails itself
+ * throws `refusal`, so the cause the run stopped on is the one reported.
+ */
+async function lockTablePresent(
+  adapter: DrizzleAdapter,
+  refusal: unknown
+): Promise<boolean> {
+  try {
+    return await adapter.tableExists(SCHEMA_LOCK_TABLE);
+  } catch {
+    throw refusal;
   }
 }
 

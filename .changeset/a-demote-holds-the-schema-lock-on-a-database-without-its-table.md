@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-`nextly db:sync --demote` and `--promote` now hold the schema lock on a database where no run has made the lock's table yet: they make the table first, as a development start or `nextly db:sync` does, so a sync started at the same time waits for them instead of writing the same collection's registry record in between. Where the database role may not create tables, they go on as before and say so in one warning.
+`nextly db:sync --demote` and `--promote` now hold the schema lock on a database where no run has made the lock's table yet: they make the lock's tables first, as a development start or `nextly db:sync` does (`nextly_schema_lock`, and beside it the earlier `nextly_field_group_lock` and, on PostgreSQL, `nextly_migrate_lock`, which they may also bring up to date), so a sync started at the same time waits for them instead of writing the same collection's registry record in between. Where the database refuses the role those tables, they go on as before and say so in one warning; any other failure stops them as it did.
