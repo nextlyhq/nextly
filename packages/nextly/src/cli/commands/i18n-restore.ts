@@ -316,8 +316,8 @@ async function previewRestore(
 /**
  * The translations table a restore writes `entity`'s values to. A field group's is read from the
  * registry, under the table its row names: on a site on the current field-group names that is
- * `fg_<slug>`, which the configuration alone would name `comp_<slug>`. Where the registry cannot
- * be read, the configuration's name stands, as before.
+ * `fg_<slug>`, which the configuration alone would name `comp_<slug>`. A registry that is there
+ * but cannot be read refuses the restore (`withStoredTable`).
  */
 async function companionOf(
   adapter: unknown,
@@ -328,7 +328,7 @@ async function companionOf(
   const stored = await readStoredFieldGroupTables(
     adapter as RegistryReadAdapter
   );
-  return withStoredTable(entity, slug, stored.tables).companionTableName;
+  return withStoredTable(entity, slug, stored).companionTableName;
 }
 
 /** The action of `nextly i18n:restore`, loaded when it runs. */

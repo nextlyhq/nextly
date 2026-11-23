@@ -13,6 +13,10 @@
  */
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import {
+  fieldGroupRegistryUnreadable,
+  type StoredFieldGroupTables,
+} from "../../field-groups/services/field-group-stored-tables";
 
 import type { I18nTransitionKind } from "./transition-state";
 
@@ -89,14 +93,18 @@ export function resolveEntityTables(
  * names (`stored`, slug to table), which is `fg_<slug>` once the site's field groups moved to the
  * current names, and which no configuration rule derives. A collection, a Single, or a field group
  * the registry does not hold keeps the tables its configuration names.
+ *
+ * Refused for a field group where the registry is there but could not be read: the configuration's
+ * name is the legacy one, and a stale legacy table under it would take the values instead.
  */
 export function withStoredTable(
   entity: ResolvedEntityTable,
   slug: string,
-  stored: ReadonlyMap<string, string>
+  stored: Pick<StoredFieldGroupTables, "tables" | "usable" | "reason">
 ): ResolvedEntityTable {
   if (entity.kind !== "fieldGroup") return entity;
-  const tableName = stored.get(slug);
+  if (!stored.usable) throw fieldGroupRegistryUnreadable(stored.reason);
+  const tableName = stored.tables.get(slug);
   if (tableName === undefined) return entity;
   return { ...entity, tableName, companionTableName: `${tableName}_locales` };
 }

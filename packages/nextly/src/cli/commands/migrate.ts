@@ -826,9 +826,15 @@ export async function runMigrate(
     const { declaredFieldGroupStorage } = await import(
       "../../domains/field-groups/services/field-group-stored-tables"
     );
+    // A database this run sets up for the first time has no registry yet, and is set up on the
+    // names its history keeps (`newDatabaseFieldGroupNaming`), so its groups compile on them.
     const fieldGroups = await declaredFieldGroupStorage(
       adapter as unknown as DrizzleAdapter,
-      configResult.config.fieldGroups
+      configResult.config.fieldGroups,
+      await newDatabaseFieldGroupNaming({
+        adapter,
+        migrationsDir: appMigrationsDir,
+      })
     );
     const extensionSchema = await compileExtensionSchema({
       ...(fieldGroups === undefined
@@ -3767,7 +3773,7 @@ async function recordNewDatabaseNaming(
 }
 
 async function newDatabaseFieldGroupNaming(
-  deps: MigrateCoreDeps
+  deps: Pick<MigrateCoreDeps, "adapter" | "migrationsDir">
 ): Promise<FieldGroupNaming | undefined> {
   const probe = deps.adapter as unknown as {
     tableExists?: (table: string) => Promise<boolean>;

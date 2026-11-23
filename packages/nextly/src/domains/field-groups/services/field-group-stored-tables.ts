@@ -193,7 +193,13 @@ export interface DeclaredFieldGroupStorage {
  */
 export async function declaredFieldGroupStorage(
   adapter: RegistryReadAdapter & CatalogReadAdapter,
-  fieldGroups: readonly unknown[] | undefined
+  fieldGroups: readonly unknown[] | undefined,
+  /**
+   * The names a database with no registry yet starts its field groups on, where the caller knows
+   * them: `nextly migrate` sets an empty database up on its history's names. Absent, such a
+   * database is read as legacy, as before.
+   */
+  newDatabaseNaming?: FieldGroupNaming
 ): Promise<DeclaredFieldGroupStorage | undefined> {
   const slugs = (fieldGroups ?? [])
     .map(group => (group as { slug?: unknown }).slug)
@@ -201,8 +207,16 @@ export async function declaredFieldGroupStorage(
   if (slugs.length === 0) return undefined;
   const stored = await readStoredFieldGroupTables(adapter);
   if (!stored.usable) throw fieldGroupRegistryUnreadable(stored.reason);
+  const naming =
+    newDatabaseNaming !== undefined &&
+    (await registryIsAbsent(adapter)) === true
+      ? newDatabaseNaming
+      : stored.naming;
   const tables = new Map(
-    slugs.map(slug => [slug, storedOrNewTableName(stored, slug)])
+    slugs.map(slug => [
+      slug,
+      storedOrNewTableName({ tables: stored.tables, naming }, slug),
+    ])
   );
   const typeColumns = await resolveKnownTypeColumns(adapter, [
     ...tables.values(),
