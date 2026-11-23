@@ -120,4 +120,69 @@ describe("planCodeMoves", () => {
       })
     );
   });
+
+  it("says what to do instead when the planner refuses a move: decline it", async () => {
+    const warned: string[] = [];
+    await expect(
+      planCodeMoves({
+        ...run(warned),
+        entities: [
+          {
+            kind: "collection",
+            entity: entity("posts", [group("meta", [text("subtitle")])], {
+              useAsTitle: "subtitle",
+            }),
+          },
+        ],
+        previous: recorded("collections", "posts", [
+          text("subtitle"),
+          group("meta", []),
+        ]),
+        previousTables: new Set(["dc_posts"]),
+      })
+    ).rejects.toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              message: expect.stringMatching(
+                /To write it as a delete at the old place and an empty field at the new one instead, which loses its values, answer no when nextly migrate:create asks, or leave out --accept-moves\.$/
+              ),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  // The DOWN moves the value back from the new place, so a working draft written there after the
+  // UP holds a pending change the DOWN would drop, as one at the old place does for the UP.
+  it("stops the DOWN where a working draft holds the field at its new place", async () => {
+    const warned: string[] = [];
+    const plan = await planCodeMoves({
+      ...run(warned),
+      entities: [
+        {
+          kind: "collection",
+          entity: entity("posts", [group("meta", [text("subtitle")])]),
+        },
+      ],
+      previous: recorded("collections", "posts", [
+        text("subtitle"),
+        group("meta", []),
+      ]),
+      previousTables: new Set(["dc_posts"]),
+    });
+    const stopsAt = (statements: readonly string[]) =>
+      statements.flatMap(s => {
+        const m = /^INSERT INTO "nextly_drafted_([a-z_]+)"/.exec(s);
+        return m ? [m[1]] : [];
+      });
+    expect(stopsAt(plan.appended.up.first)).toEqual(["subtitle"]);
+    expect(stopsAt(plan.appended.down.first)).toEqual(["meta_subtitle"]);
+    // Each stop leads its side, before the side moves any value.
+    expect(plan.appended.down.first[0]).toMatch(
+      /^CREATE TEMP TABLE "nextly_drafted_meta_subtitle"/
+    );
+  });
 });

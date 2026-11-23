@@ -3295,7 +3295,7 @@ function draftScopeOf(save: CollectionSave): {
   holds: (values: Record<string, unknown>, path: readonly string[]) => boolean;
 } {
   if (save.kind === "fieldGroup") {
-    return { where: [], holds: holdsValueAtPathAnywhere };
+    return { where: [], holds: holdsKeyAtPathAnywhere };
   }
   return {
     where: [
@@ -3306,28 +3306,32 @@ function draftScopeOf(save: CollectionSave): {
       },
       { column: "scopeSlug", op: "=", value: save.slug },
     ],
-    holds: holdsValueAtPath,
+    holds: holdsKeyAtPath,
   };
 }
 
-/** Whether a document's values hold something other than null at `path`, at any depth. */
-function holdsValueAtPathAnywhere(
+/** Whether a document's values hold `path`'s key, a null included, at any depth (`holdsKeyAtPath`). */
+function holdsKeyAtPathAnywhere(
   values: Record<string, unknown>,
   path: readonly string[]
 ): boolean {
-  if (holdsValueAtPath(values, path)) return true;
+  if (holdsKeyAtPath(values, path)) return true;
   return Object.values(values).some(value =>
     (Array.isArray(value) ? value : [value]).some(
       item =>
         item !== null &&
         typeof item === "object" &&
-        holdsValueAtPathAnywhere(item as Record<string, unknown>, path)
+        holdsKeyAtPathAnywhere(item as Record<string, unknown>, path)
     )
   );
 }
 
-/** Whether a document's values hold something other than null at `path`. */
-function holdsValueAtPath(
+/**
+ * Whether a document's values hold `path`'s key, a null included: a working draft that holds the
+ * field with a null may be a pending clear, which the move would drop as it drops a value. The
+ * file's own stop asks the same (`workingDraftsStop`).
+ */
+function holdsKeyAtPath(
   values: Record<string, unknown>,
   path: readonly string[]
 ): boolean {
@@ -3338,7 +3342,7 @@ function holdsValueAtPath(
     }
     at = (at as Record<string, unknown>)[key];
   }
-  return at !== null && at !== undefined;
+  return at !== undefined;
 }
 
 /**

@@ -557,20 +557,22 @@ function conditionLiteral(
 
 /**
  * Statements that stop a run, before the file changes anything, where a working draft of
- * `subject` holds a value at a moved field's old place (`from`): the move rewrites each entry's
- * row, not a draft's snapshot, which keeps the field where it was, so publishing that draft would
- * drop its pending change. The Schema Builder's save reads the database it writes from
- * (`refuseMovesUnderWorkingDrafts`); a file written offline asks the database it runs on. The run
- * stops on `publish_or_discard_drafts_of_<field>` in `nextly_drafted_<field>`, and goes ahead once
- * those drafts are published or discarded. It fails closed: a versions table or column the
- * statement cannot read is an error that stops the run as well.
+ * `subject` holds the moved field at the place the run moves it away from (`at`): its old place
+ * for the UP, its new one for the DOWN. The run rewrites each entry's row, not a draft's
+ * snapshot, which keeps the field where it was, so publishing that draft would drop its pending
+ * change. A draft holding the key with a null is held too: that may be a pending clear. The
+ * Schema Builder's save reads the database it writes from (`refuseMovesUnderWorkingDrafts`); a
+ * file written offline asks the database it runs on. The run stops on
+ * `publish_or_discard_drafts_of_<field>` in `nextly_drafted_<field>`, and goes ahead once those
+ * drafts are published or discarded. It fails closed: a versions table or column the statement
+ * cannot read is an error that stops the run as well.
  */
 export function workingDraftsStop(
   dialect: SupportedDialect,
   subject: { kind: "collection" | "single"; slug: string },
-  from: readonly string[]
+  at: readonly string[]
 ): string[] {
-  const name = from.map(safeKey).join("_");
+  const name = at.map(safeKey).join("_");
   // The subject's working drafts, as the versions repository finds one (`WORKING_DRAFT_SHAPE`),
   // so the file and the application agree on which rows are working drafts.
   const working = [
@@ -581,7 +583,7 @@ export function workingDraftsStop(
   return stopWhereNot(dialect, quoteIdent(VERSIONS_TABLE, dialect), {
     guard: `nextly_drafted_${name}`,
     reason: `publish_or_discard_drafts_of_${name}`,
-    kept: `NOT (${holdsValueAt("snapshot", from, dialect)})`,
+    kept: `NOT (${DIALECTS[dialect].hasKey(quoteIdent("snapshot", dialect), at)})`,
     where: working
       .map(condition => versionsConditionSql(condition, dialect))
       .join(" AND "),
@@ -884,6 +886,13 @@ export function moveDataStatements(
               ? json.fromJson(q(from.column), from.keys, target)
               : q(from.column)
           } WHERE ${source.holds};`,
+          // An explicit JSON null arrives as NULL: a column added or put back with a database
+          // default would otherwise keep that default where the entry said nothing.
+          ...(from.kind === "json"
+            ? [
+                `UPDATE ${table} SET ${q(to.column)} = NULL WHERE ${json.hasKey(q(from.column), from.keys)} AND NOT (${source.holds});`,
+              ]
+            : []),
         ]
       : [
           ...emptyAtDestination(json, table, from, to, source.holds, q),

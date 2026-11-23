@@ -12,6 +12,8 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors/nextly-error";
+import type { ValidationPublicData } from "../../../errors/public-data";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { movesFileFacts, planMovingEntity } from "../field-moves/entity-moves";
@@ -142,25 +144,63 @@ async function acceptedMovesOf(
 }
 
 /**
- * The statements that stop a run over a working draft keeping a moved field at its old place
- * (`workingDraftsStop`). A field group's values sit in the drafts of every entity that uses it,
- * under paths a run cannot know offline, so none is written for one: the run says so instead.
+ * The statements that stop a run over a working draft keeping a moved field where the run moves it
+ * away from (`workingDraftsStop`): its old place for the UP, its new one for the DOWN, which moves
+ * it back. A field group's values sit in the drafts of every entity that uses it, under paths a
+ * run cannot know offline, so none is written for one: the run says so instead.
  */
 function draftsStopsOf(
   run: CodeMovesRun,
   kind: SettingsEntityKind,
   slug: string,
   moves: AcceptedMoves["moves"]
-): string[] {
+): { up: string[]; down: string[] } {
   if (kind === "fieldGroup") {
     run.warn(
-      `Working drafts are not checked for field group "${slug}": a draft that holds ${moves.map(m => placeOf(m.from)).join(", ")} keeps it where it was, and publishing it after this migration drops that change. Publish or discard such drafts before you run the migration.`
+      `Working drafts are not checked for field group "${slug}": a draft that holds ${moves.map(m => placeOf(m.from)).join(", ")} keeps it where it was, and publishing it after this migration drops that change. Publish or discard such drafts before you run the migration, and before you roll it back.`
     );
-    return [];
+    return { up: [], down: [] };
   }
-  return moves.flatMap(move =>
-    workingDraftsStop(run.dialect, { kind, slug }, move.from)
-  );
+  const stop = (at: readonly string[]) =>
+    workingDraftsStop(run.dialect, { kind, slug }, at);
+  return {
+    up: moves.flatMap(move => stop(move.from)),
+    down: moves.flatMap(move => stop(move.to)),
+  };
+}
+
+/** What a run that cannot carry a move can do instead, added to the planner's refusal. */
+const INSTEAD =
+  " To write it as a delete at the old place and an empty field at the new one instead, which loses its values, answer no when nextly migrate:create asks, or leave out --accept-moves.";
+
+/**
+ * The entity's moves planned (`planMovingEntity`), or the planner's refusal of the first that
+ * cannot keep its values, saying what this road can do instead: decline the move.
+ */
+function plannedOrRefused(
+  entity: Parameters<typeof planMovingEntity>[0],
+  dialect: SupportedDialect
+): EntityMoves {
+  try {
+    return planMovingEntity(entity, dialect);
+  } catch (error) {
+    const errors = (
+      error instanceof NextlyError
+        ? (error.publicData as { errors?: unknown } | undefined)?.errors
+        : undefined
+    ) as ValidationPublicData["errors"] | undefined;
+    if (!errors?.some(entry => entry.code === "FIELD_MOVE_REFUSED"))
+      throw error;
+    throw NextlyError.validation({
+      errors: errors.map(entry =>
+        entry.code === "FIELD_MOVE_REFUSED"
+          ? { ...entry, message: `${entry.message}${INSTEAD}` }
+          : entry
+      ),
+      ...(error instanceof Error ? { cause: error } : {}),
+      logContext: { slug: entity.slug, road: "migrate:create" },
+    });
+  }
 }
 
 /**
@@ -170,18 +210,20 @@ function draftsStopsOf(
  * the planner refuses is refused here, before anything is written.
  */
 export async function planCodeMoves(run: CodeMovesRun): Promise<CodeMovesPlan> {
-  // The drafts stops of every entity lead the file, before any entity's values move.
-  const stops: string[] = [];
+  // The drafts stops of every entity lead each side of the file, before any entity's values move.
+  const stops: { up: string[]; down: string[] } = { up: [], down: [] };
   const planned: { moves: EntityMoves; table: string }[] = [];
   const unrecorded: string[] = [];
   for (const { kind, entity } of run.entities) {
     const accepted = await acceptedMovesOf(run, kind, entity);
     if (accepted === "unrecorded") unrecorded.push(entity.slug);
     if (accepted === undefined || accepted === "unrecorded") continue;
-    stops.push(...draftsStopsOf(run, kind, entity.slug, accepted.moves));
+    const drafts = draftsStopsOf(run, kind, entity.slug, accepted.moves);
+    stops.up.push(...drafts.up);
+    stops.down.push(...drafts.down);
     planned.push({
       table: entity.tableName,
-      moves: planMovingEntity(
+      moves: plannedOrRefused(
         {
           kind,
           slug: entity.slug,
@@ -212,11 +254,11 @@ export async function planCodeMoves(run: CodeMovesRun): Promise<CodeMovesPlan> {
   return {
     appended: {
       up: {
-        first: [...stops, ...all.flatMap(m => m.up.first)],
+        first: [...stops.up, ...all.flatMap(m => m.up.first)],
         last: all.flatMap(m => m.up.last),
       },
       down: {
-        first: all.flatMap(m => m.down.first),
+        first: [...stops.down, ...all.flatMap(m => m.down.first)],
         last: all.flatMap(m => m.down.last),
       },
     },

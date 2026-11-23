@@ -174,10 +174,19 @@ separate migrations. A snapshot written before snapshots recorded fields cannot 
 `migrate:create` names each entity whose table it holds without its fields, whatever else changed,
 and the snapshot that run writes records them, so the next run can show their moves.
 
+A field kept for each language cannot be moved with its values yet. Every installation now keeps
+a translatable field's values per language, so this covers `text`, `textarea`, `richText`, `email`
+and `code` fields unless they set `localized: false` (see
+[which fields are translated](/docs/localization#choose-what-gets-translated)). `migrate:create` refuses such a move before
+it writes anything, naming the field: answer no when it asks, or leave out `--accept-moves`, to
+write it as a delete at the old place and an empty field at the new one, which loses its values.
+A field kept once for every language, such as a `number`, moves with its values.
+
 A working draft keeps the field at its old place, so publishing it after the move would drop the
 pending change. For a collection or a Single, the migration stops before it changes anything
-where a working draft holds a value at the field's old place, naming the field; publish or
-discard those drafts and run `nextly migrate` again. On MySQL, which commits each schema
+where a working draft holds the field at its old place, a cleared one included, naming the field;
+publish or discard those drafts and run `nextly migrate` again. `nextly migrate:down` stops the
+same way where a working draft written after the move holds the field at its new place. On MySQL, which commits each schema
 statement as it runs, the stopped file is first recorded as cleaned up with
 `nextly migrate:resolve --failed-cleanup <file>`, as the stop's message says: the stop ran before
 the file changed anything. A field group's values sit in the drafts of

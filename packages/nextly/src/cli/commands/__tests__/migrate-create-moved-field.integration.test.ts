@@ -224,6 +224,57 @@ async function apply(): Promise<{ code: number | undefined; said: string }> {
   return { code, said: applied.said.join("\n") };
 }
 
+/** A working draft of the post `id` holding `snapshot`, as the versions repository keeps one. */
+async function workingDraft(
+  dialect: TestDialect,
+  url: string,
+  id: string,
+  snapshot: Record<string, unknown>
+): Promise<void> {
+  const app = await start(dialect, url);
+  const now = new Date();
+  await app.adapter.insert("nextly_versions", {
+    id: randomUUID(),
+    scopeKind: "collection",
+    scopeSlug: "mf_posts",
+    entryId: id,
+    versionNo: null,
+    status: "draft",
+    isAutosave: false,
+    snapshot,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+/** `migrate:down`, non-interactively and consenting to the drops it makes: how it ended, what it said. */
+async function rollBack(): Promise<{ code: number | undefined; said: string }> {
+  setNonInteractive(true);
+  const down = command();
+  const printed = vi
+    .spyOn(process.stderr, "write")
+    .mockImplementation(chunk => {
+      down.said.push(String(chunk));
+      return true;
+    });
+  const logged = vi.spyOn(console, "error").mockImplementation(message => {
+    down.said.push(String(message));
+  });
+  let code: number | undefined;
+  try {
+    code = await exiting(() =>
+      runMigrateDown({ cwd: dir, acceptDataLoss: true }, down.context)
+    );
+  } catch (error) {
+    down.said.push(String(error));
+    code = -1;
+  } finally {
+    printed.mockRestore();
+    logged.mockRestore();
+  }
+  return { code, said: down.said.join("\n") };
+}
+
 /** `createOnly`, then `migrate`, which must apply the file; what `migrate:create` said. */
 async function createAndApply(
   name: string,
@@ -387,6 +438,59 @@ describe.each(getConfiguredTestDialects())(
       }
       const applied = await apply();
       expect(applied.code, applied.said).toBeUndefined();
+      expect(await subtitles(await start(dialect, url, "grouped"), id)).toEqual(
+        { row: undefined, grouped: "Kept subtitle" }
+      );
+    });
+
+    // A draft holding the field with a null may be clearing it: publishing it after the move would
+    // drop that clear as it drops an edit.
+    it("stops nextly migrate where a working draft clears the moved field at its old place", async () => {
+      const url = await openDatabase(dialect);
+      await start(dialect, url);
+      await createAndApply("create_posts", "row");
+      const id = await created(dialect, url, "row", {
+        title: "P",
+        subtitle: "Kept subtitle",
+        meta: { note: "N" },
+      });
+      await workingDraft(dialect, url, id, { title: "P", subtitle: null });
+
+      await createOnly("move_subtitle_in", "grouped", { acceptMoves: true });
+      const stopped = await apply();
+      expect(stopped.code, stopped.said).not.toBeUndefined();
+      expect(stopped.said).toMatch(/publish_or_discard_drafts_of_subtitle/);
+      expect(await subtitles(await start(dialect, url, "row"), id)).toEqual({
+        row: "Kept subtitle",
+        grouped: undefined,
+      });
+    });
+
+    // The way back moves the value out of the group again, so a working draft written at the new
+    // place after the move holds a pending change the way back would drop.
+    it("stops migrate:down where a working draft holds the moved field at its new place", async () => {
+      const url = await openDatabase(dialect);
+      await start(dialect, url);
+      await createAndApply("create_posts", "row");
+      const id = await created(dialect, url, "row", {
+        title: "P",
+        subtitle: "Kept subtitle",
+        meta: { note: "N" },
+      });
+      await createAndApply("move_subtitle_in", "grouped", {
+        acceptMoves: true,
+      });
+      await workingDraft(dialect, url, id, {
+        title: "P",
+        meta: { note: "N", subtitle: "Pending edit" },
+      });
+
+      const stopped = await rollBack();
+      expect(stopped.code, stopped.said).not.toBeUndefined();
+      expect(stopped.said).toMatch(
+        /publish_or_discard_drafts_of_meta_subtitle/
+      );
+      // Nothing moved back: the value is still in the group, where the draft expects it.
       expect(await subtitles(await start(dialect, url, "grouped"), id)).toEqual(
         { row: undefined, grouped: "Kept subtitle" }
       );
