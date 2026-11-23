@@ -444,6 +444,119 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v")).toEqual({ kept: 12, lost: null });
     });
 
+    /** A statement on `t`'s database, outside any save. */
+    async function exec(t: TestNextly, statement: string): Promise<void> {
+      await (
+        t.adapter as unknown as { executeQuery(s: string): Promise<unknown> }
+      ).executeQuery(statement);
+    }
+
+    /** A save refused before anything ran, whose message says `why`. */
+    function refusedSaying(why: string) {
+      return {
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.v",
+              message: expect.stringContaining(why),
+            }),
+          ],
+        },
+      };
+    }
+
+    // On MySQL a column is emptied before it takes its new type: a NOT NULL column refuses to be
+    // emptied unless the constraint is set aside first and put back once its values are in.
+    it("converts a required field's lists of one item into a required text field", async () => {
+      const t = await boot([{ name: "v", type: "chips", required: true }]);
+      await write(t, "a", { v: ["x"] });
+      await write(t, "b", { v: ["y"] });
+
+      expect(
+        await save(t, [{ name: "v", type: "text", required: true }])
+      ).toBeUndefined();
+
+      expect(await read(t, "v")).toEqual({ a: "x", b: "y" });
+    });
+
+    // On PostgreSQL a column's default of the old type stops `ALTER … USING`: it is dropped first
+    // and the new field's default set after.
+    it("converts a field with a default of its own, clearing a confirmed value, and keeps the new default", async () => {
+      const t = await boot([{ name: "v", type: "text", defaultValue: "5" }]);
+      await write(t, "kept", { v: "12" });
+      await write(t, "lost", { v: "abc" });
+
+      expect(
+        await save(t, [{ name: "v", type: "number", defaultValue: 5 }], {
+          confirmedClears: [{ field: "v", count: 1 }],
+        })
+      ).toBeUndefined();
+
+      expect(await read(t, "v")).toEqual({ kept: 12, lost: null });
+      await write(t, "fresh", {});
+      expect((await read(t, "v")).fresh).toBe(5);
+    });
+
+    // Two values that read as one under a unique field would break its index part way through: the
+    // change is refused before any value is written, for that reason alone, now that the save
+    // writes each value as the new type reads it.
+    it("refuses a unique field whose values read as one under the new type, naming them, and changes nothing", async () => {
+      const t = await boot([{ name: "v", type: "text", unique: true }]);
+      await write(t, "a", { v: "12" });
+      await write(t, "b", { v: "012" });
+
+      const refused = await save(t, [
+        { name: "v", type: "number", unique: true },
+      ]);
+      expect(refused).toMatchObject(
+        refusedSaying("which a unique field holds once (2 rows")
+      );
+      expect(JSON.stringify(refused)).not.toContain("a save does not do yet");
+
+      expect(await read(t, "v")).toEqual({ a: "12", b: "012" });
+    });
+
+    // A cleared value is no value, which a required field refuses: the clear is refused, even confirmed.
+    it("refuses a confirmed clear into a required field, and changes nothing", async () => {
+      const t = await boot([{ name: "v", type: "text", required: true }]);
+      await write(t, "kept", { v: "12" });
+      await write(t, "lost", { v: "abc" });
+
+      expect(
+        await save(t, [{ name: "v", type: "number", required: true }], {
+          confirmedClears: [{ field: "v", count: 1 }],
+        })
+      ).toMatchObject(refusedSaying("required"));
+
+      expect(await read(t, "v")).toEqual({ kept: "12", lost: "abc" });
+    });
+
+    // Each value is written by an UPDATE of its row, which a table's update trigger would fire on,
+    // doing whatever it does once per row. PostgreSQL's `ALTER … USING` writes no row and fires none.
+    it("refuses a conversion of a table with an update trigger where rows are written one by one, naming it, and changes nothing", async () => {
+      const t = await boot([{ name: "v", type: "chips" }]);
+      await write(t, "one", { v: ["a"] });
+      const table = `dc_${SLUG}`;
+      if (dialect === "postgresql") {
+        expect(await save(t, [{ name: "v", type: "text" }])).toBeUndefined();
+        expect(await read(t, "v")).toEqual({ one: "a" });
+        return;
+      }
+      await exec(
+        t,
+        dialect === "mysql"
+          ? `CREATE TRIGGER ${q("tcc_touch")} AFTER UPDATE ON ${q(table)} FOR EACH ROW SET @tcc_touched = 1`
+          : `CREATE TRIGGER ${q("tcc_touch")} AFTER UPDATE ON ${q(table)} BEGIN SELECT 1; END`
+      );
+
+      expect(await save(t, [{ name: "v", type: "text" }])).toMatchObject(
+        refusedSaying("tcc_touch")
+      );
+
+      expect(await read(t, "v")).toEqual({ one: ["a"] });
+    });
+
     it("refuses a confirmed clear whose count no longer holds, naming the new count, and changes nothing", async () => {
       const t = await boot([{ name: "v", type: "text" }]);
       await write(t, "kept", { v: "12" });
@@ -545,6 +658,49 @@ describe.each(getConfiguredTestDialects())(
       } as never)) as { v?: unknown; item?: { v?: unknown } } | undefined;
       expect(read?.item?.v ?? read?.v).toBe("a");
     });
+
+    // The Single's save takes the person's confirmed clears as a collection's does.
+    it("clears a Single's value that cannot convert once the clear is confirmed with its count", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      const t = await createTestNextly({ dialect });
+      instance = t;
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "tcc_hero",
+          label: "Hero",
+          fields: [{ name: "v", type: "text" }],
+        }
+      );
+      await t.nextly.updateSingle({
+        slug: "tcc_hero",
+        data: { v: "abc", _overwrite: true },
+      } as never);
+      const single = (await t
+        .getService("singleRegistryService")
+        .getSingleBySlug("tcc_hero")) as { schemaVersion?: number } | null;
+
+      const refused = await dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "tcc_hero" },
+        {
+          fields: [{ name: "v", type: "number" }],
+          confirmed: true,
+          schemaVersion: single?.schemaVersion ?? 1,
+          confirmedClears: [{ field: "v", count: 1 }],
+        }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toBeUndefined();
+      const read = (await t.nextly.findSingle({
+        slug: "tcc_hero",
+      } as never)) as { v?: unknown; item?: { v?: unknown } } | undefined;
+      expect(read?.item?.v ?? read?.v ?? null).toBeNull();
+    });
   }
 );
 
@@ -611,6 +767,67 @@ describe.each(getConfiguredTestDialects())(
       expect(refused).toBeUndefined();
 
       expect(await boxValue()).toBe("a");
+    });
+
+    // A field group's save takes the person's confirmed clears as a collection's does.
+    it("clears a field group's value that cannot convert once the clear is confirmed with its count", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      const t = await createTestNextly({ dialect });
+      instance = t;
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: "tcc_box", label: "Box", fields: [{ name: "v", type: "text" }] }
+      );
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: SLUG,
+          label: "Post",
+          fields: [{ name: "box", type: "component", component: "tcc_box" }],
+        }
+      );
+      for (const [title, v] of [
+        ["kept", "12"],
+        ["lost", "abc"],
+      ] as const) {
+        await t.nextly.create({
+          collection: SLUG,
+          data: { title, box: { v } },
+        } as never);
+      }
+      const stored = (await t
+        .getService("fieldGroupRegistryService")
+        .getComponent("tcc_box")) as { schemaVersion?: number };
+
+      const refused = await dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "tcc_box" },
+        {
+          fields: [{ name: "v", type: "number" }],
+          confirmed: true,
+          schemaVersion: stored.schemaVersion,
+          confirmedClears: [{ field: "v", count: 1 }],
+        }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toBeUndefined();
+      const found = (await t.nextly.find({
+        collection: SLUG,
+        limit: 10,
+      } as never)) as {
+        items: Array<{ title: string; box?: { v?: unknown } }>;
+      };
+      expect(
+        Object.fromEntries(
+          found.items.map(item => [item.title, item.box?.v ?? null])
+        )
+      ).toEqual({ kept: 12, lost: null });
     });
   }
 );
