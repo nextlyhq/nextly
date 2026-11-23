@@ -40,7 +40,6 @@ import {
   MARKER_COLUMN,
   MARKER_PLUGIN,
   SEO,
-  SEO_TABLE,
   linksTo,
   markerPluginOn,
   plainHome,
@@ -141,6 +140,12 @@ async function migrationFiles(): Promise<string[]> {
     file.endsWith(".sql")
   );
 }
+
+/**
+ * SEO's table in a new project, whose history starts on the current field-group names: what the
+ * app's keys and a plugin's column reach for.
+ */
+const SEO_TABLE = fieldGroupTableNameFor("current", SEO);
 
 /** A collection that places SEO at its top level and inside a group. */
 const ARTICLES = "dep_articles";

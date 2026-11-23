@@ -3276,17 +3276,8 @@ export async function migrateCore(
       // core schema is a desired shape, so naming a registry the database does
       // not have is an instruction to create it — and an empty legacy registry
       // beside a populated migrated one is preferred by every reader.
-      // A database this run sets up for the first time starts its field groups on the names its
-      // history keeps them under (`newDatabaseFieldGroupNaming`); every other keeps the registry
-      // it holds.
-      const newSiteNaming = await newDatabaseFieldGroupNaming(deps);
-      const fieldGroupRegistryTable =
-        newSiteNaming === undefined
-          ? await resolveRegistryNameFromCatalog({
-              dialect: deps.dialect,
-              getDrizzle: <T>() => deps.db as T,
-            })
-          : storageNamesFor(newSiteNaming).registryTable;
+      const { newSiteNaming, fieldGroupRegistryTable } =
+        await phaseOneFieldGroupRegistry(deps);
       // DETECTED rather than asserted: a caller of this seam may hand an
       // adapter without these operations, and a cast to a shape with
       // `tableExists` would then call `undefined`, a TypeError that skips the
@@ -3362,17 +3353,7 @@ export async function migrateCore(
         ensureLedger: deps.ensureLedger,
       });
       coreChanged = r.changed;
-      // A new database on the current names records that its field groups are settled there, as a
-      // first start records it, so `migrate:field-groups` finds nothing to do.
-      if (newSiteNaming === "current") {
-        const { recordNewSiteOnCurrentNames } = await import(
-          "../../domains/field-groups/services/field-group-new-site"
-        );
-        await recordNewSiteOnCurrentNames(
-          deps.adapter as unknown as DrizzleAdapter,
-          serviceLoggerOf(deps.logger)
-        );
-      }
+      await recordNewDatabaseNaming(deps, newSiteNaming);
       // With the run's first write behind it, and every refusal it makes
       // before writing passed, the marks it owes.
       await (deps.markOldBuilderFilesFn ?? markOldBuilderFiles)(deps);
@@ -3681,6 +3662,41 @@ async function missingFromAppStream(
  * A new database takes the names its history keeps field groups under, and the current names
  * where the project has no history yet, as a new project's first migration records them.
  */
+/**
+ * The field-group registry Phase 1 reconciles core with. A database this run sets up for the first
+ * time starts its field groups on the names its history keeps them under
+ * (`newDatabaseFieldGroupNaming`, then `newSiteNaming`); every other keeps the registry it holds.
+ */
+async function phaseOneFieldGroupRegistry(deps: MigrateCoreDeps) {
+  const newSiteNaming = await newDatabaseFieldGroupNaming(deps);
+  const fieldGroupRegistryTable =
+    newSiteNaming === undefined
+      ? await resolveRegistryNameFromCatalog({
+          dialect: deps.dialect,
+          getDrizzle: <T>() => deps.db as T,
+        })
+      : storageNamesFor(newSiteNaming).registryTable;
+  return { newSiteNaming, fieldGroupRegistryTable };
+}
+
+/**
+ * A new database on the current names records that its field groups are settled there, as a first
+ * start records it, so `migrate:field-groups` finds nothing to do.
+ */
+async function recordNewDatabaseNaming(
+  deps: MigrateCoreDeps,
+  newSiteNaming: FieldGroupNaming | undefined
+): Promise<void> {
+  if (newSiteNaming !== "current") return;
+  const { recordNewSiteOnCurrentNames } = await import(
+    "../../domains/field-groups/services/field-group-new-site"
+  );
+  await recordNewSiteOnCurrentNames(
+    deps.adapter as unknown as DrizzleAdapter,
+    serviceLoggerOf(deps.logger)
+  );
+}
+
 async function newDatabaseFieldGroupNaming(
   deps: MigrateCoreDeps
 ): Promise<FieldGroupNaming | undefined> {
