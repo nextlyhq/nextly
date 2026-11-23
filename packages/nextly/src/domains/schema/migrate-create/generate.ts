@@ -1030,7 +1030,9 @@ export async function planRun(requested: GenerateArgs) {
         args.singles,
         args.components,
         args.dialect,
-        previous?.data.snapshot
+        previous?.data.snapshot,
+        // Held-back fields were kept above, and released where asked (`withKeptScopeFieldsOf`).
+        { keepHeldBack: false }
       ),
       args.tablesAsTheyStand
     ),
@@ -4151,10 +4153,21 @@ export function buildDesiredSnapshotFromConfig(
    * holds back from a type switched off keeps its column while these have it
    * (`kept-scope-fields.ts`). Omitted, nothing held back is kept.
    */
-  existing?: NextlySchemaSnapshot
+  existing?: NextlySchemaSnapshot,
+  /**
+   * Whether a field a plugin's scope holds back keeps its column from `existing`. A caller that keeps
+   * them itself, and releases them when asked (`withKeptScopeFieldsOf`), reads `existing` for the
+   * field groups' discriminators alone.
+   */
+  options: { keepHeldBack?: boolean } = {}
 ): NextlySchemaSnapshot {
   const tables: TableSpec[] = [];
-  const kept = columnsByTable(existing ?? { tables: [] }, dialect);
+  const kept = columnsByTable(
+    options.keepHeldBack === false
+      ? { tables: [] }
+      : (existing ?? { tables: [] }),
+    dialect
+  );
   // Each field group's discriminator, read off the table as the last migration recorded it: the
   // storage migration renames a group's column whatever its table is called, so the name alone
   // cannot say which one an existing table has (`chooseTypeColumns`).
