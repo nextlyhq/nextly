@@ -70,6 +70,14 @@ describe("the development start's warning of translated unique fields", () => {
     services.map.set("adapter", adapter);
     services.map.set("config", { collections: [posts, notes] });
     services.map.set("logger", { warn: () => {}, info: () => {} });
+    // The registries the warning reads the Builder's stored entities from (stubbed above).
+    for (const name of [
+      "collectionRegistryService",
+      "singleRegistryService",
+      "fieldGroupRegistryService",
+    ]) {
+      services.map.set(name, {});
+    }
     vi.stubEnv("NODE_ENV", "development");
 
     await runPostInitTasks();
