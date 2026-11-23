@@ -613,6 +613,18 @@ describe("a type change of a field held inside JSON, collected over its rows", (
     expect(kept.counts).toMatchObject({ kept: 1 });
   });
 
+  it("compares a value held inside JSON as JSON, whatever its keys' order", async () => {
+    // Rich text and JSON both keep the object as it is: only the order of its keys differs from the
+    // reading's, which is no rewrite.
+    const result = await collectNestedTypeChange(
+      inJson("richText"),
+      inJson("json"),
+      rows([{ root: { type: "root", children: [] }, a: 1 }])
+    );
+    expect(result.judgement.class).toBe("safe");
+    expect(result.counts.blocked).toBe(0);
+  });
+
   it("asks the new field's validation of every value of a row before naming the row by its worst", async () => {
     // Both of the first row's emails are kept by the rules; only the second is longer than the new
     // field allows.

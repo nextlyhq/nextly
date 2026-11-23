@@ -29,7 +29,7 @@ import {
   pairBlocked,
   type ValueOutcome,
 } from "./judge";
-import { type StoredAsRead, storedAsRead } from "./stored-as-read";
+import { sameJson, type StoredAsRead, storedAsRead } from "./stored-as-read";
 
 /** How many keys a reason names before it gives only the count. */
 export const FIRST_KEYS = 20;
@@ -168,7 +168,8 @@ export async function collectNestedTypeChange(
 
 /**
  * How a value held inside JSON compares with what `to` reads: as its JSON writing stands, since no
- * conversion rewrites it. A stored empty list is an empty value where the new type keeps a list.
+ * conversion rewrites it, compared as JSON (`sameJson`): an object's key order is no difference, a
+ * text is never a number. A stored empty list is an empty value where the new type keeps a list.
  */
 function heldInJson(
   from: FieldTypeOnDialect,
@@ -176,7 +177,7 @@ function heldInJson(
 ): StoredAsRead {
   return {
     value: (stored, readsAs) =>
-      stored !== null && stored === JSON.stringify(valueOf(to, readsAs)),
+      stored !== null && sameJson(stored, JSON.stringify(valueOf(to, readsAs))),
     emptyListHeld: storedAsRead(from, to).emptyListHeld,
   };
 }

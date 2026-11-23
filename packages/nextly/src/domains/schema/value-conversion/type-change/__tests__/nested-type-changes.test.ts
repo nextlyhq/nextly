@@ -132,6 +132,22 @@ describe("fieldTypeChangesOf, for fields held inside JSON", () => {
     ).toEqual(["details.meta"]);
   });
 
+  it("reads a many-to-many inside JSON as the list of links it keeps there", () => {
+    const group = (extra: object) =>
+      field("details", "group", {
+        fields: [
+          field("tags", "relationship", { relationTo: "tags", ...extra }),
+        ],
+      });
+    // A list of ids inline either way: no join table holds a value inside JSON.
+    expect(
+      changesOf(
+        [group({ options: { relationType: "manyToMany" } })],
+        [group({ hasMany: true })]
+      )
+    ).toEqual([]);
+  });
+
   it("gives none for a virtual field, or a field of a virtual container, which stores nothing", () => {
     const group = (inner: FieldDefinition) =>
       field("details", "group", { fields: [inner] });

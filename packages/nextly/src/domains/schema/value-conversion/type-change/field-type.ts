@@ -162,8 +162,10 @@ export function fieldTypeInJson(
   dialect: SupportedDialect,
   builtBy: ColumnOrigin
 ): FieldTypeOnDialect {
+  // Read as a field group's row reads it: a many-to-many held inside JSON keeps its links there, as
+  // a list, not in a join table.
   const read: FieldTypeOnDialect = {
-    ...fieldTypeOnDialect(field, dialect, builtBy),
+    ...fieldTypeOnDialect(field, dialect, builtBy, { componentRow: true }),
   };
   delete read.textBound;
   if (read.number !== undefined) {
