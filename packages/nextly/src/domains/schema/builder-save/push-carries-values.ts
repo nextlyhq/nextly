@@ -15,8 +15,8 @@ import {
   type ColumnDescriptor,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
-import { convertsByValue } from "../value-conversion/type-change/field-type-changes";
 import type { ColumnAt } from "../value-conversion/type-change/field-type";
+import { convertsByValue } from "../value-conversion/type-change/field-type-changes";
 
 import { fieldsNewToSingleTable, namedOnRow } from "./single-row-fills";
 

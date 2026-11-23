@@ -226,7 +226,12 @@ export async function refuseConversionAsItStands(
     judged.filter(change => change.converted === true)
   );
   if (dialect === "sqlite") {
-    await refuseSqliteSwapDependents(db, label, conversion.columns);
+    // The translations columns the conversion swaps; a REAL column it swaps is known where it runs.
+    await refuseSqliteSwapDependents(
+      db,
+      label,
+      conversion.columns.filter(column => column.takesPlaceOnSqlite)
+    );
   }
 }
 
@@ -285,6 +290,8 @@ interface PlannedColumn extends ConvertedColumn {
   facts: ColumnFacts;
   /** The changes judged with it, consented to as the judgement before the writing was. */
   acknowledged: ReadonlySet<string>;
+  /** On SQLite, the column beside takes its place (`swapsOnSqlite`). */
+  swaps: boolean;
 }
 
 /**
@@ -326,9 +333,6 @@ async function judgedAgain(
   }
   await refuseLeftColumns(db, dialect, input.label, only);
   await refuseOverUpdateTriggers(db, dialect, input.label, judged);
-  if (dialect === "sqlite") {
-    await refuseSqliteSwapDependents(db, input.label, only);
-  }
   const planned: PlannedColumn[] = [];
   for (const change of judged) {
     const column = only.find(
@@ -341,9 +345,42 @@ async function judgedAgain(
       cleared: change.result.cleared.length,
       facts,
       acknowledged,
+      swaps: dialect === "sqlite" && swapsOnSqlite(column, facts),
     });
   }
+  if (dialect === "sqlite") {
+    await refuseSqliteSwapDependents(
+      db,
+      input.label,
+      planned.filter(column => column.swaps)
+    );
+  }
   return planned;
+}
+
+/**
+ * Whether, on SQLite, the column beside takes the converted column's place (`swapIn`) rather than
+ * the column taking its values row by row: for a translations table, which no rebuild gives the
+ * new type; and for a column whose REAL affinity would turn a text reading that looks like a number
+ * back into one (a float number becoming a text keeps `34`, which the column would store as `34.0`
+ * and the rebuild then copy as that text).
+ */
+function swapsOnSqlite(column: ConvertedColumn, facts: ColumnFacts): boolean {
+  if (column.takesPlaceOnSqlite) return true;
+  return realAffinity(facts.type) && textAffinity(column.type);
+}
+
+/** Whether a SQLite column of declared `type` has REAL affinity (SQLite's affinity rules). */
+function realAffinity(type: string): boolean {
+  const upper = type.toUpperCase();
+  if (/INT|CHAR|CLOB|TEXT|BLOB/.test(upper)) return false;
+  return /REAL|FLOA|DOUB/.test(upper);
+}
+
+/** Whether a SQLite column of declared `type` has TEXT affinity (SQLite's affinity rules). */
+function textAffinity(type: string): boolean {
+  const upper = type.toUpperCase();
+  return !upper.includes("INT") && /CHAR|CLOB|TEXT/.test(upper);
 }
 
 /**
@@ -411,20 +448,23 @@ async function refuseOverUpdateTriggers(
 }
 
 /**
- * Refuse, on SQLite, a translations column the conversion swaps for the column beside it
- * (`takesPlaceOnSqlite`) where the swap's `DROP COLUMN` would stop part-way: a view or a trigger
- * whose text names the table, or an index on the table over an expression or with a condition,
- * which SQLite keeps whole or refuses to drop a column under. Each is named.
+ * Refuse, on SQLite, a column the conversion swaps for the column beside it (`swapsOnSqlite`)
+ * where the swap's `DROP COLUMN` would stop part-way: a view or a trigger whose text names the
+ * table, an index on the table over an expression or with a condition, or a UNIQUE constraint on
+ * the column, which SQLite keeps whole or refuses to drop a column under. Each is named.
  */
 async function refuseSqliteSwapDependents(
   db: unknown,
   label: string,
-  only: readonly ConvertedColumn[]
+  swapped: readonly ConvertedColumn[]
 ): Promise<void> {
   const errors: { path: string; code: string; message: string }[] = [];
-  for (const column of only) {
-    if (!column.takesPlaceOnSqlite) continue;
-    const dependents = await sqliteSwapDependents(db, column.table);
+  for (const column of swapped) {
+    const dependents = await sqliteSwapDependents(
+      db,
+      column.table,
+      column.column
+    );
     if (dependents.length === 0) continue;
     errors.push({
       path: `fields.${column.field}`,
@@ -441,11 +481,13 @@ async function refuseSqliteSwapDependents(
 
 /**
  * What on SQLite depends on `table` beyond the plain indexes a column swap makes again: each view
- * and trigger whose text names it, and each of its indexes over an expression or with a condition.
+ * and trigger whose text names it, each of its indexes over an expression or with a condition, and
+ * a UNIQUE constraint on `column`, whose index SQLite made itself and drops with no column.
  */
 async function sqliteSwapDependents(
   db: unknown,
-  table: string
+  table: string,
+  column: string
 ): Promise<string[]> {
   const named = new RegExp(`\\b${escapeRegExp(table)}\\b`, "i");
   const objects = await querySqlRows<{
@@ -466,7 +508,19 @@ async function sqliteSwapDependents(
     sql`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND lower(tbl_name) = ${table.toLowerCase()}`
   );
   for (const index of indexes) {
-    if (index.sql === null) continue;
+    if (index.sql === null) {
+      // An index SQLite made itself: a UNIQUE or PRIMARY KEY constraint, which no column swap
+      // can drop.
+      const covered = await querySqlRows<{ name: string | null }>(
+        db,
+        "sqlite",
+        sql`SELECT name FROM pragma_index_info(${index.name})`
+      );
+      if (covered.some(c => c.name?.toLowerCase() === column.toLowerCase())) {
+        dependents.push(`the UNIQUE constraint ${index.name}`);
+      }
+      continue;
+    }
     // An expression's place in an index is column -2 (`pragma_index_xinfo`).
     const expressions = await querySqlRows<{ cid: number }>(
       db,
@@ -705,7 +759,7 @@ async function swapIn(
   const column = sql.identifier(planned.column);
   const beside = sql.identifier(BESIDE);
   const run = (statement: SQL) => runStatement(db, dialect, statement);
-  if (dialect === "sqlite" && planned.takesPlaceOnSqlite) {
+  if (dialect === "sqlite" && planned.swaps) {
     // No rebuild gives this column its new type: the column beside, of that type, takes its place,
     // and the column's indexes (a translated unique field's per-language one) are made again on it.
     await replaceColumn(db, planned.table, BESIDE, planned.column);
