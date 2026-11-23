@@ -331,6 +331,7 @@
       "defineEmailProvider",
       "defineJob",
       "defineWidget",
+      "entryDateFieldNames",
       "failRenderWhenUnavailable",
       "formatWidgetChange",
       "formatWidgetNumber",

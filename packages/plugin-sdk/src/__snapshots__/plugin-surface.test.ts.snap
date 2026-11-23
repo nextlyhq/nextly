@@ -1008,6 +1008,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "defineJob (value)",
   "definePlugin (value)",
   "defineWidget (value)",
+  "entryDateFieldNames (value)",
   "failRenderWhenUnavailable (value)",
   "formatWidgetChange (value)",
   "formatWidgetNumber (value)",

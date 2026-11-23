@@ -20,3 +20,15 @@ export {
   type DraftPreview,
 } from "../domains/email/draft-preview-request";
 export type { RenderedTemplate } from "../domains/email/services/render-template";
+/**
+ * Whether an address a written email holds can be saved, as a save checks it:
+ * an editor tells the author while they type, from the same rule, rather than
+ * a copy of it. It imports nothing, so this entry point stays light.
+ */
+export { allowedUrl, type UrlKind } from "../domains/email/written/urls";
+/**
+ * Whether a written email can store a variable path, as a save checks it:
+ * the name pattern, the length cap and the names its compiler keeps for
+ * itself. Its module needs only zod and the address rule above.
+ */
+export { storableVariablePath } from "../domains/email/written/document";
