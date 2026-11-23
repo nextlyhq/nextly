@@ -38,6 +38,43 @@ it removes.
   removes a column, on every database.
 </Callout>
 
+#### A site with no `localization` block
+
+A site that declares no `localization` block, upgrading from 0.0.2-alpha.78 or earlier with
+committed migrations, meets the move first as a refusal. Nothing is changed by either:
+
+- `nextly migrate` and `nextly migrate:check` stop with
+  [`SCHEMA_DRIFT`](/docs/cli/errors/schema-drift). Each text-like column is listed as a
+  `drop_column` marked with where it moves, for example
+  `- drop_column dc_posts.title (moves to dc_posts_locales)`, followed by the fields that would
+  move and their per-language table.
+- `nextly migrate:create` stops with [`INPUT_REFUSED`](/docs/cli/errors/input-refused): moving
+  existing values records the language they are in, and the config names none. It lists the same
+  fields.
+
+The columns are not lost: they would move, and the move copies every value before it removes a
+column. There are two safe ways forward. Pick one before you run step 3.
+
+- **Keep the fields on the main table.** Add `localized: false` to each field listed, as
+  Nextly's own plugins do for fields that are not content:
+
+  ```ts
+  defineCollection({
+    slug: "posts",
+    fields: [
+      text({ name: "title", localized: false }),
+      textarea({ name: "summary", localized: false }),
+    ],
+  });
+  ```
+
+  Then run `nextly migrate:create`. Its migration records the setting and moves no values.
+  Commit it and run `nextly migrate`.
+
+- **Move them on purpose.** Declare a `localization` block with your default language, for
+  example `localization: { locales: ["en"], defaultLocale: "en" }`. Then follow the steps below:
+  `nextly migrate:create` writes the files that move the values.
+
 ### From 0.0.2-alpha.79
 
 Your site already keeps its translatable fields per language. This release keeps the form
@@ -173,12 +210,13 @@ to fix. Then:
 Every refusal says what it found, changes nothing, and names its fix. The ones an upgrade may
 meet:
 
-| Code                                                                                  | What it means here                                                               | What to do                                                                                                                                                                        |
-| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`DATA_LOSS_CONSENT_REQUIRED`](/docs/cli/errors/data-loss-consent-required)           | A command would remove the columns whose values move, and nobody could be asked. | Read the list, then run the command again with the `--accept-data-loss=` its `Next:` line gives, or at a terminal.                                                                |
-| [`DATA_STEPS_BACKUP_NOT_CONFIRMED`](/docs/cli/errors/data-steps-backup-not-confirmed) | `nextly migrate` would rewrite stored data and no backup was confirmed.          | Back up, then run it again with `--backup-confirmed`.                                                                                                                             |
-| [`SCHEMA_DRIFT`](/docs/cli/errors/schema-drift)                                       | `nextly migrate` found configuration changes that no migration records yet.      | Run step 3 first, commit the files, then `nextly migrate`.                                                                                                                        |
-| [`MIGRATION_APPLY_FAILED`](/docs/cli/errors/migration-apply-failed)                   | A migration failed while it ran. The files before it stay applied.               | Stop and read the message. Restore the backup from step 1, or follow [Recovering from a failed migration](/docs/guides/production-migrations#recovering-from-a-failed-migration). |
+| Code                                                                                  | What it means here                                                                                                 | What to do                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`DATA_LOSS_CONSENT_REQUIRED`](/docs/cli/errors/data-loss-consent-required)           | A command would remove the columns whose values move, and nobody could be asked.                                   | Read the list, then run the command again with the `--accept-data-loss=` its `Next:` line gives, or at a terminal.                                                                            |
+| [`DATA_STEPS_BACKUP_NOT_CONFIRMED`](/docs/cli/errors/data-steps-backup-not-confirmed) | `nextly migrate` would rewrite stored data and no backup was confirmed.                                            | Back up, then run it again with `--backup-confirmed`.                                                                                                                                         |
+| [`SCHEMA_DRIFT`](/docs/cli/errors/schema-drift)                                       | `nextly migrate` found configuration changes that no migration records yet.                                        | Run step 3 first, commit the files, then `nextly migrate`. Where the changes are columns moving to `_locales`, see [A site with no `localization` block](#a-site-with-no-localization-block). |
+| [`INPUT_REFUSED`](/docs/cli/errors/input-refused)                                     | `nextly migrate:create` would move text into per-language tables, and the config declares no `localization` block. | Choose one of the two ways in [A site with no `localization` block](#a-site-with-no-localization-block), then run it again.                                                                   |
+| [`MIGRATION_APPLY_FAILED`](/docs/cli/errors/migration-apply-failed)                   | A migration failed while it ran. The files before it stay applied.                                                 | Stop and read the message. Restore the backup from step 1, or follow [Recovering from a failed migration](/docs/guides/production-migrations#recovering-from-a-failed-migration).             |
 
 If anything looks wrong after the upgrade, restore the backup from step 1. Then report what you
 saw, with the command's output.

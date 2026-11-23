@@ -84,6 +84,10 @@ import {
   type WriteCompanionMigrationOpts,
 } from "../../i18n/migration/write-migration-file";
 import {
+  describePerLanguageMove,
+  type PerLanguageMove,
+} from "../../i18n/per-language-move-guidance";
+import {
   perLanguageStorageEnabled,
   publishesPerLanguage,
   storesPerLanguage,
@@ -178,6 +182,7 @@ import {
   leftoverUniqueStatements,
   type LiveUniqueIndexes,
 } from "./leftover-unique-indexes";
+import { perLanguageMovesIn } from "./per-language-moves";
 import {
   fileStatements,
   judgedDeletions,
@@ -1069,6 +1074,9 @@ export async function generateMigration(
 
   // 3. Diff.
   let operations = diffSnapshots(previousSnapshot, desiredSnapshot);
+  // The drops a companion file makes are stripped below; the refusal of an undeclared language
+  // names them as the moves they are, so it reads the diff as it stands here.
+  const diffed = operations;
 
   // 3a. On an ENABLE transition the diff wants to DROP the localized columns
   //     from the main table — but the companion migration already relocates them
@@ -1105,10 +1113,14 @@ export async function generateMigration(
   // them in Settings instead, which a migration file cannot depend on, since the database the
   // developer reaches is not the one the file runs against. So such a file is refused until the
   // config names its default.
-  refuseUndeclaredSeedLanguage(args.defaultLocale, {
-    seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
-    moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
-  });
+  refuseUndeclaredSeedLanguage(
+    args.defaultLocale,
+    {
+      seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
+      moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
+    },
+    () => perLanguageMovesIn(diffed, args, args.dialect)
+  );
 
   // 3d. Translated fields that become or stop being unique within each language. Their companion
   //     indexes are dropped before the main file and created after every other file.
@@ -2301,16 +2313,29 @@ function buildDisableSpec(
  */
 function refuseUndeclaredSeedLanguage(
   defaultLocale: string | undefined,
-  planned: { seeds: boolean; moves: boolean }
+  planned: { seeds: boolean; moves: boolean },
+  // The text-like fields the diff moves to their per-language tables, named so the refusal reads
+  // as the move it is rather than as data loss, with the way to keep them where they are.
+  movesOf: () => PerLanguageMove[]
 ): void {
   if (defaultLocale !== undefined || !perLanguageStorageEnabled()) return;
   if (!planned.seeds && !planned.moves) return;
+  const moves = movesOf();
+  const named =
+    moves.length === 0
+      ? ""
+      : "These text-like fields would move: " +
+        moves.map(describePerLanguageMove).join("; ") +
+        ". Nothing is lost either way. Keep them on the main table by marking each one " +
+        "`localized: false` and running migrate:create again, or ";
   throw NextlyError.invalidInput({
     message:
       "This migration moves existing content into its per-language tables, which records the " +
-      "language that content is in, and the config declares none. Declare `localization` with " +
-      "its defaultLocale in the config, then run migrate:create again.",
-    logContext: { reason: "per-language-seed-language-undeclared" },
+      "language that content is in, and the config declares none. " +
+      (named === ""
+        ? "Declare `localization` with its defaultLocale in the config, then run migrate:create again."
+        : `${named}declare \`localization\` with its defaultLocale in the config to move them on purpose, then run migrate:create again.`),
+    logContext: { reason: "per-language-seed-language-undeclared", moves },
   });
 }
 

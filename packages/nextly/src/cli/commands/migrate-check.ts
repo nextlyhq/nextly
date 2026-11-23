@@ -58,6 +58,7 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
+import { movedColumnNote } from "../../domains/i18n/per-language-move-guidance";
 import {
   describeDeletion,
   type Deletion,
@@ -101,6 +102,7 @@ import {
 } from "../../domains/schema/migrate-create/entity-settings";
 import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
 import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-create/generate";
+import { perLanguageMovesIn } from "../../domains/schema/migrate-create/per-language-moves";
 import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
 import {
   EMPTY_SNAPSHOT,
@@ -526,12 +528,27 @@ export async function runChecks(args: {
 
   const ops = diffSnapshots(previousSnapshot, desiredSnapshot);
   if (ops.length > 0) {
+    // Text-like fields moving to their per-language table, named as moves rather than drops, as
+    // `nextly migrate` names them. Judged only where the entities and the dialect are given.
+    const moves =
+      args.entities !== undefined && args.dialect !== undefined
+        ? perLanguageMovesIn(ops, args.entities, args.dialect)
+        : [];
     // Cap the listed ops at 10 to keep CI logs readable on large drifts.
-    const listed = ops.slice(0, 10).map(op => `+ ${describeOp(op)}`);
+    const listed = ops
+      .slice(0, 10)
+      .map(
+        op =>
+          `+ ${describeOp(op)}${
+            op.type === "drop_column"
+              ? movedColumnNote(moves, op.tableName, op.columnName)
+              : ""
+          }`
+      );
     if (ops.length > 10) listed.push(`... and ${ops.length - 10} more`);
     return exitWithError(
       logger,
-      schemaChangeWithoutMigration(ops.length, listed)
+      schemaChangeWithoutMigration(ops.length, listed, moves)
     );
   }
 

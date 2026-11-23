@@ -5,6 +5,11 @@
  * @module cli/errors/areas/migrations
  */
 
+import {
+  perLanguageDriftNext,
+  perLanguageMoveWhy,
+  type PerLanguageMove,
+} from "../../../domains/i18n/per-language-move-guidance";
 import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-consent";
 import { dialectVariantOf } from "../../../domains/schema/migrate/dialect-variant";
 import { shellQuote } from "../../../domains/schema/migrate/drift-error";
@@ -1384,11 +1389,23 @@ export function snapshotWithoutMigration(
 const CREATE_MIGRATION =
   'Run `nextly migrate:create --name="<migration-name>"` and commit the result.';
 
-/** Schema changes no migration holds, each as a line of the drift list. */
+/**
+ * Schema changes no migration holds, each as a line of the drift list. Where some are text-like
+ * fields moving to their per-language table (`moves`), the move is explained and the two safe
+ * ways forward replace the bare remedy, which would read as consent to drop the columns.
+ */
 export function schemaChangeWithoutMigration(
   count: number,
-  lines: readonly string[]
+  lines: readonly string[],
+  moves: readonly PerLanguageMove[] = []
 ): CliError {
+  if (moves.length > 0) {
+    return new CliError("SCHEMA_DRIFT", {
+      what: `${count} pending schema change(s) detected.`,
+      why: [...lines, perLanguageMoveWhy(moves)].join("\n"),
+      next: perLanguageDriftNext(moves, count, CREATE_MIGRATION),
+    });
+  }
   return new CliError("SCHEMA_DRIFT", {
     what: `${count} pending schema change(s) detected.`,
     why: lines.join("\n"),
