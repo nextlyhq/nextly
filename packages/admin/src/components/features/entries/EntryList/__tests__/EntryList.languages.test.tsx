@@ -310,8 +310,12 @@ describe("the entry list's languages, drawn", () => {
     expect(
       screen.getByRole("columnheader", { name: /Languages/ })
     ).toBeInTheDocument();
+    // In the table: the narrow-screen cards draw the same chips again.
     expect(
-      screen.getByRole("button", { name: /^Open in Spanish, out of date/ })
+      within(screen.getByRole("table", { name: "Entries table" })).getByRole(
+        "button",
+        { name: /^Open in Spanish, out of date/ }
+      )
     ).toBeInTheDocument();
     expect(
       screen.getByRole("list", { name: "Language key" })

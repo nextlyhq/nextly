@@ -46,10 +46,17 @@ export function TitleLanguageSelect({
 }: {
   choice: TitleLanguageChoice;
 }): JSX.Element {
+  const chosen = choice.languages.find(
+    language => language.code === choice.value
+  );
   return (
     <Select value={choice.value} onValueChange={choice.onChange}>
-      {/* The words and the value together are the control's name: "Titles in Spanish". */}
-      <SelectTrigger className="w-auto bg-background text-foreground">
+      {/* Named in full, "Titles in Spanish", as it reads: the trigger's own
+          content does not name it. */}
+      <SelectTrigger
+        aria-label={`Titles in ${chosen?.label ?? choice.value}`}
+        className="w-auto bg-background text-foreground"
+      >
         <span className="flex items-center gap-1.5 whitespace-nowrap">
           <span className="text-muted-foreground">Titles in</span>
           <SelectValue />
