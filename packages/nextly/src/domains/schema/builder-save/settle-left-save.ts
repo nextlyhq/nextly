@@ -91,10 +91,18 @@ export interface SettledSave {
    * where the record cleared, and for the other outcomes.
    */
   keptFor?: KeptFor;
+  /**
+   * Set where the save deleted the entity and this settle finished that delete, its registry row
+   * removed: a delete of the entity asked again after it has nothing left to do.
+   */
+  removed?: true;
 }
 
 /** Why an "all" record stands (`SettledSave.keptFor`). */
 export type KeptFor = "registry-row" | "saved-definition";
+
+/** What a settle of an "all" record says beside its outcome. */
+type AllFacts = Pick<SettledSave, "keptFor" | "removed">;
 
 /** What the settle works with. */
 export interface SettleDeps {
@@ -225,13 +233,15 @@ export async function settleBeforeBuilderSave(
   adapter: DrizzleAdapter,
   migrationsDir: string,
   logger: SettleDeps["logger"]
-): Promise<string[]> {
+): Promise<SettledSave[]> {
   const settled = await settleHeld(adapter, migrationsDir, logger);
   const pending = settled.filter(s => s.outcome === "pending");
   if (pending.length > 0) throw pendingSaveRefusal(pending);
   // The records this settle judged: those still standing (left, or a collection's kept for its
-  // registry row) are judged again after the save; one cleared is not read again.
-  return settled.map(s => s.id);
+  // registry row) are judged again after the save, by id; one cleared is not read again. The save
+  // is told of each, so one asking for what a settled save already did (a delete it finished) is
+  // answered as done.
+  return settled;
 }
 
 /**
@@ -301,7 +311,7 @@ async function settleLeftSave(
   record: LeftSave
 ): Promise<SettledSave> {
   const notes: string[] = [];
-  const kept: { keptFor?: KeptFor } = {};
+  const kept: AllFacts = {};
   const outcome = await settledOutcome(deps, record, notes, kept);
   return {
     id: record.id,
@@ -315,13 +325,13 @@ async function settleLeftSave(
 
 /**
  * What `settleLeftSave` did, with what it could not do added to `notes`, and in `kept` why an "all"
- * record stays, where it does.
+ * record stays, where it does, and whether it finished a delete.
  */
 async function settledOutcome(
   deps: SettleDeps,
   record: LeftSave,
   notes: string[],
-  kept: { keptFor?: KeptFor }
+  kept: AllFacts
 ): Promise<SettledOutcome> {
   if (record.applies !== true) {
     // Made outside development, the save left its files for `nextly migrate`: its tables stand
@@ -501,9 +511,9 @@ async function settlePending(
 }
 
 /**
- * A save that applied whole: its files recorded applied, its registry row brought up. Where its
- * record stays, `kept` says why, so a start settles it again or holds back what its row would
- * mislead.
+ * A save that applied whole: its files recorded applied, its registry row brought up, or removed
+ * for a delete (`kept.removed`). Where its record stays, `kept` says why, so a start settles it
+ * again or holds back what its row would mislead.
  */
 async function settleAll(
   deps: SettleDeps,
@@ -511,7 +521,7 @@ async function settleAll(
   record: LeftSave,
   files: readonly string[],
   notes: string[],
-  kept: { keptFor?: KeptFor }
+  kept: AllFacts
 ): Promise<SettledOutcome> {
   for (const filename of files) {
     if (!(await repo.isFileApplied(filename))) {
@@ -558,6 +568,7 @@ async function settleAll(
     kept.keptFor = "registry-row";
     return "all";
   }
+  if (saved === null) kept.removed = true;
   await clearSettledSave(deps.adapter, deps.projectRoot, record);
   deps.logger.info(
     `Settled a Builder save of the ${described(record)} that applied whole before it stopped: its files are recorded applied and its registry row brought up.`

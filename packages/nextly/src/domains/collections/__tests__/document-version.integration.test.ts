@@ -25,6 +25,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
+import { seedLiveAuthor } from "../../releases/__tests__/helpers/live-author";
 import { discardWorkingDraft } from "../../versions/discard-working-draft";
 import type { CollectionService } from "../services/collection-service";
 import { PRINCIPAL_KIND_MAX_LENGTH } from "../../../plugins/principals/registry";
@@ -738,6 +739,11 @@ describe.each(getConfiguredTestDialects())(
         { note: "held edit", _overwrite: true }
       );
       const held = await readRev(t, DOCS, id, "en");
+      // The discard asks the read rule itself, in the language it discards,
+      // and super-admin authority is what the role lookup finds a real user
+      // holding, never a role the caller names: the instance's first user,
+      // its super admin.
+      const admin = await seedLiveAuthor(t);
       // As the discard route makes it: the live document read first, then
       // the draft removed under the document's lock.
       const { document, removed } = await discardWorkingDraft({
@@ -745,7 +751,7 @@ describe.each(getConfiguredTestDialects())(
         slug: DOCS,
         entryId: id,
         locale: "en",
-        user: { id: "system-check", roles: ["super-admin"] } as never,
+        user: { id: admin } as never,
         version: { _rev: held },
       });
       expect(removed).toBe(1);

@@ -175,11 +175,20 @@ const KINDS: Kind[] = [
   SINGLE,
   {
     ...SINGLE,
-    // The same Single, its schema changed through the API's settings save, which detects a rename
-    // itself rather than being told of one.
+    // The same Single, its schema changed through the API's settings save, which takes a rename
+    // by field name and renames a field only when the request says so.
     name: "a Single's settings save",
-    change: (_t, fields) =>
-      dispatchSingles("updateSingleSchema", { slug: "notice" }, { fields }),
+    change: (_t, fields, rename) =>
+      dispatchSingles(
+        "updateSingleSchema",
+        { slug: "notice" },
+        {
+          fields,
+          ...(rename === undefined
+            ? {}
+            : { renames: [{ ...rename, choice: "rename" }] }),
+        }
+      ),
   },
   {
     name: "a field group",

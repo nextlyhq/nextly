@@ -81,16 +81,19 @@ export function submissionSendsCollection(): CollectionConfig {
       // language rather than per language.
       text({ name: "submission", required: true, localized: false }),
       text({ name: "queuedId", required: true, localized: false }),
-      text({ name: "sendKey", required: true }),
+      // Everything else a send records describes the send itself, not
+      // content written in a language, so it is kept once for every language
+      // too, on the main table beside the ids.
+      text({ name: "sendKey", required: true, localized: false }),
       // Which form and notification sent it, by id, and the notification's
       // name as it was then, so a renamed or deleted one still reads.
       // Empty on a send recorded before these were kept.
       text({ name: "form", localized: false }),
       text({ name: "notification", localized: false }),
-      text({ name: "notificationName" }),
+      text({ name: "notificationName", localized: false }),
       // Where it stands: waiting, retrying, sending, sent, failed or
       // cancelled; and how many attempts it has taken.
-      text({ name: "state" }),
+      text({ name: "state", localized: false }),
       number({ name: "attempts" }),
       // How many attempts failed in a way a retry could help, as recorded.
       number({ name: "retries" }),
@@ -101,14 +104,14 @@ export function submissionSendsCollection(): CollectionConfig {
       json({ name: "cancelRequested" }),
       // A failed send retired by Resend: it keeps its failure, and nothing
       // sends it again.
-      text({ name: "retiredBy" }),
+      text({ name: "retiredBy", localized: false }),
       // The recipients it was configured for, and the ones it went to, each
       // as `{ digest, hint, kind, source }` (and `outcome` once known).
       json({ name: "configured" }),
       json({ name: "recipients" }),
       // A send made by Resend: who asked, and the request.
-      text({ name: "requestedBy" }),
-      text({ name: "resend" }),
+      text({ name: "requestedBy", localized: false }),
+      text({ name: "resend", localized: false }),
     ],
     indexes: [
       { fields: ["submission"] },
@@ -140,8 +143,10 @@ export function submissionResendsCollection(): CollectionConfig {
     fields: [
       // Indexed, so kept once for every language on the main table.
       text({ name: "submission", required: true, localized: false }),
-      text({ name: "notification", required: true }),
-      text({ name: "requestedBy" }),
+      // Which notification, and who asked: a record of the request, kept
+      // once for every language.
+      text({ name: "notification", required: true, localized: false }),
+      text({ name: "requestedBy", localized: false }),
       // The digests of the recipients ticked to send again, those left out
       // as already reached, and the failed sends this one retires.
       json({ name: "ticked" }),
