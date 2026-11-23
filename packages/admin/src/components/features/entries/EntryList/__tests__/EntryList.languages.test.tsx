@@ -195,6 +195,7 @@ const lastTable = () =>
     pluginFilters?: readonly ListFilter[];
     titleLanguage?: TitleLanguageChoice;
     collection?: { localized?: boolean };
+    currentSort?: string;
   };
 
 const languageFilterOf = (filters: readonly ListFilter[] = []) =>
@@ -292,6 +293,21 @@ describe("the title language", () => {
     } finally {
       LANGUAGES[0].fallbackLocale = [];
     }
+  });
+
+  it("does not order the list by its title while titles are shown in another language", () => {
+    // The read orders by the default language's titles, not the ones shown in Spanish.
+    at("?sort=-title");
+    render(<EntryList collectionSlug="posts" />);
+    expect(lastRead().sort).toBe("-title");
+
+    act(() => lastTable().titleLanguage?.onChange("es"));
+    expect(lastRead().sort).toBe("-createdAt");
+    expect(lastTable().currentSort).toBe("-createdAt");
+
+    // Back in the default language, the title order asked for returns.
+    act(() => lastTable().titleLanguage?.onChange("en"));
+    expect(lastRead().sort).toBe("-title");
   });
 
   it("says the default language's titles are its own where it falls back to none", () => {

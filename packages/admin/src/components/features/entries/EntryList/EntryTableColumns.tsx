@@ -784,7 +784,8 @@ export function buildEntryColumns(
     });
   }
 
-  // The title column shows titles in the language the reader chose, where one is chosen.
+  // The title column shows titles in the language the reader chose, where one is chosen. It is
+  // not sortable then: the list orders by the default language's titles, not the ones shown.
   const titlesIn = actions?.titlesIn;
   if (titlesIn) {
     const titleName = getEntryTitleField(collection);
@@ -793,6 +794,7 @@ export function buildEntryColumns(
     if (titleName && base) {
       cols[index] = {
         ...cols[index],
+        sortable: false,
         cell: titleInLanguageCell(base, titleName, titlesIn),
       };
     }

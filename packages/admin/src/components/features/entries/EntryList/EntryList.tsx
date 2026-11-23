@@ -372,6 +372,61 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     asksTranslationStatus &&
     (collection as { localized?: boolean } | undefined)?.localized === true;
 
+  const collectionForColumns = useMemo(
+    () =>
+      toCollectionForColumns(collection, collectionSlug, asksTranslationStatus),
+    [collection, collectionSlug, asksTranslationStatus]
+  );
+
+  // ---------------------------------------------------------------------------
+  // Title language
+  // ---------------------------------------------------------------------------
+
+  // "Titles in" is offered where a title has languages to choose among: a
+  // site with two languages or more, and a title field translated per
+  // language. A title kept once for every language (a built-in title, or a
+  // field marked shared) reads the same in each, and shown "in Spanish" it
+  // would be marked as Spanish text that it is not. Each title in the chosen
+  // language comes from a read of its own in that language, which the server
+  // judges for that language and each row.
+  const {
+    enabled: multilingual,
+    locales = [],
+    defaultLocale = "",
+    fallback: fallsBack = true,
+  } = useLocalization();
+  // Whether the list's own read, in the default language with fallback, may show another
+  // language's title where the default holds none: the default names a language to fall back to.
+  const defaultMayFallBack =
+    fallsBack &&
+    (locales.find(l => l.code === defaultLocale)?.fallbackLocale ?? []).length >
+      0;
+  const titleField = useMemo(
+    () => getEntryTitleField(collectionForColumns),
+    [collectionForColumns]
+  );
+  const titleTranslated = useMemo(() => {
+    const field = titleField
+      ? findTopLevelField(collectionForColumns.fields, titleField)
+      : undefined;
+    // The field itself, as stored: the rule reads its `virtual` mark (at its root, or in its
+    // options) as well as `localized`, and a virtual title is stored in no language.
+    return field !== undefined && isFieldLocalized(field, collectionLocalized);
+  }, [collectionForColumns.fields, titleField, collectionLocalized]);
+  const offersTitleLanguage =
+    multilingual && locales.length > 1 && titleTranslated;
+  const chosenTitleCode = choiceInForce(
+    chosenTitleLanguage,
+    collectionSlug,
+    undefined,
+    defaultLocale
+  );
+  // A language the site no longer configures is not read in: the titles
+  // return to the default language.
+  const titleLanguage =
+    offersTitleLanguage && locales.some(l => l.code === chosenTitleCode)
+      ? chosenTitleCode
+      : defaultLocale;
   // A sort the link that opened this list carried (`?sort=-updatedAt`, from a dashboard card's
   // "More exist"), honoured only for a column the sort menu itself can order by. Anything else
   // is ignored rather than refused: a stale link still opens the list, newest first. Read once
@@ -391,12 +446,20 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       ),
     [sortParam, collection, collectionSlug, asksTranslationStatus]
   );
-  const sort = choiceInForce(
+  const sortAsked = choiceInForce(
     chosenSort,
     collectionSlug,
     linkedSort,
     DEFAULT_SORT
   );
+  // While titles are shown in a language other than the default, the list is not ordered by its
+  // title: its read orders by the default language's titles, not the ones shown.
+  const sort =
+    titleLanguage !== defaultLocale &&
+    titleField !== undefined &&
+    sortAsked.replace(/^-/, "") === titleField
+      ? DEFAULT_SORT
+      : sortAsked;
 
   // The lifecycle the link that opened this list carried (`?status=draft`), so a card's "More
   // exist" lands on the drafts or published entries it showed rather than on every entry. Only
@@ -515,16 +578,6 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   });
 
   // ---------------------------------------------------------------------------
-  // Derived Data
-  // ---------------------------------------------------------------------------
-
-  const collectionForColumns = useMemo(
-    () =>
-      toCollectionForColumns(collection, collectionSlug, asksTranslationStatus),
-    [collection, collectionSlug, asksTranslationStatus]
-  );
-
-  // ---------------------------------------------------------------------------
   // Column Visibility
   // ---------------------------------------------------------------------------
 
@@ -566,55 +619,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   );
   const pagination = toTablePaginationState(entriesResponse, limit);
 
-  // ---------------------------------------------------------------------------
-  // Title language
-  // ---------------------------------------------------------------------------
-
-  // "Titles in" is offered where a title has languages to choose among: a
-  // site with two languages or more, and a title field translated per
-  // language. A title kept once for every language (a built-in title, or a
-  // field marked shared) reads the same in each, and shown "in Spanish" it
-  // would be marked as Spanish text that it is not. Each title in the chosen
-  // language comes from a read of its own in that language, which the server
-  // judges for that language and each row.
-  const {
-    enabled: multilingual,
-    locales = [],
-    defaultLocale = "",
-    fallback: fallsBack = true,
-  } = useLocalization();
-  // Whether the list's own read, in the default language with fallback, may show another
-  // language's title where the default holds none: the default names a language to fall back to.
-  const defaultMayFallBack =
-    fallsBack &&
-    (locales.find(l => l.code === defaultLocale)?.fallbackLocale ?? []).length >
-      0;
-  const titleField = useMemo(
-    () => getEntryTitleField(collectionForColumns),
-    [collectionForColumns]
-  );
-  const titleTranslated = useMemo(() => {
-    const field = titleField
-      ? findTopLevelField(collectionForColumns.fields, titleField)
-      : undefined;
-    // The field itself, as stored: the rule reads its `virtual` mark (at its root, or in its
-    // options) as well as `localized`, and a virtual title is stored in no language.
-    return field !== undefined && isFieldLocalized(field, collectionLocalized);
-  }, [collectionForColumns.fields, titleField, collectionLocalized]);
-  const offersTitleLanguage =
-    multilingual && locales.length > 1 && titleTranslated;
-  const chosenTitleCode = choiceInForce(
-    chosenTitleLanguage,
-    collectionSlug,
-    undefined,
-    defaultLocale
-  );
-  // A language the site no longer configures is not read in: the titles
-  // return to the default language.
-  const titleLanguage =
-    offersTitleLanguage && locales.some(l => l.code === chosenTitleCode)
-      ? chosenTitleCode
-      : defaultLocale;
+  // The titles in the chosen language, for the rows on screen.
   const entryIds = useMemo(
     () => entries.map(entry => String(entry.id)),
     [entries]

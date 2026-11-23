@@ -284,6 +284,22 @@ describe("EntryTable — titles in a chosen language", () => {
     expect(screen.queryByText(/shown in English/)).toBeNull();
   });
 
+  it("offers no sort on the title column while titles are shown in another language", () => {
+    // The list orders by the default language's titles, not the ones shown.
+    renderTable({
+      titleLanguage: choice({ value: "es", titles: new Map() }),
+    });
+    const header = entriesTable().getByRole("columnheader", { name: "Title" });
+    expect(within(header).queryByRole("button")).toBeNull();
+    expect(header).not.toHaveAttribute("aria-sort");
+  });
+
+  it("sorts by the title column while the default language is chosen", () => {
+    renderTable({ titleLanguage: choice({ value: "en" }) });
+    const header = entriesTable().getByRole("columnheader", { name: "Title" });
+    expect(within(header).getByRole("button")).toBeInTheDocument();
+  });
+
   it("changes nothing while the default language is chosen", () => {
     renderTable({ titleLanguage: choice({ value: "en", failed: true }) });
     expect(titleLanguageOf("One")).toBeNull();
