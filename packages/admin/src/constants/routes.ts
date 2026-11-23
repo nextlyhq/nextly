@@ -56,6 +56,9 @@ export const ROUTES = {
   // two tables. The rail's Content item and the Content panel's title lead
   // here; COLLECTIONS and SINGLES below show one table each.
   CONTENT: "/admin/content",
+  // What waits for the reader's review across every collection and Single a workflow holds: the
+  // Content panel's first link where a workflow holds any content.
+  CONTENT_WAITING: "/admin/content/waiting",
 
   // ============================================================
   // Section landing pages.

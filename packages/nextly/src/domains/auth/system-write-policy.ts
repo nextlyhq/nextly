@@ -109,6 +109,8 @@ export const SYSTEM_WRITE_POLICY = {
   },
   emailDeliveries: {
     cancel: only("manage", "email-deliveries"),
+    // Retrying a queued email now: the same people who may cancel one.
+    retry: only("manage", "email-deliveries"),
   },
   emailTemplates: {
     create: only("create", "email-templates"),

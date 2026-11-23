@@ -26,7 +26,7 @@ describe("form-builder email.templateReferences seam", () => {
     );
 
     // Create forms with notification rules.
-    await current.nextly.create({
+    const contact = await current.nextly.create({
       collection: "forms",
       data: {
         name: "Contact Us",
@@ -61,7 +61,7 @@ describe("form-builder email.templateReferences seam", () => {
       },
     });
 
-    await current.nextly.create({
+    const feedback = await current.nextly.create({
       collection: "forms",
       data: {
         name: "Feedback",
@@ -85,7 +85,11 @@ describe("form-builder email.templateReferences seam", () => {
       TemplateReference[]
     >("email.templateReferences", [], {});
 
-    expect(references).toEqual([
+    // The forms are read in id order, which keeps paging stable; ids are
+    // random, so which form comes first is decided here the same way rather
+    // than assumed to be the order they were created in. Each form's rules
+    // keep their own order.
+    const contactReferences = [
       {
         slug: "contact-team-alert",
         label: "Form: Contact Us, Notify team",
@@ -94,11 +98,20 @@ describe("form-builder email.templateReferences seam", () => {
         slug: "audit-notification",
         label: "Form: Contact Us",
       },
+    ];
+    const feedbackReferences = [
       {
         slug: "feedback-thanks",
         label: "Form: Feedback, Autoresponder",
       },
-    ]);
+    ];
+    const idOf = (created: unknown) =>
+      String((created as { item: { id: string } }).item.id);
+    expect(references).toEqual(
+      idOf(contact) < idOf(feedback)
+        ? [...contactReferences, ...feedbackReferences]
+        : [...feedbackReferences, ...contactReferences]
+    );
   });
 
   it("reports no references when form notifications are disabled", async () => {

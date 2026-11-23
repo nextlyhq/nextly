@@ -315,6 +315,8 @@ jobs:
 
 If step 2 or 3 fails, step 4 doesn't run.
 
+A blank migration (`nextly migrate:create --blank`) has no snapshot, and `nextly migrate:check` accepts it without one. It recognises a blank file by its `-- Parent:` header line or by the template's line `-- This is a blank migration file for custom SQL.`; keep at least one of them in the file's header, above `-- UP`. A localization migration (any file carrying `-- Generated: localization`) is the other file written without a snapshot: `nextly migrate:check` passes it without checking it against one, so the check does not catch an edit to it. Any other file with no snapshot fails the check with [`MISSING_SNAPSHOT`](/docs/cli/errors/missing-snapshot).
+
 **`NEXTLY_APPLIED_BY`** is read by nothing in the current codebase. The `nextly_schema_events` table has an `applied_by` column, but the migration runner does not populate it, so setting this variable has no effect today.
 
 ## Pattern 2: Migration in Vercel's build step (simplest)
@@ -613,6 +615,14 @@ before, and neither reads nor writes the record. A production start sets none.
 
 This covers `nextly migrate` from this release on. A release from before it reads no record, so
 its `nextly migrate` and its starts set the preset grants to its own presets.
+
+A collection reaches a preset role only once it is opened to it by name
+(see [Roles and Permissions](/docs/permissions#the-preset-roles-reach-a-collection-only-once-it-is-opened-to-them)).
+The first `nextly migrate` or development start of a release with that rule records, in the
+database and before it sets any grant, which presets held each existing collection, and keeps
+them there, so the upgrade takes no grant away. It writes that record once. Moving back to a
+release from before the rule is safe in the same way as above: it reads no record and sets
+the grants to its own presets, opening every collection to them again.
 
 ### What a production start writes
 
@@ -1389,6 +1399,8 @@ Rename one of the two fields so each has its own column or key:
 A pair that shares no stored value, such as two names that differ only in letter case inside a group (two separate keys), keeps working where an entity already holds it, and `nextly migrate:check` warns about it. A change that adds such a pair is refused.
 
 ### Upgrading Nextly
+
+Upgrading a site that already holds content: follow [Upgrading an existing site](/docs/guides/upgrading), which gives the commands in order, what each asks, and how to check the result.
 
 Nextly's packages (`nextly` and every `@nextlyhq/*` package) are released together and must be installed at one release. `nextly upgrade` moves all of them at once, with the package manager the project is installed with (npm, pnpm, Yarn with `node_modules`, or bun), found from its lockfile or its `packageManager` field:
 

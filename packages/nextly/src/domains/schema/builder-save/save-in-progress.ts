@@ -382,16 +382,7 @@ export async function recordSaveStarted(args: {
   // Read back, since the insert does not say whether it wrote: a record that stood already is kept.
   const standing = await meta.get<unknown>(key);
   const stood = savedRecord.safeParse(standing);
-  if (!stood.success) {
-    // A record that cannot be read names no save to keep a marker for: the save is refused, so
-    // nothing more is written over a part-way state that cannot be told. Nothing settles such a
-    // record yet, so the refusal names the one row and the step that clears it by hand.
-    throw NextlyError.conflict({
-      reason: "state",
-      message: `A Builder save of this ${args.kind === "fieldGroup" ? "field group" : args.kind} was left part-way, and its record cannot be read. ${unreadableRecordStep(key)}`,
-      logContext: { reason: "builder-save-record-unreadable", key },
-    });
-  }
+  if (!stood.success) throw unreadableOwnRecord(args.kind, key);
   // A later step of the save that made the record in this scope (a Single's save writes a field
   // leaving translation as a step of its own, then the rest): the record is this save's, and goes on
   // for it, saying what the save now writes.
@@ -426,6 +417,140 @@ export async function recordSaveStarted(args: {
 }
 
 /**
+ * Refuse a save while a save of another entity stands left part-way, asked by the writer before
+ * anything of the save is written, the work its caller does first included: one this host's
+ * settle, run before the save, could not settle; one whose record cannot be read; or another host's that
+ * applied its own files, and may have changed this database part-way. This save would otherwise
+ * write its files and snapshot over a state no file finishes describing. A save made outside
+ * development changed no table, its files left for `nextly migrate`, so a save goes on beside it,
+ * with a notice. The entity's own record is the gate's further on (`beside`), where the same save
+ * again goes on to finish it; a record this save's own scope made is its own.
+ *
+ * @throws NextlyError `CONFLICT` naming each save left and the step that settles it
+ */
+export async function refuseBesideLeftSaves(args: {
+  adapter: DrizzleAdapter;
+  projectRoot: string;
+  kind: SaveInProgressKind;
+  slug: string;
+  /** The text the save is about to write to the definition file, which tells the same save again. */
+  definitionAfter?: string;
+  notify: (line: string) => void;
+}): Promise<void> {
+  const left = await leftBeside(args);
+  // The entity's own record first, refusing as the save's record would (`recordSaveStarted`), but
+  // before anything of the save is written.
+  if (left.own !== undefined) {
+    if (!("record" in left.own)) {
+      throw unreadableOwnRecord(args.kind, left.own.key);
+    }
+    await refuseOverOwnRecord(args, left.own.key, left.own.record);
+  }
+  if (left.named.length === 0) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message: `An earlier Builder save was left part-way and is not settled, so this save was not started: ${left.named.join("; ")}. ${waysOut(left).join(" ")}`,
+    logContext: {
+      reason: "builder-save-left-elsewhere",
+      saves: left.named,
+    },
+  });
+}
+
+/**
+ * The saves of other entities left part-way that refuse this one, each named, with what settles
+ * it: this host's start, or by hand where that start leaves it (`byHand`); another host's start
+ * (`elsewhere`); or, for a record that cannot be read, its removal by hand (`unreadable`). A save
+ * made outside development is given a notice instead, and the records this save's own scope made
+ * (an earlier step of the same save) are its own. The entity's own record is handed back apart
+ * (`own`), for the refusal a save of that entity meets.
+ */
+async function leftBeside(args: {
+  adapter: DrizzleAdapter;
+  projectRoot: string;
+  kind: SaveInProgressKind;
+  slug: string;
+  notify: (line: string) => void;
+}): Promise<LeftBeside> {
+  const own = saveInProgressKey(args.kind, args.slug);
+  const ours = new Set((scopes.getStore() ?? []).map(entry => entry.record.id));
+  const left: LeftBeside = {
+    named: [],
+    byHand: [],
+    elsewhere: new Set<string>(),
+    unreadable: [],
+  };
+  for (const row of await readSavesInProgress(args.adapter)) {
+    if (row.key === own) {
+      if (!("record" in row) || !ours.has(row.record.id)) left.own = row;
+    } else if (!("record" in row)) {
+      left.named.push(`the record ${row.key}, which could not be read`);
+      left.unreadable.push(unreadableRecordStep(row.key));
+    } else if (!ours.has(row.record.id)) {
+      addLeftRecord(left, row.record, args);
+    }
+  }
+  return left;
+}
+
+/**
+ * Add another entity's readable record to what stands beside a save (`leftBeside`): named, with
+ * the way out that works for it, or, for a save made outside development, given a notice instead.
+ */
+function addLeftRecord(
+  left: LeftBeside,
+  record: SaveInProgress,
+  args: { projectRoot: string; notify: (line: string) => void }
+): void {
+  if (record.applies === false) {
+    args.notify(
+      `${described(record)} was made outside development and is recorded as left part-way; this save goes on beside it.`
+    );
+    return;
+  }
+  left.named.push(described(record));
+  if (record.host === hostname()) {
+    left.byHand.push(clearByHand(args.projectRoot, record));
+  } else {
+    left.elsewhere.add(record.host);
+  }
+}
+
+/** What `leftBeside` finds standing beside a save. */
+interface LeftBeside {
+  /** The entity's own record, where one stands that this save's scope did not make. */
+  own?: ReadRow;
+  named: string[];
+  byHand: string[];
+  elsewhere: Set<string>;
+  unreadable: string[];
+}
+
+/**
+ * A way out that works for each save left (`leftBeside`), each a sentence of its own so the
+ * command line's reading of the refusal keeps it whole.
+ */
+function waysOut(left: {
+  byHand: readonly string[];
+  elsewhere: ReadonlySet<string>;
+  unreadable: readonly string[];
+}): string[] {
+  const ways: string[] = [];
+  if (left.byHand.length > 0) {
+    ways.push(
+      `To settle it, ${SETTLES}.`,
+      `If the start leaves it, as its log then says: ${left.byHand.join(" ")}`
+    );
+  }
+  if (left.elsewhere.size > 0) {
+    ways.push(
+      `One left on another machine is settled by \`nextly migrate\`, or a development start, on that machine (${[...left.elsewhere].join(", ")}).`
+    );
+  }
+  return [...ways, ...left.unreadable];
+}
+
+/**
  * Add `names` to the record's files: the row, only while it is still this record (a row another
  * process moved is left to that process), then the marker, replaced whole. A stop between the two
  * leaves the row ahead of the marker, which the commands with no database read only for the save
@@ -442,33 +567,61 @@ async function beside(
   key: string,
   stood: SaveInProgress
 ): Promise<StartedSave> {
+  await refuseOverOwnRecord(args, key, stood);
+  return NO_RECORD;
+}
+
+/**
+ * Refuse a save over its entity's own standing record where that record refuses it, its marker
+ * put back first, so the commands with no database see the part-way save. One of this host's that
+ * its settle, which ran before this save, could not settle: a save of the entity over it would
+ * write past a state nothing has finished. Another host's may have changed this database part-way,
+ * and only that host's start, which has its files, settles it. The same save again on this host
+ * (its definition the one the left save was writing) goes on: it is the way that save is finished,
+ * and the settle after it (`withSchemaChangeExcluded`) judges the record then. Any other save of
+ * the entity is refused.
+ */
+async function refuseOverOwnRecord(
+  args: { projectRoot: string; definitionAfter?: string },
+  key: string,
+  stood: SaveInProgress
+): Promise<void> {
   await placeMarker(markerPath(args.projectRoot, stood), stood, {
     kept: true,
   });
-  // One of this host's that its settle, which ran before this save, could not settle: a save of
-  // the entity over it would write past a state nothing has finished. Another host's is settled
-  // by that host's start, and this save goes on beside it.
-  // The same save again (its definition the one the left save was writing) goes on: it is the
-  // way that save is finished, and the settle after it (`withSchemaChangeExcluded`) judges the
-  // record then. Any other save of the entity is refused.
+  const here = stood.host === hostname();
   const finishing =
+    here &&
     args.definitionAfter !== undefined &&
     stood.definitionAfter === args.definitionAfter;
   // A record of a save that applied nothing (outside development, its files left for
-  // `nextly migrate`) is not one a settle judges: a save goes on beside it, as beside another
-  // host's.
-  if (stood.host === hostname() && stood.applies !== false && !finishing) {
-    throw NextlyError.conflict({
-      reason: "state",
-      message: `${described(stood).replace(/^a /, "A ")} was left part-way and could not be settled, so this save was not started. ${clearByHand(args.projectRoot, stood)}`,
-      logContext: {
-        reason: "builder-save-left-unsettled",
-        key,
-        record: stood.id,
-      },
-    });
-  }
-  return NO_RECORD;
+  // `nextly migrate`) is not one a settle judges, and changed no table: a save goes on beside it.
+  if (stood.applies === false || finishing) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message: `${described(stood).replace(/^a /, "A ")} was left part-way and could not be settled, so this save was not started. ${here ? clearByHand(args.projectRoot, stood) : `A development start on ${stood.host} settles it.`}`,
+    logContext: {
+      reason: "builder-save-left-unsettled",
+      key,
+      record: stood.id,
+    },
+  });
+}
+
+/**
+ * The refusal of a save over its entity's own record that cannot be read: it names no save to keep
+ * a marker for, so nothing more is written over a part-way state that cannot be told. Nothing
+ * settles such a record yet, so the refusal names the one row and the step that clears it by hand.
+ */
+function unreadableOwnRecord(
+  kind: SaveInProgressKind,
+  key: string
+): NextlyError {
+  return NextlyError.conflict({
+    reason: "state",
+    message: `A Builder save of this ${kind === "fieldGroup" ? "field group" : kind} was left part-way, and its record cannot be read. ${unreadableRecordStep(key)}`,
+    logContext: { reason: "builder-save-record-unreadable", key },
+  });
 }
 
 /**
@@ -769,7 +922,7 @@ function unreadableRecordStep(key: string): string {
 }
 
 const SETTLES =
-  "start the app in development (`next dev`) on this project: its start settles the save";
+  "run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save";
 
 /**
  * Refuse while the project's markers record a save left part-way on this host against this
@@ -811,7 +964,7 @@ export async function refuseWhileSaveLeftPartWay(args: {
       );
     } else {
       args.notice(
-        `${described(record)} is recorded in .nextly/ as left part-way; it is settled by a development start on that machine.`
+        `${described(record)} is recorded in .nextly/ as left part-way; it is settled by \`nextly migrate\`, or a development start, on that machine.`
       );
     }
   }
@@ -877,9 +1030,34 @@ export type ReadRow =
  * @throws NextlyError `CONFLICT` naming each save and the one step that settles it
  */
 export async function refuseWhileSaveInProgress(
-  adapter: DrizzleAdapter
+  adapter: DrizzleAdapter,
+  options: {
+    /**
+     * The records the caller's own run finishes, which do not refuse it: those `nextly migrate`'s
+     * settle left pending, whose remaining files its run applies.
+     */
+    allow?: ReadonlySet<string>;
+    /**
+     * Given a line for each record of another host's save made outside development, which does
+     * not refuse: that save changed no table here, and its files are on its own host.
+     */
+    notice?: (line: string) => void;
+  } = {}
 ): Promise<void> {
-  const rows = await readSavesInProgress(adapter);
+  // A database with no meta table yet (a first run) holds no record.
+  if (!(await adapter.tableExists("nextly_meta"))) return;
+  const here = hostname();
+  const rows = (await readSavesInProgress(adapter)).filter(row => {
+    if (!("record" in row)) return true;
+    if (options.allow?.has(row.record.id) === true) return false;
+    if (row.record.applies === false && row.record.host !== here) {
+      options.notice?.(
+        `${described(row.record)} was made outside development and is recorded as left part-way; it is settled by \`nextly migrate\` on that machine.`
+      );
+      return false;
+    }
+    return true;
+  });
   if (rows.length === 0) return;
   // A row that cannot be read still stands for a save: it refuses, named by its key.
   const named = rows.map(row =>

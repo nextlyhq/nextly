@@ -171,6 +171,13 @@ export async function archiveFieldsLeavingTranslation(args: {
    */
   renamed?: FieldRename | null;
   /**
+   * With `renamed: null` from a request's answers rather than the dialog's: the one translated
+   * field the request answered `drop_and_add` for. Its removal is the request's choice, so the
+   * removed-beside-added refusal leaves it out and still asks about every other translated field
+   * the change removes. Left out with the dialog's `null`, which answers for the whole change.
+   */
+  droppedByAnswer?: string;
+  /**
    * Set by the schema dialogs, whose push refuses a main-table column drop the admin did not
    * confirm (`BrowserPromptDispatcher`). Before translation is on, every field is a main-table
    * column, so that refusal already asks about each one the change takes away.
@@ -553,7 +560,7 @@ function refuseTranslatedFieldsRemovedBesideAdded(
   /** Set for the change that turns translation on, whose refusal names that save first. */
   options: { translationStarts?: boolean } = {}
 ): void {
-  if (args.renamed === null) return;
+  if (args.renamed === null && args.droppedByAnswer === undefined) return;
   const before = new Set(oldFields.map(f => f.name));
   const after = new Set(args.newFields.map(f => f.name));
   // Any new field that stores something, translated or shared, wherever it stores it: a column
@@ -566,8 +573,12 @@ function refuseTranslatedFieldsRemovedBesideAdded(
   const added = args.newFields
     .filter(f => !before.has(f.name) && storesSomething(f))
     .map(f => f.name);
+  // A field the request answered drop_and_add for is removed by its own choice.
   const removed = oldFields.filter(
-    f => !after.has(f.name) && isFieldLocalized(f, true)
+    f =>
+      !after.has(f.name) &&
+      isFieldLocalized(f, true) &&
+      f.name !== args.droppedByAnswer
   );
   // Judged by name first, so a change that does not both remove and add asks the adapter nothing.
   if (added.length === 0 || removed.length === 0) return;

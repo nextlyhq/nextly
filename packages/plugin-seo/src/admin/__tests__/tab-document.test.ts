@@ -9,7 +9,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useDocumentLocale: () => undefined,
 }));
 
-import { documentKeyOf, documentOf, withValueAt } from "../tab-document";
+import {
+  documentKeyOf,
+  documentOf,
+  judgedDocument,
+  withValueAt,
+} from "../tab-document";
 
 describe("the document the tab asks about", () => {
   it("names a saved entry by its id", () => {
@@ -76,5 +81,39 @@ describe("the document as typed, with a value the form does not hold yet", () =>
     expect(withValueAt(typed, "rows.1.blocks", "c")).toEqual({
       rows: [{ blocks: "a" }, { blocks: "c" }],
     });
+  });
+});
+
+describe("the document the tab judges", () => {
+  const saved = {
+    id: "p1",
+    title: "Saved title",
+    excerpt: "Saved excerpt",
+    createdAt: "2026-09-03T09:14:20.705Z",
+    updatedAt: "2026-11-01T10:00:00.000Z",
+  };
+
+  it("keeps the saved entry's own dates, which the form never holds", () => {
+    // The form holds the declared fields only.
+    const typed = { title: "Typed title", excerpt: "Saved excerpt" };
+    expect(judgedDocument(typed, saved)).toEqual({
+      id: "p1",
+      title: "Typed title",
+      excerpt: "Saved excerpt",
+      createdAt: "2026-09-03T09:14:20.705Z",
+      updatedAt: "2026-11-01T10:00:00.000Z",
+    });
+  });
+
+  it("lets what was typed win, a field emptied included", () => {
+    expect(judgedDocument({ title: "", excerpt: "" }, saved)).toMatchObject({
+      title: "",
+      excerpt: "",
+    });
+  });
+
+  it("is what was typed alone for an entry not saved yet", () => {
+    const typed = { title: "New" };
+    expect(judgedDocument(typed, undefined)).toEqual({ title: "New" });
   });
 });

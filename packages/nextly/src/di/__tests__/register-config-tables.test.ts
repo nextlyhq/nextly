@@ -11,7 +11,7 @@
 import { getTableConfig } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
 
-import { registerConfigTablesInResolver } from "../register";
+import { registerConfigTablesInResolver } from "../register-config-tables";
 
 /** The tables a boot registered, by name. */
 async function registered(config: Record<string, unknown>) {
@@ -75,5 +75,72 @@ describe("the tables a production boot registers", () => {
       expect.arrayContaining(["campaign", "headline"])
     );
     expect(tables.has("single_footer_locales")).toBe(false);
+  });
+});
+
+/**
+ * Whether registering `next` over the tables `first` registered tells the
+ * start that a table it serves differs from the registry's.
+ */
+async function differs(
+  first: Record<string, unknown>,
+  next: Record<string, unknown>
+) {
+  const tables = await registered(first);
+  const overrides = { differed: false };
+  await registerConfigTablesInResolver(
+    {
+      hasTable: (name: string) => tables.has(name),
+      getTable: (name: string) => tables.get(name),
+      registerDynamicSchema: (name: string, table: unknown) =>
+        tables.set(name, table),
+    } as never,
+    next as never,
+    { getCapabilities: () => ({ dialect: "sqlite" }) } as never,
+    {},
+    overrides
+  );
+  return overrides.differed;
+}
+
+describe("a table registered over the registry's", () => {
+  const posts = (postFields: unknown[]) => ({
+    collections: [{ slug: "posts", fields: postFields }],
+  });
+
+  it("differs from it when a column was added", async () => {
+    expect(
+      await differs(
+        posts([{ name: "title", type: "text" }]),
+        posts([
+          { name: "title", type: "text" },
+          { name: "summary", type: "text" },
+        ])
+      )
+    ).toBe(true);
+  });
+
+  it("differs from it when only a column's settings changed", async () => {
+    expect(
+      await differs(
+        posts([{ name: "title", type: "text" }]),
+        posts([{ name: "title", type: "text", required: true }])
+      )
+    ).toBe(true);
+  });
+
+  it("does not differ when its columns are built the same", async () => {
+    expect(
+      await differs(
+        posts([
+          { name: "title", type: "text" },
+          { name: "published", type: "date" },
+        ]),
+        posts([
+          { name: "title", type: "text" },
+          { name: "published", type: "date" },
+        ])
+      )
+    ).toBe(false);
   });
 });

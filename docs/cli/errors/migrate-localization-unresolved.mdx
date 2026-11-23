@@ -1,0 +1,23 @@
+---
+title: MIGRATE_LOCALIZATION_UNRESOLVED
+description: "`nextly migrate` found stored translations it cannot move into the layout this release keeps without choosing between two values, so it changed nothing."
+---
+
+## Cause
+
+`nextly migrate` found stored translations it cannot move into the layout this release keeps without choosing between two values, so it changed nothing.
+
+The localisation steps of `nextly migrate` move what an earlier release stored into the layout this release keeps: values per language, and pending changes split into a shared draft and a draft per language. Where two stored values could each be the current one, such as pending changes saved at the same moment, or translatable values kept both on the main table and in its translations table, the run stops rather than guess.
+
+## Fix
+
+- Follow the step the message names, then run `nextly migrate` again. For pending changes saved at the same moment, keep one of them (by the ids named); for values kept in both places, run `nextly migrate --repair-localization` once.
+
+## Example
+
+```text
+✗ More than one pending change was saved at the same moment for the collection "posts" entry 42 in fr (7, 8), so which one to keep cannot be told.
+  Why:  `nextly migrate` moves stored translations into the layout this release keeps, and moves nothing it would have to guess at. Nothing was changed.
+  Next: Delete all but one of them from nextly_versions (by the ids named), then run `nextly migrate` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-localization-unresolved  (MIGRATE_LOCALIZATION_UNRESOLVED)
+```

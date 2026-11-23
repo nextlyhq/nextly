@@ -2510,6 +2510,10 @@ function fingerprinted(step: Step, statement: string): Step {
  * and is judged by its nullability (`keepsEveryValue`).
  */
 function liveRunSteps(run: MysqlLiveRun): Step[] {
+  // A guarded index drop is read as the plain drop it amounts to.
+  if (run.kind === "drop-index") {
+    return readStatement(plainMysqlStatement(run), "mysql");
+  }
   const table = run.tableName.toLowerCase();
   return run.kind === "rename"
     ? [

@@ -36,7 +36,7 @@ import {
   schemaDraftSplit,
 } from "../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
-import { attachedWorkflowSummary } from "../domains/workflows/registry";
+import { shownWorkflowSummary } from "../domains/workflows/stage-presentation";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
@@ -157,7 +157,7 @@ export const GET = withErrorHandler(
       fields: enrichedFields,
       ...draftSplitResponseFields(draftSplit),
       // The workflow that holds its publishing, as the dispatcher's read names it.
-      workflow: attachedWorkflowSummary(
+      workflow: await shownWorkflowSummary(
         "collection",
         (collection as { slug?: string }).slug ?? ""
       ),

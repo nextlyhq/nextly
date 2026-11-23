@@ -140,6 +140,14 @@ export const nextlyReleaseMembersPg = pgTable(
       table.entryId,
       table.locale
     ),
+    // The walk of shared documents: members of given documents, read in document then id
+    // order a page at a time (`dueHoldersOf`), so a page starts and stops in the index.
+    index("nextly_release_members_doc_walk_idx").on(
+      table.scopeKind,
+      table.scopeSlug,
+      table.entryId,
+      table.id
+    ),
     // Listing a release's contents, and cascading a delete.
     index("nextly_release_members_release_idx").on(table.releaseId),
   ]

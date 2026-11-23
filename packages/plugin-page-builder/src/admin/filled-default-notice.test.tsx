@@ -48,7 +48,7 @@ window.matchMedia = ((query: string) => ({
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
 
-const { Toaster } = await import("@nextlyhq/ui");
+const { Toaster, toast } = await import("@nextlyhq/ui");
 const { showFillNotices, useFilledDefaultNotice } = await import(
   "./filled-default-notice"
 );
@@ -76,7 +76,16 @@ beforeEach(() => {
   navigateTo.mockClear();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Every toast closed and gone before the toaster unmounts: a toast removes
+  // itself on a timer after it closes, and one still pending when the file's
+  // environment is torn down fires with no window to update.
+  act(() => {
+    toast.dismiss();
+  });
+  await waitFor(() => {
+    expect(document.querySelector("[data-sonner-toast]")).toBeNull();
+  });
   cleanup();
 });
 

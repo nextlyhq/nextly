@@ -14,6 +14,7 @@
 import { crossEntityProblems } from "../../collections/config/cross-entity-problems";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { validateCollectionConfig } from "../../collections/config/validate-config";
+import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { validateFieldGroupConfig } from "../../field-groups/config/validate-field-group";
 import type { SingleConfig } from "../../singles/config/types";
@@ -110,33 +111,106 @@ function isSystemField(
 }
 
 /**
- * The problems of `entry` its validator finds, judged as the commands use it, system fields and
- * all: a field a plugin's setup gives the name of one stands beside it, and is reported as the
- * same field declared twice. Where nothing but the system fields its `define*` call added is
- * left (`isSystemField`), the author declared no field of their own, which is the one rule
- * judged of the author's fields alone: the validator is asked of those, and its `FIELDS_EMPTY`
- * is reported with the rest.
+ * The rules about the fields an author declared, asked of those alone: that there is at least
+ * one, and that no two of them are one field declared twice (the sibling-field rule). A system
+ * field beside them is not the author's; whether one of theirs takes its column is asked below.
  */
-function entryProblems<P extends { code: string }>(
+const AUTHORED_RULES: ReadonlySet<string> = new Set([
+  "FIELDS_EMPTY",
+  "FIELD_NAME_DUPLICATE",
+]);
+
+/**
+ * The problems of `entry`. The rules about the author's own declarations are its validator's, of
+ * the fields its author declared, the system
+ * fields its `define*` call added set aside (`isSystemField`), as the rules judged it when that
+ * call threw. A collection with no field of its own breaks the rule that it declare one, and an
+ * author's field may share a system field's name where it takes no column of its own (a
+ * column-less `Title` beside the added `title`), which the rules would otherwise call one name
+ * declared twice.
+ *
+ * And the one question the system fields raise beside them: whether another field takes a column
+ * one of them holds, asked as `defineCollection` asks it before adding them
+ * (`columnsDeclaredBy`). A field a plugin's setup adds by a system field's name does, and the
+ * table could not be made, so it is reported.
+ */
+
+function entryProblems<
+  P extends { path: string; code: string; message: string },
+>(
   entry: unknown,
   validate: (entry: unknown) => readonly P[],
   systemFields: readonly object[]
-): P[] {
-  const problems = [...validate(entry)];
+): Array<P | ColumnClash> {
   const fields = (entry as { fields?: unknown } | null)?.fields;
-  if (
-    systemFields.length > 0 &&
-    Array.isArray(fields) &&
-    fields.length > 0 &&
-    fields.every(field => isSystemField(field, systemFields))
-  ) {
-    problems.push(
-      ...validate({ ...(entry as object), fields: [] }).filter(
-        problem => problem.code === "FIELDS_EMPTY"
-      )
-    );
+  if (systemFields.length === 0 || !Array.isArray(fields)) {
+    return [...validate(entry)];
   }
-  return problems;
+  const { added, authored } = splitSystemFields(fields, systemFields);
+  // Each rule is asked of the fields it is about. The rules about the author's own declarations
+  // (`AUTHORED_RULES`) of the fields the author declared; every other rule, which resolves a
+  // field by its name (an index, the title field, the address field), of the entity as the
+  // commands use it, system fields and all.
+  return [
+    ...validate(entry).filter(problem => !AUTHORED_RULES.has(problem.code)),
+    ...validate({ ...(entry as object), fields: authored }).filter(problem =>
+      AUTHORED_RULES.has(problem.code)
+    ),
+    ...systemColumnClashes(added, authored),
+  ];
+}
+
+/** A field that takes a column a system field holds. */
+interface ColumnClash {
+  path: string;
+  code: string;
+  message: string;
+}
+
+/**
+ * `fields`, split into the system fields the `define*` call added and the author's. Each system
+ * field is matched once: a second copy of one (a setup's own `{ ...title }`) is the author's.
+ */
+function splitSystemFields(
+  fields: readonly unknown[],
+  systemFields: readonly object[]
+): { added: unknown[]; authored: unknown[] } {
+  const unmatched = [...systemFields];
+  const added: unknown[] = [];
+  const authored: unknown[] = [];
+  for (const field of fields) {
+    const at = unmatched.findIndex(system => isSystemField(field, [system]));
+    if (at === -1) {
+      authored.push(field);
+      continue;
+    }
+    added.push(field);
+    unmatched.splice(at, 1);
+  }
+  return { added, authored };
+}
+
+/** Each of `authored` that takes a column one of `added` holds, asked as `defineCollection` asks. */
+function systemColumnClashes(
+  added: readonly unknown[],
+  authored: readonly unknown[]
+): ColumnClash[] {
+  const nameOf = (field: unknown) => String((field as { name?: unknown }).name);
+  const clashes: ColumnClash[] = [];
+  for (const system of added) {
+    const [column] = columnsDeclaredBy([system as { name?: unknown }]);
+    if (column === undefined) continue;
+    for (const field of authored) {
+      if (!columnsDeclaredBy([field as { name?: unknown }]).has(column))
+        continue;
+      clashes.push({
+        path: "fields",
+        code: "FIELD_NAME_DUPLICATE",
+        message: `Field '${nameOf(field)}' takes the column '${column}', which the system field '${nameOf(system)}' already holds. Rename it.`,
+      });
+    }
+  }
+  return clashes;
 }
 
 /** `path` within the entity at `kind[index]`, as a path in the whole configuration. */

@@ -35,6 +35,7 @@ const DEFAULT_PAGES = {
   reset: "/account/reset",
   confirmAddress: "/account/address",
   cancelAddressChange: "/account/address/cancel",
+  acceptInvitation: "/account/invitation",
 };
 
 /** The pages {@link accountsOptionsSchema} takes, each a path on the site. */
@@ -51,6 +52,8 @@ type PagesShape = {
   confirmAddress: z.ZodDefault<typeof sitePath>;
   /** Where the old address's link to cancel a change lands. */
   cancelAddressChange: z.ZodDefault<typeof sitePath>;
+  /** Where an invitation's link lands, to choose a password. */
+  acceptInvitation: z.ZodDefault<typeof sitePath>;
 };
 
 /** A session's limits. */
@@ -96,6 +99,8 @@ type AccountsOptionsShape = {
    * each shows what its link will do and asks the visitor to confirm.
    */
   pages: z.ZodDefault<z.ZodObject<PagesShape, z.core.$strict>>;
+  /** Whether visitors may make their own accounts, or the site lets people in only another way. */
+  signUp: z.ZodDefault<z.ZodEnum<{ open: "open"; closed: "closed" }>>;
   /** Whether an address must be verified before its account signs in. */
   verificationRequired: z.ZodDefault<z.ZodBoolean>;
   session: z.ZodDefault<z.ZodObject<SessionShape, z.core.$strict>>;
@@ -104,6 +109,8 @@ type AccountsOptionsShape = {
   verification: z.ZodDefault<z.ZodObject<VerificationShape, z.core.$strict>>;
   /** Minutes a password-reset link stays good. */
   resetLinkMinutes: z.ZodDefault<z.ZodNumber>;
+  /** Days an invitation's link stays good. */
+  invitationLinkDays: z.ZodDefault<z.ZodNumber>;
   /** Failed password checks in a row after which only a known browser, or a reset, gets in. */
   failuresBeforeReset: z.ZodDefault<z.ZodNumber>;
   knownBrowsers: z.ZodDefault<z.ZodObject<KnownBrowsersShape, z.core.$strict>>;
@@ -111,6 +118,8 @@ type AccountsOptionsShape = {
   passwordMinLength: z.ZodDefault<z.ZodNumber>;
   /** Whether new passwords are checked against known breached passwords. */
   breachedPasswordCheck: z.ZodDefault<z.ZodBoolean>;
+  /** The site's time zone, which times in its emails are written in. */
+  timeZone: z.ZodDefault<z.ZodString>;
 };
 
 const accountsOptionsSchema: z.ZodObject<AccountsOptionsShape, z.core.$strict> =
@@ -138,8 +147,17 @@ const accountsOptionsSchema: z.ZodObject<AccountsOptionsShape, z.core.$strict> =
           cancelAddressChange: sitePath.default(
             DEFAULT_PAGES.cancelAddressChange
           ),
+          /** Where an invitation's link lands, to choose a password. */
+          acceptInvitation: sitePath.default(DEFAULT_PAGES.acceptInvitation),
         })
         .default(DEFAULT_PAGES),
+      /**
+       * Whether visitors may make their own accounts. Open by default, so a
+       * site that never sets it keeps signing people up; closed, every
+       * sign-up is refused alike, whatever address it names, and accounts
+       * come only from the site's own code.
+       */
+      signUp: z.enum(["open", "closed"]).default("open"),
       /** Whether an address must be verified before its account signs in. */
       verificationRequired: z.boolean().default(true),
       session: z
@@ -173,6 +191,12 @@ const accountsOptionsSchema: z.ZodObject<AccountsOptionsShape, z.core.$strict> =
         }),
       /** Minutes a password-reset link stays good. */
       resetLinkMinutes: whole(15, 60).default(60),
+      /**
+       * Days an invitation's link stays good: a week by default, since an
+       * invited person may not read their email the same day, and never
+       * past the 30 days core keeps a one-purpose link for.
+       */
+      invitationLinkDays: whole(1, 30).default(7),
       /** Failed password checks in a row after which only a known browser, or a reset, gets in. */
       failuresBeforeReset: whole(10, 100).default(100),
       knownBrowsers: z
@@ -187,6 +211,15 @@ const accountsOptionsSchema: z.ZodObject<AccountsOptionsShape, z.core.$strict> =
       passwordMinLength: whole(8, 64).default(8),
       /** Whether new passwords are checked against known breached passwords. */
       breachedPasswordCheck: z.boolean().default(false),
+      /**
+       * The site's time zone, as an IANA name such as `Asia/Karachi`, which
+       * times in its emails are written in, such as when an invitation's
+       * link stops working. UTC when the site names none.
+       */
+      timeZone: z
+        .string()
+        .refine(isTimeZone, { message: "not a known IANA time zone" })
+        .default("UTC"),
       // No option of its own for a site that runs one instance: the plugin
       // reads core's `rateLimit.singleInstance`, through the limiter's store.
     })
@@ -199,6 +232,19 @@ const accountsOptionsSchema: z.ZodObject<AccountsOptionsShape, z.core.$strict> =
         message: "the idle expiry is longer than the absolute lifetime",
       }
     );
+
+/** Whether the runtime knows a time zone by this IANA name. */
+function isTimeZone(name: string): boolean {
+  // The formatter refuses a name it does not know with a RangeError.
+  try {
+    return (
+      Intl.DateTimeFormat("en", { timeZone: name }).resolvedOptions().timeZone
+        .length > 0
+    );
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The plugin's options as a site passes them.

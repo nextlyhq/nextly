@@ -29,7 +29,7 @@ import { DOCUMENT_VERSION_KEY } from "../../lib/system-columns";
 import type { ValidationIssue } from "../../shared/lib/entry-validation";
 import type { SanitizedLocalizationConfig } from "../i18n/config/types";
 import { isLocaleSelector } from "../i18n/locale-selector";
-import { isValidLocale } from "../i18n/resolve-locale";
+import { configuredLocale } from "../i18n/resolve-locale";
 
 import { snapshotRecord } from "./shared-publish-base";
 import type { VersionRow } from "./versions-repository";
@@ -249,14 +249,18 @@ export function rewriteLocaleFor(
       message: `The field "${request.field}" is translated, so a rewrite of it names one language.`,
     });
   }
-  if (localization && !isValidLocale(localization, locale)) {
+  if (!localization) return locale;
+  // An older spelling of a configured language is rewritten under the code its rows are stored
+  // under, never the spelling as sent.
+  const configured = configuredLocale(localization, locale);
+  if (configured === undefined) {
     throw NextlyError.invalidInput({
       message: `Unknown locale '${locale}'. Configured locales: ${localization.locales
         .map(l => l.code)
         .join(", ")}.`,
     });
   }
-  return locale;
+  return configured;
 }
 
 /** What {@link assertRewritableField} reads of a field. */

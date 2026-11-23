@@ -48,6 +48,10 @@ import { sql } from "drizzle-orm";
 
 import { serializeUiSchema } from "../../../cli/utils/ui-schema-writer";
 import { NextlyError } from "../../../errors/nextly-error";
+import type {
+  RefusedPartwayPublicData,
+  ValidationPublicData,
+} from "../../../errors/public-data";
 import {
   type UiSchemaEntity,
   type UiSchemaManifest,
@@ -57,6 +61,11 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { AddressKind } from "../../../shared/address-rule";
+import {
+  closeHoldingConnection,
+  holdCollectionOnConnection,
+  holdCollectionOnSession,
+} from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { statedMoment } from "../../dynamic-collections/services/stated-default";
 import {
@@ -82,6 +91,10 @@ import {
   translatedColumnNames,
 } from "../../i18n/migration/companion-unique-indexes";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
+import {
+  fieldsTranslatedThrough,
+  retypedCompanionColumns,
+} from "../../i18n/migration/plan-companion-type-change";
 import {
   mainTableFields,
   storesPerLanguage,
@@ -164,6 +177,7 @@ import {
   readForeignKeyTargets,
   readIndexColumns,
   readIndexUniqueness,
+  readUniqueIndexesByColumn,
   uniqueIndexNames,
 } from "../pipeline/live-table-facts";
 import { assertDeleteWithinThreshold } from "../pipeline/pre-cleanup/executor";
@@ -208,6 +222,7 @@ import { nextSteps, partlyAppliedChange } from "./landing-push";
 import {
   openSaveRecords,
   recordSaveStarted,
+  refuseBesideLeftSaves,
   withSaveRecords,
   type StartedSave,
 } from "./save-in-progress";
@@ -526,11 +541,15 @@ async function writeCollectionSaveOnce(
           buildsWholeTable: options.buildsWholeTable === true,
         });
         // The counts the person confirmed, compared just before the push: no transaction of the
-        // save's holds a push's statements, so nothing is held between the count and the delete.
-        await deletionHoldOfSave(deps, save, written.table)?.compare(
-          deps.adapter.getDrizzle()
+        // save's holds a push's statements, so on MySQL the collection is held from the count
+        // until the push has ended (`comparedThenApplied`).
+        const { appliedBy } = options;
+        const applied = await comparedThenApplied(
+          deps,
+          save,
+          written.table,
+          () => appliedBy()
         );
-        const applied = await options.appliedBy();
         // `"unchanged"`: nothing was pushed (an update of settings alone), so a failure recording
         // the files leaves nothing applied, and they are withdrawn as before any change.
         pushed = applied !== "unchanged";
@@ -563,11 +582,14 @@ async function writeCollectionSaveOnce(
         );
       } else if (options.appliedAfter !== undefined) {
         // The counts the person confirmed, compared just before the change is made here, as before
-        // a push: nothing holds the table between the count and the change's own statements.
-        await deletionHoldOfSave(deps, save, written.table)?.compare(
-          deps.adapter.getDrizzle()
+        // a push, and held the same way on MySQL (`comparedThenApplied`).
+        const { appliedAfter } = options;
+        const applied = await comparedThenApplied(
+          deps,
+          save,
+          written.table,
+          () => appliedAfter()
         );
-        const applied = await options.appliedAfter();
         pushed = true;
         if (applied === "partly-applied") written.started.left();
       }
@@ -1209,6 +1231,19 @@ async function writeSave(
 }> {
   if (options.historyChecked !== true) await checkSaveHistory(deps);
   const plan = await planSave(deps, save);
+  const after = serializeUiSchema(plan.next);
+  // A save left part-way refuses this one before anything is written, the work the caller does
+  // first (`beforeWrite`) included: a save refused as not started has written nothing. Its own
+  // entity's record too, where that record refuses it; the same save again goes on, told by the
+  // definition it writes.
+  await refuseBesideLeftSaves({
+    adapter: deps.adapter,
+    projectRoot: deps.projectRoot,
+    kind: kindOf(save).kind,
+    slug: save.slug,
+    definitionAfter: after,
+    notify: line => deps.logger.warn(line),
+  });
   // Each field whose type the save changes is judged over the values its column holds, before any
   // file is written: a blocked change, or a lossy one not consented to, refuses the save.
   await refuseSaveTypeChanges(deps, save, plan.table);
@@ -1234,7 +1269,6 @@ async function writeSave(
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   const before = await readIfPresent(definitionPath);
-  const after = serializeUiSchema(plan.next);
   // The moment the save's files are named for, fixed before the record so the record can say it:
   // a settle after a stop takes a file the record had not named yet only where it is of this one.
   const filesAt = save.now ?? new Date();
@@ -1453,11 +1487,28 @@ async function refuseSaveTypeChanges(
     ...componentRow,
   });
   if (changes.length === 0) return;
+  const translatedBefore = perLanguageBefore(save.previous, table, previous);
+  const translatedAfter = perLanguageAfter(save.entity, next);
   await refuseFieldTypeChanges(deps.adapter.getDrizzle(), dialect, {
     label: entityLabel(kind.kind, save.slug),
     table,
-    ...perLanguageBefore(save.previous, table, previous),
-    ...perLanguageAfter(save.entity, next),
+    ...translatedBefore,
+    ...translatedAfter,
+    // The save's file gives a translated field's translations column its new type where that
+    // column changes on this database (`retypes`), so only a column it leaves behind is refused.
+    // Only a collection's save runs that file (in development) or leaves it for `nextly migrate`:
+    // a Single's or field group's save in production is applied by its push, which changes no
+    // translations column's type, so theirs stays refused whatever the file carries.
+    ...(kind.kind === "collection"
+      ? await retypedBySaveFile(deps, {
+          slug: save.slug,
+          table,
+          next,
+          translatedAfter: translatedAfter.translatedAfter ?? new Set(),
+          dialect,
+          builtBy: kind.builtBy,
+        })
+      : {}),
     previous,
     next,
     renamed,
@@ -1467,6 +1518,46 @@ async function refuseSaveTypeChanges(
     builtBy: kind.builtBy,
     ...componentRow,
   });
+}
+
+/**
+ * The fields whose translations column a collection's save's own file gives the new type: those
+ * `migrate:create` plans its `retypes` file for, from the folder's newest snapshot, which the file
+ * is written after (`fieldsTranslatedThrough`, then `retypedCompanionColumns`), so the save counts
+ * on no column's new type the file does not carry. None where that snapshot records no fields for
+ * the collection, or does not keep its column in the translations table.
+ */
+async function retypedBySaveFile(
+  deps: CollectionSaveDeps,
+  args: {
+    slug: string;
+    table: string;
+    next: readonly FieldDefinition[];
+    translatedAfter: ReadonlySet<string>;
+    dialect: SupportedDialect;
+    builtBy: ColumnOrigin;
+  }
+): Promise<{ retypedTranslations: ReadonlySet<string> }> {
+  const latest = await loadLatestSnapshot(join(deps.migrationsDir, "meta"));
+  const fields = fieldsTranslatedThrough({
+    previousTable: latest?.data.snapshot.tables.find(
+      t => t.name === args.table
+    ),
+    recorded: latest?.data.entities?.collections[args.slug]?.settings.fields,
+    next: args.next,
+    translatedAfter: field => args.translatedAfter.has(field.name),
+    dialect: args.dialect,
+    builtBy: args.builtBy,
+  });
+  return {
+    retypedTranslations: new Set(
+      retypedCompanionColumns({
+        fields,
+        dialect: args.dialect,
+        builtBy: args.builtBy,
+      }).map(column => column.field)
+    ),
+  };
 }
 
 /**
@@ -3082,6 +3173,10 @@ async function generateFor(
       appLanguageOrder() ??
       deps.config.localization?.locales.map(locale => locale.code),
     onWarning: message => deps.logger.warn(message),
+    // An older unique index still holding a column whose field stops being unique, read from this
+    // database, so the file drops it too and every database it runs on ends the same.
+    liveUniqueIndexes: tableName =>
+      readUniqueIndexesByColumn(deps.adapter.getDrizzle(), dialect, tableName),
     scope: {
       kind: kindOf(args.save).kind,
       slug: args.save.slug,
@@ -3752,7 +3847,7 @@ async function runWritten(
   boundsRead: BusyTableBounds | undefined,
   inLastTransaction?: () => Promise<void>,
   /** The count of what the save deletes, checked in the file that deletes it (`deletionHoldOf`). */
-  hold?: DeletionHold
+  hold?: SaveDeletionHold
 ): Promise<void> {
   const db = deps.adapter.getDrizzle();
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -3768,24 +3863,26 @@ async function runWritten(
     unit: { source: string; transaction: boolean },
     after: (db: unknown, statementsExecuted: number) => Promise<void>
   ) =>
-    runUnitInTries(
-      deps.adapter,
-      splitSqlStatements(sql, dialect, unit),
-      unit,
-      inLastTransaction !== undefined && running === ordered.at(-1)
-        ? async (handle: unknown, statementsExecuted: number) => {
-            await after(handle, statementsExecuted);
-            await inLastTransaction();
-          }
-        : after,
-      {
-        bounds,
-        notify: line => deps.logger.warn(line),
-        appliedBefore: () => [...applied],
-        // In each file that deletes removed fields' values, for the values in the tables it is
-        // the last to change: before its first statement and inside its transaction, on every try.
-        ...beforeOf(holdIn.get(unit.source)),
-      }
+    // In each file that deletes removed fields' values, for the values in the tables it is the
+    // last to change: before its first statement and inside its transaction, on every try.
+    runHeld(deps, hold, holdIn.get(unit.source), held =>
+      runUnitInTries(
+        deps.adapter,
+        splitSqlStatements(sql, dialect, unit),
+        unit,
+        inLastTransaction !== undefined && running === ordered.at(-1)
+          ? async (handle: unknown, statementsExecuted: number) => {
+              await after(handle, statementsExecuted);
+              await inLastTransaction();
+            }
+          : after,
+        {
+          bounds,
+          notify: line => deps.logger.warn(line),
+          appliedBefore: () => [...applied],
+          ...held,
+        }
+      )
     );
   const ordered =
     files.change.length === 0 && files.adopt !== undefined
@@ -3800,7 +3897,7 @@ async function runWritten(
   // until the values are gone.
   const holdIn =
     hold === undefined
-      ? new Map<string, (db: unknown) => Promise<void>>()
+      ? new Map<string, readonly string[]>()
       : await deletingFilesOf(deps, ordered, hold);
   let before = await scopedSnapshotBefore(deps, ordered[0], table);
   if (await ranAsOneUnit()) return;
@@ -3822,18 +3919,21 @@ async function runWritten(
       // holds part of the save. The files already run stay recorded applied, this one and those
       // after it are kept, recorded nowhere, and the failure says so with what to run next, as a
       // push that failed part way says it.
-      // A count that changed is refused before the file's first statement, inside its run, and
-      // the file's runner reports it as the file failing: given back as the refusal it is.
-      const refusal = countRefusalOf(error) ?? error;
+      // A count that changed, or the collection held elsewhere, is refused before the file's first
+      // statement, inside its run, and the file's runner reports it as the file failing: given
+      // back as the refusal it is. On a try resumed past statements of the file that committed
+      // (MySQL), statements stayed: the part-way failure is given back, naming them, so the file
+      // is kept rather than withdrawn.
+      const refusal = holdRefusalOf(error) ?? error;
       if (applied.length > 0) {
         const kept = ordered.slice(applied.length);
         throw partlyAppliedChange(
-          refusal,
+          laterFileFailure(error),
           kept,
           await checkedFileOf(deps, kept)
         );
       }
-      throw refusal;
+      throw firstFileFailure(error, refusal);
     }
     applied.push(filename);
   }
@@ -3877,38 +3977,40 @@ async function runWritten(
     const adoptedWith = parts.findIndex(part => part.hasSnapshot);
     const adoption = pendingAdoption;
     try {
-      await runUnitInTries(
-        deps.adapter,
-        parts.flatMap(part => part.statements),
-        { source: ordered.join(", "), transaction: true },
-        async handle => {
-          for (const [index, part] of parts.entries()) {
-            await recordRunInTransaction(
-              {
-                file: part.unit,
-                dialect,
-                repo,
-                ...(index === adoptedWith && adoption !== undefined
-                  ? {
-                      recordApplied: (held: unknown) =>
-                        recordAlreadyApplied(adoption, repo.boundTo(held)),
-                    }
-                  : {}),
-              },
-              handle,
-              part.statements.length,
-              undefined
-            );
+      // Every file runs in this one transaction, the deleting one among them.
+      await runHeld(deps, hold, "whole", held =>
+        runUnitInTries(
+          deps.adapter,
+          parts.flatMap(part => part.statements),
+          { source: ordered.join(", "), transaction: true },
+          async handle => {
+            for (const [index, part] of parts.entries()) {
+              await recordRunInTransaction(
+                {
+                  file: part.unit,
+                  dialect,
+                  repo,
+                  ...(index === adoptedWith && adoption !== undefined
+                    ? {
+                        recordApplied: (held: unknown) =>
+                          recordAlreadyApplied(adoption, repo.boundTo(held)),
+                      }
+                    : {}),
+                },
+                handle,
+                part.statements.length,
+                undefined
+              );
+            }
+            await inLastTransaction?.();
+          },
+          {
+            bounds,
+            notify: line => deps.logger.warn(line),
+            appliedBefore: () => [],
+            ...held,
           }
-          await inLastTransaction?.();
-        },
-        {
-          bounds,
-          notify: line => deps.logger.warn(line),
-          appliedBefore: () => [],
-          // Every file runs in this one transaction, the deleting one among them.
-          ...beforeOf(hold?.check),
-        }
+        )
       );
     } catch (error) {
       // A lost race, a busy table's stop, and a count that changed are thrown as they are, as a
@@ -4312,34 +4414,276 @@ async function recordUnits(
   }
 }
 
-/** The run's `before` for a hold's count (`DeletionHold.check`), or none without one. */
-function beforeOf(check: ((db: unknown) => Promise<void>) | undefined): {
+/**
+ * The run's `before`, `beforeResume` and `settled` for a save's deletion hold (`hold`), counting
+ * the removed fields stored in `tables` (every one where `"whole"`), or none without one.
+ *
+ * On PostgreSQL and SQLite the count holds the tables itself (`deletionHoldOf`). On MySQL, whose
+ * schema statements commit on their own, the collection is held instead, on the try's own
+ * connection, before the count (`holdCollectionOnConnection`): an entry write that already read
+ * the collection's registry row commits first and is counted, and one that starts after waits at
+ * the collection's named locks until the try is over, then meets the new shape. The locks belong
+ * to the connection, so `settled` lets them go there, however the try ends.
+ *
+ * A MySQL try that ends waiting after statements that committed is resumed past them, and its hold
+ * ended with it, so a resumed try takes the hold again and counts again before its statements
+ * (`beforeResume`): the removed fields whose column still stands, a field an earlier try dropped
+ * having been counted under that try's hold.
+ */
+function triedHoldOf(
+  deps: CollectionSaveDeps,
+  hold: SaveDeletionHold | undefined,
+  /** The tables this run's files change, whose removed fields it counts; `"whole"`, every one. */
+  tables: readonly string[] | "whole" | undefined,
+  /** Told the connection a release failed on, to close once the try's transaction has ended. */
+  leftHeld: (connection: string) => void
+): {
   before?: (db: unknown) => Promise<void>;
+  beforeResume?: (db: unknown) => Promise<void>;
+  settled?: (db: unknown) => Promise<void>;
 } {
-  return check === undefined ? {} : { before: check };
+  if (hold === undefined || tables === undefined) return {};
+  const scope = tables === "whole" ? undefined : tables;
+  const check = scope === undefined ? hold.check : hold.checkIn(scope);
+  if (check === undefined) return {};
+  if (deps.adapter.getCapabilities().dialect !== "mysql") {
+    return { before: check };
+  }
+  const { slug } = hold;
+  const standing = hold.standingIn(scope);
+  // This try's hold: `before` (or `beforeResume`) and `settled` run in turn, one pair per try.
+  let held: Awaited<ReturnType<typeof holdCollectionOnConnection>> | undefined;
+  return {
+    before: async db => {
+      held = await holdCollectionOnConnection(deps.adapter, db, slug);
+      await check(db);
+    },
+    beforeResume: async db => {
+      // A resumed try runs past statements an earlier try made durable, so a refusal here comes
+      // after part of the file landed, schema or data: told as part-way (`refusedPartway`), with
+      // the step to settle it, so the file is kept rather than withdrawn. Any other failure, a
+      // wait that ends the try among them, goes on as it is.
+      try {
+        held = await holdCollectionOnConnection(deps.adapter, db, slug);
+        await standing(db);
+      } catch (error) {
+        const refusal = holdRefusalOf(error);
+        throw NextlyError.is(refusal)
+          ? refusedPartway(
+              refusal,
+              "What of its migration file ran stayed applied, so the file is kept: settle it with `nextly migrate:resolve` before saving again."
+            )
+          : error;
+      }
+    },
+    settled: async () => {
+      const releasing = held;
+      held = undefined;
+      // A release that fails is told and passed over, so the try ends as its statements did. Its
+      // connection may still hold the locks, so it is closed once the try's transaction has ended
+      // (`runHeld`) rather than going back to the pool held.
+      await releasing?.release().catch((error: unknown) => {
+        deps.logger.warn(
+          `Collection '${slug}': its hold for the save could not be let go on the migration's connection (${error instanceof Error ? error.message : String(error)}); that connection is closed once the migration's try is over.`
+        );
+        leftHeld(releasing.connection);
+      });
+    },
+  };
+}
+
+/**
+ * `run`, a unit run in tries, given the hold's hooks for the removed fields stored in `tables`
+ * (`triedHoldOf`); once it has ended, however it ended, each connection a release failed on is
+ * closed (`closeHoldingConnection`), its transaction over by then.
+ */
+async function runHeld<T>(
+  deps: CollectionSaveDeps,
+  hold: SaveDeletionHold | undefined,
+  tables: Parameters<typeof triedHoldOf>[2],
+  run: (hooks: ReturnType<typeof triedHoldOf>) => Promise<T>
+): Promise<T> {
+  const leftHeld: string[] = [];
+  try {
+    return await run(
+      triedHoldOf(deps, hold, tables, connection => {
+        leftHeld.push(connection);
+      })
+    );
+  } finally {
+    for (const connection of leftHeld) {
+      await closeHoldingConnection(deps.adapter, connection);
+    }
+  }
+}
+
+/** `apply` under the save's count and hold (`countedThroughApply`), for the save's deletion hold. */
+function comparedThenApplied<T>(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string,
+  apply: () => Promise<T>
+): Promise<T> {
+  return countedThroughApply(
+    deps.adapter,
+    save.slug,
+    deletionHoldOfSave(deps, save, table),
+    apply,
+    deps.logger
+  );
+}
+
+/**
+ * `apply` (a push, or the change a caller makes outside a migration file) once the count of what
+ * it deletes is compared with the one the person confirmed (`DeletionHold.compare`), where there
+ * is a count (`hold`); without one, `apply` alone.
+ *
+ * On MySQL collection `slug` is held first, on a connection of its own, from before the count
+ * until `apply` has ended, however it ended (`holdCollectionOnSession`): `apply` runs on
+ * connections of its own, and an entry write waits at the collection's named locks wherever it
+ * runs, so a write under way at the count is counted, and one sent after it meets the new shape.
+ * On PostgreSQL and SQLite nothing more is held, as before.
+ */
+export async function countedThroughApply<T>(
+  adapter: DrizzleAdapter,
+  slug: string,
+  hold: DeletionHold | undefined,
+  apply: () => Promise<T>,
+  /** Told a release that failed, which changes nothing of what `apply` did. */
+  logger: { warn(message: string): void }
+): Promise<T> {
+  if (hold === undefined) return apply();
+  const compare = () => hold.compare(adapter.getDrizzle());
+  if (adapter.getCapabilities().dialect !== "mysql") {
+    await compare();
+    return apply();
+  }
+  return adapter.withSession(async session => {
+    const { release } = await holdCollectionOnSession(adapter, session, slug);
+    try {
+      await compare();
+      return await apply();
+    } finally {
+      // A release that fails is told and passed over: what `apply` did, or how it failed, is
+      // what the caller sees, and the session's connection is closed once this ends, which lets
+      // its named locks go.
+      await release().catch((error: unknown) => {
+        logger.warn(
+          `Collection '${slug}': its hold for the save could not be let go on its own connection (${error instanceof Error ? error.message : String(error)}); closing that connection lets it go.`
+        );
+      });
+    }
+  });
+}
+
+/**
+ * The failure of a save's file after an earlier file of the save applied: a hold's refusal
+ * (`holdRefusalOf`) told as part-way (`refusedPartway`), any other failure as it is. The files
+ * kept and the steps to settle them follow it (`partlyAppliedChange`).
+ */
+function laterFileFailure(error: unknown): unknown {
+  const refusal = holdRefusalOf(error);
+  return NextlyError.is(refusal) ? refusedPartway(refusal) : error;
+}
+
+/**
+ * A hold's refusal met where part of the save's change has already landed, told as the part-way
+ * failure it is: `NEXTLY_MIGRATION_PARTIALLY_APPLIED`, with the refusal as its cause. Its message
+ * says why the save stopped and never the refusal's own "save again" or "try again in a moment":
+ * what ran stayed applied, and a save made before that is settled meets it. The refusal's code and
+ * issues go under `publicData.refused`, not at the top, where a client shows them in the message's
+ * place. `then`, the step to settle it, follows where the caller adds none after it.
+ */
+function refusedPartway(refusal: NextlyError, then?: string): NextlyError {
+  const issues = (
+    refusal.publicData as Partial<ValidationPublicData> | undefined
+  )?.errors;
+  const publicData: RefusedPartwayPublicData = {
+    refused: {
+      code: refusal.code,
+      ...(issues === undefined ? {} : { errors: issues }),
+    },
+  };
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+    publicMessage: `The save stopped part way, after part of it had applied: ${refusedBecause(refusal)}.${then === undefined ? "" : ` ${then}`}`,
+    publicData,
+    logMessage: refusal.logMessage,
+    logContext: { reason: "partially-applied", refusedAs: refusal.code },
+    cause: refusal,
+  });
+}
+
+/**
+ * Why a hold refused a save (`holdRefusalOf`), in words that hold once part of it applied: each
+ * field whose count changed, by the counts its refusal logged, or the collection held elsewhere.
+ */
+function refusedBecause(refusal: NextlyError): string {
+  if (!isDeletionCountRefusal(refusal)) {
+    return "the collection was being changed elsewhere";
+  }
+  const fields =
+    (
+      refusal.logContext as
+        | {
+            fields?: readonly {
+              field: string;
+              counted: number | null;
+              confirmed: number;
+            }[];
+          }
+        | undefined
+    )?.fields ?? [];
+  if (fields.length === 0) {
+    return "the count of what it deletes changed, so those values were not deleted";
+  }
+  return fields
+    .map(({ field, counted, confirmed }) =>
+      counted === null
+        ? `the values of ${field} could not be counted again, so they were not deleted`
+        : `${field} now holds ${String(counted)} value(s), not the ${String(confirmed)} confirmed, so they were not deleted`
+    )
+    .join("; ");
+}
+
+/**
+ * The failure a save gives back when its first file fails: the part-way failure itself where
+ * statements of the file stayed (`partlyApplied`), so the file is kept for the operator to finish,
+ * else `refusal`, the hold's refusal it carries or the failure as it is.
+ */
+function firstFileFailure(error: unknown, refusal: unknown): unknown {
+  return partlyApplied(error) ? error : refusal;
 }
 
 /**
  * Whether a failure of the save's one unit reaches the caller as it is, as a file run alone throws
- * it: a lost race, a busy table's stop, and a count that changed (`isDeletionCountRefusal`). Any
- * other names the file whose statement the database refused.
+ * it: a lost race, a busy table's stop, a collection held elsewhere, and a count that changed
+ * (`isDeletionCountRefusal`). Any other names the file whose statement the database refused.
  */
 function passesThroughAsIs(error: unknown): boolean {
   return (
     isConcurrentRun(error) ||
     NextlyError.isCode(error, "NEXTLY_TABLE_BUSY") ||
+    // The collection held elsewhere past the hold's wait, on MySQL (`triedHoldOf`): nothing of
+    // the save ran.
+    NextlyError.isCode(error, "COLLECTION_BEING_CHANGED") ||
     isDeletionCountRefusal(error)
   );
 }
 
 /**
- * The refusal of a count that changed (`isDeletionCountRefusal`) in `error`, itself or as the cause
- * a file's runner wrapped it in (`applyFailedError`); undefined for any other failure.
+ * The refusal the deletion hold made before a file's first statement in `error`, itself or as the
+ * cause a file's runner wrapped it in (`applyFailedError`): a count that changed
+ * (`isDeletionCountRefusal`), or the collection held elsewhere past the hold's wait on MySQL
+ * (`triedHoldOf`). Undefined for any other failure.
  */
-function countRefusalOf(error: unknown): unknown {
-  if (isDeletionCountRefusal(error)) return error;
+function holdRefusalOf(error: unknown): unknown {
+  const isHoldRefusal = (candidate: unknown): boolean =>
+    isDeletionCountRefusal(candidate) ||
+    NextlyError.isCode(candidate, "COLLECTION_BEING_CHANGED");
+  if (isHoldRefusal(error)) return error;
   const cause = NextlyError.is(error) ? error.cause : undefined;
-  return isDeletionCountRefusal(cause) ? cause : undefined;
+  return isHoldRefusal(cause) ? cause : undefined;
 }
 
 /**
@@ -4351,8 +4695,8 @@ function deletionHoldOfSave(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   table: string
-): DeletionHold | undefined {
-  return deletionHoldOf({
+): SaveDeletionHold | undefined {
+  const hold = deletionHoldOf({
     dialect: deps.adapter.getCapabilities().dialect,
     tableName: table,
     localized: save.previous?.localized === true,
@@ -4361,29 +4705,34 @@ function deletionHoldOfSave(
     renamed: save.renamedFields,
     confirmed: save.confirmedDeletions,
   });
+  return hold === undefined ? undefined : { ...hold, slug: save.slug };
+}
+
+/** A save's deletion hold, with the collection it holds on MySQL (`triedHoldOf`). */
+interface SaveDeletionHold extends DeletionHold {
+  readonly slug: string;
 }
 
 /**
- * Where a file-by-file run of `ordered` counts what `hold` deletes, by file: each held table in the
- * last file whose statements change it (`fileDeletingFrom`), which deletes its values after any
- * file that converts it.
+ * Where a file-by-file run of `ordered` counts what `hold` deletes: the held tables each file counts,
+ * each in the last file whose statements change it (`fileDeletingFrom`), which deletes its values
+ * after any file that converts it. A file whose tables hold no removed field's values is left out.
  */
 async function deletingFilesOf(
   deps: CollectionSaveDeps,
   ordered: readonly string[],
   hold: DeletionHold
-): Promise<Map<string, (db: unknown) => Promise<void>>> {
+): Promise<Map<string, readonly string[]>> {
   const deleting = await fileDeletingFrom(deps, ordered, hold.tables);
   const tablesByFile = new Map<string, string[]>();
   for (const [table, filename] of deleting) {
     tablesByFile.set(filename, [...(tablesByFile.get(filename) ?? []), table]);
   }
-  const checks = new Map<string, (db: unknown) => Promise<void>>();
+  // A file whose tables hold no removed field's values counts nothing.
   for (const [filename, tables] of tablesByFile) {
-    const check = hold.checkIn(tables);
-    if (check !== undefined) checks.set(filename, check);
+    if (hold.checkIn(tables) === undefined) tablesByFile.delete(filename);
   }
-  return checks;
+  return tablesByFile;
 }
 
 /**

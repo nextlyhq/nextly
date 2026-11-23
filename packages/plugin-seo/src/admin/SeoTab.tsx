@@ -28,7 +28,7 @@ import type { DISPLAY_FIELDS } from "./display-rows";
 import { SeoPanel } from "./SeoPanel";
 import { useShareImages } from "./share-images";
 import { publishSeoStatus, statusKeyOf } from "./status";
-import { useTabDocument, withValueAt } from "./tab-document";
+import { judgedDocument, useTabDocument, withValueAt } from "./tab-document";
 import { useSeoTabContext } from "./use-seo-tab-context";
 import {
   panelAnswers,
@@ -224,20 +224,24 @@ function contentOpener(elsewhere: SeoTabElsewhere): () => void {
 
 /**
  * The whole document as typed: any of its fields can feed an automatic value
- * (a title, an excerpt, a pattern's field, its address). With a value the
- * form does not hold yet put at its path.
+ * (a title, an excerpt, a pattern's field, its address). Over the saved
+ * entry, for the dates the form does not hold, and with a value the form
+ * does not hold yet put at its path.
  */
 export function useTypedDocument(
   control: DocumentTabProps["control"],
-  unsaved: SeoTabElsewhere["unsaved"]
+  unsaved: SeoTabElsewhere["unsaved"],
+  // The saved entry, where the caller has one: a result panel that draws
+  // only the title and description reads none of its dates.
+  entry?: DocumentTabProps["entry"]
 ): Record<string, unknown> {
   const typed = useWatch({ control }) as Record<string, unknown>;
   const path = unsaved?.path;
   const value = unsaved?.value;
-  return useMemo(
-    () => (path === undefined ? typed : withValueAt(typed, path, value)),
-    [typed, path, value]
-  );
+  return useMemo(() => {
+    const document = judgedDocument(typed, entry);
+    return path === undefined ? document : withValueAt(document, path, value);
+  }, [typed, entry, path, value]);
 }
 
 export function SeoTab({
@@ -248,7 +252,7 @@ export function SeoTab({
   setBadge,
   ...elsewhere
 }: DocumentTabProps & SeoTabElsewhere): ReactNode {
-  const document = useTypedDocument(control, elsewhere.unsaved);
+  const document = useTypedDocument(control, elsewhere.unsaved, entry);
   const fields = useSeoFields();
   const errors = useSeoErrors(control);
   const { target, documentKey } = useTabDocument(context, entry);

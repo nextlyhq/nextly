@@ -41,8 +41,9 @@ import {
 } from "./retired-documents";
 import { leadingWords } from "./split-sql";
 import {
+  assertForeignKeysOff,
   refusingNewDanglingReferences,
-  sqliteForeignKeysOn,
+  sqliteSchemaTransaction,
   withSqliteForeignKeysOff,
   type SqliteForeignKeySession,
 } from "./sqlite-foreign-keys";
@@ -89,6 +90,26 @@ export interface StatementTryBound {
    * transaction, or MySQL's schema statements, which commit on their own) does not run it again.
    */
   readonly before?: (db: unknown) => Promise<void>;
+  /**
+   * Run after every try that ran `before`, with the same handle, however the try ends: its
+   * statements all ran, one failed, or it ended waiting. Inside the unit's transaction it runs
+   * before the commit or the rollback, so the connection is still the try's: what `before` took that
+   * belongs to the connection rather than to the transaction (a MySQL named lock) is let go there,
+   * before the pool hands the connection to other work. A cancel the try's watch decided lands
+   * before it, never on it. Its failure after a try that failed is passed over, so the try's own
+   * failure is what the caller sees; after a try that succeeded it is thrown. Absent, or on a try
+   * that did not run `before`, nothing runs.
+   */
+  readonly settled?: (db: unknown) => Promise<void>;
+  /**
+   * Run on a try that resumes past statements an earlier try made durable (`from` above 0), in
+   * `before`'s place and as `before` runs: before the try's first statement, with the handle its
+   * statements run on, under the try's bounds, and followed by `settled` however the try ends.
+   * What `before` took on an earlier try was let go when that try ended, so a caller whose hold
+   * must cover the statements still to run takes it again here. Absent, a resumed try runs as it
+   * always has.
+   */
+  readonly beforeResume?: (db: unknown) => Promise<void>;
   /** Told the id of the connection the unit's statements run on, once it is known. */
   readonly onSession?: (session: string) => void;
   /**
@@ -255,42 +276,29 @@ export async function executeTransaction<T>(
     );
   }
 
-  // The adapter outside the transaction for the pragma switch, which
-  // SQLite ignores inside one; the transaction's own connection for the
-  // reads that must see the unit's state.
-  const outside: SqliteForeignKeySession = {
-    read: statement => adapter.executeQuery(statement),
-    run: async statement => {
-      await adapter.executeQuery(statement);
+  // SQLite's contract for a change to a table's shape, shared with the dev push
+  // (`sqliteSchemaTransaction`); a busy answer inside it is this process
+  // waiting for its own lock (`refusingOwnWriteLockWait`).
+  return sqliteSchemaTransaction(
+    adapter,
+    ctx =>
+      work({
+        execute: async statement => {
+          await ctx.execute(statement);
+        },
+        db: ctx.getDrizzle(),
+        // SQLite has no setting a statement can change that reroutes a
+        // table name: ATTACH and DETACH are refused before anything runs.
+        restoreSession: () => Promise.resolve(),
+        // SQLite names no connection: its busy timeout bounds the one write lock.
+        session: () => Promise.resolve(undefined),
+      }),
+    {
+      subject: "this migration",
+      dangling: (count, pairs) =>
+        `This migration would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`,
     },
-  };
-  return withSqliteForeignKeysOff(outside, () =>
-    adapter.transaction(ctx =>
-      refusingOwnWriteLockWait(change, async () => {
-        const inside = {
-          read: <R>(statement: string) =>
-            ctx.queryStatement<R>(sql.raw(statement)),
-        };
-        await assertForeignKeysOff(inside);
-        return refusingNewDanglingReferences(
-          inside,
-          () =>
-            work({
-              execute: async statement => {
-                await ctx.execute(statement);
-              },
-              db: ctx.getDrizzle(),
-              // SQLite has no setting a statement can change that reroutes a
-              // table name: ATTACH and DETACH are refused before anything runs.
-              restoreSession: () => Promise.resolve(),
-              // SQLite names no connection: its busy timeout bounds the one write lock.
-              session: () => Promise.resolve(undefined),
-            }),
-          (count, pairs) =>
-            `This migration would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`
-        );
-      })
-    )
+    run => refusingOwnWriteLockWait(change, run)
   );
 }
 
@@ -351,23 +359,6 @@ export function ownWriteLockError(
     ].join("\n"),
     logContext: { reason: "own-write-lock" },
     ...(cause instanceof Error ? { cause } : {}),
-  });
-}
-
-/**
- * Refuses a unit before its first statement when foreign-key enforcement is
- * still on after the runner switched it off: another transaction was open on
- * SQLite's one connection, so the pragma did nothing.
- */
-async function assertForeignKeysOff(
-  session: Pick<SqliteForeignKeySession, "read">
-): Promise<void> {
-  if (!(await sqliteForeignKeysOn(session))) return;
-  throw new NextlyError({
-    code: "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION",
-    publicMessage:
-      "Foreign-key enforcement could not be switched off for this migration, because another transaction was open on the connection. Nothing was applied; re-run it once that transaction has finished.",
-    logContext: { reason: "enforcement-still-on" },
   });
 }
 
@@ -795,6 +786,64 @@ export async function boundSessionTry<T>(
   }
 }
 
+/**
+ * One try's `before` (or `beforeResume`) and `settled` (`StatementTryBound`): `bound` is `given`
+ * with each noting the handle it ran on, and `around` runs `settled` on that same handle once the
+ * try's work has ended, however it ended, where either ran.
+ */
+function heldTry(given: StatementTryBound | undefined): {
+  bound: StatementTryBound | undefined;
+  around<T>(work: () => Promise<T>): Promise<T>;
+} {
+  // The handle `before` ran on, once it has: `settled` runs on it.
+  let heldOn: { db: unknown } | undefined;
+  const settle = async (failed: boolean): Promise<void> => {
+    const held = heldOn;
+    heldOn = undefined;
+    if (held === undefined || given?.settled === undefined) return;
+    const { settled } = given;
+    // A cancel the try's watch decided is finished first, so it never ends this.
+    const settling = (async () => {
+      await given.beforeStatement?.();
+      await settled(held.db);
+    })();
+    // After a failed try its own failure is what the caller sees.
+    if (failed) await settling.catch(() => undefined);
+    else await settling;
+  };
+  // `before` and `beforeResume`, each noting the handle it ran on.
+  const noting = (hook: ((db: unknown) => Promise<void>) | undefined) =>
+    hook === undefined
+      ? undefined
+      : async (db: unknown) => {
+          heldOn = { db };
+          await hook(db);
+        };
+  const before = noting(given?.before);
+  const beforeResume = noting(given?.beforeResume);
+  return {
+    bound:
+      given === undefined
+        ? given
+        : {
+            ...given,
+            ...(before === undefined ? {} : { before }),
+            ...(beforeResume === undefined ? {} : { beforeResume }),
+          },
+    async around(work) {
+      let failed = false;
+      try {
+        return await work();
+      } catch (error) {
+        failed = true;
+        throw error;
+      } finally {
+        await settle(failed);
+      }
+    },
+  };
+}
+
 /** `runMigrationStatements`'s unit, run once, bounded as one try where `bound` is given. */
 async function runUnitStatements(
   adapter: DrizzleAdapter,
@@ -803,8 +852,12 @@ async function runUnitStatements(
   after:
     | ((db: unknown, statementsExecuted: number) => Promise<void>)
     | undefined,
-  bound: StatementTryBound | undefined
+  boundGiven: StatementTryBound | undefined
 ): Promise<number> {
+  // This try's `before` and `settled`, on the handle its statements run on (`heldTry`): `bound`
+  // is the one given, with its `before` noting that handle.
+  const held = heldTry(boundGiven);
+  const { bound } = held;
   const dialect = adapter.getCapabilities().dialect;
   // A column made required after an earlier statement of the unit filled its rows is counted at
   // its statement, after the fill, through the handle the statements run on; undefined when the
@@ -858,6 +911,7 @@ async function runUnitStatements(
         for (const setting of settingsBefore) await tx.execute(sent(setting));
         // Inside the transaction, before the first statement, on every try that starts there: a
         // MySQL try resumed after statements that committed on their own skips it, as below.
+        if (from > 0) await bound?.beforeResume?.(tx.db);
         if (from === 0) await bound?.before?.(tx.db);
         // The documents of each entity whose main table the unit drops, named before the drop and
         // committed or rolled back with it (`retired-documents.ts`).
@@ -926,8 +980,11 @@ async function runUnitStatements(
         // here would report it as not recorded.
         if (dialect !== "mysql") await assertSchemaLockHeld();
       });
+    // `settled` runs inside the transaction, before its commit or rollback, on the try's connection.
+    const inTransactionHeld = (tx: MigrationTransaction) =>
+      held.around(() => inTransaction(tx));
     // A stop for this process's own write lock names the unit, as the operator knows it.
-    await executeTransaction(adapter, inTransaction, unit.source);
+    await executeTransaction(adapter, inTransactionHeld, unit.source);
     return statements.length;
   }
   // On SQLite outside a transaction each statement takes the write lock anew: the try's one
@@ -944,6 +1001,7 @@ async function runUnitStatements(
     // Before the first statement, on the session the statements run on, on every try that starts
     // there. A try resumed past statements that committed as they ran skips it: what it read is
     // already changed by them, and a refusal now would undo none of them.
+    if (from > 0) await bound?.beforeResume?.(checkpointDb);
     if (from === 0) await bound?.before?.(checkpointDb);
     // Outside a transaction nothing holds the table between the capture and the drop: best effort.
     await captureRetiredDocuments(
@@ -989,6 +1047,11 @@ async function runUnitStatements(
     );
     await bound?.settle?.();
   };
+  // `settled` follows on the handle the statements ran on, however they ended.
+  const runEachHeld = (
+    execute: (statement: string) => Promise<unknown>,
+    checkpointDb: unknown
+  ): Promise<void> => held.around(() => runEach(execute, checkpointDb));
   const onPool = (statement: string) => adapter.executeQuery(statement);
   if (dialect === "sqlite") {
     const session: SqliteForeignKeySession = {
@@ -998,10 +1061,10 @@ async function runUnitStatements(
       },
     };
     await withSqliteForeignKeysOff(session, async () => {
-      await assertForeignKeysOff(session);
+      await assertForeignKeysOff(session, "this migration");
       await refusingNewDanglingReferences(
         session,
-        () => runEach(onPool, adapter.getDrizzle()),
+        () => runEachHeld(onPool, adapter.getDrizzle()),
         (count, pairs) =>
           `${unit.source} ran outside a transaction, and left ${String(count)} row(s) referencing rows that do not exist (${pairs}). Its statements stayed applied: repair or remove those rows${unit.direction === "down" ? "" : `, then ${markAppliedAdvice(unit.source)}`}.`
       );
@@ -1016,7 +1079,7 @@ async function runUnitStatements(
     await adapter.withSession(
       session => {
         const each = () =>
-          runEach(
+          runEachHeld(
             statement => session.execute(statement),
             sessionReader(session, dialect)
           );
@@ -1031,14 +1094,14 @@ async function runUnitStatements(
     // holds and closes afterwards, rather than each statement on whichever pooled one is free.
     await adapter.withSession(session =>
       boundSessionTry(session, dialect, bound, () =>
-        runEach(
+        runEachHeld(
           statement => session.execute(statement),
           sessionReader(session, dialect)
         )
       )
     );
   } else {
-    await runEach(onPool, adapter.getDrizzle());
+    await runEachHeld(onPool, adapter.getDrizzle());
   }
   if (after !== undefined) {
     await assertSchemaLockHeld();

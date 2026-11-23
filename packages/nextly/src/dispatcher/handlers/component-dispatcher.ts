@@ -948,6 +948,7 @@ export const COMPONENTS_METHODS: Record<
             builderSchemaPush({
               dialect,
               db,
+              adapter,
               databaseName,
               slug,
               kind: "component",
@@ -957,6 +958,16 @@ export const COMPONENTS_METHODS: Record<
                 legacyBundle,
               ],
               firstQuestion,
+              // A translated field's values the companion reconcile after the push drops, asked of
+              // the push by field name, as the save's file road asks them.
+              fields: {
+                tableName,
+                builtBy: "fieldGroup",
+                oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                wasLocalized,
+                isLocalized,
+              },
             }),
             dialect,
             firstQuestion

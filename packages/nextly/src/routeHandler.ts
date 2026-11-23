@@ -74,12 +74,14 @@ import {
   renewLock,
 } from "./api/document-lock";
 import { buildErrorResponse } from "./api/error-response";
+import { handleFileRoute } from "./api/file-routes";
 import {
   getGeneralSettings,
   updateGeneralSettings,
 } from "./api/general-settings";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
+import { withLanguageCodeDeprecation } from "./api/language-code-deprecation";
 import { changeLanguages, getLanguages } from "./api/languages";
 import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
 import { getPluginPanelNumbers } from "./api/plugin-panel-numbers";
@@ -101,7 +103,7 @@ import {
   respondData,
   respondMutation,
 } from "./api/response-shapes";
-import { getRolesScreen } from "./api/roles-screen";
+import { getRolesScreen, setClosedToSuperAdmin } from "./api/roles-screen";
 import { getSchemaJournal } from "./api/schema-journal";
 import { getTranslationWorklist } from "./api/translations";
 import {
@@ -160,6 +162,7 @@ import {
   widgetAudience,
   type WidgetAudience,
 } from "./domains/widgets/visibility";
+import { readableAttachedEntities } from "./domains/workflows/readable-attached";
 import { genericPublicMessage } from "./errors/error-codes";
 import { NextlyError } from "./errors/nextly-error";
 import { retryAfterHeader } from "./errors/retry-after";
@@ -432,6 +435,7 @@ async function handleApiKeyRequest(
  */
 const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
+  "files",
   "webhooks",
   "releases",
   "workflows",
@@ -1796,6 +1800,12 @@ async function serveServiceRequest(
     return handleDocumentLockRequest(req, method);
   }
 
+  // A collection's private files: the handler recognises staff and the
+  // signed-in people the collection names, and boots the app itself.
+  if (service === "files") {
+    return handleFileRoute(req, method, routeParams ?? {});
+  }
+
   // ==================== TRANSLATIONS DIRECT DISPATCH ====================
   // Owns its auth (requireAuthentication) and is read-only, so it intercepts
   // here for the same reason dashboard does: before `req.text()`, which a GET
@@ -1819,10 +1829,14 @@ async function serveServiceRequest(
   }
 
   // ==================== ROLES SCREEN DIRECT DISPATCH ====================
-  // Owns its auth (the `read-roles` permission the roles list asks). Read-only
-  // GET, so there is no body to consume.
+  // Each handler owns its auth: the listing asks the `read-roles` permission
+  // the roles list asks; the change of a collection's closed-to-super-admin
+  // mark asks a super-admin's session, the site's origin and their password,
+  // and reads its own body.
   if (service === "rolesScreen") {
-    return getRolesScreen(req);
+    return method === "setClosedToSuperAdmin"
+      ? setClosedToSuperAdmin(req)
+      : getRolesScreen(req);
   }
 
   // ==================== AUTHENTICATION & AUTHORIZATION ====================
@@ -2664,6 +2678,12 @@ async function handleAdminMetaWorkspaceRequest(
   const { workspace } = await withCurrentLanguages(() =>
     buildAdminMeta(audience, offerTo)
   );
+  // The collections and Singles a workflow holds that this reader may read, by slug: the admin
+  // asks for a document's review state, and whether anything can wait for its reader, only where
+  // one can. Answered from the registered workflows with no read at all when none is attached.
+  workspace.workflowEntities = [
+    ...(await readableAttachedEntities(caller)),
+  ].sort();
   return withSessionCacheHeaders(respondAdminMeta(workspace));
 }
 
@@ -3081,9 +3101,10 @@ export function createDynamicHandlers(options?: {
     // which is the join the diagnostics exist for.
     const effectiveRequestId =
       response.headers.get("x-request-id") ?? readOrGenerateRequestId(req);
-    const identifiedResponse = withRequestIdHeader(
-      response,
-      effectiveRequestId
+    const identifiedResponse = withLanguageCodeDeprecation(
+      req,
+      withRequestIdHeader(response, effectiveRequestId),
+      appLocalization()
     );
     // Every verb's server error, counted toward System health's "errors in
     // the last 24 hours"; once per request, however many boundaries it passed.

@@ -7,6 +7,7 @@
  */
 import {
   addressableFields,
+  entryDateFieldNames,
   humanizeFieldName,
   NextlyError,
   publicAddressOf,
@@ -61,9 +62,11 @@ const labelOfField = (field: Record<string, unknown>, name: string): string =>
 
 /**
  * The type's own fields a structured data detail may be read from: every
- * field the entry itself holds but its SEO group, labelled as the admin
- * labels it, and each field inside a named group by its path
- * (`event.startsAt`), which a detail reads as it reads any other.
+ * field the entry itself holds, labelled as the admin labels it, and each
+ * field inside a named group by its path (`event.startsAt`), which a detail
+ * reads as it reads any other. The plugin's own SEO group is not one of the
+ * type's fields, so it is not listed itself; its fields are, by their path
+ * and marked as its, since a page reads a detail mapped to one.
  */
 function mappableFieldsOf(
   declared: readonly Record<string, unknown>[],
@@ -71,6 +74,10 @@ function mappableFieldsOf(
 ): MappableField[] {
   const fields: MappableField[] = [];
   for (const field of declared) {
+    if (within === undefined && isSeoGroup(field)) {
+      fields.push(...mappableFieldsOf(entryFields(field.fields), SEO_GROUP));
+      continue;
+    }
     const own = mappableField(field, within);
     if (own === undefined) continue;
     fields.push(own);
@@ -81,22 +88,63 @@ function mappableFieldsOf(
   return fields;
 }
 
-/** One field as a mapping choice, inside `within` where it is in a group. */
+/** The plugin's own SEO group, as the fields inside it are named. */
+const SEO_GROUP: MappableField = { name: "seo", label: "SEO", kind: "seo" };
+
+/** Whether a top-level field is the SEO group the plugin adds. */
+const isSeoGroup = (field: Record<string, unknown>): boolean =>
+  field.name === SEO_GROUP.name;
+
+/**
+ * One field as a mapping choice, inside `within` where it is in a group,
+ * keeping where that group comes from.
+ */
 function mappableField(
   field: Record<string, unknown>,
   within: MappableField | undefined
 ): MappableField | undefined {
   const { name } = field;
   if (typeof name !== "string" || name === "") return undefined;
-  if (within === undefined) {
-    return name === "seo"
-      ? undefined
-      : { name, label: labelOfField(field, name) };
-  }
+  if (within === undefined) return { name, label: labelOfField(field, name) };
   return {
     name: `${within.name}.${name}`,
     label: `${within.label} › ${labelOfField(field, name)}`,
+    ...(within.kind === undefined ? {} : { kind: within.kind }),
   };
+}
+
+/**
+ * The entry's own dates as the admin names them elsewhere (an entry's
+ * details, a list's columns), by the names core publishes them under.
+ */
+const ENTRY_DATE_LABELS: Readonly<Record<string, string>> = {
+  createdAt: "Created",
+  updatedAt: "Updated",
+  firstPublishedAt: "First published",
+};
+
+/**
+ * Every field a structured data detail may be read from: the type's own,
+ * then the dates every entry holds by itself, which core names
+ * (`entryDateFieldNames`), the first publication only where the type has
+ * the Draft/Published lifecycle (`status: true`). A page reads a detail
+ * mapped to one of these dates as it reads a declared field.
+ */
+function readableFieldsOf(
+  declared: readonly Record<string, unknown>[],
+  entity: "collection" | "single",
+  record: Record<string, unknown>
+): MappableField[] {
+  const dates = entryDateFieldNames(entity, {
+    statusLifecycle: record.status === true,
+  }).map(
+    (name): MappableField => ({
+      name,
+      label: ENTRY_DATE_LABELS[name] ?? humanizeFieldName(name),
+      kind: "built-in",
+    })
+  );
+  return [...mappableFieldsOf(declared), ...dates];
 }
 
 /**
@@ -192,7 +240,7 @@ async function contentTypeOf(
       label: field.label,
     }))
   );
-  const mappableFields = mappableFieldsOf(declared);
+  const mappableFields = readableFieldsOf(declared, "collection", record);
   const isPublic = !withoutAddress.has(slug);
   // An example only from what the reader may read of the type's entries: the
   // settings permission alone must not show them a page's title.
@@ -247,7 +295,7 @@ function singleTypeOf(
         label: field.label,
       }))
     ),
-    mappableFields: mappableFieldsOf(declared),
+    mappableFields: readableFieldsOf(declared, "single", record),
     public: !withoutAddress.has(singleKey(slug)),
   };
 }

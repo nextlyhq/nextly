@@ -53,6 +53,9 @@ export const Authors = defineCollection({
     }),
   ],
   admin: { useAsTitle: "name" },
+  // Opened to the built-in roles: a collection reaches Admin, Editor, Author
+  // and Viewer only once it names them, each by its own rule.
+  grants: { presets: ["admin", "editor", "author", "viewer"] },
   access: {
     read: anyone,
     create: hasPermission,

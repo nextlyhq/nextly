@@ -27,7 +27,11 @@ import { resolve } from "node:path";
 import { NextlyError } from "../../../errors/nextly-error";
 import { recordedSnapshotNames } from "../migrate-create/snapshot-io";
 
+import type { MigrationGroup } from "../../../cli/utils/migration-discovery";
+
+import { groupMigrationFiles } from "./migration-groups";
 import { compareMigrationBaseNames } from "./migration-order";
+import { isUpMarker } from "./sql-sections";
 
 /** Migrations written without each other, with no migration recording them together. */
 export interface UnrecordedMerge {
@@ -101,14 +105,31 @@ export function blankLineHeader(line: {
   );
 }
 
-/** Where a blank migration's `content` places `base`, or undefined where it says nothing. */
+/**
+ * The header of a migration file's `content`, as its lines: the lines above the one where
+ * `nextly migrate` opens the UP section (`isUpMarker`, over each line trimmed as the runner trims
+ * it), or every line where there is none. A blank migration states what it is here and only
+ * here: a comment among the statements below that reads like a mark says nothing of the file.
+ * The one reading of the header, for every reader of a blank migration's marks.
+ */
+function headerLinesOf(content: string): string[] {
+  const lines = content.split(/\r?\n/);
+  const up = lines.findIndex(line => isUpMarker(line.trim()));
+  return up === -1 ? lines : lines.slice(0, up);
+}
+
+/**
+ * Where a blank migration's `content` places `base`, read in its header (`headerLinesOf`), or
+ * undefined where the header says nothing.
+ */
 function placedByHeader(content: string, base: string): Placed | undefined {
-  const parent = BLANK_PARENT.exec(content)?.[1].trim();
+  const header = headerLinesOf(content).join("\n");
+  const parent = BLANK_PARENT.exec(header)?.[1].trim();
   if (parent === undefined) return undefined;
   return {
     base,
     parent: parent === "none" ? null : parent,
-    merges: (BLANK_MERGES.exec(content)?.[1] ?? "")
+    merges: (BLANK_MERGES.exec(header)?.[1] ?? "")
       .split(",")
       .map(each => each.trim())
       .filter(each => each !== ""),
@@ -129,6 +150,28 @@ export function blankWrittenFrom(content: string): string[] {
     ...(typeof placed.parent === "string" ? [placed.parent] : []),
     ...placed.merges,
   ];
+}
+
+/**
+ * The line `migrate:create --blank` has written in every blank migration's header, before a
+ * blank file stated its place and since.
+ */
+export const BLANK_FILE_LINE =
+  "-- This is a blank migration file for custom SQL.";
+
+/**
+ * Whether `content` is a blank migration's: a file for SQL its author writes, which
+ * `migrate:create --blank` pairs with no snapshot. It says so in one of two ways: the header
+ * that states its place (`blankLineHeader`), or the template's own line (`BLANK_FILE_LINE`),
+ * which a file written before blank files stated a place also carries. Both are read in the
+ * header (`headerLinesOf`), as the history reads a blank migration's place. A generated
+ * migration carries neither.
+ */
+export function isBlankMigration(content: string): boolean {
+  return (
+    placedByHeader(content, "") !== undefined ||
+    headerLinesOf(content).some(line => line.trim() === BLANK_FILE_LINE)
+  );
 }
 
 /** The columns an element of a table names: an index's, a key's. */
@@ -259,19 +302,31 @@ async function placedIn(migrationsDir: string): Promise<Placed[]> {
       placedBy(await readFile(resolve(metaDir, file), "utf-8"), base)
     );
   }
-  // And each blank migration that states its own place: a `.sql` file with
-  // no snapshot beside it.
+  // And each blank migration that states its own place: a migration with no
+  // snapshot, read once with its dialect variants (`<base>.mysql.sql`) as the
+  // runner groups them, so a variant is no migration of its own.
   const withSnapshot = new Set(placed.map(each => each.base));
-  for (const file of await sqlFilesIn(migrationsDir)) {
-    const base = file.slice(0, -".sql".length);
-    if (withSnapshot.has(base)) continue;
+  const groups = groupMigrationFiles(await sqlFilesIn(migrationsDir));
+  for (const group of groups.values()) {
+    if (withSnapshot.has(group.baseName)) continue;
     const blank = placedByHeader(
-      await readFile(resolve(migrationsDir, file), "utf-8"),
-      base
+      await readFile(resolve(migrationsDir, statingFileOf(group)), "utf-8"),
+      group.baseName
     );
     if (blank !== undefined) placed.push(blank);
   }
   return placed.sort((a, b) => compareMigrationBaseNames(a.base, b.base));
+}
+
+/**
+ * The file of a migration group whose header states the group's place: its base file
+ * (`<base>.sql`), or where it was written only as variants, the first of them.
+ */
+function statingFileOf(group: MigrationGroup): string {
+  return (
+    group.variants.find(variant => variant.dialect === undefined) ??
+    group.variants[0]
+  ).file;
 }
 
 /** The `.sql` files of a folder, or none where there is no such folder. */

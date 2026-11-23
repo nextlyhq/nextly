@@ -3,7 +3,7 @@
  * anyway would be worse than holding back: a snapshot whose locale is unknown,
  * and a write that reported failure without throwing.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   getVersionSpy,
@@ -82,6 +82,9 @@ import {
   setPerLanguageStorage,
 } from "../../i18n/per-language-storage";
 import { resolveComponentSchemas, restoreVersion } from "../restore-version";
+
+// A case that stands in for an earlier release's layout leaves the one every installation runs.
+afterEach(() => _resetPerLanguageStorage());
 
 const user = { id: "u1" };
 const base = {
@@ -467,7 +470,8 @@ describe("restoreVersion", () => {
     expect(componentSpy).toHaveBeenCalledWith("leaf", undefined);
   });
 
-  it("does not pass a stale locale to an entity that is no longer localized", async () => {
+  it("does not pass a stale locale to an entity that is no longer localized (an earlier release's layout)", async () => {
+    setPerLanguageStorage(false);
     // The old version's locale may not even be configured any more, and the
     // update path rejects an unknown one outright.
     getVersionSpy.mockResolvedValue({
@@ -615,7 +619,8 @@ describe("restoreVersion", () => {
     );
   });
 
-  it("names no locale for an unlocalized document with no component values", async () => {
+  it("names no locale for an unlocalized document with no component values (an earlier release's layout)", async () => {
+    setPerLanguageStorage(false);
     // The stale-locale case: nothing in this payload is stored per locale, and
     // the update path rejects a locale it cannot place.
     getVersionSpy.mockResolvedValue({
@@ -882,7 +887,8 @@ describe("resolveComponentSchemas", () => {
     }
   });
 
-  it("marks a genuinely missing component unresolved without throwing", async () => {
+  it("marks a genuinely missing component unresolved without throwing (an earlier release's layout)", async () => {
+    setPerLanguageStorage(false);
     // A null record is a confirmed absence, not an error: the subtree is treated
     // as unknown and dropped, and the call still succeeds.
     componentSpy.mockResolvedValue(null);

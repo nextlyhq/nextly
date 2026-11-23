@@ -9,7 +9,10 @@
  *      hash recorded in its paired `.snapshot.json` (someone edited
  *      the file after `migrate:create` generated it).
  *   2. MISSING_SNAPSHOT   - A `.sql` file has no paired `.snapshot.json`
- *      (operator deleted the snapshot or the file was added by hand).
+ *      (operator deleted the snapshot or the file was added by hand). A
+ *      blank migration (`isBlankMigration`) has none by design and passes.
+ *      A dialect's variant (`<base>.mysql.sql`) pairs with its group's
+ *      `<base>.snapshot.json` and is held to no hash (`groupFileOf`).
  *   3. INVALID_SNAPSHOT   - A `.snapshot.json` file is malformed
  *      (corrupted JSON, hand-edited, or written by a future nextly
  *      version with an incompatible envelope).
@@ -57,16 +60,20 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
+import { movedColumnNote } from "../../domains/i18n/per-language-move-guidance";
+import { refuseWhileSaveLeftPartWay } from "../../domains/schema/builder-save/save-in-progress";
 import {
   describeDeletion,
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { migrationNameOf } from "../../domains/schema/migrate/dialect-variant";
 import {
   fileDeletions,
   functionsDefinedBy,
 } from "../../domains/schema/migrate/file-deletions";
 import {
   forkedHistoryError,
+  isBlankMigration,
   unrecordedMerges,
 } from "../../domains/schema/migrate/history-line";
 import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
@@ -99,6 +106,7 @@ import {
 } from "../../domains/schema/migrate-create/entity-settings";
 import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
 import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-create/generate";
+import { perLanguageMovesIn } from "../../domains/schema/migrate-create/per-language-moves";
 import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
 import {
   EMPTY_SNAPSHOT,
@@ -201,6 +209,22 @@ export async function runMigrateCheck(
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
+  // A Builder save this machine left part-way against this database refuses the check: the
+  // migrations it reads do not describe the database until the save is settled. Asked before the
+  // check reads anything, and again before it reports a pass, so a save that started while it read
+  // the folder refuses it too. Another machine's or another database's is named only.
+  const refuseLeftSave = async (notice: (line: string) => void) =>
+    refuseWhileSaveLeftPartWay({
+      projectRoot: cwd,
+      postgresSchema: configResult.config.db.postgres?.schema,
+      notice,
+    });
+  try {
+    await refuseLeftSave(line => logger.warn(line));
+  } catch (error) {
+    exitWithError(logger, error);
+  }
+
   // The Builder's definitions, read by the rules `migrate:create` reads them
   // by (`readBuilderDefinitions`), and judged against the newest snapshot once
   // `runChecks` reads it, as `migrate:create` judges them: the same definition
@@ -274,6 +298,8 @@ export async function runMigrateCheck(
       collections: merged.collections,
       singles: merged.singles,
     }),
+    // Asked again, its notices already given once.
+    beforePass: () => refuseLeftSave(() => undefined),
     logger,
   });
 }
@@ -289,6 +315,76 @@ async function failOnUnrecordedMerge(
 ): Promise<void> {
   const forked = forkedHistoryError(await unrecordedMerges(migrationsDir));
   if (forked !== undefined) exitWithError(logger, forked);
+}
+
+/**
+ * How one migration file fails its pairing with its snapshot, or undefined where it passes:
+ * the snapshot is malformed (INVALID_SNAPSHOT), missing (MISSING_SNAPSHOT), or records a hash
+ * the file no longer has (CHECKSUM_MISMATCH). Its own function so `runChecks` stays one list of
+ * checks rather than every branch of each.
+ */
+async function snapshotPairingError(
+  migrationsDir: string,
+  metaDir: string,
+  sqlName: string
+): Promise<CliError | undefined> {
+  const sqlContent = await readFile(resolve(migrationsDir, sqlName), "utf-8");
+  // Localization/companion migrations are snapshot-less by design (they carry
+  // cross-table seed SQL run verbatim), so skip the snapshot-pairing checks
+  // rather than flagging them MISSING_SNAPSHOT.
+  if (sqlContent.includes(LOCALIZATION_MIGRATION_MARKER)) return undefined;
+  let result;
+  try {
+    result = await verifyMigrationHash(
+      metaDir,
+      groupFileOf(sqlName),
+      sqlContent
+    );
+  } catch (err) {
+    // A distinct INVALID_SNAPSHOT code so the operator can tell "snapshot file
+    // is corrupt / version-mismatched" (fix = regenerate or upgrade nextly)
+    // apart from "snapshot is missing entirely" (fix = git checkout).
+    if (err instanceof SnapshotFileError) {
+      return migrationSnapshotInvalid(err.message);
+    }
+    throw err;
+  }
+  return pairingOutcome(sqlName, sqlContent, metaDir, result);
+}
+
+/**
+ * What the hash read of `sqlName` against its group's snapshot comes to (`snapshotPairingError`):
+ * nothing where it matches, MISSING_SNAPSHOT where no snapshot is there and the file is no blank
+ * migration, CHECKSUM_MISMATCH where the file is not the one recorded.
+ */
+function pairingOutcome(
+  sqlName: string,
+  sqlContent: string,
+  metaDir: string,
+  result: { ok: boolean; expected?: string; actual: string }
+): CliError | undefined {
+  if (result.ok) return undefined;
+  if (result.expected === undefined) {
+    // A blank migration is its author's SQL, which `migrate:create --blank` pairs with no
+    // snapshot, so none is missing. One that does have a snapshot is held to it above, as
+    // any file is.
+    if (isBlankMigration(sqlContent)) return undefined;
+    return migrationSnapshotMissing(sqlName, metaDir);
+  }
+  // A dialect's variant is held to no hash: its group's snapshot records the base file's, which
+  // the base file is held to, and none is recorded for a variant.
+  if (groupFileOf(sqlName) !== sqlName) return undefined;
+  return migrationFileEdited(sqlName, result.expected, result.actual);
+}
+
+/**
+ * The `.sql` name of the migration `sqlName` is a file of: a dialect's variant (`<base>.mysql.sql`)
+ * is its group's (`<base>.sql`), as the runner groups the folder, so its snapshot is the group's
+ * `meta/<base>.snapshot.json`; any other file is its own. `migrate:create` writes no snapshot per
+ * variant.
+ */
+function groupFileOf(sqlName: string): string {
+  return `${migrationNameOf(sqlName)}.sql`;
 }
 
 /**
@@ -346,6 +442,11 @@ export async function runChecks(args: {
    * snapshot's record of them. Omitted, permissions are not checked.
    */
   permissions?: PermissionRecord;
+  /**
+   * Asked once every check has read what it reads, before the check reports a pass: a Builder save
+   * that started while the check read the folder refuses it then. Omitted, nothing is asked.
+   */
+  beforePass?: () => Promise<void>;
   logger: CommandContext["logger"];
 }): Promise<void> {
   const { migrationsDir, logger } = args;
@@ -383,37 +484,18 @@ export async function runChecks(args: {
   const templateFiles = await templateMigrationFiles(migrationsDir, metaDir);
   for (const sqlName of sqlFiles) {
     if (templateFiles.has(sqlName)) continue;
-    const sqlContent = await readFile(resolve(migrationsDir, sqlName), "utf-8");
-    // Localization/companion migrations are snapshot-less by design (they carry
-    // cross-table seed SQL run verbatim), so skip the snapshot-pairing checks
-    // rather than flagging them MISSING_SNAPSHOT.
-    if (sqlContent.includes(LOCALIZATION_MIGRATION_MARKER)) continue;
-    let result;
-    try {
-      result = await verifyMigrationHash(metaDir, sqlName, sqlContent);
-    } catch (err) {
-      // F11 PR 4 review fix #3: distinct INVALID_SNAPSHOT code so the
-      // operator can tell "snapshot file is corrupt / version-mismatched"
-      // (fix = regenerate or upgrade nextly) apart from "snapshot is
-      // missing entirely" (fix = git checkout).
-      if (err instanceof SnapshotFileError) {
-        return exitWithError(logger, migrationSnapshotInvalid(err.message));
-      }
-      throw err;
-    }
-    if (!result.ok && result.expected === undefined) {
-      return exitWithError(logger, migrationSnapshotMissing(sqlName, metaDir));
-    }
-    if (!result.ok) {
-      return exitWithError(
-        logger,
-        migrationFileEdited(sqlName, result.expected, result.actual)
-      );
-    }
+    const unpaired = await snapshotPairingError(
+      migrationsDir,
+      metaDir,
+      sqlName
+    );
+    if (unpaired !== undefined) return exitWithError(logger, unpaired);
   }
 
-  // Check 3: missing migration per snapshot.
-  const sqlBaseNames = new Set(sqlFiles.map(f => f.replace(/\.sql$/, "")));
+  // Check 3: missing migration per snapshot. A dialect's variant is a file of
+  // its group's migration (`migrationNameOf`), so a group written only as
+  // variants has its migration.
+  const sqlBaseNames = new Set(sqlFiles.map(migrationNameOf));
   for (const snapName of snapshotFiles) {
     const baseName = snapName.replace(/\.snapshot\.json$/, "");
     if (!sqlBaseNames.has(baseName)) {
@@ -506,12 +588,27 @@ export async function runChecks(args: {
 
   const ops = diffSnapshots(previousSnapshot, desiredSnapshot);
   if (ops.length > 0) {
+    // Text-like fields moving to their per-language table, named as moves rather than drops, as
+    // `nextly migrate` names them. Judged only where the entities and the dialect are given.
+    const moves =
+      args.entities !== undefined && args.dialect !== undefined
+        ? perLanguageMovesIn(ops, args.entities, args.dialect)
+        : [];
     // Cap the listed ops at 10 to keep CI logs readable on large drifts.
-    const listed = ops.slice(0, 10).map(op => `+ ${describeOp(op)}`);
+    const listed = ops
+      .slice(0, 10)
+      .map(
+        op =>
+          `+ ${describeOp(op)}${
+            op.type === "drop_column"
+              ? movedColumnNote(moves, op.tableName, op.columnName)
+              : ""
+          }`
+      );
     if (ops.length > 10) listed.push(`... and ${ops.length - 10} more`);
     return exitWithError(
       logger,
-      schemaChangeWithoutMigration(ops.length, listed)
+      schemaChangeWithoutMigration(ops.length, listed, moves)
     );
   }
 
@@ -536,6 +633,12 @@ export async function runChecks(args: {
         });
   if (permissionDrift !== undefined) {
     return exitWithError(logger, permissionDrift);
+  }
+
+  try {
+    await args.beforePass?.();
+  } catch (error) {
+    exitWithError(logger, error);
   }
 
   logger.success(

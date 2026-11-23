@@ -131,6 +131,7 @@ describe.each(getConfiguredTestDialects())(
         preCleanupExecutor: new RealPreCleanupExecutor(),
         migrationJournal: noopMigrationJournal,
         notifier: noopNotifier,
+        adapter: undefined,
       }).apply({
         desired: {
           collections: {

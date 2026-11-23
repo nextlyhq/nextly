@@ -566,10 +566,17 @@ exports[`each code, as a command ends with it > BUILDER_RELATION_TARGET_UNKNOWN 
   Docs: https://nextlyhq.com/docs/cli/errors/builder-relation-target-unknown  (BUILDER_RELATION_TARGET_UNKNOWN)"
 `;
 
+exports[`each code, as a command ends with it > BUILDER_SAVE_EARLIER_LEFT 1`] = `
+"✗ An earlier Builder save stopped between its migration files (collection "posts"), and the rest of them have not run yet.
+  Why:  An earlier Builder save was left part-way and is not settled, and a save written over it would start from a state nothing has finished.
+  Next: Start the app in development (\`next dev\`): its start finishes the previous save. Then save again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-save-earlier-left  (BUILDER_SAVE_EARLIER_LEFT)"
+`;
+
 exports[`each code, as a command ends with it > BUILDER_SAVE_LEFT_PART_WAY 1`] = `
 "✗ A Builder save was left part-way, so the database does not match its migrations yet.
   Why:  Left part-way: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio.
-  Next: To settle it, start the app in development (\`next dev\`) on this project: its start settles the save.
+  Next: To settle it, run \`nextly migrate\`, or start the app in development (\`next dev\`), on this project: either settles the save.
   Docs: https://nextlyhq.com/docs/cli/errors/builder-save-left-part-way  (BUILDER_SAVE_LEFT_PART_WAY)"
 `;
 
@@ -1001,11 +1008,25 @@ exports[`each code, as a command ends with it > MIGRATE_EVENTS_TABLE_TAKEN 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/migrate-events-table-taken  (MIGRATE_EVENTS_TABLE_TAKEN)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATE_LANGUAGE_CODES_COLLIDE 1`] = `
+"✗ The configuration names "pt_BR" and "pt-br" (both "pt-BR"): one language under two codes once written in standard form.
+  Why:  \`nextly migrate\` keeps every language under its standard code, and these two would become one, putting two languages' values in one place. Nothing was changed.
+  Next: Keep one of them in the configuration and run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-language-codes-collide  (MIGRATE_LANGUAGE_CODES_COLLIDE)"
+`;
+
 exports[`each code, as a command ends with it > MIGRATE_LEDGER_UNREADABLE 1`] = `
 "✗ The table "nextly_migrations" holds records \`nextly migrate\` cannot read: the record of 0001_init.sql has the status "rolled_back".
   Why:  \`nextly migrate\` moves the records an earlier release kept in \`nextly_migrations\` into \`nextly_schema_events\`, and reads every one before writing any. One of them it cannot read, so nothing was changed.
   Next: Rename the table if Nextly did not create it, then run \`nextly migrate\` again.
   Docs: https://nextlyhq.com/docs/cli/errors/migrate-ledger-unreadable  (MIGRATE_LEDGER_UNREADABLE)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATE_LOCALIZATION_UNRESOLVED 1`] = `
+"✗ More than one pending change was saved at the same moment for the collection "posts" entry 42 in fr (7, 8), so which one to keep cannot be told.
+  Why:  \`nextly migrate\` moves stored translations into the layout this release keeps, and moves nothing it would have to guess at. Nothing was changed.
+  Next: Delete all but one of them from nextly_versions (by the ids named), then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-localization-unresolved  (MIGRATE_LOCALIZATION_UNRESOLVED)"
 `;
 
 exports[`each code, as a command ends with it > MIGRATION_APPLY_FAILED 1`] = `
@@ -1083,6 +1104,13 @@ exports[`each code, as a command ends with it > MIGRATION_NOT_PROVEN 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/migration-not-proven  (MIGRATION_NOT_PROVEN)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATION_NOT_WRITTEN 1`] = `
+"✗ The migration was not written: moving 20261020_120000_001_create_localization_posts.sql into place failed (EACCES).
+  Why:  The files already placed were removed; the folder is as it was.
+  Next: Check that the migrations folder can be written to and has room, then run \`migrate:create\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-not-written  (MIGRATION_NOT_WRITTEN)"
+`;
+
 exports[`each code, as a command ends with it > MIGRATION_SQL_UNCHECKABLE 1`] = `
 "✗ A migration contains SQL whose drops cannot be read, so which owner's tables it drops cannot be checked.
   Why:  A statement in \`@acme/seo/20261020_120000_add_redirects\` could not be read: unterminated block comment. It has been refused.
@@ -1120,8 +1148,8 @@ exports[`each code, as a command ends with it > MISSING_MIGRATION 1`] = `
 
 exports[`each code, as a command ends with it > MISSING_SNAPSHOT 1`] = `
 "✗ \`20261020_120000_add_posts.sql\` has no paired snapshot file in /home/you/app/migrations/meta.
-  Why:  Nothing is at \`20261020_120000_add_posts.snapshot.json\`, which \`migrate:create\` writes beside every migration; a migration generated before it wrote snapshots has none.
-  Next: Either delete it, or re-create it with \`nextly migrate:create --blank\` and copy the SQL across.
+  Why:  Nothing is at \`20261020_120000_add_posts.snapshot.json\`, which \`migrate:create\` writes beside every migration it generates, and the file does not say it is a blank migration, which has none; a migration generated before snapshots were written has none either.
+  Next: Restore the snapshot if it was deleted. For SQL you wrote yourself: if no database has applied the file, re-create it with \`nextly migrate:create --blank\` and copy the SQL across; if one has, add the line \`-- This is a blank migration file for custom SQL.\` to its header instead, then accept the edit with \`nextly migrate:resolve --applied '20261020_120000_add_posts' --skip-verify\` on every database that has applied it. Otherwise delete the file.
   Docs: https://nextlyhq.com/docs/cli/errors/missing-snapshot  (MISSING_SNAPSHOT)"
 `;
 

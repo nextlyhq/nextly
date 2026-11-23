@@ -30,7 +30,10 @@ import {
   lossLinesOf,
 } from "@admin/lib/builder/brought-up-to-date";
 import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
-import { reviewDeletesData } from "@admin/lib/builder/review-deletes-data";
+import {
+  changedRowDeletesData,
+  reviewDeletesData,
+} from "@admin/lib/builder/review-deletes-data";
 import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type {
   SchemaPreviewChange,
@@ -218,7 +221,7 @@ export function SchemaChangeDialog({
       confirmed[field.name] = { action: "confirm_drop" };
     }
     for (const field of changes.changed) {
-      if (field.classification === "destructive") {
+      if (changedRowDeletesData(field)) {
         confirmed[field.name] = { action: "confirm_drop" };
       }
     }
