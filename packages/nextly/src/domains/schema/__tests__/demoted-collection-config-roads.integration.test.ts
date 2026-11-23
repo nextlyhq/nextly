@@ -426,23 +426,23 @@ for (const dialect of getConfiguredTestDialects()) {
           text({ name: "code", unique: true }),
         ],
       });
-      // The control: code's own collection whose field became unique after its tables were made.
-      // A start makes no index, so the field is named until a migration or a sync makes it.
-      const codes = (unique: boolean) =>
-        defineCollection({
-          slug: "dcr_codes",
-          fields: [text({ name: "code", unique })],
-        });
-      clearServices();
-      await createTestNextly({
-        adapter: database.adapter as never,
-        collections: [postsWithCode, codes(false)],
+      // The control: code's own collection whose field the configuration makes unique after its
+      // tables were made, as an edit does, so the field has no per-language index yet and is named.
+      const codes = defineCollection({
+        slug: "dcr_codes",
+        fields: [text({ name: "code" })],
       });
       clearServices();
       await createTestNextly({
         adapter: database.adapter as never,
-        collections: [postsWithCode, codes(true)],
+        collections: [postsWithCode, codes],
       });
+      const served = getService("config") as {
+        collections?: { slug: string; fields: { unique?: boolean }[] }[];
+      };
+      const servedCodes = served.collections?.find(c => c.slug === codes.slug);
+      expect(servedCodes).toBeDefined();
+      servedCodes!.fields[0].unique = true;
       const warned: string[] = [];
       vi.spyOn(getService("logger"), "warn").mockImplementation(
         (message: unknown) => {
