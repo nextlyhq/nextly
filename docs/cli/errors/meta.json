@@ -84,6 +84,7 @@
     "migration-name-required",
     "migration-not-proven",
     "migration-not-written",
+    "migration-place-stated-twice",
     "migrate-backup-declined",
     "migrate-backup-not-confirmed",
     "migrate-events-table-taken",
