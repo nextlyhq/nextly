@@ -5,6 +5,7 @@
  * @module domains/schema/builder-save/push-carries-values
  */
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 import { fieldsWithLeavingSettingsDeferred } from "../../i18n/migration/archive-preflight";
 import type { FieldRename } from "../../i18n/migration/reconcile-companion";
 import type { TableSpec } from "../pipeline/diff/types";
@@ -23,7 +24,10 @@ import { fieldsNewToSingleTable, namedOnRow } from "./single-row-fills";
  * Unique field leaving translation while the entity stays translated,
  * whose setting the push applies once the default language's values are in its shared column
  * (`fieldsWithLeavingSettingsDeferred`); a field whose column changes type or size, whose stored
- * values the push judges before it alters the column; a field new to a Single's table that its row
+ * values the push judges before it alters the column (not a field kept per language before the
+ * save and after it, whose only column is its translations column, which the file's `retypes`
+ * step changes, judged in each language by the save before the file is written); a field new to a
+ * Single's table that its row
  * is filled in; and a change reaching a relation's storage (`reachesRelationStorage`), which the
  * push plans from the live table.
  *
@@ -156,6 +160,8 @@ function sameFieldsBesideTranslation(
 function columnTypeChanges(args: {
   oldFields: readonly FieldDefinition[];
   newFields: readonly FieldDefinition[];
+  wasStored: boolean;
+  isStored: boolean;
   columnOf: (field: FieldDefinition) => ColumnDescriptor | null;
   renames: ReadonlyArray<{ from: string; to: string }>;
 }): boolean {
@@ -174,6 +180,14 @@ function columnTypeChanges(args: {
       args.renames.find(rename => rename.to === column)?.from ?? column;
     const old = before.get(from);
     if (old === undefined) return false;
+    // Kept per language before the save and after it: the field has no column on this table, and
+    // its translations column takes the new type in the save's own file.
+    if (
+      isFieldLocalized(old, args.wasStored) &&
+      isFieldLocalized(field, args.isStored)
+    ) {
+      return false;
+    }
     // A field gaining or losing a column of its own (a many-to-many, kept in a junction table, made
     // one-to-one) changes no column's type: the column is added or dropped, as the file writes it.
     const was = shape(old);

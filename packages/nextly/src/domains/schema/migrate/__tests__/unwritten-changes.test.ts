@@ -4,7 +4,12 @@
  * difference is named, in both directions, and a snapshot written before
  * settings or permissions were recorded is never a difference by its silence.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../../i18n/per-language-storage";
 
 import { toMinimalEntities } from "../../migrate-create/config-entities";
 import type { PermissionRecord } from "../../migrate-create/declared-permissions";
@@ -422,5 +427,67 @@ describe("unwrittenChangesError", () => {
   it("is undefined when nothing differs", () => {
     const posts = entitiesOf(collection([TITLE]));
     expect(unwrittenChangesError(compare(posts, posts))).toBeUndefined();
+  });
+
+  describe("over a snapshot written before text was kept per language", () => {
+    afterEach(() => _resetPerLanguageStorage());
+
+    /** The newest snapshot as an earlier release wrote it: `title` on the main table. */
+    function earlierSnapshot(entities: DeclaredEntities) {
+      setPerLanguageStorage(false);
+      const latest = snapshotOf(entities);
+      _resetPerLanguageStorage();
+      return latest;
+    }
+
+    it("names the title's drop as a move, explains it, and still asks a migration for the other change", () => {
+      const before = entitiesOf(collection([TITLE]));
+      const after = entitiesOf(
+        collection([TITLE, { name: "views", type: "number" }])
+      );
+      const error = unwrittenChangesError(
+        compareWithNewestSnapshot({
+          entities: after,
+          appStream: NO_APP_STREAM_TABLES,
+          permissions: NO_PERMISSIONS,
+          latest: earlierSnapshot(before),
+          dialect: DIALECT,
+        })
+      );
+      expect(error?.code).toBe("SCHEMA_DRIFT");
+      expect(error?.why).toContain(
+        "- drop_column dc_posts.title (moves to dc_posts_locales)"
+      );
+      expect(error?.why).toContain("dc_posts: title -> dc_posts_locales");
+      expect(error?.why).toContain("Nothing is lost");
+      expect(error?.next).toContain("localized: false");
+      expect(error?.next).toContain("`localization`");
+      // The added number is not a move: it still needs its migration.
+      expect(error?.why).toContain("+ add_column dc_posts.views");
+      expect(error?.next).toContain(
+        "For the other changes listed: Run `nextly migrate:create"
+      );
+    });
+
+    it("names a field removed from the config as a drop, with no move explained", () => {
+      const before = entitiesOf(
+        collection([TITLE, { name: "views", type: "number" }])
+      );
+      // The same earlier snapshot, but `title` marked to stay on the main table: only `views` goes.
+      const kept = entitiesOf(collection([{ ...TITLE, localized: false }]));
+      const error = unwrittenChangesError(
+        compareWithNewestSnapshot({
+          entities: kept,
+          appStream: NO_APP_STREAM_TABLES,
+          permissions: NO_PERMISSIONS,
+          latest: earlierSnapshot(before),
+          dialect: DIALECT,
+        })
+      );
+      expect(error?.why).toContain("- drop_column dc_posts.views");
+      expect(error?.why).not.toContain("moves to");
+      expect(error?.why).not.toContain("Nothing is lost");
+      expect(error?.next).not.toContain("localized: false");
+    });
   });
 });
