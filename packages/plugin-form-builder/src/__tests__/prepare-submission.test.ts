@@ -729,6 +729,30 @@ describe("the write-seam hook on submissions", () => {
     });
   });
 
+  it("refuses a submission created with an empty form id", async () => {
+    // An empty string names no form, and the collection no longer refuses it
+    // itself, so a visitor's create could otherwise skip every check here.
+    const refused = await prepareSubmissionForWrite(
+      {
+        data: {
+          form: "",
+          data: { name: "Ada", email: "ada@example.com" },
+          status: "new",
+        },
+        operation: "create",
+      },
+      formsSlug,
+      withForm
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: { errors: [{ path: "form", code: "REQUIRED" }] },
+    });
+  });
+
   it("refuses a patch that empties a submission's form", async () => {
     // The stored row names a form and holds valid answers, so the only thing
     // wrong with the patch is the emptied form, and the stored form is not

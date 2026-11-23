@@ -1378,8 +1378,9 @@ export async function prepareSubmissionForWrite(
   // stored row's form is used, so a patch naming no form cannot fall back to
   // it. A patch that leaves `form` out on a row an earlier release stored
   // without one is let through, so that row can still be handled.
+  // An empty id names no form either.
   if (
-    parentFormId(submission) === null &&
+    !parentFormId(submission) &&
     (ctx.operation === "create" || "form" in submission)
   ) {
     throw NextlyError.validation({
