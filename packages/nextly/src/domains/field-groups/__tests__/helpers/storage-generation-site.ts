@@ -72,6 +72,11 @@ export interface SiteOptions {
   legacy?: boolean;
   /** Plugins every start boots, as the app config lists them. */
   plugins?: PluginDefinition[];
+  /**
+   * Keep a SQLite site in a file rather than in memory, so a second process can open the same
+   * database (`StorageGenerationSite.url`). Server dialects are always reachable that way.
+   */
+  sqliteFile?: boolean;
 }
 
 /**
@@ -127,6 +132,11 @@ export function recordingLogger(): {
 
 export interface StorageGenerationSite {
   adapter: DrizzleAdapter;
+  /**
+   * What another process connects to this database with: the server URL of its own database, or
+   * the SQLite file's `file:` URL. Undefined for a SQLite site kept in memory.
+   */
+  readonly url: string | undefined;
   /** The instance the last start made. */
   readonly current: TestNextly | undefined;
   /** A development start: the boot, then its schema apply, as `next dev` runs them. */
@@ -148,17 +158,37 @@ export interface StorageGenerationSite {
 }
 
 async function openDatabase(
-  dialect: TestDialect
-): Promise<{ adapter: DrizzleAdapter; close(): Promise<void> }> {
+  dialect: TestDialect,
+  sqliteFile = false
+): Promise<{
+  adapter: DrizzleAdapter;
+  url: string | undefined;
+  close(): Promise<void>;
+}> {
   if (dialect === "sqlite") {
     vi.stubEnv("DB_DIALECT", "sqlite");
     _resetEnvCache();
-    const adapter = (await createAdapter({
-      type: "sqlite",
-      memory: true,
-    } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
-    // Disconnected once by the instance's own teardown already, where one ran.
-    return { adapter, close: () => adapter.disconnect().catch(() => {}) };
+    const folder = sqliteFile
+      ? await mkdtemp(join(tmpdir(), "nextly-fgsn-db-"))
+      : undefined;
+    const url =
+      folder === undefined ? undefined : `file:${join(folder, "site.db")}`;
+    const adapter = (await createAdapter(
+      (url === undefined
+        ? { type: "sqlite", memory: true }
+        : { type: "sqlite", url }) as Parameters<typeof createAdapter>[0]
+    )) as unknown as DrizzleAdapter;
+    return {
+      adapter,
+      url,
+      // Disconnected once by the instance's own teardown already, where one ran.
+      async close() {
+        await adapter.disconnect().catch(() => {});
+        if (folder !== undefined) {
+          await rm(folder, { recursive: true, force: true });
+        }
+      },
+    };
   }
   const serverUrl = process.env[SERVER_URL_ENV[dialect]];
   if (!serverUrl) throw new Error(`${SERVER_URL_ENV[dialect]} is not set`);
@@ -179,6 +209,7 @@ async function openDatabase(
   })) as unknown as DrizzleAdapter;
   return {
     adapter,
+    url: url.toString(),
     async close() {
       await adapter.disconnect().catch(() => {});
       await server.executeQuery(dropDatabaseStatement(dialect, name));
@@ -191,7 +222,7 @@ export async function openStorageGenerationSite(
   options: SiteOptions
 ): Promise<StorageGenerationSite> {
   const { dialect, loaded, localization, plugins } = options;
-  const database = await openDatabase(dialect);
+  const database = await openDatabase(dialect, options.sqliteFile === true);
   if (options.legacy === true) {
     await seedLegacyCoreTables(database.adapter, dialect);
   }
@@ -210,6 +241,7 @@ export async function openStorageGenerationSite(
 
   return {
     adapter: database.adapter,
+    url: database.url,
     get current() {
       return current;
     },

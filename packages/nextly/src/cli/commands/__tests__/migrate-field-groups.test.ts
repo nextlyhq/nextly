@@ -269,6 +269,62 @@ describe("migrate:field-groups — what it tells the operator", () => {
     );
   });
 
+  it("warns, before it applies, that content saves may be refused while it runs", async () => {
+    // Printed before the engine starts, so an operator reads it before any statement runs: a
+    // warning printed with the result would come after the saves it warns of were refused.
+    runFieldGroupMigration.mockImplementation(async () => {
+      printed.push("ENGINE STARTED");
+      return { ran: true, direction: "up", steps: 9, restartNeeded: false };
+    });
+
+    await runMigrateFieldGroups(
+      { apply: true, backupConfirmed: true },
+      context
+    );
+
+    const warning = printed.findIndex(line =>
+      /saves .*may be refused/i.test(line)
+    );
+    expect(warning, printed.join("\n")).toBeGreaterThanOrEqual(0);
+    expect(warning).toBeLessThan(printed.indexOf("ENGINE STARTED"));
+  });
+
+  it("says when it ends that no running server needs a restart, when none does", async () => {
+    runFieldGroupMigration.mockResolvedValue({
+      ran: true,
+      direction: "up",
+      steps: 9,
+      restartNeeded: false,
+    });
+
+    await runMigrateFieldGroups(
+      { apply: true, backupConfirmed: true },
+      context
+    );
+
+    expect(printed.join("\n")).toMatch(/no running server needs a restart/i);
+  });
+
+  it("says when it ends that running servers must restart, when the run says so", async () => {
+    // The line follows the run's own answer, not a fixed sentence: the same report for both
+    // answers would tell an operator nothing.
+    runFieldGroupMigration.mockResolvedValue({
+      ran: true,
+      direction: "up",
+      steps: 9,
+      restartNeeded: true,
+    });
+
+    await runMigrateFieldGroups(
+      { apply: true, backupConfirmed: true },
+      context
+    );
+
+    const report = printed.join("\n");
+    expect(report).toMatch(/restart every running server/i);
+    expect(report).not.toMatch(/no running server needs a restart/i);
+  });
+
   it("names the ROLLBACK command when previewing a rollback", async () => {
     runFieldGroupMigration.mockResolvedValue({
       ...DRY_RUN_OUTCOME,

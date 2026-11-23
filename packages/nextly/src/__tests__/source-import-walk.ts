@@ -169,13 +169,22 @@ export interface Walk {
   problems: string[];
 }
 
-/** What `entry` loads. With `lazy`, an `import()` is followed too. */
-export function loads(entry: string, lazy = false): Walk {
+/**
+ * What `entry` loads. With `lazy`, an `import()` is followed too. A module in `stopAt` is reached
+ * but not walked past: what it loads is left out, as for a registry whose entries load only when
+ * one is chosen.
+ */
+export function loads(
+  entry: string,
+  lazy = false,
+  stopAt: ReadonlySet<string> = new Set()
+): Walk {
   const from = new Map<string, string | null>([[entry, null]]);
   const problems: string[] = [];
   const queue = [entry];
   while (queue.length > 0) {
     const file = queue.shift() as string;
+    if (file !== entry && stopAt.has(file)) continue;
     for (const edge of edgesOf(file)) {
       if (edge.dynamic && !lazy) continue;
       if (edge.kind !== "module") {
