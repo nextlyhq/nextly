@@ -68,6 +68,7 @@ import {
   withinSqliteTransaction,
   withSqliteForeignKeysOff,
 } from "../migrate/sqlite-foreign-keys";
+import { elementsFromOwnerRows } from "../ownership/dependent-elements";
 import {
   dropsPluginMigratedTable,
   pluginMigratedTableSet,
@@ -80,6 +81,10 @@ import {
   refuseRebuildsLosingKeptElements,
   withKeptElements,
 } from "../ownership/kept-elements";
+import {
+  deletionsOfOperations,
+  refuseRemovingOthersElements,
+} from "../ownership/removed-elements";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import { withoutKeysOnKeylessRenames } from "./builder-foreign-keys";
@@ -144,6 +149,7 @@ import {
 } from "./kept-scope-fields";
 import { refuseKeysRowsWouldBreak } from "./key-move-refusal";
 import { kitRouteConstraintStatements } from "./kit-route-constraints";
+import { readForeignKeyColumns, readIndexColumns } from "./live-table-facts";
 import {
   desiredUniqueColumns,
   liveTableName,
@@ -1258,6 +1264,31 @@ export class PushSchemaPipeline {
             live: liveSnapshot,
           });
         }
+        // A column or table the push drops takes with it no element another owner built there: an
+        // index, key or check on the column, anything on the table. Refused here too, before any
+        // prompt and before anything runs, judged on the schema and owner rows read above
+        // (`removed-elements.ts`).
+        await refuseRemovingOthersElements({
+          deletions: deletionsOfOperations(operations),
+          dialect,
+          entity: "The schema change",
+          sources: {
+            extensionSchema: () => Promise.resolve(extensions),
+            recordedElements: tables =>
+              Promise.resolve(
+                elementsFromOwnerRows(
+                  (elementOwners?.rows ?? []).filter(row =>
+                    tables.includes(row.tableName)
+                  )
+                )
+              ),
+            indexColumns: table => readIndexColumns(db, dialect, table),
+            foreignKeyColumns: table =>
+              readForeignKeyColumns(db, dialect, table),
+          },
+          // A push has the fields' columns, not their definitions: each column names its field.
+          fieldOf: (_table, column) => column,
+        });
 
         // A field this apply makes translated still has its value on the main table, which the diff
         // drops: the value moves to the default language's companion row first. Planned here, from

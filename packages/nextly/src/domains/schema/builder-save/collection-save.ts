@@ -161,6 +161,13 @@ import {
   isWriterOvertaken,
   WRITER_HOLD_LOST_REASON,
 } from "../migrate-create/writer-hold";
+import { readRecordedElementsOn } from "../ownership/dependent-elements";
+import {
+  databaseRemovedElementsSources,
+  readingOthersElements,
+  refuseRemovingOthersElements,
+  withoutOthersElements,
+} from "../ownership/removed-elements";
 import {
   countRowsBreakingNotNull,
   querySqlRows,
@@ -193,7 +200,9 @@ import {
   classifyFieldKind,
   fieldsStoredOnRow,
   getColumnDescriptor,
+  junctionTableNameFor,
   toSnakeCase,
+  usesJunctionTable,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import {
@@ -3094,6 +3103,36 @@ function movesFacts(args: MovesFacts): MovesFacts {
 }
 
 /**
+ * The field a column or table the save removes belongs to, read from the fields before the save:
+ * the field whose column it is, or the many-to-many whose join table it is. None where it is
+ * neither (a translations table, say), and the refusal then names the table alone.
+ */
+function fieldOfRemoval(
+  save: CollectionSave,
+  table: string,
+  dialect: SupportedDialect
+): (removedTable: string, column?: string) => string | undefined {
+  const previous = (save.previous?.fields ??
+    []) as unknown as FieldDefinition[];
+  const builtBy = kindOf(save).builtBy;
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  return (removedTable, column) =>
+    column === undefined
+      ? previous.find(
+          field =>
+            usesJunctionTable(field) &&
+            same(junctionTableNameFor(table, field), removedTable)
+        )?.name
+      : fieldsStoredOnRow(previous).find(field =>
+          same(
+            getColumnDescriptor(field, dialect, builtBy)?.name ??
+              toSnakeCase(field.name),
+            column
+          )
+        )?.name;
+}
+
+/**
  * Generate the collection's migration from `manifest` into the folder, and
  * name every file the run wrote (its main file and any companion beside it),
  * in run order.
@@ -3204,6 +3243,16 @@ async function generateFor(
       : { joiningJudgement: args.joiningJudgement }),
     decideRenames: candidates =>
       Promise.resolve(renamesOf(candidates, args.save.renamedFields ?? [])),
+    // Every file's deletions, in run order, judged before any is written: a column or table the
+    // save removes takes with it no element another owner built there (`removed-elements.ts`).
+    judgeDeletions: deletions =>
+      refuseRemovingOthersElements({
+        deletions,
+        dialect,
+        entity: entityLabel(kindOf(args.save).kind, args.save.slug),
+        sources: databaseRemovedElementsSources(deps.adapter, dialect),
+        fieldOf: fieldOfRemoval(args.save, args.table, dialect),
+      }),
     now: args.now,
   });
   let result: Awaited<typeof generated>;
@@ -4163,7 +4212,11 @@ function tablesChangedBy(
   return [...tables];
 }
 
-/** The tables of `names` the database has now, as it has them. */
+/**
+ * The tables of `names` the database has now, as the app's history would describe them: without
+ * the elements another owner built there, which the owner record keeps (`withoutOthersElements`).
+ * Compared with that history, such an element would otherwise read as drift.
+ */
 async function liveTables(
   deps: Pick<CollectionSaveDeps, "adapter">,
   names: readonly string[]
@@ -4179,26 +4232,24 @@ async function liveTables(
     dialect,
     present
   );
-  return {
-    ...snapshot,
-    tables: snapshot.tables.filter(t => unique.includes(t.name)),
-  };
+  return withoutOthersElements(
+    {
+      ...snapshot,
+      tables: snapshot.tables.filter(t => unique.includes(t.name)),
+    },
+    // A record that cannot be read refuses the save, never read as none.
+    await readingOthersElements(`The save of ${present.join(", ")}`, () =>
+      readRecordedElementsOn(deps.adapter, present)
+    )
+  );
 }
 
-/** The collection's table as the database has it now, alone. */
+/** The collection's table as the database has it now, alone, as `liveTables` reads it. */
 async function liveTable(
   deps: CollectionSaveDeps,
   table: string
 ): Promise<NextlySchemaSnapshot> {
-  const dialect = deps.adapter.getCapabilities().dialect;
-  return onlyTable(
-    await introspectLiveSnapshot(
-      deps.adapter.getDrizzle(),
-      dialect,
-      (await deps.adapter.tableExists(table)) ? [table] : []
-    ),
-    table
-  );
+  return onlyTable(await liveTables(deps, [table]), table);
 }
 
 /**

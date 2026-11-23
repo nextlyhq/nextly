@@ -655,11 +655,13 @@ export async function pushElementOwners(input: {
     { SCHEMA_OWNERS_TABLE },
     { SchemaOwnersRepository },
     { retiredElementRows },
+    { readingOthersElements },
   ] = await Promise.all([
     import("../pipeline/diff/introspect-live"),
     import("../../../schemas/schema-owners"),
     import("./schema-owners-repository"),
     import("./retired-elements"),
+    import("./removed-elements"),
   ]);
   let exists: boolean;
   try {
@@ -677,7 +679,8 @@ export async function pushElementOwners(input: {
   if (!exists) return undefined;
   const repository = new SchemaOwnersRepository(input.db, input.dialect);
   const declaring = declaringOwners(input.schema, input.dialect);
-  let rows = await repository.read();
+  // A record there that cannot be read refuses the change, never read as no element at all.
+  let rows = await readingOthersElements("The change", () => repository.read());
   if (!input.record) return { rows, declaring };
 
   const contributed = contributedElements(input.schema, input.dialect);

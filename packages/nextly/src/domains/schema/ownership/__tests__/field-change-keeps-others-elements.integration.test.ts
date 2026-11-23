@@ -1,0 +1,500 @@
+/**
+ * A field change that keeps its entity but removes one of its columns or tables never takes with it
+ * an element another owner built there. Removing a field, moving it into a group, turning
+ * translation on, or removing a many-to-many's join table is refused before anything runs where a
+ * plugin's index is built on the column, or its column is on the table, naming the field, the
+ * plugin, the element, its kind and its table; the table, the element, the definition, the registry
+ * and the migrations folder are left as they were. An element elsewhere on a table the change keeps
+ * does not stop it, and keeps its values. A record of other owners' elements that cannot be read
+ * refuses the change, never counting them as none.
+ *
+ * As a person meets it: the Schema Builder makes the collection and the field group, a plugin's
+ * migrations build on their tables (a schema hook cannot: an entity the Builder made is not known
+ * when hooks run), and the record of other owners' elements keeps what they built, as the
+ * migration run records it. Then the Builder's save. On SQLite, PostgreSQL and MySQL, because what
+ * a drop takes with it differs between them: PostgreSQL drops an index on a dropped column
+ * silently, MySQL narrows or drops it, SQLite refuses part-way.
+ */
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { createScratchDatabase } from "../../../../__tests__/helpers/fresh-database";
+import { createAdapter } from "../../../../database/factory";
+import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
+import { NextlyError } from "../../../../errors/nextly-error";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../../services";
+import { _resetEnvCache } from "../../../../shared/lib/env";
+import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
+import { readIndexNames } from "../../pipeline/live-table-facts";
+import { junctionTableNameFor } from "../../services/field-column-descriptor";
+import { resolveComponentTableName } from "../../utils/resolve-table-name";
+import { SchemaOwnersRepository } from "../schema-owners-repository";
+
+const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
+const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
+
+const POSTS = "fco_posts";
+const POSTS_TABLE = `dc_${POSTS}`;
+const TAGS = "fco_tags";
+const CARDS = "fco_cards";
+const CARDS_TABLE = resolveComponentTableName(CARDS);
+
+const PLUGIN = "@t/fco-indexer";
+const MARKER = "marker";
+
+type Field = Record<string, unknown>;
+
+const TAGS_FIELD: Field = {
+  name: "tags",
+  type: "relationship",
+  options: { target: TAGS, relationType: "manyToMany" },
+};
+const LINKS_TABLE = junctionTableNameFor(POSTS_TABLE, TAGS_FIELD as never);
+
+/** POSTS as the Builder makes it: `code`, which the plugin indexes; `note`, which nothing builds on. */
+const POSTS_FIELDS: Field[] = [
+  { name: "code", type: "text" },
+  { name: "note", type: "text" },
+  { name: "meta", type: "group", fields: [{ name: "summary", type: "text" }] },
+  TAGS_FIELD,
+];
+const CARDS_FIELDS: Field[] = [
+  { name: "code", type: "text" },
+  { name: "note", type: "text" },
+];
+
+/** An element the plugin's migrations built on another owner's table. */
+interface Built {
+  table: string;
+  kind: "index" | "column";
+  /** The index's name, or the column's. */
+  name: string;
+  /** An index's columns. */
+  columns?: string[];
+  /**
+   * The leading characters an index keys a text column by on MySQL, which indexes a TEXT column
+   * only by a prefix: a plugin indexing a Builder text field there writes one.
+   */
+  prefix?: number;
+}
+
+let instance: TestNextly | undefined;
+let basePath: string;
+let dropDatabase: (() => Promise<void>) | undefined;
+
+beforeEach(async () => {
+  basePath = await mkdtemp(join(tmpdir(), "nextly-others-elements-"));
+  // The schema dialog applies its change, and writes its migration, in development only.
+  vi.stubEnv("NODE_ENV", "development");
+});
+
+afterEach(async () => {
+  try {
+    await instance?.destroy();
+    await dropDatabase?.();
+  } finally {
+    instance = undefined;
+    dropDatabase = undefined;
+    vi.unstubAllEnvs();
+    _resetEnvCache();
+    await rm(basePath, { recursive: true, force: true });
+  }
+});
+
+/** A database both starts reach: a SQLite file in the test's folder, or a scratch database. */
+async function databaseFor(dialect: TestDialect): Promise<string> {
+  if (dialect === "sqlite") return `file:${join(basePath, "app.db")}`;
+  const scratch = await createScratchDatabase(dialect, "fco");
+  dropDatabase = scratch.drop;
+  return scratch.url;
+}
+
+async function start(dialect: TestDialect, url: string): Promise<TestNextly> {
+  // The app's own dialect and database, which the Builder's files are written for.
+  vi.stubEnv("DB_DIALECT", dialect);
+  vi.stubEnv("DATABASE_URL", url);
+  _resetEnvCache();
+  const adapter = await createAdapter({ type: dialect, url } as Parameters<
+    typeof createAdapter
+  >[0]);
+  instance = await createTestNextly({
+    adapter: adapter as never,
+    basePath,
+    db: DB,
+    localization: LOCALIZATION,
+  });
+  return instance;
+}
+
+/** TAGS, POSTS and CARDS, made by the Builder as a person makes them. */
+async function boot(dialect: TestDialect): Promise<TestNextly> {
+  const t = await start(dialect, await databaseFor(dialect));
+  for (const [name, fields] of [
+    [TAGS, [{ name: "name", type: "text" }]],
+    [POSTS, POSTS_FIELDS],
+  ] as const) {
+    await dispatchCollections(
+      {} as ServiceContainer,
+      "createCollection",
+      {},
+      { name, label: name, fields }
+    );
+  }
+  await dispatchComponents(
+    "createComponent",
+    {},
+    { slug: CARDS, label: "Card", fields: CARDS_FIELDS }
+  );
+  clearRegistryRowCache();
+  return t;
+}
+
+async function filesWritten(): Promise<number> {
+  const names = await readdir(join(basePath, "migrations")).catch(
+    () => [] as string[]
+  );
+  return names.filter(name => name.endsWith(".sql")).length;
+}
+
+async function stored(t: TestNextly): Promise<Field[]> {
+  const row = await t
+    .getService("collectionRegistryService")
+    .getCollectionBySlug(POSTS);
+  // The stored fields, read as plain records the save takes back as they are.
+  return (row?.fields ?? []).map(field => ({ ...field }) as Field);
+}
+
+async function schemaVersionOf(
+  t: TestNextly,
+  registry: "dynamic_collections" | "dynamic_components",
+  slug: string
+): Promise<number> {
+  const [row] = await t.adapter.executeQuery<{ v: number | string | null }>(
+    `SELECT schema_version AS v FROM ${registry} WHERE slug = '${slug}'`
+  );
+  return Number(row?.v ?? 1);
+}
+
+/** The schema dialog's save of POSTS; what it refused with, or undefined. */
+async function savePosts(
+  t: TestNextly,
+  fields: Field[],
+  extra: Record<string, unknown> = {}
+): Promise<unknown> {
+  return dispatchCollections(
+    {} as ServiceContainer,
+    "applySchemaChanges",
+    { collectionName: POSTS },
+    {
+      fields,
+      confirmed: true,
+      schemaVersion: await schemaVersionOf(t, "dynamic_collections", POSTS),
+      ...extra,
+    }
+  ).then(
+    () => undefined,
+    (error: unknown) => error
+  );
+}
+
+/** The field group's schema dialog save of CARDS; what it refused with, or undefined. */
+async function saveCards(
+  t: TestNextly,
+  fields: Field[],
+  extra: Record<string, unknown> = {}
+): Promise<unknown> {
+  return dispatchComponents(
+    "applyComponentSchemaChanges",
+    { slug: CARDS },
+    {
+      fields,
+      confirmed: true,
+      schemaVersion: await schemaVersionOf(t, "dynamic_components", CARDS),
+      ...extra,
+    }
+  ).then(
+    () => undefined,
+    (error: unknown) => error
+  );
+}
+
+/** A refusal naming the field, the plugin, the element's kind and its table. */
+function expectNamesTheElement(
+  refused: unknown,
+  parts: { field: string; kind: string; table: string }
+): void {
+  expect(NextlyError.is(refused), String(refused)).toBe(true);
+  const message = (refused as NextlyError).publicMessage;
+  for (const part of [parts.field, PLUGIN, parts.kind, parts.table]) {
+    expect(message).toContain(part);
+  }
+}
+
+const without = (fields: Field[], name: string): Field[] =>
+  fields.filter(field => field.name !== name);
+
+/** The dialog's confirmation that the person drops `name`'s values with it. */
+const dropping = (name: string) => ({
+  resolutions: { [name]: { action: "confirm_drop" } },
+});
+
+describe.each(getConfiguredTestDialects())(
+  "a field change keeps what another owner built on the entity's tables (%s)",
+  dialect => {
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+    const columnsOf = async (t: TestNextly, table: string) =>
+      (
+        await t.adapter.executeQuery<{ name: string }>(
+          dialect === "mysql"
+            ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}'`
+            : dialect === "sqlite"
+              ? `SELECT name FROM pragma_table_info('${table}')`
+              : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}'`
+        )
+      )
+        .map(row => row.name)
+        .sort();
+
+    const indexesOf = async (t: TestNextly, table: string) =>
+      [
+        ...(await readIndexNames(t.adapter.getDrizzle(), dialect, table)),
+      ].sort();
+
+    /** Builds each element as the plugin's migration does, and records it as that run records it. */
+    async function build(t: TestNextly, ...elements: Built[]): Promise<void> {
+      for (const element of elements) {
+        await t.adapter.executeQuery(
+          element.kind === "index"
+            ? `CREATE INDEX ${q(element.name)} ON ${q(element.table)} (${(
+                element.columns ?? []
+              )
+                .map(column =>
+                  dialect === "mysql" && element.prefix !== undefined
+                    ? `${q(column)}(${element.prefix})`
+                    : q(column)
+                )
+                .join(", ")})`
+            : `ALTER TABLE ${q(element.table)} ADD COLUMN ${q(element.name)} ${dialect === "mysql" ? "varchar(64)" : "text"}`
+        );
+      }
+      await new SchemaOwnersRepository(
+        (t.adapter as unknown as DrizzleAdapter).getDrizzle(),
+        dialect
+      ).upsert(
+        elements.map(element => ({
+          tableName: element.table,
+          elementKind: element.kind,
+          elementName: element.name,
+          ownerKind: "plugin" as const,
+          ownerId: PLUGIN,
+          migratedBy: `plugin:${PLUGIN}`,
+          ownerVersion: "1.0.0",
+          schemaVersion: null,
+          state: "active" as const,
+        }))
+      );
+    }
+
+    const codeIndex = (table: string): Built => ({
+      table,
+      kind: "index",
+      name: `fco_idx_${table}_code`,
+      columns: ["code"],
+      prefix: 64,
+    });
+    const marker = (table: string): Built[] => [
+      { table, kind: "column", name: MARKER },
+      {
+        table,
+        kind: "index",
+        name: `fco_idx_${table}_marker`,
+        columns: [MARKER],
+      },
+    ];
+
+    /** What a refusal must leave as it was. */
+    async function stateOf(t: TestNextly, table: string) {
+      return {
+        columns: await columnsOf(t, table),
+        indexes: await indexesOf(t, table),
+        fields: JSON.stringify(await stored(t)),
+        files: await filesWritten(),
+      };
+    }
+
+    it("refuses removing a field whose column a plugin's index is built on, changing nothing", async () => {
+      const t = await boot(dialect);
+      await build(t, codeIndex(POSTS_TABLE));
+      const before = await stateOf(t, POSTS_TABLE);
+
+      const refused = await savePosts(
+        t,
+        without(await stored(t), "code"),
+        dropping("code")
+      );
+
+      expectNamesTheElement(refused, {
+        field: "code",
+        kind: "index",
+        table: POSTS_TABLE,
+      });
+      expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
+    });
+
+    it("refuses moving that field into a group, changing nothing", async () => {
+      const t = await boot(dialect);
+      await build(t, codeIndex(POSTS_TABLE));
+      const fields = await stored(t);
+      const before = await stateOf(t, POSTS_TABLE);
+      const code = fields.find(field => field.name === "code");
+      const moved = without(fields, "code").map(field =>
+        field.name === "meta"
+          ? { ...field, fields: [...((field.fields as Field[]) ?? []), code] }
+          : field
+      );
+
+      const refused = await savePosts(t, moved, {
+        hints: { moves: [{ from: ["code"], to: ["meta", "code"] }] },
+      });
+
+      expectNamesTheElement(refused, {
+        field: "code",
+        kind: "index",
+        table: POSTS_TABLE,
+      });
+      expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
+    });
+
+    it("refuses turning translation on where it moves that field's column, changing nothing", async () => {
+      const t = await boot(dialect);
+      await build(t, codeIndex(POSTS_TABLE));
+      const before = await stateOf(t, POSTS_TABLE);
+
+      const refused = await savePosts(t, await stored(t), { localized: true });
+
+      expectNamesTheElement(refused, {
+        field: "code",
+        kind: "index",
+        table: POSTS_TABLE,
+      });
+      expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
+    });
+
+    it("refuses removing a field group's field whose column in its shared table a plugin's index is built on", async () => {
+      const t = await boot(dialect);
+      await build(t, codeIndex(CARDS_TABLE));
+      const before = {
+        columns: await columnsOf(t, CARDS_TABLE),
+        indexes: await indexesOf(t, CARDS_TABLE),
+        files: await filesWritten(),
+      };
+
+      const refused = await saveCards(
+        t,
+        without(CARDS_FIELDS, "code"),
+        dropping("code")
+      );
+
+      expectNamesTheElement(refused, {
+        field: "code",
+        kind: "index",
+        table: CARDS_TABLE,
+      });
+      expect({
+        columns: await columnsOf(t, CARDS_TABLE),
+        indexes: await indexesOf(t, CARDS_TABLE),
+        files: await filesWritten(),
+      }).toEqual(before);
+    });
+
+    it("refuses removing a many-to-many whose join table holds a plugin's column, changing nothing", async () => {
+      const t = await boot(dialect);
+      await build(t, { table: LINKS_TABLE, kind: "column", name: MARKER });
+      const files = await filesWritten();
+
+      const refused = await savePosts(
+        t,
+        without(await stored(t), "tags"),
+        dropping("tags")
+      );
+
+      expectNamesTheElement(refused, {
+        field: "tags",
+        kind: "column",
+        table: LINKS_TABLE,
+      });
+      expect(await columnsOf(t, LINKS_TABLE)).toContain(MARKER);
+      expect(await filesWritten()).toBe(files);
+    });
+
+    it("applies a removal where the plugin's column and index are elsewhere on the table, keeping them and their values", async () => {
+      const t = await boot(dialect);
+      await build(t, ...marker(POSTS_TABLE), ...marker(CARDS_TABLE));
+      await t.nextly.create({
+        collection: POSTS,
+        data: { code: "c", note: "n" },
+      } as never);
+      // Past the runtime model, which knows only the collection's own columns.
+      await t.adapter.executeQuery(
+        `UPDATE ${q(POSTS_TABLE)} SET ${q(MARKER)} = 'kept by the plugin'`
+      );
+      const markerIndexes = (await indexesOf(t, POSTS_TABLE)).filter(name =>
+        name.includes(MARKER)
+      );
+      expect(markerIndexes).toHaveLength(1);
+
+      expect(
+        await savePosts(t, without(await stored(t), "note"), dropping("note"))
+      ).toBeUndefined();
+      expect(
+        await saveCards(t, without(CARDS_FIELDS, "note"), dropping("note"))
+      ).toBeUndefined();
+
+      expect(await columnsOf(t, POSTS_TABLE)).not.toContain("note");
+      expect(await columnsOf(t, POSTS_TABLE)).toContain(MARKER);
+      expect(
+        (await indexesOf(t, POSTS_TABLE)).filter(name => name.includes(MARKER))
+      ).toEqual(markerIndexes);
+      const [row] = await t.adapter.executeQuery<{ v: unknown }>(
+        `SELECT ${q(MARKER)} AS v FROM ${q(POSTS_TABLE)}`
+      );
+      expect(row?.v).toBe("kept by the plugin");
+      expect(await columnsOf(t, CARDS_TABLE)).toContain(MARKER);
+    });
+
+    it("refuses a removal where the record of other owners' elements cannot be read, changing nothing", async () => {
+      const t = await boot(dialect);
+      await build(t, ...marker(POSTS_TABLE));
+      const before = await stateOf(t, POSTS_TABLE);
+      await t.adapter.executeQuery(`DROP TABLE nextly_schema_owners`);
+      await t.adapter.executeQuery(
+        `CREATE TABLE nextly_schema_owners (unrelated integer)`
+      );
+
+      const refused = await savePosts(
+        t,
+        without(await stored(t), "note"),
+        dropping("note")
+      );
+
+      expect(NextlyError.is(refused), String(refused)).toBe(true);
+      expect((refused as NextlyError).publicMessage).toContain(
+        "could not be read"
+      );
+      expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
+    });
+  }
+);
