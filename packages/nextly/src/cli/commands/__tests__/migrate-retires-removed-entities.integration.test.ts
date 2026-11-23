@@ -488,7 +488,10 @@ describe.each(LOCK_DIALECTS)(
         `ALTER TABLE ${P}_events_away RENAME TO nextly_content_events`
       );
 
-    /** A capture stored as the run stores one (`retired-documents.ts`), for `head`, holding `ids`. */
+    /**
+     * A capture stored as the run stores one (`retired-documents.ts`), for `head`, holding `ids`;
+     * answers its keys.
+     */
     async function storeCapture(
       head: {
         file: string;
@@ -499,7 +502,7 @@ describe.each(LOCK_DIALECTS)(
         seq: number;
       },
       ids: string[]
-    ) {
+    ): Promise<string[]> {
       const hash = (text: string) =>
         createHash("sha256").update(text).digest("hex").slice(0, 32);
       const prefix = `retired_documents:${hash(head.file)}:${hash(`${head.kind}:${head.slug}:${head.direction}`)}:`;
@@ -513,6 +516,7 @@ describe.each(LOCK_DIALECTS)(
           updatedAt: new Date(),
         });
       }
+      return [`${prefix}head`, `${prefix}0`];
     }
 
     /** Whether the refusal lets `files` through, each with its statements. */
@@ -1096,6 +1100,7 @@ describe.each(LOCK_DIALECTS)(
     it("applies no file again while a DOWN's capture cannot be recorded", async () => {
       const name = await extraApplied();
       const deps = await downDatabaseDeps({ adapter, dialect, logger });
+      // The DOWN commits; its events wait, captured.
       await withStopPoints(
         point => {
           if (point === "collection extra: recorded deletion events") {
@@ -1111,17 +1116,31 @@ describe.each(LOCK_DIALECTS)(
             }
           )
       );
+      // A DOWN's capture taken before it, whose event cannot be written: a slug longer than an
+      // event holds.
+      const stuck = await storeCapture(
+        {
+          file: name,
+          kind: "collection",
+          slug: "x".repeat(600),
+          table: `${P}_gone`,
+          direction: "down",
+          seq: 0,
+        },
+        ["z1"]
+      );
 
-      await eventsAway();
-      try {
-        await expect(migrate()).rejects.toThrow();
-        expect(await adapter.tableExists(extra)).toBe(false);
-      } finally {
-        await eventsBack();
+      await expect(migrate()).rejects.toThrow(/could not be recorded/);
+      expect(await adapter.tableExists(extra)).toBe(false);
+
+      for (const key of stuck) {
+        await adapter.delete("nextly_meta", {
+          and: [{ column: "key", op: "=", value: key }],
+        });
       }
-
       await migrate();
 
+      expect(await adapter.tableExists(extra)).toBe(true);
       expect(await deletionsOf("collection", "extra")).toEqual({
         x1: 1,
         x2: 1,

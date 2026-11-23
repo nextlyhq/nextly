@@ -51,6 +51,7 @@ import {
   repairSqliteRegistryTimestamps,
 } from "../../../database/repair-sqlite-registry-timestamps";
 import { rearmRegistryTimestampRepair } from "../../../database/repair-sqlite-timestamps";
+import { NextlyError } from "../../../errors/nextly-error";
 import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
 import type { Logger } from "../../../shared/types";
 import type { SupportedDialect } from "../../../types/database";
@@ -92,7 +93,10 @@ import {
 } from "./pending-entities";
 import { readRegistrySource, type RegistrySource } from "./registry-source";
 import { writeRegistryFromSource } from "./registry-writer";
-import { recordRetiredDocumentEvents } from "./retired-documents";
+import {
+  recordRetiredDocumentEvents,
+  type RetiredDocumentEvents,
+} from "./retired-documents";
 import { endsTheRun, reachStopPoint } from "./stop-points";
 
 /**
@@ -641,30 +645,16 @@ async function holdersInPlace(deps: ReconcileMetadataDeps): Promise<boolean> {
  * tries again; a lost lock or a test's stop ends the run. Nothing while a registry write is open:
  * the first run's commit, which writes the registry instead, records them once it lands.
  */
-/**
- * The deletion events captures still owe, recorded before something that would change what they
- * are judged by: a DOWN rolling back the file an UP's capture waits on, or an UP applying again a
- * file a DOWN's capture waits on. Unlike the step every Phase 3 takes, a failure here is thrown,
- * so the change waits until the events are in.
- */
-export async function settleRetiredDocumentEvents(
-  deps: Pick<ReconcileMetadataDeps, "adapter" | "logger">
-): Promise<void> {
-  const events = await recordRetiredDocumentEvents(deps.adapter);
-  for (const name of events.recorded) {
-    deps.logger.info(`Recorded the deletion of every document of ${name}.`);
-  }
-}
-
 export async function deletionEventsOfRetiredDocuments(
   deps: Pick<ReconcileMetadataDeps, "adapter" | "logger">
 ): Promise<void> {
   if (registryWriteOpen()) return;
   try {
-    const events = await recordRetiredDocumentEvents(deps.adapter);
-    for (const name of events.recorded) {
-      deps.logger.info(`Recorded the deletion of every document of ${name}.`);
-    }
+    reportRetiredDocumentEvents(
+      deps.logger,
+      await recordRetiredDocumentEvents(deps.adapter),
+      undefined
+    );
   } catch (error) {
     if (endsTheRun(error)) throw error;
     deps.logger.warn(
@@ -673,6 +663,59 @@ export async function deletionEventsOfRetiredDocuments(
       }. The next \`nextly migrate\` tries again.`
     );
   }
+}
+
+/**
+ * The deletion events captures still owe, recorded before something that would change what they
+ * are judged by: a DOWN rolling back the file an UP's capture waits on (`blocking` "up"), or files
+ * applying again over a DOWN's capture (`blocking` "down"). A capture of that direction that cannot
+ * be recorded refuses the change, so its events are not lost; any other failure is warned of, as
+ * every Phase 3 warns of it.
+ */
+export async function settleRetiredDocumentEvents(
+  deps: Pick<ReconcileMetadataDeps, "adapter" | "logger">,
+  blocking: "up" | "down"
+): Promise<void> {
+  const blocked = reportRetiredDocumentEvents(
+    deps.logger,
+    await recordRetiredDocumentEvents(deps.adapter),
+    blocking
+  );
+  if (blocked.length === 0) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message: `The deletion events of ${blocked.join("; ")} could not be recorded, and ${
+      blocking === "up"
+        ? "rolling back the migration that dropped it"
+        : "applying the migration a rollback dropped it in again"
+    } would lose them. Fix the cause, then run the command again.`,
+  });
+}
+
+/**
+ * Says what a pass over the captures did: each entity whose events went, and each capture that
+ * could not be recorded, warned of unless its direction is `blocking`; answers those that are.
+ */
+function reportRetiredDocumentEvents(
+  logger: ReconcileLogger,
+  events: RetiredDocumentEvents,
+  blocking: "up" | "down" | undefined
+): string[] {
+  for (const name of events.recorded) {
+    logger.info(`Recorded the deletion of every document of ${name}.`);
+  }
+  const blocked: string[] = [];
+  for (const failure of events.failed) {
+    const said = `${failure.name} (${failure.reason})`;
+    if (failure.direction === blocking) {
+      blocked.push(said);
+    } else {
+      logger.warn(
+        `The deletion events of ${said} were not recorded; the next \`nextly migrate\` tries again.`
+      );
+    }
+  }
+  return blocked;
 }
 
 async function leftoversOfDroppedEntities(

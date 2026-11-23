@@ -37,7 +37,6 @@ import { and, eq, inArray, like, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 
 import { loadedDialect } from "../../../database/dialect-tables";
-import { NextlyError } from "../../../errors/nextly-error";
 import { contentEventsTables } from "../../../schemas/content-events";
 import { recordWriteEvent } from "../../content-events/write-event";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
@@ -353,6 +352,11 @@ export interface RetiredDocumentEvents {
    * leaves it (applied, or rolled back for a DOWN), and its table is gone.
    */
   left: string[];
+  /**
+   * Each capture whose events could not be recorded, kept for a later run, with which way its
+   * file's drop ran and why it failed.
+   */
+  failed: { name: string; direction: "up" | "down"; reason: string }[];
 }
 
 /**
@@ -364,21 +368,20 @@ export interface RetiredDocumentEvents {
  *
  * A capture that fails is kept for the next run, and the captures of other entities still settle;
  * a later capture of the same entity waits behind it, since its counts take the earlier one's
- * events as recorded. A lost lock, or a test's stop, ends the pass at once. Once every capture has
- * had its turn, the failures are thrown together.
+ * events as recorded. A lost lock, or a test's stop, ends the pass at once. The failures are
+ * answered with the rest, for the caller to judge.
  */
 export async function recordRetiredDocumentEvents(
   adapter: DrizzleAdapter
 ): Promise<RetiredDocumentEvents> {
   const dialect = adapter.getCapabilities().dialect;
   const db = adapter.getDrizzle();
-  const result: RetiredDocumentEvents = { recorded: [], left: [] };
+  const result: RetiredDocumentEvents = { recorded: [], left: [], failed: [] };
   if (!(await metaStands(db, dialect))) return result;
   const heads = (await readHeads(db, dialect, KEY_PREFIX)).sort(
     (a, b) => a.head.seq - b.head.seq
   );
   const waiting = new Set<string>();
-  const failed: string[] = [];
   for (const { head } of heads) {
     const name = `${head.kind} ${head.slug}`;
     if (waiting.has(name)) continue;
@@ -388,18 +391,12 @@ export async function recordRetiredDocumentEvents(
     } catch (error) {
       if (endsTheRun(error)) throw error;
       waiting.add(name);
-      failed.push(
-        `${name} (${error instanceof Error ? error.message : String(error)})`
-      );
+      result.failed.push({
+        name,
+        direction: head.direction,
+        reason: error instanceof Error ? error.message : String(error),
+      });
     }
-  }
-  if (failed.length > 0) {
-    throw NextlyError.internal({
-      cause: new Error(
-        `The deletion events of ${failed.join("; ")} were not recorded; the capture waits for the next run.`
-      ),
-      logContext: { reason: "retired-documents-unrecorded", failed },
-    });
   }
   return result;
 }

@@ -1330,7 +1330,7 @@ function settlerOf(
 ): (() => Promise<void>) | undefined {
   return logger === undefined
     ? undefined
-    : () => settleRetiredDocumentEvents({ adapter, logger });
+    : () => settleRetiredDocumentEvents({ adapter, logger }, "up");
 }
 
 /**

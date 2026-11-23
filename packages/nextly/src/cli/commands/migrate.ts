@@ -3376,7 +3376,8 @@ export async function migrateCore(
           seedAccess,
           retiredDocumentEvents: () =>
             deletionEventsOfRetiredDocuments(metadataArgs()),
-          settleRetirements: () => settleRetiredDocumentEvents(metadataArgs()),
+          settleRetirements: () =>
+            settleRetiredDocumentEvents(metadataArgs(), "down"),
         }
       );
       // A file that deletes data runs only with consent covering each
