@@ -240,7 +240,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("leaves a row made in the Schema Builder with its owner, whoever declares its address", async () => {
       // No demote marked it, so neither the app's entry nor a plugin's takes it.
-      const slug = "chb_made_in_builder";
+      const slug = "chb_builder_keeps_owner";
       await registry.syncCodeFirstCollections([coded(slug)]);
       await registry.updateCollection(
         slug,
