@@ -37,6 +37,8 @@ import { writeSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 
 import type { UnwrittenChanges } from "../../domains/schema/migrate/unwritten-changes";
+import { toCliError } from "../errors/from-thrown";
+import { formatCliError } from "../errors/render";
 
 import { runChecks } from "./migrate-check";
 
@@ -164,9 +166,11 @@ describe("runChecks (F11 PR 4)", () => {
       await writeSnapshot(join(migrationsDir, "meta"), name, snapshot, content);
     }
 
-    // The dialect defaults to PostgreSQL; a SQLite rebuild test passes its own. No comparison is
-    // asked, so no drift is reported.
-    const run = async (dialect: "postgresql" | "sqlite" = "postgresql") => {
+    // The dialect defaults to PostgreSQL; a test of another dialect's statements passes its own.
+    // No comparison is asked, so no drift is reported.
+    const run = async (
+      dialect: "postgresql" | "mysql" | "sqlite" = "postgresql"
+    ) => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
@@ -231,6 +235,50 @@ describe("runChecks (F11 PR 4)", () => {
       );
       expect(exitSpy).not.toHaveBeenCalled();
     });
+
+    // A dialect's variant leaves the schema its group's snapshot records
+    // (`meta/<base>.snapshot.json`): the file after it is judged against that.
+    it("names the column a SQLite rebuild leaves out after a migration written with a SQLite variant", async () => {
+      await createNotes();
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_notes.sqlite.sql"),
+        '-- UP\nCREATE TABLE "notes" ("id" integer PRIMARY KEY NOT NULL, "title" text, "body" text);\n\n-- DOWN\n',
+        "utf-8"
+      );
+      await writeGenerated(
+        "20260101_120000_002_drop_body",
+        rebuildNotes(["id", "title"]),
+        notesWith("id", "title")
+      );
+      const logger = await run("sqlite");
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /DESTRUCTIVE: 20260101_120000_002_drop_body\.sql \(UP\) deletes data: column notes\.body\./
+        )
+      );
+    });
+
+    it.each(["postgresql", "mysql", "sqlite"] as const)(
+      "judges the file after a %s variant by its group's snapshot: a column it adds and drops again deletes nothing",
+      async dialect => {
+        await createNotes();
+        await writeFile(
+          join(migrationsDir, `20260101_120000_001_notes.${dialect}.sql`),
+          "-- UP\nCREATE TABLE notes (id integer PRIMARY KEY NOT NULL, title text, body text);\n\n-- DOWN\n",
+          "utf-8"
+        );
+        await writeGenerated(
+          "20260101_120000_002_scratch",
+          "-- UP\nALTER TABLE notes ADD COLUMN scratch text;\nALTER TABLE notes DROP COLUMN scratch;\n\n-- DOWN\n",
+          notesWith("id", "title", "body")
+        );
+        const logger = await run(dialect);
+        expect(logger.warn).not.toHaveBeenCalledWith(
+          expect.stringContaining("DESTRUCTIVE")
+        );
+        expect(exitSpy).not.toHaveBeenCalled();
+      }
+    );
 
     it("reports nothing for a SQLite rebuild that carries every column", async () => {
       await createNotes();
@@ -715,6 +763,98 @@ describe("runChecks (F11 PR 4)", () => {
 
       expect(printed).not.toHaveBeenCalled();
       expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    /** The checks over the folder as written; no comparison is asked. */
+    const check = async () => {
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+    };
+
+    // A migration says once that it is blank, in any of its files: a variant that says nothing
+    // is a file of its migration, as the history reads it.
+    it("passes a blank migration's variant that carries no mark of its own", async () => {
+      const base = "20260101_120000_001_seed";
+      await writeFile(
+        join(migrationsDir, `${base}.sql`),
+        formatBlankFile("seed", "postgresql", new Date("2026-01-01T12:00:00Z")),
+        "utf-8"
+      );
+      await writeFile(
+        join(migrationsDir, `${base}.mysql.sql`),
+        "-- UP\nINSERT INTO foo (id) VALUES ('a');\n",
+        "utf-8"
+      );
+
+      await check();
+
+      expect(printed).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it("passes a migration whose blank mark only its variant carries", async () => {
+      const base = "20260101_120000_001_seed";
+      await writeFile(
+        join(migrationsDir, `${base}.sql`),
+        "-- UP\nINSERT INTO foo (id) VALUES ('a');\n",
+        "utf-8"
+      );
+      await writeFile(
+        join(migrationsDir, `${base}.mysql.sql`),
+        formatBlankFile("seed", "mysql", new Date("2026-01-01T12:00:00Z")),
+        "utf-8"
+      );
+
+      await check();
+
+      expect(printed).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    // Two files of one migration that state different places: the check fails as `nextly
+    // migrate` refuses, naming both, rather than ending on an unexpected error.
+    it("fails a migration whose base and variant state different places, naming both", async () => {
+      const seed = "20260101_120000_001_seed";
+      const tune = "20260102_120000_001_tune";
+      await writeFile(
+        join(migrationsDir, `${seed}.sql`),
+        formatBlankFile("seed", "postgresql", new Date("2026-01-01T12:00:00Z")),
+        "utf-8"
+      );
+      for (const [file, parent] of [
+        [`${tune}.sql`, seed],
+        [`${tune}.mysql.sql`, null],
+      ] as const) {
+        await writeFile(
+          join(migrationsDir, file),
+          formatBlankFile(
+            "tune",
+            "postgresql",
+            new Date("2026-01-02T12:00:00Z"),
+            {
+              line: blankLineHeader({ parent, merges: [] }),
+            }
+          ),
+          "utf-8"
+        );
+      }
+
+      // Both pass their pairing (a blank migration); the line's reading refuses, as `nextly
+      // migrate` refuses it, and the command's catch ends it in its own code.
+      const refusal = toCliError(
+        await check().then(
+          () => undefined,
+          (error: unknown) => error
+        )
+      );
+      expect(printed).not.toHaveBeenCalled();
+      expect(refusal.code).toBe("MIGRATION_PLACE_STATED_TWICE");
+      expect(formatCliError(refusal)).toContain(
+        `\`${tune}.sql\` states \`-- Parent: ${seed}\`, and \`${tune}.mysql.sql\` states \`-- Parent: none\`.`
+      );
     });
 
     it("passes a migration written only as a variant, whose snapshot is its group's", async () => {

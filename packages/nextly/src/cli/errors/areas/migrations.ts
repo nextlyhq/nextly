@@ -19,6 +19,7 @@ import { shellQuote } from "../../../domains/schema/migrate/drift-error";
 import {
   BLANK_FILE_LINE,
   HISTORY_FORKED_REASON,
+  MIGRATION_PLACE_STATED_TWICE_REASON,
 } from "../../../domains/schema/migrate/history-line";
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
 import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
@@ -538,6 +539,26 @@ function forkedHistoryParts(error: NextlyError): CliErrorParts {
     : { what: part("what"), why: part("why"), next: part("next") };
 }
 
+/**
+ * A migration whose files state different places, as the three parts it was built from
+ * (`placeStatedTwiceError`); the whole message stands where they are not there.
+ */
+function placeStatedTwiceParts(error: NextlyError): CliErrorParts {
+  const parts = error.logContext?.parts as
+    | Partial<Record<"what" | "why" | "next", unknown>>
+    | undefined;
+  const { what, why, next } = parts ?? {};
+  return typeof what === "string" &&
+    typeof why === "string" &&
+    typeof next === "string"
+    ? { what, why, next }
+    : {
+        what: error.publicMessage,
+        why: "A migration has one place in the history, and its files state two.",
+        next: "Make the `-- Parent:` and `-- Merges:` lines the same in every file of the migration, or keep them in the base file alone.",
+      };
+}
+
 /** A writer of migration files that another overtook, as its three parts. */
 function overtakenParts(error: NextlyError): CliErrorParts {
   return refusalParts(error, "Another run wrote a migration meanwhile.");
@@ -577,6 +598,17 @@ export const MIGRATION_CODES = defineCodes({
         code: "CONFLICT",
         reason: HISTORY_FORKED_REASON,
         describe: forkedHistoryParts,
+      },
+    ],
+  },
+  MIGRATION_PLACE_STATED_TWICE: {
+    cause:
+      "The files of one migration (its base file and a dialect's variant) state different places in the history, so the command refused and changed nothing.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: MIGRATION_PLACE_STATED_TWICE_REASON,
+        describe: placeStatedTwiceParts,
       },
     ],
   },
