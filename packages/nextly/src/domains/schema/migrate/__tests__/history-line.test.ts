@@ -11,10 +11,15 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../../errors/nextly-error";
 import {
+  BLANK_FILE_LINE,
   HISTORY_FORKED_REASON,
+  MIGRATION_PLACE_STATED_TWICE_REASON,
   blankLineHeader,
   blankLineIn,
+  blankMigrationNames,
+  blankMigrationsWrittenFrom,
   blankWrittenFrom,
   forkedHistoryError,
   isBlankMigration,
@@ -305,6 +310,70 @@ describe("the merges a migration history does not record", () => {
     expect(await blankLineIn(dir)).toEqual({ parent: "0004_tune", merges: [] });
   });
 
+  // A migration states its place once, in any of its files: a base file that states none (one
+  // written before blank files stated a place) follows its variant's Parent line.
+  it("places a blank migration by a Parent line only its dialect's variant states", async () => {
+    migration("0001_a", null);
+    migration("0002_b", "0001_a");
+    writeFileSync(
+      join(dir, "0003_seed.sql"),
+      `-- Migration: 0003_seed\n${BLANK_FILE_LINE}\n--\n-- UP\n`
+    );
+    writeFileSync(
+      join(dir, "0003_seed.mysql.sql"),
+      `-- Migration: 0003_seed\n${blankLineHeader({ parent: "0001_a", merges: [] })}--\n-- UP\n`
+    );
+
+    const [merge] = await unrecordedMerges(dir);
+    expect(merge).toMatchObject({
+      parent: "0001_a",
+      migrations: ["0002_b", "0003_seed"],
+      blank: true,
+    });
+  });
+
+  // Two files of one migration that state different places leave no one place to read: every
+  // reader of the line refuses, naming both files and what each states, rather than following
+  // either.
+  it("refuses a migration whose base and variant state different places, naming both", async () => {
+    migration("0001_a", null);
+    migration("0002_b", "0001_a");
+    blank("0003_seed", "0002_b");
+    writeFileSync(
+      join(dir, "0003_seed.mysql.sql"),
+      `-- Migration: 0003_seed\n${blankLineHeader({ parent: "0001_a", merges: ["0002_b"] })}--\n-- UP\n`
+    );
+
+    const refusal = await unrecordedMerges(dir).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(refusal).toBeInstanceOf(NextlyError);
+    expect(refusal).toMatchObject({
+      code: "CONFLICT",
+      logContext: { reason: MIGRATION_PLACE_STATED_TWICE_REASON },
+    });
+    const message = (refusal as NextlyError).publicMessage;
+    expect(message).toContain(
+      "`0003_seed.sql` states `-- Parent: 0002_b`, and `0003_seed.mysql.sql` states `-- Parent: 0001_a` `-- Merges: 0002_b`."
+    );
+    // `migrate:create` reads the same line for the place it writes from.
+    await expect(blankLineIn(dir)).rejects.toMatchObject({
+      logContext: { reason: MIGRATION_PLACE_STATED_TWICE_REASON },
+    });
+    await expect(mergedBy(dir, "0002_b")).rejects.toMatchObject({
+      logContext: { reason: MIGRATION_PLACE_STATED_TWICE_REASON },
+    });
+
+    // Stated alike, or in one file only, the place is the migration's.
+    writeFileSync(
+      join(dir, "0003_seed.mysql.sql"),
+      `-- Migration: 0003_seed\n${blankLineHeader({ parent: "0002_b", merges: [] })}--\n-- UP\n`
+    );
+    writeFileSync(join(dir, "0003_seed.sqlite.sql"), "-- UP\nSELECT 1;\n");
+    expect(await unrecordedMerges(dir)).toEqual([]);
+  });
+
   it("takes the branch of the folder's newest snapshot as the newest, whichever end sorts last", async () => {
     migration("0001_p", null);
     migration("0005_a", "0001_p");
@@ -397,6 +466,57 @@ describe("the merges a migration history does not record", () => {
     rmSync(join(dir, "meta"), { recursive: true });
     expect(await unrecordedMerges(dir)).toEqual([]);
     expect(await mergedBy(dir, null)).toEqual([]);
+  });
+});
+
+// The readers beside the line (`migrate:check`'s snapshot pairing, a left Builder save's settle)
+// read a blank migration as the line does: once, with its dialect variants.
+describe("the blank migrations of a folder, read once per migration with its variants", () => {
+  it("marks a migration blank where any of its files carries the mark", async () => {
+    writeFileSync(
+      join(dir, "0001_seed.sql"),
+      `-- Migration: seed\n${BLANK_FILE_LINE}\n-- UP\n`
+    );
+    writeFileSync(join(dir, "0001_seed.mysql.sql"), "-- UP\nSELECT 1;\n");
+    writeFileSync(join(dir, "0002_tune.sql"), "-- UP\nSELECT 1;\n");
+    writeFileSync(
+      join(dir, "0002_tune.sqlite.sql"),
+      `-- Migration: tune\n${blankLineHeader({ parent: null, merges: [] })}-- UP\n`
+    );
+    writeFileSync(join(dir, "0003_generated.sql"), "-- UP\nSELECT 1;\n");
+
+    expect([...(await blankMigrationNames(dir))].sort()).toEqual([
+      "0001_seed",
+      "0002_tune",
+    ]);
+  });
+
+  // A settle must remove nothing a migration was written from, so where its files disagree it
+  // takes every migration any of them names, and refuses nothing.
+  it("names each by its migration, with every migration any of its files was written from", async () => {
+    migration("0001_a", null);
+    migration("0002_b", "0001_a");
+    blank("0003_seed", "0002_b");
+    writeFileSync(
+      join(dir, "0003_seed.mysql.sql"),
+      `-- Migration: 0003_seed\n${blankLineHeader({ parent: "0001_a", merges: [] })}-- UP\n`
+    );
+    // A migration with a snapshot is placed by it alone, whatever its variant's header says.
+    migration("0004_c", "0002_b");
+    writeFileSync(
+      join(dir, "0004_c.mysql.sql"),
+      `-- Migration: 0004_c\n${blankLineHeader({ parent: "0003_seed", merges: [] })}-- UP\n`
+    );
+
+    const writtenFrom = await blankMigrationsWrittenFrom(
+      dir,
+      new Set(["0001_a", "0002_b", "0004_c"])
+    );
+    expect([...writtenFrom.keys()]).toEqual(["0003_seed"]);
+    expect(writtenFrom.get("0003_seed")?.slice().sort()).toEqual([
+      "0001_a",
+      "0002_b",
+    ]);
   });
 });
 

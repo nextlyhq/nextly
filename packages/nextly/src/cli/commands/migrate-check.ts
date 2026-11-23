@@ -10,7 +10,9 @@
  *      the file after `migrate:create` generated it).
  *   2. MISSING_SNAPSHOT   - A `.sql` file has no paired `.snapshot.json`
  *      (operator deleted the snapshot or the file was added by hand). A
- *      blank migration (`isBlankMigration`) has none by design and passes.
+ *      blank migration has none by design and passes: one any of whose
+ *      files, its dialect variants with it, carries the blank mark
+ *      (`blankMigrationNames`).
  *      A dialect's variant (`<base>.mysql.sql`) pairs with its group's
  *      `<base>.snapshot.json` and is held to no hash (`groupFileOf`).
  *   3. INVALID_SNAPSHOT   - A `.snapshot.json` file is malformed
@@ -72,8 +74,9 @@ import {
   functionsDefinedBy,
 } from "../../domains/schema/migrate/file-deletions";
 import {
+  MIGRATION_PLACE_STATED_TWICE_REASON,
+  blankMigrationNames,
   forkedHistoryError,
-  isBlankMigration,
   unrecordedMerges,
 } from "../../domains/schema/migrate/history-line";
 import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
@@ -127,6 +130,7 @@ import {
   judgeBuilderDefinitions,
   readBuilderDefinitions,
 } from "../../domains/schema/ui-schema/builder-definitions";
+import { NextlyError } from "../../errors/nextly-error";
 import { addressRefusalsError } from "../../shared/address-rule";
 import {
   type CliError,
@@ -313,8 +317,33 @@ async function failOnUnrecordedMerge(
   migrationsDir: string,
   logger: CommandContext["logger"]
 ): Promise<void> {
-  const forked = forkedHistoryError(await unrecordedMerges(migrationsDir));
+  const forked = forkedHistoryError(
+    await mergesOrRefusal(migrationsDir, logger)
+  );
   if (forked !== undefined) exitWithError(logger, forked);
+}
+
+/**
+ * The merges nothing records (`unrecordedMerges`), or the refusal of a history the line cannot
+ * be read from, ended in the CLI's error shape as `nextly migrate` refuses it: a migration whose
+ * files state different places (`MIGRATION_PLACE_STATED_TWICE_REASON`).
+ */
+async function mergesOrRefusal(
+  migrationsDir: string,
+  logger: CommandContext["logger"]
+): ReturnType<typeof unrecordedMerges> {
+  try {
+    return await unrecordedMerges(migrationsDir);
+  } catch (error) {
+    if (
+      !(error instanceof NextlyError) ||
+      error.logContext?.reason !== MIGRATION_PLACE_STATED_TWICE_REASON
+    ) {
+      throw error;
+    }
+    exitWithError(logger, error);
+    return [];
+  }
 }
 
 /**
@@ -326,7 +355,8 @@ async function failOnUnrecordedMerge(
 async function snapshotPairingError(
   migrationsDir: string,
   metaDir: string,
-  sqlName: string
+  sqlName: string,
+  blank: boolean
 ): Promise<CliError | undefined> {
   const sqlContent = await readFile(resolve(migrationsDir, sqlName), "utf-8");
   // Localization/companion migrations are snapshot-less by design (they carry
@@ -349,17 +379,17 @@ async function snapshotPairingError(
     }
     throw err;
   }
-  return pairingOutcome(sqlName, sqlContent, metaDir, result);
+  return pairingOutcome(sqlName, blank, metaDir, result);
 }
 
 /**
  * What the hash read of `sqlName` against its group's snapshot comes to (`snapshotPairingError`):
- * nothing where it matches, MISSING_SNAPSHOT where no snapshot is there and the file is no blank
- * migration, CHECKSUM_MISMATCH where the file is not the one recorded.
+ * nothing where it matches, MISSING_SNAPSHOT where no snapshot is there and the file's migration
+ * is not `blank`, CHECKSUM_MISMATCH where the file is not the one recorded.
  */
 function pairingOutcome(
   sqlName: string,
-  sqlContent: string,
+  blank: boolean,
   metaDir: string,
   result: { ok: boolean; expected?: string; actual: string }
 ): CliError | undefined {
@@ -367,8 +397,9 @@ function pairingOutcome(
   if (result.expected === undefined) {
     // A blank migration is its author's SQL, which `migrate:create --blank` pairs with no
     // snapshot, so none is missing. One that does have a snapshot is held to it above, as
-    // any file is.
-    if (isBlankMigration(sqlContent)) return undefined;
+    // any file is. `blank` is the migration's, read with its dialect variants: a mark in any
+    // of its files marks each of them.
+    if (blank) return undefined;
     return migrationSnapshotMissing(sqlName, metaDir);
   }
   // A dialect's variant is held to no hash: its group's snapshot records the base file's, which
@@ -482,12 +513,15 @@ export async function runChecks(args: {
   // Check 1+2: hash + missing snapshot per .sql file. A template's own
   // migration is passed over: its snapshot carries no hash to hold it to.
   const templateFiles = await templateMigrationFiles(migrationsDir, metaDir);
+  // Read once for the folder: a migration is blank where any of its files says so.
+  const blankNames = await blankMigrationNames(migrationsDir);
   for (const sqlName of sqlFiles) {
     if (templateFiles.has(sqlName)) continue;
     const unpaired = await snapshotPairingError(
       migrationsDir,
       metaDir,
-      sqlName
+      sqlName,
+      blankNames.has(migrationNameOf(sqlName))
     );
     if (unpaired !== undefined) return exitWithError(logger, unpaired);
   }
@@ -809,10 +843,11 @@ export async function judgeStatements(
       )
     )
   );
-  for (const { file, transaction, sections } of files) {
+  for (const { file, migration, transaction, sections } of files) {
     // UP runs against the schema before the file, DOWN against the one the
-    // file leaves, which its own snapshot records.
-    const after = await pairedSnapshot(metaDir, file);
+    // file leaves, which its migration's snapshot records: a dialect's
+    // variant's is its group's.
+    const after = await pairedSnapshot(metaDir, migration);
     const schemaFor = { UP: before, DOWN: after };
     before = after;
     if (!transaction) outsideTransaction.push(file);
@@ -842,6 +877,8 @@ async function readSections(
 ): Promise<
   {
     file: string;
+    /** The migration the file is of, by name: a dialect's variant's is its group's. */
+    migration: string;
     transaction: boolean;
     sections: (readonly ["UP" | "DOWN", string[]])[];
   }[]
@@ -857,6 +894,7 @@ async function readSections(
       splitSqlStatements(sql, dialect, { transaction });
     files.push({
       file,
+      migration: baseName,
       transaction,
       sections: [
         ["UP", split(upSql)],
@@ -868,16 +906,17 @@ async function readSections(
 }
 
 /**
- * The schema recorded by the snapshot paired with migration `file`, or
- * undefined when it has none or it cannot be read. `runChecks` has already
+ * The schema recorded by the snapshot of `migration` (`meta/<migration>.snapshot.json`, the one
+ * snapshot of a migration and its dialect variants), or undefined when it has none or it cannot
+ * be read. `runChecks` has already
  * failed on an unreadable snapshot by then; this reader only judges what a
  * file deletes, which then falls back to leaving a rebuild to the run.
  */
 async function pairedSnapshot(
   metaDir: string,
-  file: string
+  migration: string
 ): Promise<NextlySchemaSnapshot | undefined> {
-  const name = `${file.replace(/\.sql$/, "")}.snapshot.json`;
+  const name = `${migration}.snapshot.json`;
   try {
     const content = await readFile(resolve(metaDir, name), "utf-8");
     return parseSnapshotFile(content, name).snapshot;
