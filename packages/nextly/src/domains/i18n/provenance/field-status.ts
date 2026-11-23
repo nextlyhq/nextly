@@ -24,6 +24,7 @@ import {
   type ProvenanceOrigin,
   type ProvenanceScopeKind,
 } from "../../../schemas/translation-provenance";
+import { toSnakeCase } from "../../schema/services/field-column-descriptor";
 
 /** Where one field's value in one language came from, and whether its source moved since. */
 export interface FieldProvenance {
@@ -43,6 +44,11 @@ export interface FieldProvenance {
 export interface ProvenanceScope {
   scopeKind: ProvenanceScopeKind;
   scopeSlug: string;
+  /**
+   * The names of its translatable fields: a language with a value of one of them unrecorded, as
+   * a translation made before origins were recorded, is judged by its language-level stamp.
+   */
+  fields: readonly string[];
 }
 
 /** A table alias as `sql.identifier` produces it. */
@@ -53,6 +59,8 @@ const SOURCE = sql.identifier("nx_provenance_source");
 const TARGET = sql.identifier("nx_provenance_target");
 const RECORDED = sql.identifier("nx_provenance_recorded");
 const UNKNOWN = sql.identifier("nx_provenance_unknown");
+const COVERED = sql.identifier("nx_provenance_covered");
+const CLAIMED = sql.identifier("nx_provenance_claimed");
 
 /** One column of a row of the provenance table, under `alias`. */
 function column(alias: Alias, name: string): SQL {
@@ -109,10 +117,55 @@ function sourceUnknownSql(alias: Alias): SQL {
 }
 
 /**
+ * Whether one of the scope's translatable fields has no live record in one document's language:
+ * a value from before origins were recorded, which only the language-level stamp can judge. Field
+ * by field, so one field recorded since does not leave the others unjudged.
+ */
+function fieldUnrecordedSql(
+  scope: ProvenanceScope,
+  entryId: SQL,
+  locale: SQL,
+  /** The language's own row, whose columns hold its values. */
+  row: SQL
+): SQL {
+  if (scope.fields.length === 0) return sql`1=0`;
+  // A field counts only where the language holds a value of it: one made before origins were
+  // recorded. A field the language never translated holds none; it is missing, not out of date,
+  // so a change at its source says nothing of the language.
+  return sql`(${sql.join(
+    scope.fields.map(
+      field => sql`(${row}.${sql.identifier(toSnakeCase(field))} IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM ${PROVENANCE} ${COVERED}
+      WHERE ${liveRowsOfSql(COVERED, scope, entryId, locale)}
+      AND ${column(COVERED, "field_path")} = ${field}))`
+    ),
+    sql` OR `
+  )})`;
+}
+
+/**
+ * The language a document's language is made from, for its language-level stamp to be compared
+ * with: the source its live records claim (a copy of French, say), else `defaultLocale`, the
+ * source every other language is made from. Where records claim more than one, the greatest is
+ * taken, so the answer is the same on every dialect.
+ */
+export function stampSourceLocaleSql(args: {
+  scope: ProvenanceScope;
+  entryId: SQL;
+  locale: SQL;
+  defaultLocale: string;
+}): SQL {
+  const { scope, entryId, locale } = args;
+  return sql`COALESCE((SELECT MAX(${column(CLAIMED, "source_locale")}) FROM ${PROVENANCE} ${CLAIMED}
+    WHERE ${liveRowsOfSql(CLAIMED, scope, entryId, locale)}
+    AND ${column(CLAIMED, "source_locale")} IS NOT NULL), ${args.defaultLocale})`;
+}
+
+/**
  * Whether one document's language is out of date: when any of its recorded values is, and
  * otherwise by `byStamp`, the language-level stamp comparison, wherever the recorded values
- * cannot say: the language has none, or one of them was made from a source with no recorded
- * value (`sourceUnknownSql`).
+ * cannot say: the language has none, one of its fields has none (`fieldUnrecordedSql`), or one of
+ * them was made from a source with no recorded value (`sourceUnknownSql`).
  */
 export function languageOutOfDateSql(args: {
   scope: ProvenanceScope;
@@ -120,6 +173,8 @@ export function languageOutOfDateSql(args: {
   entryId: SQL;
   /** The language, as the enclosing query has it. */
   locale: SQL;
+  /** The language's own translation row, as the enclosing query has it. */
+  row: SQL;
   byStamp: SQL;
 }): SQL {
   const { scope, entryId, locale } = args;
@@ -130,7 +185,7 @@ export function languageOutOfDateSql(args: {
   ) OR (${args.byStamp} AND (NOT EXISTS (
     SELECT 1 FROM ${PROVENANCE} ${RECORDED}
     WHERE ${liveRowsOfSql(RECORDED, scope, entryId, locale)}
-  ) OR EXISTS (
+  ) OR ${fieldUnrecordedSql(scope, entryId, locale, args.row)} OR EXISTS (
     SELECT 1 FROM ${PROVENANCE} ${UNKNOWN}
     WHERE ${liveRowsOfSql(UNKNOWN, scope, entryId, locale)}
     AND ${sourceUnknownSql(UNKNOWN)}

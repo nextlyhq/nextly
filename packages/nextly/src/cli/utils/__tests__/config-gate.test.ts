@@ -266,3 +266,25 @@ describe("a configuration cached from a file named with -c, since removed", () =
     });
   });
 });
+
+describe("a configuration cached from one project, asked for by a caller that keeps the default", () => {
+  // Another project's configuration is no answer for this one, whether or not the caller refuses
+  // a missing one: a blank migration would otherwise be written where the first project puts them.
+  it("is not given for another project that has none", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    await loadConfig({ cwd: project() });
+    const other = realpathSync(
+      mkdtempSync(join(tmpdir(), "nextly-config-gate-other-"))
+    );
+    made.push(other);
+
+    const loaded = await loadConfig({ cwd: other });
+
+    expect(loaded.configPath).toBeUndefined();
+    expect(loaded.config.collections ?? []).toEqual([]);
+  });
+});

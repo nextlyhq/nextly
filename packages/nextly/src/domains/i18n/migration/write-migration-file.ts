@@ -5,6 +5,10 @@ import {
   entityHeaderLine,
   SCOPED_ENTITIES_MARKER,
 } from "../../schema/migrate-create/format-file";
+import {
+  prepareWhole,
+  type PreparedFile,
+} from "../../schema/migrate-create/writer-hold";
 
 import { buildLocalizationDownSql } from "./generate-down";
 import { buildLocalizationUpSql } from "./generate-up";
@@ -100,7 +104,7 @@ export interface WriteCompanionMigrationOpts {
 }
 
 /**
- * Where `writeCompanionMigrationFile` writes `spec`'s file, worked out from
+ * Where `prepareCompanionMigrationFile` puts `spec`'s file, worked out from
  * the same name and timestamp, so a dry run can name the file without
  * writing it.
  */
@@ -122,21 +126,24 @@ function companionBaseName(
 }
 
 /**
- * Write a snapshot-less companion `.sql` migration from a pre-planned
- * `planCompanionMigration` result. Like {@link writeLocalizationMigrationFile}, it writes
- * **no** paired `meta/<name>.snapshot.json` so the file-migration runner executes it
+ * Prepare a snapshot-less companion `.sql` migration from a pre-planned
+ * `planCompanionMigration` result: the whole file written under another name
+ * beside its own, for the writer of the migration it belongs to to put in
+ * place with that migration's own files (`publishHeld`). A companion that
+ * cannot be written then leaves no migration behind without it.
+ *
+ * Like {@link writeLocalizationMigrationFile}, it has **no** paired
+ * `meta/<name>.snapshot.json`, so the file-migration runner executes it
  * verbatim (the only path that runs the cross-table `INSERT ... SELECT` seed).
  *
  * Callers (migrate:create) pass the UP/DOWN SQL the planner produced so the file's shape
  * matches the planned transition (create-only vs enable) exactly.
- *
- * @returns the absolute path of the written `.sql` file.
  */
-export function writeCompanionMigrationFile(
+export function prepareCompanionMigrationFile(
   migrationsDir: string,
   spec: CompanionMigrationSpec,
   opts: WriteCompanionMigrationOpts
-): string {
+): Promise<PreparedFile> {
   const baseName = companionBaseName(spec, opts);
   // The statements below are one route to the goal — the right one for a database that has had
   // nothing done to it yet. Recording the goal itself lets the apply path choose a different route
@@ -153,7 +160,8 @@ export function writeCompanionMigrationFile(
     `${formatLocalizationIntent({ kind: opts.kind, entity: opts.entity, spec })}\n`;
   const content = `${header}\n-- UP\n${opts.upSql}\n\n-- DOWN\n${opts.downSql}\n`;
 
-  const path = companionMigrationPath(migrationsDir, spec, opts);
-  writeFileSync(path, content, "utf-8");
-  return path;
+  return prepareWhole(
+    companionMigrationPath(migrationsDir, spec, opts),
+    content
+  );
 }

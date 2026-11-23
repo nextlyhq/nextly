@@ -58,6 +58,38 @@ describe("migrationDriftError", () => {
     expect(err.publicMessage).not.toContain("Schema Builder");
   });
 
+  it("gives a translations table's drift the recoveries that work for its file", () => {
+    const err = migrationDriftError({
+      migration: "20260522_adds_localization_posts",
+      file: "src/db/migrations/20260522_adds_localization_posts.sql",
+      translationsTable: "dc_posts_locales",
+      driftItems: [{ kind: "-", detail: "column dc_posts_locales.title" }],
+    });
+
+    expect(err.code).toBe("NEXTLY_MIGRATION_DRIFT");
+    expect(err.publicMessage).toContain(
+      "The translations table dc_posts_locales differs from what the applied"
+    );
+    expect(err.publicMessage).toContain("- column dc_posts_locales.title");
+    expect(err.publicMessage).toContain(
+      "Put back what the lines above say is missing"
+    );
+    expect(err.publicMessage).toContain("pnpm nextly migrate:create");
+    // Removing the field clears the check, yet a pending file that still uses the column runs
+    // first and fails on it: the recovery has to say so, and send that case to [A].
+    expect(err.publicMessage).toContain(
+      "only when no migration file not yet applied uses that column"
+    );
+    // The main file's recoveries do not work here: a companion file has no snapshot to
+    // capture into, and marking it applied would skip the values it moves.
+    expect(err.publicMessage).not.toContain("migrate:resolve --applied");
+    expect(err.publicMessage).not.toContain("capture_drift");
+    expect(err.publicMessage).not.toContain("db:sync");
+    expect(err.logContext).toMatchObject({
+      suggestedActions: ["restore-table", "migrate-the-change"],
+    });
+  });
+
   // A refused Builder save has withdrawn its file, so the way on is the one a save can take, and
   // no command that names the file or compares only the definitions is offered.
   it("tells a Builder save's refusal its own way on, naming no file and no command", () => {

@@ -40,6 +40,10 @@ import {
 } from "../../__tests__/helpers/run-nextly";
 import { createLogger } from "../../utils/logger";
 import { collectionRegistryOn } from "../db-sync-registry";
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+
+// `nextly db:sync` as every installation runs it: per-language storage (`storage-layout`).
+perLanguageStorageSuite();
 
 /** A collection in code throughout; the second configuration adds a column to it. */
 const POSTS = "dsr_posts";
@@ -136,11 +140,14 @@ describe.each(LOCK_DIALECTS)(
       const tables = (
         shape as { tables: { name: string; columns: { name: string }[] }[] }
       ).tables;
-      return (
-        tables
-          .find(table => table.name === `dc_${POSTS}`)
-          ?.columns.map(column => column.name) ?? []
-      );
+      // Wherever the posts' fields are kept: every installation keeps its translatable fields in
+      // the per-language table beside the main one.
+      return tables
+        .filter(
+          table =>
+            table.name === `dc_${POSTS}` || table.name === `dc_${POSTS}_locales`
+        )
+        .flatMap(table => table.columns.map(column => column.name));
     };
 
     beforeAll(async () => {

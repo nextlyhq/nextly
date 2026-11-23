@@ -102,11 +102,6 @@ vi.mock("../../cli/utils/config-loader", async importOriginal => {
         config,
         config.plugins ?? []
       );
-      // As the real loader does.
-      const { adoptPerLanguageStorage } = await import(
-        "../../domains/i18n/per-language-storage"
-      );
-      adoptPerLanguageStorage(merged.perLanguageStorage);
       return {
         config: merged,
         appConfig: config,

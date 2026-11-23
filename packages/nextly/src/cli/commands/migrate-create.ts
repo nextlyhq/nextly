@@ -55,12 +55,6 @@ import { buildExtensionSchema } from "../../domains/schema/extension/build-exten
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
-  blankLineHeader,
-  blankLineIn,
-  nothingToRecordNotice,
-  refuseUnrecordableMerge,
-} from "../../domains/schema/migrate/history-line";
-import {
   consentCovers,
   consentToCover,
   countDeletions,
@@ -70,6 +64,12 @@ import {
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
 import { countEntityRows } from "../../domains/schema/migrate/entity-shared-rows";
+import {
+  blankLineHeader,
+  blankLineIn,
+  nothingToRecordNotice,
+  refuseUnrecordableMerge,
+} from "../../domains/schema/migrate/history-line";
 import {
   orderedMigrations,
   type PluginMigration,
@@ -308,6 +308,9 @@ const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
   // confirmed.
   "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
   "NEXTLY_UPGRADE_IN_PROGRESS",
+  // `upgrade`'s localisation steps: two configured language codes that become one.
+  "NEXTLY_LANGUAGE_CODES_COLLIDE",
+  "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
   // `migrate:resolve`'s checks: the file, its snapshot, the live schema
   // against it, and the ledger's state for the mode asked for.
   "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
@@ -691,6 +694,9 @@ export async function runMigrateCreate(
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
+      // A blank migration reads no entity, only the migrations folder, so a project with no
+      // configuration file writes it there as it did; every other run plans from the entities.
+      missing: options.blank ? "defaults" : "refuse",
     },
     logger
   );

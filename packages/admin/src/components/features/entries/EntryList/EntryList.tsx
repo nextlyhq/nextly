@@ -103,6 +103,7 @@ import { useDeclaredRowActions } from "./useDeclaredRowActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import type { EntryRow, EntryVersions } from "./useEntrySelection";
 import { useListCreateDialog } from "./useListCreateDialog";
+import { workflowListFilters } from "./workflow-list-filters";
 
 // ============================================================================
 // Types
@@ -277,9 +278,18 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // Plugins' declared row actions for this list, and the component one of
   // them opened, drawn below in a dialog with the row it was run on.
   const declaredActions = useDeclaredRowActions<EntryRow>(collectionSlug);
+  // Fetch collection metadata: read before the filters, since a workflow's review filters are
+  // offered from it.
+  const { data: collection, isLoading: collectionLoading } =
+    useCollection(collectionSlug);
+  // The plugins' filters, then the review filters of the workflow holding the collection: one
+  // toolbar, one `pf` in the URL and one way into the request for both.
   const pluginFilters = useMemo(
-    () => listFiltersFor(plugins, collectionSlug),
-    [plugins, collectionSlug]
+    () => [
+      ...listFiltersFor(plugins, collectionSlug),
+      ...workflowListFilters(collection?.workflow),
+    ],
+    [plugins, collectionSlug, collection?.workflow]
   );
   const chosenPluginFilterOptions = useMemo(
     () =>
@@ -296,7 +306,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     isUnavailable: pluginFiltersUnavailable,
   } = useBrandingStatus();
   const choosesPluginFilter = pluginFilterParamValues(searchParams).length > 0;
-  const awaitsPluginFilters = pluginFiltersPending && choosesPluginFilter;
+  // A review filter is offered from the collection, so a choice waits for it too.
+  const awaitsPluginFilters =
+    (pluginFiltersPending || collectionLoading) && choosesPluginFilter;
   const lostPluginFilters =
     !pluginFiltersPending && pluginFiltersUnavailable && choosesPluginFilter;
   // The page returns to the first whenever the choice changes, however it
@@ -320,10 +332,6 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // ---------------------------------------------------------------------------
   // Queries
   // ---------------------------------------------------------------------------
-
-  // Fetch collection metadata
-  const { data: collection, isLoading: collectionLoading } =
-    useCollection(collectionSlug);
 
   // Request the per-locale translation-status overview only for localized collections
   // on a localization-enabled app — drives the list's translation-completeness column.
@@ -440,6 +448,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       status: "all",
       where: whereFilter,
       translationStatus: wantsTranslationStatus || undefined,
+      // Each row's review state, for the Review column and the bulk moves, where a workflow
+      // holds the collection.
+      reviewState: collection?.workflow ? true : undefined,
       // Counting every row of a very large collection is slow, and the list
       // only needs to say "1000+" past that.
       cappedCount: true,

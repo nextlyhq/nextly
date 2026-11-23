@@ -90,6 +90,7 @@ import {
   snapshotPathOf,
 } from "../../domains/schema/migrate-create/snapshot-io";
 import {
+  prepareAll,
   prepareWhole,
   publishHeld,
   withMigrationWriterHold,
@@ -1054,25 +1055,28 @@ async function adopt(deps: BaselineCoreDeps): Promise<BaselineCoreResult> {
       // that writes neither, and records nothing.
       await publishHeld(migrationsDir, async () => {
         await mkdir(migrationsDir, { recursive: true });
-        return [
-          await prepareSnapshot(
-            planned.metaDir,
-            baseName,
-            planned.snapshot,
-            sqlContent,
-            // What the app contributed to other owners' tables, as every snapshot
-            // writer records it, so the next diff can tell the app's elements from
-            // the owner's own after this file becomes the latest snapshot.
-            planned.contributions,
-            undefined,
-            undefined,
-            // A baseline is a project's first migration: written from none.
-            { parent: null, merges: [] },
-            // The names the database keeps field groups under, which every later file follows.
-            deps.fieldGroupNaming ?? "legacy"
-          ),
-          await prepareWhole(sqlPath, sqlContent),
-        ];
+        // Each written aside in turn (`prepareAll`): where the second
+        // cannot be, the first is not left waiting in `meta/`.
+        return prepareAll([
+          () =>
+            prepareSnapshot(
+              planned.metaDir,
+              baseName,
+              planned.snapshot,
+              sqlContent,
+              // What the app contributed to other owners' tables, as every snapshot
+              // writer records it, so the next diff can tell the app's elements from
+              // the owner's own after this file becomes the latest snapshot.
+              planned.contributions,
+              undefined,
+              undefined,
+              // A baseline is a project's first migration: written from none.
+              { parent: null, merges: [] },
+              // The names the database keeps field groups under, which every later file follows.
+              deps.fieldGroupNaming ?? "legacy"
+            ),
+          () => prepareWhole(sqlPath, sqlContent),
+        ]);
       });
 
       // The ledger is bootstrapped out of band by `migrate`, which has never

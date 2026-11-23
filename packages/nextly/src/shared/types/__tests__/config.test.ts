@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { NextlyError } from "../../../errors/nextly-error";
 
 import { sanitizeConfig } from "../config";
+import { perLanguageStorageWritten } from "../per-language-storage-written";
 
 describe("sanitizeConfig — production migration db options", () => {
   it("defaults runMigrationsOnBoot=false and the schema lock's lease to 120 s", () => {
@@ -28,33 +29,6 @@ describe("sanitizeConfig — webhook audit seam", () => {
   it("resolves webhooks.audit true", () => {
     expect(
       sanitizeConfig({ webhooks: { audit: true } }).webhookAuditEnabled
-    ).toBe(true);
-  });
-});
-
-describe("sanitizeConfig — per-language storage", () => {
-  it("is off unless experimental.perLanguageStorage is true", () => {
-    expect(sanitizeConfig({}).perLanguageStorage).toBe(false);
-    expect(sanitizeConfig({ experimental: {} }).perLanguageStorage).toBe(false);
-    expect(
-      sanitizeConfig({ experimental: { perLanguageStorage: true } })
-        .perLanguageStorage
-    ).toBe(true);
-    // A stray value from an untyped config never moves a site's storage.
-    expect(
-      sanitizeConfig({
-        experimental: { perLanguageStorage: "yes" as unknown as boolean },
-      }).perLanguageStorage
-    ).toBe(false);
-  });
-
-  // The CLI sanitizes the config export again, and an export written with `defineConfig` is
-  // sanitized already: the setting must survive that, or the CLI lays tables out without it.
-  it("keeps the setting when an already-sanitized config is sanitized again", () => {
-    const once = sanitizeConfig({ experimental: { perLanguageStorage: true } });
-    expect(
-      sanitizeConfig(once as unknown as Parameters<typeof sanitizeConfig>[0])
-        .perLanguageStorage
     ).toBe(true);
   });
 });
@@ -122,5 +96,41 @@ describe("sanitizeConfig — admin.environment", () => {
     expect(refusals("Production")).toEqual([
       { path: "admin.environment", message: "Must be { label, tone? }." },
     ]);
+  });
+});
+
+// The setting chooses no layout any longer, but the sanitized config keeps the boolean the
+// published type promises, and carries what the configuration wrote apart from it, so the start
+// warns only a site that still sets it.
+describe("sanitizeConfig — the deprecated per-language storage setting", () => {
+  it("is always true, whatever the configuration writes", () => {
+    expect(sanitizeConfig({}).perLanguageStorage).toBe(true);
+    expect(
+      sanitizeConfig({ experimental: { perLanguageStorage: false } })
+        .perLanguageStorage
+    ).toBe(true);
+  });
+
+  it("records what the configuration wrote off the published type, and nothing where it writes nothing", () => {
+    const unset = sanitizeConfig({});
+    expect(perLanguageStorageWritten(unset)).toBeUndefined();
+    expect(Object.keys(unset)).not.toContain("perLanguageStorageSetting");
+    const written = sanitizeConfig({
+      experimental: { perLanguageStorage: false },
+    });
+    expect(perLanguageStorageWritten(written)).toBe(false);
+    // A stray value from an untyped config is not taken for a written setting.
+    expect(
+      perLanguageStorageWritten(
+        sanitizeConfig({
+          experimental: { perLanguageStorage: "yes" as unknown as boolean },
+        })
+      )
+    ).toBeUndefined();
+    // A copy of it, and a sanitized config sanitized again as the CLI does, keep what was written.
+    expect(perLanguageStorageWritten({ ...written })).toBe(false);
+    expect(perLanguageStorageWritten(sanitizeConfig(written as never))).toBe(
+      false
+    );
   });
 });

@@ -566,6 +566,13 @@ exports[`each code, as a command ends with it > BUILDER_RELATION_TARGET_UNKNOWN 
   Docs: https://nextlyhq.com/docs/cli/errors/builder-relation-target-unknown  (BUILDER_RELATION_TARGET_UNKNOWN)"
 `;
 
+exports[`each code, as a command ends with it > BUILDER_SAVE_EARLIER_LEFT 1`] = `
+"✗ An earlier Builder save stopped between its migration files (collection "posts"), and the rest of them have not run yet.
+  Why:  An earlier Builder save was left part-way and is not settled, and a save written over it would start from a state nothing has finished.
+  Next: Start the app in development (\`next dev\`): its start finishes the previous save. Then save again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-save-earlier-left  (BUILDER_SAVE_EARLIER_LEFT)"
+`;
+
 exports[`each code, as a command ends with it > BUILDER_SAVE_LEFT_PART_WAY 1`] = `
 "✗ A Builder save was left part-way, so the database does not match its migrations yet.
   Why:  Left part-way: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio.
@@ -1132,6 +1139,13 @@ exports[`each code, as a command ends with it > MIGRATION_NOT_PROVEN 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/migration-not-proven  (MIGRATION_NOT_PROVEN)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATION_NOT_WRITTEN 1`] = `
+"✗ The migration was not written: moving 20261020_120000_001_create_localization_posts.sql into place failed (EACCES).
+  Why:  The files already placed were removed; the folder is as it was.
+  Next: Check that the migrations folder can be written to and has room, then run \`migrate:create\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-not-written  (MIGRATION_NOT_WRITTEN)"
+`;
+
 exports[`each code, as a command ends with it > MIGRATION_SQL_UNCHECKABLE 1`] = `
 "✗ A migration contains SQL whose drops cannot be read, so which owner's tables it drops cannot be checked.
   Why:  A statement in \`@acme/seo/20261020_120000_add_redirects\` could not be read: unterminated block comment. It has been refused.
@@ -1169,8 +1183,8 @@ exports[`each code, as a command ends with it > MISSING_MIGRATION 1`] = `
 
 exports[`each code, as a command ends with it > MISSING_SNAPSHOT 1`] = `
 "✗ \`20261020_120000_add_posts.sql\` has no paired snapshot file in /home/you/app/migrations/meta.
-  Why:  Nothing is at \`20261020_120000_add_posts.snapshot.json\`, which \`migrate:create\` writes beside every migration; a migration generated before it wrote snapshots has none.
-  Next: Either delete it, or re-create it with \`nextly migrate:create --blank\` and copy the SQL across.
+  Why:  Nothing is at \`20261020_120000_add_posts.snapshot.json\`, which \`migrate:create\` writes beside every migration it generates, and the file does not say it is a blank migration, which has none; a migration generated before snapshots were written has none either.
+  Next: Restore the snapshot if it was deleted. For SQL you wrote yourself: if no database has applied the file, re-create it with \`nextly migrate:create --blank\` and copy the SQL across; if one has, add the line \`-- This is a blank migration file for custom SQL.\` to its header instead, then accept the edit with \`nextly migrate:resolve --applied '20261020_120000_add_posts' --skip-verify\` on every database that has applied it. Otherwise delete the file.
   Docs: https://nextlyhq.com/docs/cli/errors/missing-snapshot  (MISSING_SNAPSHOT)"
 `;
 

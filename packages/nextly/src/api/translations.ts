@@ -31,7 +31,7 @@ import {
 } from "../domains/i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { appLocalization } from "../domains/i18n/configured-locales";
-import { isValidLocale } from "../domains/i18n/resolve-locale";
+import { configuredLocale } from "../domains/i18n/resolve-locale";
 import { resolveCompanionColumn } from "../domains/i18n/runtime/companion-readiness";
 import {
   AUTHORIZATION_CONCURRENCY,
@@ -171,7 +171,7 @@ function configuredLocalization(): SanitizedLocalizationConfig | undefined {
 }
 
 /**
- * Refuse a language the app does not have.
+ * The configured code `locale` names, refusing a language the app does not have.
  *
  * Not pedantry: an unconfigured code has no rows in any companion table, so the
  * `NOT EXISTS` predicate matches EVERYTHING. `locale=esp` would report every
@@ -179,7 +179,7 @@ function configuredLocalization(): SanitizedLocalizationConfig | undefined {
  * which is both alarming and completely wrong, and nothing in the response
  * would hint that the language was the problem.
  */
-function assertConfiguredLocale(locale: string): void {
+function assertConfiguredLocale(locale: string): string {
   const localization = configuredLocalization();
   if (localization === undefined) {
     throw NextlyError.validation({
@@ -192,7 +192,8 @@ function assertConfiguredLocale(locale: string): void {
       ],
     });
   }
-  if (!isValidLocale(localization, locale)) {
+  const configured = configuredLocale(localization, locale);
+  if (configured === undefined) {
     throw NextlyError.validation({
       errors: [
         {
@@ -205,6 +206,9 @@ function assertConfiguredLocale(locale: string): void {
       ],
     });
   }
+  // An older spelling of a configured language is answered for under the code its rows are
+  // stored under, never the spelling as sent.
+  return configured;
 }
 
 /**
@@ -349,10 +353,10 @@ async function resolveStalenessCapability<
  */
 export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   const { auth, searchParams } = await authenticatedRead(req);
-  const locale = searchParams.get("locale");
+  const requested = searchParams.get("locale");
   // Required, and refused rather than defaulted to the site default: a worklist
   // for a language nobody asked about is a list of work that is not theirs.
-  if (locale === null || locale === "") {
+  if (requested === null || requested === "") {
     throw NextlyError.validation({
       errors: [
         {
@@ -371,7 +375,7 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   const depth = page * limit;
 
   await getCachedNextly();
-  assertConfiguredLocale(locale);
+  const locale = assertConfiguredLocale(requested);
   const handler = container.get<CollectionsHandler>("collectionsHandler");
   const caller = await readCaller(auth);
 

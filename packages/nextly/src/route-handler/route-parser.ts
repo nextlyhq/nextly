@@ -2741,6 +2741,13 @@ const WORKFLOW_ROUTES: readonly {
     operation: "list",
     method: "listWaiting",
   },
+  // Whether anything can ever wait for the caller's review: the admin's sidebar asks it.
+  {
+    path: ["waiting", "scope"],
+    verb: "GET",
+    operation: "single",
+    method: "getWaitingScope",
+  },
   {
     path: ["steps", null],
     verb: "POST",

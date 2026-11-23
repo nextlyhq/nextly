@@ -31,6 +31,7 @@ import {
   describeDeletion,
   type Deletion,
 } from "../migrate/data-loss-consent";
+import { BLANK_FILE_LINE } from "../migrate/history-line";
 import { NO_TRANSACTION_MARKER } from "../migrate/split-sql";
 
 import { getDialectDisplayName } from "./dialect-name";
@@ -376,7 +377,7 @@ export function formatBlankFile(
 -- Generated at: ${now.toISOString()}
 -- Dialect: ${getDialectDisplayName(dialect)}
 ${options.line ?? ""}--
--- This is a blank migration file for custom SQL.
+${BLANK_FILE_LINE}
 -- Add your migration SQL below.
 --
 ${
