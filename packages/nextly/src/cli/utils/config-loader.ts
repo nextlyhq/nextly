@@ -702,6 +702,37 @@ function asCause(error: unknown): Error | undefined {
 }
 
 /**
+ * Refuses the configuration's problems, and the Builder's definitions' beside them
+ * (`builderProblemsFor`), every one named rather than the first.
+ */
+function refuseConfigurationProblems(args: {
+  /** The app's own entities, as the plugins' setups left them, where the app declared them. */
+  appConfig: Parameters<typeof configurationProblems>[0];
+  config: SanitizedNextlyConfig;
+  builderEntities: BuilderEntities;
+  configPath: string;
+  options: LoadConfigOptions;
+}): void {
+  const problems: ReturnType<typeof configurationProblems> = [
+    ...configurationProblems(args.appConfig, args.config),
+    // The Builder's definitions, by the same rules: reported with the configuration's for a
+    // command that reads the entities, warned of for a running site.
+    ...builderProblemsFor(
+      args.builderEntities,
+      args.config,
+      args.config.db?.uiSchemaFile,
+      args.options
+    ),
+  ];
+  if (problems.length > 0) {
+    throw NextlyError.validation({
+      errors: problems,
+      logContext: { configPath: args.configPath, reason: "config-invalid" },
+    });
+  }
+}
+
+/**
  * The load where no configuration file is found and the caller takes the defaults: the default
  * configuration, with the Builder's definitions beside it judged.
  */
@@ -1062,28 +1093,15 @@ async function loadConfigInternal(
     // field's type is judged against them.
     // The app's own entities, in the form the plugins' setups left them, placed where the app
     // declared them; a plugin's contributions keep the checks of their own type.
-    const problems: ReturnType<typeof configurationProblems> =
-      configurationProblems(appConfig, config);
-    // The Builder's definitions, by the same rules, where the file could be read: reported with
-    // the configuration's for a command that reads the entities, warned of for a running site.
-    builderEntitiesRead ??= await readBuilderEntities(
-      cwd,
-      config.db?.uiSchemaFile
-    );
-    problems.push(
-      ...builderProblemsFor(
-        builderEntitiesRead,
-        config,
-        config.db?.uiSchemaFile,
-        options
-      )
-    );
-    if (problems.length > 0) {
-      throw NextlyError.validation({
-        errors: problems,
-        logContext: { configPath, reason: "config-invalid" },
-      });
-    }
+    refuseConfigurationProblems({
+      appConfig,
+      config,
+      builderEntities:
+        builderEntitiesRead ??
+        (await readBuilderEntities(cwd, config.db?.uiSchemaFile)),
+      configPath,
+      options,
+    });
 
     // After the configuration's problems, among which a cycle in its own field groups is listed.
     // Field groups placed in a cycle are judged over code and the Builder's field groups whether
