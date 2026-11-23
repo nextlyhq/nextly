@@ -43,6 +43,8 @@
  * ```
  */
 
+import { NextlyError } from "../errors/nextly-error";
+
 import { LocalStorageAdapter } from "./adapters/local-adapter";
 import { assertClientUploadClaim } from "./client-upload-claim";
 import { keepsCopies } from "./keeps-copies";
@@ -50,6 +52,12 @@ import {
   recordStorageWriteFailure,
   recordStorageWriteSuccess,
 } from "./last-write-failure";
+import {
+  keepsFilesPrivate,
+  privateFileStore,
+  type PrivateFileStorage,
+  type PrivateFileStore,
+} from "./private-files";
 import type {
   BulkDeleteResult,
   ClientUploadData,
@@ -101,6 +109,18 @@ export interface MediaStorageConfig {
     /** URL path prefix for serving files (default: /uploads) */
     publicPath?: string;
   };
+
+  /**
+   * Collections whose files are private: no public address ever serves them.
+   * Routing for these fails closed. A private collection with no storage
+   * plugin, or whose plugin cannot keep files private, is refused rather than
+   * written to the local disk, and every call that would give a file a public
+   * address (`upload`, `getPublicUrl`, client uploads, signed downloads) is
+   * refused for it. Their files are stored through `getPrivateFiles`.
+   *
+   * @experimental
+   */
+  privateCollections?: readonly string[];
 }
 
 /**
@@ -143,6 +163,56 @@ async function recordedWrite<T>(
   if (failure === undefined) recordStorageWriteSuccess();
   else recordStorageWriteFailure(adapterType(adapter), failure.error);
   return result;
+}
+
+/**
+ * Refuse a call that would give a private collection's file a public address,
+ * or would put it where it may be public. The public message is generic; what
+ * to change goes to the operator.
+ */
+function refusePrivate(collection: string, why: string): never {
+  throw NextlyError.configuration({
+    logMessage: `The collection "${collection}" keeps private files: ${why}`,
+    logContext: { collection, reason: "private-collection" },
+  });
+}
+
+/**
+ * A private collection's storage as `getAdapterForCollection` hands it out:
+ * reading, checking and deleting pass through, and the calls that form a
+ * public address or write under a key of the storage's choosing are refused.
+ * Signed links and direct uploads are absent, so nothing reaches them by
+ * feature detection either; the private-file store is the way to both.
+ */
+function privateAdapterView(
+  collection: string,
+  adapter: PrivateFileStorage
+): IStorageAdapter {
+  const view: IStorageAdapter = {
+    upload: () =>
+      refusePrivate(
+        collection,
+        "upload() gives a file a public address; store it through getPrivateFiles()."
+      ),
+    getPublicUrl: () =>
+      refusePrivate(collection, "its files have no public address."),
+    delete: filePath => adapter.delete(filePath),
+    exists: filePath => adapter.exists(filePath),
+    getType: () => adapter.getType(),
+    getInfo: () => ({
+      ...adapter.getInfo(),
+      supportsSignedUrls: false,
+      supportsClientUploads: false,
+    }),
+    read: (filePath, options) => adapter.read(filePath, options),
+    head: filePath => adapter.head(filePath),
+    readStream: (filePath, options) => adapter.readStream(filePath, options),
+  };
+  if (adapter.bulkDelete) {
+    const bulkDelete = adapter.bulkDelete.bind(adapter);
+    view.bulkDelete = filePaths => bulkDelete(filePaths);
+  }
+  return view;
 }
 
 /** How many of the fallback's deletes run at once. */
@@ -212,6 +282,9 @@ export class MediaStorage {
   /** Local storage adapter (always available as fallback) */
   private localAdapter: IStorageAdapter;
 
+  /** Collections whose files are private, routed fail-closed. */
+  private privateCollections: ReadonlySet<string>;
+
   /**
    * Create a new MediaStorage instance.
    *
@@ -223,6 +296,7 @@ export class MediaStorage {
       basePath: config?.local?.uploadDir ?? "./public/uploads",
       baseUrl: config?.local?.publicPath ?? "/uploads",
     });
+    this.privateCollections = new Set(config?.privateCollections);
 
     // Register plugins if provided
     if (config?.plugins) {
@@ -301,6 +375,13 @@ export class MediaStorage {
    * @returns The storage adapter instance, or null if not configured
    */
   getAdapterOrNull(collection?: string): IStorageAdapter | null {
+    // A private collection never falls back to the local disk.
+    if (collection && this.isPrivateCollection(collection)) {
+      const adapter = this.collectionAdapters.get(collection);
+      return keepsFilesPrivate(adapter)
+        ? privateAdapterView(collection, adapter)
+        : null;
+    }
     if (collection && this.collectionAdapters.has(collection)) {
       return this.collectionAdapters.get(collection)!;
     }
@@ -318,12 +399,69 @@ export class MediaStorage {
    * @throws Error if no storage plugin is configured
    */
   getAdapterForCollection(collection?: string): IStorageAdapter {
+    // A private collection fails closed: its own storage, seen through a view
+    // that forms no public address, or a refusal. Never the local disk, which
+    // serves every file it holds publicly.
+    if (collection && this.isPrivateCollection(collection)) {
+      return privateAdapterView(collection, this.privateStorageFor(collection));
+    }
     if (collection && this.collectionAdapters.has(collection)) {
       return this.collectionAdapters.get(collection)!;
     }
 
     // Fall back to local storage adapter (always available)
     return this.localAdapter;
+  }
+
+  /**
+   * Whether `collection`'s files are private.
+   *
+   * @experimental
+   */
+  isPrivateCollection(collection: string): boolean {
+    return this.privateCollections.has(collection);
+  }
+
+  /**
+   * The storage a private collection's files go to, or a refusal: when the
+   * collection is not private, when no storage plugin takes it, or when its
+   * storage cannot keep files private. The one answer routing and the
+   * private-file store share.
+   */
+  private privateStorageFor(collection: string): PrivateFileStorage {
+    if (!this.isPrivateCollection(collection)) {
+      return refusePrivate(collection, "it is not declared private.");
+    }
+    const adapter = this.collectionAdapters.get(collection);
+    if (adapter === undefined) {
+      return refusePrivate(
+        collection,
+        "no storage plugin lists it, and the local disk serves every file publicly. Add it to a storage plugin that keeps files private."
+      );
+    }
+    if (!keepsFilesPrivate(adapter)) {
+      return refusePrivate(
+        collection,
+        `its storage (${adapterType(adapter)}) cannot keep files private as configured. Use a storage plugin that can, with no public URL in front of it.`
+      );
+    }
+    return adapter;
+  }
+
+  /**
+   * A private collection's files: opaque keys, short links, no public
+   * address. Refused when the collection is not private or its storage
+   * cannot keep files private.
+   *
+   * @experimental
+   */
+  getPrivateFiles(collection: string): PrivateFileStore {
+    const adapter = this.privateStorageFor(collection);
+    const prefix = this.getCollectionConfig(collection)?.prefix;
+    return privateFileStore(collection, adapter, {
+      ...(prefix !== undefined ? { prefix } : {}),
+      recordWrite: write => recordedWrite(adapter, write),
+    });
   }
 
   /**
@@ -371,6 +509,16 @@ export class MediaStorage {
    * ```
    */
   async upload(buffer: Buffer, options: UploadOptions): Promise<UploadResult> {
+    // Refused before anything is written, since an upload's answer is a
+    // public URL, and outside the write record: a refused call is not a
+    // storage failure. Client uploads and signed downloads are refused by the
+    // private view's own info, which says it supports neither.
+    if (options.collection && this.isPrivateCollection(options.collection)) {
+      return refusePrivate(
+        options.collection,
+        "upload() gives a file a public address; store it through getPrivateFiles()."
+      );
+    }
     const adapter = this.getAdapterForCollection(options.collection);
     const config = options.collection
       ? this.getCollectionConfig(options.collection)

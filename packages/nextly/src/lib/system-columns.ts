@@ -680,6 +680,30 @@ export function reservedSystemFieldNames(
 }
 
 /**
+ * The dates every entry of `entity` holds by itself, by the names responses publish them under:
+ * when it was created and last saved, and, where the entity has the Draft/Published lifecycle,
+ * when it was first published.
+ *
+ * Derived from the declaration rather than listed, so a consumer that reads an entry's own dates
+ * (a plugin mapping a published date to one, say) names exactly what a response carries: a
+ * timestamp responses drop, such as the change stamp, is not one of them.
+ */
+export function entryDateFieldNames(
+  entity: SystemColumnEntity,
+  options: { statusLifecycle: boolean }
+): string[] {
+  return SYSTEM_COLUMNS.filter(
+    column =>
+      column.appliesTo.includes(entity) &&
+      column.publishedUnderCamelName &&
+      !column.strippedFromResponses &&
+      column.shape.postgresql.kind === "timestamp" &&
+      (column.presence === "always" ||
+        (column.presence === "withStatusLifecycle" && options.statusLifecycle))
+  ).map(column => column.camelName);
+}
+
+/**
  * The columns a client may never write, for a given entity.
  *
  * `appliesTo` is what keeps a single's own `created_by` field: the column does not exist on a

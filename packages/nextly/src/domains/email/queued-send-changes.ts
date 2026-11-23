@@ -102,6 +102,12 @@ export interface QueuedEmailChange {
   cancel?: QueuedEmailCancelCause;
   /** A cancel that reached an attempt in flight, on `sending`. */
   cancelRequested?: QueuedEmailCancelCause;
+  /**
+   * On `retrying`, when a person retried an email that had failed: who did
+   * (`userId`, or null for the site's own code naming nobody). The attempts
+   * that follow count from 1 again, this change marking where they start.
+   */
+  retry?: { by: "person"; userId: string | null };
 }
 
 /** A change's handler, as core holds it: handed the change's transaction. */

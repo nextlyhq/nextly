@@ -9,14 +9,14 @@
  * entity's table here leaves a `ready` verdict for those writes, whichever way their transaction
  * was opened.
  *
- * Not awaited by the boot: it costs one probe per translated entity, and a cold start should not
- * wait for them. Until it finishes, a write inside a transaction refuses as it did before, failing
- * closed; a probe that fails is logged and the others go on.
+ * Not awaited by the boot: a cold start should not wait for it. It costs one catalogue read where
+ * the adapter lists its tables, else one probe per translated entity. Until it finishes, a write
+ * inside a transaction refuses as it did before, failing closed; a failure is logged.
  *
  * @module init/warm-companion-readiness
  */
 import type { CompanionIntrospectAdapter } from "../domains/i18n/runtime/companion-io";
-import { isCompanionReady } from "../domains/i18n/runtime/companion-readiness";
+import { resolveCompanionsReady } from "../domains/i18n/runtime/companion-readiness";
 import {
   storedLocalizableEntities,
   type StoredRegistries,
@@ -59,15 +59,18 @@ export function startCompanionReadinessWarmUp(deps: {
         );
         return;
       }
-      for (const entity of entities) {
-        try {
-          await isCompanionReady(deps.adapter, entity.companionTable);
-        } catch (error) {
-          deps.logger.warn(
-            "A translation table's readiness could not be resolved at boot",
-            { table: entity.companionTable, code: codeOf(error) }
-          );
-        }
+      // All at once: one catalogue read where the adapter lists its tables, so the start's
+      // statements do not grow with the number of translated entities.
+      try {
+        await resolveCompanionsReady(
+          deps.adapter,
+          entities.map(entity => entity.companionTable)
+        );
+      } catch (error) {
+        deps.logger.warn(
+          "The translation tables' readiness could not be resolved at boot",
+          { code: codeOf(error) }
+        );
       }
     });
 }

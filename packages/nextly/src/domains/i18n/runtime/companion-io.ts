@@ -24,7 +24,7 @@ import { isUniqueViolation } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
-import { readsOnTransaction } from "../../../shared/lib/read-transaction-scope";
+import { asksOnTransaction } from "../../../shared/lib/read-transaction-scope";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import {
   readIndexUniqueness,
@@ -1211,13 +1211,6 @@ function isMissingTableError(error: unknown): boolean {
   );
 }
 
-/** Whether the calling flow holds a transaction open on `adapter`. */
-function transactionOpenInFlow(adapter: object): boolean {
-  const open = (adapter as { transactionOpenInFlow?: unknown })
-    .transactionOpenInFlow;
-  return typeof open === "function" && open.call(adapter) === true;
-}
-
 /** Whether `adapter` can ask the catalog for a table. */
 function hasTableExists(
   adapter: object
@@ -1254,10 +1247,7 @@ export async function companionTableExists(
   // a read inside a plugin's transaction (a Single's runtime table resolved
   // there) reaches this through the adapter itself, and its statement lands
   // on that transaction's connection.
-  if (
-    (readsOnTransaction(adapter) || transactionOpenInFlow(adapter)) &&
-    hasTableExists(adapter)
-  ) {
+  if (asksOnTransaction(adapter) && hasTableExists(adapter)) {
     return adapter.tableExists(companionTableName);
   }
   const q =

@@ -51,6 +51,7 @@ import { dirname, relative, resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { refuseWhileSaveLeftPartWay } from "../../domains/schema/builder-save/save-in-progress";
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
@@ -787,6 +788,19 @@ export async function runMigrateCreate(
   });
   held.enter();
   try {
+    // A Builder save this machine left part-way against this database refuses the command, a
+    // blank migration's included: what it would write from is not what the database holds. Asked
+    // once the folder is held, so a save that started while this waited for it is seen too.
+    // Another machine's or another database's is named only.
+    try {
+      await refuseWhileSaveLeftPartWay({
+        projectRoot: cwd,
+        postgresSchema: configResult.config.db.postgres?.schema,
+        notice: line => logger.warn(line),
+      });
+    } catch (error) {
+      exitWithError(logger, error);
+    }
     // Branches written without each other that change the same thing cannot
     // be recorded as merged; ones that change different things are, below.
     await refuseUnrecordableMerge(migrationsDir);
