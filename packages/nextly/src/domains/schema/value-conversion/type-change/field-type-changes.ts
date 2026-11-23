@@ -289,26 +289,28 @@ export function convertsByValue(
  *
  * @param translated the names of the fields kept per language before the save
  */
-export async function judgeFieldTypeChanges(args: {
-  db: unknown;
-  dialect: SupportedDialect;
-  builtBy: ColumnOrigin;
-  /** Whether the fields are kept on a field group's row (`columnDescriptorAt`). */
-  componentRow?: boolean;
-  table: string;
-  translationsTable?: string;
-  translated?: ReadonlySet<string>;
-  /** The names of the fields kept per language after the save: none where absent. */
-  translatedAfter?: ReadonlySet<string>;
-  /** The fields whose translations column the road's own statements retype (`retypedTranslations`). */
-  retyped?: ReadonlySet<string>;
-  changes: readonly FieldTypeChange[];
-  /**
-   * The columns whose values the road rewrites, as the new type reads each, for a pair it converts
-   * (`rewritesPair`): each change there is judged that way (`converted`).
-   */
-  rewrites?: RewritesAt;
-} & JudgingPass): Promise<JudgedFieldTypeChange[]> {
+export async function judgeFieldTypeChanges(
+  args: {
+    db: unknown;
+    dialect: SupportedDialect;
+    builtBy: ColumnOrigin;
+    /** Whether the fields are kept on a field group's row (`columnDescriptorAt`). */
+    componentRow?: boolean;
+    table: string;
+    translationsTable?: string;
+    translated?: ReadonlySet<string>;
+    /** The names of the fields kept per language after the save: none where absent. */
+    translatedAfter?: ReadonlySet<string>;
+    /** The fields whose translations column the road's own statements retype (`retypedTranslations`). */
+    retyped?: ReadonlySet<string>;
+    changes: readonly FieldTypeChange[];
+    /**
+     * The columns whose values the road rewrites, as the new type reads each, for a pair it converts
+     * (`rewritesPair`): each change there is judged that way (`converted`).
+     */
+    rewrites?: RewritesAt;
+  } & JudgingPass
+): Promise<JudgedFieldTypeChange[]> {
   const judged: JudgedFieldTypeChange[] = [];
   const columnsOf = liveColumnReader(args.db, args.dialect);
   const textOf = tableTextReader(args.db, args.dialect);

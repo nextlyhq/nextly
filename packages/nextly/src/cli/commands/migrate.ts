@@ -29,7 +29,7 @@
  * ```
  */
 
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -152,6 +152,7 @@ import {
   type FirstRun,
 } from "../../domains/schema/migrate/first-run";
 import { refuseForkedHistory } from "../../domains/schema/migrate/history-line";
+import { compareMigrationBaseNames } from "../../domains/schema/migrate/migration-order";
 import {
   outsideTransactionNotice,
   runMigrationStatements,
@@ -2175,7 +2176,9 @@ function conversionsByFile(
     );
     return named.some(tables => tables === undefined)
       ? undefined
-      : new Set(named.flatMap(tables => tables ?? []).map(t => t.toLowerCase()));
+      : new Set(
+          named.flatMap(tables => tables ?? []).map(t => t.toLowerCase())
+        );
   });
   const runsOf = new Map<string, ((db: unknown) => Promise<void>)[]>();
   for (const conversion of conversions) {
@@ -2189,7 +2192,8 @@ function conversionsByFile(
     }
     for (const [name, tables] of tablesOf) {
       const run = conversion.runIn(tables);
-      if (run !== undefined) runsOf.set(name, [...(runsOf.get(name) ?? []), run]);
+      if (run !== undefined)
+        runsOf.set(name, [...(runsOf.get(name) ?? []), run]);
     }
   }
   for (const [name, runs] of runsOf) {
@@ -5198,6 +5202,39 @@ function retypedByFiles(
     retyped.set(table, fields);
   }
   return retyped;
+}
+
+/**
+ * The snapshots around migration `name` (its base name) in `migrationsDir`: its own, which records
+ * the entities as it leaves them, and the newest one of a migration ordered before it
+ * (`compareMigrationBaseNames`), which records them as it found them. Either is null where there is
+ * none. For a rollback judging the reverse of the file's field type changes.
+ */
+export async function snapshotsAround(
+  migrationsDir: string,
+  name: string
+): Promise<{
+  own: SnapshotFile | null;
+  before: SnapshotFile | null;
+}> {
+  const metaDir = resolve(migrationsDir, "meta");
+  const own = await loadTargetSnapshot(metaDir, name);
+  let names: string[];
+  try {
+    names = (await readdir(metaDir))
+      .filter(file => file.endsWith(".snapshot.json"))
+      .map(file => file.slice(0, -".snapshot.json".length));
+  } catch {
+    return { own, before: null };
+  }
+  const earlier = names
+    .filter(other => compareMigrationBaseNames(other, name) < 0)
+    .sort(compareMigrationBaseNames);
+  for (let i = earlier.length - 1; i >= 0; i -= 1) {
+    const snapshot = await loadTargetSnapshot(metaDir, earlier[i]);
+    if (snapshot !== null) return { own, before: snapshot };
+  }
+  return { own, before: null };
 }
 
 /** The newest snapshot of a file before `files[at]`, or null where none before it has one. */

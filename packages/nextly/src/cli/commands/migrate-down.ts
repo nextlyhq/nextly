@@ -57,6 +57,10 @@ import {
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
 import {
+  type ConvertsMark,
+  readConvertsMark,
+} from "../../domains/schema/migrate/converts-header";
+import {
   concurrentRunError,
   failedAttemptMayBePartial,
   isConcurrentRun,
@@ -111,6 +115,11 @@ import {
   storeSchemaVersion,
   newestAppliedAppMigration,
 } from "../../domains/schema/schema-version";
+import {
+  type FileTypeChangeJudgement,
+  judgeFileTypeChanges,
+  throwFileTypeChangeRefusals,
+} from "../../domains/schema/value-conversion/type-change/file-type-changes";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import { busyTableNotices } from "../busy-table-options";
@@ -134,7 +143,11 @@ import {
 } from "../utils/migration-discovery";
 
 import { commandRun } from "./command-run";
-import { assertAppHistoryHolds, migrateExitCode } from "./migrate";
+import {
+  assertAppHistoryHolds,
+  migrateExitCode,
+  snapshotsAround,
+} from "./migrate";
 import {
   pluginModuleDown,
   recordRollbackFailed,
@@ -372,8 +385,25 @@ export interface MigrateDownCoreDeps {
   execDown: (
     statements: readonly string[],
     unit: MigrationUnit,
-    after: (db: unknown) => Promise<void>
+    after: (db: unknown) => Promise<void>,
+    /**
+     * Work run before the DOWN's first statement, on the handle it runs on and inside its
+     * transaction where it has one: the conversion of the values its migration converted
+     * (`judgeDownTypeChanges`).
+     */
+    before?: (db: unknown) => Promise<void>
   ) => Promise<number>;
+  /**
+   * The field type changes a marked migration's DOWN makes (`PlannedDown.converts`), judged on the
+   * values the database holds now as `nextly migrate` judges a file's (`judgeFileTypeChanges`):
+   * the reverse of each change, from the migration's own snapshot back to the newest one before
+   * it, its marked columns converted back value by value under the rollback's consent. Undefined
+   * where the DOWN changes no field's type, or nothing can be read to judge it by.
+   */
+  judgeDownTypeChanges?: (
+    p: PlannedDown,
+    consent: DataLossConsent
+  ) => Promise<FileTypeChangeJudgement | undefined>;
   /**
    * Records a `rolled_back` event (retires the applied row) through `db`,
    * the handle the DOWN ran on. False, and nothing written, when the
@@ -570,6 +600,12 @@ export interface MigrationDown {
    * moves no translation.
    */
   stepFile?: StepFile;
+  /**
+   * The columns the migration converts value by value, as its header marks them
+   * (`readConvertsMark`): its DOWN converts each back the same way. Absent for a file without the
+   * mark, whose DOWN is the database's cast, and for a plugin's module.
+   */
+  converts?: ConvertsMark;
 }
 
 /** One rollback target, as planned before anything runs. */
@@ -593,6 +629,8 @@ export interface PlannedDown {
   liveTables?: ReadonlySet<string>;
   /** The table each index its DOWN names without one is on; see `readLiveState`. */
   liveIndexTables?: ReadonlyMap<string, string>;
+  /** The columns its migration converts value by value (`MigrationDown.converts`). */
+  converts?: ConvertsMark;
 }
 
 /**
@@ -728,6 +766,7 @@ export async function rollBackOne(
     | "endDownAttempt"
     | "recordStopped"
     | "refuseRequiredColumns"
+    | "judgeDownTypeChanges"
   >,
   /**
    * Run in the DOWN's transaction after its statements and before its
@@ -747,6 +786,9 @@ export async function rollBackOne(
   // A column made required over rows that would break it: refused here, before the DOWN's first
   // statement and before the ledger records an attempt, so the migration stays applied.
   await deps.refuseRequiredColumns?.(p.statements, p.filename);
+  // The values its migration converted, judged back the same way, refused here as that is; the
+  // conversion itself runs before the DOWN's first statement, where it judges them again.
+  const convertBack = await downConversionOf(p, deps);
   if (!p.transaction) {
     deps.logger.warn(outsideTransactionNotice(p.filename));
   }
@@ -781,7 +823,8 @@ export async function rollBackOne(
         if (attempt !== undefined) {
           await deps.endDownAttempt?.(attempt, db).catch(() => undefined);
         }
-      }
+      },
+      convertBack
     );
   } catch (err) {
     // A DOWN that stopped waiting for a busy table before anything of it was made durable left
@@ -835,6 +878,45 @@ export async function rollBackOne(
     }
     throw err;
   }
+}
+
+/**
+ * The rollback's data-loss consent: the command's, or the earlier spelling read alone. One reading
+ * for the DOWN's deletions and for the values its conversion clears.
+ */
+function rollbackConsent(
+  deps: Pick<MigrateDownCoreDeps, "options">
+): DataLossConsent {
+  return (
+    deps.options.consent ??
+    resolveDataLossConsent({
+      honours: ["--allow-data-loss"],
+      earlierFlags: deps.options.allowDataLoss ? ["--allow-data-loss"] : [],
+    })
+  );
+}
+
+/**
+ * The conversion a marked migration's DOWN runs before its first statement: each of its field
+ * type changes judged back on the database as it stands (`judgeDownTypeChanges`), refused as
+ * `nextly migrate` refuses a file's (`throwFileTypeChangeRefusals`), and the conversions of the
+ * columns it converts back. Undefined for a DOWN that converts nothing.
+ *
+ * @throws {NextlyError} a validation error naming each refusal, before any statement
+ */
+async function downConversionOf(
+  p: PlannedDown,
+  deps: Pick<MigrateDownCoreDeps, "judgeDownTypeChanges" | "options">
+): Promise<((db: unknown) => Promise<void>) | undefined> {
+  if (p.converts === undefined) return undefined;
+  const judged = await deps.judgeDownTypeChanges?.(p, rollbackConsent(deps));
+  if (judged === undefined) return undefined;
+  throwFileTypeChangeRefusals(p.filename, judged.refusals);
+  const { conversions } = judged;
+  if (conversions.length === 0) return undefined;
+  return async db => {
+    for (const conversion of conversions) await conversion.run(db);
+  };
 }
 
 /**
@@ -911,6 +993,9 @@ function plannedFrom(
         downSql,
         transaction: read.down.transaction,
         statements: splitSqlStatements(downSql, dialect, read.down),
+        ...(read.down.converts === undefined
+          ? {}
+          : { converts: read.down.converts }),
       };
     } catch (error) {
       unreadable = error;
@@ -978,12 +1063,7 @@ async function planAndGuard(
   // A DOWN that loses data takes the data-loss consent, judged once for
   // every target before the first runs, by the deletions their statements
   // make (`downDeletions`), each file named above its own.
-  const consent =
-    deps.options.consent ??
-    resolveDataLossConsent({
-      honours: ["--allow-data-loss"],
-      earlierFlags: deps.options.allowDataLoss ? ["--allow-data-loss"] : [],
-    });
+  const consent = rollbackConsent(deps);
   // Each deletion keeps the file it comes from, by identity, for the listing
   // and for binding an agreement to the file as it stands.
   const sources = new Map<Deletion, DeletionSource>();
@@ -1037,6 +1117,7 @@ async function previewRollback(
       );
       continue;
     }
+    await previewDownConversion(p, at === 0, deps);
     const deletes = perTarget[at] ?? [];
     if (deletes.length > 0) {
       deps.logger.info(
@@ -1047,6 +1128,37 @@ async function previewRollback(
       deps.logger.info(`    ⚠ ${outsideTransactionNotice(p.filename)}`);
     }
     deps.logger.info(p.downSql);
+  }
+}
+
+/**
+ * What a dry run says of a marked migration's DOWN (`PlannedDown.converts`): for the first target,
+ * which meets the database as it stands, each column it converts back with how many values convert
+ * and clear, and each refusal a real run makes; for a later one, that it is judged when the
+ * rollback reaches it, as the DOWNs before it are not run here.
+ */
+async function previewDownConversion(
+  p: PlannedDown,
+  first: boolean,
+  deps: Pick<MigrateDownCoreDeps, "judgeDownTypeChanges" | "logger" | "options">
+): Promise<void> {
+  if (p.converts === undefined) return;
+  if (!first) {
+    deps.logger.info(
+      `    ⚠ the values its migration converted are converted back when the rollback reaches it: a dry run does not run the DOWNs before it`
+    );
+    return;
+  }
+  const judged = await deps.judgeDownTypeChanges?.(p, rollbackConsent(deps));
+  for (const conversion of judged?.conversions ?? []) {
+    for (const column of conversion.columns) {
+      deps.logger.info(
+        `    ↻ converts ${column.table}.${column.column} back value by value, as ${column.field}'s earlier type reads each: ${String(column.converted)} converted, ${String(column.cleared)} that cannot convert cleared`
+      );
+    }
+  }
+  for (const refusal of judged?.refusals ?? []) {
+    deps.logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
   }
 }
 
@@ -1359,6 +1471,7 @@ export async function downDatabaseDeps(args: {
     | "endDownAttempt"
     | "recordStopped"
     | "refuseRequiredColumns"
+    | "judgeDownTypeChanges"
   >
 > {
   const { adapter, dialect, plugin } = args;
@@ -1423,20 +1536,51 @@ export async function downDatabaseDeps(args: {
       await refuseRequiredColumnsOverNulls(db, dialect, statements, source);
       await refuseUniqueIndexesOverRepeats(db, dialect, statements, source);
     },
-    execDown: async (statements, unit, after) => {
-      if (args.busyTable === undefined) {
+    // A marked migration's field type changes judged back, from its own snapshot to the newest one
+    // before it, as `nextly migrate` judges a file's, on the DOWN's own statements and under the
+    // rollback's consent. Only an app migration in a folder is judged: a plugin's module is marked
+    // by nothing.
+    judgeDownTypeChanges: async (p, consent) => {
+      const folder = args.migrationsDir;
+      if (plugin !== undefined || folder === undefined) return undefined;
+      if (p.converts === undefined) return undefined;
+      const name = p.filename.replace(/\.sql$/, "");
+      const { own, before } = await snapshotsAround(folder, name);
+      if (own === null || before === null) return undefined;
+      return judgeFileTypeChanges(db, {
+        filename: `${name}.sql`,
+        before: own.entities,
+        target: before.entities,
+        statements: p.statements,
+        dialect,
+        converts: p.converts.columns,
+        consent,
+      });
+    },
+    execDown: async (statements, unit, after, before) => {
+      // Without bounds a DOWN runs in one try, unless work runs before it, which only a run in
+      // tries takes: then under the bounds the environment gives.
+      if (args.busyTable === undefined && before === undefined) {
         return runMigrationStatements(adapter, statements, unit, handle =>
           after(handle)
         );
       }
       // A down section waits for a busy table in tries; a report names the sections this run
-      // rolled back before it.
+      // rolled back before it. A marked migration's values are converted back before its first
+      // statement, inside its transaction (`judgeDownTypeChanges`).
       const ran = await runUnitInTries(
         adapter,
         statements,
         unit,
         handle => after(handle),
-        { ...args.busyTable, appliedBefore: () => [...rolledBack] }
+        {
+          ...(args.busyTable ?? {
+            bounds: busyTableBounds({ env: process.env }),
+            notify: () => undefined,
+          }),
+          appliedBefore: () => [...rolledBack],
+          ...(before === undefined ? {} : { before }),
+        }
       );
       rolledBack.push(unit.source);
       return ran;
@@ -1661,12 +1805,18 @@ export async function runMigrateDown(
       }
       const name = filename.endsWith(".sql") ? filename : `${filename}.sql`;
       const content = await readFile(resolve(migrationsDir, name), "utf-8");
+      // A mark that cannot be followed makes the DOWN unreadable, so the rollback is refused.
+      const converts = readConvertsMark(content, name);
       return {
         sql: parseSqlSections(content).downSql,
         transaction: !marksNoTransaction(content),
         stepFile: stepFileOf(content, name),
+        ...(converts === null ? {} : { converts }),
       };
     };
+
+    // The consent the DOWN's deletions and the values its conversion clears are judged by.
+    const consent = downConsent(options, m => logger.warn(m));
 
     const plugin = options.plugin;
     const result = await migrateDownCore({
@@ -1684,7 +1834,7 @@ export async function runMigrateDown(
       logger,
       options: {
         step: options.step,
-        consent: downConsent(options, m => logger.warn(m)),
+        consent,
         yes: options.yes,
         dryRun: options.dryRun,
         plugin,

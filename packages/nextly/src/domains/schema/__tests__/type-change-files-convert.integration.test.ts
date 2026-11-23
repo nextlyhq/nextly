@@ -21,6 +21,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { migrateCore, previewMigrate } from "../../../cli/commands/migrate";
+import {
+  downDatabaseDeps,
+  migrateDownCore,
+} from "../../../cli/commands/migrate-down";
 import { createLogger } from "../../../cli/utils/logger";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import {
@@ -31,12 +35,16 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { readConvertsMark } from "../migrate/converts-header";
 import {
   type DataLossConsent,
   NO_CONSENT,
   resolveDataLossConsent,
 } from "../migrate/data-loss-consent";
+import { marksNoTransaction } from "../migrate/split-sql";
+import { parseSqlSections } from "../migrate/sql-sections";
 import { verifyMigrationHash } from "../migrate-create/snapshot-io";
+import { withMigrateLock } from "../pipeline/locks";
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const SLUG = "tcf_posts";
@@ -135,6 +143,41 @@ async function dryRun(t: TestNextly): Promise<string> {
     logger: capture,
   });
   return printed.join("\n");
+}
+
+/**
+ * `nextly migrate:down` of the newest migration on `t`'s database, reading the files of the folder
+ * as the command reads them: each DOWN with its migration's mark.
+ */
+async function migrateDown(
+  t: TestNextly,
+  consent: DataLossConsent = resolveDataLossConsent({ flag: true, env: {} })
+): Promise<void> {
+  const adapter = t.adapter as unknown as DrizzleAdapter;
+  const migrationsDir = join(basePath, "migrations");
+  await migrateDownCore({
+    ...(await downDatabaseDeps({
+      adapter,
+      dialect: adapter.getCapabilities().dialect,
+      migrationsDir,
+    })),
+    nodeEnv: "test",
+    logger: createLogger({ quiet: true }),
+    options: { step: 1, consent, yes: true, dryRun: false },
+    fileExists: () => Promise.resolve(true),
+    readDownSql: async (filename: string) => {
+      const name = filename.endsWith(".sql") ? filename : `${filename}.sql`;
+      const content = await readFile(join(migrationsDir, name), "utf-8");
+      const converts = readConvertsMark(content, name);
+      return {
+        sql: parseSqlSections(content).downSql,
+        transaction: !marksNoTransaction(content),
+        ...(converts === null ? {} : { converts }),
+      };
+    },
+    withLock: withMigrateLock,
+  } as Parameters<typeof migrateDownCore>[0]);
+  clearRegistryRowCache();
 }
 
 /** The run's consent to lose the data of `targets` (`--accept-data-loss=<targets>`). */
@@ -298,6 +341,49 @@ describe.each(getConfiguredTestDialects())(
       expect(marked).toHaveLength(1);
     });
 
+    // A rollback of the marked change converts that database's values back as the earlier type
+    // reads each, before its DOWN's statements: SQLite's cast would write a number back as 12.0.
+    it("converts a deploy's own values back when migrate:down rolls the change back", async () => {
+      const created = await textBecomesNumber();
+      const second = await boot(dialect);
+      await migrateFolder(second, created);
+      await write(second, "whole", { v: "34" });
+      await write(second, "part", { v: "7.5" });
+      await migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"));
+      expect(await read(second)).toEqual({ whole: 34, part: 7.5 });
+
+      await migrateDown(second);
+
+      expect(await read(second)).toEqual({ whole: "34", part: "7.5" });
+    });
+
+    // Undoing a list becoming a text makes each text a list again, which no conversion writes:
+    // a text no list reads stops the rollback before its statements, naming its row, and the
+    // consent the DOWN's type change takes does not clear it.
+    it("stops a rollback on a value its earlier type cannot hold, naming the row, and changes nothing", async () => {
+      const first = await boot(dialect);
+      await createPosts([{ name: "v", type: "chips" }]);
+      const created = await filesWritten();
+      await write(first, "one", { v: ["a"] });
+      await save(first, [{ name: "v", type: "text" }]);
+      await first.destroy();
+      instance = undefined;
+
+      const second = await boot(dialect);
+      await migrateFolder(second, created);
+      await write(second, "listed", { v: ["b"] });
+      await migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"));
+      await write(second, "words", { v: "plain words" });
+
+      await expect(migrateDown(second)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [expect.objectContaining({ path: "fields.v" })],
+        },
+      });
+      expect(await read(second)).toEqual({ listed: "b", words: "plain words" });
+    });
+
     it("lists in a dry run each column a deploy converts and its values that cannot convert, changing nothing", async () => {
       const created = await textBecomesNumber();
       const second = await boot(dialect);
@@ -342,7 +428,10 @@ describe.each(getConfiguredTestDialects())(
       await migrateFolder(second, created);
       await write(second, "whole", { v: "34" });
       await editMarkedFile(text =>
-        text.replace("-- Converts values: rules 1;", "-- Converts values: rules 2;")
+        text.replace(
+          "-- Converts values: rules 1;",
+          "-- Converts values: rules 2;"
+        )
       );
 
       await expect(migrateFolder(second)).rejects.toMatchObject(

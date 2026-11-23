@@ -191,8 +191,9 @@ const REFUSAL_CODES: ReadonlySet<string> = new Set([
  */
 export function isConversionRefusal(error: unknown): boolean {
   if (!NextlyError.isCode(error, "VALIDATION_ERROR")) return false;
-  const issues = (error.publicData as { errors?: { code?: unknown }[] } | undefined)
-    ?.errors;
+  const issues = (
+    error.publicData as { errors?: { code?: unknown }[] } | undefined
+  )?.errors;
   return (
     issues !== undefined &&
     issues.length > 0 &&
@@ -241,8 +242,9 @@ function translationsColumnType(
 
 /**
  * The refusals of `judged` with the clearing `consent` gives (`typeChangeRefusals`): a review's
- * fields, or each change a run's consent covers that clears any value, worded as the road asks for
- * it. One reading of a consent, for the judgement before a run and the conversion's own.
+ * fields, or each converted change a run's consent covers that clears any value, worded as the
+ * road asks for it. One reading of a consent, for the judgement before a run and the conversion's
+ * own.
  */
 export function consentedRefusals(
   label: string,
@@ -259,10 +261,15 @@ export function consentedRefusals(
       refusals: typeChangeRefusals(label, judged, acknowledged),
     };
   }
+  // Only a change the conversion writes clears its values: a run's consent never lets a lossy
+  // change the cast converts through, as the cast does not clear what it cannot read.
   const acknowledged = new Set(
     judged
       .filter(
-        change => change.result.cleared.length > 0 && consent.covers(change)
+        change =>
+          change.converted === true &&
+          change.result.cleared.length > 0 &&
+          consent.covers(change)
       )
       .map(change => change.to.name)
   );
@@ -535,8 +542,7 @@ async function columnFactsOf(
     // A character column's set and collation are part of its type; JSON's are fixed, and stated
     // again they are refused.
     const charset =
-      row?.charset == null ||
-      !/char|text|enum|set\(/i.test(row.column_type)
+      row?.charset == null || !/char|text|enum|set\(/i.test(row.column_type)
         ? ""
         : ` CHARACTER SET ${row.charset}${row.collation == null ? "" : ` COLLATE ${row.collation}`}`;
     return {

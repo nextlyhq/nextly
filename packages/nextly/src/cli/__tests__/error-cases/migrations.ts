@@ -598,8 +598,7 @@ export const MIGRATION_CASES = {
   // judgement and its writing (`convertColumn`).
   TYPE_CHANGE_VALUES_CHANGED: () =>
     valuesChangedWhileConverting({
-      label:
-        "Collection 'products' (migration 20261123_101500_products.sql)",
+      label: "Collection 'products' (migration 20261123_101500_products.sql)",
       field: "price",
       table: "dc_products",
       column: "price",

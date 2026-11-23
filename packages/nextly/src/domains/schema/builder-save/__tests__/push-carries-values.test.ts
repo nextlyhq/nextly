@@ -338,7 +338,10 @@ describe("pushCarriesValues", () => {
     // is the one the same save gives without it: what separates the rule from one that sends every
     // save to its file, or every type change.
     describe("where the save converts a type change's values in its file", () => {
-      const onPostgres = { dialect: "postgresql" as const, builtBy: "collection" as const };
+      const onPostgres = {
+        dialect: "postgresql" as const,
+        builtBy: "collection" as const,
+      };
 
       it("runs the file for a field whose type changes between a pair it converts", async () => {
         const typeChange = save({
@@ -379,20 +382,23 @@ describe("pushCarriesValues", () => {
           },
           false,
         ],
-      ])("takes the road it takes without it: %s", async (_, overrides, push) => {
-        const without = save(overrides);
-        expect(await pushCarriesValues(without)).toBe(push);
-        expect(
-          await pushCarriesValues({
-            ...without,
-            convertsValues: {
-              ...onPostgres,
-              dialect:
-                "columnOf" in overrides ? ("mysql" as const) : "postgresql",
-            },
-          })
-        ).toBe(push);
-      });
+      ])(
+        "takes the road it takes without it: %s",
+        async (_, overrides, push) => {
+          const without = save(overrides);
+          expect(await pushCarriesValues(without)).toBe(push);
+          expect(
+            await pushCarriesValues({
+              ...without,
+              convertsValues: {
+                ...onPostgres,
+                dialect:
+                  "columnOf" in overrides ? ("mysql" as const) : "postgresql",
+              },
+            })
+          ).toBe(push);
+        }
+      );
     });
 
     it("reads the fields a group with no name lays out, which its row stores", async () => {

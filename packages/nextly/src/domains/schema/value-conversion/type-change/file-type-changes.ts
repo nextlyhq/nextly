@@ -105,7 +105,7 @@ export interface FileTypeChangeSource {
 }
 
 /** One refusal of a file's type changes, with the entity it is of. */
-interface FileTypeChangeRefusal extends TypeChangeRefusal {
+export interface FileTypeChangeRefusal extends TypeChangeRefusal {
   entity: { kind: SettingsEntityKind; slug: string };
 }
 
@@ -494,14 +494,11 @@ function convertedOf(
   source: FileTypeChangeSource
 ): Pick<EntityTypeChangeInput, "rewrites"> {
   const named = new Set(
-    (source.converts ?? []).map(c =>
-      `${c.table}.${c.column}`.toLowerCase()
-    )
+    (source.converts ?? []).map(c => `${c.table}.${c.column}`.toLowerCase())
   );
   if (named.size === 0) return {};
   return {
-    rewrites: (table, column) =>
-      named.has(`${table}.${column}`.toLowerCase()),
+    rewrites: (table, column) => named.has(`${table}.${column}`.toLowerCase()),
   };
 }
 
@@ -778,11 +775,26 @@ export async function refuseFileTypeChanges(
   source: FileTypeChangeSource
 ): Promise<TypeConversion[]> {
   const { refusals, conversions } = await judgeFileTypeChanges(db, source);
-  if (refusals.length === 0) return conversions;
+  throwFileTypeChangeRefusals(source.filename, refusals);
+  return conversions;
+}
+
+/**
+ * Throw a file's type change refusals (`judgeFileTypeChanges`) as one validation error, each with
+ * its entity and field, where there are any: the error `refuseFileTypeChanges` throws, for a
+ * caller that judged the file itself (a rollback, which lists the judgement in its dry run).
+ *
+ * @throws {NextlyError} a validation error listing each refusal
+ */
+export function throwFileTypeChangeRefusals(
+  filename: string,
+  refusals: readonly FileTypeChangeRefusal[]
+): void {
+  if (refusals.length === 0) return;
   throw NextlyError.validation({
     errors: refusals.map(refusal => typeChangeError(refusal)),
     logContext: {
-      file: source.filename,
+      file: filename,
       entities: [
         ...new Set(refusals.map(r => `${r.entity.kind}:${r.entity.slug}`)),
       ],

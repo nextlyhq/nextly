@@ -66,9 +66,7 @@ describe("a conversion's readings, a page at a time", () => {
     expect(events.indexOf("write 200")).toBeLessThan(
       events.indexOf(`read ${String(ROWS)}`)
     );
-    expect(
-      pages.flat().map(reading => [reading.key, reading.readsAs])
-    ).toEqual(
+    expect(pages.flat().map(reading => [reading.key, reading.readsAs])).toEqual(
       Array.from({ length: ROWS }, (_, at) => [
         { id: String(at + 1) },
         String(at + 1),

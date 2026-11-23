@@ -744,7 +744,10 @@ describe.each(getConfiguredTestDialects())(
         dialect,
         input,
         judged,
-        consent: { kind: "review", confirmed: [{ field: "v", count: confirmed }] },
+        consent: {
+          kind: "review",
+          confirmed: [{ field: "v", count: confirmed }],
+        },
       });
       if (conversion === undefined) throw new Error("nothing converts");
       return { db: adapter.getDrizzle(), conversion };
