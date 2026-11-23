@@ -187,6 +187,36 @@ describe("EntryTable — titles in a chosen language", () => {
     expect(entriesTable().queryByText("(English)")).toBeNull();
   });
 
+  it("leaves a title unmarked where it may be another language's than the default", () => {
+    // Where the default language falls back to another, a title the list shows may be that
+    // other language's: marked English, a Spanish fallback would be announced as English.
+    renderTable({
+      titleLanguage: choice({
+        value: "es",
+        titles: new Map<string, unknown>([["p1", "Uno"]]),
+        defaultMayFallBack: true,
+      }),
+    });
+    expect(titleLanguageOf("Uno")).toHaveAttribute("lang", "es");
+    expect(titleLanguageOf("Two")).toBeNull();
+    expect(entriesTable().queryByText("(English)")).toBeNull();
+  });
+
+  it("leaves a title unmarked where the row says its default language holds nothing", () => {
+    renderTable({
+      entries: [
+        {
+          id: "p9",
+          title: "Nueve",
+          _translations: { en: { translated: false } },
+        },
+      ],
+      titleLanguage: choice({ value: "es", titles: new Map() }),
+    });
+    expect(titleLanguageOf("Nueve")).toBeNull();
+    expect(entriesTable().queryByText("(English)")).toBeNull();
+  });
+
   it("writes a right-to-left language's titles right to left", () => {
     renderTable({
       titleLanguage: choice({

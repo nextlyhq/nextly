@@ -379,9 +379,12 @@ export const EntryTable: ForwardRefExoticComponent<
   const titlesIn = useMemo((): TitlesShownIn | undefined => {
     const language = chosenTitleLanguage(titleLanguage);
     if (!titleLanguage || !language) return undefined;
-    const { defaultLocale, languages, titles } = titleLanguage;
+    const { defaultLocale, languages, titles, defaultMayFallBack } =
+      titleLanguage;
     const defaultLanguage = languages.find(each => each.code === defaultLocale);
-    return defaultLanguage ? { language, defaultLanguage, titles } : undefined;
+    return defaultLanguage
+      ? { language, defaultLanguage, titles, defaultMayFallBack }
+      : undefined;
   }, [titleLanguage]);
 
   // The collection's own columns, which the column chooser offers and hides.

@@ -581,7 +581,14 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     enabled: multilingual,
     locales = [],
     defaultLocale = "",
+    fallback: fallsBack = true,
   } = useLocalization();
+  // Whether the list's own read, in the default language with fallback, may show another
+  // language's title where the default holds none: the default names a language to fall back to.
+  const defaultMayFallBack =
+    fallsBack &&
+    (locales.find(l => l.code === defaultLocale)?.fallbackLocale ?? []).length >
+      0;
   const titleField = useMemo(
     () => getEntryTitleField(collectionForColumns),
     [collectionForColumns]
@@ -633,6 +640,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
             onChange: handleTitleLanguageChange,
             titles: titlesInLanguage.titles,
             failed: titlesInLanguage.failed,
+            defaultMayFallBack,
           }
         : undefined,
     [
@@ -643,6 +651,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       handleTitleLanguageChange,
       titlesInLanguage.titles,
       titlesInLanguage.failed,
+      defaultMayFallBack,
     ]
   );
 

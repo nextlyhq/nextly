@@ -39,6 +39,11 @@ export interface TitleLanguageChoice {
   titles: ReadonlyMap<string, unknown> | undefined;
   /** Whether the titles in the chosen language could not be read. */
   failed: boolean;
+  /**
+   * Whether the default language falls back to another on a read, so a title the list shows
+   * may be that other language's.
+   */
+  defaultMayFallBack?: boolean;
 }
 
 export function TitleLanguageSelect({

@@ -450,6 +450,12 @@ export interface TitlesShownIn {
   defaultLanguage: TitleLanguage;
   /** Each row's title in the chosen language, by id, once read; a row not returned is absent. */
   titles: ReadonlyMap<string, unknown> | undefined;
+  /**
+   * Whether the list's own titles may be another language's: the list reads the default
+   * language with fallback, so where the default language falls back to another, a title it
+   * lacks is that other language's, and nothing on the row says which.
+   */
+  defaultMayFallBack?: boolean;
 }
 
 /** The `dir` a language's text is written in. */
@@ -495,6 +501,20 @@ function titleInLanguageCell(
           })}
         </span>
       );
+    }
+    // The list's own title is marked as the default language's only where it can only be that:
+    // where the default may fall back to another language, or the row says its default language
+    // holds nothing, the title shown may be another language's, so it is left unmarked.
+    const defaultMeta = (
+      ctx.row._translations as
+        | Record<string, { translated?: boolean }>
+        | undefined
+    )?.[shownIn.defaultLanguage.code];
+    if (
+      shownIn.defaultMayFallBack === true ||
+      defaultMeta?.translated === false
+    ) {
+      return base(ctx);
     }
     return (
       <span className="inline-flex flex-wrap items-baseline gap-x-1.5">

@@ -45,9 +45,24 @@ const { useEntries, tableProps, table, site, access, title, find, LANGUAGES } =
     // The read of titles in a chosen language.
     find: vi.fn(),
     LANGUAGES: [
-      { code: "en", label: "English", rtl: false, fallbackLocale: [] },
-      { code: "es", label: "Spanish", rtl: false, fallbackLocale: [] },
-      { code: "ar", label: "Arabic", rtl: true, fallbackLocale: [] },
+      {
+        code: "en",
+        label: "English",
+        rtl: false,
+        fallbackLocale: [] as string[],
+      },
+      {
+        code: "es",
+        label: "Spanish",
+        rtl: false,
+        fallbackLocale: [] as string[],
+      },
+      {
+        code: "ar",
+        label: "Arabic",
+        rtl: true,
+        fallbackLocale: [] as string[],
+      },
     ],
   }));
 
@@ -267,6 +282,21 @@ describe("the title language", () => {
     expect(lastTable().titleLanguage).toBeUndefined();
     // The languages column and filter still are: the content is per language.
     expect(lastTable().collection?.localized).toBe(true);
+  });
+
+  it("says when the default language falls back to another, so its titles may be that one's", () => {
+    LANGUAGES[0].fallbackLocale = ["es"];
+    try {
+      render(<EntryList collectionSlug="posts" />);
+      expect(lastTable().titleLanguage?.defaultMayFallBack).toBe(true);
+    } finally {
+      LANGUAGES[0].fallbackLocale = [];
+    }
+  });
+
+  it("says the default language's titles are its own where it falls back to none", () => {
+    render(<EntryList collectionSlug="posts" />);
+    expect(lastTable().titleLanguage?.defaultMayFallBack).toBe(false);
   });
 
   it("is not offered where the title is virtual, stored in no language", () => {
