@@ -63,6 +63,10 @@ import {
   type CompanionMigrationPlan,
 } from "../../i18n/migration/plan-companion-migration";
 import {
+  fieldsTranslatedThrough,
+  planCompanionTypeChange,
+} from "../../i18n/migration/plan-companion-type-change";
+import {
   type FieldLeavesFile,
   type FieldLeavesMigrationPlan,
   planFieldLeavesTranslationMigration,
@@ -83,6 +87,10 @@ import {
   prepareCompanionMigrationFile,
   type WriteCompanionMigrationOpts,
 } from "../../i18n/migration/write-migration-file";
+import {
+  describePerLanguageMove,
+  type PerLanguageMove,
+} from "../../i18n/per-language-move-guidance";
 import {
   perLanguageStorageEnabled,
   publishesPerLanguage,
@@ -178,6 +186,7 @@ import {
   leftoverUniqueStatements,
   type LiveUniqueIndexes,
 } from "./leftover-unique-indexes";
+import { perLanguageMovesIn } from "./per-language-moves";
 import {
   fileStatements,
   judgedDeletions,
@@ -1069,6 +1078,9 @@ export async function generateMigration(
 
   // 3. Diff.
   let operations = diffSnapshots(previousSnapshot, desiredSnapshot);
+  // The drops a companion file makes are stripped below; the refusal of an undeclared language
+  // names them as the moves they are, so it reads the diff as it stands here.
+  const diffed = operations;
 
   // 3a. On an ENABLE transition the diff wants to DROP the localized columns
   //     from the main table — but the companion migration already relocates them
@@ -1105,10 +1117,14 @@ export async function generateMigration(
   // them in Settings instead, which a migration file cannot depend on, since the database the
   // developer reaches is not the one the file runs against. So such a file is refused until the
   // config names its default.
-  refuseUndeclaredSeedLanguage(args.defaultLocale, {
-    seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
-    moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
-  });
+  refuseUndeclaredSeedLanguage(
+    args.defaultLocale,
+    {
+      seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
+      moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
+    },
+    () => perLanguageMovesIn(diffed, args, args.dialect)
+  );
 
   // 3d. Translated fields that become or stop being unique within each language. Their companion
   //     indexes are dropped before the main file and created after every other file.
@@ -1119,11 +1135,25 @@ export async function generateMigration(
     args.defaultLocale ?? "en"
   );
 
-  const hasCompanions =
-    companionPlans.length > 0 ||
-    fieldLeavesPlans.length > 0 ||
-    fieldJoinsPlans.length > 0 ||
-    uniquePlans.length > 0;
+  // 3d'. Fields translated before the change and after it whose translations column takes another
+  //      type on this database: that column takes it in a file of its own, ahead of the main file,
+  //      so `nextly migrate` judges each language's value before either runs.
+  const retypesPlans = planTranslatedTypeChanges(
+    entities,
+    previousSnapshot,
+    previous?.data.entities,
+    args.dialect,
+    args.defaultLocale
+  );
+
+  // Whether any companion file is written beside the main one.
+  const hasCompanions = [
+    companionPlans,
+    fieldLeavesPlans,
+    fieldJoinsPlans,
+    uniquePlans,
+    retypesPlans,
+  ].some(plans => plans.length > 0);
 
   // 3e. Settings: what the declarations say beyond their columns. A change to
   //     one alone changes no table, so without this the run returned "no
@@ -1160,6 +1190,7 @@ export async function generateMigration(
         ...companionPlans,
         ...fieldLeavesPlans.map(({ plan }) => plan.shared),
         ...fieldJoinsPlans.map(({ plan }) => plan),
+        ...retypesPlans.map(({ plan }) => plan),
       ].map(({ spec }) => spec.mainTable),
     ],
     hasSettingsChanges: changesBeyondTables,
@@ -1518,6 +1549,16 @@ export async function generateMigration(
     ...fieldJoinsPlans.map(({ plan, entity }) => ({
       spec: plan.spec,
       kind: "joins" as const,
+      entity,
+      upSql: plan.upSql,
+      downSql: plan.downSql,
+    })),
+    //    - A translated field taking another type: its RETYPES file runs before the main file, so
+    //      the change is judged in every language before either runs, after a dropped per-language
+    //      index's file, which the column it retypes no longer carries.
+    ...retypesPlans.map(({ plan, entity }) => ({
+      spec: plan.spec,
+      kind: "retypes" as const,
       entity,
       upSql: plan.upSql,
       downSql: plan.downSql,
@@ -2301,16 +2342,29 @@ function buildDisableSpec(
  */
 function refuseUndeclaredSeedLanguage(
   defaultLocale: string | undefined,
-  planned: { seeds: boolean; moves: boolean }
+  planned: { seeds: boolean; moves: boolean },
+  // The text-like fields the diff moves to their per-language tables, named so the refusal reads
+  // as the move it is rather than as data loss, with the way to keep them where they are.
+  movesOf: () => PerLanguageMove[]
 ): void {
   if (defaultLocale !== undefined || !perLanguageStorageEnabled()) return;
   if (!planned.seeds && !planned.moves) return;
+  const moves = movesOf();
+  const named =
+    moves.length === 0
+      ? ""
+      : "These text-like fields would move: " +
+        moves.map(describePerLanguageMove).join("; ") +
+        ". Nothing is lost either way. Keep them on the main table by marking each one " +
+        "`localized: false` and running migrate:create again, or ";
   throw NextlyError.invalidInput({
     message:
       "This migration moves existing content into its per-language tables, which records the " +
-      "language that content is in, and the config declares none. Declare `localization` with " +
-      "its defaultLocale in the config, then run migrate:create again.",
-    logContext: { reason: "per-language-seed-language-undeclared" },
+      "language that content is in, and the config declares none. " +
+      (named === ""
+        ? "Declare `localization` with its defaultLocale in the config, then run migrate:create again."
+        : `${named}declare \`localization\` with its defaultLocale in the config to move them on purpose, then run migrate:create again.`),
+    logContext: { reason: "per-language-seed-language-undeclared", moves },
   });
 }
 
@@ -2394,6 +2448,55 @@ function planTranslatedUniqueMigrations(
       previous,
     });
     return plan === null ? [] : [{ entity: kind, spec, plan }];
+  });
+}
+
+/** The key an entity's kind is recorded under in a snapshot's entity settings. */
+const SETTINGS_KEY: Record<I18nTransitionKind, keyof EntitySettingsRecord> = {
+  collection: "collections",
+  single: "singles",
+  fieldGroup: "fieldGroups",
+};
+
+/**
+ * The `retypes` file of each translated entity whose fields, translated before this change and
+ * after it under one name, have a translations column that takes another type on `dialect`. The
+ * fields before the change are the ones the previous snapshot records for the entity; one it
+ * records no fields for, or whose table it did not keep translated, has no file here.
+ */
+function planTranslatedTypeChanges(
+  entities: TaggedConfigEntity[],
+  previousSnapshot: NextlySchemaSnapshot,
+  previousEntities: EntitySettingsRecord | undefined,
+  dialect: SupportedDialect,
+  /** The site's default language, recorded in the file's header; English where none is declared. */
+  defaultLocale = "en"
+): {
+  entity: I18nTransitionKind;
+  plan: NonNullable<ReturnType<typeof planCompanionTypeChange>>;
+}[] {
+  if (previousEntities === undefined) return [];
+  return entities.flatMap(({ entity: c, kind }) => {
+    if (!storesPerLanguage(c)) return [];
+    const builtBy = columnOriginOf(c, kind);
+    const fields = fieldsTranslatedThrough({
+      previousTable: previousSnapshot.tables.find(t => t.name === c.tableName),
+      recorded: previousEntities[SETTINGS_KEY[kind]][c.slug]?.settings.fields,
+      next: c.fields,
+      translatedAfter: to => isFieldLocalized(to, true),
+      dialect,
+      builtBy,
+    });
+    const plan = planCompanionTypeChange({
+      slug: c.slug,
+      kind,
+      tableName: c.tableName,
+      dialect,
+      defaultLocale,
+      fields,
+      builtBy,
+    });
+    return plan === undefined ? [] : [{ entity: kind, plan }];
   });
 }
 

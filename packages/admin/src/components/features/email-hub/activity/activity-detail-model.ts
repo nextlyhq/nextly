@@ -321,3 +321,43 @@ export function emptyTimelineText(
   }
   return "No delivery is on record: none was made, or it’s no longer kept.";
 }
+
+/** What the sheet offers to do with a queued email, and why where it offers less. */
+export interface QueuedEmailActions {
+  retry: boolean;
+  cancel: boolean;
+  /** Why an action isn't offered, or what cancelling now does; null when both are plain. */
+  note: string | null;
+}
+
+/**
+ * What a queued email may have done to it now, as the server allows it: cancelled until it is
+ * sent or cancelled, which while an attempt is with the provider is a request that holds only if
+ * that attempt fails; tried again while it is waiting, retrying or failed with its message held.
+ * Whether the reader may do either is the caller's.
+ */
+export function queuedEmailActions(email: {
+  state: QueuedEmailState;
+  messageHeld: boolean;
+}): QueuedEmailActions {
+  if (email.state === "sent" || email.state === "cancelled") {
+    return { retry: false, cancel: false, note: null };
+  }
+  if (email.state === "sending") {
+    // A second attempt now could send the message twice.
+    return {
+      retry: false,
+      cancel: true,
+      note: "An attempt is with the provider now, so it can’t be tried again until that attempt ends. Cancelling now holds only if this attempt fails; if it succeeds, the email is sent.",
+    };
+  }
+  if (!email.messageHeld) {
+    // Nothing is left to send, but the server still lets it be cancelled.
+    return {
+      retry: false,
+      cancel: true,
+      note: "Its message was cleared, so it can’t be tried again.",
+    };
+  }
+  return { retry: true, cancel: true, note: null };
+}
