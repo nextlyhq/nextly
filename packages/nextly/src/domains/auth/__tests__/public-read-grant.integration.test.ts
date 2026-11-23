@@ -379,9 +379,7 @@ describe.each(getConfiguredTestDialects())(
         seedRolePresets(nextly.adapter, logger)
       );
       expect(
-        await readPresetGrantsRelease(
-          new MetaService(nextly.adapter, logger)
-        )
+        await readPresetGrantsRelease(new MetaService(nextly.adapter, logger))
       ).toBe("0.0.2-alpha.75");
       warnings = [];
 

@@ -264,7 +264,9 @@ describe.each(getConfiguredTestDialects())(
     async function migrate(earlier?: Earlier): Promise<string[]> {
       state.earlier = earlier;
       state.release =
-        earlier === "migrated-by-alpha-75" ? "0.0.2-alpha.75" : "0.0.2-alpha.81";
+        earlier === "migrated-by-alpha-75"
+          ? "0.0.2-alpha.75"
+          : "0.0.2-alpha.81";
       state.config = CONFIG;
       const { context, said } = command();
       try {
