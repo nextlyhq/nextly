@@ -17,6 +17,7 @@ import {
 } from "../../../i18n/classify-fields";
 import { ddlType } from "../../../i18n/migration/ddl-types";
 import { fieldToLocalizedColumnSpec } from "../../../i18n/migration/field-to-column-spec";
+import { retypedCompanionColumns } from "../../../i18n/migration/plan-companion-type-change";
 import { storesPerLanguage } from "../../../i18n/per-language-storage";
 import { querySqlRows } from "../../pipeline/classifier/count-helpers";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
@@ -149,8 +150,9 @@ export interface JudgedFieldTypeChange extends FieldTypeChange {
   result: StoredTypeChangeJudgement;
   /**
    * The field is kept per language before the save and after it (`translatedAfter`), and its
-   * column in the entity's translations table takes another type: a column a type change leaves in
-   * the old type, values or none (`typeChangeRefusals`). A field the save stops translating, or
+   * column in the entity's translations table takes another type that the save's or file's own
+   * statements do not give it (`retyped`): a column a type change leaves in the old type, values or
+   * none (`typeChangeRefusals`). A field the save stops translating, or
    * whose entity it stops translating, is not: its values leave that table, and the save's own
    * check of a field leaving translation answers for them. Nor is one whose translations column
    * keeps its type (a long text becoming code), which that column holds as it is.
@@ -186,6 +188,8 @@ export async function judgeFieldTypeChanges(args: {
   translated?: ReadonlySet<string>;
   /** The names of the fields kept per language after the save: none where absent. */
   translatedAfter?: ReadonlySet<string>;
+  /** The fields whose translations column the road's own statements retype (`retypedTranslations`). */
+  retyped?: ReadonlySet<string>;
   changes: readonly FieldTypeChange[];
 }): Promise<JudgedFieldTypeChange[]> {
   const judged: JudgedFieldTypeChange[] = [];
@@ -250,6 +254,7 @@ function translationsTableFlags(
     dialect: SupportedDialect;
     builtBy: ColumnOrigin;
     translatedAfter?: ReadonlySet<string>;
+    retyped?: ReadonlySet<string>;
   }
 ): Pick<
   JudgedFieldTypeChange,
@@ -257,7 +262,10 @@ function translationsTableFlags(
 > {
   if (args.translatedAfter === undefined) return {};
   if (args.translatedAfter.has(change.to.name)) {
-    return translationsColumnChanges(change.from, change.to, args.builtBy)
+    // A column the save's or file's own statements give the new type is no column left behind:
+    // its values are judged in each language, as the entity's own column's are.
+    return translationsColumnChanges(change.from, change.to, args.builtBy) &&
+      args.retyped?.has(change.to.name) !== true
       ? { changesTranslationsColumn: true }
       : {};
   }
@@ -689,6 +697,12 @@ export interface EntityTypeChangeInput {
   translatedBefore?: ReadonlySet<string>;
   /** The fields translated after the save (`perLanguageAfter`). */
   translatedAfter?: ReadonlySet<string>;
+  /**
+   * The fields, by their new name, whose translations column the road's own statements give the
+   * new type: the save's file's or the deployed change's `retypes` statements. A translated change
+   * is refused for its column only where it is not among them (`changesTranslationsColumn`).
+   */
+  retypedTranslations?: ReadonlySet<string>;
   /** The fields as the database holds them before the save: the registry row's. */
   previous: readonly FieldDefinition[];
   /** The fields as the save leaves them. */
@@ -751,10 +765,48 @@ export async function fieldTypeChangeRefusals(
       ...(entity.translatedAfter !== undefined
         ? { translatedAfter: entity.translatedAfter }
         : {}),
+      ...(entity.retypedTranslations !== undefined
+        ? { retyped: entity.retypedTranslations }
+        : {}),
       changes,
     }),
     entity.acknowledged
   );
+}
+
+/**
+ * The fields a Schema Builder save's own file retypes in the translations table: each kept per
+ * language before the save and after it under one name, whose column there takes another type on
+ * the save's database (`retypedCompanionColumns`, the question `migrate:create`'s `retypes` file
+ * is planned by). One whose column changes only on another database is not among them: the file
+ * is written for this one.
+ */
+export function retypedBySave(args: {
+  previous: readonly FieldDefinition[];
+  next: readonly FieldDefinition[];
+  translatedBefore?: ReadonlySet<string>;
+  translatedAfter?: ReadonlySet<string>;
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+}): Pick<EntityTypeChangeInput, "retypedTranslations"> {
+  const before = new Map(args.previous.map(field => [field.name, field]));
+  const fields = args.next.flatMap(to => {
+    const from = before.get(to.name);
+    return from !== undefined &&
+      args.translatedBefore?.has(from.name) === true &&
+      args.translatedAfter?.has(to.name) === true
+      ? [{ from, to }]
+      : [];
+  });
+  return {
+    retypedTranslations: new Set(
+      retypedCompanionColumns({
+        fields,
+        dialect: args.dialect,
+        builtBy: args.builtBy,
+      }).map(column => column.field)
+    ),
+  };
 }
 
 /** A refusal as a validation error lists it: by the field's path under `fields`. */

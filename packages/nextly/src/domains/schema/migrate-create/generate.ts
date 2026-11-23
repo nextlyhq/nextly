@@ -63,6 +63,10 @@ import {
   type CompanionMigrationPlan,
 } from "../../i18n/migration/plan-companion-migration";
 import {
+  planCompanionTypeChange,
+  type RetypedField,
+} from "../../i18n/migration/plan-companion-type-change";
+import {
   type FieldLeavesFile,
   type FieldLeavesMigrationPlan,
   planFieldLeavesTranslationMigration,
@@ -1119,11 +1123,25 @@ export async function generateMigration(
     args.defaultLocale ?? "en"
   );
 
-  const hasCompanions =
-    companionPlans.length > 0 ||
-    fieldLeavesPlans.length > 0 ||
-    fieldJoinsPlans.length > 0 ||
-    uniquePlans.length > 0;
+  // 3d'. Fields translated before the change and after it whose translations column takes another
+  //      type on this database: that column takes it in a file of its own, ahead of the main file,
+  //      so `nextly migrate` judges each language's value before either runs.
+  const retypesPlans = planTranslatedTypeChanges(
+    entities,
+    previousSnapshot,
+    previous?.data.entities,
+    args.dialect,
+    args.defaultLocale
+  );
+
+  // Whether any companion file is written beside the main one.
+  const hasCompanions = [
+    companionPlans,
+    fieldLeavesPlans,
+    fieldJoinsPlans,
+    uniquePlans,
+    retypesPlans,
+  ].some(plans => plans.length > 0);
 
   // 3e. Settings: what the declarations say beyond their columns. A change to
   //     one alone changes no table, so without this the run returned "no
@@ -1160,6 +1178,7 @@ export async function generateMigration(
         ...companionPlans,
         ...fieldLeavesPlans.map(({ plan }) => plan.shared),
         ...fieldJoinsPlans.map(({ plan }) => plan),
+        ...retypesPlans.map(({ plan }) => plan),
       ].map(({ spec }) => spec.mainTable),
     ],
     hasSettingsChanges: changesBeyondTables,
@@ -1518,6 +1537,16 @@ export async function generateMigration(
     ...fieldJoinsPlans.map(({ plan, entity }) => ({
       spec: plan.spec,
       kind: "joins" as const,
+      entity,
+      upSql: plan.upSql,
+      downSql: plan.downSql,
+    })),
+    //    - A translated field taking another type: its RETYPES file runs before the main file, so
+    //      the change is judged in every language before either runs, after a dropped per-language
+    //      index's file, which the column it retypes no longer carries.
+    ...retypesPlans.map(({ plan, entity }) => ({
+      spec: plan.spec,
+      kind: "retypes" as const,
       entity,
       upSql: plan.upSql,
       downSql: plan.downSql,
@@ -2394,6 +2423,68 @@ function planTranslatedUniqueMigrations(
       previous,
     });
     return plan === null ? [] : [{ entity: kind, spec, plan }];
+  });
+}
+
+/** The key an entity's kind is recorded under in a snapshot's entity settings. */
+const SETTINGS_KEY: Record<I18nTransitionKind, keyof EntitySettingsRecord> = {
+  collection: "collections",
+  single: "singles",
+  fieldGroup: "fieldGroups",
+};
+
+/**
+ * The `retypes` file of each translated entity whose fields, translated before this change and
+ * after it under one name, have a translations column that takes another type on `dialect`. The
+ * fields before the change are the ones the previous snapshot records for the entity; one it
+ * records no fields for, or whose table it did not keep translated, has no file here.
+ */
+function planTranslatedTypeChanges(
+  entities: TaggedConfigEntity[],
+  previousSnapshot: NextlySchemaSnapshot,
+  previousEntities: EntitySettingsRecord | undefined,
+  dialect: SupportedDialect,
+  /** The site's default language, recorded in the file's header; English where none is declared. */
+  defaultLocale = "en"
+): {
+  entity: I18nTransitionKind;
+  plan: NonNullable<ReturnType<typeof planCompanionTypeChange>>;
+}[] {
+  if (previousEntities === undefined) return [];
+  return entities.flatMap(({ entity: c, kind }) => {
+    if (!storesPerLanguage(c)) return [];
+    const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
+    if (prevMain?.localized !== true) return [];
+    const translatedBefore = new Set(prevMain.localizedColumns ?? []);
+    const recorded =
+      previousEntities[SETTINGS_KEY[kind]][c.slug]?.settings.fields;
+    if (!Array.isArray(recorded)) return [];
+    const before = new Map(
+      // A recorded declaration's fields, as `settingsOf` keeps them: each one's name and type.
+      (recorded as unknown as RetypedField["from"][]).map(field => [
+        field.name,
+        field,
+      ])
+    );
+    const builtBy = columnOriginOf(c, kind);
+    const fields = c.fields.flatMap(to => {
+      const from = before.get(to.name);
+      if (from === undefined || !isFieldLocalized(to, true)) return [];
+      const column = fieldToLocalizedColumnSpec(from, dialect, builtBy);
+      // Translated before: its column is the one the translations table kept.
+      if (column === null || !translatedBefore.has(column.name)) return [];
+      return [{ from, to }];
+    });
+    const plan = planCompanionTypeChange({
+      slug: c.slug,
+      kind,
+      tableName: c.tableName,
+      dialect,
+      defaultLocale,
+      fields,
+      builtBy,
+    });
+    return plan === undefined ? [] : [{ entity: kind, plan }];
   });
 }
 

@@ -24,6 +24,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { planCompanionTypeChange } from "../../domains/i18n/migration/plan-companion-type-change";
+import { prepareCompanionMigrationFile } from "../../domains/i18n/migration/write-migration-file";
 import { blankLineHeader } from "../../domains/schema/migrate/history-line";
 import { settingsOf } from "../../domains/schema/migrate-create/entity-settings";
 import {
@@ -450,6 +452,53 @@ describe("runChecks (F11 PR 4)", () => {
       expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("(MISSING_SNAPSHOT)")
       );
+    });
+  });
+
+  // A translated field's translations column taking its new type is a companion file of its own,
+  // written without a snapshot as every companion file is: it is passed by the marker the writer
+  // gives it, not reported as a migration missing its snapshot.
+  describe("a retypes companion file, which has no snapshot by design", () => {
+    it("passes the file the writer prepares for a translations column's new type", async () => {
+      const planned = planCompanionTypeChange({
+        slug: "posts",
+        kind: "collection",
+        tableName: "dc_posts",
+        dialect: "postgresql",
+        defaultLocale: "en",
+        fields: [
+          {
+            from: { name: "price", type: "text", localized: true },
+            to: { name: "price", type: "number", localized: true },
+          },
+        ],
+        builtBy: "collection",
+      });
+      if (planned === undefined) throw new Error("no retypes file planned");
+      const prepared = await prepareCompanionMigrationFile(
+        migrationsDir,
+        planned.spec,
+        {
+          kind: "retypes",
+          entity: "collection",
+          upSql: planned.upSql,
+          downSql: planned.downSql,
+          now: new Date("2026-01-01T12:00:00Z"),
+        }
+      );
+      await prepared.place();
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(printed).not.toHaveBeenCalledWith(
+        expect.stringContaining("(MISSING_SNAPSHOT)")
+      );
+      expect(exitSpy).not.toHaveBeenCalledWith(1);
     });
   });
 

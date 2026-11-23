@@ -194,6 +194,7 @@ import {
   entityLabel,
   fieldTypeChangesOf,
   perLanguageAfter,
+  retypedBySave,
   perLanguageBefore,
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
@@ -1467,11 +1468,27 @@ async function refuseSaveTypeChanges(
     ...componentRow,
   });
   if (changes.length === 0) return;
+  const translatedBefore = perLanguageBefore(save.previous, table, previous);
+  const translatedAfter = perLanguageAfter(save.entity, next);
   await refuseFieldTypeChanges(deps.adapter.getDrizzle(), dialect, {
     label: entityLabel(kind.kind, save.slug),
     table,
-    ...perLanguageBefore(save.previous, table, previous),
-    ...perLanguageAfter(save.entity, next),
+    ...translatedBefore,
+    ...translatedAfter,
+    // The save's file gives a translated field's translations column its new type where that
+    // column changes on this database (`retypes`), so only a column it leaves behind is refused.
+    // It is planned from the fields the folder's newest snapshot records: where that snapshot
+    // records none for the entity, the file cannot carry it, and the change stays refused.
+    ...((await newestSnapshotRecordsFields(deps, kind.kind, save.slug))
+      ? retypedBySave({
+          previous,
+          next,
+          ...translatedBefore,
+          ...translatedAfter,
+          dialect,
+          builtBy: kind.builtBy,
+        })
+      : {}),
     previous,
     next,
     renamed,
@@ -1481,6 +1498,26 @@ async function refuseSaveTypeChanges(
     builtBy: kind.builtBy,
     ...componentRow,
   });
+}
+
+/**
+ * Whether the folder's newest snapshot records `slug`'s fields: what `migrate:create` plans a
+ * translated field's translations column's new type from (its `retypes` file). A snapshot written
+ * before fields were recorded, or none, leaves the save's file without that step.
+ */
+async function newestSnapshotRecordsFields(
+  deps: CollectionSaveDeps,
+  kind: AddressKind,
+  slug: string
+): Promise<boolean> {
+  const latest = await loadLatestSnapshot(join(deps.migrationsDir, "meta"));
+  const key =
+    kind === "collection"
+      ? "collections"
+      : kind === "single"
+        ? "singles"
+        : "fieldGroups";
+  return Array.isArray(latest?.data.entities?.[key][slug]?.settings.fields);
 }
 
 /**

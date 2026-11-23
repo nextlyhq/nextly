@@ -90,10 +90,15 @@ const WINDOWS: Record<
   up: [
     { from: "archive", to: "shared" },
     { from: "joins", to: "main" },
+    // A translations column's new type and the main column's are one change: a run ending
+    // between them leaves the two columns of one field on different types, and the change
+    // unjudged, since it is judged before its first file only when the run reaches its last.
+    { from: "retypes", to: "main" },
   ],
   down: [
     { from: "shared", to: "main" },
     { from: "main", to: "joins", stopAt: "main" },
+    { from: "main", to: "retypes", stopAt: "main" },
   ],
 };
 

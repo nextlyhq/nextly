@@ -4935,12 +4935,14 @@ async function refusePendingFilesTheServerCannotHold(args: {
 /**
  * The companion files `migrate:create` writes ahead of their change's own file
  * (`generate.ts`' `beforeMain`): an entity's translation turned off, a field leaving translation's
- * archive, and a field joining translation's move. The others are written after it.
+ * archive, a field joining translation's move, and a translated field's translations column taking
+ * its new type. The others are written after it.
  */
 const WRITTEN_AHEAD: ReadonlySet<string> = new Set([
   "disable",
   "archive",
   "joins",
+  "retypes",
 ]);
 
 /**
@@ -5002,10 +5004,30 @@ async function changeFilesFrom(
           splitSqlStatements(file.upSql, dialect, file)
         ),
         dialect,
+        retyped: retypedByFiles(written),
       }),
     };
   }
   return null;
+}
+
+/**
+ * The fields the `retypes` files among `files` give a new translations column type, by that
+ * table's name lower-cased: the change's own statements for those columns.
+ */
+function retypedByFiles(
+  files: readonly ParsedMigration[]
+): Map<string, Set<string>> {
+  const retyped = new Map<string, Set<string>>();
+  for (const file of files) {
+    const intent = file.localization;
+    if (intent?.kind !== "retypes") continue;
+    const table = intent.spec.companionTable.toLowerCase();
+    const fields = retyped.get(table) ?? new Set<string>();
+    for (const each of intent.spec.retyped ?? []) fields.add(each.field);
+    retyped.set(table, fields);
+  }
+  return retyped;
 }
 
 /** The newest snapshot of a file before `files[at]`, or null where none before it has one. */
