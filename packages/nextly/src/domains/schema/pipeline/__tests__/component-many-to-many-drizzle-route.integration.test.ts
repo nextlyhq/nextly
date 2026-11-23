@@ -37,6 +37,7 @@ function makePipeline(db: unknown): PushSchemaPipeline {
     preCleanupExecutor: noopPreCleanupExecutor,
     migrationJournal: noopMigrationJournal,
     notifier: noopNotifier,
+    adapter: undefined,
   });
 }
 

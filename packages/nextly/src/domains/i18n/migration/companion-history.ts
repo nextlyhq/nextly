@@ -210,6 +210,11 @@ const COMPANION_EFFECT: Record<
   },
   archive: () => "kept",
   unique: () => "kept",
+  // The named columns stay, each with the type the file gives it.
+  retypes: (columns, named) => {
+    for (const column of named) columns.set(column.name, column);
+    return "kept";
+  },
 };
 
 function addColumns(

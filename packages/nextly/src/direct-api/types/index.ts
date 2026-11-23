@@ -173,6 +173,7 @@ export type {
   QueuedEmail,
   QueuedEmailState,
   CancelQueuedEmailArgs,
+  RetryQueuedEmailArgs,
   FindEmailActivityArgs,
   FindEmailDeliveriesArgs,
   FindQueuedEmailsArgs,

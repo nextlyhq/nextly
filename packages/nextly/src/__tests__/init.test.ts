@@ -254,6 +254,7 @@ describe("init - Nextly API", () => {
       "emailProviders",
       "emailTemplates",
       "fieldGroups",
+      "files",
       "find",
       "findByID",
       "findSingle",

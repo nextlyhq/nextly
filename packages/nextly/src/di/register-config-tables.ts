@@ -90,7 +90,11 @@ export async function registerConfigTablesInResolver(
     registerEntityRuntimeTables(observed, entity, dialect);
 
   // Collections: table name convention is `dc_<slug-with-underscores>`.
-  for (const collection of config.collections ?? []) {
+  for (const collection of await collectionsLeftToConfig(
+    registry,
+    config,
+    adapter
+  )) {
     registerConfigEntity(
       collection,
       "collection",
@@ -121,6 +125,39 @@ export async function registerConfigTablesInResolver(
       logger
     );
   }
+}
+
+/**
+ * The configuration's collections whose runtime table this registers: every one but a collection a
+ * demote handed to the Schema Builder, which keeps the runtime table the registry pass registered
+ * from its record. Its entry, while still in the configuration, describes columns the table no
+ * longer follows (`withoutHandedToBuilder`). Only a record whose table that pass did register
+ * counts, so where it failed (the case this registration is the fallback for) the entry is still
+ * registered, as before; so is every entry when the registry cannot be read here.
+ */
+async function collectionsLeftToConfig(
+  registry: SchemaRegistry,
+  config: NextlyServiceConfig,
+  adapter: DrizzleAdapter
+): Promise<NonNullable<NextlyServiceConfig["collections"]>> {
+  const [{ CollectionRegistryService }, { withoutHandedToBuilder }, sources] =
+    await Promise.all([
+      import("../domains/collections/services/collection-registry-service"),
+      import("../domains/schema/pipeline/registered-collections"),
+      import("../domains/schema/migrate/plugin/plugin-collection-sources"),
+    ]);
+  const quiet = { info() {}, warn() {}, error() {}, debug() {} };
+  const registered = await new CollectionRegistryService(adapter, quiet)
+    .getAllCollections()
+    .catch(() => []);
+  return withoutHandedToBuilder(
+    config.collections ?? [],
+    registered.filter(
+      row =>
+        typeof row.tableName === "string" && registry.hasTable(row.tableName)
+    ),
+    sources.pluginCollectionSources(config.plugins ?? [])
+  );
 }
 
 /**

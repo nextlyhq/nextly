@@ -100,6 +100,7 @@ import { runAsCaller, withLanguagesPinned } from "./namespaces/helpers";
 import {
   createAccessNamespace,
   createApiKeysNamespace,
+  createFilesNamespace,
   createContentEventsNamespace,
   createJobsNamespace,
   createNoticesNamespace,
@@ -119,6 +120,7 @@ import {
   createUsersNamespace,
   type AccessNamespace,
   type ApiKeysNamespace,
+  type FilesNamespace,
   type ContentEventsNamespace,
   type JobsNamespace,
   type NoticesNamespace,
@@ -328,6 +330,8 @@ export class Nextly implements NextlyContext {
   public readonly workflows: WorkflowsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;
+  /** @experimental A collection's private files: the checked download. */
+  public readonly files: FilesNamespace;
 
   /**
    * Create a new Nextly instance.
@@ -373,6 +377,7 @@ export class Nextly implements NextlyContext {
     );
     this.workflows = withLanguagesPinned(createWorkflowsNamespace(this));
     this.principals = createNextlyPrincipals();
+    this.files = withLanguagesPinned(createFilesNamespace());
 
     // The instance its callers reach: only the collection and Single
     // operations may be made as a plugin-defined person, and every other
@@ -1174,6 +1179,11 @@ export const nextly = {
     queue: async <TTask extends JobSlug>(args: QueueJobArgs<TTask>) =>
       (await requireNextlyOnceStarted()).jobs.queue(args),
   },
+
+  files: {
+    download: async args =>
+      (await requireNextlyOnceStarted()).files.download(args),
+  } satisfies FilesNamespace,
 
   principals: {
     fromRequest: async (request: Request, kind: string) =>

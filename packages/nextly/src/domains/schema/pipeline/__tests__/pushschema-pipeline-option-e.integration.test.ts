@@ -123,6 +123,7 @@ describe("PushSchemaPipeline Option E end-to-end - PostgreSQL", () => {
       preCleanupExecutor: new RealPreCleanupExecutor(),
       migrationJournal: noopMigrationJournal,
       notifier: noopNotifier,
+      adapter: undefined,
     });
     // No test hooks - we let real drizzle-kit pushSchema run AFTER
     // pre-resolution. That's the whole point of Option E.

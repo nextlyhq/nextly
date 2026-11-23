@@ -70,6 +70,7 @@ import { _resetEnvCache } from "../shared/lib/env";
 import type { SecurityConfig } from "../shared/types/config";
 import type { SingleConfig } from "../singles/config/types";
 import { getImageProcessor } from "../storage/image-processor";
+import type { StoragePlugin } from "../storage/types";
 
 import {
   PG_ABORTED_TRANSACTION_SQLSTATE,
@@ -316,6 +317,11 @@ export interface CreateTestNextlyOptions {
   postgresSchema?: string;
   /** Plugins to boot (their full lifecycle runs). */
   plugins?: PluginDefinition[];
+  /**
+   * Storage plugins, as `storage` in `nextly.config.ts` lists them: for a test
+   * whose collections need storage of their own, such as private files.
+   */
+  storagePlugins?: StoragePlugin[];
   /**
    * @experimental What the app lists plugins for, as `db.rawSqlPlugins` does
    * in `nextly.config.ts`. Absent, nothing is listed, as in an app that lists
@@ -945,6 +951,7 @@ async function bootServices(
       hookRegistry: getHookRegistry(),
       plugins: opts.plugins,
       pluginConsent: opts.pluginConsent,
+      ...(opts.storagePlugins ? { storagePlugins: opts.storagePlugins } : {}),
       collections: opts.collections,
       // A site's own widgets reach boot where a site config puts them.
       ...(opts.widgets
