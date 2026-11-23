@@ -25,6 +25,7 @@ import type { CollectionEntryService } from "../../../services/collections/colle
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { consoleLogger } from "../../../shared/types";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { holdEntityInProcess } from "../../dynamic-collections/services/entity-hold";
 import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
 import {
   holdEntityForWrite,
@@ -308,6 +309,20 @@ describe.each(getConfiguredTestDialects())(
       );
     };
 
+    /** The write's hold of the collection, kept until `whileHeld` ends, in a transaction of its own. */
+    const heldWhile = (t: TestNextly, whileHeld: () => Promise<void>) => {
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      return t.adapter.transaction(async tx => {
+        await holdEntityForWrite(
+          tx,
+          { kind: "collection", slug: SLUG },
+          registry,
+          t.adapter as unknown as HoldingAdapter
+        );
+        await whileHeld();
+      });
+    };
+
     /** The registry row as a write made now would load it, `data` the write's. */
     async function loadedNow(
       t: TestNextly,
@@ -381,5 +396,59 @@ describe.each(getConfiguredTestDialects())(
       });
       await expect(heldFor(t, setsTitle)).resolves.toBeUndefined();
     }, 30_000);
+
+    // Entry writes share the hold: two under way at once each take it while the other is open,
+    // never waiting on each other. On SQLite every transaction takes its turn anyway.
+    it.runIf(dialect !== "sqlite")(
+      "lets entry writes take the hold beside each other",
+      async () => {
+        const t = await boot();
+        let letGo: () => void = () => undefined;
+        const goes = new Promise<void>(resolve => {
+          letGo = resolve;
+        });
+        let first: () => void = () => undefined;
+        const firstHolds = new Promise<void>(resolve => {
+          first = resolve;
+        });
+        const open = heldWhile(t, async () => {
+          first();
+          await goes;
+        });
+        await firstHolds;
+        try {
+          const { landed, write } = await landsWhileHeld(heldFor(t, undefined));
+          expect(landed).toBe(true);
+          await write;
+        } finally {
+          letGo();
+          await open;
+        }
+      },
+      30_000
+    );
+
+    // On SQLite a save holds the collection in the process, and every transaction takes its turn
+    // on one connection: a write on a transaction already open, which holds that turn, is refused
+    // at once while a save holds it, rather than waiting for a save that needs the turn to finish.
+    it.runIf(dialect === "sqlite")(
+      "refuses at once a write on a transaction already open while a save holds the collection",
+      async () => {
+        const t = await boot();
+        const release = await holdEntityInProcess(t.adapter, {
+          kind: "collection",
+          slug: SLUG,
+        });
+        try {
+          await expect(heldFor(t, undefined)).rejects.toMatchObject({
+            code: "COLLECTION_BEING_CHANGED",
+          });
+        } finally {
+          release();
+        }
+        await expect(heldFor(t, undefined)).resolves.toBeUndefined();
+      },
+      30_000
+    );
   }
 );
