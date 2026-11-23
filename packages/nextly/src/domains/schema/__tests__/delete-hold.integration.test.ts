@@ -173,6 +173,24 @@ vi.mock("../builder-save/push-carries-values", async importOriginal => {
   };
 });
 
+// A pause before each registry write a save makes once its change applied (`writeRegistryRows`), while
+// `ms` is set: the span a hold let go before the registry write would leave a write to land in.
+const slowRegistry = vi.hoisted(() => ({ ms: 0 }));
+vi.mock("../schema-version", async importOriginal => {
+  const real = await importOriginal<typeof import("../schema-version")>();
+  return {
+    ...real,
+    writeRegistryRows: async (
+      ...args: Parameters<typeof real.writeRegistryRows>
+    ) => {
+      if (slowRegistry.ms > 0) {
+        await new Promise(resolve => setTimeout(resolve, slowRegistry.ms));
+      }
+      return real.writeRegistryRows(...args);
+    },
+  };
+});
+
 // The push road's hold runs on a session of its own (`withSession`): what each case counts of it,
 // and a switch that refuses its release once the release has really run (`sessionsOf`).
 const releaseFails = { on: false, holds: 0, refused: 0 };
@@ -223,6 +241,7 @@ async function holdsCollectionLocks(db: unknown): Promise<boolean> {
 let instance: TestNextly | undefined;
 afterEach(async () => {
   pushRoad.forced = false;
+  slowRegistry.ms = 0;
   releaseFails.on = false;
   tryRelease.fails = false;
   tryRelease.refused = 0;
@@ -754,6 +773,9 @@ describe.each(getConfiguredTestDialects())(
       await new Promise(resolve => setTimeout(resolve, 1_000));
       expect(settled).toBe(false);
 
+      // The save's registry write made slow: the write still waits through it, never landing
+      // between the push and the row that records the save.
+      slowRegistry.ms = 1_500;
       release();
       expect(await applying).toBe("applied");
       expect(await writing).toMatchObject({
