@@ -44,6 +44,8 @@ import {
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { JobRegistry } from "../../jobs/job-registry";
+import { runJobsPass, type JobsPassDatabase } from "../../jobs/jobs-runner";
 import { sweepAbandonedUploads } from "../sweep-abandoned-uploads";
 
 import { MemoryPrivateStorage } from "./memory-private-storage";
@@ -129,6 +131,14 @@ describe.each(getConfiguredTestDialects())(
             slug: STAFF_ONLY,
             files: FILES,
             access: { create: mayCreate },
+            // The app's own rule refusing some deletes, after access.
+            hooks: {
+              beforeDelete: [
+                ({ data }: { data?: { note?: unknown } }) => {
+                  if (data?.note === "keep") throw new Error("kept by the app");
+                },
+              ],
+            },
             fields: [text({ name: "note" })],
           }),
         ],
@@ -333,6 +343,20 @@ describe.each(getConfiguredTestDialects())(
       expect(storage.browserPut(upload, swap).ok).toBe(true);
       expect(storage.objects.get(keptKey)?.bytes.equals(bytes)).toBe(true);
       expect((await entry(id))!.storageKey).toBe(keptKey);
+
+      // Once the link has expired, what it left is removed and forgotten.
+      expect(storage.objects.has(uploadKey)).toBe(true);
+      await sweepAbandonedUploads(
+        {
+          collections: () => [{ slug: CONTRACTS, files: FILES }],
+          entries: () =>
+            container.get<CollectionsHandler>("collectionsHandler"),
+        },
+        new Date(Date.now() + 3600_000)
+      );
+      expect(storage.objects.has(uploadKey)).toBe(false);
+      expect(storage.objects.has(keptKey)).toBe(true);
+      expect((await entry(id))!.uploadKey ?? null).toBeNull();
     });
 
     it("removes a file's bytes when its entry is deleted, confirmed or not", async () => {
@@ -358,6 +382,50 @@ describe.each(getConfiguredTestDialects())(
       await expect(entry(done.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
       expect(storage.objects.has(doneKey)).toBe(false);
       expect(storage.objects.has(waitingKey)).toBe(false);
+    });
+
+    it("retries a deleted file's bytes through the job runner when storage refuses at first", async () => {
+      const bytes = pdf("storage briefly down");
+      const done = started(
+        await start(await staff("uploader"), claimFor(bytes))
+      );
+      storage.browserPut(done.upload, bytes);
+      await complete(await staff("uploader"), done.id);
+      const key = String((await entry(done.id))!.storageKey);
+
+      storage.refuseDeletes = 1;
+      await new Nextly().delete({
+        collection: CONTRACTS,
+        id: done.id,
+      } as never);
+      // The entry is gone and storage refused: the bytes wait for the job.
+      expect(storage.objects.has(key)).toBe(true);
+
+      await runJobsPass(
+        container.get<JobsPassDatabase>("adapter"),
+        container.get<JobRegistry>("jobRegistry"),
+        { batchSize: 10, maxDurationMs: 20_000 }
+      );
+      expect(storage.objects.has(key)).toBe(false);
+    });
+
+    it("keeps a file's bytes when its deletion is refused", async () => {
+      const bytes = pdf("refused deletion");
+      const kept = started(
+        await start(
+          await staff("uploader"),
+          claimFor(bytes, { data: { note: "keep" } }),
+          STAFF_ONLY
+        )
+      );
+      storage.browserPut(kept.upload, bytes);
+      await complete(await staff("uploader"), kept.id, STAFF_ONLY);
+      const key = String((await entry(kept.id, STAFF_ONLY))!.storageKey);
+      await expect(
+        new Nextly().delete({ collection: STAFF_ONLY, id: kept.id } as never)
+      ).rejects.toThrow();
+      expect((await entry(kept.id, STAFF_ONLY))!.fileStatus).toBe("ready");
+      expect(storage.objects.has(key)).toBe(true);
     });
 
     it("refuses staff without the permission before anything is written", async () => {

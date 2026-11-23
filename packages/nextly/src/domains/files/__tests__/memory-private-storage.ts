@@ -24,10 +24,17 @@ interface Stored {
 export class MemoryPrivateStorage {
   readonly objects = new Map<string, Stored>();
 
+  /** How many deletes to refuse next, as a storage that is briefly down would. */
+  refuseDeletes = 0;
+
   /** The storage adapter, as a storage plugin hands it to core. */
   readonly adapter: IStorageAdapter = {
     upload: () => Promise.reject(new Error("public upload refused in test")),
     delete: async key => {
+      if (this.refuseDeletes > 0) {
+        this.refuseDeletes--;
+        throw new Error("storage unavailable in test");
+      }
       this.objects.delete(key);
     },
     exists: async key => this.objects.has(key),

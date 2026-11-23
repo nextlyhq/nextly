@@ -134,7 +134,7 @@ const SYSTEM_WRITES = { create: false, update: false } as const;
 /**
  * The fields a collection holding files carries for each file, in the order
  * they come before the author's own. Every one is the system's: no caller
- * writes it through a checked path, and `storageKey` is never read through
+ * writes it through a checked path, and the two keys are never read through
  * one either.
  *
  * - `filename`: the name the file was uploaded under, for display and for
@@ -142,6 +142,9 @@ const SYSTEM_WRITES = { create: false, update: false } as const;
  * - `mimeType`, `size`, `sha256`: what the stored bytes are, as checked when
  *   the upload was confirmed.
  * - `storageKey`: where the bytes are in storage.
+ * - `uploadKey`: where the upload link writes, kept until the link has
+ *   expired, so bytes sent through it after the file was confirmed or
+ *   rejected are still found and removed.
  * - `fileStatus`: `pending` until the upload is confirmed, then `ready`, or
  *   `rejected` with a `rejectReason`.
  * - `uploadedByKind`, `uploadedById`: who started the upload (`user`, or a
@@ -192,6 +195,15 @@ export function fileSystemFields(): Array<FieldConfig & { name: string }> {
       // Withheld from every checked read, as well as written by no caller:
       // knowing where a file is in storage is a step toward reaching it
       // without Nextly.
+      access: { read: false, ...SYSTEM_WRITES },
+      admin: { readOnly: true, hidden: true },
+    },
+    {
+      type: "text",
+      name: "uploadKey",
+      label: "Upload key",
+      localized: false,
+      // As `storageKey`: a place in storage no caller learns or sets.
       access: { read: false, ...SYSTEM_WRITES },
       admin: { readOnly: true, hidden: true },
     },

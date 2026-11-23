@@ -37,6 +37,7 @@ const FILE_FIELDS = [
   "size",
   "sha256",
   "storageKey",
+  "uploadKey",
   "fileStatus",
   "rejectReason",
   "uploadedByKind",
@@ -83,7 +84,7 @@ describe("defineCollection with files", () => {
     ).toEqual(["title", "slug", "note"]);
   });
 
-  it("lets no caller write a file's fields, and withholds only the storage key from reads", () => {
+  it("lets no caller write a file's fields, and withholds only the two storage keys from reads", () => {
     const contracts = defineCollection({
       slug: "contracts",
       files: FILES,
@@ -94,7 +95,7 @@ describe("defineCollection with files", () => {
       expect(access?.create, name).toBe(false);
       expect(access?.update, name).toBe(false);
       expect(access?.read, name).toBe(
-        name === "storageKey" ? false : undefined
+        name === "storageKey" || name === "uploadKey" ? false : undefined
       );
     }
     // The author's own field keeps its own access.

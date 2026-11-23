@@ -52,7 +52,7 @@ import {
 } from "./file-caller";
 
 /** How long an upload link lasts, in seconds: the storage layer's own cap. */
-const UPLOAD_LINK_SECONDS = 300;
+export const UPLOAD_LINK_SECONDS = 300;
 
 /** What a start request may carry. */
 export const startUploadBody: z.ZodType<StartUploadBody> = z
@@ -179,7 +179,7 @@ type FileCallerScope = NonNullable<StaffCaller["read"]["authenticatedScope"]>;
 type FileCallerActor = StaffCaller["actor"];
 
 /** A trusted write of a file's own fields, which no caller may make. */
-async function writeFileFields(
+export async function writeFileFields(
   slug: string,
   id: string,
   fields: Record<string, unknown>
@@ -257,6 +257,9 @@ export async function startUpload(
     mimeType: claim.mimeType,
     size: claim.size,
     storageKey: key,
+    // Kept after the file is confirmed or rejected, until the link expires:
+    // bytes sent through it late land here, and are removed from here.
+    uploadKey: key,
     fileStatus: "pending",
     uploadedByKind: caller.uploader.kind,
     uploadedById: caller.uploader.id,
@@ -284,6 +287,7 @@ interface FileEntry {
   mimeType?: unknown;
   size?: unknown;
   storageKey?: unknown;
+  uploadKey?: unknown;
   fileStatus?: unknown;
   uploadedByKind?: unknown;
   uploadedById?: unknown;

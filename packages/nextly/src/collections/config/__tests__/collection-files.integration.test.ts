@@ -29,6 +29,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { ServiceContainer } from "../../../services/index";
+import { MemoryPrivateStorage } from "../../../domains/files/__tests__/memory-private-storage";
 
 const CONTRACTS = "contracts";
 const NOTES = "notes";
@@ -43,6 +44,8 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
+        // A collection with files starts only on storage that keeps them private.
+        storagePlugins: [new MemoryPrivateStorage().plugin([CONTRACTS])],
         collections: [
           defineCollection({
             slug: CONTRACTS,
