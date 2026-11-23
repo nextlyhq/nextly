@@ -51,6 +51,7 @@ import { dirname, relative, resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { refuseWhileSaveLeftPartWay } from "../../domains/schema/builder-save/save-in-progress";
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
@@ -181,6 +182,15 @@ export interface MigrateCreateCommandOptions {
    * @default false
    */
   acceptRenames?: boolean;
+
+  /**
+   * Only meaningful when the run cannot prompt (`canPrompt`), where a field that looks moved into
+   * or out of a group is otherwise declined: deleted at its old place and added empty at its new
+   * one. Carries every such field as a move, its values copied to the new place first. The column
+   * a move drops still needs the data-loss consent, as every drop does.
+   * @default false
+   */
+  acceptMoves?: boolean;
 
   /**
    * Generate a PLUGIN's migration module instead of the app's `.sql` file.
@@ -761,6 +771,19 @@ export async function runMigrateCreate(
   });
   held.enter();
   try {
+    // A Builder save this machine left part-way against this database refuses the command, a
+    // blank migration's included: what it would write from is not what the database holds. Asked
+    // once the folder is held, so a save that started while this waited for it is seen too.
+    // Another machine's or another database's is named only.
+    try {
+      await refuseWhileSaveLeftPartWay({
+        projectRoot: cwd,
+        postgresSchema: configResult.config.db.postgres?.schema,
+        notice: line => logger.warn(line),
+      });
+    } catch (error) {
+      exitWithError(logger, error);
+    }
     // Branches written without each other that change the same thing cannot
     // be recorded as merged; ones that change different things are, below.
     await refuseUnrecordableMerge(migrationsDir);
@@ -799,6 +822,13 @@ export async function runMigrateCreate(
     if (options.acceptRenames === true && !nonInteractive) {
       logger.warn(
         "--accept-renames has no effect in interactive mode. " +
+          "Pass --non-interactive to use it (typically only for CI)."
+      );
+    }
+    // The same for moves: at a terminal, each one is asked about.
+    if (options.acceptMoves === true && !nonInteractive) {
+      logger.warn(
+        "--accept-moves has no effect in interactive mode: each possible move is asked about. " +
           "Pass --non-interactive to use it (typically only for CI)."
       );
     }
@@ -905,6 +935,8 @@ export async function runMigrateCreate(
         permissions,
         nonInteractive,
         autoAcceptRenames: options.acceptRenames === true,
+        // Fields moved into or out of a group are looked for, and asked about as renames are.
+        codeMoves: { acceptAll: options.acceptMoves === true },
         recordSnapshot: options.recordSnapshot === true,
         liveCompanionColumns: live.read,
         liveUniqueIndexes: uniques.read,

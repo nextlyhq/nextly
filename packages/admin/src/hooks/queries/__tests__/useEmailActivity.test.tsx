@@ -5,7 +5,8 @@
  * change by itself (waiting, retrying, sending), and every minute once all
  * have settled, so email sent or queued since still appears; each refresh
  * measures the window again, so it rolls with the clock, while a later page
- * keeps the window its first page was read in.
+ * keeps the window its first page was read in. A queued email's Retry or
+ * Cancel, done or refused, reads its open sheet and the list again.
  *
  * @module hooks/queries/__tests__/useEmailActivity.test
  */
@@ -19,7 +20,11 @@ import type {
   QueuedEmailActivity,
 } from "@admin/services/emailActivityApi";
 
-import { useActivityDetail, useEmailActivity } from "../useEmailActivity";
+import {
+  useActivityDetail,
+  useEmailActivity,
+  useQueuedEmailAction,
+} from "../useEmailActivity";
 
 const listActivity = vi.fn();
 const searchActivityByAddress = vi.fn();
@@ -30,8 +35,12 @@ vi.mock("@admin/services/emailActivityApi", () => ({
   getQueuedEmailOverdue: vi.fn(),
   getDeliveryDetail: vi.fn(),
   getQueuedEmailDetail: (...args: unknown[]) => getQueuedEmailDetail(...args),
+  retryQueuedEmail: (...args: unknown[]) => retryQueuedEmail(...args),
+  cancelQueuedEmail: (...args: unknown[]) => cancelQueuedEmail(...args),
 }));
 const getQueuedEmailDetail = vi.fn();
+const retryQueuedEmail = vi.fn();
+const cancelQueuedEmail = vi.fn();
 
 /** One merged row: a queued email in `status`. */
 function entry(
@@ -89,6 +98,8 @@ function wrapper({ children }: { children: ReactNode }) {
 
 afterEach(() => {
   getQueuedEmailDetail.mockReset();
+  retryQueuedEmail.mockReset();
+  cancelQueuedEmail.mockReset();
   vi.useRealTimers();
   listActivity.mockReset();
   searchActivityByAddress.mockReset();
@@ -453,5 +464,63 @@ describe("useActivityDetail", () => {
     sheet.rerender({ open: row });
     await waitFor(() => expect(getQueuedEmailDetail).toHaveBeenCalledTimes(2));
     sheet.unmount();
+  });
+});
+
+describe("useQueuedEmailAction", () => {
+  /** The open sheet, the list and the action, mounted together. */
+  function mounted() {
+    listActivity.mockResolvedValue({
+      items: [entry("failed")],
+      meta: EMPTY_META,
+    });
+    getQueuedEmailDetail.mockResolvedValue({ ...queuedEmail("failed") });
+    return renderHook(
+      () => ({
+        list: useEmailActivity({ outcome: "any", window: "7d" }),
+        detail: useActivityDetail({ source: "queued", id: "q1" }),
+        action: useQueuedEmailAction(),
+      }),
+      { wrapper }
+    );
+  }
+
+  it("tries the email again by its id, then reads its sheet and the list again", async () => {
+    retryQueuedEmail.mockResolvedValue({
+      message: "Email will be tried again now.",
+      item: { id: "q1", state: "failed" },
+    });
+    const { result } = mounted();
+    await waitFor(() => expect(result.current.detail.data).toBeDefined());
+    const reads = getQueuedEmailDetail.mock.calls.length;
+    const lists = listActivity.mock.calls.length;
+    await act(async () => {
+      await result.current.action.mutateAsync({ action: "retry", id: "q1" });
+    });
+    expect(retryQueuedEmail).toHaveBeenCalledWith("q1");
+    expect(cancelQueuedEmail).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(getQueuedEmailDetail.mock.calls.length).toBe(reads + 1)
+    );
+    expect(listActivity.mock.calls.length).toBeGreaterThan(lists);
+  });
+
+  it("reads them again after a refused cancel too, since the email moved on", async () => {
+    cancelQueuedEmail.mockRejectedValue(
+      new Error("This email has already been sent or cancelled.")
+    );
+    const { result } = mounted();
+    await waitFor(() => expect(result.current.detail.data).toBeDefined());
+    const reads = getQueuedEmailDetail.mock.calls.length;
+    await act(async () => {
+      await result.current.action
+        .mutateAsync({ action: "cancel", id: "q1" })
+        .catch(() => undefined);
+    });
+    expect(cancelQueuedEmail).toHaveBeenCalledWith("q1");
+    expect(retryQueuedEmail).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(getQueuedEmailDetail.mock.calls.length).toBe(reads + 1)
+    );
   });
 });

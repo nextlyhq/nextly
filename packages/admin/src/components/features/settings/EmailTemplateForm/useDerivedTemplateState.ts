@@ -45,6 +45,8 @@ export interface DerivedTemplateState {
   isPreviewPending: boolean;
   /** The render was refused or unreachable; the pane says so rather than lying. */
   previewError: string | null;
+  /** A written draft's code, as converting it would store it; none for code. */
+  previewSource: string | undefined;
 }
 
 export function useDerivedTemplateState({
@@ -159,6 +161,7 @@ export function useDerivedTemplateState({
     hasPreview,
     isPreviewPending,
     previewError,
+    previewSource,
   } = useDraftPreview(
     /*
      * `null` while the sample JSON is unparseable: sending `{}` would preview
@@ -181,5 +184,6 @@ export function useDerivedTemplateState({
     hasPreview,
     isPreviewPending,
     previewError,
+    previewSource,
   };
 }

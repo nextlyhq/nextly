@@ -87,6 +87,7 @@ import {
   resolveKnownTableColumns,
   resolveTableColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
+import { registerStoredFileDeletion } from "../domains/files/delete-stored-file";
 import { stopGrantsExpiryRetry } from "../domains/flush-content-change";
 import type {
   LanguageAddressRule,
@@ -1119,6 +1120,15 @@ async function registerServicesOnce(
     structure,
     "before migrations at start"
   );
+  // The cache handlers read expiries from this adapter's ledger, and writes
+  // made outside a request record theirs into it, for every instance. A
+  // stored page is served only once it is published, so it is published as
+  // soon as nothing this start does can expire a tag first: here, where the
+  // app does not opt into migrations at start, and after them where it does,
+  // below. The steps between change no content, and each of their round trips
+  // held the admin page's first byte.
+  const ledgerAt = ledgerPublicationOf(structure, config);
+  publishLedgerIfAt("before the schema reads", ledgerAt, adapter);
   await refuseUnmigratedDatabaseInBuildPhase(adapter);
 
   const bootExtensionSchema = await prepareBootSchema(
@@ -1167,11 +1177,10 @@ async function registerServicesOnce(
         },
       })
   );
-  // The cache handlers read expiries from this adapter's ledger, and writes
-  // made outside a request record theirs into it, for every instance. After
-  // the migrations at start, which record theirs through the ledger they lend
-  // themselves, on their own transaction, as `nextly migrate` does.
-  installTagExpiryLedger(adapter);
+  // After the migrations at start where they run, which record their
+  // expiries through the ledger they lend themselves, on their own
+  // transaction, as `nextly migrate` does.
+  publishLedgerIfAt("after migrations at start", ledgerAt, adapter);
 
   // A run that failed before it set the database up leaves it as it was.
   await refuseDatabaseNotSetUp(adapter, structure, "after migrations at start");
@@ -1342,7 +1351,8 @@ async function registerServicesOnce(
       const { mediaStorage, storage } = registerBootMediaStorage(
         storagePlugins,
         resolvedLogger,
-        resolvedBasePath
+        resolvedBasePath,
+        transformedConfig.collections ?? []
       );
 
       // Before any schema work, a database laid out for the other choice of the setting is refused:
@@ -2896,12 +2906,22 @@ async function recordBootParticipation(
 function registerBootMediaStorage(
   storagePlugins: NextlyServiceConfig["storagePlugins"],
   logger: Logger,
-  basePath: string
+  basePath: string,
+  collections: ReadonlyArray<{ slug: string; files?: unknown }>
 ): { mediaStorage: MediaStorage; storage: IStorageAdapter | null } {
+  // A collection with `files` keeps private files: its storage is routed fail
+  // closed, and the start is refused here, before anything is served, when
+  // that storage cannot keep files private (no storage plugin takes the
+  // collection, or its plugin has a public URL in front of it).
+  const privateCollections = collections
+    .filter(collection => collection.files !== undefined)
+    .map(collection => collection.slug);
   const mediaStorage = initializeMediaStorage({
     plugins: storagePlugins,
     local: { uploadDir: join(basePath, "public", "uploads") },
+    privateCollections,
   });
+  for (const slug of privateCollections) mediaStorage.getPrivateFiles(slug);
   logStorageConfiguration(mediaStorage, storagePlugins, logger);
   container.registerSingleton<MediaStorage>("mediaStorage", () => mediaStorage);
 
@@ -3098,6 +3118,35 @@ async function withStartRegistrationsSetAside<T>(
   } finally {
     container.restore(setAside);
   }
+}
+
+/** Where in a start the cache tag expiry ledger is published. */
+type LedgerPublication =
+  | "before the schema reads"
+  | "after migrations at start";
+
+/**
+ * Where this start publishes the ledger: after the migrations at start where
+ * the app opts into them, as they record their own expiries; before the
+ * schema reads otherwise, as nothing before the registry is read can expire a
+ * tag then.
+ */
+function ledgerPublicationOf(
+  structure: StartStructure,
+  config: NextlyServiceConfig
+): LedgerPublication {
+  return structure.migratesAtStart || config.db?.runMigrationsOnBoot === true
+    ? "after migrations at start"
+    : "before the schema reads";
+}
+
+/** Publishes `adapter`'s ledger when `at` is where this start publishes it. */
+function publishLedgerIfAt(
+  at: LedgerPublication,
+  publication: LedgerPublication,
+  adapter: DrizzleAdapter
+): void {
+  if (at === publication) installTagExpiryLedger(adapter);
 }
 
 /**
@@ -3416,6 +3465,9 @@ function registerGlobalHooks(
   );
   hookRegistry.register("beforeCreate", "*", sanitizationHandler);
   hookRegistry.register("beforeUpdate", "*", sanitizationHandler);
+  // A private file's bytes go with its entry: deleting the entry first would
+  // leave them in storage with nothing pointing at them.
+  registerStoredFileDeletion(hookRegistry);
   logger.info?.(
     `Input sanitization hook registered (enabled: ${transformedConfig.security?.sanitization?.enabled !== false})`
   );

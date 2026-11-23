@@ -337,6 +337,7 @@ async function syncVerdict(target: Target, table: string, parity: ParityCase) {
     preCleanupExecutor: noopPreCleanupExecutor,
     migrationJournal: noopMigrationJournal,
     notifier: noopNotifier,
+    adapter: undefined,
   }).apply({
     desired,
     db: target.db,

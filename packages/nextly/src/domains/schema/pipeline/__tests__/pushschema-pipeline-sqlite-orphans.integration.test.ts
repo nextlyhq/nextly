@@ -117,6 +117,7 @@ describe("PushSchemaPipeline — SQLite applies with orphan live tables", () => 
       preCleanupExecutor: noopPreCleanupExecutor,
       migrationJournal: noopMigrationJournal,
       notifier: noopNotifier,
+      adapter: undefined,
     });
   }
 

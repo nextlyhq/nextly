@@ -269,6 +269,42 @@ describe("pageProblems", () => {
     expect(problems[2]?.subject).toEqual({ label: "Whole site" });
   });
 
+  it("sends an entry's own date that is not set yet to the page, to save or publish it", () => {
+    const problems = pageProblems(
+      facts({
+        structuredData: [
+          {
+            type: "blogPosting",
+            detail: "datePublished",
+            message: "The date published is set when the page is first saved.",
+            fix: "save",
+            field: "createdAt",
+          },
+          {
+            type: "blogPosting",
+            detail: "datePublished",
+            message:
+              "The date published is set when the page is first published.",
+            fix: "save",
+            field: "firstPublishedAt",
+          },
+        ],
+      })
+    );
+    expect(problems.map(p => [p.what, p.action, p.fix])).toEqual([
+      [
+        "The date published is set when the page is first saved.",
+        "Save the page",
+        { place: "page", tab: "content" },
+      ],
+      [
+        "The date published is set when the page is first published.",
+        "Publish the page",
+        { place: "page", tab: "content" },
+      ],
+    ]);
+  });
+
   it("reports images with no alt text, by field, and passes a decorative one", () => {
     const problems = pageProblems(
       facts({

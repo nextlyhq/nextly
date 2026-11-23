@@ -12,7 +12,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { collectProblems, waitForCompleteRelease } from "./lib.mjs";
+import {
+  collectProblems,
+  describeWaiting,
+  SETTLE_BUDGET_MS,
+  waitForCompleteRelease,
+} from "./lib.mjs";
 
 const VERSION = "0.0.2-alpha.64";
 
@@ -207,6 +212,89 @@ describe("waiting for a release to settle on the registry", () => {
 
     expect(waits.slice(0, 4)).toEqual([5_000, 10_000, 20_000, 30_000]);
     expect(Math.max(...waits)).toBe(30_000);
+  });
+
+  /*
+   * The largest package's settle, measured: `nextly` became readable 11m10s
+   * after the publish step finished. A registry that turns `live` at a moment
+   * on the clock, rather than after a number of polls, states that delay as
+   * the duration it was.
+   */
+  const LARGEST_SETTLE_MS = 11 * 60 * 1000 + 10 * 1000;
+
+  function registrySettlingAtTime(settleAtMs, clock, manifest) {
+    return {
+      fetchStates: async () => {
+        const entry = clock.now() >= settleAtMs ? live() : stale();
+        return new Map(manifest.map(({ name }) => [name, entry]));
+      },
+    };
+  }
+
+  it("waits long enough by default for the largest package's measured settle", async () => {
+    const manifest = manifestOf(22);
+    const clock = fakeClock();
+    const registry = registrySettlingAtTime(LARGEST_SETTLE_MS, clock, manifest);
+
+    const { problems } = await waitForCompleteRelease({
+      manifest,
+      preState: PRE_STATE,
+      fetchStates: registry.fetchStates,
+      sleep: clock.sleep,
+      now: clock.now,
+    });
+
+    expect(problems).toEqual([]);
+    expect(SETTLE_BUDGET_MS).toBeGreaterThanOrEqual(2 * LARGEST_SETTLE_MS);
+  });
+
+  it("gives up on that registry at the earlier ten-minute budget", async () => {
+    // The control for the case above: the same registry and the budget the
+    // releases that reported a complete train as incomplete ran with. Without
+    // it the case above would also pass on a registry that settled at once.
+    const manifest = manifestOf(22);
+    const clock = fakeClock();
+    const registry = registrySettlingAtTime(LARGEST_SETTLE_MS, clock, manifest);
+
+    const { problems } = await waitForCompleteRelease({
+      manifest,
+      preState: PRE_STATE,
+      fetchStates: registry.fetchStates,
+      sleep: clock.sleep,
+      now: clock.now,
+      budgetMs: 10 * 60 * 1000,
+    });
+
+    expect(problems).toHaveLength(22);
+  });
+});
+
+describe("the line printed while waiting", () => {
+  it("names the packages when only a few are still settling", () => {
+    const line = describeWaiting(
+      [{ name: "nextly", reason: "version not published" }],
+      7,
+      123_400
+    );
+
+    expect(line).toBe(
+      "Waiting for 1 package(s) to settle on the registry: nextly " +
+        "(attempt 7, 123s of budget left)..."
+    );
+  });
+
+  it("gives only the count while a whole train is still settling", () => {
+    const problems = manifestOf(22).map(({ name }) => ({
+      name,
+      reason: "version not published",
+    }));
+
+    const line = describeWaiting(problems, 1, 1_800_000);
+
+    expect(line).toBe(
+      "Waiting for 22 package(s) to settle on the registry " +
+        "(attempt 1, 1800s of budget left)..."
+    );
   });
 });
 

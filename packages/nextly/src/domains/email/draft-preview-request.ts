@@ -115,4 +115,10 @@ export type DraftPreview = RenderedTemplate & {
    * as written.
    */
   from: string | null;
+  /**
+   * A written draft's code: the HTML and plain text its blocks compile to,
+   * Liquid and all, before any data. It is what converting the email to code
+   * would store. Absent for a coded draft, whose code is what it sent.
+   */
+  source?: { html: string; text: string };
 };

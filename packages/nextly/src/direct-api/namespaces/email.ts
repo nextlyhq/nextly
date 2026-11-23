@@ -55,6 +55,7 @@ import type {
   ActivityPage,
   AddressSearchPage,
   CancelQueuedEmailArgs,
+  RetryQueuedEmailArgs,
   CreateEmailProviderArgs,
   CreateEmailTemplateArgs,
   CreateUserFieldArgs,
@@ -211,6 +212,16 @@ export interface EmailNamespace {
   cancelQueued(
     args: CancelQueuedEmailArgs
   ): Promise<MutationResult<{ id: string; state: string }>>;
+  /**
+   * Retry a queued email now, as a person: one waiting or retrying is
+   * attempted now; one failed with its message still held waits again, due
+   * now. Refused while an attempt is with the provider, and for one sent,
+   * cancelled, or whose message was cleared. A checked call needs
+   * `manage-email-deliveries`.
+   */
+  retryQueued(
+    args: RetryQueuedEmailArgs
+  ): Promise<MutationResult<{ id: string; state: string }>>;
 }
 
 /**
@@ -261,8 +272,24 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
       const actor = directApiActor(ctx.defaultConfig, args);
       const item = await ctx.emailSendService.cancelQueued(args.id, {
         userId: actor?.type === "user" ? (actor.id ?? null) : null,
+        actor,
       });
       return { message: "Email cancelled.", item };
+    },
+
+    async retryQueued(
+      args: RetryQueuedEmailArgs
+    ): Promise<MutationResult<{ id: string; state: string }>> {
+      // A precondition: judged before anything is read or retried.
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailDeliveries.retry
+      );
+      const item = await ctx.emailSendService.retryQueued(args.id, {
+        actor: directApiActor(ctx.defaultConfig, args),
+      });
+      return { message: "Email will be tried again now.", item };
     },
   };
 }

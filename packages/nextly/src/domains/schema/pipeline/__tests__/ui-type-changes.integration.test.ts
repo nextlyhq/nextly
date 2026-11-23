@@ -126,6 +126,7 @@ function save(
     preCleanupExecutor: noopPreCleanupExecutor,
     migrationJournal: noopMigrationJournal,
     notifier: noopNotifier,
+    adapter: undefined,
   }).apply({
     desired,
     db: target.db,

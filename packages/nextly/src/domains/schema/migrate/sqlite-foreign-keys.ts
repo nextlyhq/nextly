@@ -16,7 +16,12 @@
  *
  * @module domains/schema/migrate/sqlite-foreign-keys
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { sql } from "drizzle-orm";
+
 import { NextlyError } from "../../../errors/nextly-error";
+import { consoleLogger } from "../../../shared/types";
 
 /** The two ways a caller's connection runs SQL. */
 export interface SqliteForeignKeySession {
@@ -27,7 +32,7 @@ export interface SqliteForeignKeySession {
 }
 
 /** Whether enforcement is on for the session's connection right now. */
-export async function sqliteForeignKeysOn(
+async function sqliteForeignKeysOn(
   session: Pick<SqliteForeignKeySession, "read">
 ): Promise<boolean> {
   const [row] = await session.read<{ foreign_keys: number }>(
@@ -51,6 +56,150 @@ export async function withSqliteForeignKeysOff<T>(
   } finally {
     await session.run(`PRAGMA foreign_keys = ${wasOn ? "ON" : "OFF"}`);
   }
+}
+
+/**
+ * Runs `work` as one change to SQLite's schema, in the adapter's own transaction, under SQLite's
+ * contract for changing a table's shape. Migration units (`executeTransaction`) and the dev push
+ * (`PushSchemaPipeline`) both run theirs through it.
+ *
+ * 1. `PRAGMA foreign_keys = OFF` before the transaction opens (inside one the pragma is silently
+ *    ignored), after reading the setting in force.
+ * 2. The adapter's transaction: queued behind every other flow's on the one connection, and begun
+ *    IMMEDIATE, so the database's write lock is taken at the start, waiting the busy timeout for
+ *    another writer, and nothing inside waits for it. Another flow's transaction waits its turn
+ *    rather than beginning inside this one.
+ * 3. Inside, the setting is read back; if enforcement is still on (another transaction was open on
+ *    the connection, so the pragma did nothing) the change is refused before `work` runs.
+ * 4. `work`, then `PRAGMA foreign_key_check`: a row it returns is a reference the change left
+ *    dangling, and the change is rolled back and refused with `dangling`'s sentence.
+ * 5. COMMIT, then the setting read in step 1 is restored, whether the change committed, was
+ *    refused or failed. A restore that fails once the transaction has committed is thrown as a
+ *    failure the change outlived (`restoreFailedAfterCommit`): the change stands, and only the
+ *    setting could not be put back, which a reconnection does.
+ *
+ * `inside` wraps everything the transaction runs, where a caller reads its failures its own way.
+ */
+export function sqliteSchemaTransaction<T>(
+  adapter: DrizzleAdapter,
+  work: (ctx: TransactionContext) => Promise<T>,
+  sentences: {
+    /** What is refused where enforcement stays on, as "this migration". */
+    readonly subject: string;
+    /** The refusal of a change that would leave references dangling. */
+    readonly dangling: (count: number, pairs: string) => string;
+  },
+  inside: <R>(run: () => Promise<R>) => Promise<R> = run => run()
+): Promise<T> {
+  // The adapter outside the transaction for the pragma switch, which SQLite ignores inside one;
+  // the transaction's own connection for the reads that must see the change's state.
+  const outside: SqliteForeignKeySession = {
+    read: statement => adapter.executeQuery(statement),
+    run: async statement => {
+      await adapter.executeQuery(statement);
+    },
+  };
+  let committed = false;
+  return withSqliteForeignKeysOff(outside, async () => {
+    const result = await adapter.transaction(ctx =>
+      inside(async () => {
+        const within = {
+          read: <R>(statement: string) =>
+            ctx.queryStatement<R>(sql.raw(statement)),
+        };
+        await assertForeignKeysOff(within, sentences.subject);
+        return refusingNewDanglingReferences(
+          within,
+          () => work(ctx),
+          sentences.dangling
+        );
+      })
+    );
+    committed = true;
+    return result;
+  }).catch((error: unknown) => {
+    if (!committed) throw error;
+    throw restoreFailureAfterCommit(sentences.subject, error);
+  });
+}
+
+/** The failures `sqliteSchemaTransaction` raised for a restore after its transaction committed. */
+const failedRestoresAfterCommit = new WeakSet<object>();
+
+/**
+ * Whether `error` is a restore of the foreign-key setting that failed after its schema change's
+ * transaction committed: the change stands, so a caller reports it as landed, not taken back.
+ */
+export function restoreFailedAfterCommit(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    failedRestoresAfterCommit.has(error)
+  );
+}
+
+/**
+ * The failure of a restore after `subject`'s transaction committed, logged at once: until the
+ * connection is opened again (as a restart does), enforcement may stay off for whatever runs next.
+ */
+function restoreFailureAfterCommit(
+  subject: string,
+  cause: unknown
+): NextlyError {
+  const failure = new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: `${subject.charAt(0).toUpperCase()}${subject.slice(1)} was applied, but foreign-key enforcement could not be switched back on after it. Restart the server before making further changes, so the database connection is opened again with enforcement on.`,
+    logMessage: `The foreign-key setting could not be restored after ${subject} committed.`,
+    logContext: { reason: "foreign-keys-not-restored-after-commit" },
+    ...(cause instanceof Error ? { cause } : {}),
+  });
+  failedRestoresAfterCommit.add(failure);
+  consoleLogger.error(failure.publicMessage, {
+    reason: "foreign-keys-not-restored-after-commit",
+    cause: cause instanceof Error ? cause.message : String(cause),
+  });
+  return failure;
+}
+
+/**
+ * Runs `work` in one transaction on the session's own connection, for a caller with a database
+ * handle and no adapter whose transaction it could take (`sqliteSchemaTransaction` is the path
+ * wherever there is one): committed where it returns, rolled back where it or the commit throws.
+ * Begun IMMEDIATE, as the adapter begins its own: the write lock is taken at the start, waiting the
+ * busy timeout for another writer, so nothing inside waits for it.
+ */
+export async function withinSqliteTransaction<T>(
+  session: Pick<SqliteForeignKeySession, "run">,
+  work: () => Promise<T>
+): Promise<T> {
+  await session.run("BEGIN IMMEDIATE");
+  try {
+    const result = await work();
+    await session.run("COMMIT");
+    return result;
+  } catch (error) {
+    // A failure that already ended the transaction leaves none to roll back: the work's own
+    // failure is what is thrown.
+    await session.run("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Refuses a change before its first statement when foreign-key enforcement is still on after it
+ * was switched off: another transaction was open on SQLite's one connection, so the pragma did
+ * nothing.
+ */
+export async function assertForeignKeysOff(
+  session: Pick<SqliteForeignKeySession, "read">,
+  subject: string
+): Promise<void> {
+  if (!(await sqliteForeignKeysOn(session))) return;
+  throw new NextlyError({
+    code: "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION",
+    publicMessage: `Foreign-key enforcement could not be switched off for ${subject}, because another transaction was open on the connection. Nothing was applied; re-run it once that transaction has finished.`,
+    logContext: { reason: "enforcement-still-on" },
+  });
 }
 
 /** One dangling-reference count: rows of `table` pointing at missing `parent` rows. */

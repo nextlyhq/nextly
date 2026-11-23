@@ -33,7 +33,9 @@ import type {
 } from "@admin/services/emailTemplateApi";
 
 import type { UndoNote } from "./OwnershipNotices";
+import { useConvertToCode, type ConvertToCode } from "./useConvertToCode";
 import { useOwnerName } from "./useOwnerName";
+import { ownsContent } from "./workbench-model";
 import type { WorkbenchMenu } from "./WorkbenchHeader";
 
 export type WorkbenchDialog =
@@ -154,6 +156,10 @@ export function useOwnershipActs({
   isOverriding: boolean;
   isResetting: boolean;
   isDeleting: boolean;
+  /** Converting a written email to code, and its dialog's state. */
+  convert: ConvertToCode;
+  /** Whether the form holds edits not yet saved. */
+  isDirty: boolean;
 } {
   const [dialog, setDialog] = useState<WorkbenchDialog | null>(null);
   const [undoable, setUndoable] = useState<Undoable | null>(null);
@@ -166,6 +172,7 @@ export function useOwnershipActs({
   const undoUpdate = useUndoOwnerUpdate();
   const update = useUpdateEmailTemplate();
   const remove = useDeleteEmailTemplate();
+  const convert = useConvertToCode(template, ownsContent(template));
   const owner = template ? nameOwner(template) : "";
 
   const confirmOverride = (): void => {
@@ -253,7 +260,9 @@ export function useOwnershipActs({
     dialog,
     setDialog,
     owner,
-    menu: menuFor({ template, hasPermission, startAct, setDialog, nameOwner }),
+    menu: convert.menu(
+      menuFor({ template, hasPermission, startAct, setDialog, nameOwner })
+    ),
     undoNote: undoNoteFor(
       undoable,
       owner,
@@ -271,6 +280,8 @@ export function useOwnershipActs({
     isOverriding: override.isPending,
     isResetting: reset.isPending,
     isDeleting: remove.isPending,
+    convert,
+    isDirty,
   };
 }
 
