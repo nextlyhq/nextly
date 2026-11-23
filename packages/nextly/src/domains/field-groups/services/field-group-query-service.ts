@@ -52,6 +52,7 @@ import { directFieldGroupFields } from "../field-group-write-access";
 import {
   followMovedFieldGroupTable,
   followingMovedRegistry,
+  hasMovedStorageCause,
   isMovedStorageError,
   storageMovingRefusal,
 } from "../migration/moved-storage";
@@ -2057,7 +2058,13 @@ export class FieldGroupQueryService extends BaseService {
     // Set on the read that already followed a move once: it is not followed again.
     followed: boolean
   ): Promise<string | undefined> {
-    if (followed || !isMovedStorageError(error)) return undefined;
+    // On a write's transaction only the database's own missing table or column counts: a table
+    // this process never registered keeps the refusal its write already raises for it.
+    const isMove =
+      executor === undefined
+        ? isMovedStorageError(error)
+        : hasMovedStorageCause(error);
+    if (followed || !isMove) return undefined;
     const moved = await followMovedFieldGroupTable({
       adapter: this.adapter,
       rows: this.registryService,

@@ -143,7 +143,8 @@ function wireKeyRewrite(
  * own verify rewrites rows written while it ran before it answers, and this only reads, so a
  * caller can ask it of a database without running, or finishing, a migration.
  *
- * @throws a refusal naming each ledger that still holds a row carrying the old vocabulary.
+ * @throws the refusal a step's verify raises (`unrewrittenRowRefusal`), naming the first ledger
+ * and row still carrying the old vocabulary.
  */
 export async function assertLedgersSettled(args: {
   session: MigrationSession;
@@ -153,28 +154,36 @@ export async function assertLedgersSettled(args: {
   to: FieldGroupStorageVocabulary;
 }): Promise<void> {
   const rewrite = wireKeyRewrite(args.from, args.to);
-  const unsettled: string[] = [];
   for (const target of CONTENT_TARGETS) {
     const row = await findUnrewrittenRow({
       session: args.session,
       target,
       rewrite,
     });
-    if (row !== undefined) {
-      unsettled.push(`data:${target.table}.${target.documentProperty}`);
-    }
+    // The refusal a step's own verify raises, so the two name a surface and a row alike.
+    if (row !== undefined) throw unrewrittenRowRefusal(target, row);
   }
-  if (unsettled.length > 0) {
-    throw NextlyError.serviceUnavailable({
-      logMessage:
-        "field-group migration left stored vocabulary unrewritten: " +
-        unsettled.join(", "),
-      logContext: {
-        reason: "settlement verification reported an unrewritten surface",
-        steps: unsettled.join(", "),
-      },
-    });
-  }
+}
+
+/**
+ * The refusal for a ledger row still carrying the old vocabulary. Named rather than merely
+ * reported false: a row the walk did not reach is not "not finished yet" (the walk ran to the end
+ * of the table), so an operator needs the row to look at, and a retry needs to be understood as a
+ * retry of something that already claimed to be done.
+ */
+function unrewrittenRowRefusal(
+  target: RowRewriteTarget,
+  row: string
+): NextlyError {
+  return NextlyError.serviceUnavailable({
+    logMessage: `field-group migration left a row carrying the old vocabulary: ${target.table}`,
+    logContext: {
+      reason: "row rewrite did not reach every row",
+      table: target.table,
+      property: target.documentProperty,
+      row,
+    },
+  });
 }
 
 /**
@@ -314,19 +323,7 @@ function contentStep(args: {
         ...(began === undefined ? {} : { writtenBefore: began }),
       });
       if (unrewritten === undefined) return true;
-      // Named rather than merely reported false. A row the walk did not reach is
-      // not "not finished yet" — the walk ran to the end of the table — so an
-      // operator needs the row to look at, and a retry needs to be understood as
-      // a retry of something that already claimed to be done.
-      throw NextlyError.serviceUnavailable({
-        logMessage: `field-group migration left a row carrying the old vocabulary: ${target.table}`,
-        logContext: {
-          reason: "row rewrite did not reach every row",
-          table: target.table,
-          property: target.documentProperty,
-          row: unrewritten,
-        },
-      });
+      throw unrewrittenRowRefusal(target, unrewritten);
     },
   };
 }
