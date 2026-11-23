@@ -104,15 +104,16 @@ const shop = definePlugin({
         slug: ORDERS,
         fields: [text({ name: "number" }), text({ name: "customer" })],
       }),
-      defineCollection({
-        slug: OWN_ORDERS,
-        fields: [text({ name: "number" }), text({ name: "customer" })],
-        // Each person reads only the orders the filter matches.
-        access: { read: () => ({ customer: { equals: "reader" } }) },
-      }),
     ],
   },
 } as never);
+
+/** Orders each person reads only the ones a read rule's filter matches of. */
+const ownOrders = defineCollection({
+  slug: OWN_ORDERS,
+  fields: [text({ name: "number" }), text({ name: "customer" })],
+  access: { read: () => ({ customer: { equals: "reader" } }) },
+});
 
 async function permissionIds(t: TestNextly, slugs: string[]) {
   const ids: string[] = [];
@@ -199,10 +200,21 @@ for (const dialect of getConfiguredTestDialects()) {
     let adaId: string;
 
     beforeAll(async () => {
-      t = await createTestNextly({ dialect, plugins: [shop] });
+      t = await createTestNextly({
+        dialect,
+        plugins: [shop],
+        collections: [ownOrders],
+      });
       try {
         const services = new ServiceContainer(t.adapter);
         await seedAllPermissions();
+        // The install's first account, which core makes super-admin, so
+        // every person below is judged by the permissions their role holds.
+        await t.nextly.users.create({
+          email: "owner@records.test",
+          password: "Password123!",
+          data: { name: "Owner", isActive: true },
+        });
         ({ headers: reader } = await sessionFor(t, services, "reader", [
           "read-email-templates",
           `read-${ORDERS}`,
@@ -326,6 +338,7 @@ for (const dialect of getConfiguredTestDialects()) {
         `email-templates/${ownShippedId}/sample-records`,
         `email-templates/${ownShippedId}/sample-records/o-9`,
       ]) {
+        // Holds the read, which the rule's filter limits to some orders.
         const refused = await get(path, reader);
         expect(REFUSED, `${path}: ${refused.text}`).toContain(refused.status);
       }
