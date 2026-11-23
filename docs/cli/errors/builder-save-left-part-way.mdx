@@ -9,29 +9,33 @@ A Builder save was left part-way, so the command refused: the project's migratio
 
 A Schema Builder save records that it is in progress before its first write, and clears that record once its outcome is recorded. A save whose process stopped partway through (killed, crashed, or stopped at a step it could not finish) leaves the record standing. Its definition, migration files and database may then disagree.
 
-A command that checks for such a record refuses rather than run from a state the save may have left half-written:
+`nextly migrate` and a development start settle such a save first, from what the database and the migration files hold. Each finishes the save or withdraws its unapplied files. A save made outside development, which applied none of its files itself, is judged by its files: complete files run, and a save stopped before its definition was written has its own unapplied files withdrawn. A file any run has applied is never removed.
 
-- `nextly migrate` refuses on the record kept in the database.
+A command refuses rather than run from a state the save may have left half-written:
+
+- `nextly migrate` refuses, before its first file, on a save its own settle could not settle.
+- `nextly db:sync` refuses on the record kept in the database.
+- A production start that runs migrations (`db.runMigrationsOnBoot`) settles nothing. It removes no file and does not rewrite `ui-schema.json`, so it refuses the start on the record kept in the database.
 - `nextly migrate:check` and `nextly migrate:create`, which connect to no database, refuse on the record's file in the project's `.nextly/` folder, written on this machine for this database.
 
-A record written on another machine, or for another database, gives one line of notice instead of refusing.
+A record written on another machine, or for another database, gives one line of notice instead of refusing. So does another machine's save made outside development, which changed no table.
 
 ## Fix
 
-First check that no Builder save is running. Then check that the project's definition (`ui-schema.json`) and its migration files describe the database as it stands, and settle any difference by hand. Then remove the record in both places it is kept:
+Run `nextly migrate`, or start the app in development (`next dev`), on the machine the save was made on. Either settles the save first, then goes on.
+
+If it still refuses, the save could not be settled from what the database holds, and its message or log names why. First check that no Builder save is running. Then check that the project's definition (`ui-schema.json`) and its migration files describe the database as it stands, and settle any difference by hand. Then remove the record in both places it is kept:
 
 - the row `builder-save-in-progress:<kind>:<slug>` in the database's `nextly_meta` table;
 - the file `.nextly/save-in-progress/<kind>-<slug>-<id>.json` in the project.
 
 Here `<kind>` is `collection`, `single` or `fieldGroup`, and `<slug>` is the slug of the entity the save was for. Run the command again afterwards.
 
-A later release settles such a save automatically when the app starts in development.
-
 ## Example
 
 ```text
 ✗ A Builder save was left part-way, so the database does not match its migrations yet.
   Why:  Left part-way: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio.
-  Next: To settle it, start the app in development (`next dev`) on this project: its start settles the save.
+  Next: To settle it, run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save.
   Docs: https://nextlyhq.com/docs/cli/errors/builder-save-left-part-way  (BUILDER_SAVE_LEFT_PART_WAY)
 ```
