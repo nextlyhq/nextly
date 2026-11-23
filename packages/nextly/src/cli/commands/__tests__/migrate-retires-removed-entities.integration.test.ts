@@ -959,6 +959,34 @@ describe.each(LOCK_DIALECTS)(
       ).resolves.toBeUndefined();
     }, 180_000);
 
+    it("refuses a drop of a collection a key the run adds points into under the name it renamed it to", async () => {
+      const moved = `${posts}_art`;
+      const added =
+        dialect === "sqlite"
+          ? [
+              `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36) REFERENCES ${moved} (id)`,
+            ]
+          : [
+              `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36)`,
+              `ALTER TABLE ${pages} ADD CONSTRAINT ${P}_pages_moved FOREIGN KEY (post_id) REFERENCES ${moved} (id)`,
+            ];
+
+      await expect(
+        judge([
+          {
+            label: "x.sql",
+            statements: [
+              `ALTER TABLE ${posts} RENAME TO ${moved}`,
+              ...added,
+              `DROP TABLE ${posts}_tags`,
+              `DROP TABLE ${posts}_locales`,
+              `DROP TABLE ${moved}`,
+            ],
+          },
+        ])
+      ).rejects.toThrow(new RegExp(pages));
+    }, 180_000);
+
     it("refuses a drop a key from a surviving table differing only in case points into", async () => {
       // Only PostgreSQL keeps a quoted name's case apart.
       if (dialect !== "postgresql") return;

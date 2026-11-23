@@ -46,6 +46,7 @@ import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import { readCoveredEntities } from "./entity-coverage";
 import { readRegistrySource } from "./registry-source";
 import {
+  followRenames,
   tablesTheStatementsDrop,
   tablesTheStatementsRetire,
 } from "./retired-documents";
@@ -197,8 +198,10 @@ function retiredTableMatcher(
 /**
  * The foreign keys `statements` add into `tables` and leave standing, as keys whose owner is not
  * recorded: read in order, so a key a later statement takes away (its table dropped, its
- * constraint dropped by name, or one of its columns dropped) is not among them. What the database
- * holds into them once the run is done, beside the keys already there (`keysLeftAfter`).
+ * constraint dropped by name, or one of its columns dropped) is not among them. A key naming a
+ * table an earlier statement renamed points into the table that had `tables`' name before. What
+ * the database holds into them once the run is done, beside the keys already there
+ * (`keysLeftAfter`).
  */
 function keysAddedInto(
   tables: readonly string[],
@@ -206,6 +209,8 @@ function keysAddedInto(
   statements: readonly string[]
 ): LiveKeyInto[] {
   const into = new Set(tables.map(table => table.toLowerCase()));
+  // Each table the statements read so far renamed, by its name now, to its name before the run.
+  const renamed = new Map<string, string>();
   let standing: AddedForeignKey[] = [];
   for (const statement of statements) {
     const dropped = tablesTheStatementsDrop([statement], dialect);
@@ -222,10 +227,12 @@ function keysAddedInto(
       return !key.columns.some(column => removed.has(table, "column", column));
     });
     standing.push(
-      ...foreignKeysAddedBy(statement, dialect).filter(key =>
-        into.has(key.referencesTable.toLowerCase())
-      )
+      ...foreignKeysAddedBy(statement, dialect).filter(key => {
+        const target = key.referencesTable.toLowerCase();
+        return into.has(renamed.get(target) ?? target);
+      })
     );
+    followRenames(renamed, [statement], dialect);
   }
   return standing.map(key => ({
     table: key.table,
