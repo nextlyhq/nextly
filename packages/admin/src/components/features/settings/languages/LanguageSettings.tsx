@@ -111,6 +111,9 @@ export function LanguageSettings({
     openerGone: addButton.current,
   };
   const move = (language: LanguageView, step: -1 | 1) => {
+    // One change at a time: a second move planned from the order before the
+    // first is saved would send that order back.
+    if (changeLanguages.isPending) return;
     const codes = movedOrder(active, language.code, step);
     if (!codes) return;
     changeLanguages.mutate(
@@ -186,6 +189,7 @@ export function LanguageSettings({
                     language={language}
                     first={index === 0}
                     last={index === active.length - 1}
+                    saving={changeLanguages.isPending}
                     onEdit={opener =>
                       openDialog({ kind: "edit", language }, opener)
                     }
@@ -408,6 +412,8 @@ interface LanguageActionsProps {
   language: LanguageView;
   first: boolean;
   last: boolean;
+  /** A change is being saved: no move is offered until it is. */
+  saving: boolean;
   /** Each given the menu's button, which the dialog gives focus back to. */
   onEdit: (opener: HTMLElement | null) => void;
   onMove: (step: -1 | 1) => void;
@@ -423,6 +429,7 @@ function LanguageActions({
   language,
   first,
   last,
+  saving,
   onEdit,
   onMove,
   onMakeDefault,
@@ -447,12 +454,12 @@ function LanguageActions({
           Edit…
         </DropdownMenuItem>
         {!first && (
-          <DropdownMenuItem onSelect={() => onMove(-1)}>
+          <DropdownMenuItem disabled={saving} onSelect={() => onMove(-1)}>
             Move up
           </DropdownMenuItem>
         )}
         {!last && (
-          <DropdownMenuItem onSelect={() => onMove(1)}>
+          <DropdownMenuItem disabled={saving} onSelect={() => onMove(1)}>
             Move down
           </DropdownMenuItem>
         )}

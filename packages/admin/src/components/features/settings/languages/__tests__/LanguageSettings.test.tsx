@@ -514,6 +514,40 @@ describe("Settings › Languages", () => {
     expect(names()).toEqual(["Spanish", "English", "Arabic"]);
   });
 
+  it("offers no second move while one is being saved", async () => {
+    await open();
+    const saving = deferred<LanguageList>();
+    api.changeLanguages.mockReturnValueOnce(saving.promise);
+    await choose("English", "Move down");
+    await waitFor(() => expect(api.changeLanguages).toHaveBeenCalledTimes(1));
+
+    // The menu again while the first move is saved: its moves are not offered.
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Spanish" })
+    );
+    const down = await screen.findByRole("menuitem", { name: "Move down" });
+    expect(down).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: "Move up" })).toHaveAttribute(
+      "aria-disabled",
+      "true"
+    );
+    await user.click(down);
+    expect(api.changeLanguages).toHaveBeenCalledTimes(1);
+
+    // Saved: moves are offered again.
+    saving.resolve(THREE);
+    await user.keyboard("{Escape}");
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Spanish" })
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("menuitem", { name: "Move down" })
+      ).not.toHaveAttribute("aria-disabled")
+    );
+  });
+
   it("moves a language by sending every language in the new order", async () => {
     await open();
     await choose("English", "Move down");
