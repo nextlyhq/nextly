@@ -649,6 +649,10 @@ interface NamedObject {
   table: string;
   name: string;
   tail: StatementToken[];
+  /** An index made unique: on MySQL a constraint too, which `DROP CONSTRAINT` removes. */
+  unique?: boolean;
+  /** The column a constraint is named inside: it goes where the column goes. */
+  column?: string;
 }
 
 /** `CONSTRAINT n ...`, read after `CONSTRAINT`, as a named constraint of `table`. */
@@ -693,7 +697,7 @@ function mysqlIndexElement(
   const name = clause.name();
   return name === undefined
     ? []
-    : [{ kind: "index", table, name, tail: clause.rest() }];
+    : [{ kind: "index", table, name, tail: clause.rest(), unique }];
 }
 
 /** The index a `CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] n ON [ONLY] t` creates. */
@@ -703,7 +707,7 @@ function createdIndexOf(
 ): NamedObject[] {
   const cursor = cursorOf(statement, dialect, EXACT);
   if (!cursor.accept("CREATE")) return [];
-  cursor.accept("UNIQUE");
+  const unique = cursor.accept("UNIQUE");
   if (!cursor.accept("INDEX")) return [];
   if (dialect === "postgresql") cursor.accept("CONCURRENTLY");
   cursor.acceptCondition();
@@ -713,7 +717,7 @@ function createdIndexOf(
   const table = cursor.name();
   return table === undefined
     ? []
-    : [{ kind: "index", table, name, tail: cursor.rest() }];
+    : [{ kind: "index", table, name, tail: cursor.rest(), unique }];
 }
 
 /** Every constraint and index a statement makes or validates under a name. */
@@ -723,7 +727,7 @@ function namedObjectsOf(
 ): NamedObject[] {
   const created = createdBodyOf(statement, dialect);
   if (created !== undefined) {
-    return created.clauses.flatMap(clause => {
+    const elements = created.clauses.flatMap(clause => {
       if (clause.accept("CONSTRAINT")) {
         return namedConstraint(clause, created.table);
       }
@@ -731,49 +735,181 @@ function namedObjectsOf(
         ? mysqlIndexElement(clause, created.table)
         : [];
     });
+    const inColumns = columnDefinitions(statement, dialect).flatMap(
+      ([column, definition]) =>
+        columnConstraints(created.table, column, definition)
+    );
+    return [...elements, ...inColumns];
   }
   const altered = alteredTableOf(statement, dialect);
   if (altered !== undefined) {
-    return altered.clauses.flatMap(clause =>
+    const elements = altered.clauses.flatMap(clause =>
       namedObjectOfClause(clause, altered.table, dialect)
     );
+    const inColumns = columnsAdded(statement, dialect).flatMap(
+      ([table, column, definition]) =>
+        columnConstraints(table, column, definition)
+    );
+    return [...elements, ...inColumns];
   }
   return createdIndexOf(statement, dialect);
 }
 
-/** Words after `DROP` in an `ALTER TABLE` clause that open a named constraint, index or key. */
-const DROPPED_BY_NAME: readonly (readonly string[])[] = [
-  ["CONSTRAINT"],
-  ["CHECK"],
-  ["FOREIGN", "KEY"],
-  ["INDEX"],
-  ["KEY"],
-];
+/** Words that open a column's next constraint or setting, read after one named inside it. */
+const COLUMN_CONSTRAINT_OPENERS = new Set([
+  "CONSTRAINT",
+  "NULL",
+  "CHECK",
+  "DEFAULT",
+  "UNIQUE",
+  "PRIMARY",
+  "REFERENCES",
+  "GENERATED",
+  "COLLATE",
+]);
 
 /**
- * The constraints and indexes one statement drops, by name, with the table where the statement
- * names one: `DROP INDEX n` on PostgreSQL and SQLite names none.
+ * Whether the token at `at` of a column's definition opens its next constraint: `NOT NULL` does,
+ * `NOT DEFERRABLE` and `NOT ENFORCED` do not, and neither does a key's `SET NULL` or
+ * `SET DEFAULT` action.
  */
+function opensColumnConstraint(
+  tokens: readonly StatementToken[],
+  at: number
+): boolean {
+  const token = tokens[at];
+  if (tokens[at - 1] === "SET") return false;
+  if (token === "NOT") return tokens[at + 1] === "NULL";
+  return typeof token === "string" && COLUMN_CONSTRAINT_OPENERS.has(token);
+}
+
+/** The positions of `tokens` outside any parentheses at which `opens` holds. */
+function topLevelPositions(
+  tokens: readonly StatementToken[],
+  opens: (at: number) => boolean
+): number[] {
+  const positions: number[] = [];
+  let depth = 0;
+  tokens.forEach((token, at) => {
+    if (depth === 0 && opens(at)) positions.push(at);
+    if (token === "(") depth += 1;
+    if (token === ")") depth = Math.max(0, depth - 1);
+  });
+  return positions;
+}
+
+/**
+ * Each constraint named inside a column's definition (`c integer CONSTRAINT n REFERENCES t (id)
+ * DEFERRABLE`), as a named constraint of `table`, with its own words only: its kind opens right
+ * after its name, and its words end where the column's next constraint opens. It is asked what a
+ * table-level constraint of the same kind is asked.
+ */
+function columnConstraints(
+  table: string,
+  column: string,
+  definition: readonly StatementToken[]
+): NamedObject[] {
+  const opened = topLevelPositions(definition, at =>
+    opensColumnConstraint(definition, at)
+  );
+  return opened.flatMap(at => {
+    if (definition[at] !== "CONSTRAINT") return [];
+    // The name, then the kind: the name may be a word that opens a constraint itself, so the
+    // constraint's words end at the first opener after both.
+    const end = opened.find(next => next > at + 2) ?? definition.length;
+    return namedConstraint(
+      new StatementCursor(definition.slice(at + 1, end)),
+      table
+    ).map(object => ({ ...object, column }));
+  });
+}
+
+/** What a drop by name removes: an index, any constraint, or a constraint of one kind. */
+type DropKind = "index" | "constraint" | "check" | "foreign-key";
+
+/** Words after `DROP` in an `ALTER TABLE` clause that open a named constraint, index or key. */
+const DROPPED_BY_NAME: readonly (readonly [DropKind, readonly string[]])[] = [
+  ["constraint", ["CONSTRAINT"]],
+  ["check", ["CHECK"]],
+  ["foreign-key", ["FOREIGN", "KEY"]],
+  ["index", ["INDEX"]],
+  ["index", ["KEY"]],
+];
+
+/** One object a statement drops by name. */
+interface NamedDrop {
+  /** The table the statement names: `DROP INDEX n` on PostgreSQL and SQLite names none. */
+  table?: string;
+  name: string;
+  kind: DropKind;
+}
+
+/** The constraints and indexes one statement drops, by name and kind. */
 function namedDropsOf(
   statement: string,
   dialect: SupportedDialect
-): Array<{ table?: string; name: string }> {
+): NamedDrop[] {
   const cursor = cursorOf(statement, dialect, EXACT);
   if (cursor.accept("DROP", "INDEX")) {
     if (dialect === "postgresql") cursor.accept("CONCURRENTLY");
     cursor.acceptCondition();
     const names = cursor.names() ?? [];
     const table = cursor.accept("ON") ? cursor.name() : undefined;
-    return names.map(name => ({ table, name }));
+    return names.map(name => ({ table, name, kind: "index" as const }));
   }
   const altered = alteredTableOf(statement, dialect);
   return (altered?.clauses ?? []).flatMap(clause => {
     if (!clause.accept("DROP")) return [];
-    if (!DROPPED_BY_NAME.some(words => clause.accept(...words))) return [];
+    const kind = DROPPED_BY_NAME.find(([, words]) => clause.accept(...words));
+    if (kind === undefined) return [];
     clause.acceptCondition();
     const name = clause.name();
-    return name === undefined ? [] : [{ table: altered?.table, name }];
+    return name === undefined
+      ? []
+      : [{ table: altered?.table, name, kind: kind[0] }];
   });
+}
+
+/** The word a named constraint's definition opens with (`CHECK`, `FOREIGN`), or undefined. */
+function constraintKindOf(object: NamedObject): string | undefined {
+  if (object.kind !== "constraint") return undefined;
+  const first = outsideParentheses(object.tail)[0];
+  return typeof first === "string" ? first : undefined;
+}
+
+/**
+ * Which named objects a drop of each kind removes. A drop of another kind under the same name
+ * removes another object, so the one the file made is still asked about. A unique constraint is
+ * an index under its own name on MySQL, which an index's drop removes, and a unique index is a
+ * constraint there, which a constraint's drop removes; PostgreSQL refuses an index's drop while
+ * its constraint stands.
+ */
+const ENDED_BY: Record<
+  DropKind,
+  (object: NamedObject, dialect: SupportedDialect) => boolean
+> = {
+  constraint: (object, dialect) =>
+    object.kind !== "index" || (dialect === "mysql" && object.unique === true),
+  check: object => constraintKindOf(object) === "CHECK",
+  "foreign-key": object =>
+    ["FOREIGN", "REFERENCES"].includes(constraintKindOf(object) ?? ""),
+  index: (object, dialect) =>
+    object.kind === "index" ||
+    (dialect === "mysql" && constraintKindOf(object) === "UNIQUE"),
+};
+
+/** Whether `drop` removes `object`, standing at `at`: same name, same table, its kind. */
+function dropEnds(
+  drop: NamedDrop,
+  object: NamedObject,
+  at: { table: string; name: string },
+  dialect: SupportedDialect
+): boolean {
+  return (
+    drop.name === at.name &&
+    (drop.table === undefined || drop.table === at.table) &&
+    ENDED_BY[drop.kind](object, dialect)
+  );
 }
 
 /** The indexes MySQL's `ALTER TABLE t RENAME INDEX | KEY a TO b` renames, as `[from, to]`. */
@@ -793,19 +929,24 @@ function indexRenamesOf(
   return { table: altered.table, pairs };
 }
 
-/** Where a named object stands after one later statement, or undefined where it drops it. */
+/**
+ * Where a named object, standing at `at`, stands after one later statement, or undefined where it
+ * drops it.
+ */
 function objectAfter(
+  object: NamedObject,
   at: { table: string; name: string },
   statement: string,
   dialect: SupportedDialect
 ): { table: string; name: string } | undefined {
-  const dropped = namedDropsOf(statement, dialect).some(
-    drop =>
-      drop.name === at.name &&
-      (drop.table === undefined || drop.table === at.table)
+  const dropped = namedDropsOf(statement, dialect).some(drop =>
+    dropEnds(drop, object, at, dialect)
   );
   if (dropped) return undefined;
-  const renames = indexRenamesOf(statement, dialect);
+  // MySQL's `RENAME INDEX` moves what an index's drop would remove, and no other kind.
+  const renames = ENDED_BY.index(object, dialect)
+    ? indexRenamesOf(statement, dialect)
+    : undefined;
   const renamed =
     renames?.table === at.table
       ? renames.pairs.find(([from]) => from === at.name)?.[1]
@@ -830,15 +971,30 @@ function whereObjectEnds(
   later: readonly string[],
   dialect: SupportedDialect
 ): { table: string; name: string } | undefined {
+  if (columnGoneBy(object, later, dialect)) return undefined;
   let at: { table: string; name: string } | undefined = {
     table: object.table,
     name: object.name,
   };
   for (const statement of later) {
-    at = objectAfter(at, statement, dialect);
+    at = objectAfter(object, at, statement, dialect);
     if (at === undefined) return undefined;
   }
   return at;
+}
+
+/**
+ * Whether a later statement drops the column a constraint is named inside, or its table: the
+ * constraint goes with it. False for a constraint written as its own clause.
+ */
+function columnGoneBy(
+  object: NamedObject,
+  later: readonly string[],
+  dialect: SupportedDialect
+): boolean {
+  if (object.column === undefined) return false;
+  const start = { table: object.table, column: object.column };
+  return whereItEnds(start, later, dialect, "rows") === undefined;
 }
 
 /** How a foreign key's definition has its check deferred: PostgreSQL's three states. */
@@ -870,7 +1026,11 @@ function constraintAsDeclared(
       !hasRun(declared, "NOT", "ENFORCED")
     );
   }
-  if (dialect === "postgresql" && declared[0] === "FOREIGN") {
+  // A key named inside a column's definition opens with `REFERENCES`.
+  if (
+    dialect === "postgresql" &&
+    (declared[0] === "FOREIGN" || declared[0] === "REFERENCES")
+  ) {
     return (
       schema.keyDeferrability(end.table, end.name) ===
       declaredDeferrability(object.tail)
@@ -1387,7 +1547,47 @@ function createTableShown(
   if (name === undefined || !createsEmptyTable(statement, file.dialect)) {
     return false;
   }
+  if (declaresIndexBeyondSnapshot(statement, file.dialect)) return false;
   return file.objects.tables.has(name) || file.goneLater.has(name);
+}
+
+/** Words that open an index or key MySQL declares inside a `CREATE TABLE` body. */
+const MYSQL_TABLE_INDEX_WORDS = new Set([
+  "INDEX",
+  "KEY",
+  "UNIQUE",
+  "PRIMARY",
+  "FULLTEXT",
+  "SPATIAL",
+]);
+
+/**
+ * Whether a MySQL `CREATE TABLE` declares in its body an index the snapshot cannot show: a
+ * full-text or spatial one, or one that states a direction, a NULL order or a method
+ * (`statesIndexOrder`), as `CREATE INDEX` and `ALTER TABLE ... ADD INDEX` are read.
+ */
+function declaresIndexBeyondSnapshot(
+  statement: string,
+  dialect: SupportedDialect
+): boolean {
+  if (dialect !== "mysql") return false;
+  return (createdBodyOf(statement, dialect)?.clauses ?? []).some(
+    tableIndexStatesMore
+  );
+}
+
+/** One `CREATE TABLE` body clause: an index or key, `CONSTRAINT n` first or not, stating more. */
+function tableIndexStatesMore(clause: StatementCursor): boolean {
+  if (clause.accept("CONSTRAINT")) clause.name();
+  const opens = clause.peek();
+  if (typeof opens !== "string" || !MYSQL_TABLE_INDEX_WORDS.has(opens)) {
+    return false;
+  }
+  return (
+    opens === "FULLTEXT" ||
+    opens === "SPATIAL" ||
+    statesIndexOrder(clause.rest())
+  );
 }
 
 /** `DROP TABLE [IF EXISTS] a[, b...] [CASCADE|RESTRICT]`, of tables the file may change. */

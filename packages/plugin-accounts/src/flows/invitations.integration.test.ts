@@ -67,9 +67,12 @@ describe.each(getConfiguredTestDialects())(
     });
 
     /** Booted on fake core helpers, whose clock and mail the test reads. */
-    async function boot(options: Omit<AccountsOptions, "origin"> = {}) {
+    async function boot(
+      options: Omit<AccountsOptions, "origin"> = {},
+      start: Date = new Date()
+    ) {
       const core = fakeAccountsCore({
-        start: new Date(),
+        start,
         rules: accountsLimitRules(
           resolveAccountsSettings({ origin: TEST_ORIGIN, ...options })
         ),
@@ -120,6 +123,52 @@ describe.each(getConfiguredTestDialects())(
       return result.status === "signed-in";
     }
 
+    it("hands the invitation email the invitee's name and when its link stops working, in the site's time zone, again on a new invitation", async () => {
+      const { server, mail, core } = await boot(
+        { timeZone: "Asia/Karachi" },
+        new Date("2026-11-23T12:00:00.000Z")
+      );
+
+      const issued = await server.invite({ address: ADDRESS, name: "Ayesha" });
+      // Seven days, the default: 12:00 UTC is 5:00 PM in Karachi.
+      expect(issued.expiresAt.toISOString()).toBe("2026-11-30T12:00:00.000Z");
+      expect(mail.ofKind("invitation")).toMatchObject([
+        {
+          name: "Ayesha",
+          expiresAt: "2026-11-30T12:00:00.000Z",
+          expiresAtText: "30 November 2026, 5:00 PM",
+          timeZone: "Asia/Karachi",
+        },
+      ]);
+
+      // Invited again a day and a half later, under another name: the new
+      // link's own expiry, the same way.
+      core.clock.advance(36 * 60 * 60 * 1000);
+      await server.invite({ address: ADDRESS, name: "Ayesha Khan" });
+      expect(mail.ofKind("invitation")[1]).toMatchObject({
+        name: "Ayesha Khan",
+        expiresAt: "2026-12-02T00:00:00.000Z",
+        expiresAtText: "2 December 2026, 5:00 AM",
+        timeZone: "Asia/Karachi",
+      });
+    });
+
+    it("writes the invitation's expiry in UTC where the site names no time zone", async () => {
+      const { server, mail } = await boot(
+        {},
+        new Date("2026-11-23T12:00:00.000Z")
+      );
+
+      await server.invite({ address: ADDRESS, name: NAME });
+      expect(mail.ofKind("invitation")).toMatchObject([
+        {
+          name: NAME,
+          expiresAtText: "30 November 2026, 12:00 PM",
+          timeZone: "UTC",
+        },
+      ]);
+    });
+
     it("makes a verified account for the invited address, signs it in, and hands back the site's data", async () => {
       const { deps, server, visitor, mail, emitted } = await boot({
         signUp: "closed",
@@ -139,6 +188,11 @@ describe.each(getConfiguredTestDialects())(
           accountId: null,
           to: ADDRESS,
           link: issued.link,
+          name: NAME,
+          expiresAt: issued.expiresAt.toISOString(),
+          expiresAtText: expect.any(String),
+          timeZone: "UTC",
+          refs: { link: expect.any(String) },
         },
       ]);
 

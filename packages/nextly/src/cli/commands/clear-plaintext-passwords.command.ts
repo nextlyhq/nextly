@@ -6,6 +6,7 @@
 import type { Command } from "commander";
 
 import type { CommandContext, GlobalOptions } from "../context";
+import { DATABASE_LINE, declareFirstLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 export const CLEAR_PLAINTEXT_PASSWORDS_COMMAND =
@@ -18,26 +19,29 @@ export function registerClearPlaintextPasswordsCommand(
   program: Command,
   createContext: (options: GlobalOptions) => CommandContext
 ): void {
-  program
-    .command(CLEAR_PLAINTEXT_PASSWORDS_COMMAND)
-    .description(
-      "Find accounts holding a password stored as given, and with --apply clear it and end their sessions"
-    )
-    .option(
-      "--apply",
-      "Clear the values (without this, the command only previews)",
-      false
-    )
-    .option(
-      CONFIRM_DEFAULT_HASHER,
-      "With --apply: state that every stored password was written by core's bcrypt or by the passwordHasher in nextly.config.ts, now and earlier",
-      false
-    )
-    .action(
-      lazyAction(async () =>
-        (
-          await import("./clear-plaintext-passwords")
-        ).clearPlaintextPasswordsAction(createContext)
+  declareFirstLine(
+    program
+      .command(CLEAR_PLAINTEXT_PASSWORDS_COMMAND)
+      .description(
+        "Find accounts holding a password stored as given, and with --apply clear it and end their sessions"
       )
-    );
+      .option(
+        "--apply",
+        "Clear the values (without this, the command only previews)",
+        false
+      )
+      .option(
+        CONFIRM_DEFAULT_HASHER,
+        "With --apply: state that every stored password was written by core's bcrypt or by the passwordHasher in nextly.config.ts, now and earlier",
+        false
+      )
+      .action(
+        lazyAction(async () =>
+          (
+            await import("./clear-plaintext-passwords")
+          ).clearPlaintextPasswordsAction(createContext)
+        )
+      ),
+    DATABASE_LINE
+  );
 }

@@ -36,7 +36,12 @@ import {
 import { accountsService } from "./server/service";
 import { resolveAccountsSettings, type AccountsOptions } from "./settings";
 import { accountsEmailTemplates } from "./wiring/emails";
-import { sendEmailJob, sweepJob } from "./wiring/jobs";
+import {
+  SEND_EMAIL_JOB,
+  SEND_EMAIL_JOB_BEFORE_REFS,
+  sendEmailJob,
+  sweepJob,
+} from "./wiring/jobs";
 import {
   accountPrincipals,
   flowDepsFor,
@@ -134,9 +139,21 @@ export function buildAccounts(
       },
       emailTemplates: accountsEmailTemplates(),
       events: ACCOUNTS_EVENTS.map(name => ({ name })),
+      // The send puts an email's secrets back from their refs with the
+      // secrets helper the flows minted them with, on the site's pages; the
+      // same send runs the jobs queued before secrets were queued by ref.
       jobs: [
-        sendEmailJob((email, attempt) =>
-          sendQueuedEmail(started(), email, attempt)
+        ...([SEND_EMAIL_JOB, SEND_EMAIL_JOB_BEFORE_REFS] as const).map(slug =>
+          sendEmailJob((email, attempt) => {
+            const ctx = started();
+            return sendQueuedEmail(ctx, email, attempt, {
+              secrets: coreFor(ctx).secrets,
+              settings,
+              logger: {
+                warn: (message, context) => ctx.logger.warn(message, context),
+              },
+            });
+          }, slug)
         ),
         sweepJob(now => sweepAll({ ...deps(), now: () => now }, now)),
       ],

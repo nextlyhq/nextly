@@ -16,11 +16,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { z } from "zod";
 
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
-import {
-  canReadEntity,
-  readAccessCaller,
-  readableEntities,
-} from "../auth/entity-read-access";
+import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
 import {
   authorizeCaller,
   authorizeCallerForAny,
@@ -41,7 +37,7 @@ import {
   documentTableOf,
   documentTableOn,
 } from "../domains/workflows/part-versions";
-import { registeredWorkflows } from "../domains/workflows/registry";
+import { readableAttachedEntities } from "../domains/workflows/readable-attached";
 import {
   assignMany,
   reviewStateOf,
@@ -494,13 +490,8 @@ export type WaitingAsker = Pick<
 
 /** The collections and Singles a workflow is attached to that `asker` may read anything of. */
 async function readableAttached(asker: WaitingAsker): Promise<Set<string>> {
-  // Collections and Singles share one namespace of slugs, so one ask covers both.
-  const attached = registeredWorkflows().flatMap(registered => [
-    ...registered.collections,
-    ...registered.singles,
-  ]);
-  return readableEntities(
-    attached,
+  // The same rule the admin's workspace answer carries (`readableAttachedEntities`).
+  return readableAttachedEntities(
     readAccessCaller({
       user: asker.user,
       ...(asker.scope === undefined ? {} : { authenticatedScope: asker.scope }),

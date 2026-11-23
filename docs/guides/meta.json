@@ -6,6 +6,7 @@
     "upgrading",
     "authentication",
     "media-storage",
+    "private-files",
     "email",
     "draft-published-status",
     "isr-caching",

@@ -98,6 +98,11 @@ export async function documentReadableIn(
     routeAuthorized: false,
     authenticatedScope: caller.authenticatedScope,
     status: "all",
+    // Ids only: the verdict is the read's own report of the row it loaded,
+    // which no related row changes, so each language's probe reads the
+    // document and not every entry and file it relates to (a related row the
+    // caller may not read is withheld from a read, never a refusal of it).
+    depth: 0,
     ...hooks,
     ...inLanguage,
   });

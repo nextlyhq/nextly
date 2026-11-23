@@ -94,6 +94,34 @@ describe("planCompanionTypeChange", () => {
     }
   );
 
+  // A translated relationship to authors, one id and then a list of them, as the Builder stores it.
+  const authorOne = {
+    name: "author",
+    type: "relationship",
+    relationTo: "authors",
+    localized: true,
+  };
+  const authorMany = { ...authorOne, hasMany: true };
+
+  // A translated relation becoming many is converted by the relation's own switch statements,
+  // which wrap each stored id into a list: a cast of its column ahead of them would meet a bare id.
+  it.each(DIALECTS)(
+    "leaves a translated relation's change of storage shape to its own conversion on %s",
+    dialect => {
+      expect(
+        planCompanionTypeChange({
+          slug: "posts",
+          kind: "collection",
+          tableName: "dc_posts",
+          dialect,
+          defaultLocale: "en",
+          fields: [{ from: authorOne, to: authorMany }],
+          builtBy: "collection",
+        })
+      ).toBeUndefined();
+    }
+  );
+
   it("plans nothing where no translations column takes another type here", () => {
     expect(
       planCompanionTypeChange({
