@@ -12,6 +12,7 @@ import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-f
 import type { JsonValue as JobJsonValue } from "../direct-api/types/jobs";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { RegisteredEmailProvider } from "../domains/email/provider-definition";
+import type { EmailSampleRecords } from "../domains/email/sample-records";
 import type { WrittenDocument } from "../domains/email/written/document";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
 import type { LimitRule } from "../domains/limits/limit-rules";
@@ -267,6 +268,15 @@ export interface PluginEmailTemplate {
    * harmless to share; it cannot be changed from the admin.
    */
   carriesSecret?: boolean;
+  /**
+   * @experimental Real records the template's test data can be filled from in
+   * the admin, such as "A real order": what they are, what they read (`"users"`
+   * or `{ collection }`), and a `list` and `load` that answer them. Nextly
+   * calls the loader only for a person allowed to read what `reads` names, and
+   * stores nothing it answers; `load` answers a record's values by variable
+   * name, or null for a record that is gone.
+   */
+  sampleRecords?: EmailSampleRecords;
   /**
    * @experimental The Reply-To the template starts with, which may use the
    * send's variables (for example `{{customerEmail}}`). After the first boot

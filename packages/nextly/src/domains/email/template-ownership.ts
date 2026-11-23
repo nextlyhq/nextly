@@ -22,6 +22,7 @@ import type {
   EmailTemplateVersion,
 } from "../../schemas/email-templates/types";
 
+import { sampleRecordsOf, type EmailSampleRecords } from "./sample-records";
 import { parseLiquid } from "./services/liquid-engine";
 import { declarationSubstance, pluginDeclarations } from "./template-variables";
 import type { EmailConfig } from "./types";
@@ -42,6 +43,11 @@ export type OwnerTemplate = EmailTemplateInsert & {
   carriesSecret?: boolean;
   /** What sends it, as its owner says; never stored on the row. */
   sentBy?: string[];
+  /**
+   * @experimental Real records its test data can be filled from, as its
+   * owner offers them; never stored on the row.
+   */
+  sampleRecords?: EmailSampleRecords;
 };
 
 /** One owned template's current default. */
@@ -70,6 +76,11 @@ export interface OwnedTemplate {
   carriesSecret: boolean;
   /** What sends it, as its owner says; empty when it says nothing. */
   sentBy: string[];
+  /**
+   * @experimental Real records its test data can be filled from, where its
+   * owner offers a well-formed loader.
+   */
+  sampleRecords?: EmailSampleRecords;
   /**
    * The engine the owner wrote its version for, where it says. Unsaid, the
    * version is Liquid unless Liquid can't read it.
@@ -310,7 +321,8 @@ function owned(
     earlier?: ReadonlyArray<EmailTemplateVersion>;
   } = {}
 ): OwnedTemplate {
-  const { carriesSecret, sentBy, ...defaults } = declared;
+  const { carriesSecret, sentBy, sampleRecords, ...defaults } = declared;
+  const records = sampleRecordsOf(sampleRecords);
   const version = versionOf(defaults);
   const blocks =
     defaults.format === "written" && defaults.blocks
@@ -332,6 +344,7 @@ function owned(
     sentBy: (Array.isArray(sentBy) ? sentBy : []).filter(
       (line): line is string => typeof line === "string" && line.trim() !== ""
     ),
+    ...(records ? { sampleRecords: records } : {}),
     ...(extras.engine ? { engine: extras.engine } : {}),
     earlier: (extras.earlier ?? []).map(versionDigest),
   };
@@ -368,6 +381,7 @@ function pluginDefaults(
     replyTo: template.replyTo ?? null,
     carriesSecret: template.carriesSecret,
     sentBy: template.sentBy,
+    sampleRecords: template.sampleRecords,
   };
 }
 

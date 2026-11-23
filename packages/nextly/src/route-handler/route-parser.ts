@@ -2152,10 +2152,14 @@ function emailTemplateSubresourceRoute(
  * - GET /api/email-templates/[id]/compare → the owner's changes since the override
  * - PATCH /api/email-templates/[id]/apply-update → apply a review of them
  * - PATCH /api/email-templates/[id]/undo-update → undo that review
+ * - GET /api/email-templates/[id]/sample-records → the real records its owner offers for its test data
+ * - GET /api/email-templates/[id]/sample-records/[recordId] → one record's values for the preview
  */
 function parseEmailTemplateRoutes(
   id: string | undefined,
   subresource: string | undefined,
+  subId: string | undefined,
+  extraSegments: readonly string[],
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
@@ -2189,6 +2193,19 @@ function parseEmailTemplateRoutes(
   // branches for the reason `preview` is: this segment is a route, not an id.
   if (id === "brand" && !subresource) {
     return parsed(EMAIL_TEMPLATE_BRAND_ROUTES[httpMethod]);
+  }
+
+  // The real records a template's owner offers, and one record's values. Both
+  // read, so the method-derived permission is `read-email-templates`; the
+  // handler then asks the caller may read what the records are read from.
+  if (subresource === "sample-records") {
+    if (httpMethod !== "GET" || extraSegments.length > 0) return null;
+    routeParams.templateId = id;
+    if (!subId) {
+      return parsed({ operation: "list", method: "listSampleRecords" });
+    }
+    routeParams.recordId = subId;
+    return parsed({ operation: "single", method: "loadSampleRecord" });
   }
 
   const route = subresource
@@ -3731,6 +3748,8 @@ export function parseRestRoute(
     const result = parseEmailTemplateRoutes(
       id,
       subresource,
+      subId,
+      additionalParams,
       httpMethod,
       routeParams
     );

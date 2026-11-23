@@ -1,0 +1,329 @@
+/**
+ * Real records for a template's test data: an owner offers them beside its
+ * template, and the workbench reads them through
+ * `GET /api/email-templates/{id}/sample-records` and
+ * `GET /api/email-templates/{id}/sample-records/{recordId}`.
+ *
+ * A record is offered only to a person allowed to read it: Nextly checks the
+ * caller may read what the loader says it reads before the loader runs, so a
+ * caller refused never reaches it. A record is read for the preview and kept
+ * nowhere.
+ *
+ * Through the REST catch-all as real users with real roles, on every dialect.
+ */
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import { buildClaims } from "../../../auth/jwt/claims";
+import { signAccessToken } from "../../../auth/jwt/sign";
+import { defineCollection, text } from "../../../config";
+import { seedAllPermissions } from "../../../init/seed-permissions";
+import type { PluginEmailTemplate } from "../../../plugins/contributions";
+import { definePlugin } from "../../../plugins/plugin-context";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import { createDynamicHandlers } from "../../../routeHandler";
+import { ServiceContainer } from "../../../services/index";
+import type { EmailTemplateService } from "../services/email-template-service";
+
+const ORIGIN = "http://localhost";
+const REFUSED = [401, 403];
+const ORDERS = "sample_orders";
+const SHIPPED = "sample-order-shipped";
+
+type Headers = Record<string, string>;
+
+/** Every call each loader was handed, by loader. */
+const loaderCalls: string[] = [];
+
+/** The shop's template, offering its orders as real records. */
+const shippedTemplate = {
+  slug: SHIPPED,
+  name: "Order shipped",
+  subject: "Order {{ orderNumber }} is on its way",
+  htmlContent: "<p>Hi {{ customer }}, order {{ orderNumber }} shipped.</p>",
+  variables: [
+    { name: "orderNumber", type: "text", example: "A-100" },
+    { name: "customer", type: "text", example: "Sam" },
+  ],
+  sampleRecords: {
+    label: "A real order",
+    reads: { collection: ORDERS },
+    list: async ({ limit }: { limit: number }) => {
+      loaderCalls.push(`list:${limit}`);
+      return [
+        { id: "o-1", label: "Order A-1" },
+        { id: "o-2", label: "Order A-2" },
+      ];
+    },
+    load: async (id: string) => {
+      loaderCalls.push(`load:${id}`);
+      return id === "gone"
+        ? null
+        : { orderNumber: id.toUpperCase(), customer: "Ada" };
+    },
+  },
+} as unknown as PluginEmailTemplate;
+
+const shop = definePlugin({
+  name: "sample-shop",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  contributes: {
+    collections: [
+      defineCollection({
+        slug: ORDERS,
+        fields: [text({ name: "number" }), text({ name: "customer" })],
+      }),
+    ],
+  },
+} as never);
+
+async function permissionIds(t: TestNextly, slugs: string[]) {
+  const ids: string[] = [];
+  for (let page = 1; ; page++) {
+    const found = await t.nextly.permissions.find({ limit: 100, page });
+    ids.push(
+      ...found.items.filter(p => slugs.includes(p.slug)).map(p => String(p.id))
+    );
+    if (!found.meta.hasNext) return ids;
+  }
+}
+
+async function tokenFor(
+  id: string,
+  name: string,
+  roleIds: string[]
+): Promise<Headers> {
+  const token = await signAccessToken(
+    buildClaims({
+      userId: id,
+      email: `${name}@records.test`,
+      name,
+      image: null,
+      roleIds,
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET ?? ""
+  );
+  return { cookie: `nextly_session=${token}` };
+}
+
+async function sessionFor(
+  t: TestNextly,
+  services: ServiceContainer,
+  name: string,
+  slugs: string[]
+): Promise<{ headers: Headers; id: string }> {
+  const role = await t.nextly.roles.create({
+    data: { name, slug: name, permissionIds: await permissionIds(t, slugs) },
+  });
+  const roleId = String(role.item.id);
+  const made = await t.nextly.users.create({
+    email: `${name}@records.test`,
+    password: "Password123!",
+    data: { name, isActive: true },
+  });
+  const id = String((made.item as { id: string | number }).id);
+  await services.userRoles.assignRoleToUser(id, roleId);
+  return { headers: await tokenFor(id, name, [roleId]), id };
+}
+
+/** One GET through the REST catch-all, as the admin sends it. */
+async function get(
+  path: string,
+  headers: Headers
+): Promise<{ status: number; body: Record<string, unknown>; text: string }> {
+  const segments = path.split("?")[0].split("/").filter(Boolean);
+  const res = await createDynamicHandlers().GET(
+    new Request(`${ORIGIN}/api/${path}`, {
+      method: "GET",
+      headers: { origin: ORIGIN, ...headers },
+    }),
+    { params: Promise.resolve({ params: segments }) }
+  );
+  const text = await res.text();
+  let body: Record<string, unknown> = {};
+  try {
+    body = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    body = {};
+  }
+  return { status: res.status, body, text };
+}
+
+for (const dialect of getConfiguredTestDialects()) {
+  describe(`real records for a template's test data — ${dialect}`, () => {
+    let t: TestNextly;
+    let reader: Headers;
+    let templatesOnly: Headers;
+    let usersOnly: Headers;
+    let shippedId: string;
+    let welcomeId: string;
+    let adaId: string;
+
+    beforeAll(async () => {
+      t = await createTestNextly({ dialect, plugins: [shop] });
+      try {
+        const services = new ServiceContainer(t.adapter);
+        await seedAllPermissions();
+        ({ headers: reader } = await sessionFor(t, services, "reader", [
+          "read-email-templates",
+          `read-${ORDERS}`,
+          "read-users",
+        ]));
+        ({ headers: templatesOnly } = await sessionFor(
+          t,
+          services,
+          "templates-only",
+          ["read-email-templates"]
+        ));
+        ({ headers: usersOnly } = await sessionFor(t, services, "users-only", [
+          `read-${ORDERS}`,
+          "read-users",
+        ]));
+        const ada = await t.nextly.users.create({
+          email: "ada@records.test",
+          password: "Password123!",
+          data: { name: "Ada Lovelace", isActive: true },
+        });
+        adaId = String((ada.item as { id: string | number }).id);
+
+        // The shop's template registered as its running owner's.
+        const templates = t.getService(
+          "emailTemplateService"
+        ) as unknown as EmailTemplateService;
+        templates.configureOwnership({
+          plugins: [{ name: "sample-shop", templates: [shippedTemplate] }],
+        });
+        await templates.ensureBuiltInTemplates();
+
+        const shipped = await t.nextly.emailTemplates.findBySlug({
+          slug: SHIPPED,
+        });
+        const welcome = await t.nextly.emailTemplates.findBySlug({
+          slug: "welcome",
+        });
+        if (!shipped || !welcome) throw new Error("templates not seeded");
+        shippedId = String(shipped.id);
+        welcomeId = String(welcome.id);
+      } catch (error) {
+        await t?.destroy();
+        throw error;
+      }
+    }, 120_000);
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    it("lists an owner's real records, and loads one's variables, for a person who may read them", async () => {
+      loaderCalls.length = 0;
+      const list = await get(
+        `email-templates/${shippedId}/sample-records`,
+        reader
+      );
+      expect(list.status, list.text).toBe(200);
+      expect(list.body).toMatchObject({
+        items: [
+          { id: "o-1", label: "Order A-1" },
+          { id: "o-2", label: "Order A-2" },
+        ],
+        meta: expect.objectContaining({ label: "A real order" }),
+      });
+
+      const one = await get(
+        `email-templates/${shippedId}/sample-records/o-1`,
+        reader
+      );
+      expect(one.status, one.text).toBe(200);
+      expect(one.body).toMatchObject({
+        variables: { orderNumber: "O-1", customer: "Ada" },
+      });
+      expect(loaderCalls).toEqual([
+        expect.stringMatching(/^list:\d+$/),
+        "load:o-1",
+      ]);
+    });
+
+    it("answers not found for a record the loader no longer has", async () => {
+      const gone = await get(
+        `email-templates/${shippedId}/sample-records/gone`,
+        reader
+      );
+      expect(gone.status, gone.text).toBe(404);
+    });
+
+    it("refuses a person who can't read what the loader reads, before the loader runs", async () => {
+      loaderCalls.length = 0;
+      for (const path of [
+        `email-templates/${shippedId}/sample-records`,
+        `email-templates/${shippedId}/sample-records/o-1`,
+      ]) {
+        // Allowed to read templates, not orders.
+        expect(REFUSED, path).toContain(
+          (await get(path, templatesOnly)).status
+        );
+        // Allowed to read orders, not templates.
+        expect(REFUSED, path).toContain((await get(path, usersOnly)).status);
+        // Nobody signed in.
+        expect(REFUSED, path).toContain((await get(path, {})).status);
+      }
+      expect(loaderCalls).toEqual([]);
+    });
+
+    it("offers core's user emails a real user, to a person who may read users", async () => {
+      const list = await get(
+        `email-templates/${welcomeId}/sample-records`,
+        reader
+      );
+      expect(list.status, list.text).toBe(200);
+      const items = list.body.items as Array<{ id: string; label: string }>;
+      expect(items.map(item => item.id)).toContain(adaId);
+
+      const one = await get(
+        `email-templates/${welcomeId}/sample-records/${adaId}`,
+        reader
+      );
+      expect(one.status, one.text).toBe(200);
+      expect(one.body).toMatchObject({
+        variables: { userName: "Ada Lovelace", userEmail: "ada@records.test" },
+      });
+
+      // Reading users is the access asked, not reading templates alone.
+      expect(REFUSED).toContain(
+        (
+          await get(
+            `email-templates/${welcomeId}/sample-records`,
+            templatesOnly
+          )
+        ).status
+      );
+    });
+
+    it("answers not found for a template whose owner offers no records", async () => {
+      const layout = await t.nextly.emailTemplates.findBySlug({
+        slug: "default-layout",
+      });
+      const id = layout ? String(layout.id) : "missing";
+      const none = await get(`email-templates/${id}/sample-records`, reader);
+      expect(none.status, none.text).toBe(404);
+    });
+
+    it("stores nothing of a record it reads", async () => {
+      const before = await t.nextly.emailTemplates.findBySlug({
+        slug: SHIPPED,
+      });
+      await get(`email-templates/${shippedId}/sample-records/o-2`, reader);
+      const after = await t.nextly.emailTemplates.findBySlug({ slug: SHIPPED });
+      expect(after).toEqual(before);
+      expect(JSON.stringify(after)).not.toContain("O-2");
+    });
+  });
+}

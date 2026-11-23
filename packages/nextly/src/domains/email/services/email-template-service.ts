@@ -56,6 +56,7 @@ import {
   type BrandSettingsUpdate,
 } from "../brand-settings";
 import type { DraftPreview } from "../draft-preview-request";
+import type { EmailSampleRecords } from "../sample-records";
 import {
   changedTemplateFields,
   recordTemplateActivity,
@@ -643,6 +644,14 @@ export class EmailTemplateService extends BaseService {
   /** What sends a template, as its running owner says; empty when it says nothing. */
   ownerSentBy(slug: string): string[] {
     return [...(this.registry.owned.get(slug)?.sentBy ?? [])];
+  }
+
+  /**
+   * @experimental The real records a template's test data can be filled
+   * from, as its running owner offers them; undefined when it offers none.
+   */
+  ownerSampleRecords(slug: string): EmailSampleRecords | undefined {
+    return this.registry.owned.get(slug)?.sampleRecords;
   }
   /** Where the switch to Liquid, and the templates kept off it, are recorded. */
   private readonly meta: MetaService;
