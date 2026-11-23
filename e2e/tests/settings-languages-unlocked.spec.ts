@@ -311,11 +311,12 @@ test("makes Spanish the default after showing what that changes", async ({
     .getByRole("button", { name: "Make Spanish the default" })
     .click();
   await expect(dialog).toBeHidden();
+  // Each row by the name it starts with: English is also Spanish's fallback.
   await expect(
-    list.getByRole("listitem").filter({ hasText: "Spanish" })
+    list.getByRole("listitem").filter({ hasText: /^Spanish/ })
   ).toContainText("Default");
   await expect(
-    list.getByRole("listitem").filter({ hasText: "English" })
+    list.getByRole("listitem").filter({ hasText: /^English/ })
   ).not.toContainText("Default");
   expect(
     (await languagesOf(page.request)).languages.find(each => each.isDefault)
@@ -326,7 +327,7 @@ test("makes Spanish the default after showing what that changes", async ({
 test("the keyboard reaches every control in order, with its focus drawn", async ({
   page,
 }) => {
-  await openLanguages(page);
+  const list = await openLanguages(page);
   const add = page.getByRole("button", { name: "Add language" });
   await add.focus();
 
@@ -350,11 +351,17 @@ test("the keyboard reaches every control in order, with its focus drawn", async 
     type: "tab order",
     description: order.join(" → "),
   });
+  // The rows' order is the site's: Arabic, added back, comes last.
+  expect(await rowNames(list)).toEqual([
+    "English",
+    "Spanish",
+    "Arabic (Modern Standard)",
+  ]);
   expect(order).toEqual([
     "Add language",
     "Actions for English",
-    "Actions for Arabic (Modern Standard)",
     "Actions for Spanish",
+    "Actions for Arabic (Modern Standard)",
   ]);
 
   // A menu opened and closed from the keyboard gives focus back to its button.
