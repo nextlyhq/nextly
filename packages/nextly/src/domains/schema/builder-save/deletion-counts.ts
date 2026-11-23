@@ -13,7 +13,9 @@
  * collection delete does), counts under that hold just before the statements, and lets it go once
  * the try is over (`triedHoldOf` in the collection save), so entry writes wait for it. A
  * save applied by a push rather than its file (a translated collection in development, or an app
- * with no file writer) is compared the same way, just before the push, with nothing held.
+ * with no file writer) is compared the same way, just before the push, with the collection held
+ * from before the count until its registry row is written (`saveHoldScope`). A many-to-many's
+ * links are counted in its link table, which goes with them.
  *
  * @module domains/schema/builder-save/deletion-counts
  */
@@ -36,7 +38,9 @@ import {
   fieldsStoredOnRow,
   junctionTableNameFor,
   toSnakeCase,
+  usesJunctionTable,
 } from "../services/field-column-descriptor";
+import { linkMoveOf } from "../services/field-storage-moves";
 
 /** A removed field's values, as far as they could be counted. */
 export interface RemovedCount {
@@ -72,8 +76,10 @@ function valuesTableOf(
 /**
  * Count each removed field's non-null values where they are stored:
  * - a field with no storage (a virtual field) holds nothing;
- * - a field whose values live in a table of their own (a field group, a
- *   many-to-many relationship) is not counted here, so its count is unknown;
+ * - a many-to-many relationship's links are counted in its link table
+ *   (`countJunctionLinks`), which goes with it;
+ * - a field whose values live in a table of their own otherwise (a field
+ *   group) is not counted here, so its count is unknown;
  * - a translated field is counted in the companion table, across its
  *   languages, where the entity keeps it there (`valuesTableOf`); every other
  *   field on the main table;
@@ -97,7 +103,9 @@ export async function computeNonNullCounts(
       continue;
     }
     if (!fieldProducesColumn(field)) {
-      counts[field.name] = UNCOUNTED;
+      counts[field.name] = usesJunctionTable(field)
+        ? await countJunctionLinks(db, dialect, tableName, field)
+        : UNCOUNTED;
       continue;
     }
     const table = valuesTableOf(tableName, localized, field);
@@ -196,6 +204,28 @@ async function columnStands(
   }
 }
 
+/**
+ * Whether `table` still stands, read through `db` on MySQL, as `columnStands` reads a column; a
+ * link table dropped by an earlier try's statements took its links with it. Elsewhere, and where
+ * the lookup fails, it is taken to stand, so it is counted.
+ */
+async function tableStands(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string
+): Promise<boolean> {
+  if (dialect !== "mysql") return true;
+  try {
+    const result = await (db as Executes).execute(
+      sql`SELECT COUNT(*) AS ${sql.identifier("count")} FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${table}`
+    );
+    const [rows] = result as [Array<{ count: unknown }>];
+    return Number(rows[0]?.count) > 0;
+  } catch {
+    return true;
+  }
+}
+
 /** The handle a statement is run through, as Drizzle gives it on PostgreSQL. */
 interface Executes {
   execute(query: SQL): Promise<unknown>;
@@ -260,15 +290,33 @@ export function deletionHoldOf(args: {
     )
     .map(rename => rename.from);
   const kept = new Set([...after, ...renamedAway]);
-  const removed = fieldsStoredOnRow(args.previous).filter(
-    field => inAColumn(field) && !kept.has(columnOf(field.name))
+  // The links a many-to-many's link table holds go with it where the save removes the field, or
+  // keeps it by name but moves its links out of the table or to another (`linkMoveOf`): counted
+  // in that table, as a column's values are counted in their column. A field renamed is kept.
+  const nextByName = new Map(
+    fieldsStoredOnRow(args.next).map(field => [field.name, field])
   );
-  if (removed.length === 0) return undefined;
-  const tables = [
-    ...new Set(
-      removed.map(field => valuesTableOf(tableName, localized, field))
+  const renamedFrom = new Set((args.renamed ?? []).map(rename => rename.from));
+  const linksDropped = fieldsStoredOnRow(args.previous).filter(field => {
+    if (!usesJunctionTable(field)) return false;
+    const after = nextByName.get(field.name);
+    if (after === undefined) return !renamedFrom.has(field.name);
+    const move = linkMoveOf(field, after);
+    return move === "leaving" || move === "retargeted";
+  });
+  const removed = [
+    ...fieldsStoredOnRow(args.previous).filter(
+      field => inAColumn(field) && !kept.has(columnOf(field.name))
     ),
+    ...linksDropped,
   ];
+  if (removed.length === 0) return undefined;
+  // Where each removed field's values are: its link table, or the column's table (`valuesTableOf`).
+  const storedIn = (field: FieldDefinition): string =>
+    usesJunctionTable(field)
+      ? junctionTableNameFor(tableName, field)
+      : valuesTableOf(tableName, localized, field);
+  const tables = [...new Set(removed.map(storedIn))];
   const confirmedOf = new Map(
     confirmed.map(entry => [entry.field, entry.count])
   );
@@ -329,9 +377,7 @@ export function deletionHoldOf(args: {
   const removedIn = (changed: readonly string[] | undefined) => {
     if (changed === undefined) return removed;
     const inThem = new Set(changed.map(table => table.toLowerCase()));
-    return removed.filter(field =>
-      inThem.has(valuesTableOf(tableName, localized, field).toLowerCase())
-    );
+    return removed.filter(field => inThem.has(storedIn(field).toLowerCase()));
   };
   return {
     tables,
@@ -340,17 +386,18 @@ export function deletionHoldOf(args: {
     standingIn: changed => async db => {
       const standing: FieldDefinition[] = [];
       for (const field of removedIn(changed)) {
-        const table = valuesTableOf(tableName, localized, field);
-        if (await columnStands(db, dialect, table, columnOf(field.name))) {
-          standing.push(field);
-        }
+        const table = storedIn(field);
+        const stands = usesJunctionTable(field)
+          ? await tableStands(db, dialect, table)
+          : await columnStands(db, dialect, table, columnOf(field.name));
+        if (stands) standing.push(field);
       }
       if (standing.length > 0) await compareOf(standing)(db);
     },
     checkIn(changed) {
       const inThem = new Set(changed.map(table => table.toLowerCase()));
       const fields = removed.filter(field =>
-        inThem.has(valuesTableOf(tableName, localized, field).toLowerCase())
+        inThem.has(storedIn(field).toLowerCase())
       );
       if (fields.length === 0) return undefined;
       return checkOf(

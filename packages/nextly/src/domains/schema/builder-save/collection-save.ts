@@ -64,7 +64,6 @@ import type { AddressKind } from "../../../shared/address-rule";
 import {
   closeHoldingConnection,
   holdCollectionOnConnection,
-  holdCollectionOnSession,
 } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { statedMoment } from "../../dynamic-collections/services/stated-default";
@@ -219,6 +218,7 @@ import {
   isDeletionCountRefusal,
 } from "./deletion-counts";
 import { nextSteps, partlyAppliedChange } from "./landing-push";
+import { type SaveHoldScope, saveHoldScope } from "./save-hold";
 import {
   openSaveRecords,
   recordSaveStarted,
@@ -502,6 +502,12 @@ export async function writeCollectionSave(
      * write, so a save refused by any of them has written nothing.
      */
     beforeWrite?: () => Promise<void>;
+    /**
+     * The caller's hold of the collection for a save that deletes values (`saveHoldScope`),
+     * kept past this save until the caller has written the registry row, and let go by it. Absent,
+     * the save keeps its own, let go when it returns.
+     */
+    holdScope?: SaveHoldScope;
   } = {}
 ): Promise<CollectionSaveResult> {
   // A drift refusal leaves the save's files withdrawn, so it is told with the Builder's way on.
@@ -517,6 +523,22 @@ async function writeCollectionSaveOnce(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   options: Parameters<typeof writeCollectionSave>[2] = {}
+): Promise<CollectionSaveResult> {
+  // The save's hold where it deletes values, the caller's or, without one, its own until it returns.
+  const scope = options.holdScope ?? saveHoldScope(deps.logger);
+  try {
+    return await writeCollectionSaveHeld(deps, save, options, scope);
+  } finally {
+    if (options.holdScope === undefined) await scope.end();
+  }
+}
+
+/** `writeCollectionSave`'s save, made once, its hold taken through `scope` where it deletes values. */
+async function writeCollectionSaveHeld(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  options: NonNullable<Parameters<typeof writeCollectionSave>[2]>,
+  scope: SaveHoldScope
 ): Promise<CollectionSaveResult> {
   // The save's record that it is in progress is cleared when this scope ends, or the caller's
   // where one is open around it (`withSaveRecords`), as its outcome allows.
@@ -548,7 +570,8 @@ async function writeCollectionSaveOnce(
           deps,
           save,
           written.table,
-          () => appliedBy()
+          () => appliedBy(),
+          scope
         );
         // `"unchanged"`: nothing was pushed (an update of settings alone), so a failure recording
         // the files leaves nothing applied, and they are withdrawn as before any change.
@@ -572,13 +595,23 @@ async function writeCollectionSaveOnce(
             deps.adapter.getCapabilities().dialect
           );
         }
+        const hold = deletionHoldOfSave(deps, save, written.table);
+        // On PostgreSQL and SQLite the collection is held from before the file's count until the
+        // caller has written the registry row, so an entry write that waited meets the definition
+        // the save recorded. On MySQL the file's try holds it on its own connection (`runHeld`).
+        if (
+          hold !== undefined &&
+          deps.adapter.getCapabilities().dialect !== "mysql"
+        ) {
+          await scope.take(deps.adapter, save.slug);
+        }
         await runWritten(
           deps,
           written.files,
           written.table,
           bounds,
           options.inLastTransaction,
-          deletionHoldOfSave(deps, save, written.table)
+          hold
         );
       } else if (options.appliedAfter !== undefined) {
         // The counts the person confirmed, compared just before the change is made here, as before
@@ -588,7 +621,8 @@ async function writeCollectionSaveOnce(
           deps,
           save,
           written.table,
-          () => appliedAfter()
+          () => appliedAfter(),
+          scope
         );
         pushed = true;
         if (applied === "partly-applied") written.started.left();
@@ -4517,19 +4551,24 @@ async function runHeld<T>(
   }
 }
 
-/** `apply` under the save's count and hold (`countedThroughApply`), for the save's deletion hold. */
+/**
+ * `apply` under the save's count and hold (`countedThroughApply`), for the save's deletion hold,
+ * the hold taken through `scope`, the save's.
+ */
 function comparedThenApplied<T>(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   table: string,
-  apply: () => Promise<T>
+  apply: () => Promise<T>,
+  scope: SaveHoldScope
 ): Promise<T> {
   return countedThroughApply(
     deps.adapter,
     save.slug,
     deletionHoldOfSave(deps, save, table),
     apply,
-    deps.logger
+    deps.logger,
+    scope
   );
 }
 
@@ -4538,11 +4577,11 @@ function comparedThenApplied<T>(
  * it deletes is compared with the one the person confirmed (`DeletionHold.compare`), where there
  * is a count (`hold`); without one, `apply` alone.
  *
- * On MySQL collection `slug` is held first, on a connection of its own, from before the count
- * until `apply` has ended, however it ended (`holdCollectionOnSession`): `apply` runs on
- * connections of its own, and an entry write waits at the collection's named locks wherever it
- * runs, so a write under way at the count is counted, and one sent after it meets the new shape.
- * On PostgreSQL and SQLite nothing more is held, as before.
+ * Collection `slug` is held first (`SaveHoldScope.take`), from before the count: `apply` runs on
+ * connections of its own, and an entry write waits at the hold wherever it runs, so a write under
+ * way at the count is counted, and one sent after it meets the new shape. Through `scope`, the
+ * caller that writes the registry row after `apply` keeps the hold until it is written, and lets
+ * it go; without one, it is let go once `apply` has ended, however it ended.
  */
 export async function countedThroughApply<T>(
   adapter: DrizzleAdapter,
@@ -4550,30 +4589,22 @@ export async function countedThroughApply<T>(
   hold: DeletionHold | undefined,
   apply: () => Promise<T>,
   /** Told a release that failed, which changes nothing of what `apply` did. */
-  logger: { warn(message: string): void }
+  logger: { warn(message: string): void },
+  scope?: SaveHoldScope
 ): Promise<T> {
   if (hold === undefined) return apply();
-  const compare = () => hold.compare(adapter.getDrizzle());
-  if (adapter.getCapabilities().dialect !== "mysql") {
-    await compare();
-    return apply();
+  const held = scope ?? saveHoldScope(logger);
+  try {
+    await held.take(adapter, slug);
+    // On SQLite the count takes a turn on the one connection, as a transaction: one the flow has
+    // open when the hold is taken has ended first, so its writes are counted.
+    await (adapter.getCapabilities().dialect === "sqlite"
+      ? adapter.transaction(tx => hold.compare(tx.getDrizzle()))
+      : hold.compare(adapter.getDrizzle()));
+    return await apply();
+  } finally {
+    if (scope === undefined) await held.end();
   }
-  return adapter.withSession(async session => {
-    const { release } = await holdCollectionOnSession(adapter, session, slug);
-    try {
-      await compare();
-      return await apply();
-    } finally {
-      // A release that fails is told and passed over: what `apply` did, or how it failed, is
-      // what the caller sees, and the session's connection is closed once this ends, which lets
-      // its named locks go.
-      await release().catch((error: unknown) => {
-        logger.warn(
-          `Collection '${slug}': its hold for the save could not be let go on its own connection (${error instanceof Error ? error.message : String(error)}); closing that connection lets it go.`
-        );
-      });
-    }
-  });
 }
 
 /**

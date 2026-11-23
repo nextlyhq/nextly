@@ -27,8 +27,10 @@ import { consoleLogger } from "../../../shared/types";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
 import {
-  expectedRegistryRowOf,
   holdEntityForWrite,
+  type HoldingAdapter,
+  type LoadedRegistryRow,
+  loadedRegistryRowOf,
 } from "../services/entry-write-hold";
 
 const SLUG = "ewh_notes";
@@ -289,51 +291,95 @@ describe.each(getConfiguredTestDialects())(
       30_000
     );
 
-    // A delete that committed before the write looked its collection up leaves the slug absent;
-    // a collection made again under it before the write holds it is not the one the write was
-    // made for, so the write is refused, not written into it.
-    onMysql(
-      "refuses a write whose collection was gone when it looked and made again before it held it",
-      async () => {
-        const t = await boot();
-        const registry = new DynamicCollectionService(t.adapter, consoleLogger);
-        // The delete, committed: no registry row holds the slug.
-        await t.adapter.executeQuery(
-          `UPDATE dynamic_collections SET slug = 'ewh_gone' WHERE slug = '${SLUG}'`
-        );
-        clearRegistryRowCache();
-        const expected = await expectedRegistryRowOf(
+    /**
+     * The write's hold of the collection in a transaction of its own, compared with `loaded`,
+     * through the adapter the app writes through.
+     */
+    const heldFor = (t: TestNextly, loaded: LoadedRegistryRow | undefined) => {
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      return t.adapter.transaction(tx =>
+        holdEntityForWrite(
+          tx,
+          { kind: "collection", slug: SLUG },
           registry,
-          SLUG,
-          t.adapter,
-          dialect
-        );
+          t.adapter as unknown as HoldingAdapter,
+          loaded
+        )
+      );
+    };
 
-        // The collection made again under the slug, by a session holding it, as a create holds it.
-        const hold = await holdForUpdate(t, tx =>
-          tx
-            .execute(
-              `UPDATE dynamic_collections SET slug = '${SLUG}', id = 'made-again-${SLUG}' WHERE slug = 'ewh_gone'`
-            )
-            .then(() => undefined)
-        );
-        // The write's hold, as its transaction takes it: it waits for the session, then finds
-        // the row made since.
-        const { landed, write } = await landsWhileHeld(
-          t.adapter.transaction(tx =>
-            holdEntityForWrite(tx, SLUG, registry, dialect, expected)
-          )
-        );
-        expect(landed).toBe(false);
+    /** The registry row as a write made now would load it, `data` the write's. */
+    async function loadedNow(
+      t: TestNextly,
+      data?: Record<string, unknown>
+    ): Promise<LoadedRegistryRow | undefined> {
+      clearRegistryRowCache();
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      return loadedRegistryRowOf(await registry.getCollection(SLUG), data);
+    }
 
-        await hold.release();
-        await expect(write).rejects.toMatchObject({
-          code: "COLLECTION_BEING_CHANGED",
-        });
-        // Told apart from a write that read no row at all.
-        expect(expected).toBe("absent");
-      },
-      30_000
-    );
+    // A write made for a collection deleted before it held it finds no row under the slug, and is
+    // refused as not found, never written into what a create of the same slug makes next.
+    it("refuses a write whose collection was deleted after it loaded it, as not found", async () => {
+      const t = await boot();
+      const loaded = await loadedNow(t, { note: "made for the deleted one" });
+      expect(loaded).toBeDefined();
+      // The delete, committed: no registry row holds the slug.
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET slug = 'ewh_gone' WHERE slug = '${SLUG}'`
+      );
+
+      await expect(heldFor(t, loaded)).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    }, 30_000);
+
+    // A write made for a collection deleted and made again under its slug before it held it finds
+    // another row there, and is refused, not written into the replacement.
+    it("refuses a write whose collection was made again under its slug after it loaded it", async () => {
+      const t = await boot();
+      const loaded = await loadedNow(t, { note: "made for the first one" });
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET id = 'made-again-${SLUG}' WHERE slug = '${SLUG}'`
+      );
+
+      await expect(heldFor(t, loaded)).rejects.toMatchObject({
+        code: "COLLECTION_BEING_CHANGED",
+      });
+    }, 30_000);
+
+    // A save that removed a field while the write waited moves the definition's version: a field the
+    // write sets that the held definition no longer has is refused by name, before anything is
+    // written. A write that sets only fields the definition keeps goes on.
+    it("refuses, by name, a field the write sets that a save removed after it loaded the definition", async () => {
+      const t = await boot();
+      const setsNote = await loadedNow(t, { title: "t", note: "n" });
+      const setsTitle = await loadedNow(t, { title: "t" });
+      expect(setsNote?.setsFields).toEqual(["title", "note"]);
+      // The save's registry write: the definition without `note`, its version moved.
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      const row = (await registry.getCollection(SLUG)) as {
+        fields: Array<{ name: string }>;
+      };
+      const kept = JSON.stringify(
+        row.fields.filter(field => field.name !== "note")
+      );
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET fields = '${kept.replace(/'/g, "''")}', schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+      );
+
+      await expect(heldFor(t, setsNote)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.note",
+              code: "FIELD_REMOVED",
+            }),
+          ],
+        },
+      });
+      await expect(heldFor(t, setsTitle)).resolves.toBeUndefined();
+    }, 30_000);
   }
 );

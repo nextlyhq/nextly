@@ -750,11 +750,18 @@ export class DynamicCollectionRegistryService extends BaseService {
   ): Promise<{
     existing: string[];
     ids: ReadonlyMap<string, string>;
+    /** Each held row's `schema_version`, which every save of the collection moves. */
+    versions: ReadonlyMap<string, number>;
     release: () => Promise<void>;
   }> {
     const none = (): Promise<void> => Promise.resolve();
     if (slugs.length === 0) {
-      return { existing: [], ids: new Map(), release: none };
+      return {
+        existing: [],
+        ids: new Map(),
+        versions: new Map(),
+        release: none,
+      };
     }
     const named =
       this.dialect === "mysql"
@@ -764,16 +771,17 @@ export class DynamicCollectionRegistryService extends BaseService {
             slugs
           )
         : { release: none };
-    let rows: { slug: string; id: unknown }[];
+    let rows: { slug: string; id: unknown; schema_version: unknown }[];
     try {
-      rows = await tx.select<{ slug: string; id: unknown }>(
-        "dynamic_collections",
-        {
-          columns: ["slug", "id"],
-          where: { and: [{ column: "slug", op: "IN", value: [...slugs] }] },
-          ...(strength === "update" ? { forUpdate: true } : { forShare: true }),
-        }
-      );
+      rows = await tx.select<{
+        slug: string;
+        id: unknown;
+        schema_version: unknown;
+      }>("dynamic_collections", {
+        columns: ["slug", "id", "schema_version"],
+        where: { and: [{ column: "slug", op: "IN", value: [...slugs] }] },
+        ...(strength === "update" ? { forUpdate: true } : { forShare: true }),
+      });
     } catch (error) {
       await named.release();
       throw error;
@@ -783,11 +791,14 @@ export class DynamicCollectionRegistryService extends BaseService {
     forgetRegistryRowsOnTransaction(this.adapter);
     const existing = rows.map(row => row.slug);
     const ids = new Map(rows.map(row => [row.slug, String(row.id)]));
+    const versions = new Map(
+      rows.map(row => [row.slug, Number(row.schema_version)])
+    );
     if (strength === "share") {
       await named.release();
-      return { existing, ids, release: none };
+      return { existing, ids, versions, release: none };
     }
-    return { existing, ids, release: named.release };
+    return { existing, ids, versions, release: named.release };
   }
 
   /**

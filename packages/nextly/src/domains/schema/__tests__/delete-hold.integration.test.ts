@@ -657,13 +657,12 @@ describe.each(getConfiguredTestDialects())(
       expect(await notesHeld(t)).toBe(4);
     }, 60_000);
 
-    // The push road holds the collection on MySQL from its count until the push has ended, on a
-    // connection of the save's own, and an entry write waits at its named locks. PostgreSQL holds
-    // nothing on the push road (a stated limit), so there the same write lands at once: the
-    // control that this case tells a held road from one that is not. SQLite's suite runs in
-    // memory, on one connection, where nothing else writes while the save runs.
+    // The push road holds the collection from its count until the save has written its registry
+    // row, on a connection of the save's own: on MySQL an entry write waits at the collection's
+    // named locks, on PostgreSQL at its advisory lock. A write on a transaction already open is
+    // refused rather than held on SQLite, whose suite has the next case for its writes.
     it.skipIf(dialect === "sqlite")(
-      "keeps an entry write sent between the count and the push waiting on MySQL, then writes it to the new shape",
+      "keeps an entry write sent between the count and the push waiting, then writes it to the new shape",
       async () => {
         const t = await boot();
         sessionsOf(t);
@@ -685,13 +684,18 @@ describe.each(getConfiguredTestDialects())(
         expect(reached || (await applying)).toBe(true);
 
         // An entry write sent after the count, before the push, on a connection of its own: the
-        // hold an entry write takes first (`holdEntityForWrite`, the collection's share side on
-        // MySQL, nothing elsewhere), then the row.
+        // hold an entry write takes first (`holdEntityForWrite`, the collection's share side),
+        // then the row.
         let landed = false;
         const registry = new DynamicCollectionService(t.adapter, consoleLogger);
         const writing = t.adapter
           .transaction(async tx => {
-            await holdEntityForWrite(tx, SLUG, registry, dialect);
+            await holdEntityForWrite(
+              tx,
+              { kind: "collection", slug: SLUG },
+              registry,
+              t.adapter as unknown as DrizzleAdapter
+            );
             await tx.execute(insertStatement(null));
           })
           .then(() => {
@@ -702,7 +706,7 @@ describe.each(getConfiguredTestDialects())(
 
         release();
         expect(await applying).toBe("applied");
-        // The push road's hold, on MySQL alone.
+        // The push road's hold on MySQL, which takes the named locks once.
         expect(releaseFails.holds).toBe(dialect === "mysql" ? 1 : 0);
         await writing;
         expect(landed).toBe(true);
@@ -716,54 +720,50 @@ describe.each(getConfiguredTestDialects())(
     // save holds the collection, through the save's registry write, then is refused naming the
     // field: never written into the field just before the push drops it uncounted, nor sent to a
     // table the field has left.
-    it(
-      "keeps an entry write sent between a push road's count and its push waiting until the save is recorded, then refuses its value for the removed field",
-      async () => {
-        const t = await boot();
-        for (const note of ["a", "b", "c"]) await insert(t, note);
-        pushRoad.forced = true;
-        const { paused, release } = gated(afterCount);
-        const applying = apply(t, 3, REMAINING, {
-          note: { action: "confirm_drop" },
-        }).then(
-          () => "applied",
+    it("keeps an entry write sent between a push road's count and its push waiting until the save is recorded, then refuses its value for the removed field", async () => {
+      const t = await boot();
+      for (const note of ["a", "b", "c"]) await insert(t, note);
+      pushRoad.forced = true;
+      const { paused, release } = gated(afterCount);
+      const applying = apply(t, 3, REMAINING, {
+        note: { action: "confirm_drop" },
+      }).then(
+        () => "applied",
+        (error: unknown) => error
+      );
+      const reached = await Promise.race([
+        paused.then(() => true),
+        applying.then(() => false),
+      ]);
+      expect(reached || (await applying)).toBe(true);
+
+      // Another writer's create through the Direct API, setting `note`.
+      let settled = false;
+      const writing = t.nextly
+        .create({
+          collection: SLUG,
+          data: { label: "between", note: "written after the count" },
+        })
+        .then(
+          () => "created",
           (error: unknown) => error
-        );
-        const reached = await Promise.race([
-          paused.then(() => true),
-          applying.then(() => false),
-        ]);
-        expect(reached || (await applying)).toBe(true);
-
-        // Another writer's create through the Direct API, setting `note`.
-        let settled = false;
-        const writing = t.nextly
-          .create({
-            collection: SLUG,
-            data: { label: "between", note: "written after the count" },
-          })
-          .then(
-            () => "created",
-            (error: unknown) => error
-          )
-          .finally(() => {
-            settled = true;
-          });
-        await new Promise(resolve => setTimeout(resolve, 1_000));
-        expect(settled).toBe(false);
-
-        release();
-        expect(await applying).toBe("applied");
-        expect(await writing).toMatchObject({
-          code: "VALIDATION_ERROR",
-          publicData: {
-            errors: [expect.objectContaining({ path: "fields.note" })],
-          },
+        )
+        .finally(() => {
+          settled = true;
         });
-        expect(await hasNoteColumn(t)).toBe(false);
-      },
-      60_000
-    );
+      await new Promise(resolve => setTimeout(resolve, 1_000));
+      expect(settled).toBe(false);
+
+      release();
+      expect(await applying).toBe("applied");
+      expect(await writing).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [expect.objectContaining({ path: "fields.note" })],
+        },
+      });
+      expect(await hasNoteColumn(t)).toBe(false);
+    }, 60_000);
 
     // An entry write holds the collection's registry row for share until it commits. One that
     // read the row and wrote before a save the push applies counted, and has not committed, is
@@ -790,7 +790,12 @@ describe.each(getConfiguredTestDialects())(
         });
         const registry = new DynamicCollectionService(t.adapter, consoleLogger);
         const writer = t.adapter.transaction(async tx => {
-          await holdEntityForWrite(tx, SLUG, registry, dialect);
+          await holdEntityForWrite(
+            tx,
+            { kind: "collection", slug: SLUG },
+            registry,
+            t.adapter as unknown as DrizzleAdapter
+          );
           await tx.execute(insertStatement("in flight"));
           wrote();
           await committed;

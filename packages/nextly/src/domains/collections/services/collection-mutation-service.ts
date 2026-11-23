@@ -220,6 +220,7 @@ import {
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { transactionTableProbe } from "../../dashboard/table-presence";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { shareEntityInProcess } from "../../dynamic-collections/services/entity-hold";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   applyFieldGroupWriteAccessToDocument,
@@ -552,9 +553,9 @@ import {
   referrersHolding,
 } from "./entry-still-referenced";
 import {
-  type ExpectedRegistryRow,
-  expectedRegistryRowOf,
   holdEntityForWrite,
+  type LoadedRegistryRow,
+  loadedRegistryRowOf,
 } from "./entry-write-hold";
 import { publishCallerOf, publishGate, type PublishPart } from "./publish-gate";
 import { type PartsState, publishValueIssues } from "./publish-parts";
@@ -9867,7 +9868,9 @@ export class CollectionMutationService extends BaseService {
         // What the gate's verdict on a create that publishes started is settled now the create is
         // written, before it commits; a gate that throws takes the create back.
         if (settleCreateGate) await settleCreateGate();
-      }, transactionOptions);
+        // Compared, under the hold, with the registry row this create loaded its fields from: a
+        // field it sets that a save removed while it waited is refused by name.
+      }, transactionOptions, loadedRegistryRowOf(collection, body));
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
       // there; from here a post-commit hook failure must not hide the delivery.
@@ -22920,27 +22923,37 @@ export class CollectionMutationService extends BaseService {
 
   /**
    * An entry write's own transaction on collection `collectionName`, holding the collection first
-   * (`holdForEntryWrite`): on MySQL a Builder save deleting the collection's field values waits for
-   * it to commit, and it waits for such a save to finish. Every transaction that writes entries
-   * opens through this, the batch writes included, so none is left without the hold.
+   * (`holdForEntryWrite`): a Builder save deleting the collection's field values waits for it to
+   * commit, and it waits for such a save to finish. Every transaction that writes entries opens
+   * through this, the batch writes included, so none is left without the hold. `loaded` is the
+   * registry row the write's operation loaded its fields from (`loadedRegistryRowOf`), compared
+   * with the row the hold reads.
    */
   async entryTransaction<T>(
     collectionName: string,
     work: (tx: TransactionContext) => Promise<T>,
-    options?: TransactionOptions
+    options?: TransactionOptions,
+    loaded?: LoadedRegistryRow
   ): Promise<T> {
-    // The registry row the write is made for, read before its transaction opens, so the hold can
-    // refuse a write whose collection was replaced while it waited (`expectedRegistryRowOf`).
-    const expected = await expectedRegistryRowOf(
-      this.collectionService,
-      collectionName,
-      this.adapter,
-      this.dialect
-    );
-    return this.adapter.transaction(async tx => {
-      await this.holdForEntryWrite(tx, collectionName, expected);
-      return work(tx);
-    }, options);
+    // On SQLite every transaction of the process takes its turn on one connection, so the write's
+    // share is taken before its own opens, where it can wait for a save. Inside a transaction the
+    // flow already opened, the turn is held, and the hold refuses rather than waits.
+    const sharesFirst =
+      this.dialect === "sqlite" && !this.adapter.transactionOpenInFlow();
+    const release = sharesFirst
+      ? await shareEntityInProcess(this.adapter, {
+          kind: "collection",
+          slug: collectionName,
+        })
+      : undefined;
+    try {
+      return await this.adapter.transaction(async tx => {
+        await this.holdForEntryWrite(tx, collectionName, loaded, sharesFirst);
+        return work(tx);
+      }, options);
+    } finally {
+      release?.();
+    }
   }
 
   /**
@@ -22950,15 +22963,18 @@ export class CollectionMutationService extends BaseService {
   private holdForEntryWrite(
     tx: TransactionContext,
     collectionName: string,
-    /** The registry row the write is made for, where it was read (`expectedRegistryRowOf`). */
-    expected?: ExpectedRegistryRow
+    /** The registry row the write was made for (`loadedRegistryRowOf`); undefined, not compared. */
+    loaded?: LoadedRegistryRow,
+    /** Whether the write's SQLite share was taken before `tx` opened (`entryTransaction`). */
+    sharedInProcess = false
   ): Promise<void> {
     return holdEntityForWrite(
       tx,
-      collectionName,
+      { kind: "collection", slug: collectionName },
       this.collectionService,
-      this.dialect,
-      expected
+      this.adapter,
+      loaded,
+      { sharedInProcess }
     );
   }
 

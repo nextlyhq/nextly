@@ -61,6 +61,7 @@ import {
 import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
+import type { SaveHoldScope } from "../../domains/schema/builder-save/save-hold";
 import {
   renamedFieldsOf,
   saveOfSchemaChange,
@@ -453,6 +454,8 @@ async function pipelinePushCounted<T>(args: {
   renames: readonly BrowserRenameResolution[] | undefined;
   confirmed: readonly ConfirmedDeletion[] | undefined;
   push: () => Promise<T>;
+  /** The request's hold of the collection, kept until its registry row is written. */
+  holdScope: SaveHoldScope;
 }): Promise<T> {
   const { countedThroughApply } = await import(
     "../../domains/schema/builder-save/collection-save"
@@ -471,7 +474,8 @@ async function pipelinePushCounted<T>(args: {
     args.slug,
     hold,
     args.push,
-    consoleLogger
+    consoleLogger,
+    args.holdScope
   );
 }
 
@@ -1166,6 +1170,14 @@ const COLLECTIONS_METHODS: Record<
       // and runs holding the schema lock, refused at once while a migration holds it. The shared
       // apply takes the lock too, re-entrantly; it is taken here so the registry read, the version
       // check and the registry write sit inside the same claim as the DDL.
+      //
+      // A save that deletes values holds the collection from its count until its registry row is
+      // written below, and lets it go once the request is answered, however it ended, so an entry
+      // write that waited for it meets the definition it recorded (`saveHoldScope`).
+      const { saveHoldScope } = await import(
+        "../../domains/schema/builder-save/save-hold"
+      );
+      const holdScope = saveHoldScope(getLoggerFromDI() ?? consoleLogger);
       return withSchemaChangeExcluded(
         {
           adapter: getAdapterFromDI(),
@@ -1464,6 +1476,7 @@ const COLLECTIONS_METHODS: Record<
             }
           };
           const written = await saveThroughWriter({
+            holdScope,
             // Where the save runs its file, the row is written in the file's own transaction, so a
             // failed write leaves the save as it was and is answered as the failure it is. Not where
             // the translations table is brought in step after the file: the row would then record
@@ -1583,6 +1596,7 @@ const COLLECTIONS_METHODS: Record<
                   renames: renameResolutions,
                   confirmed: confirmedDeletions,
                   push: () => applyCollectionSchemaChange(change),
+                  holdScope,
                 });
 
           // pipeline.apply mutates the live DB (renamed/added/dropped
@@ -1673,6 +1687,13 @@ const COLLECTIONS_METHODS: Record<
               : {}),
           });
         }
+      ).then(
+        // Let go once the request is answered, however it ended.
+        result => holdScope.end().then(() => result),
+        (error: unknown) =>
+          holdScope.end().then(() => {
+            throw error;
+          })
       );
     },
   },
@@ -2546,6 +2567,11 @@ async function saveThroughWriter(
      * one unanswered is refused as the push refuses it (`refuseUnansweredDialogQuestions`).
      */
     questions?: (moved: readonly string[]) => Promise<void>;
+    /**
+     * The request's hold of the collection for a save that deletes values, kept until the caller
+     * has written the registry row (`writeCollectionSave`'s `holdScope`).
+     */
+    holdScope?: SaveHoldScope;
   }
 ): Promise<
   | {
@@ -2582,9 +2608,7 @@ async function saveThroughWriter(
   ]);
   const registry = change.registry;
   const inFile = prepared.deps.applies && !viaPush && registry !== undefined;
-  const result = await writeCollectionSave(
-    prepared.deps,
-    prepared.save,
+  const roadOptions: Parameters<typeof writeCollectionSave>[2] =
     viaPush && change.appliedBy !== undefined
       ? { appliedBy: change.appliedBy }
       : inFile
@@ -2603,8 +2627,11 @@ async function saveThroughWriter(
               change.settled?.(applied);
             },
           }
-        : beforeWrite
-  );
+        : beforeWrite;
+  const result = await writeCollectionSave(prepared.deps, prepared.save, {
+    ...roadOptions,
+    ...(change.holdScope === undefined ? {} : { holdScope: change.holdScope }),
+  });
   if (runsFile) await afterTheFile(change, prepared.fields);
   return {
     fields: prepared.fields,
