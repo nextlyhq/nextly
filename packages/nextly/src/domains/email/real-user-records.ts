@@ -11,6 +11,7 @@
  */
 
 import { getService } from "../../di/service-access";
+import { NextlyError } from "../../errors";
 import { SYSTEM_CONTEXT } from "../../shared/types";
 import type { User } from "../users/services/user-service";
 
@@ -47,9 +48,16 @@ export const realUserRecords: EmailSampleRecords = {
     let user: User;
     try {
       user = await getService("userService").findById(id, SYSTEM_CONTEXT);
-    } catch {
-      // Not found, or an id no user can have: a record that is gone.
-      return null;
+    } catch (error) {
+      // Not found, or an id no user can have: a record that is gone. Any
+      // other failure is the server's, and is not answered as a gone record.
+      if (
+        NextlyError.isNotFound(error) ||
+        NextlyError.isCode(error, "VALIDATION_ERROR")
+      ) {
+        return null;
+      }
+      throw error;
     }
     return { userName: labelOf(user), userEmail: user.email };
   },

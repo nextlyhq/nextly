@@ -715,7 +715,10 @@ const EMAIL_TEMPLATE_METHODS: Record<
         hasPrev: false,
         label,
       };
-      return respondList(items, meta);
+      // A record's label is the loader's text, never re-read as a date.
+      const response = respondList(items, meta);
+      response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+      return response;
     },
   },
   loadSampleRecord: {
@@ -724,7 +727,11 @@ const EMAIL_TEMPLATE_METHODS: Record<
     execute: async (svc, p) => {
       const { source, caller } = await sampleRecordsFor(svc, p.templateId);
       const variables = await loadSampleRecord(source, p.recordId, caller);
-      return respondDoc({ id: p.recordId, variables });
+      // The values fill the preview exactly as the loader gave them: a date
+      // is never rewritten in the installation's timezone on the way.
+      const response = respondDoc({ id: p.recordId, variables });
+      response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
+      return response;
     },
   },
 };

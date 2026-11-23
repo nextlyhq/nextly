@@ -1046,8 +1046,34 @@ const CELL_DOORS: ReadonlySet<Door> = new Set<Door>(["capabilities", "widget"]);
  * The one answer as `door` gives it (see {@link YES_OR_NO_DOORS} and
  * {@link CELL_DOORS}).
  */
+/**
+ * The doors that hand what they read to code given no filter: an email
+ * template's records are read by its owner's loader, which would read past a
+ * rule's filter, so a read the filter limits is refused there.
+ */
+const WHOLE_READ_DOORS: ReadonlySet<Door> = new Set<Door>(["sample"]);
+
+/** The callers past every rule, whose read no filter limits. */
+const PAST_EVERY_RULE: readonly Caller[] = [
+  "super-admin",
+  "super-admin-inherited",
+  "key-super-admin",
+];
+
+/** Whether the row's read is one a rule's filter limits to some entries. */
+function readIsFiltered(row: Row): boolean {
+  return (
+    !PAST_EVERY_RULE.includes(row.caller) &&
+    rulesLet(row.rule, judgedAs(row.action), row.caller, row.target) ===
+      "matching"
+  );
+}
+
 export function oneAnswerAt(row: Row, door: Door): Verdict {
   const answer = oneAnswer(row);
+  if (WHOLE_READ_DOORS.has(door) && answer === "allow" && readIsFiltered(row)) {
+    return "refuse";
+  }
   if (answer !== "matching") return answer;
   if (CELL_DOORS.has(door)) return "allow";
   if (YES_OR_NO_DOORS.has(door)) {

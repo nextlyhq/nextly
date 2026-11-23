@@ -36,6 +36,9 @@ const ORIGIN = "http://localhost";
 const REFUSED = [401, 403];
 const ORDERS = "sample_orders";
 const SHIPPED = "sample-order-shipped";
+/** Orders a rule lets each person read only some of. */
+const OWN_ORDERS = "sample_own_orders";
+const OWN_SHIPPED = "sample-own-order-shipped";
 
 type Headers = Record<string, string>;
 
@@ -64,9 +67,29 @@ const shippedTemplate = {
     },
     load: async (id: string) => {
       loaderCalls.push(`load:${id}`);
-      return id === "gone"
-        ? null
-        : { orderNumber: id.toUpperCase(), customer: "Ada" };
+      if (id === "gone") return null;
+      // Under 64 KB in UTF-16 code units, over it in the UTF-8 bytes sent.
+      if (id === "large") return { customer: "数".repeat(25_000) };
+      return { orderNumber: id.toUpperCase(), customer: "Ada" };
+    },
+  },
+} as unknown as PluginEmailTemplate;
+
+/** A template offering the orders a read rule filters. */
+const ownShippedTemplate = {
+  ...shippedTemplate,
+  slug: OWN_SHIPPED,
+  name: "Own order shipped",
+  sampleRecords: {
+    label: "A real order of yours",
+    reads: { collection: OWN_ORDERS },
+    list: async () => {
+      loaderCalls.push("own-list");
+      return [{ id: "o-9", label: "Order A-9" }];
+    },
+    load: async (id: string) => {
+      loaderCalls.push(`own-load:${id}`);
+      return { orderNumber: id, customer: "Someone else" };
     },
   },
 } as unknown as PluginEmailTemplate;
@@ -80,6 +103,12 @@ const shop = definePlugin({
       defineCollection({
         slug: ORDERS,
         fields: [text({ name: "number" }), text({ name: "customer" })],
+      }),
+      defineCollection({
+        slug: OWN_ORDERS,
+        fields: [text({ name: "number" }), text({ name: "customer" })],
+        // Each person reads only the orders the filter matches.
+        access: { read: () => ({ customer: { equals: "reader" } }) },
       }),
     ],
   },
@@ -165,6 +194,7 @@ for (const dialect of getConfiguredTestDialects()) {
     let templatesOnly: Headers;
     let usersOnly: Headers;
     let shippedId: string;
+    let ownShippedId: string;
     let welcomeId: string;
     let adaId: string;
 
@@ -176,6 +206,7 @@ for (const dialect of getConfiguredTestDialects()) {
         ({ headers: reader } = await sessionFor(t, services, "reader", [
           "read-email-templates",
           `read-${ORDERS}`,
+          `read-${OWN_ORDERS}`,
           "read-users",
         ]));
         ({ headers: templatesOnly } = await sessionFor(
@@ -200,7 +231,12 @@ for (const dialect of getConfiguredTestDialects()) {
           "emailTemplateService"
         ) as unknown as EmailTemplateService;
         templates.configureOwnership({
-          plugins: [{ name: "sample-shop", templates: [shippedTemplate] }],
+          plugins: [
+            {
+              name: "sample-shop",
+              templates: [shippedTemplate, ownShippedTemplate],
+            },
+          ],
         });
         await templates.ensureBuiltInTemplates();
 
@@ -210,8 +246,14 @@ for (const dialect of getConfiguredTestDialects()) {
         const welcome = await t.nextly.emailTemplates.findBySlug({
           slug: "welcome",
         });
-        if (!shipped || !welcome) throw new Error("templates not seeded");
+        const ownShipped = await t.nextly.emailTemplates.findBySlug({
+          slug: OWN_SHIPPED,
+        });
+        if (!shipped || !welcome || !ownShipped) {
+          throw new Error("templates not seeded");
+        }
         shippedId = String(shipped.id);
+        ownShippedId = String(ownShipped.id);
         welcomeId = String(welcome.id);
       } catch (error) {
         await t?.destroy();
@@ -276,6 +318,27 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(REFUSED, path).toContain((await get(path, {})).status);
       }
       expect(loaderCalls).toEqual([]);
+    });
+
+    it("refuses a person whose read a rule's filter limits, before the loader runs: it would read past the filter", async () => {
+      loaderCalls.length = 0;
+      for (const path of [
+        `email-templates/${ownShippedId}/sample-records`,
+        `email-templates/${ownShippedId}/sample-records/o-9`,
+      ]) {
+        const refused = await get(path, reader);
+        expect(REFUSED, `${path}: ${refused.text}`).toContain(refused.status);
+      }
+      expect(loaderCalls).toEqual([]);
+    });
+
+    it("refuses a record larger than 64 KB as sent, counted in bytes", async () => {
+      const large = await get(
+        `email-templates/${shippedId}/sample-records/large`,
+        reader
+      );
+      expect(large.status, large.text).toBe(500);
+      expect(large.text).not.toContain("数数数");
     });
 
     it("offers core's user emails a real user, to a person who may read users", async () => {

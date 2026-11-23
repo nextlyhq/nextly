@@ -317,6 +317,7 @@ closed custom-role read collection async-false at direct  404 NOT_FOUND thrown  
 closed custom-role read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed custom-role read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed custom-role read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed custom-role read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed custom-role read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed custom-role read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed custom-role read collection async-throws at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -345,6 +346,7 @@ closed custom-role read collection returns-false at direct  404 NOT_FOUND thrown
 closed custom-role read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed custom-role read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed custom-role read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed custom-role read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed custom-role read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed custom-role read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed custom-role read collection returns-null at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -801,6 +803,7 @@ closed key-full-access read collection async-false at direct  404 NOT_FOUND thro
 closed key-full-access read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-full-access read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-full-access read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed key-full-access read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-full-access read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed key-full-access read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-full-access read collection async-throws at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -829,6 +832,7 @@ closed key-full-access read collection returns-false at direct  404 NOT_FOUND th
 closed key-full-access read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-full-access read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-full-access read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed key-full-access read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-full-access read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed key-full-access read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-full-access read collection returns-null at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -1364,6 +1368,7 @@ closed key-partial read collection async-false at direct  404 NOT_FOUND thrown  
 closed key-partial read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-partial read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-partial read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed key-partial read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-partial read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed key-partial read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-partial read collection async-throws at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -1392,6 +1397,7 @@ closed key-partial read collection returns-false at direct  404 NOT_FOUND thrown
 closed key-partial read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-partial read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-partial read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed key-partial read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-partial read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed key-partial read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-partial read collection returns-null at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -2006,6 +2012,7 @@ closed key-read-only read collection async-false at direct  404 NOT_FOUND thrown
 closed key-read-only read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-read-only read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-read-only read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed key-read-only read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-read-only read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed key-read-only read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-read-only read collection async-throws at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -2034,6 +2041,7 @@ closed key-read-only read collection returns-false at direct  404 NOT_FOUND thro
 closed key-read-only read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-read-only read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-read-only read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed key-read-only read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-read-only read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed key-read-only read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-read-only read collection returns-null at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -2699,6 +2707,7 @@ closed key-read-only-super-admin read collection async-false at direct  404 NOT_
 closed key-read-only-super-admin read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-read-only-super-admin read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-read-only-super-admin read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed key-read-only-super-admin read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-read-only-super-admin read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed key-read-only-super-admin read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-read-only-super-admin read collection async-throws at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -2727,6 +2736,7 @@ closed key-read-only-super-admin read collection returns-false at direct  404 NO
 closed key-read-only-super-admin read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-read-only-super-admin read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-read-only-super-admin read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed key-read-only-super-admin read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-read-only-super-admin read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed key-read-only-super-admin read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-read-only-super-admin read collection returns-null at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -3273,6 +3283,7 @@ closed key-role-based read collection async-false at direct  404 NOT_FOUND throw
 closed key-role-based read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-role-based read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-role-based read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed key-role-based read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-role-based read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed key-role-based read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-role-based read collection async-throws at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -3301,6 +3312,7 @@ closed key-role-based read collection returns-false at direct  404 NOT_FOUND thr
 closed key-role-based read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-role-based read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-role-based read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed key-role-based read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-role-based read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed key-role-based read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-role-based read collection returns-null at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -3784,6 +3796,7 @@ closed key-role-based-super-admin read collection async-false at direct  404 NOT
 closed key-role-based-super-admin read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-role-based-super-admin read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-role-based-super-admin read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed key-role-based-super-admin read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-role-based-super-admin read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed key-role-based-super-admin read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-role-based-super-admin read collection async-throws at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -3812,6 +3825,7 @@ closed key-role-based-super-admin read collection returns-false at direct  404 N
 closed key-role-based-super-admin read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-role-based-super-admin read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-role-based-super-admin read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed key-role-based-super-admin read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed key-role-based-super-admin read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed key-role-based-super-admin read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed key-role-based-super-admin read collection returns-null at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -7492,6 +7506,7 @@ closed user-partial read collection async-false at direct  404 NOT_FOUND thrown 
 closed user-partial read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed user-partial read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed user-partial read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed user-partial read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed user-partial read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed user-partial read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed user-partial read collection async-throws at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -7520,6 +7535,7 @@ closed user-partial read collection returns-false at direct  404 NOT_FOUND throw
 closed user-partial read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed user-partial read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed user-partial read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed user-partial read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed user-partial read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed user-partial read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed user-partial read collection returns-null at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -8008,6 +8024,7 @@ closed user-with read collection async-false at direct  404 NOT_FOUND thrown  mi
 closed user-with read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed user-with read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed user-with read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed user-with read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed user-with read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed user-with read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed user-with read collection async-throws at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -8036,6 +8053,7 @@ closed user-with read collection returns-false at direct  404 NOT_FOUND thrown  
 closed user-with read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed user-with read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed user-with read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
+closed user-with read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 closed user-with read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 closed user-with read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 closed user-with read collection returns-null at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
@@ -10939,6 +10957,7 @@ service custom-role read collection async-false at route  403 FORBIDDEN error  |
 service custom-role read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
+service custom-role read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -10975,6 +10994,7 @@ service custom-role read collection returns-false at route  403 FORBIDDEN error 
 service custom-role read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
+service custom-role read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service custom-role read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -11739,6 +11759,7 @@ service key-full-access read collection async-false at route  403 FORBIDDEN erro
 service key-full-access read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
+service key-full-access read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -11775,6 +11796,7 @@ service key-full-access read collection returns-false at route  403 FORBIDDEN er
 service key-full-access read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
+service key-full-access read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-full-access read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -12622,6 +12644,7 @@ service key-partial read collection async-false at route  403 FORBIDDEN error  |
 service key-partial read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
+service key-partial read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -12658,6 +12681,7 @@ service key-partial read collection returns-false at route  403 FORBIDDEN error 
 service key-partial read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
+service key-partial read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-partial read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -13653,6 +13677,7 @@ service key-read-only read collection async-false at route  403 FORBIDDEN error 
 service key-read-only read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
+service key-read-only read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -13689,6 +13714,7 @@ service key-read-only read collection returns-false at route  403 FORBIDDEN erro
 service key-read-only read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
+service key-read-only read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -14770,6 +14796,7 @@ service key-read-only-super-admin read collection async-false at route  403 FORB
 service key-read-only-super-admin read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only-super-admin read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only-super-admin read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
+service key-read-only-super-admin read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only-super-admin read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only-super-admin read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only-super-admin read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -14806,6 +14833,7 @@ service key-read-only-super-admin read collection returns-false at route  403 FO
 service key-read-only-super-admin read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only-super-admin read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only-super-admin read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
+service key-read-only-super-admin read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-read-only-super-admin read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only-super-admin read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only-super-admin read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -15721,6 +15749,7 @@ service key-role-based read collection async-false at route  403 FORBIDDEN error
 service key-role-based read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
+service key-role-based read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -15757,6 +15786,7 @@ service key-role-based read collection returns-false at route  403 FORBIDDEN err
 service key-role-based read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
+service key-role-based read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -16547,6 +16577,7 @@ service key-role-based-super-admin read collection async-false at route  403 FOR
 service key-role-based-super-admin read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based-super-admin read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
+service key-role-based-super-admin read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based-super-admin read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -16583,6 +16614,7 @@ service key-role-based-super-admin read collection returns-false at route  403 F
 service key-role-based-super-admin read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based-super-admin read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
+service key-role-based-super-admin read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service key-role-based-super-admin read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -18402,6 +18434,7 @@ service user-partial read collection async-false at route  403 FORBIDDEN error  
 service user-partial read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
+service user-partial read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -18438,6 +18471,7 @@ service user-partial read collection returns-false at route  403 FORBIDDEN error
 service user-partial read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
+service user-partial read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-partial read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -19258,6 +19292,7 @@ service user-with read collection async-false at route  403 FORBIDDEN error  | Y
 service user-with read collection async-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
+service user-with read collection async-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -19294,6 +19329,7 @@ service user-with read collection returns-false at route  403 FORBIDDEN error  |
 service user-with read collection returns-false at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
+service user-with read collection returns-filter at sample  403 FORBIDDEN error  | You don't have permission to perform this action.
 service user-with read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
