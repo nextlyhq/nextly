@@ -145,16 +145,6 @@ function placedByHeader(content: string, base: string): Placed | undefined {
   };
 }
 
-/**
- * The migrations a blank migration's `content` says it was written after: the parent and the
- * merges its header states (`blankLineHeader`), none where it states no place. For a reader that
- * must not take a file away from under a migration written from it.
- */
-export function blankWrittenFrom(content: string): string[] {
-  const placed = placedByHeader(content, "");
-  return placed === undefined ? [] : writtenFromPlace(placed);
-}
-
 /** The migrations a stated place names: its parent, and the merges it records. */
 function writtenFromPlace(placed: Placed): string[] {
   return [
@@ -188,7 +178,9 @@ async function unsnapshottedIn(
     if (withSnapshot.has(group.baseName)) continue;
     const files: FileStatement[] = [];
     for (const { file } of baseFileFirst(group)) {
-      const content = await readFile(resolve(migrationsDir, file), "utf-8");
+      const content = await readIfPresent(resolve(migrationsDir, file));
+      // Gone since the folder was listed (a writer taking its own files back): no file of it.
+      if (content === undefined) continue;
       files.push({
         file,
         marked: isBlankMigration(content),
@@ -198,6 +190,16 @@ async function unsnapshottedIn(
     read.push({ base: group.baseName, files });
   }
   return read;
+}
+
+/** The text of the file at `path`, or undefined where there is none. */
+async function readIfPresent(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 /** A migration group's files, its base file (`<base>.sql`) first and its variants after. */
@@ -261,9 +263,9 @@ export function placeStatedTwiceError(
   const why =
     "A dialect's variant runs in place of the base file on its dialect and is the same migration, so the migration has one place in the history.";
   const next = `Make the \`-- Parent:\` and \`-- Merges:\` lines the same in every file of ${base} that states them, or keep them in the base file alone.`;
-  return new NextlyError({
-    code: "CONFLICT",
-    publicMessage: `${what} ${why} ${next}`,
+  return NextlyError.conflict({
+    reason: "state",
+    message: `${what} ${why} ${next}`,
     logContext: {
       // Spelt out, as `MIGRATION_PLACE_STATED_TWICE_REASON` holds it, for the CLI's mapping.
       reason: "migration place stated twice",
@@ -275,17 +277,18 @@ export function placeStatedTwiceError(
 }
 
 /**
- * The folder's blank migrations, by name: those any of whose files carries the blank mark
- * (`isBlankMigration`), read once with their dialect variants. For `migrate:check`, which pairs
- * a blank migration's files with no snapshot.
+ * The folder's blank migrations whose names are not in `withSnapshot`, by name: those any of
+ * whose files carries the blank mark (`isBlankMigration`), read once with their dialect variants.
+ * For `migrate:check`, which pairs a blank migration's files with no snapshot.
  */
 export async function blankMigrationNames(
-  migrationsDir: string
+  migrationsDir: string,
+  withSnapshot: ReadonlySet<string>
 ): Promise<Set<string>> {
   const names = new Set<string>();
   for (const { base, files } of await unsnapshottedIn(
     migrationsDir,
-    new Set()
+    withSnapshot
   )) {
     if (files.some(each => each.marked)) names.add(base);
   }

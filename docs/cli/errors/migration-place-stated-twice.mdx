@@ -1,11 +1,11 @@
 ---
 title: MIGRATION_PLACE_STATED_TWICE
-description: "The files of one migration (its base file and a dialect's variant) state different places in the history, so the command applied none of them."
+description: "The files of one migration (its base file and a dialect's variant) state different places in the history, so the command refused and changed nothing."
 ---
 
 ## Cause
 
-The files of one migration (its base file and a dialect's variant) state different places in the history, so the command applied none of them.
+The files of one migration (its base file and a dialect's variant) state different places in the history, so the command refused and changed nothing.
 
 A migration can have more than one file. Beside `0003_seed.sql`, a file named for a dialect, such as `0003_seed.mysql.sql`, runs in its place on that dialect. The variant belongs to the same migration and has the same place in the history.
 

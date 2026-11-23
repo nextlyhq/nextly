@@ -603,7 +603,7 @@ export const MIGRATION_CODES = defineCodes({
   },
   MIGRATION_PLACE_STATED_TWICE: {
     cause:
-      "The files of one migration (its base file and a dialect's variant) state different places in the history, so the command applied none of them.",
+      "The files of one migration (its base file and a dialect's variant) state different places in the history, so the command refused and changed nothing.",
     from: [
       {
         code: "CONFLICT",

@@ -5,7 +5,13 @@
  * records the merge. Snapshots that name no parent of their own are never
  * refused.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,7 +26,6 @@ import {
   blankLineIn,
   blankMigrationNames,
   blankMigrationsWrittenFrom,
-  blankWrittenFrom,
   forkedHistoryError,
   isBlankMigration,
   mergedBy,
@@ -276,12 +281,18 @@ describe("the merges a migration history does not record", () => {
 
     expect(await unrecordedMerges(dir)).toEqual([]);
     expect(await blankLineIn(dir)).toEqual({ parent: "0002_seed", merges: [] });
-    expect(blankWrittenFrom(below)).toEqual([]);
+    const withSnapshot = new Set(["0001_a"]);
+    expect(
+      Object.fromEntries(await blankMigrationsWrittenFrom(dir, withSnapshot))
+    ).toEqual({ "0002_seed": ["0001_a"] });
     expect(isBlankMigration(below)).toBe(false);
     // Above UP, the same line places the file, for every reader alike.
     const above =
       "-- Migration: backfill\n-- Parent: 0001_a\n--\n-- UP\nSELECT 1;\n";
-    expect(blankWrittenFrom(above)).toEqual(["0001_a"]);
+    writeFileSync(join(dir, "0003_backfill.sql"), above);
+    expect(
+      Object.fromEntries(await blankMigrationsWrittenFrom(dir, withSnapshot))
+    ).toEqual({ "0002_seed": ["0001_a"], "0003_backfill": ["0001_a"] });
     expect(isBlankMigration(above)).toBe(true);
   });
 
@@ -485,7 +496,7 @@ describe("the blank migrations of a folder, read once per migration with its var
     );
     writeFileSync(join(dir, "0003_generated.sql"), "-- UP\nSELECT 1;\n");
 
-    expect([...(await blankMigrationNames(dir))].sort()).toEqual([
+    expect([...(await blankMigrationNames(dir, new Set()))].sort()).toEqual([
       "0001_seed",
       "0002_tune",
     ]);
@@ -517,6 +528,25 @@ describe("the blank migrations of a folder, read once per migration with its var
       "0001_a",
       "0002_b",
     ]);
+  });
+});
+
+// A file removed between the folder's listing and its reading (a writer taking its own files
+// back) is no file of the folder: every reader passes over it rather than failing. A link to
+// nothing is listed and cannot be read, as such a file is.
+describe("a migration file gone by the time it is read", () => {
+  it("is passed over by the line, the blank marks and what blank migrations were written from", async () => {
+    migration("0001_a", null);
+    blank("0002_seed", "0001_a");
+    symlinkSync(join(dir, "gone.sql"), join(dir, "0002_seed.mysql.sql"));
+
+    expect(await unrecordedMerges(dir)).toEqual([]);
+    expect([...(await blankMigrationNames(dir, new Set()))]).toEqual([
+      "0002_seed",
+    ]);
+    expect(
+      Object.fromEntries(await blankMigrationsWrittenFrom(dir, new Set()))
+    ).toEqual({ "0002_seed": ["0001_a"] });
   });
 });
 

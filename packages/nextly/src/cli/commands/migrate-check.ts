@@ -74,7 +74,6 @@ import {
   functionsDefinedBy,
 } from "../../domains/schema/migrate/file-deletions";
 import {
-  MIGRATION_PLACE_STATED_TWICE_REASON,
   blankMigrationNames,
   forkedHistoryError,
   unrecordedMerges,
@@ -130,7 +129,6 @@ import {
   judgeBuilderDefinitions,
   readBuilderDefinitions,
 } from "../../domains/schema/ui-schema/builder-definitions";
-import { NextlyError } from "../../errors/nextly-error";
 import { addressRefusalsError } from "../../shared/address-rule";
 import {
   type CliError,
@@ -317,33 +315,10 @@ async function failOnUnrecordedMerge(
   migrationsDir: string,
   logger: CommandContext["logger"]
 ): Promise<void> {
-  const forked = forkedHistoryError(
-    await mergesOrRefusal(migrationsDir, logger)
-  );
+  // A history whose line cannot be read (a migration whose files state different places) is
+  // refused by a throw, ended in the error shape by the command's own catch.
+  const forked = forkedHistoryError(await unrecordedMerges(migrationsDir));
   if (forked !== undefined) exitWithError(logger, forked);
-}
-
-/**
- * The merges nothing records (`unrecordedMerges`), or the refusal of a history the line cannot
- * be read from, ended in the CLI's error shape as `nextly migrate` refuses it: a migration whose
- * files state different places (`MIGRATION_PLACE_STATED_TWICE_REASON`).
- */
-async function mergesOrRefusal(
-  migrationsDir: string,
-  logger: CommandContext["logger"]
-): ReturnType<typeof unrecordedMerges> {
-  try {
-    return await unrecordedMerges(migrationsDir);
-  } catch (error) {
-    if (
-      !(error instanceof NextlyError) ||
-      error.logContext?.reason !== MIGRATION_PLACE_STATED_TWICE_REASON
-    ) {
-      throw error;
-    }
-    exitWithError(logger, error);
-    return [];
-  }
 }
 
 /**
@@ -513,8 +488,12 @@ export async function runChecks(args: {
   // Check 1+2: hash + missing snapshot per .sql file. A template's own
   // migration is passed over: its snapshot carries no hash to hold it to.
   const templateFiles = await templateMigrationFiles(migrationsDir, metaDir);
-  // Read once for the folder: a migration is blank where any of its files says so.
-  const blankNames = await blankMigrationNames(migrationsDir);
+  // Read once for the folder: a migration with no snapshot is blank where any of its files says
+  // so. One with a snapshot is held to it, whatever its files say.
+  const blankNames = await blankMigrationNames(
+    migrationsDir,
+    new Set(snapshotFiles.map(name => name.replace(/\.snapshot\.json$/, "")))
+  );
   for (const sqlName of sqlFiles) {
     if (templateFiles.has(sqlName)) continue;
     const unpaired = await snapshotPairingError(

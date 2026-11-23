@@ -36,6 +36,9 @@ import type { MinimalConfigField } from "../../domains/schema/migrate-create/gen
 import { writeSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 
+import { toCliError } from "../errors/from-thrown";
+import { formatCliError } from "../errors/render";
+
 import { runChecks } from "./migrate-check";
 
 function makeLogger() {
@@ -896,11 +899,17 @@ describe("runChecks (F11 PR 4)", () => {
         );
       }
 
-      await check();
-
-      expect(exitSpy).toHaveBeenCalledWith(1);
-      const message = String(printed.mock.calls[0]?.[0]);
-      expect(message).toContain(
+      // Both pass their pairing (a blank migration); the line's reading refuses, as `nextly
+      // migrate` refuses it, and the command's catch ends it in its own code.
+      const refusal = toCliError(
+        await check().then(
+          () => undefined,
+          (error: unknown) => error
+        )
+      );
+      expect(printed).not.toHaveBeenCalled();
+      expect(refusal.code).toBe("MIGRATION_PLACE_STATED_TWICE");
+      expect(formatCliError(refusal)).toContain(
         `\`${tune}.sql\` states \`-- Parent: ${seed}\`, and \`${tune}.mysql.sql\` states \`-- Parent: none\`.`
       );
     });

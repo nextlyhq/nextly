@@ -421,7 +421,6 @@ async function registryFieldNames(t: TestNextly): Promise<string[]> {
   return (fields as Array<{ name: string }>).map(field => field.name);
 }
 
-/** The settle, as the next development start runs it, over the same database and folder. */
 /** A migration written by hand: `header` above its UP line, statements that change nothing. */
 const byHand = (header: string[]): string =>
   [
@@ -436,6 +435,7 @@ const byHand = (header: string[]): string =>
     "",
   ].join("\n");
 
+/** The settle, as the next development start runs it, over the same database and folder. */
 function settle(t: TestNextly): Promise<SettledSave[]> {
   return settleLeftSaves({
     adapter: t.adapter,
