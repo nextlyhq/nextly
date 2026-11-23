@@ -3398,6 +3398,48 @@ function parseDocumentLockRoutes(
 }
 
 // ============================================================================
+// File Routes Parser
+// ============================================================================
+
+/**
+ * The file routes of a collection with `files` (@experimental):
+ *
+ *   POST /files/:slug/uploads               → startFileUpload
+ *   POST /files/:slug/uploads/:id/complete  → completeFileUpload
+ *
+ * Exact paths only: anything longer or of another method is no route, so a
+ * mistyped path 404s rather than being taken for a near one. The handler owns
+ * its authentication, which judges staff and signed-in people alike.
+ */
+function parseFileRoutes(
+  slug: string | undefined,
+  subresource: string | undefined,
+  uploadId: string | undefined,
+  rest: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (httpMethod !== "POST" || !slug || subresource !== "uploads") return null;
+  if (uploadId === undefined && rest.length === 0) {
+    return {
+      service: "files",
+      operation: "create",
+      method: "startFileUpload",
+      routeParams: { ...routeParams, slug },
+    };
+  }
+  if (uploadId !== undefined && rest.length === 1 && rest[0] === "complete") {
+    return {
+      service: "files",
+      operation: "update",
+      method: "completeFileUpload",
+      routeParams: { ...routeParams, slug, uploadId },
+    };
+  }
+  return null;
+}
+
+// ============================================================================
 // Schema Routes Parser
 // ============================================================================
 
@@ -3738,6 +3780,19 @@ export function parseRestRoute(
   // Handle Webhook endpoint management
   if (resource === "webhooks") {
     const result = parseWebhookRoutes(
+      id,
+      subresource,
+      subId,
+      additionalParams,
+      httpMethod,
+      routeParams
+    );
+    if (result) return result;
+  }
+
+  // A collection's private files
+  if (resource === "files") {
+    const result = parseFileRoutes(
       id,
       subresource,
       subId,

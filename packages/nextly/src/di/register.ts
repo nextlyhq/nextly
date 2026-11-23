@@ -1342,7 +1342,8 @@ async function registerServicesOnce(
       const { mediaStorage, storage } = registerBootMediaStorage(
         storagePlugins,
         resolvedLogger,
-        resolvedBasePath
+        resolvedBasePath,
+        transformedConfig.collections ?? []
       );
 
       // Before any schema work, a database laid out for the other choice of the setting is refused:
@@ -2896,12 +2897,22 @@ async function recordBootParticipation(
 function registerBootMediaStorage(
   storagePlugins: NextlyServiceConfig["storagePlugins"],
   logger: Logger,
-  basePath: string
+  basePath: string,
+  collections: ReadonlyArray<{ slug: string; files?: unknown }>
 ): { mediaStorage: MediaStorage; storage: IStorageAdapter | null } {
+  // A collection with `files` keeps private files: its storage is routed fail
+  // closed, and the start is refused here, before anything is served, when
+  // that storage cannot keep files private (no storage plugin takes the
+  // collection, or its plugin has a public URL in front of it).
+  const privateCollections = collections
+    .filter(collection => collection.files !== undefined)
+    .map(collection => collection.slug);
   const mediaStorage = initializeMediaStorage({
     plugins: storagePlugins,
     local: { uploadDir: join(basePath, "public", "uploads") },
+    privateCollections,
   });
+  for (const slug of privateCollections) mediaStorage.getPrivateFiles(slug);
   logStorageConfiguration(mediaStorage, storagePlugins, logger);
   container.registerSingleton<MediaStorage>("mediaStorage", () => mediaStorage);
 

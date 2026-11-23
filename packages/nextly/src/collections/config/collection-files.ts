@@ -56,6 +56,50 @@ export interface CollectionFilesConfig {
    * @default 3600
    */
   pendingTimeout?: number;
+
+  /**
+   * The kinds of plugin-defined signed-in person (`<plugin>:<name>`, such as
+   * an accounts plugin's members) whose sessions the file routes recognise,
+   * beside staff sessions and API keys. A person of one of these kinds is
+   * judged by this collection's `access` rules, as everywhere else. Absent,
+   * only staff and API keys may upload or open a file.
+   *
+   * @default []
+   */
+  principals?: readonly string[];
+}
+
+/**
+ * A collection's `files` option with every default filled in: what the file
+ * routes and the clean-up job read.
+ *
+ * @experimental
+ */
+export interface FilesPolicy {
+  accept: readonly string[];
+  maxSize: number;
+  delivery: "stream" | "redirect";
+  pendingTimeout: number;
+  principals: readonly string[];
+}
+
+/** How long an upload waits for its confirm when the option says nothing. */
+const DEFAULT_PENDING_TIMEOUT = 3600;
+
+/**
+ * `files` with its defaults: one place, so the routes and the clean-up never
+ * disagree about how long an upload may wait or how a file is delivered.
+ *
+ * @experimental
+ */
+export function resolveFilesPolicy(files: CollectionFilesConfig): FilesPolicy {
+  return {
+    accept: files.accept,
+    maxSize: files.maxSize,
+    delivery: files.delivery ?? "stream",
+    pendingTimeout: files.pendingTimeout ?? DEFAULT_PENDING_TIMEOUT,
+    principals: files.principals ?? [],
+  };
 }
 
 /** The states a file's entry passes through. */
@@ -81,6 +125,7 @@ const FILES_KEYS: ReadonlySet<string> = new Set([
   "maxSize",
   "delivery",
   "pendingTimeout",
+  "principals",
 ]);
 
 /** No caller writes a file's own fields; only core's routes do, as trusted code. */
@@ -253,6 +298,33 @@ function limitProblems(files: Record<string, unknown>): FilesProblem[] {
   return problems;
 }
 
+/** A kind of signed-in person as core names one: `<plugin>:<name>`. */
+const PRINCIPAL_KIND = /^[a-z0-9@/._-]+:[a-z][a-z0-9-]{0,31}$/;
+
+/** Each problem with the kinds of signed-in person the routes recognise. */
+function principalProblems(principals: unknown): FilesProblem[] {
+  if (principals === undefined) return [];
+  if (!Array.isArray(principals)) {
+    return [
+      {
+        path: "files.principals",
+        message:
+          'files.principals must list kinds of signed-in person, such as "accounts:account".',
+      },
+    ];
+  }
+  return principals.flatMap((kind: unknown, index) =>
+    typeof kind === "string" && PRINCIPAL_KIND.test(kind)
+      ? []
+      : [
+          {
+            path: `files.principals[${index}]`,
+            message: `${JSON.stringify(kind)} is not a kind of signed-in person, written <plugin>:<name>.`,
+          },
+        ]
+  );
+}
+
 /** Each problem with the `files` option's own shape. */
 function shapeProblems(files: Record<string, unknown>): FilesProblem[] {
   return [
@@ -267,6 +339,7 @@ function shapeProblems(files: Record<string, unknown>): FilesProblem[] {
         ]),
     ...acceptProblems(files.accept),
     ...limitProblems(files),
+    ...principalProblems(files.principals),
   ];
 }
 
