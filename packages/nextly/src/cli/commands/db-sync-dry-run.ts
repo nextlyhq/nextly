@@ -18,11 +18,11 @@ import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-s
 import { blockedConversionMessages } from "../../domains/schema/pipeline/classifier/conversion-refusal";
 import { describeOp } from "../../domains/schema/pipeline/diff/describe-operation";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
+import { configTheCodeOwns } from "../../domains/schema/pipeline/registered-collections";
 import type {
   ClassifierEvent,
   TypeChangeEvent,
 } from "../../domains/schema/pipeline/resolution/types";
-import { configTheCodeOwns } from "../../domains/schema/pipeline/registered-collections";
 import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import {
   describeClassed,

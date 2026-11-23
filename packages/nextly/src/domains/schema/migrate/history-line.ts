@@ -24,10 +24,9 @@
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import type { MigrationGroup } from "../../../cli/utils/migration-discovery";
 import { NextlyError } from "../../../errors/nextly-error";
 import { recordedSnapshotNames } from "../migrate-create/snapshot-io";
-
-import type { MigrationGroup } from "../../../cli/utils/migration-discovery";
 
 import { groupMigrationFiles } from "./migration-groups";
 import { compareMigrationBaseNames } from "./migration-order";

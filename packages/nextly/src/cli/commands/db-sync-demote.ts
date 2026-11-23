@@ -8,6 +8,7 @@
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { SupportedDialect } from "../../database/schema-registry";
 import {
   toCodeFirstCollectionConfig,
   type CodeFirstCollectionSource,
@@ -24,7 +25,6 @@ import {
 } from "../../domains/schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveCollectionTableName } from "../../domains/schema/utils/resolve-table-name";
-import type { SupportedDialect } from "../../database/schema-registry";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { DynamicCollectionInsert } from "../../schemas/dynamic-collections/types";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
