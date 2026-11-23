@@ -35,7 +35,9 @@ import { expectNoAxeViolations } from "./support/axe";
 import { emptyScanReason, scanAxe } from "./support/axe-scan.mjs";
 import { test } from "./support/test";
 
-// Each test builds on the list the one before it left.
+// Each test builds on the list the one before it left. A retry runs the
+// file again from its first test, on the server the failed attempt left, so
+// the first test starts by putting the site back to English alone.
 test.describe.configure({ mode: "serial" });
 
 const LANGUAGES = "/admin/api/languages";
@@ -69,6 +71,40 @@ async function activeCodes(api: APIRequestContext): Promise<string[]> {
     .filter(language => language.active)
     .sort((a, b) => a.position - b.position)
     .map(language => language.code);
+}
+
+/** Makes one change through the API, which must be saved. */
+async function change(
+  api: APIRequestContext,
+  data: Record<string, unknown>
+): Promise<void> {
+  const saved = await api.post(LANGUAGES, { data });
+  expect(saved.ok(), await saved.text()).toBe(true);
+}
+
+/**
+ * Puts the site back to English alone, its default, from wherever an earlier
+ * attempt of this file stopped: English added back if it was removed, made
+ * the default again, every other language removed. Changes nothing on a site
+ * that already has English alone, as a first attempt's has.
+ */
+async function startWithEnglishAlone(api: APIRequestContext): Promise<void> {
+  let { languages } = await languagesOf(api);
+  const english = languages.find(each => each.code === "en");
+  if (english && !english.active) {
+    await change(api, { kind: "add", code: "en", label: "English" });
+    ({ languages } = await languagesOf(api));
+  }
+  const current = languages.find(each => each.isDefault && each.active);
+  if (current && current.code !== "en") {
+    await change(api, { kind: "setDefault", code: "en", confirmed: true });
+  }
+  for (const other of languages.filter(
+    each => each.active && each.code !== "en"
+  )) {
+    await change(api, { kind: "remove", code: other.code });
+  }
+  expect(await activeCodes(api)).toEqual(["en"]);
 }
 
 async function openLanguages(page: Page): Promise<Locator> {
@@ -164,6 +200,7 @@ test("a site of one language: English, the default, and where a second is added"
 }) => {
   // The positive control for this file: the server answers an unlocked list.
   expect((await languagesOf(page.request)).lockedByConfig).toBe(false);
+  await startWithEnglishAlone(page.request);
 
   const list = await openLanguages(page);
   await expect(list.getByRole("listitem")).toHaveCount(1);
