@@ -66,7 +66,7 @@ const SURFACE_CLASS: Record<LanguageChipState, string> = {
 };
 
 /** A chip's face: its state's mark and surface around `children`. Shared by a row and the key. */
-export function LanguageChipFace({
+function LanguageChipFace({
   state,
   children,
   className,
