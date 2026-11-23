@@ -9,7 +9,8 @@ exports[`a configuration that does not parse > names the file, line and column o
 `;
 
 exports[`a configuration with several problems > reports every problem with its path, the problem and the fix, then a count 1`] = `
-"✗ \`nextly.config.ts\` has 3 problems, so it cannot be used.
+"Reading the configuration...
+✗ \`nextly.config.ts\` has 3 problems, so it cannot be used.
   Why:  collections[0].slug: Collection address 'Blog Posts' must start with a lowercase letter and contain only lowercase letters, numbers, hyphens and underscores
           Fix: use a lowercase address, such as 'blog-posts'.
         collections[1].fields: Collection 'notes': fields 'body' and 'body' at the top level share the column 'body'. Rename one of them so each has its own column.
@@ -22,7 +23,8 @@ exports[`a configuration with several problems > reports every problem with its 
 `;
 
 exports[`a project with no configuration > is refused in one sentence, naming the paths looked in, -c and create-nextly-app 1`] = `
-"✗ No Nextly configuration file was found in <project>.
+"Reading the configuration...
+✗ No Nextly configuration file was found in <project>.
   Why:  Looked for \`nextly.config.ts\`, \`nextly.config.mts\`, \`nextly.config.js\` or \`nextly.config.mjs\` in the project folder, \`src/\` and \`config/\`.
   Next: Pass \`-c\` the path of your configuration file, or start a new project with \`npx create-nextly-app\`.
   Docs: https://nextlyhq.com/docs/cli/errors/config-missing  (CONFIG_MISSING)

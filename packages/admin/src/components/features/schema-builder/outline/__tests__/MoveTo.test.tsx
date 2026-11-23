@@ -157,14 +157,19 @@ describe("Move to…", () => {
     );
   });
 
-  it("offers only the field's own place today, saying why not the others", async () => {
+  it("offers a group today but not repeating rows, saying why", async () => {
     const { probe, user } = setup(TODAY);
     const dialog = await openMoveTo(user, "summary_a");
     const listed = places(dialog);
+    // A group's values move with the field: the save sends the move.
     const meta = listed.get("Meta (name in the database and API: meta)");
-    expect(meta?.disabled).toBe(true);
-    expect(noteOf(meta!)).toBe(
-      "Moving a field into or out of a group or repeating rows is not available yet."
+    expect(meta?.disabled).toBe(false);
+    const sections = listed.get(
+      "Sections (name in the database and API: sections)"
+    );
+    expect(sections?.disabled).toBe(true);
+    expect(noteOf(sections!)).toBe(
+      "Moving a saved field into or out of repeating rows is not available yet. It can move into and out of named groups."
     );
     // Where it already is, nothing is moved.
     const move = within(dialog).getByRole("button", { name: "Move" });

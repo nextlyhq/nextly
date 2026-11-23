@@ -1120,6 +1120,15 @@ async function registerServicesOnce(
     structure,
     "before migrations at start"
   );
+  // The cache handlers read expiries from this adapter's ledger, and writes
+  // made outside a request record theirs into it, for every instance. A
+  // stored page is served only once it is published, so it is published as
+  // soon as nothing this start does can expire a tag first: here, where the
+  // app does not opt into migrations at start, and after them where it does,
+  // below. The steps between change no content, and each of their round trips
+  // held the admin page's first byte.
+  const ledgerAt = ledgerPublicationOf(structure, config);
+  publishLedgerIfAt("before the schema reads", ledgerAt, adapter);
   await refuseUnmigratedDatabaseInBuildPhase(adapter);
 
   // The names a new database starts its field groups on, one value for the compile below and the
@@ -1178,11 +1187,10 @@ async function registerServicesOnce(
         },
       })
   );
-  // The cache handlers read expiries from this adapter's ledger, and writes
-  // made outside a request record theirs into it, for every instance. After
-  // the migrations at start, which record theirs through the ledger they lend
-  // themselves, on their own transaction, as `nextly migrate` does.
-  installTagExpiryLedger(adapter);
+  // After the migrations at start where they run, which record their
+  // expiries through the ledger they lend themselves, on their own
+  // transaction, as `nextly migrate` does.
+  publishLedgerIfAt("after migrations at start", ledgerAt, adapter);
 
   // A run that failed before it set the database up leaves it as it was.
   await refuseDatabaseNotSetUp(adapter, structure, "after migrations at start");
@@ -3128,6 +3136,35 @@ async function withStartRegistrationsSetAside<T>(
   } finally {
     container.restore(setAside);
   }
+}
+
+/** Where in a start the cache tag expiry ledger is published. */
+type LedgerPublication =
+  | "before the schema reads"
+  | "after migrations at start";
+
+/**
+ * Where this start publishes the ledger: after the migrations at start where
+ * the app opts into them, as they record their own expiries; before the
+ * schema reads otherwise, as nothing before the registry is read can expire a
+ * tag then.
+ */
+function ledgerPublicationOf(
+  structure: StartStructure,
+  config: NextlyServiceConfig
+): LedgerPublication {
+  return structure.migratesAtStart || config.db?.runMigrationsOnBoot === true
+    ? "after migrations at start"
+    : "before the schema reads";
+}
+
+/** Publishes `adapter`'s ledger when `at` is where this start publishes it. */
+function publishLedgerIfAt(
+  at: LedgerPublication,
+  publication: LedgerPublication,
+  adapter: DrizzleAdapter
+): void {
+  if (at === publication) installTagExpiryLedger(adapter);
 }
 
 /**

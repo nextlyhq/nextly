@@ -67,6 +67,7 @@ import {
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import { compileAndPublishExtensionSchema } from "../domains/schema/extension/publish";
 import { registerExtensionTables } from "../domains/schema/extension/register-tables";
+import { pluginCollectionSources } from "../domains/schema/migrate/plugin/plugin-collection-sources";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { hasRelationSwitches } from "../domains/schema/pipeline/companion-shape-switches";
@@ -110,6 +111,7 @@ import {
 import {
   isCodeOwned,
   mergeRegisteredCollectionsSafely,
+  withoutHandedToBuilder,
 } from "../domains/schema/pipeline/registered-collections";
 import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector";
 import type {
@@ -177,6 +179,11 @@ import { consoleLogger } from "../shared/types";
 import type { SanitizedNextlyConfig } from "../shared/types/config";
 import type { SingleHooks } from "../singles/config/types";
 
+import {
+  movesHeldBack,
+  reloadedEntities,
+  withMovesHeldBack,
+} from "./code-first-moves";
 import {
   type TypeChangedEntity,
   typeChangesHeldBack,
@@ -448,6 +455,7 @@ interface CollectionRegistrySurface {
       status?: boolean;
       localized?: boolean;
       source?: string;
+      configPath?: string | null;
     }>
   >;
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
@@ -2449,7 +2457,27 @@ async function applyReloadHolding(
     localized?: boolean;
     indexes?: DesiredCollection["indexes"];
   }> = [];
-  for (const c of newConfig.collections ?? []) {
+  // The registry's collections, read once: this filter and the merge below must see the same rows,
+  // or a read that failed only for the merge would leave a handed-over collection out of both.
+  // A registry that cannot be resolved or read rejects it, which the merge reports as before.
+  const registeredCollections = Promise.resolve()
+    .then(() => resolve("collectionRegistryService"))
+    .then(resolved => {
+      const registry = resolved as CollectionRegistrySurface | undefined;
+      return typeof registry?.getAllCollections === "function"
+        ? registry.getAllCollections()
+        : [];
+    });
+  // A collection a demote handed to the Schema Builder, while its entry is still in the
+  // configuration, is built from the Builder's registry row (merged in below), not from that entry.
+  // A registry that cannot be read leaves every entry in: the merge below reports it and falls back
+  // to the configuration alone, as before.
+  const configuredCollections = withoutHandedToBuilder(
+    newConfig.collections ?? [],
+    await registeredCollections.catch(() => []),
+    pluginCollectionSources(newConfig.plugins ?? [])
+  );
+  for (const c of configuredCollections) {
     if (!c.slug) continue;
     targets.push({
       slug: c.slug,
@@ -2972,6 +3000,17 @@ async function applyReloadHolding(
     undoOptimisticReloadWork();
     return;
   }
+  // A field that looks moved into or out of a group is held back too, whatever the consent: the
+  // push would delete its values or leave them where nothing reads them, and only migrate:create
+  // asks whether it is a move (`movesHeldBack`). Its reasons join any the entity's type change has.
+  heldBack = withMovesHeldBack(
+    heldBack,
+    movesHeldBack([
+      ...reloadedEntities("collection", desiredCollections),
+      ...reloadedEntities("single", desiredSingles),
+      ...reloadedEntities("fieldGroup", desiredComponents),
+    ])
+  );
   for (const { kind, slug, reasons } of heldBack) {
     logger?.warn(
       `[Nextly HMR] Code-first change for ${KIND_NOUN[kind]}'${slug}' was not applied: ${reasons.join(" ")}`
@@ -3230,17 +3269,11 @@ async function applyReloadHolding(
     desiredCollections,
     await mergeRegisteredCollectionsSafely(
       desiredCollections,
-      async () => {
-        const collectionRegistry = (await resolve(
-          "collectionRegistryService"
-        )) as CollectionRegistrySurface;
-        return typeof collectionRegistry?.getAllCollections === "function"
-          ? withoutRemovedFromCode(
-              await collectionRegistry.getAllCollections(),
-              declaredCollections
-            )
-          : [];
-      },
+      async () =>
+        withoutRemovedFromCode(
+          await registeredCollections,
+          declaredCollections
+        ),
       logger
         ? { warn: (m: string) => logger.warn(`[Nextly HMR] ${m}`) }
         : undefined

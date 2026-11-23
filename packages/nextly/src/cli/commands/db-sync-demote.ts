@@ -10,22 +10,24 @@ import { createHash } from "node:crypto";
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { DEMOTED_FROM_CODE } from "../../domains/collections/services/collection-registry-service";
 import {
   toCodeFirstCollectionConfig,
   type CodeFirstCollectionSource,
 } from "../../domains/collections/services/collection-sync-service";
 import { assertNoMigrationInFlight } from "../../domains/field-groups/migration/sync-guard";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
+import { pluginCollectionSources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
+import { DEMOTED_FROM_CODE } from "../../domains/schema/pipeline/demoted-from-code";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveCollectionTableName } from "../../domains/schema/utils/resolve-table-name";
 import type { DynamicCollectionInsert } from "../../schemas/dynamic-collections/types";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import { reportDryRun, type DryRunPlan } from "../dry-run";
-import { exitWithError } from "../errors";
+import { CliError, exitWithError } from "../errors";
 import {
   demoteCollectionNotFound,
+  demotePluginCollection,
   syncConfirmationRequired,
 } from "../errors/areas/sync";
 import type { CommandContext } from "../program";
@@ -199,6 +201,9 @@ function demotedWrite(
         // The table the record already names, where its entries are: a demote moves no table,
         // so a `dbName` the configuration changed since is not written over it.
         tableName: current.tableName,
+        // The timestamps setting the record already holds, for the same reason: it matches the
+        // table, which a demote adds no column to, whatever the configuration says since.
+        timestamps: current.timestamps,
         source: "ui",
         locked: false,
         schemaHash: calculateSchemaHash(options.fields),
@@ -373,21 +378,44 @@ async function askToDemote(slug: string, code: string): Promise<boolean> {
 }
 
 /**
- * The collection `nextly.config.ts` defines under `slug`, which a demote moves, or undefined when it
- * defines none, which a demote refuses. A configuration that cannot be loaded ends the run.
+ * The collection a demote of `slug` moves: the app's own, as `config` defines it. Refused when the
+ * configuration defines none under `slug`, or when a plugin contributes `slug` (by the rule a start
+ * gives a collection its origin by, `pluginCollectionSources`): a plugin registers its collection
+ * again at every start, so it has no hand-over to make, and under the address of a collection the
+ * Schema Builder holds a demote would mark that record as handed over from code.
+ */
+export function demotedCollectionIn(
+  slug: string,
+  config: {
+    collections?: readonly unknown[];
+    plugins?: Parameters<typeof pluginCollectionSources>[0];
+  }
+): DemotedCollection | CliError {
+  const plugin = pluginCollectionSources(config.plugins ?? []).get(slug);
+  if (plugin !== undefined) {
+    return demotePluginCollection(slug, plugin.slice("plugin:".length));
+  }
+  const collections = (config.collections ?? []) as DemotedCollection[];
+  return (
+    collections.find(c => c.slug === slug) ?? demoteCollectionNotFound(slug)
+  );
+}
+
+/**
+ * The collection `nextly.config.ts` defines under `slug`, which a demote moves, or the refusal of
+ * a demote of `slug` (`demotedCollectionIn`). A configuration that cannot be loaded ends the run.
  */
 async function findDemotedCollection(
   slug: string,
   context: CommandContext
-): Promise<DemotedCollection | undefined> {
+): Promise<DemotedCollection | CliError> {
   let config: Awaited<ReturnType<typeof loadNextlyConfig>>["config"];
   try {
     config = (await loadNextlyConfig(context.cwd)).config;
   } catch (err) {
     exitWithError(context.logger, err);
   }
-  const collections = (config.collections ?? []) as DemotedCollection[];
-  return collections.find(c => c.slug === slug);
+  return demotedCollectionIn(slug, config);
 }
 
 /**
@@ -402,11 +430,8 @@ export async function runDemoteDryRun(
 ): Promise<void> {
   const { logger } = context;
   const collection = await findDemotedCollection(slug, context);
-  if (!collection) {
-    reportDryRun(logger, {
-      changes: [],
-      refusals: [demoteCollectionNotFound(slug).what],
-    });
+  if (collection instanceof CliError) {
+    reportDryRun(logger, { changes: [], refusals: [collection.what] });
     return;
   }
   const opened = await openCollectionRegistry(logger, true);
@@ -434,8 +459,8 @@ export async function runDemote(
 
   // 1. Load user config so we can find the target collection.
   const collection = await findDemotedCollection(slug, context);
-  if (!collection) {
-    exitWithError(logger, demoteCollectionNotFound(slug));
+  if (collection instanceof CliError) {
+    exitWithError(logger, collection);
   }
 
   // Its confirmation cannot be asked and `--yes` did not answer it: stop

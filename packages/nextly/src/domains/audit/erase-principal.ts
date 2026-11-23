@@ -29,7 +29,6 @@ import {
   eq,
   isNotNull,
   isNull,
-  like,
   or,
   type Column,
   type Table,
@@ -57,6 +56,7 @@ import {
 } from "../email/erase-recipient";
 
 import { adapterDialect, rowLockServer } from "./audit-log-writer";
+import { pluginAuditKinds } from "./core-dotted-kinds";
 import {
   markHoldsDeletionLock,
   PRINCIPAL_DIGEST_KEY_META_KEY,
@@ -452,13 +452,14 @@ export async function erasePrincipalAuditRows(
 
   // A plugin's metadata may name either party; core's own rows carry core's
   // fixed projection, which names nobody. A plugin's kind always carries its
-  // `<slug>.` prefix, and no core kind contains a dot.
+  // `<slug>.` prefix, and the few core kinds with a dot are listed, so
+  // `pluginAuditKinds` tells the two apart as the writer does.
   await db
     .update(auditLog)
     .set({ metadata: null })
     .where(
       and(
-        like(auditLog.kind, "%.%"),
+        pluginAuditKinds(auditLog.kind),
         or(asActor, asTarget),
         isNotNull(auditLog.metadata)
       )

@@ -647,7 +647,13 @@ export function planEntityMoves(given: {
   localized: boolean;
   table: string;
   dialect: SupportedDialect;
-  /** Which generator made the table: a field group's makes its columns its own way. */
+  /**
+   * What the entity is, which decides its table's own columns: a field group's table keeps its
+   * parent's pointer and order and stores a many-to-many on its row, a Single's keeps no owner,
+   * whichever generator made it.
+   */
+  kind: "collection" | "single" | "fieldGroup";
+  /** Which generator made the table, which decides each field's column (`ColumnOrigin`). */
   builtBy?: ColumnOrigin;
   /** The entity's admin settings after the save, which name top-level fields. */
   admin?: AdminReferences;
@@ -713,10 +719,10 @@ function asStoredByRow<
   A extends {
     before: readonly FieldDefinition[];
     after: readonly FieldDefinition[];
-    builtBy?: ColumnOrigin;
+    kind: "collection" | "single" | "fieldGroup";
   },
 >(given: A): A {
-  return given.builtBy === "fieldGroup"
+  return given.kind === "fieldGroup"
     ? {
         ...given,
         before: asFieldGroupRow(given.before),
@@ -774,21 +780,25 @@ function asFieldGroupRow(
 
 /**
  * The system columns the table holds before the save and after it, `title` and `slug` among them
- * while no field takes their name. A field group's table keeps its own columns (`_parent_id`,
- * `_order`...), none a field can take, so no move onto or off one of them is in question there.
+ * while no field takes their name, and `created_by` on a collection's alone. A field group's table
+ * keeps its own columns (`_parent_id`, `_order`...), none a field can take, so no move onto or off
+ * one of them is in question there. Asked of the entity's kind, not of the generator that made the
+ * table: a code-first field group's table is a field group's all the same.
  */
 function systemColumnSets(args: {
   before: readonly FieldDefinition[];
   after: readonly FieldDefinition[];
   dialect: SupportedDialect;
+  kind: "collection" | "single" | "fieldGroup";
   builtBy?: ColumnOrigin;
 }): { before: Set<string>; after: Set<string> } {
   const systemOf = (fields: readonly FieldDefinition[]): Set<string> =>
-    args.builtBy === "fieldGroup"
+    args.kind === "fieldGroup"
       ? new Set()
       : new Set(
           systemColumnsForFields(fields, args.dialect, {
-            builtBy: "collection",
+            builtBy: args.builtBy ?? "collection",
+            isSingle: args.kind === "single",
           }).map(column => column.name)
         );
   return { before: systemOf(args.before), after: systemOf(args.after) };

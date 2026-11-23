@@ -265,6 +265,8 @@ function buildNextlyInstance(
     releases: directAPI.releases,
     // A subject's content events, forwarded for the same reason.
     contentEvents: directAPI.contentEvents,
+    // A collection's private files, the checked download, for the same reason.
+    files: directAPI.files,
     // A person's own notices, forwarded for the same reason.
     notices: directAPI.notices,
     // Review state under a workflow, and the email delivery log, forwarded

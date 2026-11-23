@@ -74,7 +74,7 @@ export interface StartUploadBody {
 }
 
 /** The collection whose files are asked for, and its policy. */
-interface FilesCollection {
+export interface FilesCollection {
   slug: string;
   policy: FilesPolicy;
 }
@@ -84,7 +84,7 @@ interface FilesCollection {
  * that names no collection with files: the same answer a missing file gets,
  * so the routes do not say which collections exist.
  */
-function filesCollection(slug: string): FilesCollection {
+export function filesCollection(slug: string): FilesCollection {
   const config = container.get<{
     collections?: ReadonlyArray<{
       slug: string;
@@ -102,7 +102,7 @@ function filesCollection(slug: string): FilesCollection {
   return { slug, policy: resolveFilesPolicy(found.files) };
 }
 
-function collections(): CollectionsHandler {
+export function collections(): CollectionsHandler {
   return container.get<CollectionsHandler>("collectionsHandler");
 }
 
@@ -155,7 +155,7 @@ function judgeClaim(
 }
 
 /** The services' options for a checked write or read made as `caller`. */
-function checkedAs(caller: FileCaller): {
+export function checkedAs(caller: FileCaller): {
   overrideAccess: false;
   user?: FileCallerUser;
   authenticatedScope?: FileCallerScope;
@@ -281,7 +281,7 @@ export async function startUpload(
 }
 
 /** An entry of a files collection, as trusted code reads it. */
-interface FileEntry {
+export interface FileEntry {
   id: string;
   filename?: unknown;
   mimeType?: unknown;
@@ -294,8 +294,15 @@ interface FileEntry {
   createdAt?: unknown;
 }
 
-/** The entry `id` of `slug` as trusted code reads it, or `null`. */
-async function fileEntry(slug: string, id: string): Promise<FileEntry | null> {
+/**
+ * The entry `id` of `slug` as trusted code reads it, or `null`. Bound to
+ * `id`: a read a hook pointed at another entry is `null`, and the entry
+ * carries its stored id, whatever id a read hook presents it under.
+ */
+export async function fileEntry(
+  slug: string,
+  id: string
+): Promise<FileEntry | null> {
   const found = await collections().getEntry({
     collectionName: slug,
     entryId: id,
@@ -309,7 +316,9 @@ async function fileEntry(slug: string, id: string): Promise<FileEntry | null> {
       collection: slug,
     });
   }
-  return (found.data as FileEntry | null) ?? null;
+  const data = found.data as FileEntry | null;
+  if (data === null || found.resolvedEntryId !== id) return null;
+  return { ...data, id };
 }
 
 /** The one refusal for an upload that is missing or not the caller's. */
@@ -317,6 +326,34 @@ function uploadNotFound(slug: string, reason: string): never {
   throw NextlyError.notFound({
     logContext: { reason, collection: slug },
   });
+}
+
+/**
+ * The key a confirmed file is kept under, derived from its upload's key and
+ * the checked bytes' own hash: in the collection's folder, so the store owns
+ * it, and never the upload key, so the upload link cannot write it. Derived
+ * rather than drawn at random, so two confirms of one upload that overlap
+ * with the same bytes write one object and leave no copy nothing points at;
+ * and keyed by the bytes too, so confirms that read different bytes (the
+ * link was used again between their reads) never overwrite each other. The
+ * entry's key and hash are written together, so they always name one copy.
+ */
+function confirmedKeyFor(
+  files: PrivateFileStore,
+  uploadKey: string,
+  sha256: string
+): string {
+  const hex = createHash("sha256")
+    .update(`${uploadKey}\n${sha256}`)
+    .digest("hex");
+  const id = [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join("-");
+  return `${files.prefix}${id}`;
 }
 
 /** What a confirm answers about a ready file. Never where it is stored. */
@@ -443,6 +480,10 @@ export async function completeUpload(
 
   const head = await files.head(key);
   if (head === null) {
+    // A confirm of the same upload that finished meanwhile moved the bytes
+    // to the confirmed key: answered as that confirm was.
+    const now = await fileEntry(slug, id);
+    if (now?.fileStatus === "ready") return confirmed(now);
     // Nothing has arrived yet: the entry stays pending, so the browser may
     // send the bytes and confirm again within the wait.
     throw NextlyError.validation({
@@ -462,7 +503,12 @@ export async function completeUpload(
     throw rejectedError(slug, "size-mismatch");
   }
   const bytes = await storedBytes(files, key, collection.policy.maxSize);
-  if (bytes === null) uploadNotFound(slug, "upload-bytes-vanished");
+  if (bytes === null) {
+    // As above: another confirm of this upload finished first.
+    const now = await fileEntry(slug, id);
+    if (now?.fileStatus === "ready") return confirmed(now);
+    uploadNotFound(slug, "upload-bytes-vanished");
+  }
   if (bytes === "too-large" || bytes.length !== claimedSize) {
     await rejectFile(files, slug, entry, "size-mismatch");
     throw rejectedError(slug, "size-mismatch");
@@ -477,11 +523,12 @@ export async function completeUpload(
   // link cannot write: the link stays usable until it expires, and a second
   // PUT through it must never replace a file already confirmed. The entry is
   // pointed at the new key before the upload's own object is removed.
-  const finalKey = files.newKey();
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const finalKey = confirmedKeyFor(files, key, sha256);
   await files.put(finalKey, bytes, { mimeType: String(entry.mimeType) });
   await writeFileFields(slug, entry.id, {
     fileStatus: "ready",
-    sha256: createHash("sha256").update(bytes).digest("hex"),
+    sha256,
     storageKey: finalKey,
   });
   await files.delete(key);
