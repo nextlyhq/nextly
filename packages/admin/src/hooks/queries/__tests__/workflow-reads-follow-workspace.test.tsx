@@ -41,7 +41,7 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 
 import { reviewKeys, useReviewState } from "../useReviewState";
-import { useWaitingScope } from "../useWaitingForMe";
+import { useWaitingScope, waitingKeys } from "../useWaitingForMe";
 
 const post = {
   scopeKind: "collection" as const,
@@ -133,6 +133,22 @@ describe("workflow reads follow the workspace answer", () => {
     renderHook(() => useWaitingScope(), { wrapper });
     await waitFor(() => expect(reviewSpy).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(scopeSpy).toHaveBeenCalledTimes(1));
+  });
+
+  it("reads a waiting scope held from before the last workflow was detached as nothing waiting", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    client.setQueryData(waitingKeys.scope(), { reviews: true, stages: 2 });
+    workspace.entities = [];
+    const { result } = renderHook(() => useWaitingScope(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    });
+    expect(result.current.data).toEqual({ reviews: false, stages: 0 });
+    await settle();
+    expect(scopeSpy).not.toHaveBeenCalled();
   });
 
   it("asks the waiting scope only where a workflow holds something", async () => {
