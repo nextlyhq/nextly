@@ -85,6 +85,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
           preCleanupExecutor: noopPreCleanupExecutor,
           migrationJournal: noopMigrationJournal,
           notifier: noopNotifier,
+          adapter: undefined,
         },
         {
           _kitOverride: {
@@ -119,6 +120,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
       preCleanupExecutor: noopPreCleanupExecutor,
       migrationJournal: noopMigrationJournal,
       notifier: noopNotifier,
+      adapter: undefined,
     });
 
     const result = await pipeline.apply({
@@ -202,6 +204,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
       preCleanupExecutor: noopPreCleanupExecutor,
       migrationJournal: noopMigrationJournal,
       notifier: noopNotifier,
+      adapter: undefined,
     });
 
     const result = await pipeline.apply({
@@ -292,6 +295,7 @@ describe("PushSchemaPipeline integration — PostgreSQL", () => {
         preCleanupExecutor: noopPreCleanupExecutor,
         migrationJournal: noopMigrationJournal,
         notifier: noopNotifier,
+        adapter: undefined,
       },
       {
         _kitOverride: {

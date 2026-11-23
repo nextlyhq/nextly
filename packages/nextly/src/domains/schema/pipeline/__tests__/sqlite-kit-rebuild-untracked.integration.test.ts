@@ -128,6 +128,7 @@ function push() {
     preCleanupExecutor: noopPreCleanupExecutor,
     migrationJournal: noopMigrationJournal,
     notifier: noopNotifier,
+    adapter: undefined,
   }).apply({
     desired: {
       collections: {

@@ -548,6 +548,19 @@ export type { FieldConfig, CollectionConfig } from "nextly";
 export { addressableFields } from "nextly";
 
 /**
+ * The dates every entry of a collection or Single holds by itself, by the names
+ * responses publish them under: `createdAt` and `updatedAt`, and
+ * `firstPublishedAt` where the type has the Draft/Published lifecycle
+ * (`statusLifecycle`). They are not among a type's declared fields, so a plugin
+ * that lets a person pick any field of an entry to read a value out of offers
+ * these beside them, named by core's own declaration rather than a list of
+ * its own.
+ *
+ * @experimental
+ */
+export { entryDateFieldNames } from "nextly";
+
+/**
  * What a caller passes to control the walk, and what it emits.
  *
  * `descendInto` chooses which unnamed containers are transparent, and the

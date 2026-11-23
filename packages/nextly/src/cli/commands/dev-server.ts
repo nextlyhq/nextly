@@ -798,6 +798,8 @@ export async function performAutoSync(
         // F10 PR 3: db-sync CLI applies print a terminal box + write
         // the NDJSON line. Same singleton across CLI invocations.
         notifier: getProductionNotifier(),
+        // The adapter `db` belongs to: a SQLite push runs in its transaction.
+        adapter: drizzleAdapter,
       });
       return pipeline.apply({
         desired: desiredArg,

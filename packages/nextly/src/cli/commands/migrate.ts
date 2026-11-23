@@ -49,6 +49,12 @@ import {
   filesWithinStep,
   stepContinuedNotice,
 } from "../../domains/i18n/migration/step-windows";
+import { databaseIdentity } from "../../domains/schema/builder-save/saved-database";
+import {
+  recheckBeforeFiles,
+  settleAfterMigrate,
+  settleBeforeMigrate,
+} from "../../domains/schema/builder-save/settle-at-migrate";
 import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
 import {
   runUnitInTries,
@@ -736,11 +742,14 @@ export async function runMigrate(
     // Config and the Builder manifest, merged as generation merges them. The
     // drift check needs the derived-table set, and assembling it here from the
     // config alone missed Builder entities and plugin extends.
-    const resolvedSchema = await resolveDeclaredSchema({
-      projectRoot: cwd,
-      config: configResult.config,
-      deferredExtends: configResult.deferredExtends,
-    });
+    // Read again where the run's settle of a left Builder save changes the project (below).
+    const resolveDeclared = () =>
+      resolveDeclaredSchema({
+        projectRoot: cwd,
+        config: configResult.config,
+        deferredExtends: configResult.deferredExtends,
+      });
+    let resolvedSchema = await resolveDeclared();
 
     // Phase 0: a database that still keeps its migration records the way an
     // earlier release did has them moved into `nextly_schema_events` first.
@@ -780,15 +789,19 @@ export async function runMigrate(
     // What the declared schema names, with the ledger's old Builder marks:
     // the one value every reader of the folder below reads it through.
     // `migrateCore` reads the marks again under the lock.
-    const { declared } = await withOldBuilderMarks({
-      adapter,
-      db,
-      dialect,
-      declared: {
-        junctions: resolvedSchema.junctionsByEntity,
-        tables: resolvedSchema.declaredTables,
-      },
-    });
+    const markedDeclared = async () =>
+      (
+        await withOldBuilderMarks({
+          adapter,
+          db,
+          dialect,
+          declared: {
+            junctions: resolvedSchema.junctionsByEntity,
+            tables: resolvedSchema.declaredTables,
+          },
+        })
+      ).declared;
+    let declared = await markedDeclared();
 
     const serverConstructs = (
       adapter as unknown as DrizzleAdapter
@@ -852,6 +865,46 @@ export async function runMigrate(
     // backup nobody confirmed is refused here, before anything changes.
     await storedData.confirmBeforeSchemaChanges(options.step).catch(fail);
 
+    // The consent a deleting file needs, read from the flag and the environment before anything
+    // below changes the project or the database: a value the command refuses ends the run here.
+    const lineConsent = orFail(() => commandLineConsent(options, logger), fail);
+
+    // Clear a stale lock first when --force-unlock is passed (e.g. left by a
+    // crashed prior run), before the settle below takes the lock. Already
+    // cleared where the run moved an earlier release's records, above.
+    await clearStaleLock();
+
+    // A Builder save left part-way is settled first, as a development start settles it: its
+    // files recorded applied, or withdrawn with its definition put back, and one made outside
+    // development judged by its files. What cannot be settled refuses the run before its first
+    // file. A save left pending has its remaining files applied by this run.
+    const saveSettle = {
+      adapter: adapter as unknown as DrizzleAdapter,
+      projectRoot: cwd,
+      migrationsDir: appMigrationsDir,
+      // The database this run reaches, so a marker of a save against another one stays.
+      database: databaseIdentity(
+        dbValidation.databaseUrl,
+        configResult.config.db.postgres?.schema
+      ),
+      // The run's busy-table bounds, from its flags, for the settle's lock too.
+      busyBounds: bounds,
+      ...(configResult.config.db.migrateLockTtlSeconds === undefined
+        ? {}
+        : { lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds }),
+      logger: {
+        info: (m: string) => logger.info(m),
+        warn: (m: string) => logger.warn(m),
+      },
+    };
+    const leftSaves = await settleBeforeMigrate(saveSettle).catch(fail);
+    // A settle that withdrew a save's files or put its definition back has changed what the
+    // project declares: the run reads it again, as it now stands, before planning anything.
+    if (leftSaves.changed) {
+      resolvedSchema = await resolveDeclared();
+      declared = await markedDeclared();
+    }
+
     // The retired-table cleanup has flags of its own: removing those tables
     // and losing rows still in them are each a separate decision from
     // accepting a core schema change. Read here so all three live at one edge.
@@ -861,11 +914,6 @@ export async function runMigrate(
     const dz = adapter as unknown as DrizzleAdapter & {
       tableExists: (n: string) => Promise<boolean>;
     };
-
-    // Clear a stale lock first when --force-unlock is passed (e.g. left by a
-    // crashed prior run), then proceed with the normal migrate. Already
-    // cleared where the run moved an earlier release's records, above.
-    await clearStaleLock();
 
     // Every entity as the registry records it before any file applies, so the companion pass
     // after the migrations can tell a field this run newly translates from one translated before.
@@ -886,6 +934,8 @@ export async function runMigrate(
     let hooksFailed: NextlyError | null = null;
     try {
       const { applied, pluginModulesApplied, metadata } = await migrateCore({
+        // Asked again under the run's lock, before its first file.
+        recheckSaveRecords: recheckBeforeFiles(saveSettle, leftSaves),
         extensionSchema,
         dialect,
         db,
@@ -941,7 +991,7 @@ export async function runMigrate(
         // by the run's one consent (`--accept-data-loss`, with
         // NEXTLY_ALLOW_CORE_DESTRUCTIVE honoured as deprecated for Nextly's own
         // tables), never by a boolean of its own.
-        ...commandLineConsent(options, logger),
+        ...lineConsent,
         dropRetiredAuthTables,
         allowDropNonEmptyRetired,
         ensureLedger: () => ensureSchemaEventsTable(dz),
@@ -979,6 +1029,15 @@ export async function runMigrate(
        * registry work it had just measured was still owed.
        */
       reportMetadataOutcome(metadata, logger);
+
+      // A save left pending, settled again once this run has applied its remaining files. The run
+      // has applied them by now, so a settle that fails is said, never the run's answer: its record
+      // stays, and the next run settles it.
+      await settleAfterMigrate(saveSettle, leftSaves).catch((error: unknown) =>
+        logger.warn(
+          `The migrations applied, but settling the Builder save they finished failed (${error instanceof Error ? error.message : String(error)}). Its record stays, and the next \`nextly migrate\` settles it.`
+        )
+      );
 
       // Both streams count: a run that executed only plugin modules did
       // migrate, and saying "nothing to migrate" after it is untrue.
@@ -1425,6 +1484,13 @@ export interface MigrateCoreDeps {
    * and its own push brings the database to it.
    */
   refuseUnwrittenChanges?: () => Promise<void>;
+  /**
+   * Asked under the lock, before anything changes the database: a Builder save left part-way
+   * refuses the run (`refuseWhileSaveInProgress`). `nextly migrate` passes it with the saves its
+   * own settle left pending, whose files the run applies; a production start passes it alone.
+   * Not passed, nothing is asked.
+   */
+  recheckSaveRecords?: () => Promise<void>;
   /**
    * Refuse, reading only, a database that lacks a table or column the newest
    * applied app snapshot records (`database-behind-migrations.ts`), naming
@@ -3183,6 +3249,9 @@ export async function migrateCore(
     deps.adapter as unknown as DrizzleAdapter,
     deps.dialect,
     async () => {
+      // A Builder save left part-way first, on the records as they stand now that no other run
+      // changes them: a save that started while this run waited for the lock refuses it.
+      await deps.recheckSaveRecords?.();
       // Before anything changes the database, the core reconcile included:
       // a deploy refused after the core reconcile would leave core's tables
       // at a release that never ran.
