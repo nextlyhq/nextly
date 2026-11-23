@@ -276,7 +276,9 @@ function asUsed(
  */
 export function configurationProblems(
   declared: ConfigEntities,
-  effective?: ConfigEntities
+  effective?: ConfigEntities,
+  /** `acrossEntities: false` leaves the rules across entities out: each entity alone is judged. */
+  options: { acrossEntities?: boolean } = {}
 ): ConfigProblem[] {
   const collections = asUsed(
     "collections",
@@ -358,6 +360,7 @@ export function configurationProblems(
     });
   }
   // The rules across entities, judged over the entities as the commands use them.
+  if (options.acrossEntities === false) return problems;
   for (const problem of crossEntityProblems({
     collections,
     singles,
@@ -366,4 +369,69 @@ export function configurationProblems(
     problems.push({ ...problem, declaredByDefine: false, crossEntity: true });
   }
   return problems;
+}
+
+/**
+ * What the Builder saves that the code rules refuse, so its definitions are not refused for it:
+ * a collection with no fields of its own (its system fields come at runtime), and an address the
+ * address rule judges (`shared/address-rule`), which the Builder's save and the migrate commands
+ * ask only of a new or changed address, as they know which are; one that already exists keeps
+ * working. A slug that is missing or not a string is still reported: the Builder never writes one.
+ */
+const BUILDER_ALLOWS: ReadonlySet<string> = new Set([
+  "FIELDS_EMPTY",
+  "SLUG_INVALID_FORMAT",
+  "SLUG_TOO_LONG",
+  "SLUG_RESERVED",
+  "SLUG_SQL_KEYWORD",
+  "SLUG_SAME_SNAKE_CASE",
+]);
+
+/** The Builder's definitions, as the definition file holds them. */
+export interface BuilderDefinitionEntities {
+  collections?: readonly unknown[];
+  singles?: readonly unknown[];
+  components?: readonly unknown[];
+}
+
+/**
+ * Every problem in the Builder's definitions that the same per-entity rules find, each at its
+ * place in the definition file (`ui-schema.json collections[0].slug`), except what the Builder
+ * itself saves (`BUILDER_ALLOWS`). An entry a code-first entity of its kind shadows is not
+ * judged: the code definition is the one used, as the Builder merge decides (one slug, one kind).
+ */
+export function builderDefinitionProblems(
+  builder: BuilderDefinitionEntities,
+  code: ConfigEntities,
+  definitionFile: string
+): ConfigProblem[] {
+  const file = definitionFile.replace(/^\.\//, "");
+  const lists = {
+    collections: builder.collections ?? [],
+    singles: builder.singles ?? [],
+    fieldGroups: builder.components ?? [],
+  };
+  const codeSlugs = {
+    collections: new Set((code.collections ?? []).map(slugOf)),
+    singles: new Set((code.singles ?? []).map(slugOf)),
+    fieldGroups: new Set((code.fieldGroups ?? []).map(slugOf)),
+  };
+  // Each entry is judged in place, so a problem keeps its index in the file; one a code-first
+  // entity shadows has its problems set aside.
+  const shadowed = (path: string): boolean => {
+    const match = /^(collections|singles|fieldGroups)\[(\d+)\]/.exec(path);
+    if (match === null) return false;
+    const kind = match[1] as keyof typeof lists;
+    const slug = slugOf(lists[kind][Number(match[2])]);
+    return slug !== undefined && codeSlugs[kind].has(slug);
+  };
+  return configurationProblems(lists, undefined, { acrossEntities: false })
+    .filter(
+      problem => !BUILDER_ALLOWS.has(problem.code) && !shadowed(problem.path)
+    )
+    .map(problem => ({
+      ...problem,
+      // The file names field groups `components`.
+      path: `${file} ${problem.path.replace(/^fieldGroups\[/, "components[")}`,
+    }));
 }

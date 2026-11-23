@@ -90,7 +90,10 @@ import {
   CONFIG_SEARCH_DIRS,
   findConfigFile,
 } from "../../shared/lib/config-file";
-import { configurationProblems } from "../../shared/lib/config-problems";
+import {
+  builderDefinitionProblems,
+  configurationProblems,
+} from "../../shared/lib/config-problems";
 import { consoleLogger } from "../../shared/types";
 
 import { bundleAndRequire } from "./config-bundler";
@@ -310,6 +313,14 @@ export interface LoadConfigOptions {
    * @default "defaults"
    */
   missing?: "defaults" | "refuse";
+
+  /**
+   * What a problem in the Builder's definitions (`builderDefinitionProblems`) does: `"refuse"`
+   * reports it with the configuration's, and the load is refused; `"warn"` logs each and the load
+   * goes on, as for a running site. By default it refuses where the caller refuses a missing
+   * configuration, as a command that reads the app's entities does, and warns otherwise.
+   */
+  builderDefinitions?: "refuse" | "warn";
 }
 
 /**
@@ -764,6 +775,8 @@ async function loadConfigInternal(
     clearFieldTypes();
 
     // The Builder's field groups, set by the plugin block, which reads them anyway.
+    // The Builder's entities, once a road below has read them, judged with the configuration's.
+    let builderEntitiesRead: BuilderEntities | undefined;
     let builderFieldGroups:
       | {
           stored: NonNullable<BuilderEntities["components"]>;
@@ -856,6 +869,7 @@ async function loadConfigInternal(
         cwd,
         config.db?.uiSchemaFile
       );
+      builderEntitiesRead = builderEntities;
       // One slug, one kind, now that the Builder's entities are readable: the
       // fold could not see them, and the runtime boot makes the same check
       // against the registry rows (register.ts), so the two paths agree (D50).
@@ -920,6 +934,7 @@ async function loadConfigInternal(
         cwd,
         config.db?.uiSchemaFile
       );
+      builderEntitiesRead = builderEntities;
       const builderSlugs = new Set(builderCollectionSlugs(builderEntities));
       const unknownTarget = collectUnresolvedRelationTargets(
         config as unknown as NextlyServiceConfig
@@ -946,7 +961,33 @@ async function loadConfigInternal(
     // field's type is judged against them.
     // The app's own entities, in the form the plugins' setups left them, placed where the app
     // declared them; a plugin's contributions keep the checks of their own type.
-    const problems = configurationProblems(appConfig, config);
+    const problems: ReturnType<typeof configurationProblems> =
+      configurationProblems(appConfig, config);
+    // The Builder's definitions, by the same rules, where the file could be read: reported with
+    // the configuration's for a command that reads the entities, warned of for a running site.
+    builderEntitiesRead ??= await readBuilderEntities(
+      cwd,
+      config.db?.uiSchemaFile
+    );
+    if (builderEntitiesRead !== UNREAD_BUILDER_ENTITIES) {
+      const builderProblems = builderDefinitionProblems(
+        builderEntitiesRead,
+        config,
+        config.db?.uiSchemaFile ?? "ui-schema.json"
+      );
+      const refuses =
+        (options.builderDefinitions ??
+          (options.missing === "refuse" ? "refuse" : "warn")) === "refuse";
+      if (refuses) {
+        problems.push(...builderProblems);
+      } else {
+        for (const problem of builderProblems) {
+          consoleLogger.warn(
+            `[Nextly] Problem in the Builder's definitions at ${problem.path}: ${problem.message}`
+          );
+        }
+      }
+    }
     if (problems.length > 0) {
       throw NextlyError.validation({
         errors: problems,

@@ -288,3 +288,80 @@ describe("a configuration cached from one project, asked for by a caller that ke
     expect(loaded.config.collections ?? []).toEqual([]);
   });
 });
+
+describe("a Builder definition with a problem the same rules refuse", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // Judged as the configuration's entities are, at its place in the definition file. A command
+  // that reads the entities refuses it with the rest; a running site is told of it and goes on.
+  const withDefinitions = () => {
+    const cwd = project();
+    writeFileSync(
+      join(cwd, "ui-schema.json"),
+      JSON.stringify({
+        collections: [
+          {
+            slug: "cases",
+            fields: [
+              { name: "body", type: "text" },
+              { name: "body", type: "text" },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+    return cwd;
+  };
+
+  it("is refused, at its place in the file, by a command that reads the entities", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+
+    const refused = await loadConfig({
+      cwd: withDefinitions(),
+      missing: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path);
+    expect(paths).toEqual(["ui-schema.json collections[0].fields"]);
+  });
+
+  it("is warned of, and the configuration loads, where the caller keeps the default", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const warned: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation((...parts: unknown[]) => {
+      warned.push(parts.map(String).join(" "));
+    });
+
+    const loaded = await loadConfig({ cwd: withDefinitions() });
+
+    expect(loaded.configPath).toBeDefined();
+    expect(
+      warned.some(line =>
+        line.includes("ui-schema.json collections[0].fields")
+      ),
+      warned.join("\n")
+    ).toBe(true);
+  });
+});

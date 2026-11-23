@@ -2058,6 +2058,8 @@ async function applyReloadHolding(
     // own reload keeps the default, as a site without one starts today.
     const result = await loadConfig({
       missing: opts?.atStart === true ? "defaults" : "refuse",
+      // A running site: a problem in the Builder's definitions is warned of, not refused.
+      builderDefinitions: "warn",
     });
     loadedConfig = result.config;
     // Watch exactly what this read: the config and every file it imported. Set

@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 import { defineCollection } from "../../../collections/config/define-collection";
 import { setupTransformerInput } from "../../../plugins/plugin-consent";
 import { defineSingle } from "../../../singles/config/define-single";
-import { configurationProblems } from "../config-problems";
+import {
+  builderDefinitionProblems,
+  configurationProblems,
+} from "../config-problems";
 
 describe("a bad Single and a bad collection, each through its define function", () => {
   it("are both reported, neither stopping the import", () => {
@@ -363,5 +366,76 @@ describe("a define* collection whose index names its system slug", () => {
     };
 
     expect(configurationProblems(declared)).toEqual([]);
+  });
+});
+
+describe("the Builder's definitions, judged with the same rules", () => {
+  // Each Builder entity no code-first entity shadows is judged as a configuration's entity is,
+  // at its place in the definition file, except where the Builder itself allows what the code
+  // rules refuse: a collection with no fields, and an address that is the address rule's (judged
+  // where an address is new, by the roads that know which are).
+  const text = (name: string) => ({ name, type: "text" });
+
+  it("reports a problem at its place in the definition file", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [{ slug: "cases", fields: [text("body"), text("body")] }],
+        singles: [],
+        components: [],
+      },
+      {},
+      "./ui-schema.json"
+    );
+
+    expect(problems.map(problem => `${problem.path} ${problem.code}`)).toEqual([
+      "ui-schema.json collections[0].fields FIELD_NAME_DUPLICATE",
+    ]);
+  });
+
+  it("allows what the Builder saves: no fields, and an address the address rule judges", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [
+          { slug: "bag", fields: [] },
+          { slug: "view", fields: [text("title")] },
+        ],
+        singles: [],
+        components: [],
+      },
+      {},
+      "./ui-schema.json"
+    );
+
+    expect(problems).toEqual([]);
+  });
+
+  it("does not judge an entry a code-first entity of its kind shadows", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [{ slug: "cases", fields: [text("body"), text("body")] }],
+        singles: [],
+        components: [],
+      },
+      { collections: [{ slug: "cases", fields: [text("title")] }] },
+      "./ui-schema.json"
+    );
+
+    expect(problems).toEqual([]);
+  });
+
+  it("names a field group by the file's own key", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [],
+        singles: [],
+        components: [{ slug: "hero", fields: [text("a"), text("a")] }],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(problems.map(problem => problem.path)).toEqual([
+      "ui-schema.json components[0].fields",
+    ]);
   });
 });
