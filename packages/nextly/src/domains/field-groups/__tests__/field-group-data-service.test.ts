@@ -1146,7 +1146,9 @@ describe("FieldGroupDataService", () => {
     });
 
     it("refuses a zone whose component cannot be looked up, even when the error names a missing relation", async () => {
-      ctx.registry.getComponent.mockRejectedValueOnce(
+      // Every lookup fails: a registry that moved is looked up once more under the name it holds
+      // now, so only a lookup that still fails then is the failure this refuses.
+      ctx.registry.getComponent.mockRejectedValue(
         new Error('relation "dynamic_components" does not exist')
       );
 

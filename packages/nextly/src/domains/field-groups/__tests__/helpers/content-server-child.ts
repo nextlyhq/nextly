@@ -58,7 +58,24 @@ function describeError(error: unknown): string {
   };
   const code = String(e.publicData?.errors?.[0]?.code ?? e.code ?? "UNKNOWN");
   const message = String(e.message ?? error).replace(/\s+/g, " ");
-  return `${REFUSALS.has(code) ? "REFUSED" : "ERROR"} ${code} ${message}`;
+  if (REFUSALS.has(code)) return `REFUSED ${code} ${message}`;
+  // Anything else is unexpected: what it says beyond its public message, on the one line, so a
+  // failing suite shows where it came from.
+  const detail = error as {
+    logMessage?: unknown;
+    logContext?: { reason?: unknown };
+    cause?: { message?: unknown };
+    stack?: unknown;
+  };
+  const where = String(detail.stack ?? "")
+    .split(/\r?\n/)
+    .slice(1, 6)
+    .map(line => line.trim())
+    .join(" < ");
+  return `ERROR ${code} ${message} | ${String(detail.logMessage ?? "")} | ${String(detail.logContext?.reason ?? "")} | ${String(detail.cause?.message ?? "")} | ${where}`.replace(
+    /\s+/g,
+    " "
+  );
 }
 
 async function answer(command: string, args: string[]): Promise<string> {

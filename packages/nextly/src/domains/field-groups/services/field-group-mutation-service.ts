@@ -92,7 +92,8 @@ import {
 } from "../field-group-write-access";
 import {
   followMovedFieldGroupTable,
-  isMissingTableError,
+  followingMovedRegistry,
+  hasMovedStorageCause,
   storageMovingRefusal,
 } from "../migration/moved-storage";
 import {
@@ -562,7 +563,8 @@ export class FieldGroupMutationService extends BaseService {
     private readonly localizationSource?: LocalizationSource
   ) {
     super(adapter, logger);
-    this.registryService = registryService;
+    // Its lookups follow a registry the storage migration moved under this process.
+    this.registryService = followingMovedRegistry(registryService, adapter);
   }
 
   /**
@@ -2154,7 +2156,9 @@ export class FieldGroupMutationService extends BaseService {
   ): Promise<void> {
     // A NextlyError is an answer already decided, a refusal among them; only the database's own
     // missing-table error is a table that may have moved.
-    if (NextlyError.is(error) || !isMissingTableError(error)) return;
+    // A refusal already decided carries no database error and is left as it is; a database error
+    // saying a table or column is missing, however it was wrapped, may be storage that moved.
+    if (!hasMovedStorageCause(error)) return;
     for (const slug of slugs) {
       const moved = await followMovedFieldGroupTable({
         adapter: this.adapter,

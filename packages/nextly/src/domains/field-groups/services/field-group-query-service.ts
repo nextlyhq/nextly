@@ -51,7 +51,9 @@ import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor
 import { directFieldGroupFields } from "../field-group-write-access";
 import {
   followMovedFieldGroupTable,
-  isMissingOrUnregisteredTableError,
+  followingMovedRegistry,
+  isMovedStorageError,
+  storageMovingRefusal,
 } from "../migration/moved-storage";
 import { passwordReachOf } from "../password-reach";
 import {
@@ -476,7 +478,8 @@ export class FieldGroupQueryService extends BaseService {
     private readonly instanceTables?: InstanceTables
   ) {
     super(adapter, logger);
-    this.registryService = registryService;
+    // Its lookups follow a registry the storage migration moved under this process.
+    this.registryService = followingMovedRegistry(registryService, adapter);
     this.relationshipService = relationshipService;
   }
 
@@ -1994,7 +1997,9 @@ export class FieldGroupQueryService extends BaseService {
     parentTable: string,
     fieldName: string,
     executor: unknown,
-    strict: boolean
+    strict: boolean,
+    // Set on the read that follows a move: it reads under the name it was given, once.
+    followed = false
   ): Promise<ComponentRow[]> {
     try {
       const rows = await this.adapter.select<ComponentRow>(
@@ -2009,7 +2014,7 @@ export class FieldGroupQueryService extends BaseService {
     } catch (error) {
       // The storage migration may have moved the table since this process resolved its name: read
       // it again under the name it holds now, rather than reading the group as empty.
-      const moved = await this.movedTable(tableName, error, executor);
+      const moved = await this.movedTable(tableName, error, executor, followed);
       if (moved !== undefined) {
         return this.instancesAlone(
           moved,
@@ -2017,7 +2022,8 @@ export class FieldGroupQueryService extends BaseService {
           parentTable,
           fieldName,
           executor,
-          strict
+          strict,
+          true
         );
       }
       // The comp_* table may not exist yet (a component before its migration
@@ -2038,22 +2044,30 @@ export class FieldGroupQueryService extends BaseService {
   // results maintain correct array ordering.
   /**
    * The name `tableName` has now, when a read of it failed because the storage migration moved it
-   * (`followMovedFieldGroupTable`), registered in this process; `undefined` otherwise. Never on a
-   * transaction: a failed statement has aborted it on PostgreSQL, so the caller's error stands.
+   * (`followMovedFieldGroupTable`), registered in this process; `undefined` otherwise.
+   *
+   * A read on a write's transaction is not retried: a failed statement has aborted it on
+   * PostgreSQL. The write it serves is refused instead (`storageMovingRefusal`), the names now
+   * registered, so the whole write succeeds when retried.
    */
   private async movedTable(
     tableName: string,
     error: unknown,
-    executor: unknown
+    executor: unknown,
+    // Set on the read that already followed a move once: it is not followed again.
+    followed: boolean
   ): Promise<string | undefined> {
-    if (executor !== undefined || !isMissingOrUnregisteredTableError(error)) {
-      return undefined;
-    }
-    return followMovedFieldGroupTable({
+    if (followed || !isMovedStorageError(error)) return undefined;
+    const moved = await followMovedFieldGroupTable({
       adapter: this.adapter,
       rows: this.registryService,
       tableName,
     });
+    if (executor !== undefined) {
+      if (moved !== undefined) throw storageMovingRefusal(moved);
+      return undefined;
+    }
+    return moved;
   }
 
   private async batchGetInstances(
@@ -2063,7 +2077,9 @@ export class FieldGroupQueryService extends BaseService {
     fieldName: string,
     // As `getExistingInstances` takes them: only a missing table is read as
     // empty under `strict`, and `executor` reads on a write's transaction.
-    read: Pick<BatchPopulateRead, "strict" | "executor">
+    read: Pick<BatchPopulateRead, "strict" | "executor">,
+    // Set on the read that follows a move: it reads under the name it was given, once.
+    followed = false
   ): Promise<ComponentRow[]> {
     if (parentIds.length === 0) return [];
 
@@ -2100,14 +2116,20 @@ export class FieldGroupQueryService extends BaseService {
       return this.withoutServerOnlyColumns(rows, tableName);
     } catch (error) {
       // As `instancesAlone`: a table the storage migration moved is read under its name now.
-      const moved = await this.movedTable(tableName, error, read.executor);
+      const moved = await this.movedTable(
+        tableName,
+        error,
+        read.executor,
+        followed
+      );
       if (moved !== undefined) {
         return this.batchGetInstances(
           moved,
           parentIds,
           parentTable,
           fieldName,
-          read
+          read,
+          true
         );
       }
       // On a transaction a failed statement has aborted it on PostgreSQL, so
