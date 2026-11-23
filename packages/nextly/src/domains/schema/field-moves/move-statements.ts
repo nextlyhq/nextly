@@ -560,7 +560,8 @@ function conditionLiteral(
  * `subject` holds the moved field at the place the run moves it away from (`at`): its old place
  * for the UP, its new one for the DOWN. The run rewrites each entry's row, not a draft's
  * snapshot, which keeps the field where it was, so publishing that draft would drop its pending
- * change. A draft holding the key with a null is held too: that may be a pending clear. The
+ * change. A draft holding the key with a null is held too, as is one whose group on the way to it
+ * holds a null: either may be a pending clear. The
  * Schema Builder's save reads the database it writes from (`refuseMovesUnderWorkingDrafts`); a
  * file written offline asks the database it runs on. The run stops on
  * `publish_or_discard_drafts_of_<field>` in `nextly_drafted_<field>`, and goes ahead once those
@@ -583,7 +584,7 @@ export function workingDraftsStop(
   return stopWhereNot(dialect, quoteIdent(VERSIONS_TABLE, dialect), {
     guard: `nextly_drafted_${name}`,
     reason: `publish_or_discard_drafts_of_${name}`,
-    kept: `NOT (${DIALECTS[dialect].hasKey(quoteIdent("snapshot", dialect), at)})`,
+    kept: `NOT (${draftHoldsPlace(dialect, at)})`,
     where: working
       .map(condition => versionsConditionSql(condition, dialect))
       .join(" AND "),
@@ -789,6 +790,26 @@ export function emptiedContainers(
     );
   }
   return statements;
+}
+
+/**
+ * Whether a working draft's snapshot holds the place `at`: its key, a null included, or a group on
+ * the way to it cleared to null, which clears the field with it.
+ */
+function draftHoldsPlace(
+  dialect: SupportedDialect,
+  at: readonly string[]
+): string {
+  const json = DIALECTS[dialect];
+  const snapshot = quoteIdent("snapshot", dialect);
+  const clearedAbove = at
+    .slice(0, -1)
+    .map((_, i) => at.slice(0, i + 1))
+    .map(
+      above =>
+        `(${json.hasKey(snapshot, above)} AND NOT (${json.holds(snapshot, above)}))`
+    );
+  return [json.hasKey(snapshot, at), ...clearedAbove].join(" OR ");
 }
 
 /**

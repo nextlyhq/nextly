@@ -466,6 +466,29 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    // A draft that clears the group clears the field inside it: moved out, the field would keep its
+    // value once the draft is published, the clear dropped.
+    it("stops nextly migrate where a working draft clears the group holding the moved field", async () => {
+      const url = await openDatabase(dialect);
+      await start(dialect, url);
+      await createAndApply("create_posts", "grouped");
+      const id = await created(dialect, url, "grouped", {
+        title: "P",
+        meta: { note: "N", subtitle: "Kept subtitle" },
+      });
+      await workingDraft(dialect, url, id, { title: "P", meta: null });
+
+      await createOnly("move_subtitle_out", "row", { acceptMoves: true });
+      const stopped = await apply();
+      expect(stopped.code, stopped.said).not.toBeUndefined();
+      expect(stopped.said).toMatch(
+        /publish_or_discard_drafts_of_meta_subtitle/
+      );
+      expect(await subtitles(await start(dialect, url, "grouped"), id)).toEqual(
+        { row: undefined, grouped: "Kept subtitle" }
+      );
+    });
+
     // The way back moves the value out of the group again, so a working draft written at the new
     // place after the move holds a pending change the way back would drop.
     it("stops migrate:down where a working draft holds the moved field at its new place", async () => {

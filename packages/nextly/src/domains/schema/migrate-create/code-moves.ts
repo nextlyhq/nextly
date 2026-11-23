@@ -169,6 +169,25 @@ function draftsStopsOf(
   };
 }
 
+/**
+ * Refuses moves on an entity whose table this run renames (a new `dbName`): its table stood under
+ * another name at the latest snapshot, and the moves' statements, which run before the table's
+ * own change, would name a table not made yet.
+ */
+function refuseMovesIntoRenamedTable(
+  run: CodeMovesRun,
+  entity: MinimalConfigEntity,
+  moves: AcceptedMoves["moves"]
+): void {
+  if (run.previousTables.has(entity.tableName)) return;
+  const [first] = moves;
+  const message = `${entity.slug}'s table becomes ${entity.tableName} in this migration, so ${placeOf(first.from)} → ${placeOf(first.to)} cannot be carried with it: change the table's name and move fields in migrations of their own.${INSTEAD}`;
+  throw NextlyError.validation({
+    errors: [{ path: placeOf(first.to), code: "FIELD_MOVE_REFUSED", message }],
+    logContext: { slug: entity.slug, table: entity.tableName },
+  });
+}
+
 /** What a run that cannot carry a move can do instead, added to the planner's refusal. */
 const INSTEAD =
   " To write it as a delete at the old place and an empty field at the new one instead, which loses its values, answer no when nextly migrate:create asks, or leave out --accept-moves.";
@@ -218,6 +237,7 @@ export async function planCodeMoves(run: CodeMovesRun): Promise<CodeMovesPlan> {
     const accepted = await acceptedMovesOf(run, kind, entity);
     if (accepted === "unrecorded") unrecorded.push(entity.slug);
     if (accepted === undefined || accepted === "unrecorded") continue;
+    refuseMovesIntoRenamedTable(run, entity, accepted.moves);
     const drafts = draftsStopsOf(run, kind, entity.slug, accepted.moves);
     stops.up.push(...drafts.up);
     stops.down.push(...drafts.down);

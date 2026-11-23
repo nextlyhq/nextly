@@ -3327,9 +3327,10 @@ function holdsKeyAtPathAnywhere(
 }
 
 /**
- * Whether a document's values hold `path`'s key, a null included: a working draft that holds the
- * field with a null may be a pending clear, which the move would drop as it drops a value. The
- * file's own stop asks the same (`workingDraftsStop`).
+ * Whether a document's values hold `path`'s key, a null included, or a group on the way to it
+ * cleared to null: a working draft that clears the field, itself or with its group, may be a
+ * pending clear, which the move would drop as it drops a value. The file's own stop asks the same
+ * (`workingDraftsStop`).
  */
 function holdsKeyAtPath(
   values: Record<string, unknown>,
@@ -3341,6 +3342,8 @@ function holdsKeyAtPath(
       return false;
     }
     at = (at as Record<string, unknown>)[key];
+    // The field's key holding null, or a group above it cleared with it.
+    if (at === null) return true;
   }
   return at !== undefined;
 }

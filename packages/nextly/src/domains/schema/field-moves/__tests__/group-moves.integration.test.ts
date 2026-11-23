@@ -615,6 +615,53 @@ describe.each(getConfiguredTestDialects())(
       expect(await readAll(t)).toEqual(before);
     });
 
+    // A draft that clears the group clears the field inside it, which a move out of the group
+    // would drop: refused, as the file's own stop is.
+    it("refuses a move out of a group while a working draft clears that group", async () => {
+      const t = await boot(dialect);
+      const summary: Field = { name: "summary", type: "text" };
+      await createPosts(t, SLUG, { fields: [group("meta", [NOTE, summary])] });
+      const { item } = await t.nextly.create({
+        collection: SLUG,
+        data: { title: "One", slug: "one", meta: { summary: "Live" } },
+      });
+      const now = new Date();
+      await t.adapter.insert("nextly_versions", {
+        id: randomUUID(),
+        scopeKind: "collection",
+        scopeSlug: SLUG,
+        entryId: String((item as { id: unknown }).id),
+        versionNo: null,
+        status: "draft",
+        isAutosave: false,
+        snapshot: { title: "One", slug: "one", meta: null },
+        createdAt: now,
+        updatedAt: now,
+      });
+      const before = await readAll(t);
+      await expect(
+        save(
+          t,
+          [summary, group("meta", [NOTE])],
+          [{ from: ["meta", "summary"], to: ["summary"] }]
+        )
+      ).rejects.toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: expect.stringMatching(
+                  /^summary has unpublished changes in a working draft of 1 entry/
+                ),
+              }),
+            ],
+          },
+        })
+      );
+      expect(await readAll(t)).toEqual(before);
+    });
+
     // MySQL's TIMESTAMP holds no year past 2038.
     it.runIf(dialect !== "mysql")(
       "stops a move into a group, before it changes anything, where a date's year has more than four digits",

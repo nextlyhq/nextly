@@ -185,4 +185,39 @@ describe("planCodeMoves", () => {
       /^CREATE TEMP TABLE "nextly_drafted_meta_subtitle"/
     );
   });
+
+  // A new `dbName` renames the entity's table in the same run, and the moves' statements, which run
+  // first, would name a table not made yet.
+  it("refuses a move on an entity whose table this run renames", async () => {
+    const warned: string[] = [];
+    await expect(
+      planCodeMoves({
+        ...run(warned),
+        entities: [
+          {
+            kind: "collection",
+            entity: entity("posts", [group("meta", [text("subtitle")])]),
+          },
+        ],
+        previous: recorded("collections", "posts", [
+          text("subtitle"),
+          group("meta", []),
+        ]),
+        previousTables: new Set(["dc_articles"]),
+      })
+    ).rejects.toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message: expect.stringMatching(
+                /^posts's table becomes dc_posts in this migration, so subtitle → meta\.subtitle cannot be carried with it/
+              ),
+            }),
+          ],
+        },
+      })
+    );
+  });
 });
