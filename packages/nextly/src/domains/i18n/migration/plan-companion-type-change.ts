@@ -60,6 +60,43 @@ interface Retyped {
 }
 
 /**
+ * The fields a change keeps per language before it and after it under one name, each as the
+ * previous snapshot records it and as the change leaves it: those whose column the snapshot's table
+ * keeps in its translations table (`localizedColumns`), on a table it records as translated. The
+ * one question both `migrate:create`'s `retypes` plan and a save relying on that plan ask, so a
+ * save never counts on a column's new type the file it writes does not carry. None where the
+ * snapshot records no fields for the entity, or does not keep its table translated.
+ */
+export function fieldsTranslatedThrough(args: {
+  /** The entity's main table as the previous snapshot records it. */
+  previousTable:
+    | { localized?: boolean; localizedColumns?: readonly string[] }
+    | undefined;
+  /** The entity's fields as the previous snapshot's settings record them. */
+  recorded: unknown;
+  next: readonly UniqueFieldLike[];
+  /** Whether a field is kept per language after the change. */
+  translatedAfter: (field: UniqueFieldLike) => boolean;
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+}): RetypedField[] {
+  if (args.previousTable?.localized !== true) return [];
+  if (!Array.isArray(args.recorded)) return [];
+  const kept = new Set(args.previousTable.localizedColumns ?? []);
+  // A recorded declaration's fields, as `settingsOf` keeps them: each one's name and type.
+  const before = new Map(
+    (args.recorded as UniqueFieldLike[]).map(field => [field.name, field])
+  );
+  return args.next.flatMap(to => {
+    const from = before.get(to.name);
+    if (from === undefined || !args.translatedAfter(to)) return [];
+    const column = fieldToLocalizedColumnSpec(from, args.dialect, args.builtBy);
+    // Translated before: its column is one the translations table kept.
+    return column !== null && kept.has(column.name) ? [{ from, to }] : [];
+  });
+}
+
+/**
  * The columns among `fields` whose type in the translations table differs on `dialect`, each with
  * its type on either side. A field the change leaves without a companion column on either side
  * (`fieldToLocalizedColumnSpec` gives none) has nothing here to retype.

@@ -63,8 +63,8 @@ import {
   type CompanionMigrationPlan,
 } from "../../i18n/migration/plan-companion-migration";
 import {
+  fieldsTranslatedThrough,
   planCompanionTypeChange,
-  type RetypedField,
 } from "../../i18n/migration/plan-companion-type-change";
 import {
   type FieldLeavesFile,
@@ -2453,27 +2453,14 @@ function planTranslatedTypeChanges(
   if (previousEntities === undefined) return [];
   return entities.flatMap(({ entity: c, kind }) => {
     if (!storesPerLanguage(c)) return [];
-    const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
-    if (prevMain?.localized !== true) return [];
-    const translatedBefore = new Set(prevMain.localizedColumns ?? []);
-    const recorded =
-      previousEntities[SETTINGS_KEY[kind]][c.slug]?.settings.fields;
-    if (!Array.isArray(recorded)) return [];
-    const before = new Map(
-      // A recorded declaration's fields, as `settingsOf` keeps them: each one's name and type.
-      (recorded as unknown as RetypedField["from"][]).map(field => [
-        field.name,
-        field,
-      ])
-    );
     const builtBy = columnOriginOf(c, kind);
-    const fields = c.fields.flatMap(to => {
-      const from = before.get(to.name);
-      if (from === undefined || !isFieldLocalized(to, true)) return [];
-      const column = fieldToLocalizedColumnSpec(from, dialect, builtBy);
-      // Translated before: its column is the one the translations table kept.
-      if (column === null || !translatedBefore.has(column.name)) return [];
-      return [{ from, to }];
+    const fields = fieldsTranslatedThrough({
+      previousTable: previousSnapshot.tables.find(t => t.name === c.tableName),
+      recorded: previousEntities[SETTINGS_KEY[kind]][c.slug]?.settings.fields,
+      next: c.fields,
+      translatedAfter: to => isFieldLocalized(to, true),
+      dialect,
+      builtBy,
     });
     const plan = planCompanionTypeChange({
       slug: c.slug,

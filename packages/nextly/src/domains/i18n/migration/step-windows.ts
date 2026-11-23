@@ -197,20 +197,39 @@ function shiftWindows(
   for (const [key, intent] of file?.opens ?? []) open.set(key, intent);
 }
 
-/** The moves, as the notice names them: `"body" in collection "docs"`. */
+/**
+ * The changes a run goes on through, as the notice names them, each kind of change once with its
+ * fields: `a move between translated and shared ("body" in collection "docs")`, and a translated
+ * field's type change (`retypes`) as what it is, since nothing moves between translated and shared
+ * there.
+ */
 function describeMoves(moves: readonly LocalizationMigrationIntent[]): string {
-  return moves
-    .map(
-      m =>
-        `${m.spec.columns.map(c => `"${c.name}"`).join(", ")} in ${KIND_NAMES[m.entity]} "${m.spec.collection}"`
-    )
-    .join("; ");
+  const fields = (of: readonly LocalizationMigrationIntent[]) =>
+    of
+      .map(
+        m =>
+          `${m.spec.columns.map(c => `"${c.name}"`).join(", ")} in ${KIND_NAMES[m.entity]} "${m.spec.collection}"`
+      )
+      .join("; ");
+  const moved = moves.filter(m => m.kind !== "retypes");
+  const retyped = moves.filter(m => m.kind === "retypes");
+  return [
+    ...(moved.length > 0
+      ? [`a move between translated and shared (${fields(moved)})`]
+      : []),
+    ...(retyped.length > 0
+      ? [`a translated field's type change (${fields(retyped)})`]
+      : []),
+  ].join(", and ");
 }
 
-/** The notice a run prints when its `--step` budget ends inside a move (`filesWithinStep`). */
+/**
+ * The notice a run prints when its `--step` budget ends inside a change it must not stop in, named
+ * by `filesWithinStep`.
+ */
 export function stepContinuedNotice(continued: string): string {
   return (
-    `--step ends inside a move between translated and shared (${continued}): running on until ` +
+    `--step ends inside ${continued}: running on until ` +
     "it is whole, so nothing can write in between."
   );
 }

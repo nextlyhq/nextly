@@ -83,6 +83,10 @@ import {
 } from "../../i18n/migration/companion-unique-indexes";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import {
+  fieldsTranslatedThrough,
+  retypedCompanionColumns,
+} from "../../i18n/migration/plan-companion-type-change";
+import {
   mainTableFields,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
@@ -194,7 +198,6 @@ import {
   entityLabel,
   fieldTypeChangesOf,
   perLanguageAfter,
-  retypedBySave,
   perLanguageBefore,
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
@@ -1477,18 +1480,15 @@ async function refuseSaveTypeChanges(
     ...translatedAfter,
     // The save's file gives a translated field's translations column its new type where that
     // column changes on this database (`retypes`), so only a column it leaves behind is refused.
-    // It is planned from the fields the folder's newest snapshot records: where that snapshot
-    // records none for the entity, the file cannot carry it, and the change stays refused. Only a
-    // collection's save runs that file (in development) or leaves it for `nextly migrate`: a
-    // Single's or field group's save in production is applied by its push, which changes no
+    // Only a collection's save runs that file (in development) or leaves it for `nextly migrate`:
+    // a Single's or field group's save in production is applied by its push, which changes no
     // translations column's type, so theirs stays refused whatever the file carries.
-    ...(kind.kind === "collection" &&
-    (await newestSnapshotRecordsFields(deps, kind.kind, save.slug))
-      ? retypedBySave({
-          previous,
+    ...(kind.kind === "collection"
+      ? await retypedBySaveFile(deps, {
+          slug: save.slug,
+          table,
           next,
-          ...translatedBefore,
-          ...translatedAfter,
+          translatedAfter: translatedAfter.translatedAfter ?? new Set(),
           dialect,
           builtBy: kind.builtBy,
         })
@@ -1505,23 +1505,43 @@ async function refuseSaveTypeChanges(
 }
 
 /**
- * Whether the folder's newest snapshot records `slug`'s fields: what `migrate:create` plans a
- * translated field's translations column's new type from (its `retypes` file). A snapshot written
- * before fields were recorded, or none, leaves the save's file without that step.
+ * The fields whose translations column a collection's save's own file gives the new type: those
+ * `migrate:create` plans its `retypes` file for, from the folder's newest snapshot, which the file
+ * is written after (`fieldsTranslatedThrough`, then `retypedCompanionColumns`), so the save counts
+ * on no column's new type the file does not carry. None where that snapshot records no fields for
+ * the collection, or does not keep its column in the translations table.
  */
-async function newestSnapshotRecordsFields(
+async function retypedBySaveFile(
   deps: CollectionSaveDeps,
-  kind: AddressKind,
-  slug: string
-): Promise<boolean> {
+  args: {
+    slug: string;
+    table: string;
+    next: readonly FieldDefinition[];
+    translatedAfter: ReadonlySet<string>;
+    dialect: SupportedDialect;
+    builtBy: ColumnOrigin;
+  }
+): Promise<{ retypedTranslations: ReadonlySet<string> }> {
   const latest = await loadLatestSnapshot(join(deps.migrationsDir, "meta"));
-  const key =
-    kind === "collection"
-      ? "collections"
-      : kind === "single"
-        ? "singles"
-        : "fieldGroups";
-  return Array.isArray(latest?.data.entities?.[key][slug]?.settings.fields);
+  const fields = fieldsTranslatedThrough({
+    previousTable: latest?.data.snapshot.tables.find(
+      t => t.name === args.table
+    ),
+    recorded: latest?.data.entities?.collections[args.slug]?.settings.fields,
+    next: args.next,
+    translatedAfter: field => args.translatedAfter.has(field.name),
+    dialect: args.dialect,
+    builtBy: args.builtBy,
+  });
+  return {
+    retypedTranslations: new Set(
+      retypedCompanionColumns({
+        fields,
+        dialect: args.dialect,
+        builtBy: args.builtBy,
+      }).map(column => column.field)
+    ),
+  };
 }
 
 /**

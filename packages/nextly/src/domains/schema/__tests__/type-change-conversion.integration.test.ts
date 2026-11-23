@@ -16,6 +16,7 @@
  * - a refusal without its reason gives the person no way to tell a value to fix from a change
  *   that can't be deployed yet.
  */
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -261,6 +262,47 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await read(t, "v", "en")).toEqual({ a: 12 });
       expect(await read(t, "v", "es")).toEqual({ a: 34 });
+    });
+
+    // The save counts on a translations column's new type only where its own file carries it, which
+    // `migrate:create` plans from the folder's newest snapshot: one that records the fields but not
+    // which columns the translations table keeps (a snapshot written before those were kept) gives
+    // the file no `retypes` step, so the change is refused as before, every value as it was.
+    it("refuses a translated change where the newest snapshot keeps no record of the translations columns", async () => {
+      const t = await boot([{ name: "v", type: "text", localized: true }], {
+        localized: true,
+      });
+      const id = await write(t, "a", { v: "12" }, "en");
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        data: { v: "34", _overwrite: true },
+        locale: "es",
+      } as never);
+      const meta = join(project ?? "", "database", "history", "meta");
+      const [newest] = readdirSync(meta)
+        .filter(file => file.endsWith(".snapshot.json"))
+        .sort()
+        .reverse();
+      const file = JSON.parse(readFileSync(join(meta, newest), "utf-8")) as {
+        snapshot: { tables: { name: string; localizedColumns?: string[] }[] };
+        entities?: { collections: Record<string, unknown> };
+      };
+      // The fixture's controls: the snapshot records the fields and the translations columns.
+      expect(file.entities?.collections[SLUG]).toBeDefined();
+      const table = file.snapshot.tables.find(t => t.name === `dc_${SLUG}`);
+      expect(table?.localizedColumns).toContain("v");
+      delete table?.localizedColumns;
+      writeFileSync(join(meta, newest), JSON.stringify(file, null, 2));
+
+      expect(
+        await save(t, [{ name: "v", type: "number", localized: true }], {
+          localized: true,
+        })
+      ).toMatchObject(refusedAs("TYPE_CHANGE_BLOCKED", "kept per language"));
+
+      expect(await read(t, "v", "en")).toEqual({ a: "12" });
+      expect(await read(t, "v", "es")).toEqual({ a: "34" });
     });
 
     // Holding no value is no exception: the translations table's column takes the new type, so a
