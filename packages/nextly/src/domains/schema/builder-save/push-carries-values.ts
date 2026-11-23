@@ -13,7 +13,10 @@ import { reachesRelationStorage } from "../pipeline/recorded-shapes";
 import {
   toSnakeCase,
   type ColumnDescriptor,
+  type SupportedDialect,
 } from "../services/field-column-descriptor";
+import { convertsByValue } from "../value-conversion/type-change/field-type-changes";
+import type { ColumnAt } from "../value-conversion/type-change/field-type";
 
 import { fieldsNewToSingleTable, namedOnRow } from "./single-row-fills";
 
@@ -26,7 +29,9 @@ import { fieldsNewToSingleTable, namedOnRow } from "./single-row-fills";
  * (`fieldsWithLeavingSettingsDeferred`); a field whose column changes type or size, whose stored
  * values the push judges before it alters the column (not a field kept per language before the
  * save and after it, whose only column is its translations column, which the file's `retypes`
- * step changes, judged in each language by the save before the file is written); a field new to a
+ * step changes, judged in each language by the save before the file is written; nor one the save
+ * converts value by value, `convertsValues`, whose file judges and converts each value before its
+ * statements, in their transaction); a field new to a
  * Single's table that its row
  * is filled in; and a change reaching a relation's storage (`reachesRelationStorage`), which the
  * push plans from the live table.
@@ -69,6 +74,13 @@ export async function pushCarriesValues(args: {
    * from a group is not new to it.
    */
   moved?: readonly MovedField[];
+  /**
+   * Where the save's fields are kept, on the dialect its file runs on, for a save that writes the
+   * values of a type change itself: a field whose change it converts value by value
+   * (`convertsByValue`) is the file's to change, not the push's. Absent, every type change keeps
+   * the push.
+   */
+  convertsValues?: ColumnAt & { dialect: SupportedDialect };
 }): Promise<boolean> {
   // Translation turned off: its file puts each column back as the main table's snapshot records
   // it, Required and Unique settings included, and the main file that follows is recorded as
@@ -164,6 +176,7 @@ function columnTypeChanges(args: {
   isStored: boolean;
   columnOf: (field: FieldDefinition) => ColumnDescriptor | null;
   renames: ReadonlyArray<{ from: string; to: string }>;
+  convertsValues?: ColumnAt & { dialect: SupportedDialect };
 }): boolean {
   const before = new Map(
     namedOnRow(args.oldFields).map(
@@ -192,7 +205,13 @@ function columnTypeChanges(args: {
     // one-to-one) changes no column's type: the column is added or dropped, as the file writes it.
     const was = shape(old);
     const is = shape(field);
-    return was !== null && is !== null && was !== is;
+    if (was === null || is === null || was === is) return false;
+    // A change the save converts value by value: its file judges and converts each value.
+    const converts = args.convertsValues;
+    return (
+      converts === undefined ||
+      !convertsByValue(old, field, converts.dialect, converts)
+    );
   });
 }
 

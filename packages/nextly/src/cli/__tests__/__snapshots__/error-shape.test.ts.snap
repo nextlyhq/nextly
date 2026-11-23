@@ -668,6 +668,13 @@ exports[`each code, as a command ends with it > CONFIG_TOOLING_UNAVAILABLE 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/config-tooling-unavailable  (CONFIG_TOOLING_UNAVAILABLE)"
 `;
 
+exports[`each code, as a command ends with it > CONVERSION_RULES_UNKNOWN 1`] = `
+"✗ A migration's field type change converts its values by rules this version of Nextly cannot follow, so nothing of it ran.
+  Why:  migrations.20261123_101500_products.sql: Migration 20261123_101500_products.sql converts its field type changes' values, but it was written under conversion rules 2, and this version of Nextly converts by rules 1. Nothing was changed.
+  Next: Run it with the version of Nextly that wrote it, or a later one. A mark edited by hand goes back to the line the Schema Builder wrote.
+  Docs: https://nextlyhq.com/docs/cli/errors/conversion-rules-unknown  (CONVERSION_RULES_UNKNOWN)"
+`;
+
 exports[`each code, as a command ends with it > CORE_DESTRUCTIVE_CHANGE_DECLINED 1`] = `
 "✗ Core schema reconciliation aborted: destructive operations were not confirmed.
   Why:  drops column 'nextly_users.legacy_role'
@@ -2040,6 +2047,13 @@ exports[`each code, as a command ends with it > TRANSLATIONS_UNRECORDED 1`] = `
   Why:  The latest snapshot was written before snapshots recorded which fields are translated, and the project has translations: planning a change on a guess could lose their values.
   Next: To record them, put the config back as it was at the last migration and run \`nextly migrate:create --record-snapshot\` against a database that has applied every migration, then make your changes again and run \`nextly migrate:create --name add_excerpt\`.
   Docs: https://nextlyhq.com/docs/cli/errors/translations-unrecorded  (TRANSLATIONS_UNRECORDED)"
+`;
+
+exports[`each code, as a command ends with it > TYPE_CHANGE_VALUES_CHANGED 1`] = `
+"✗ A field's type change stopped before its column changed: its values were written to while they were converted.
+  Why:  fields.price: Collection 'products' (migration 20261123_101500_products.sql): price was written to while its values were converted, and now holds 2 value(s) that cannot convert, not 1. Try again once its writes have finished.
+  Next: Run the command again once those writes have finished: the change converts the values as they then stand.
+  Docs: https://nextlyhq.com/docs/cli/errors/type-change-values-changed  (TYPE_CHANGE_VALUES_CHANGED)"
 `;
 
 exports[`each code, as a command ends with it > UI_SCHEMA_INVALID 1`] = `

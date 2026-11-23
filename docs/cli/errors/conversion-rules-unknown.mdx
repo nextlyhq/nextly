@@ -1,0 +1,29 @@
+---
+title: CONVERSION_RULES_UNKNOWN
+description: "A migration converts its field type changes' values by rules this version of Nextly cannot follow."
+---
+
+## Cause
+
+A migration converts its field type changes' values by rules this version of Nextly cannot follow.
+
+A migration the Schema Builder writes for a field type change marks, in its header, the columns it converts value by value and the version of the conversion rules it was written under:
+
+```sql
+-- Converts values: rules 1; dc_products.price
+```
+
+`nextly migrate` converts each database's own values by those rules, so every database the migration reaches holds what the Schema Builder's save gave its own. A file whose mark names rules this version of Nextly does not know, or whose mark cannot be read, is refused before any of its statements runs. It is never converted by other rules, or left to the database's cast instead.
+
+## Fix
+
+Run it with the version of Nextly that wrote it, or a later one. A mark edited by hand goes back to the line the Schema Builder wrote.
+
+## Example
+
+```text
+✗ A migration's field type change converts its values by rules this version of Nextly cannot follow, so nothing of it ran.
+  Why:  migrations.20261123_101500_products.sql: Migration 20261123_101500_products.sql converts its field type changes' values, but it was written under conversion rules 2, and this version of Nextly converts by rules 1. Nothing was changed.
+  Next: Run it with the version of Nextly that wrote it, or a later one. A mark edited by hand goes back to the line the Schema Builder wrote.
+  Docs: https://nextlyhq.com/docs/cli/errors/conversion-rules-unknown  (CONVERSION_RULES_UNKNOWN)
+```

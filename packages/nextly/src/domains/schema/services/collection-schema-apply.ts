@@ -1198,6 +1198,8 @@ async function collectionChangeCarriesValues(
         .tables[0],
     columnOf: field => getColumnDescriptor(field, dialect, "collection"),
     renames: renamedFieldsOf(change.renameResolutions),
+    // A type change the save converts value by value is its file's to apply.
+    convertsValues: { dialect, builtBy: "collection" },
   });
 }
 

@@ -35,6 +35,8 @@ import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
 import { asSentence, deepestMessage, sentences } from "../messages";
 
+import { issueLines } from "./general";
+
 /**
  * A command's refusal once what the operator agreed to changed before it could act
  * (`planChangedAfterConsent`). The error's log context names the command and both lists, so the
@@ -854,6 +856,40 @@ export const MIGRATION_CODES = defineCodes({
             next: UNIQUE_INDEX_NAME_HELD_ADVICE,
           };
         },
+      },
+    ],
+  },
+  TYPE_CHANGE_VALUES_CHANGED: {
+    cause:
+      "A field type change's values were written to while they were converted, so it stopped before its column changed.",
+    from: [
+      {
+        // The conversion judges each value before any statement and again as it writes them; a
+        // count of values it clears that differs between the two was written in between.
+        code: "VALIDATION_ERROR",
+        issue: "TYPE_CHANGE_CLEAR_COUNT_CHANGED",
+        describe: error => ({
+          what: "A field's type change stopped before its column changed: its values were written to while they were converted.",
+          why: issueLines(error).join("\n") || error.publicMessage,
+          next: "Run the command again once those writes have finished: the change converts the values as they then stand.",
+        }),
+      },
+    ],
+  },
+  CONVERSION_RULES_UNKNOWN: {
+    cause:
+      "A migration converts its field type changes' values by rules this version of Nextly cannot follow.",
+    from: [
+      {
+        // A file's mark (`readConvertsMark`) names rules this version does not know, or cannot be
+        // read: refused before any statement, never run by the database's cast instead.
+        code: "VALIDATION_ERROR",
+        reason: "converts-mark-unreadable",
+        describe: error => ({
+          what: "A migration's field type change converts its values by rules this version of Nextly cannot follow, so nothing of it ran.",
+          why: issueLines(error).join("\n") || error.publicMessage,
+          next: "Run it with the version of Nextly that wrote it, or a later one. A mark edited by hand goes back to the line the Schema Builder wrote.",
+        }),
       },
     ],
   },

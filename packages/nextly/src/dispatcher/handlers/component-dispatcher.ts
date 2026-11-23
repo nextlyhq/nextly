@@ -870,6 +870,12 @@ export const COMPONENTS_METHODS: Record<
                 ),
               renames: renamedFieldsOf(renameResolutions ?? []),
               moved: moves,
+              // A type change the save converts value by value is its file's to apply.
+              convertsValues: {
+                dialect: adapter.dialect,
+                builtBy: "fieldGroup",
+                componentRow: true,
+              },
             }));
           await refuseMovesOffTheFile({
             moves,

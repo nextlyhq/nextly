@@ -45,8 +45,12 @@ const WITH_EXTRA: Field[] = [...FIELDS, { name: "extra", type: "text" }];
  * The person's change that keeps the push rather than the save's file: a column's type changed,
  * whose stored values the push judges before it alters the column.
  */
-const HEADING_AS_NUMBER: Field[] = [
-  { name: "heading", type: "number" },
+/**
+ * `heading` changed to a checkbox: a column type change the push carries, which a save does not
+ * convert value by value in its file (`convertsByValue`), as a text becoming a number it does.
+ */
+const HEADING_AS_CHECKBOX: Field[] = [
+  { name: "heading", type: "checkbox" },
   { name: "views", type: "number" },
 ];
 
@@ -268,8 +272,9 @@ for (const kind of KINDS) {
   );
 }
 
-// A Single's and a field group's save of a column type change is the push's; a collection's runs
-// its own files, adoption and conversion included, as the cases above show.
+// A Single's and a field group's save of a column type change it does not convert value by value
+// is the push's; a collection's runs its own files, adoption and conversion included, as the cases
+// above show.
 for (const kind of KINDS.filter(k => k.name !== "a collection")) {
   describeEachDialect(
     `the first Builder save of ${kind.name}'s table an earlier version made with a column default, by a change the push applies`,
@@ -306,7 +311,7 @@ for (const kind of KINDS.filter(k => k.name !== "a collection")) {
         expect(viewsBefore!.default).not.toBeNull();
 
         const shown = await bodyOf<Preview>(
-          await kind.preview(HEADING_AS_NUMBER)
+          await kind.preview(HEADING_AS_CHECKBOX)
         );
         const keys = (shown.conversions ?? []).map(c => c.column);
         // What the person is asked to confirm: the default removed, on this table's column.
@@ -323,7 +328,7 @@ for (const kind of KINDS.filter(k => k.name !== "a collection")) {
 
         // A save the push applies records the files it wrote applied once the table stands as the
         // newest one says: a default the push left would refuse it as drift, here.
-        await kind.apply(HEADING_AS_NUMBER, {
+        await kind.apply(HEADING_AS_CHECKBOX, {
           schemaVersion: shown.schemaVersion,
           acknowledgedConversions: keys,
         });
@@ -338,14 +343,11 @@ for (const kind of KINDS.filter(k => k.name !== "a collection")) {
         expect(
           recorded.map(r => (r.ran === null ? null : Number(r.ran)))
         ).toEqual(recorded.map(() => 0));
-        // `heading` now has the type a number field's column has: `views`'s, made by the create.
-        expect(viewsBefore!.type).not.toBe(headingBefore!.type);
-        expect(await columnOf("heading")).toMatchObject({
-          type: viewsBefore!.type,
-        });
+        // `heading` now has a checkbox's column type, which is not the text's it had.
+        expect((await columnOf("heading"))!.type).not.toBe(headingBefore!.type);
         expect(await columnOf("views")).toMatchObject({ default: null });
         const next = await bodyOf<Preview>(
-          await kind.preview(HEADING_AS_NUMBER)
+          await kind.preview(HEADING_AS_CHECKBOX)
         );
         expect(next.conversions).toEqual([]);
         const migrated = await migrateCore({

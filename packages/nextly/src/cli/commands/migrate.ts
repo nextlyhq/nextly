@@ -55,6 +55,7 @@ import {
   settleAfterMigrate,
   settleBeforeMigrate,
 } from "../../domains/schema/builder-save/settle-at-migrate";
+import type { TypeConversion } from "../../domains/schema/builder-save/type-conversion";
 import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
 import {
   runUnitInTries,
@@ -94,6 +95,10 @@ import {
   planCoreReconcile,
   reconcileCore,
 } from "../../domains/schema/migrate/core-reconcile";
+import {
+  type ConvertsMark,
+  readConvertsMark,
+} from "../../domains/schema/migrate/converts-header";
 import {
   consentToCover,
   countDeletions,
@@ -229,6 +234,7 @@ import {
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { danglingReferences } from "../../domains/schema/migrate/sqlite-foreign-keys";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
+import { tablesChangedIn } from "../../domains/schema/migrate/statement-targets";
 import {
   endsTheRun,
   isStoppedAtPoint,
@@ -299,8 +305,8 @@ import {
   writeRegistryRows,
 } from "../../domains/schema/schema-version";
 import {
-  fileTypeChangeRefusals,
   fileTypeChangesOf,
+  judgeFileTypeChanges,
   refuseFileTypeChanges,
 } from "../../domains/schema/value-conversion/type-change/file-type-changes";
 import { provisionUserFieldStorage } from "../../domains/users/services/provision-user-field-storage";
@@ -480,6 +486,13 @@ interface ParsedMigration {
    * both apply verbatim, which is what they have always done.
    */
   localization?: LocalizationMigrationIntent;
+  /**
+   * The columns whose type changes the file converts value by value, as its header marks them
+   * (`readConvertsMark`), with the conversion rules' version: null for a file without the mark,
+   * whose type changes the database's cast converts. Read when the file is about to run, so a mark
+   * that cannot be followed refuses the run there, and never a run that has applied the file.
+   */
+  converts: () => ConvertsMark | null;
   /** Timestamp extracted from filename */
   timestamp: string;
   /** Source of the migration (core bundled or app) */
@@ -2001,10 +2014,13 @@ function previewPendingFile(
 
 /**
  * What a real run would refuse of the changes it applies, by their field type changes
- * (`fileTypeChangeRefusals`). Only a change nothing runs before is judged here, after the newest
- * snapshot before it, as the run judges it: a later one meets the database as the files before it
- * leave it, which a dry run does not run, so each later change that changes a field's type is
- * named as judged when the run reaches it, never listed as clean.
+ * (`judgeFileTypeChanges`), and the columns a marked change converts value by value, with how
+ * many of their values a real run clears, under its consent. Only a change nothing runs before is
+ * judged here, after the newest snapshot before it, as the run judges it: a later one meets the
+ * database as the files before it leave it, which a dry run does not run, so each later change
+ * that changes a field's type is named as judged when the run reaches it, never listed as clean.
+ * A dry run is given no consent, so a converted column's values that cannot convert are named
+ * with the consent that clears them.
  */
 async function previewFileTypeChanges(
   files: readonly ParsedMigration[],
@@ -2035,7 +2051,15 @@ async function previewFileTypeChanges(
     }
     const source = change.source(before, args.dialect);
     if (first) {
-      for (const refusal of await fileTypeChangeRefusals(args.db, source)) {
+      const judged = await judgeFileTypeChanges(args.db, source);
+      for (const conversion of judged.conversions) {
+        for (const column of conversion.columns) {
+          logger.info(
+            `    ↻ ${source.filename} converts ${column.table}.${column.column} value by value, as ${column.field}'s new type reads each: ${String(column.converted)} converted, ${String(column.cleared)} that cannot convert cleared`
+          );
+        }
+      }
+      for (const refusal of judged.refusals) {
         logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
       }
     } else if (fileTypeChangesOf(source).length > 0) {
@@ -2100,16 +2124,80 @@ function buildSqlExecutor(
 ): (
   sqlText: string,
   unit: MigrationUnit,
-  after: (db: unknown, statementsExecuted: number) => Promise<void>
+  after: (db: unknown, statementsExecuted: number) => Promise<void>,
+  /**
+   * Work run before the unit's first statement, on the handle its statements run on and inside
+   * its transaction where it has one (`BusyTableRun.before`): a file's value conversion.
+   */
+  before?: (db: unknown) => Promise<void>
 ) => Promise<number> {
-  return async (sqlText, unit, after) => {
+  return async (sqlText, unit, after, before) => {
     if (!unit.transaction) logger.warn(outsideTransactionNotice(unit.source));
     const statements = splitSqlStatements(sqlText, dialect, unit);
-    // With bounds, a unit waits for a busy table in tries (`runUnitInTries`); without, in one.
-    return busyTable === undefined
-      ? runMigrationStatements(dz, statements, unit, after)
-      : runUnitInTries(dz, statements, unit, after, busyTable);
+    // With bounds, a unit waits for a busy table in tries (`runUnitInTries`); without, in one,
+    // unless work runs before it, which only a run in tries takes: then under the bounds the
+    // environment gives.
+    if (busyTable !== undefined) {
+      return runUnitInTries(dz, statements, unit, after, {
+        ...busyTable,
+        ...(before === undefined ? {} : { before }),
+      });
+    }
+    if (before === undefined) {
+      return runMigrationStatements(dz, statements, unit, after);
+    }
+    return runUnitInTries(dz, statements, unit, after, {
+      bounds: busyTableBounds({ env: process.env }),
+      notify: line => logger.warn(line),
+      appliedBefore: () => [],
+      before,
+    });
   };
+}
+
+/**
+ * What each of a change's files (`files`, in run order) converts before its first statement, by
+ * its name: each of the change's conversions (`TypeConversion.runIn`) for the tables it is the
+ * first file to change, where its statements name them or any table where one cannot be named. A
+ * table no file names (a list becoming a text changes no SQLite column) is converted by the
+ * change's first file, before any of its statements.
+ */
+function conversionsByFile(
+  conversions: readonly TypeConversion[],
+  files: readonly ParsedMigration[],
+  dialect: SupportedDialect
+): Map<string, (db: unknown) => Promise<void>> {
+  const byFile = new Map<string, (db: unknown) => Promise<void>>();
+  if (conversions.length === 0 || files.length === 0) return byFile;
+  const changes = files.map(file => {
+    const named = splitSqlStatements(file.upSql, dialect, file).map(statement =>
+      tablesChangedIn(statement, dialect)
+    );
+    return named.some(tables => tables === undefined)
+      ? undefined
+      : new Set(named.flatMap(tables => tables ?? []).map(t => t.toLowerCase()));
+  });
+  const runsOf = new Map<string, ((db: unknown) => Promise<void>)[]>();
+  for (const conversion of conversions) {
+    const tablesOf = new Map<string, string[]>();
+    for (const table of conversion.tables) {
+      const at = changes.findIndex(
+        changed => changed === undefined || changed.has(table.toLowerCase())
+      );
+      const name = files[at === -1 ? 0 : at].name;
+      tablesOf.set(name, [...(tablesOf.get(name) ?? []), table]);
+    }
+    for (const [name, tables] of tablesOf) {
+      const run = conversion.runIn(tables);
+      if (run !== undefined) runsOf.set(name, [...(runsOf.get(name) ?? []), run]);
+    }
+  }
+  for (const [name, runs] of runsOf) {
+    byFile.set(name, async db => {
+      for (const run of runs) await run(db);
+    });
+  }
+  return byFile;
 }
 
 /**
@@ -2902,6 +2990,7 @@ async function runMigrationStreams(
           appliedBefore: pluginOutcome.ran,
         }),
     columnOverrides: overriddenColumns(deps.extensionSchema),
+    consent: runConsent(deps),
   });
   return { pluginModulesApplied, applied };
 }
@@ -3866,6 +3955,11 @@ async function judgeFileDeletions(
     deps.logger
   );
   const plan = fileRunPlan(listed, deps.step);
+  // A file the run reaches whose conversion mark this version cannot follow is refused here, before
+  // anyone is asked to consent to the run, as its run would refuse it (`readConvertsMark`).
+  for (const { file } of listed) {
+    if (plan.runs.has(file)) file.converts();
+  }
   // Each deletion keeps the file it comes from, by identity, for the listing
   // and for binding an agreement to the file as it stands.
   const sources = new Map<Deletion, DeletionSource>();
@@ -5044,10 +5138,14 @@ async function changeFilesFrom(
   /** The change's own file's snapshot: what the next change is judged after. */
   target: SnapshotFile;
   files: readonly ParsedMigration[];
-  /** What `refuseFileTypeChanges` is asked with, judged after the change `before` records. */
+  /**
+   * What `refuseFileTypeChanges` is asked with, judged after the change `before` records, with the
+   * run's consent to clear what a converted column cannot convert.
+   */
   source: (
     before: SnapshotFile | null,
-    dialect: SupportedDialect
+    dialect: SupportedDialect,
+    consent?: DataLossConsent
   ) => Parameters<typeof refuseFileTypeChanges>[1];
 } | null> {
   for (let end = at; end < files.length; end += 1) {
@@ -5065,7 +5163,7 @@ async function changeFilesFrom(
     return {
       target,
       files: written,
-      source: (before, dialect) => ({
+      source: (before, dialect, consent) => ({
         filename: `${files[end].name}.sql`,
         before: before?.entities,
         target: target.entities,
@@ -5074,6 +5172,9 @@ async function changeFilesFrom(
         ),
         dialect,
         retyped: retypedByFiles(written),
+        // The columns any file of the change marks as converting its values.
+        converts: written.flatMap(file => file.converts()?.columns ?? []),
+        ...(consent === undefined ? {} : { consent }),
       }),
     };
   }
@@ -5391,6 +5492,11 @@ export async function runFileMigrations(args: {
    * one in-place change to another owner's column its files may make.
    */
   columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+  /**
+   * The run's consent to lose data, which clears the values a file's converted type change
+   * cannot convert (`judgeFileTypeChanges`). None where absent.
+   */
+  consent?: DataLossConsent;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -5489,6 +5595,11 @@ export async function runFileMigrations(args: {
   // The last file of the newest change whose field type changes were judged: each change is judged
   // once, at its first file, before any of its files runs.
   let judgedThrough = -1;
+  // The files of the change being run, and what each of them converts before its first statement
+  // (`conversionsByFile`): each table's values are written inside the transaction of the first of
+  // the change's files that changes it.
+  let changeFiles: readonly ParsedMigration[] = [];
+  let convertsBefore = new Map<string, (db: unknown) => Promise<void>>();
   try {
     for (const [index, m] of all.entries()) {
       const filename = `${m.name}.sql`;
@@ -5562,12 +5673,15 @@ export async function runFileMigrations(args: {
       // It is taken here, with the files as written, and asked once the database is read below.
       let typeChanges: Parameters<typeof refuseFileTypeChanges>[1] | undefined;
       if (index > judgedThrough) {
+        changeFiles = [];
+        convertsBefore = new Map();
         const change = await changeFilesFrom(all, index, metaDir, file =>
           plan.runs.has(file)
         );
         if (change !== null) {
           judgedThrough = index + change.files.length - 1;
-          typeChanges = change.source(beforeFile, dialect);
+          changeFiles = change.files;
+          typeChanges = change.source(beforeFile, dialect, args.consent);
         }
       }
       // A file adding per-language unique indexes is refused here, before the ledger records an
@@ -5651,17 +5765,24 @@ export async function runFileMigrations(args: {
         !snapshotsEquivalent(sides.live, sides.before) &&
         snapshotsEquivalent(sides.live, sides.target);
       if (typeChanges !== undefined && !atItsEnd) {
-        await refuseFileTypeChanges(db, typeChanges);
+        convertsBefore = conversionsByFile(
+          await refuseFileTypeChanges(db, typeChanges),
+          changeFiles,
+          dialect
+        );
       }
+      // The values this file converts, written inside its transaction before its first statement,
+      // so its own type statement finds them converted. A file at its end runs none.
+      const convertBefore = atItsEnd ? undefined : convertsBefore.get(m.name);
       // The caller's last word before the file applies, every refusal of it passed.
       await args.beforeApply?.(m.name);
 
       // The statements of this file, sent through `executeSql`. Once the first is sent, a file
       // whose statements commit one by one (one outside a transaction, or any file on MySQL) may
       // stand part-way, so a lost lock names it; a refusal before then left it untouched.
-      const executeFileSql: typeof executeSql = (...statement) => {
+      const executeFileSql: typeof executeSql = (sqlText, unit, after) => {
         if (m.transaction === false || dialect === "mysql") running = filename;
-        return executeSql(...statement);
+        return executeSql(sqlText, unit, after, convertBefore);
       };
       if (!target || sides === undefined) {
         // No paired snapshot: run verbatim + record. A hand-written file is said to have no
@@ -5903,6 +6024,7 @@ function parseMigrationFile(
     source,
     transaction: !marksNoTransaction(content),
     ...(localization === null ? {} : { localization }),
+    converts: () => readConvertsMark(content, `${name}.sql`),
   };
 }
 

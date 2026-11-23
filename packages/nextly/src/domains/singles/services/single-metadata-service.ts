@@ -1448,6 +1448,8 @@ export class SingleMetadataService {
       renames: renamed
         ? [{ from: toSnakeCase(renamed.from), to: toSnakeCase(renamed.to) }]
         : [],
+      // A type change the save converts value by value is its file's to apply.
+      convertsValues: { dialect, builtBy: "collection" },
       // A Single's one row is filled in, in the service's own statements, for a field new to its
       // table that is required or states a default the row takes: a value the file does not carry.
       singleRow: {

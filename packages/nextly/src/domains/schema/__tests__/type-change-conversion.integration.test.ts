@@ -24,6 +24,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
@@ -33,6 +35,11 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
+import { typeConversionOf } from "../builder-save/type-conversion";
+import {
+  type EntityTypeChangeInput,
+  judgeEntityTypeChanges,
+} from "../value-conversion/type-change/field-type-changes";
 
 const SLUG = "tcc_posts";
 
@@ -247,6 +254,32 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v", "en")).toEqual({ a: 12 });
       expect(await read(t, "v", "es")).toEqual({ a: 34 });
     });
+
+    // On SQLite the translations column is replaced by one of the new type, which a view naming the
+    // table would stop part-way: refused before any value is written, naming the view.
+    it.runIf(dialect === "sqlite")(
+      "refuses a translated change whose translations table a view depends on, naming it, and changes nothing",
+      async () => {
+        const t = await boot([{ name: "v", type: "text", localized: true }], {
+          localized: true,
+        });
+        await write(t, "a", { v: "12" }, "en");
+        await (
+          t.adapter as unknown as { executeQuery(s: string): Promise<unknown> }
+        ).executeQuery(
+          `CREATE VIEW "tcc_view" AS SELECT "v" FROM "dc_${SLUG}_locales"`
+        );
+
+        const refused = await save(
+          t,
+          [{ name: "v", type: "number", localized: true }],
+          { localized: true }
+        );
+
+        expect(JSON.stringify(refused)).toContain("view tcc_view");
+        expect(await read(t, "v", "en")).toEqual({ a: "12" });
+      }
+    );
 
     // The save counts on a translations column's new type only where its own file carries it, which
     // `migrate:create` plans from the folder's newest snapshot: one that records the fields but not
@@ -485,17 +518,6 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v", "es")).toEqual({ a: "abc" });
     });
 
-    // A date read as text is its ISO instant, a form the database's cast does not write: the save
-    // writes it, from each dialect's stored form (SQLite's seconds included).
-    it("converts a date into a text as its ISO instant", async () => {
-      const t = await boot([{ name: "v", type: "date" }]);
-      await write(t, "a", { v: "2024-01-02T03:04:05.000Z" });
-
-      expect(await save(t, [{ name: "v", type: "text" }])).toBeUndefined();
-
-      expect(await read(t, "v")).toEqual({ a: "2024-01-02T03:04:05.000Z" });
-    });
-
     // A value that cannot convert is cleared only with the person's consent, for the count the
     // review showed: without it the change is refused, and nothing changes.
     it("refuses a change that would lose a value when no clear is confirmed, and changes nothing", async () => {
@@ -666,6 +688,160 @@ describe.each(getConfiguredTestDialects())(
       expect(await save(t, [{ name: "v", type: "text" }])).toMatchObject(
         refusedSaying("tcc_touch")
       );
+
+      expect(await read(t, "v")).toEqual({ one: ["a"] });
+    });
+
+    /** `v` of each entry, by title, as the table holds it: its text, or null for no value. */
+    async function stored(
+      t: TestNextly
+    ): Promise<Record<string, string | null>> {
+      const rows = await (
+        t.adapter as unknown as {
+          executeQuery<R>(statement: string): Promise<R[]>;
+        }
+      ).executeQuery<{ title: string; v: unknown }>(
+        `SELECT ${q("title")} AS title, ${q("v")} AS v FROM ${q(`dc_${SLUG}`)}`
+      );
+      return Object.fromEntries(
+        rows.map(row => [row.title, row.v === null ? null : String(row.v)])
+      );
+    }
+
+    /** The judgement of `v` becoming a number on `t`'s table, as a save makes it, and its conversion. */
+    async function judgedThenConversion(t: TestNextly, confirmed: number) {
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      const input: EntityTypeChangeInput = {
+        label: `Collection '${SLUG}'`,
+        table: `dc_${SLUG}`,
+        previous: [{ name: "v", type: "text" }] as never,
+        next: [{ name: "v", type: "number" }] as never,
+        builtBy: "collection",
+        acknowledged: new Set(["v"]),
+        rewrites: true,
+      };
+      const { judged } = await judgeEntityTypeChanges(
+        adapter.getDrizzle(),
+        dialect,
+        input
+      );
+      const conversion = typeConversionOf({
+        dialect,
+        input,
+        judged,
+        consent: { kind: "review", confirmed: [{ field: "v", count: confirmed }] },
+      });
+      if (conversion === undefined) throw new Error("nothing converts");
+      return { db: adapter.getDrizzle(), conversion };
+    }
+
+    // The conversion judges its values again on the handle that writes them, so a value written
+    // after the save judged them is converted with the rest: one carried over from the judgement
+    // alone would leave it empty.
+    it("converts a value written after the save judged the values, as the rest", async () => {
+      const t = await boot([{ name: "v", type: "text" }]);
+      await write(t, "kept", { v: "12" });
+      await write(t, "lost", { v: "abc" });
+      const { db, conversion } = await judgedThenConversion(t, 1);
+      await write(t, "late", { v: "34" });
+
+      await conversion.run(db);
+
+      const after = await stored(t);
+      expect(Number(after.late)).toBe(34);
+      expect(Number(after.kept)).toBe(12);
+      expect(after.lost).toBeNull();
+    });
+
+    it("refuses a conversion once a value written after the save's judgement changes the count to clear, and changes nothing", async () => {
+      const t = await boot([{ name: "v", type: "text" }]);
+      await write(t, "kept", { v: "12" });
+      await write(t, "lost", { v: "abc" });
+      const { db, conversion } = await judgedThenConversion(t, 1);
+      await write(t, "late", { v: "xyz" });
+
+      await expect(conversion.run(db)).rejects.toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "TYPE_CHANGE_CLEAR_COUNT_CHANGED",
+              message: expect.stringContaining("2"),
+            }),
+          ],
+        },
+      });
+
+      expect(await stored(t)).toEqual({ kept: "12", lost: "abc", late: "xyz" });
+    });
+
+    // A default the column carries of the old type need not cast to the new one: it goes before the
+    // column changes type, as a field's column declares none. A save refuses such a column as drift
+    // before anything runs, so the conversion is asked directly; on MySQL a text column holds no
+    // default, and SQLite's keeps its own through the rebuild that types it.
+    it.runIf(dialect === "postgresql")(
+      "converts a column carrying a default of the old type that cannot cast to the new one",
+      async () => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        await write(t, "a", { v: "12" });
+        await exec(
+          t,
+          `ALTER TABLE ${q(`dc_${SLUG}`)} ALTER COLUMN ${q("v")} SET DEFAULT 'none'`
+        );
+        const { db, conversion } = await judgedThenConversion(t, 0);
+
+        await conversion.run(db);
+
+        expect(Number((await stored(t)).a)).toBe(12);
+      }
+    );
+
+    // A conversion writes the values while the old field's unique index still holds the column,
+    // its file dropping it only after: two that read as one are refused, saying why. A collection
+    // turning Unique off takes its push, so the judgement is asked as a file that converts asks it.
+    it("refuses values that read as one under the old field's Unique index where the change converts them", async () => {
+      const t = await boot([{ name: "v", type: "text", unique: true }]);
+      await write(t, "a", { v: "12" });
+      await write(t, "b", { v: "012" });
+
+      const { refusals } = await judgeEntityTypeChanges(
+        (t.adapter as unknown as DrizzleAdapter).getDrizzle(),
+        dialect,
+        {
+          label: `Collection '${SLUG}'`,
+          table: `dc_${SLUG}`,
+          previous: [{ name: "v", type: "text", unique: true }] as never,
+          next: [{ name: "v", type: "number" }] as never,
+          builtBy: "collection",
+          rewrites: true,
+        }
+      );
+
+      expect(refusals).toEqual([
+        expect.objectContaining({
+          path: "v",
+          message: expect.stringContaining("turn Unique off and save first"),
+        }),
+      ]);
+    });
+
+    // A save its push applies converts by the push's own statements, the database's cast, outside
+    // any transaction a conversion could share: it is judged as that cast, and nothing is written
+    // ahead of the push. A Required field added over the rows, which the review's answer fills,
+    // keeps a collection's save on its push, which fills them.
+    it("judges a type change by the cast where the save's push applies it, converting nothing ahead of it", async () => {
+      const t = await boot([{ name: "v", type: "chips" }]);
+      await write(t, "one", { v: ["a"] });
+
+      expect(
+        await save(
+          t,
+          [
+            { name: "v", type: "text" },
+            { name: "r", type: "text", required: true },
+          ],
+          { resolutions: { r: { action: "provide_default", value: "x" } } }
+        )
+      ).toMatchObject(refusedAs("TYPE_CHANGE_BLOCKED", "Rewriting values"));
 
       expect(await read(t, "v")).toEqual({ one: ["a"] });
     });

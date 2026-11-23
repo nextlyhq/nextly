@@ -13,14 +13,14 @@
  * - one that carries the development database's own readings converts only the rows that database
  *   held, and none of the deploy's own.
  */
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { migrateCore } from "../../../cli/commands/migrate";
+import { migrateCore, previewMigrate } from "../../../cli/commands/migrate";
 import { createLogger } from "../../../cli/utils/logger";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import {
@@ -36,6 +36,7 @@ import {
   NO_CONSENT,
   resolveDataLossConsent,
 } from "../migrate/data-loss-consent";
+import { verifyMigrationHash } from "../migrate-create/snapshot-io";
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const SLUG = "tcf_posts";
@@ -91,6 +92,66 @@ async function migrateFolder(
     throwOnFailure: true,
   } as never);
   clearRegistryRowCache();
+}
+
+/**
+ * The migration file whose header marks the columns it converts, with `edit` applied to its text:
+ * how a file written before the mark, or under other rules, reads to `nextly migrate`.
+ */
+async function editMarkedFile(edit: (text: string) => string): Promise<void> {
+  const dir = join(basePath, "migrations");
+  const files = (await readdir(dir)).filter(f => f.endsWith(".sql"));
+  let edited = 0;
+  for (const file of files) {
+    const text = await readFile(join(dir, file), "utf8");
+    if (!text.includes("-- Converts values:")) continue;
+    await writeFile(join(dir, file), edit(text));
+    edited += 1;
+  }
+  // The save wrote one marked file: an edit that reached none would test nothing.
+  expect(edited).toBe(1);
+}
+
+/** What `nextly migrate --dry-run` prints on `t`'s database over the folder. */
+async function dryRun(t: TestNextly): Promise<string> {
+  const adapter = t.adapter as unknown as DrizzleAdapter;
+  const printed: string[] = [];
+  const capture = new Proxy(
+    {},
+    {
+      get:
+        () =>
+        (...parts: unknown[]) => {
+          printed.push(parts.map(String).join(" "));
+        },
+    }
+  ) as Parameters<typeof previewMigrate>[0]["logger"];
+  await previewMigrate({
+    adapter: adapter as never,
+    db: adapter.getDrizzle(),
+    dialect: adapter.getCapabilities().dialect,
+    migrationsDir: join(basePath, "migrations"),
+    plugins: [],
+    logger: capture,
+  });
+  return printed.join("\n");
+}
+
+/** The run's consent to lose the data of `targets` (`--accept-data-loss=<targets>`). */
+function consentTo(targets: string): DataLossConsent {
+  return resolveDataLossConsent({ flag: targets, env: {} });
+}
+
+/** A run refused before its first statement, one of whose issues says `why`. */
+function refusedSaying(why: string) {
+  return {
+    code: "VALIDATION_ERROR",
+    publicData: {
+      errors: expect.arrayContaining([
+        expect.objectContaining({ message: expect.stringContaining(why) }),
+      ]),
+    },
+  };
 }
 
 async function createPosts(fields: Record<string, unknown>[]): Promise<void> {
@@ -167,7 +228,9 @@ describe.each(getConfiguredTestDialects())(
       await migrateFolder(second, created);
       await write(second, "other", { v: ["b"] });
       await write(second, "empty", { v: [] });
-      await migrateFolder(second);
+      // A file changing a column's type needs consent naming the column, read from its statements
+      // whatever its header says: none on SQLite, whose list and text are both its text.
+      await migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"));
 
       expect(await read(second)).toEqual({ other: "b", empty: null });
     });
@@ -190,7 +253,9 @@ describe.each(getConfiguredTestDialects())(
       await write(second, "whole", { v: "34" });
       await write(second, "word", { v: "zzz" });
 
-      await expect(migrateFolder(second)).rejects.toThrow();
+      await expect(migrateFolder(second)).rejects.toThrow(
+        /--accept-data-loss=dc_tcf_posts\.v/
+      );
       expect(await read(second)).toEqual({ whole: "34", word: "zzz" });
 
       await migrateFolder(
@@ -199,6 +264,91 @@ describe.each(getConfiguredTestDialects())(
         resolveDataLossConsent({ flag: true, env: {} })
       );
       expect(await read(second)).toEqual({ whole: 34, word: null });
+    });
+
+    /** A first database's text field becoming a number, its file written; its folder kept. */
+    async function textBecomesNumber(): Promise<number> {
+      const first = await boot(dialect);
+      await createPosts([{ name: "v", type: "text" }]);
+      const created = await filesWritten();
+      await write(first, "kept", { v: "12" });
+      await save(first, [{ name: "v", type: "number" }]);
+      expect(await read(first)).toEqual({ kept: 12 });
+      await first.destroy();
+      instance = undefined;
+      return created;
+    }
+
+    // `migrate:check` holds each file to the hash its snapshot recorded when it was written: the
+    // mark is part of the file that hash was taken of.
+    it("writes the mark into the file its snapshot's hash was taken of, which migrate:check accepts", async () => {
+      await textBecomesNumber();
+      const dir = join(basePath, "migrations");
+      const marked: string[] = [];
+      for (const file of (await readdir(dir)).filter(f => f.endsWith(".sql"))) {
+        const text = await readFile(join(dir, file), "utf8");
+        if (!text.includes("-- Converts values: rules 1; dc_tcf_posts.v")) {
+          continue;
+        }
+        marked.push(file);
+        expect(
+          (await verifyMigrationHash(join(dir, "meta"), file, text)).ok
+        ).toBe(true);
+      }
+      expect(marked).toHaveLength(1);
+    });
+
+    it("lists in a dry run each column a deploy converts and its values that cannot convert, changing nothing", async () => {
+      const created = await textBecomesNumber();
+      const second = await boot(dialect);
+      await migrateFolder(second, created);
+      await write(second, "whole", { v: "34" });
+      await write(second, "word", { v: "zzz" });
+
+      const printed = await dryRun(second);
+
+      expect(printed).toMatch(
+        /converts dc_tcf_posts\.v value by value.*1 converted, 1 that cannot convert cleared/
+      );
+      expect(printed).toContain("--accept-data-loss=dc_tcf_posts.v");
+      expect(await read(second)).toEqual({ whole: "34", word: "zzz" });
+    });
+
+    it("judges a file without the mark by the cast, as a file written before it was", async () => {
+      const first = await boot(dialect);
+      await createPosts([{ name: "v", type: "chips" }]);
+      const created = await filesWritten();
+      await write(first, "one", { v: ["a"] });
+      await save(first, [{ name: "v", type: "text" }]);
+      await first.destroy();
+      instance = undefined;
+      await editMarkedFile(text =>
+        text.replace(/^-- Converts values:.*\n/m, "")
+      );
+
+      const second = await boot(dialect);
+      await migrateFolder(second, created);
+      await write(second, "other", { v: ["b"] });
+
+      await expect(
+        migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"))
+      ).rejects.toMatchObject(refusedSaying("can't be deployed yet"));
+      expect(await read(second)).toEqual({ other: ["b"] });
+    });
+
+    it("refuses a file marked with conversion rules this version does not know, and changes nothing", async () => {
+      const created = await textBecomesNumber();
+      const second = await boot(dialect);
+      await migrateFolder(second, created);
+      await write(second, "whole", { v: "34" });
+      await editMarkedFile(text =>
+        text.replace("-- Converts values: rules 1;", "-- Converts values: rules 2;")
+      );
+
+      await expect(migrateFolder(second)).rejects.toMatchObject(
+        refusedSaying("conversion rules 2")
+      );
+      expect(await read(second)).toEqual({ whole: "34" });
     });
   }
 );

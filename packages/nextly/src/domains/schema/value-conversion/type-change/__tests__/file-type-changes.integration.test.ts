@@ -5,7 +5,8 @@
  * The files are the ones `migrate:create` writes (`generateMigration`, from `defineCollection`
  * declarations, so each snapshot records the fields): the first file's statements make the table,
  * its rows are written, and the next file is judged as `nextly migrate` would judge it before its
- * first statement.
+ * first statement. Such a file carries no mark of values it converts, so one that goes ahead answers
+ * no conversion (`[]`): the database's cast changes its column.
  *
  * What separates the correct judgement from a plausible broken one: a type change that keeps its
  * column writes no statement, so a judgement that reads statements alone refuses nothing over
@@ -180,7 +181,7 @@ function cases(open: () => { connection: Connection; slug: string }) {
     });
     const next = await create(slug, connection.dialect, CHOICE, 2);
 
-    await expect(judge(connection, first, next)).resolves.toBeUndefined();
+    await expect(judge(connection, first, next)).resolves.toEqual([]);
   });
 
   it("refuses a file changing a text into a number over a value no number reads", async () => {
@@ -214,7 +215,7 @@ function cases(open: () => { connection: Connection; slug: string }) {
       2
     );
 
-    await expect(judge(connection, first, next)).resolves.toBeUndefined();
+    await expect(judge(connection, first, next)).resolves.toEqual([]);
   });
 
   it("judges a renamed field's values under its new name", async () => {
@@ -401,7 +402,7 @@ function cases(open: () => { connection: Connection; slug: string }) {
       },
     });
     // The migration's own statements alone pair nothing: why every file of the change is given.
-    await expect(judgedOn(next.main)).resolves.toBeUndefined();
+    await expect(judgedOn(next.main)).resolves.toEqual([]);
   });
 
   // An entity the file moves from the Schema Builder to code keeps the column the Builder made
@@ -441,7 +442,7 @@ function cases(open: () => { connection: Connection; slug: string }) {
         },
       });
     } else {
-      await expect(outcome).resolves.toBeUndefined();
+      await expect(outcome).resolves.toEqual([]);
     }
   });
 
@@ -481,7 +482,7 @@ function cases(open: () => { connection: Connection; slug: string }) {
         statements: next.statements,
         dialect: connection.dialect,
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual([]);
   });
 }
 

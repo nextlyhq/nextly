@@ -29,6 +29,7 @@ import { describeClassed } from "../describe";
 import type { RowKey } from "../types";
 
 import {
+  type ColumnAt,
   columnDescriptorAt,
   type Family,
   type FieldTypeOnDialect,
@@ -38,9 +39,17 @@ import {
   FIRST_KEYS,
   fieldAccepts,
   judgeStoredTypeChange,
+  type ReadingPages,
   type StoredTypeChangeJudgement,
   uniqueValues,
 } from "./judge-stored";
+
+/**
+ * Which columns a road rewrites the values of, for the pairs it converts (`rewritesPair`): every
+ * one (`true`), none, or those a test of the table and column names, as a migration file's marker
+ * names the columns it converts.
+ */
+export type RewritesAt = boolean | ((table: string, column: string) => boolean);
 
 /** One field whose type a save changes, read as the rules read both types on one database. */
 export interface FieldTypeChange {
@@ -166,17 +175,16 @@ export interface JudgedFieldTypeChange extends FieldTypeChange {
    */
   leavesWithEntity?: true;
   /**
-   * Each kept or changed value as the new type reads it, by row, where the save rewrites the
-   * values (`rewrites`): what the save's conversion writes. Absent where the database's cast is
-   * left to reach them.
-   */
-  readings?: readonly { key: RowKey; readsAs: string }[];
-  /**
    * The save writes this change's values itself, as the new type reads them (`rewrites`), here and
    * in the migration file that deploys it, so no database's cast is left to reach them: a value
    * that cannot convert is cleared where the person confirmed it, never refused as undeployable.
    */
   converted?: true;
+  /**
+   * The old field is unique and the new one is not: the values are rewritten while the old unique
+   * index still stands, so two that read as one were judged as repeats (`judgeFieldTypeChanges`).
+   */
+  uniqueBefore?: true;
 }
 
 /**
@@ -201,8 +209,8 @@ const REWRITTEN_TO: ReadonlySet<Family> = new Set([
 
 /**
  * What the stored-value judgement is asked to hand over: each value's reading, gathered into
- * `readings`, where a unique MySQL text weighs them after the scan (`collated`) or the save writes
- * them (`rewritten`); and, for the latter, that it judges the values as rewritten.
+ * `readings`, where a unique MySQL text weighs them after the scan (`collated`); and, where the
+ * road writes the values (`rewritten`), that it judges them as rewritten.
  */
 function readingOptions(
   collated: boolean,
@@ -210,7 +218,7 @@ function readingOptions(
   readings: { key: RowKey; readsAs: string }[]
 ): { onReading?: (key: RowKey, readsAs: string) => void; rewrites?: true } {
   return {
-    ...(collated || rewritten
+    ...(collated
       ? {
           onReading: (key: RowKey, readsAs: string) =>
             readings.push({ key, readsAs }),
@@ -220,12 +228,55 @@ function readingOptions(
   };
 }
 
+/** Whether `rewrites` names `column` of `table`. */
+function rewritesAt(
+  rewrites: RewritesAt | undefined,
+  table: string,
+  column: string
+): boolean {
+  return typeof rewrites === "function"
+    ? rewrites(table, column)
+    : rewrites === true;
+}
+
+/**
+ * How one pass of the judgement reads the columns, beyond what it judges: the conversion's pass
+ * judges only the columns it converts there (`only`) and hands each one's readings to the writer
+ * of its values a page at a time (`readingPages`), so a table's values are never all held.
+ */
+export interface JudgingPass {
+  /** Judge only the changes held in `column` of `table`. */
+  only?: (table: string, column: string) => boolean;
+  /** Where a rewritten change's readings go, a page at a time; none where undefined. */
+  readingPages?: (table: string, column: string) => ReadingPages | undefined;
+}
+
 /** Whether a save that rewrites the values writes `from`'s values as `to` reads them. */
 function rewritesPair(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect
 ): boolean {
   return REWRITTEN_FROM.has(from.family) && REWRITTEN_TO.has(to.family);
+}
+
+/**
+ * Whether a save that writes the values itself converts a field changing from `from` to `to` value
+ * by value, the fields read where `at` keeps them: a change of the field's type
+ * (`fieldTypeChangesOf`, which a column's width alone is not) between a pair it rewrites
+ * (`rewritesPair`). Its migration file judges and converts each value before its statements, so
+ * it needs no push to carry it. A column only resized (a text made Unique, bounded on MySQL) is no
+ * such change: nothing judges its values on the file's road.
+ */
+export function convertsByValue(
+  from: FieldDefinition,
+  to: FieldDefinition,
+  dialect: SupportedDialect,
+  at: ColumnAt
+): boolean {
+  const options = at.componentRow === true ? { componentRow: true } : {};
+  const fromType = fieldTypeOnDialect(from, dialect, at.builtBy, options);
+  const toType = fieldTypeOnDialect(to, dialect, at.builtBy, options);
+  return !sameType(fromType, toType) && rewritesPair(fromType, toType);
 }
 
 /**
@@ -253,11 +304,11 @@ export async function judgeFieldTypeChanges(args: {
   retyped?: ReadonlySet<string>;
   changes: readonly FieldTypeChange[];
   /**
-   * The save rewrites each value of a pair it converts (`rewritesPair`) as the new type reads it,
-   * so each change of such a pair is judged that way and hands over its readings.
+   * The columns whose values the road rewrites, as the new type reads each, for a pair it converts
+   * (`rewritesPair`): each change there is judged that way (`converted`).
    */
-  rewrites?: boolean;
-}): Promise<JudgedFieldTypeChange[]> {
+  rewrites?: RewritesAt;
+} & JudgingPass): Promise<JudgedFieldTypeChange[]> {
   const judged: JudgedFieldTypeChange[] = [];
   const columnsOf = liveColumnReader(args.db, args.dialect);
   const textOf = tableTextReader(args.db, args.dialect);
@@ -265,17 +316,25 @@ export async function judgeFieldTypeChanges(args: {
     const held = await whereHeld(change, args, columnsOf);
     if (held === undefined) continue;
     const { table, column } = held;
+    if (args.only !== undefined && !args.only(table, column)) continue;
     const perLanguage = table === args.translationsTable;
     const text = await textOf(table);
+    const rewritten =
+      rewritesAt(args.rewrites, table, column) &&
+      rewritesPair(change.fromType, change.toType);
+    // A rewritten column takes its values while the old field's unique index still stands, the
+    // save's own statements dropping it only after: two values that read as one are refused there
+    // as they are where the new field is unique.
+    const unique =
+      change.to.unique === true || (rewritten && change.from.unique === true);
     // A unique MySQL text compares values by its collation, which only the database can weigh:
     // the readings are gathered and weighed after the scan instead of compared as they come.
     const collated =
       text !== undefined &&
-      change.to.unique === true &&
+      unique &&
       COLLATED_FAMILIES.has(change.toType.family);
     const readings: { key: RowKey; readsAs: string }[] = [];
-    const rewritten =
-      args.rewrites === true && rewritesPair(change.fromType, change.toType);
+    const pages = rewritten ? args.readingPages?.(table, column) : undefined;
     const judgedHere = await judgeStoredTypeChange({
       db: args.db,
       dialect: args.dialect,
@@ -288,8 +347,9 @@ export async function judgeFieldTypeChanges(args: {
       to: withCharset(change.toType, text?.charset),
       accepts: fieldAccepts(change.toType, change.to),
       // A unique field holds each value once: two that read as one value of the new type block.
-      unique: change.to.unique === true && !collated,
+      unique: unique && !collated,
       ...readingOptions(collated, rewritten, readings),
+      ...(pages === undefined ? {} : { readingPages: pages }),
     });
     const result =
       collated && text !== undefined
@@ -304,7 +364,10 @@ export async function judgeFieldTypeChanges(args: {
       column,
       result,
       ...(perLanguage ? translationsTableFlags(change, args) : {}),
-      ...(rewritten ? { readings, converted: true as const } : {}),
+      ...(rewritten ? { converted: true as const } : {}),
+      ...(rewritten && unique && change.to.unique !== true
+        ? { uniqueBefore: true as const }
+        : {}),
     });
   }
   return judged;
@@ -601,21 +664,31 @@ const DEPLOYED_BY_CAST =
 export function typeChangeRefusals(
   entity: string,
   judged: readonly JudgedFieldTypeChange[],
-  acknowledged: ReadonlySet<string> = new Set()
+  acknowledged: ReadonlySet<string> = new Set(),
+  /**
+   * How the road takes consent to clear a converted change's lost values, said in its refusal: a
+   * save's review by default, a run's consent for a migration file deploying it.
+   */
+  clearsBy: (change: JudgedFieldTypeChange) => string = () => CLEARS_BY_REVIEW
 ): TypeChangeRefusal[] {
   const refusals: TypeChangeRefusal[] = [];
   for (const change of judged) {
-    const refusal = refusalOf(entity, change, acknowledged);
+    const refusal = refusalOf(entity, change, acknowledged, clearsBy);
     if (refusal !== null) refusals.push(refusal);
   }
   return refusals;
 }
 
+/** How a save takes consent to clear a converted change's lost values: its review's count. */
+const CLEARS_BY_REVIEW =
+  "Confirm clearing the values that cannot convert, with the count the review shows, and the save clears them, here and on every database its migration deploys to.";
+
 /** One judged change's refusal, as `typeChangeRefusals` describes it; null where it goes ahead. */
 function refusalOf(
   entity: string,
   change: JudgedFieldTypeChange,
-  acknowledged: ReadonlySet<string>
+  acknowledged: ReadonlySet<string>,
+  clearsBy: (change: JudgedFieldTypeChange) => string
 ): TypeChangeRefusal | null {
   const { judgement } = change.result;
   const blocked = judgement.class === "blocked";
@@ -639,6 +712,10 @@ function refusalOf(
     clearsRequired,
     rewritten: judgement.reasons.some(r => r.kind === "needs-rewrite"),
     converted: change.converted === true,
+    repeatsUnderOldIndex:
+      change.uniqueBefore === true &&
+      judgement.reasons.some(r => r.kind === "repeated"),
+    clearsBy: () => clearsBy(change),
   });
   const values =
     blocked || lossy || clearsRequired
@@ -671,8 +748,17 @@ function refusalReasons(of: {
   clearsRequired: boolean;
   rewritten: boolean;
   converted: boolean;
+  /** Values that read as one meet the old field's unique index, which the save drops only after. */
+  repeatsUnderOldIndex: boolean;
+  /** How the road takes consent to clear a converted change's lost values. */
+  clearsBy: () => string;
 }): string[] {
   const why: string[] = [];
+  if (of.repeatsUnderOldIndex) {
+    why.push(
+      "Its values take the new type while the old Unique setting's index still holds the column, so values that read as one cannot both be written: turn Unique off and save first, then change the field's type."
+    );
+  }
   if (of.translated) {
     why.push(
       "It is kept per language, in a translations table whose column a type change does not convert, so the change can't be deployed yet."
@@ -688,9 +774,7 @@ function refusalReasons(of: {
       "It is required, so a cleared value would leave its row with none: make it optional first, or change the values that cannot convert, then save again."
     );
   } else if (of.lossy && of.converted) {
-    why.push(
-      "Confirm clearing the values that cannot convert, with the count the review shows, and the save clears them, here and on every database its migration deploys to."
-    );
+    why.push(of.clearsBy());
   } else if (of.lossy) {
     why.push(
       `Clearing the values that cannot convert can't be deployed yet: ${DEPLOYED_BY_CAST}.`
@@ -811,8 +895,8 @@ export interface EntityTypeChangeInput {
   ignore?: ReadonlySet<string>;
   /** The creator of the entity's table before the change, where its ownership moves (`fieldTypeChangesOf`). */
   builtByBefore?: ColumnOrigin;
-  /** The save rewrites the values of each pair it converts (`judgeFieldTypeChanges`' `rewrites`). */
-  rewrites?: boolean;
+  /** The columns whose values the road rewrites, for each pair it converts (`judgeFieldTypeChanges`' `rewrites`). */
+  rewrites?: RewritesAt;
 }
 
 /**
@@ -837,7 +921,9 @@ export async function fieldTypeChangeRefusals(
 export async function judgeEntityTypeChanges(
   db: unknown,
   dialect: SupportedDialect,
-  entity: EntityTypeChangeInput
+  entity: EntityTypeChangeInput,
+  /** How this pass reads the columns (`JudgingPass`): every column, holding no reading, by default. */
+  pass: JudgingPass = {}
 ): Promise<{
   refusals: TypeChangeRefusal[];
   judged: JudgedFieldTypeChange[];
@@ -878,7 +964,8 @@ export async function judgeEntityTypeChanges(
       ? { retyped: entity.retypedTranslations }
       : {}),
     changes,
-    ...(entity.rewrites === true ? { rewrites: true } : {}),
+    ...(entity.rewrites === undefined ? {} : { rewrites: entity.rewrites }),
+    ...pass,
   });
   return {
     refusals: typeChangeRefusals(entity.label, judged, entity.acknowledged),

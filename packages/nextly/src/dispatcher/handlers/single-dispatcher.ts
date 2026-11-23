@@ -676,6 +676,8 @@ async function singleSaveTakesPush(args: {
       getSingleRowColumnDescriptor(field, args.dialect, "collection"),
     renames: renamedFieldsOf(args.renameResolutions ?? []),
     ...(args.moved === undefined ? {} : { moved: args.moved }),
+    // A type change the save converts value by value is its file's to apply.
+    convertsValues: { dialect: args.dialect, builtBy: "collection" },
   });
 }
 

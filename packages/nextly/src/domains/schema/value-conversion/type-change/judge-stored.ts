@@ -367,11 +367,28 @@ function valueOf(to: FieldTypeOnDialect, readsAs: string): unknown {
   }
 }
 
+/** One kept or changed value as the new type reads it, by its row. */
+export interface Reading {
+  key: RowKey;
+  readsAs: string;
+}
+
+/**
+ * Where a judgement hands its readings a page at a time (`judgeStoredTypeChange`'s
+ * `readingPages`): `write` is given each page of at most `size` readings, awaited before the next
+ * page of values is read, so no more than a page is ever held.
+ */
+export interface ReadingPages {
+  size: number;
+  write: (page: readonly Reading[]) => Promise<void>;
+}
+
 /**
  * A field's type change judged over every value `column` of `table` holds, read a page at a time
- * and keyed as the table keys its rows.
+ * and keyed as the table keys its rows. With `readingPages`, each kept or changed value's reading
+ * is handed over a page at a time as the values are judged, the last page once every value is.
  */
-export function judgeStoredTypeChange(
+export async function judgeStoredTypeChange(
   args: {
     db: unknown;
     dialect: SupportedDialect;
@@ -382,22 +399,52 @@ export function judgeStoredTypeChange(
     to: FieldTypeOnDialect;
     /** The new field's own validation, asked of each kept or changed value (`fieldAccepts`). */
     accepts?: (readsAs: string) => Promise<boolean>;
+    readingPages?: ReadingPages;
   } & CollectOptions
 ): Promise<StoredTypeChangeJudgement> {
-  return collectTypeChange(
+  const values = readStoredValues(args.db, args.dialect, {
+    table: args.table,
+    column: args.column,
+    keyedBy: args.keyedBy,
+    toJson: false,
+  });
+  const pages = args.readingPages;
+  const page: Reading[] = [];
+  const onReading =
+    pages === undefined
+      ? args.onReading
+      : (key: RowKey, readsAs: string) => {
+          args.onReading?.(key, readsAs);
+          page.push({ key, readsAs });
+        };
+  const judgement = await collectTypeChange(
     args.from,
     args.to,
-    readStoredValues(args.db, args.dialect, {
-      table: args.table,
-      column: args.column,
-      keyedBy: args.keyedBy,
-      toJson: false,
-    }),
+    pages === undefined ? values : writtenAsRead(values, page, pages),
     args.accepts,
     {
       ...(args.unique !== undefined ? { unique: args.unique } : {}),
-      ...(args.onReading !== undefined ? { onReading: args.onReading } : {}),
+      ...(onReading !== undefined ? { onReading } : {}),
       ...(args.rewrites === true ? { rewrites: true } : {}),
     }
   );
+  if (pages !== undefined && page.length > 0) {
+    await pages.write(page.splice(0));
+  }
+  return judgement;
+}
+
+/**
+ * `values`, handing the readings judged so far (`page`, filled as each value is judged) to
+ * `pages.write` once there are a page of them, before the next value is read.
+ */
+async function* writtenAsRead<V>(
+  values: AsyncIterable<V>,
+  page: Reading[],
+  pages: ReadingPages
+): AsyncIterable<V> {
+  for await (const value of values) {
+    if (page.length >= pages.size) await pages.write(page.splice(0));
+    yield value;
+  }
 }

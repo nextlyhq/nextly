@@ -159,6 +159,19 @@ async function read(t: TestNextly): Promise<Record<string, unknown>> {
 describe.each(getConfiguredTestDialects())(
   "a type change into or out of a date, checkbox, JSON or rich text writes each dialect's stored form (%s)",
   dialect => {
+    // A date read as text is its ISO instant, a form the database's cast does not write: the save
+    // writes it, from each dialect's stored form (SQLite's seconds included).
+    it("converts a date into a text as its ISO instant", async () => {
+      await boot(dialect);
+      await createPosts([{ name: "v", type: "date" }]);
+      const t = instance as TestNextly;
+      await write(t, "a", { v: "2024-01-02T03:04:05.000Z" });
+
+      expect(await save(t, [{ name: "v", type: "text" }])).toBeUndefined();
+
+      expect(await read(t)).toEqual({ a: "2024-01-02T03:04:05.000Z" });
+    });
+
     it("converts a text holding an instant into a date, clearing a confirmed value that is no date", async () => {
       await boot(dialect);
       await createPosts([{ name: "v", type: "text" }]);

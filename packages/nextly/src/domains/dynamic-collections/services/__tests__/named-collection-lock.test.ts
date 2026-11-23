@@ -87,31 +87,7 @@ describe("a collection's named lock", () => {
   });
 
   it("is taken on the transaction's connection under both names, and released under both in reverse", async () => {
-    const dialect = new MySqlDialect();
-    const statements: { sql: string; params: unknown[] }[] = [];
-    const tx = {
-      queryStatement: vi.fn(async (statement: SQL) => {
-        const query = dialect.sqlToQuery(statement);
-        statements.push(query);
-        if (query.sql.includes("DATABASE()")) return [{ name: "site_a" }];
-        if (query.sql.includes("GET_LOCK")) return [{ locked: 1 }];
-        return [{}];
-      }),
-      select: vi.fn(async () => [
-        { slug: "posts", id: "c1" },
-        { slug: "authors", id: "c2" },
-      ]),
-    } as unknown as TransactionContext;
-    const adapter = {
-      getCapabilities: () => ({ dialect: "mysql" }),
-    } as never;
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    } as never;
-    const registry = new DynamicCollectionRegistryService(adapter, logger);
+    const { tx, statements, registry } = mysqlHold();
 
     const held = await registry.holdCollectionsIn(
       tx,
@@ -126,14 +102,119 @@ describe("a collection's named lock", () => {
       namedCollectionLockName("site_a", "authors"),
       namedCollectionLockName("site_a", "posts"),
     ];
-    const taken = statements
-      .filter(query => query.sql.includes("GET_LOCK"))
-      .map(query => query.params[0]);
-    expect(taken).toEqual(expected);
-    // Released once the rows have been read, each name once, in reverse.
-    const released = statements
-      .filter(query => query.sql.includes("RELEASE_LOCK"))
-      .map(query => query.params[0]);
-    expect(released).toEqual([...expected].reverse());
+    expect(lockNamesIn(statements, "GET_LOCK")).toEqual([expected]);
+    // Released once the rows have been read, each name once, in reverse, in one statement.
+    expect(lockNamesIn(statements, "RELEASE_LOCK")).toEqual([
+      [...expected].reverse(),
+    ]);
+  });
+
+  // The share side every MySQL entry write takes: one statement to take the names, one to read
+  // the registry row, one to release them. The database's name is read once per adapter.
+  it("costs a write three statements once the database's name is known", async () => {
+    const { tx, statements, registry } = mysqlHold();
+
+    await registry.holdCollectionsIn(tx, ["posts"], "share");
+    const first = statements.length + vi.mocked(tx.select).mock.calls.length;
+    statements.length = 0;
+    vi.mocked(tx.select).mockClear();
+    await registry.holdCollectionsIn(tx, ["posts"], "share");
+    const later = statements.length + vi.mocked(tx.select).mock.calls.length;
+
+    expect(first).toBe(4);
+    expect(later).toBe(3);
+    expect(statements.map(query => query.sql)).not.toContainEqual(
+      expect.stringContaining("DATABASE()")
+    );
+  });
+
+  it("refuses as COLLECTION_BEING_CHANGED when a name is not got in time, releasing the ones it got", async () => {
+    // The first of the two names got, the second not.
+    const { tx, statements, registry } = mysqlHold({ taken: 1 });
+
+    await expect(
+      registry.holdCollectionsIn(tx, ["posts"], "update")
+    ).rejects.toMatchObject({ code: "COLLECTION_BEING_CHANGED" });
+
+    expect(lockNamesIn(statements, "RELEASE_LOCK")).toEqual([
+      [oldReleaseName("posts")],
+    ]);
+    expect(tx.select).not.toHaveBeenCalled();
+  });
+
+  it("releases every name when the take fails part way", async () => {
+    const { tx, statements, registry } = mysqlHold({ takeFails: true });
+
+    await expect(
+      registry.holdCollectionsIn(tx, ["posts"], "update")
+    ).rejects.toThrow("connection lost while waiting");
+
+    expect(lockNamesIn(statements, "RELEASE_LOCK")).toEqual([
+      [namedCollectionLockName("site_a", "posts"), oldReleaseName("posts")],
+    ]);
   });
 });
+
+/**
+ * A MySQL registry service on a stand-in transaction that records each statement: its database is
+ * `site_a`, the registry holds `posts` and `authors`, and the take of the names answers `taken`
+ * (every name by default), or fails when `takeFails`.
+ */
+function mysqlHold(
+  options: { taken?: number; takeFails?: boolean } = {}
+): {
+  tx: TransactionContext;
+  statements: { sql: string; params: unknown[] }[];
+  registry: DynamicCollectionRegistryService;
+} {
+  const dialect = new MySqlDialect();
+  const statements: { sql: string; params: unknown[] }[] = [];
+  const tx = {
+    queryStatement: vi.fn(async (statement: SQL) => {
+      const query = dialect.sqlToQuery(statement);
+      statements.push(query);
+      if (query.sql.includes("DATABASE()")) return [{ name: "site_a" }];
+      if (query.sql.includes("GET_LOCK")) {
+        if (options.takeFails === true) {
+          throw new Error("connection lost while waiting");
+        }
+        const names = query.params.filter(isLockName).length;
+        return [{ taken: options.taken ?? names }];
+      }
+      return [{}];
+    }),
+    select: vi.fn(async () => [
+      { slug: "posts", id: "c1" },
+      { slug: "authors", id: "c2" },
+    ]),
+  } as unknown as TransactionContext;
+  // A new adapter each time, so each case reads the database's name afresh.
+  const adapter = {
+    getCapabilities: () => ({ dialect: "mysql" }),
+  } as never;
+  const logger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  } as never;
+  return {
+    tx,
+    statements,
+    registry: new DynamicCollectionRegistryService(adapter, logger),
+  };
+}
+
+function isLockName(param: unknown): param is string {
+  return typeof param === "string" && param.startsWith("nextly:collection:");
+}
+
+/** The lock names each statement calling `fn` names, in the order it names them. */
+function lockNamesIn(
+  statements: readonly { sql: string; params: unknown[] }[],
+  fn: "GET_LOCK" | "RELEASE_LOCK"
+): string[][] {
+  return statements
+    .filter(query => query.sql.includes(fn))
+    .map(query => query.params.filter(isLockName));
+}
