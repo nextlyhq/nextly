@@ -135,9 +135,18 @@ export function buildAccounts(
       emailTemplates: accountsEmailTemplates(),
       events: ACCOUNTS_EVENTS.map(name => ({ name })),
       jobs: [
-        sendEmailJob((email, attempt) =>
-          sendQueuedEmail(started(), email, attempt)
-        ),
+        // The send puts an email's secrets back from their refs with the
+        // secrets helper the flows minted them with, on the site's pages.
+        sendEmailJob((email, attempt) => {
+          const ctx = started();
+          return sendQueuedEmail(ctx, email, attempt, {
+            secrets: coreFor(ctx).secrets,
+            settings,
+            logger: {
+              warn: (message, context) => ctx.logger.warn(message, context),
+            },
+          });
+        }),
         sweepJob(now => sweepAll({ ...deps(), now: () => now }, now)),
       ],
     },

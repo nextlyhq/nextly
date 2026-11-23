@@ -11,6 +11,21 @@ export const SWEEP_JOB = "accounts:sweep";
 /** Sends emails a few times over before giving up, as a mail server can be down a while. */
 const SEND_ATTEMPTS = 5;
 
+/**
+ * An email as its job holds it: its kind, account and recipient, the
+ * fields that carry no secret, and the refs of those that do, by field. A
+ * row queued before secrets were queued by ref holds its fields whole and
+ * no refs.
+ */
+export type QueuedAccountsEmail = Readonly<
+  {
+    kind: AccountsEmail["kind"];
+    accountId: string | null;
+    to: string;
+    refs?: Readonly<Record<string, string>>;
+  } & Record<string, unknown>
+>;
+
 /** The attempt a send runs in: its job's id, the same on every attempt, and the runner's now. */
 export interface SendAttempt {
   jobId: string;
@@ -24,7 +39,7 @@ export interface SendAttempt {
  * nothing more.
  */
 export function sendEmailJob(
-  send: (email: AccountsEmail, attempt: SendAttempt) => Promise<void>
+  send: (email: QueuedAccountsEmail, attempt: SendAttempt) => Promise<void>
 ): JobDefinition {
   return defineJob({
     slug: SEND_EMAIL_JOB,
@@ -56,15 +71,27 @@ export function sweepJob(sweep: (now: Date) => Promise<void>): JobDefinition {
  * The plugin's own queued email, read back from the job's row. Only the
  * plugin queues this job, so a check of its shape is enough: every email
  * names its account, but an invitation to an address with no account,
- * which names none.
+ * which names none; and its refs, where it has them, are strings by field.
  */
-function isQueuedEmail(value: unknown): value is AccountsEmail {
+function isQueuedEmail(value: unknown): value is QueuedAccountsEmail {
   if (typeof value !== "object" || value === null) return false;
-  const { kind, to, accountId } = value as Record<string, unknown>;
+  const { kind, to, accountId, refs } = value as Record<string, unknown>;
 
   return (
     typeof kind === "string" &&
     typeof to === "string" &&
-    (kind === "invitation" ? accountId === null : typeof accountId === "string")
+    (kind === "invitation"
+      ? accountId === null
+      : typeof accountId === "string") &&
+    (refs === undefined || isRefs(refs))
+  );
+}
+
+/** Refs by field, as a queued email's secrets are held: strings, by name. */
+function isRefs(value: unknown): value is Readonly<Record<string, string>> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Object.values(value).every(ref => typeof ref === "string")
   );
 }

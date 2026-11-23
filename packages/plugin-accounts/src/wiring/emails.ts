@@ -198,11 +198,20 @@ export function accountsEmailTemplates(): PluginEmailTemplate[] {
   );
 }
 
-/** An email's fields as its template's variables: everything but its kind, its account and its recipient. */
-export function emailVariables(email: AccountsEmail): Record<string, string> {
+/** What an email holds that is never one of its template's variables. */
+const NOT_VARIABLES = new Set(["kind", "accountId", "to", "refs"]);
+
+/**
+ * An email's fields as its template's variables: everything but its kind,
+ * its account, its recipient and the refs its secrets are sent by. Takes the
+ * email a send rebuilt from its queued form as well as one a flow built.
+ */
+export function emailVariables(
+  email: AccountsEmail | Readonly<Record<string, unknown>>
+): Record<string, string> {
   const variables: Record<string, string> = {};
   for (const [name, value] of Object.entries(email)) {
-    if (name === "kind" || name === "accountId" || name === "to") continue;
+    if (NOT_VARIABLES.has(name)) continue;
     variables[name] = String(value);
   }
 

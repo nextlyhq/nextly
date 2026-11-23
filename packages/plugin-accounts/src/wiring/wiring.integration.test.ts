@@ -39,6 +39,18 @@ import { accountByAddress } from "../storage/accounts";
 
 const DAY = 24 * 60 * 60 * 1000;
 
+/**
+ * What a send of an email that carries no secret is handed to put secrets
+ * back: never asked, so a secret it is asked for is refused.
+ */
+const NO_SECRETS = {
+  secrets: {
+    reveal: async () => ({ ok: false as const, reason: "invalid" as const }),
+  },
+  settings: resolveAccountsSettings({ origin: TEST_ORIGIN }),
+  logger: { warn: () => undefined },
+};
+
 describe.each(getConfiguredTestDialects())(
   "the plugin as a site boots it (%s)",
   (dialect: TestDialect) => {
@@ -180,15 +192,15 @@ describe.each(getConfiguredTestDialects())(
 
       // One job, run three times: it sends once.
       for (let attempt = 0; attempt < 3; attempt += 1)
-        await sendQueuedEmail(ctx, email, { jobId: "job-1", now });
+        await sendQueuedEmail(ctx, email, { jobId: "job-1", now }, NO_SECRETS);
       expect(sends).toHaveLength(1);
 
       // Another job whose first send fails: it is free to send on its retry.
       await expect(
-        sendQueuedEmail(ctx, email, { jobId: "job-2", now })
+        sendQueuedEmail(ctx, email, { jobId: "job-2", now }, NO_SECRETS)
       ).rejects.toThrow("did not send");
-      await sendQueuedEmail(ctx, email, { jobId: "job-2", now });
-      await sendQueuedEmail(ctx, email, { jobId: "job-2", now });
+      await sendQueuedEmail(ctx, email, { jobId: "job-2", now }, NO_SECRETS);
+      await sendQueuedEmail(ctx, email, { jobId: "job-2", now }, NO_SECRETS);
       expect(sends).toHaveLength(3);
       // Every send names the account it is to, so core erases its delivery
       // record with the account.
@@ -215,7 +227,7 @@ describe.each(getConfiguredTestDialects())(
       expect(seen).toEqual(["job-7", "job-7"]);
     });
 
-    it("sends an invitation queued for an address with no account, naming no person, and refuses a nameless email of any other kind", async () => {
+    it("sends an invitation queued, before its link was queued by ref, for an address with no account, naming no person, and refuses a nameless email of any other kind", async () => {
       const booted = await bootAccounts(dialect);
       current = booted.nextly;
       const people: unknown[] = [];
@@ -237,7 +249,7 @@ describe.each(getConfiguredTestDialects())(
         },
       };
       const job = sendEmailJob((email, attempt) =>
-        sendQueuedEmail(ctx, email, attempt)
+        sendQueuedEmail(ctx, email, attempt, NO_SECRETS)
       );
       const run = (email: Record<string, unknown>, jobId: string) =>
         job.handler({ email }, {

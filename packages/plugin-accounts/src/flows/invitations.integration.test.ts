@@ -139,6 +139,7 @@ describe.each(getConfiguredTestDialects())(
           accountId: null,
           to: ADDRESS,
           link: issued.link,
+          refs: { link: expect.any(String) },
         },
       ]);
 
