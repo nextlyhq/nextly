@@ -66,9 +66,9 @@ async function refusedStart(
     refusal = error;
   }
   expect(refusal, "the start was not refused").toBeDefined();
-  const errors =
-    (refusal as { data?: { errors?: unknown } }).data?.errors ??
-    (refusal as { errors?: unknown }).errors;
+  expect((refusal as { code?: unknown }).code).toBe("VALIDATION_ERROR");
+  const errors = (refusal as { publicData?: { errors?: unknown } }).publicData
+    ?.errors;
   expect(Array.isArray(errors), String(refusal)).toBe(true);
   return (errors as Array<{ path: string; code: string; message: string }>).map(
     e => `${e.path} ${e.code} ${e.message}`
