@@ -181,6 +181,41 @@ describe("the review of a save with moves", () => {
     expect(reviewed.classification).toBe("safe");
   });
 
+  // The preview asks about the drop of the moved field's old column; that drop is the move's.
+  it("asks nothing where the only question was the moved column's drop", () => {
+    const asking = {
+      ...base,
+      classification: "interactive" as const,
+      hasDestructiveChanges: false,
+    };
+    const move = {
+      fieldId: "summary",
+      label: "summary",
+      from: ["summary"],
+      to: ["address", "summary"],
+    };
+    expect(previewWithMoves(asking, [move]).classification).toBe("safe");
+    // Another removal is still the person's to confirm.
+    const alsoRemoved = {
+      ...asking,
+      changes: {
+        ...asking.changes,
+        removed: [
+          ...asking.changes.removed,
+          {
+            name: "notes",
+            type: "text",
+            rowCount: 0,
+            classification: "safe",
+          },
+        ],
+      },
+    };
+    expect(previewWithMoves(alsoRemoved, [move]).classification).toBe(
+      "interactive"
+    );
+  });
+
   it("keeps a removal no move accounts for", () => {
     const reviewed = previewWithMoves(base, [
       {

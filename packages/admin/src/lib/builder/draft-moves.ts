@@ -145,21 +145,27 @@ export function previewWithMoves(
       )
   );
   const deletesData = reviewDeletesData(changes);
+  // A pair from a moved field's old column, or onto its new one, is the move's, not a rename.
+  const renamed = (preview.renamed ?? []).filter(
+    c => !leftColumns.has(c.from) && !arrivedColumns.has(c.to)
+  );
   return {
     ...preview,
     hasChanges: true,
     changes,
-    // A pair from a moved field's old column, or onto its new one, is the move's, not a rename.
-    renamed: (preview.renamed ?? []).filter(
-      c => !leftColumns.has(c.from) && !arrivedColumns.has(c.to)
-    ),
+    renamed,
     interactiveFields,
     hasDestructiveChanges: preview.hasDestructiveChanges && deletesData,
+    // The preview asks about the drop of each moved field's old column, which is the move's to
+    // answer: the save still asks only while a prompt, a removal, a change asking for an answer or
+    // a rename pair is left.
     classification: classificationOf(
       preview.classification,
       deletesData,
       interactiveFields.length > 0 ||
-        interactiveFields.length === preview.interactiveFields.length
+        changes.removed.length > 0 ||
+        changes.changed.some(c => c.classification === "interactive") ||
+        renamed.length > 0
     ),
   };
 }
