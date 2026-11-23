@@ -701,6 +701,48 @@ function asCause(error: unknown): Error | undefined {
     : undefined;
 }
 
+/**
+ * The load where no configuration file is found and the caller takes the defaults: the default
+ * configuration, with the Builder's definitions beside it judged.
+ */
+async function loadDefaultConfig(
+  cwd: string,
+  options: LoadConfigOptions
+): Promise<LoadConfigResult> {
+  debugLog(options, "No config file found, using default config");
+  // Cleared here too: a long-lived process that had loaded a plugin config
+  // and then lost its config file would otherwise keep the removed plugins'
+  // types registered, and Builder saves would go on recognizing them and
+  // running their `validate` and `validateOptions`.
+  clearFieldTypes();
+  const appConfig = defineConfig({});
+  // The Builder's definitions beside the default configuration are judged as they are beside a
+  // configuration file, once the registry holds no plugin's field type.
+  const builderProblems = builderProblemsFor(
+    await readBuilderEntities(cwd, appConfig.db?.uiSchemaFile),
+    appConfig,
+    appConfig.db?.uiSchemaFile,
+    options
+  );
+  if (builderProblems.length > 0) {
+    throw NextlyError.validation({
+      errors: builderProblems,
+      logContext: { configPath: undefined, reason: "config-invalid" },
+    });
+  }
+  return {
+    config: appConfig,
+    appConfig,
+    configPath: undefined,
+    projectRoot: cwd,
+    dependencies: [],
+    pluginConsent: NO_PLUGIN_CONSENT,
+    // Empty, matching the clear above: work pinned to this result must not
+    // resolve plugin types a later config happens to register.
+    fieldTypes: snapshotFieldTypes(),
+  };
+}
+
 async function loadConfigInternal(
   options: LoadConfigOptions
 ): Promise<LoadConfigResult> {
@@ -729,40 +771,7 @@ async function loadConfigInternal(
     });
   }
 
-  if (!configPath) {
-    debugLog(options, "No config file found, using default config");
-    // Cleared here too: a long-lived process that had loaded a plugin config
-    // and then lost its config file would otherwise keep the removed plugins'
-    // types registered, and Builder saves would go on recognizing them and
-    // running their `validate` and `validateOptions`.
-    clearFieldTypes();
-    const appConfig = defineConfig({});
-    // The Builder's definitions beside the default configuration are judged as they are beside a
-    // configuration file, once the registry holds no plugin's field type.
-    const builderProblems = builderProblemsFor(
-      await readBuilderEntities(cwd, appConfig.db?.uiSchemaFile),
-      appConfig,
-      appConfig.db?.uiSchemaFile,
-      options
-    );
-    if (builderProblems.length > 0) {
-      throw NextlyError.validation({
-        errors: builderProblems,
-        logContext: { configPath: undefined, reason: "config-invalid" },
-      });
-    }
-    return {
-      config: appConfig,
-      appConfig,
-      configPath: undefined,
-      projectRoot: cwd,
-      dependencies: [],
-      pluginConsent: NO_PLUGIN_CONSENT,
-      // Empty, matching the clear above: work pinned to this result must not
-      // resolve plugin types a later config happens to register.
-      fieldTypes: snapshotFieldTypes(),
-    };
-  }
+  if (!configPath) return loadDefaultConfig(cwd, options);
 
   if (!existsSync(configPath)) {
     throw new NextlyError({
