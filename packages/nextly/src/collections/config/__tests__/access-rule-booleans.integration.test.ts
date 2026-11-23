@@ -138,8 +138,10 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses to start with an access key it does not know, naming it", async () => {
-      // A config's collections are defined as it loads, and defining one
-      // validates it, so the instance never boots.
+      // The start judges every entity before it connects and refuses one
+      // declared through `defineCollection` with each problem in the error's
+      // public data (its message is the generic "Validation failed."), so the
+      // key is named there, at its place and with its code.
       await expect(async () =>
         createTestNextly({
           ...(dialect === "sqlite" ? {} : { dialect }),
@@ -151,7 +153,19 @@ describe.each(getConfiguredTestDialects())(
             }),
           ],
         })
-      ).rejects.toThrow(/reed/);
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        logContext: { reason: "config-invalid" },
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: expect.stringContaining("access.reed"),
+              code: "ACCESS_KEY_UNKNOWN",
+              message: expect.stringContaining("reed"),
+            }),
+          ],
+        },
+      });
     });
   }
 );

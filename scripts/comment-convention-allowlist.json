@@ -191,12 +191,11 @@
     "digests": ["a532c6cee9e6e280"]
   },
   "packages/nextly/src/cli/commands/migrate-check.ts": {
-    "count": 5,
+    "count": 4,
     "digests": [
       "1e69da4e9a7faed6",
       "ac4363b1f74caedb",
       "b0fd26dbfaf30d0a",
-      "c7a32540bd4bec8c",
       "f373ffe8aadde1d6"
     ]
   },
@@ -226,10 +225,6 @@
   "packages/nextly/src/cli/commands/migrate.ts": {
     "count": 1,
     "digests": ["952b3b5c1ea2151e"]
-  },
-  "packages/nextly/src/cli/commands/upgrade.test.ts": {
-    "count": 1,
-    "digests": ["d51aa38e85147b44"]
   },
   "packages/nextly/src/cli/program.ts": {
     "count": 5,

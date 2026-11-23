@@ -124,6 +124,14 @@ export const cancelAddressEndpoint: Endpoint = endpoint("cancelAddressChange");
 
 export const deleteAccountEndpoint: Endpoint = endpoint("deleteAccount");
 
+/** Accepts an invitation, signing the visitor in, and says where to go next: a path on the site only. */
+export const acceptInvitationEndpoint: Endpoint = endpoint(
+  "acceptInvitation",
+  (_outcome, read, server) => ({
+    redirectTo: server.returnPath(read("next") || undefined),
+  })
+);
+
 /** The signed-in account, or null; never cached. */
 export const meEndpoint: Endpoint = async (deps, request) => {
   const server = accountsService(() => deps);

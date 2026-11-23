@@ -282,7 +282,9 @@ describe("the allowlist", () => {
   // both entries went with them.
   // 208 -> 207: the one recorded offence in `cli/commands/index.ts` no longer
   // exists, and its entry went with it.
-  const EXPECTED_ENTRIES = 207;
+  // 207 -> 206: the one recorded offence in `cli/commands/upgrade.test.ts` no
+  // longer exists, and its entry went with it.
+  const EXPECTED_ENTRIES = 206;
   // 503 -> 498: recorded offences in `services/users.ts`, the Direct API auth
   // namespace and its test, and `auth-service.ts` no longer exist, so the list
   // shrank by five digests. Each entry itself remains, which is why the count
@@ -331,7 +333,10 @@ describe("the allowlist", () => {
   // `ui-schema/merge.ts` no longer exists, and both entries went with them.
   // 430 -> 429: the one recorded offence in `cli/commands/index.ts` no longer
   // exists, and its entry went with it.
-  const EXPECTED_TOTAL = 429;
+  // 429 -> 427: one of the five recorded offences in `cli/commands/migrate-check.ts`
+  // and the one in `cli/commands/upgrade.test.ts` no longer exist, and the record
+  // shrank with them.
+  const EXPECTED_TOTAL = 427;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

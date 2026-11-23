@@ -39,7 +39,7 @@ vi.mock("../../di", () => ({
         return { list: vi.fn().mockResolvedValue([]), get: vi.fn() };
       // No registered entity is localized, so history asks no language.
       case "collectionRegistryService":
-        return { getCollectionBySlug: vi.fn().mockResolvedValue(null) };
+        return { getCollectionBySlugForRead: vi.fn().mockResolvedValue(null) };
       default:
         return {};
     }
@@ -280,7 +280,7 @@ describe("version list pagination meta", () => {
               { select: vi.fn().mockResolvedValue([]) }
             : name === "collectionRegistryService"
               ? // Not localized, so the listing asks no language.
-                { getCollectionBySlug: vi.fn().mockResolvedValue(null) }
+                { getCollectionBySlugForRead: vi.fn().mockResolvedValue(null) }
               : {}) as typeof di.getService);
   });
 

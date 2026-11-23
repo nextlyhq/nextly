@@ -46,6 +46,18 @@ const SAMPLES: {
   },
   "account-deleted": { ...base, kind: "account-deleted" },
   "password-changed": { ...base, kind: "password-changed" },
+  invitation: {
+    kind: "invitation",
+    accountId: null,
+    to: "dana@example.com",
+    link: "L",
+  },
+  "invitation-has-account": {
+    ...base,
+    kind: "invitation-has-account",
+    signInLink: "S",
+    resetLink: "R",
+  },
 };
 
 describe("the accounts email templates", () => {
@@ -103,6 +115,7 @@ describe("the accounts email templates", () => {
       "reset-required",
       "address-change-asked",
       "confirm-new-address",
+      "invitation",
     ];
     const marked = accountsEmailTemplates()
       .filter(template => template.carriesSecret === true)

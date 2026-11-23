@@ -21,6 +21,9 @@ export const Tags = defineCollection({
   ],
   admin: { useAsTitle: "name" },
   // Same policy as Categories: public read, curating needs the permission.
+  // Opened to the built-in roles: a collection reaches Admin, Editor, Author
+  // and Viewer only once it names them, each by its own rule.
+  grants: { presets: ["admin", "editor", "author", "viewer"] },
   access: {
     read: anyone,
     create: hasPermission,
