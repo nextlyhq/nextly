@@ -298,18 +298,18 @@ describe.each(getConfiguredTestDialects())(
 
     // `migrate:create` plans a translations column's new type from the folder's newest snapshot: one
     // that records the fields but not which columns the translations table keeps (a snapshot written
-    // before those were kept) gives the file no `retypes` step. A change the save converts value by
-    // value gives the column its new type itself, here and on every database its marked file
-    // deploys to, so it no longer waits on that step.
-    it("converts a translated change where the newest snapshot keeps no record of the translations columns", async () => {
-      const t = await boot([{ name: "v", type: "text", localized: true }], {
+    // before those were kept) gives the file no `retypes` step, so a change the database's cast
+    // converts (a checkbox becoming a number, which no save converts value by value) is refused as
+    // before, every value as it was. A change the save converts gives the column its new type itself.
+    it("refuses a translated change the cast converts where the newest snapshot keeps no record of the translations columns", async () => {
+      const t = await boot([{ name: "v", type: "checkbox", localized: true }], {
         localized: true,
       });
-      const id = await write(t, "a", { v: "12" }, "en");
+      const id = await write(t, "a", { v: true }, "en");
       await t.nextly.update({
         collection: SLUG,
         id,
-        data: { v: "34", _overwrite: true },
+        data: { v: false, _overwrite: true },
         locale: "es",
       } as never);
       const meta = join(project ?? "", "database", "history", "meta");
@@ -332,10 +332,10 @@ describe.each(getConfiguredTestDialects())(
         await save(t, [{ name: "v", type: "number", localized: true }], {
           localized: true,
         })
-      ).toBeUndefined();
+      ).toMatchObject(refusedAs("TYPE_CHANGE_BLOCKED", "kept per language"));
 
-      expect(await read(t, "v", "en")).toEqual({ a: 12 });
-      expect(await read(t, "v", "es")).toEqual({ a: 34 });
+      expect(await read(t, "v", "en")).toEqual({ a: true });
+      expect(await read(t, "v", "es")).toEqual({ a: false });
     });
 
     // Holding no value is no exception: the translations table's column takes the new type, so a
