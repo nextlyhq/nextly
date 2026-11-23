@@ -28,6 +28,7 @@ import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import { openNamedQueryFrame } from "../../../auth/named-query-scope";
 import { defineCollection, text } from "../../../config";
+import { getDialectTables } from "../../../database/index";
 import { Nextly } from "../../../direct-api/nextly";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import type { Principal } from "../../../plugins/principals/types";
@@ -37,12 +38,21 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import {
+  registerBeforeOperationHook,
+  unregisterBeforeOperationHook,
+} from "../../../hooks";
+import type { BeforeOperationHandler } from "../../../hooks/types";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
+import { reportPrincipalDeleted } from "../../audit/erase-principal";
 
 import { MemoryPrivateStorage } from "./memory-private-storage";
 
 const STREAMED = "contracts";
 const LINKED = "linkfiles";
+const DATA = "datafiles";
+const OWNED = "ownedfiles";
 const KIND = "accounts:account";
 const ORIGIN = "http://localhost";
 const MISSING = "00000000-0000-4000-8000-000000000000";
@@ -50,6 +60,7 @@ const MISSING = "00000000-0000-4000-8000-000000000000";
 const MEMBERS: Record<string, { verified: boolean }> = {
   m1: { verified: true },
   m3: { verified: false },
+  m4: { verified: true },
 };
 
 const accounts = {
@@ -156,18 +167,15 @@ describe.each(getConfiguredTestDialects())(
     async function uploaded(
       collection: string,
       bytes: Buffer,
-      confirm = true
+      confirm = true,
+      named = { filename: "note.pdf", mimeType: "application/pdf" }
     ): Promise<string> {
       const started = (await (
         await call(
           "POST",
           ["files", collection, "uploads"],
           await staff("uploader"),
-          {
-            filename: "note.pdf",
-            mimeType: "application/pdf",
-            size: bytes.length,
-          }
+          { ...named, size: bytes.length }
         )
       ).json()) as {
         item: {
@@ -226,7 +234,7 @@ describe.each(getConfiguredTestDialects())(
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
         plugins: [accounts],
-        storagePlugins: [storage.plugin([STREAMED, LINKED])],
+        storagePlugins: [storage.plugin([STREAMED, LINKED, DATA, OWNED])],
         collections: [
           defineCollection({
             slug: STREAMED,
@@ -238,6 +246,23 @@ describe.each(getConfiguredTestDialects())(
             slug: LINKED,
             files: { ...FILES, delivery: "redirect" },
             access: { read: verifiedOrStaff, create: verifiedOrStaff },
+            fields: [text({ name: "note" })],
+          }),
+          defineCollection({
+            slug: DATA,
+            files: { ...FILES, accept: ["application/json"] },
+            access: { read: verifiedOrStaff, create: verifiedOrStaff },
+            fields: [text({ name: "note" })],
+          }),
+          // Staff read only the entries whose note names them.
+          defineCollection({
+            slug: OWNED,
+            files: FILES,
+            access: {
+              read: ({ user }: { user?: { id: string } | null }) =>
+                user ? { note: { equals: user.id } } : false,
+              create: verifiedOrStaff,
+            },
             fields: [text({ name: "note" })],
           }),
         ],
@@ -262,8 +287,8 @@ describe.each(getConfiguredTestDialects())(
           })
         ).item.id;
       }
-      await grantTo(t, ids.uploader, "create", [STREAMED, LINKED]);
-      await grantTo(t, ids.reader, "read", [STREAMED, LINKED]);
+      await grantTo(t, ids.uploader, "create", [STREAMED, LINKED, DATA, OWNED]);
+      await grantTo(t, ids.reader, "read", [STREAMED, LINKED, DATA, OWNED]);
       // The stranger may create, but not read.
       await grantTo(t, ids.stranger, "create", [STREAMED]);
 
@@ -489,6 +514,127 @@ describe.each(getConfiguredTestDialects())(
           })
         )
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("hands over a streamed file's bytes exactly as stored, whatever their type", async () => {
+      // JSON with spacing and a date-like value: the bytes a caller confirmed
+      // are the bytes they get back, never re-serialised on the way out.
+      const bytes = Buffer.from(
+        '{\n  "signedAt": "2026-01-02T03:04:05.000Z",\n  "n":   1\n}\n'
+      );
+      const id = await uploaded(DATA, bytes, true, {
+        filename: "terms.json",
+        mimeType: "application/json",
+      });
+      const res = await download(DATA, id, await staff("reader"));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("application/json");
+      expect(Buffer.from(await res.arrayBuffer()).equals(bytes)).toBe(true);
+      expect(res.headers.get("x-nextly-skip-date-formatting")).toBeNull();
+    });
+
+    it("never hands over a file other than the one the caller was allowed to read", async () => {
+      // A read hook may point the caller's read at another entry. Allowed to
+      // read only `mine`, the reader asking for `theirs` must not be given
+      // `theirs`' bytes because the hook let them read `mine`.
+      const api = new Nextly();
+      const theirs = await uploaded(OWNED, pdf("their file"));
+      const mine = await uploaded(OWNED, pdf("my file"));
+      await api.update({
+        collection: OWNED,
+        id: theirs,
+        data: { note: "someone else", _overwrite: true },
+      } as never);
+      await api.update({
+        collection: OWNED,
+        id: mine,
+        data: { note: ids.reader, _overwrite: true },
+      } as never);
+      const retarget: BeforeOperationHandler = ctx => {
+        const args = ctx.args as { id?: string };
+        return ctx.operation === "read" && ctx.user && args.id === theirs
+          ? { ...args, id: mine }
+          : undefined;
+      };
+      registerBeforeOperationHook(OWNED, retarget);
+      try {
+        const seen = await seenRows(theirs);
+        const refused = await download(OWNED, theirs, await staff("reader"));
+        const missing = await download(OWNED, MISSING, await staff("reader"));
+        expect(refused.status).toBe(404);
+        expect(await refusal(refused)).toBe(await refusal(missing));
+        expect(await seenRows(theirs)).toEqual(seen);
+      } finally {
+        unregisterBeforeOperationHook(OWNED, retarget);
+      }
+
+      // Nor the other way round: the caller allowed `mine`, and the read that
+      // finds the key pointed at `theirs`.
+      const retargetTrusted: BeforeOperationHandler = ctx => {
+        const args = ctx.args as { id?: string };
+        return ctx.operation === "read" && !ctx.user && args.id === mine
+          ? { ...args, id: theirs }
+          : undefined;
+      };
+      registerBeforeOperationHook(OWNED, retargetTrusted);
+      try {
+        const seen = await seenRows(mine);
+        const res = await download(OWNED, mine, await staff("reader"));
+        expect(res.status).toBe(404);
+        expect(await seenRows(mine)).toEqual(seen);
+      } finally {
+        unregisterBeforeOperationHook(OWNED, retargetTrusted);
+      }
+      // The allowed read, unhooked, still opens.
+      expect((await download(OWNED, mine, await staff("reader"))).status).toBe(
+        200
+      );
+    });
+
+    it("keeps which file was opened when the person who opened it is erased", async () => {
+      const api = new Nextly();
+      const byMember = await seenRows(files.ready.id);
+      await download(STREAMED, files.ready.id, member("m4"));
+      const memberRow = await addedRow(files.ready.id, byMember);
+      const byStaff = await seenRows(files.ready.id);
+      await api.files.download({
+        collection: STREAMED,
+        id: files.ready.id,
+        user: { id: ids.owner },
+        overrideAccess: true,
+      });
+      const staffRow = await addedRow(files.ready.id, byStaff);
+
+      await reportPrincipalDeleted(
+        { kind: KIND, id: "m4" },
+        { adapter: t.adapter as never, secrets: [process.env.NEXTLY_SECRET!] }
+      );
+      await eraseActorPersonalData(
+        t.adapter.getDrizzle() as Parameters<typeof eraseActorPersonalData>[0],
+        getDialectTables(dialect) as Parameters<
+          typeof eraseActorPersonalData
+        >[1],
+        ids.owner,
+        new Date()
+      );
+
+      const rows = await t.adapter.select<AuditRow>("audit_log");
+      for (const kept of [memberRow, staffRow]) {
+        const row = rows.find(r => r.id === kept.id)!;
+        const metadata =
+          typeof row.metadata === "string"
+            ? (JSON.parse(row.metadata) as Record<string, unknown>)
+            : row.metadata;
+        expect(metadata).toMatchObject({
+          collection: STREAMED,
+          id: files.ready.id,
+          delivery: "stream",
+        });
+      }
+      // The member is named by digest from now on, not by their id.
+      expect(
+        rows.find(r => r.id === memberRow.id)!.actorPrincipalId
+      ).not.toBe("m4");
     });
   }
 );

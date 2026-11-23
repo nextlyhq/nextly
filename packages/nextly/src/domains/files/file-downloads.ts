@@ -67,16 +67,25 @@ function notFound(slug: string, reason: string): never {
  * the caller may not read it or it does not exist; it is the precondition,
  * asked before anything else is read or written. `reader` is who the audit
  * row names.
+ *
+ * The caller's read and the trusted read that finds the key must both be of
+ * entry `id`. A read hook may point a read at another entry; a file is opened
+ * only when the entry the caller was allowed to read is the one asked for, so
+ * the key of one entry is never handed over on the strength of another.
  */
 export async function openFile(
   slug: string,
   id: string,
-  readChecked: () => Promise<{ fileStatus?: unknown } | null>,
+  readChecked: () => Promise<{ id?: unknown; fileStatus?: unknown } | null>,
   reader: FileReader
 ): Promise<OpenedFile> {
   const { policy } = filesCollection(slug);
   const readable = await readChecked();
-  if (readable === null || readable.fileStatus !== "ready") {
+  if (
+    readable === null ||
+    String(readable.id) !== id ||
+    readable.fileStatus !== "ready"
+  ) {
     notFound(slug, "file-not-readable-by-caller");
   }
 
@@ -84,6 +93,7 @@ export async function openFile(
   const key = entry?.storageKey;
   if (
     entry === null ||
+    String(entry.id) !== id ||
     entry.fileStatus !== "ready" ||
     typeof key !== "string"
   ) {

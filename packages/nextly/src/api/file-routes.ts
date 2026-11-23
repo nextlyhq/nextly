@@ -39,7 +39,7 @@ import { ensureServicesInitialized } from "../route-handler";
 import { attachmentDisposition } from "../storage/private-files";
 
 import { PRIVATE_NO_STORE_HEADERS } from "./authenticated-read";
-import { respondMutation } from "./response-shapes";
+import { SKIP_DATE_FORMATTING_HEADER, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -48,6 +48,10 @@ import { nextlyValidationFromZod } from "./zod-to-nextly-error";
  * browser to save, or a 303 to the short link. Both are private to their
  * caller and stored by no cache, a redirect included, since a cache that kept
  * one would hand the link to whoever asked next.
+ *
+ * The bytes are the file's, not a payload of records: the router's date
+ * formatting, which re-serialises a JSON body, is told to leave them alone,
+ * so a JSON file is handed over byte for byte as it was confirmed.
  */
 function downloadResponse(opened: OpenedFile): Response {
   if (opened.url !== undefined) {
@@ -63,6 +67,7 @@ function downloadResponse(opened: OpenedFile): Response {
       "Content-Type": opened.mimeType,
       "Content-Disposition": attachmentDisposition(opened.filename),
       "Content-Length": String(opened.size),
+      [SKIP_DATE_FORMATTING_HEADER]: "1",
     },
   });
 }

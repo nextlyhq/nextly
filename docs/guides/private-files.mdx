@@ -141,9 +141,9 @@ Only the caller who started the upload may confirm it. Nextly reads the stored b
 
 `GET /admin/api/files/:slug/:id/download`
 
-The entry is read as the caller, through the collection's read rule and permissions. A file they may not read, one that does not exist and one not yet confirmed are all answered with the same `404`, so nothing is learned about files a caller cannot open.
+The entry is read as the caller, through the collection's read rule and permissions. A file they may not read, one that does not exist and one not yet confirmed are all answered with the same `404`, so nothing is learned about files a caller cannot open. A `beforeOperation` hook that points the read at another entry gets the same `404`: a file is opened only when the entry the caller was allowed to read is the one asked for.
 
-- With `delivery: "stream"`, the answer is `200` with the bytes, the stored type, and `Content-Disposition: attachment`.
+- With `delivery: "stream"`, the answer is `200` with the bytes exactly as they were confirmed, the stored type, and `Content-Disposition: attachment`.
 - With `delivery: "redirect"`, it is `303` to a link that lasts at most 60 seconds and answers as an attachment.
 
 Every answer carries `Cache-Control: private, no-store`, `Pragma: no-cache`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox` and `Referrer-Policy: no-referrer`, so no cache keeps a file and none is ever rendered on your site's origin.
@@ -169,11 +169,11 @@ export async function openContract(contractId: string, userId: string) {
 }
 ```
 
-The same checks apply. A call that names neither a `user` nor a `principal` is refused; trusted code opening a file for nobody must say `overrideAccess: true`.
+The same checks apply. A call that names neither a `user` nor a `principal` is refused; trusted code opening a file for nobody must say `overrideAccess: true`. A script acting for an API key passes the key's maker as `user` and the key's id as `apiKeyId`, and the audit row names the key. Inside a named query, `files.download` is refused like every other call.
 
 ## The audit trail
 
-Every download writes an [audit log](/docs/audit-log) row of kind `file.downloaded`, naming who opened the file (a staff user, an API key by its maker with the key's id, a signed-in person, or core) and, in its metadata, the `collection`, the file's `id` and the `delivery`. Never the link or where the file is stored.
+Every download writes an [audit log](/docs/audit-log) row of kind `file.downloaded`, naming who opened the file (a staff user, an API key by its maker with the key's id, a signed-in person, or core) and, in its metadata, the `collection`, the file's `id` and the `delivery`. Never the link or where the file is stored. When the person who opened a file is later erased, the row keeps that metadata, so the trail still says which file was opened, and the person's identifying details go as on every other core row.
 
 ## Clean-up
 

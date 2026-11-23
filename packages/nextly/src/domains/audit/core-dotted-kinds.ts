@@ -9,8 +9,22 @@
  *
  * @module domains/audit/core-dotted-kinds
  */
+import { and, like, notInArray, type Column, type SQL } from "drizzle-orm";
 
 /** Core audit kinds containing a dot. */
 export const CORE_DOTTED_AUDIT_KINDS: ReadonlySet<string> = new Set([
   "file.downloaded",
 ]);
+
+/**
+ * The rows of a plugin's kinds, as a filter on the audit log's `kind`
+ * column: a dot in the name, and none of {@link CORE_DOTTED_AUDIT_KINDS}.
+ * Written once so the writer and every erasure tell the two apart alike: a
+ * core row's metadata is kept through an erasure, a plugin row's is not.
+ */
+export function pluginAuditKinds(kind: Column): SQL {
+  return and(
+    like(kind, "%.%"),
+    notInArray(kind, [...CORE_DOTTED_AUDIT_KINDS])
+  ) as SQL;
+}
