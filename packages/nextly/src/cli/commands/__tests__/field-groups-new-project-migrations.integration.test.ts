@@ -29,9 +29,11 @@ import {
   text,
 } from "../../../config";
 import { createAdapter } from "../../../database/factory";
-import type { SchemaHook } from "../../../domains/schema/extension/draft";
-import { col } from "../../../domains/schema/extension/dsl";
 import { shutdownServices } from "../../../di/register";
+import {
+  MARKER_COLUMN,
+  markerPluginOn,
+} from "../../../domains/field-groups/__tests__/helpers/used-field-group-fixtures";
 import { runFieldGroupMigration } from "../../../domains/field-groups/migration/run";
 import { forgetFieldGroupStorageNames } from "../../../domains/field-groups/storage/resolve-storage-names";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
@@ -189,19 +191,14 @@ async function newestSnapshot(): Promise<{
 }
 
 /**
- * The app's own column on the card's table and an index on its type column, by the names a new
- * project's history keeps them under: what `nextly migrate` must compile on an empty database.
+ * A plugin's column and index on the card's table, by the name a new project's history keeps it
+ * under: what `nextly migrate` must compile on an empty database before it creates the table.
  */
-const onCardTable: SchemaHook = ({ schema }) => {
-  schema.extendTable("fg_np_card", {
-    columns: { np_note: col.shortText({ nullable: true }) },
-    indexes: [{ columns: ["_field_group_type"] }],
-  });
-};
 const WITH_CARD_EXTENSION = defineConfig({
   collections: [posts],
   fieldGroups: [card],
-  db: { migrationsDir: "./migrations", schema: { extend: [onCardTable] } },
+  plugins: [markerPluginOn("fg_np_card")],
+  db: { migrationsDir: "./migrations" },
 });
 
 describe.each(getConfiguredTestDialects())(
@@ -242,9 +239,9 @@ describe.each(getConfiguredTestDialects())(
       expect(outcome).toMatchObject({ ran: false, reason: "already-migrated" });
     });
 
-    // Compiled before the run creates the registry, the app's contributions are read on the
-    // names the history keeps, not on legacy names an absent registry would suggest.
-    it("compile the app's contributions to a field group's table on the history's names", async () => {
+    // Compiled before the run creates the registry, contributions to a field group's table are
+    // read on the names the history keeps, not on legacy names an absent registry would suggest.
+    it("compile a contribution to a field group's table on the history's names", async () => {
       const url = await openDatabase(dialect);
       loaded.config = WITH_CARD_EXTENSION;
       setNonInteractive(true);
@@ -266,7 +263,7 @@ describe.each(getConfiguredTestDialects())(
               : "SELECT column_name AS name FROM information_schema.columns WHERE table_name = 'fg_np_card'"
         )
       ).map(row => row.name);
-      expect(columns).toContain("np_note");
+      expect(columns).toContain(MARKER_COLUMN);
     });
 
     // The control: a history on the legacy names sets a new database up on them.
