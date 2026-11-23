@@ -19,7 +19,7 @@
  * - a review that lists only the top-level fields shows no count for a field removed from a group
  *   with no name, and a save that compares the row's fields then refuses every such removal.
  */
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -34,6 +34,10 @@ import {
 import type { ServiceContainer } from "../../../services";
 import { consoleLogger } from "../../../shared/types";
 import { holdEntityForWrite } from "../../collections/services/entry-write-hold";
+import {
+  asCreatedBefore,
+  withNoHistory,
+} from "../builder-save/__tests__/helpers/older-table";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { namedCollectionLockNames } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
@@ -68,10 +72,14 @@ vi.mock("../migrate/required-column-guard", async importOriginal => {
 // release then runs on too. `refused` counts the releases refused.
 const tryRelease = vi.hoisted(() => ({ fails: false, refused: 0 }));
 
-// A switch that puts two statements before each migration file's own: a column added to the
-// collection's table, which commits on MySQL, then a write to a row the case holds, which the
-// first try waits at and ends on. The next try resumes past the column, with the delete ahead.
-const resumable = vi.hoisted(() => ({ on: false }));
+// A switch that puts two statements before each migration file's own: `first`, a schema statement
+// that commits on MySQL, then a write to a row the case holds, which the first try waits at and
+// ends on. The next try resumes past `first`, with the delete ahead. `first` changes the
+// collection's own table, or makes a table beside it and leaves the collection's as it was.
+const resumable = vi.hoisted(() => ({
+  on: false,
+  first: "collection" as "collection" | "beside",
+}));
 vi.mock("../migrate/split-sql", async importOriginal => {
   const real = await importOriginal<typeof import("../migrate/split-sql")>();
   return {
@@ -82,7 +90,9 @@ vi.mock("../migrate/split-sql", async importOriginal => {
       const statements = real.splitSqlStatements(...args);
       return resumable.on
         ? [
-            "ALTER TABLE `dc_dh_notes` ADD COLUMN `resumed_past` integer",
+            resumable.first === "collection"
+              ? "ALTER TABLE `dc_dh_notes` ADD COLUMN `resumed_past` integer"
+              : "CREATE TABLE IF NOT EXISTS `dh_resumed_past` (`id` integer)",
             "UPDATE `dh_waited_at` SET `n` = `n` + 1 WHERE `id` = 1",
             ...statements,
           ]
@@ -90,6 +100,13 @@ vi.mock("../migrate/split-sql", async importOriginal => {
     },
   };
 });
+
+// What a resumed try's recount (`DeletionHold.standingIn`) finds on the handle it runs on: whether
+// that connection holds every one of the collection's named locks, recorded while `watching`.
+const resumedRecount = vi.hoisted(() => ({
+  watching: false,
+  holdsLocks: [] as boolean[],
+}));
 
 // A gate just after the save's count, inside the file's transaction, with the table held.
 const afterCount = vi.hoisted(() => ({
@@ -122,6 +139,15 @@ vi.mock("../builder-save/deletion-counts", async importOriginal => {
         // The push road compares just before the push; the gate follows that count too.
         compare: gatedAfter(hold.compare),
         check: gatedAfter(hold.check),
+        standingIn(changed?: readonly string[]) {
+          const standing = hold.standingIn(changed);
+          return async (db: unknown) => {
+            if (resumedRecount.watching) {
+              resumedRecount.holdsLocks.push(await holdsCollectionLocks(db));
+            }
+            await standing(db);
+          };
+        },
         checkIn(changed: readonly string[]) {
           const check = hold.checkIn(changed);
           return check === undefined ? undefined : gatedAfter(check);
@@ -169,6 +195,31 @@ async function refuseReleaseOn(db: unknown): Promise<void> {
   };
 }
 
+/**
+ * Whether the MySQL connection behind `db` holds every one of the collection's named locks
+ * (`namedCollectionLockNames`): the hold a resumed try takes again before it counts.
+ */
+async function holdsCollectionLocks(db: unknown): Promise<boolean> {
+  const { sql: query } = await import("drizzle-orm");
+  const { namedCollectionLockNames: lockNames } = await import(
+    "../../dynamic-collections/services/dynamic-collection-registry-service"
+  );
+  const execute = async (statement: unknown) =>
+    (
+      (await (db as { execute(statement: unknown): Promise<unknown> }).execute(
+        statement
+      )) as [Array<Record<string, unknown>>]
+    )[0];
+  const [database] = await execute(query`SELECT DATABASE() AS name`);
+  for (const name of lockNames(String(database?.name), [SLUG])) {
+    const [row] = await execute(
+      query`SELECT IS_USED_LOCK(${name}) = CONNECTION_ID() AS mine`
+    );
+    if (Number(row?.mine) !== 1) return false;
+  }
+  return true;
+}
+
 let instance: TestNextly | undefined;
 afterEach(async () => {
   pushRoad.forced = false;
@@ -176,6 +227,9 @@ afterEach(async () => {
   tryRelease.fails = false;
   tryRelease.refused = 0;
   resumable.on = false;
+  resumable.first = "collection";
+  resumedRecount.watching = false;
+  resumedRecount.holdsLocks = [];
   releaseFails.holds = 0;
   releaseFails.refused = 0;
   fileStart.armed = false;
@@ -386,8 +440,11 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
-    const historyFiles = (t: TestNextly) =>
-      readdirSync(join(t.basePath, "database", "history")).sort();
+    // The history's files, none where the folder is not there yet (a history forgotten whole).
+    const historyFiles = (t: TestNextly) => {
+      const dir = join(t.basePath, "database", "history");
+      return existsSync(dir) ? readdirSync(dir).sort() : [];
+    };
 
     const refusedWith = (count: number) => ({
       code: "VALIDATION_ERROR",
@@ -775,46 +832,51 @@ describe.each(getConfiguredTestDialects())(
       60_000
     );
 
-    // A MySQL try that ends waiting after a statement that committed resumes past it, its hold let
-    // go with the try that ended. The resumed try takes the hold again and counts again before the
-    // statement that deletes, so a write made between the tries is counted, not dropped.
-    it.runIf(dialect === "mysql")(
-      "counts again on a try resumed past a statement that committed, and refuses a write made between the tries",
-      async () => {
-        const t = await boot();
-        for (const note of ["a", "b", "c"]) await insert(t, note);
-        // One try waits a second: the column commits, the write to the held row waits past it.
-        vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
-        vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "30");
-        // A row the case holds, which the first try's write to it waits at.
-        await sql(
-          t,
-          "CREATE TABLE `dh_waited_at` (`id` integer PRIMARY KEY, `n` integer NOT NULL)"
+    /**
+     * The save that removes `note`, confirmed at 3, run so its first try commits `first` and ends
+     * waiting, and an entry write writing a fourth value goes in between the tries; the outcome,
+     * and the history files the save found.
+     */
+    async function resumedPastWithWriteBetween(
+      t: TestNextly,
+      first: "collection" | "beside"
+    ): Promise<{ outcome: unknown; filesBefore: string[] }> {
+      for (const note of ["a", "b", "c"]) await insert(t, note);
+      // One try waits a second: `first` commits, the write to the held row waits past it.
+      vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
+      vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "30");
+      // A row the case holds, which the first try's write to it waits at.
+      await sql(
+        t,
+        "CREATE TABLE `dh_waited_at` (`id` integer PRIMARY KEY, `n` integer NOT NULL)"
+      );
+      await sql(t, "INSERT INTO `dh_waited_at` (`id`, `n`) VALUES (1, 0)");
+      let letGo: () => void = () => undefined;
+      const goes = new Promise<void>(resolve => {
+        letGo = resolve;
+      });
+      let holding: () => void = () => undefined;
+      const isHolding = new Promise<void>(resolve => {
+        holding = resolve;
+      });
+      const holder = t.adapter.transaction(async tx => {
+        await tx.execute(
+          "SELECT `n` FROM `dh_waited_at` WHERE `id` = 1 FOR UPDATE"
         );
-        await sql(t, "INSERT INTO `dh_waited_at` (`id`, `n`) VALUES (1, 0)");
-        let letGo: () => void = () => undefined;
-        const goes = new Promise<void>(resolve => {
-          letGo = resolve;
-        });
-        let holding: () => void = () => undefined;
-        const isHolding = new Promise<void>(resolve => {
-          holding = resolve;
-        });
-        const holder = t.adapter.transaction(async tx => {
-          await tx.execute(
-            "SELECT `n` FROM `dh_waited_at` WHERE `id` = 1 FOR UPDATE"
-          );
-          holding();
-          await goes;
-        });
-        await isHolding;
-        resumable.on = true;
-        const filesBefore = historyFiles(t);
-        const { paused, release } = gated(afterCount);
-        const applying = apply(t, 3).then(
-          () => "applied",
-          (error: unknown) => error
-        );
+        holding();
+        await goes;
+      });
+      await isHolding;
+      resumable.on = true;
+      resumable.first = first;
+      resumedRecount.watching = true;
+      const filesBefore = historyFiles(t);
+      const { paused, release } = gated(afterCount);
+      const applying = apply(t, 3).then(
+        () => "applied",
+        (error: unknown) => error
+      );
+      try {
         const reached = await Promise.race([
           paused.then(() => true),
           applying.then(() => false),
@@ -829,17 +891,128 @@ describe.each(getConfiguredTestDialects())(
         });
         release();
         await between;
-        // The row is free once the write is in.
+      } finally {
+        // The gate and the held row let go however the case ended, so the save and the holding
+        // session end before the app does.
+        release();
         letGo();
         await holder;
+      }
+      return { outcome: await applying, filesBefore };
+    }
 
-        const outcome = await applying;
+    // A MySQL try that ends waiting after a statement that committed resumes past it, its hold let
+    // go with the try that ended. The resumed try takes the hold again and counts again before the
+    // statement that deletes, so a write made between the tries is counted, not dropped.
+    it.runIf(dialect === "mysql")(
+      "counts again on a try resumed past a statement that committed, and refuses a write made between the tries",
+      async () => {
+        const t = await boot();
+        const { outcome, filesBefore } = await resumedPastWithWriteBetween(
+          t,
+          "collection"
+        );
+        // The resumed try counted under the collection's hold, taken again on its own connection.
+        expect(resumedRecount.holdsLocks).toEqual([true]);
         expect(JSON.stringify(outcome)).toContain("DELETION_COUNT_CHANGED");
         expect(await hasNoteColumn(t)).toBe(true);
         expect(await notesHeld(t)).toBe(4);
-        // The file's first statement stayed applied, so the file is kept, for the operator to
-        // finish, rather than withdrawn as if nothing of it ran.
+        // The file's first statement stayed applied, so the save is told as part held and its file
+        // kept, for the operator to finish, rather than withdrawn as if nothing of it ran.
+        expect(JSON.stringify(outcome)).toContain(
+          "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
+        );
         expect(historyFiles(t).length).toBeGreaterThan(filesBefore.length);
+      },
+      60_000
+    );
+
+    // The same refusal on a resumed try whose earlier try committed a statement that left the
+    // collection's own table as it was: it is still told as part held, never as a refusal that
+    // changed nothing.
+    it.runIf(dialect === "mysql")(
+      "tells a refusal on a resumed try as part held, whatever the statement that committed changed",
+      async () => {
+        const t = await boot();
+        const { outcome } = await resumedPastWithWriteBetween(t, "beside");
+        expect(JSON.stringify(outcome)).toContain("DELETION_COUNT_CHANGED");
+        expect(JSON.stringify(outcome)).toContain(
+          "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
+        );
+        expect(await notesHeld(t)).toBe(4);
+      },
+      60_000
+    );
+
+    // On MySQL a save's files run one by one. A collection's first save of a table an earlier
+    // version made converts its columns in a file of its own, before the file that deletes the
+    // removed field's values; a count refused in that later file, after the conversion applied,
+    // leaves the save told as part held, never as a refusal that changed nothing.
+    it.runIf(dialect === "mysql")(
+      "tells a count refused in a later file, after the first file applied, as part held",
+      async () => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        // The table as an earlier version made it, with no history: the next save converts it.
+        await asCreatedBefore(t, dialect, TABLE, ["label", "note"]);
+        await withNoHistory(t, dialect, "./database/history");
+        // Written after the review counted three.
+        await insert(t, "written after the review");
+        const body = async (extra: Record<string, unknown>) => ({
+          fields: REMAINING,
+          confirmed: true,
+          schemaVersion: await schemaVersion(t),
+          resolutions: { note: { action: "confirm_drop" } },
+          confirmedDeletions: [{ field: "note", count: 3 }],
+          ...extra,
+        });
+        // The conversions the save makes, named by its refusal to make them unconfirmed.
+        const unconfirmed = await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: SLUG },
+          await body({})
+        ).then(
+          () => undefined,
+          (error: unknown) =>
+            error as { code?: string; logContext?: { columns?: string[] } }
+        );
+        expect(unconfirmed?.code).toBe("NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED");
+        const filesBefore = historyFiles(t);
+
+        const outcome = await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: SLUG },
+          await body({
+            acknowledgedConversions: unconfirmed?.logContext?.columns ?? [],
+          })
+        ).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+
+        // The save wrote more than one file, and the first of them applied.
+        const written = historyFiles(t).filter(
+          name => !filesBefore.includes(name)
+        );
+        expect(written.length, written.join(", ")).toBeGreaterThan(1);
+        expect(outcome).toMatchObject({
+          code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: "fields.note",
+                code: "DELETION_COUNT_CHANGED",
+              }),
+            ],
+          },
+        });
+        expect(
+          (outcome as { publicMessage?: string }).publicMessage ?? ""
+        ).toContain("The database now holds part of this change");
+        expect(await hasNoteColumn(t)).toBe(true);
+        expect(await notesHeld(t)).toBe(4);
       },
       60_000
     );

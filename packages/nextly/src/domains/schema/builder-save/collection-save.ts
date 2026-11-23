@@ -3863,7 +3863,7 @@ async function runWritten(
       if (applied.length > 0) {
         const kept = ordered.slice(applied.length);
         throw partlyAppliedChange(
-          refusal,
+          laterFileFailure(error),
           kept,
           await checkedFileOf(deps, kept)
         );
@@ -4394,8 +4394,17 @@ function triedHoldOf(
       await check(db);
     },
     beforeResume: async db => {
-      held = await holdCollectionOnConnection(deps.adapter, db, slug);
-      await standing(db);
+      // A resumed try runs past statements an earlier try made durable, so a refusal here comes
+      // after part of the file landed, schema or data: told as part-way (`refusedPartway`), so the
+      // file is kept rather than withdrawn. Any other failure, a wait that ends the try among them,
+      // goes on as it is.
+      try {
+        held = await holdCollectionOnConnection(deps.adapter, db, slug);
+        await standing(db);
+      } catch (error) {
+        const refusal = holdRefusalOf(error);
+        throw NextlyError.is(refusal) ? refusedPartway(refusal) : error;
+      }
     },
     settled: async () => {
       const releasing = held;
@@ -4494,6 +4503,34 @@ export async function countedThroughApply<T>(
         );
       });
     }
+  });
+}
+
+/**
+ * The failure of a save's file after an earlier file of the save applied: a hold's refusal
+ * (`holdRefusalOf`) told as part-way (`refusedPartway`), any other failure as it is.
+ */
+function laterFileFailure(error: unknown): unknown {
+  const refusal = holdRefusalOf(error);
+  return NextlyError.is(refusal) ? refusedPartway(refusal) : error;
+}
+
+/**
+ * A hold's refusal met where part of the save's change has already landed, told as the part-way
+ * failure it is: `NEXTLY_MIGRATION_PARTIALLY_APPLIED`, with the refusal's own words and public data
+ * and the refusal as its cause. Its own code (`COLLECTION_BEING_CHANGED`, refused before anything
+ * changed; or a count that changed) is then never read for a save the database holds part of.
+ */
+function refusedPartway(refusal: NextlyError): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+    publicMessage: refusal.publicMessage,
+    ...(refusal.publicData === undefined
+      ? {}
+      : { publicData: refusal.publicData }),
+    logMessage: refusal.logMessage,
+    logContext: { reason: "partially-applied", refusedAs: refusal.code },
+    cause: refusal,
   });
 }
 
