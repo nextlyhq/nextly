@@ -27,6 +27,7 @@ import {
   ensureHmrListener,
   scheduleReloadForTest,
   stopConfigWatch,
+  stopHmrListener,
   watchLoadedConfig,
   watchScannedConfig,
   watchedConfigFiles,
@@ -119,6 +120,22 @@ describe("watching the config and the files it imports", () => {
     writeFileSync(config, "export default { collections: [] };\n");
 
     await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  // A Nextly that shut down applies no edit: the next start in the process
+  // reads the config itself.
+  it("reloads nothing once stopped, for a save it had scheduled or a config removed after", async () => {
+    watchLoadedConfig(loaded("collections/posts.ts"), cwd, DEV);
+    await watching();
+
+    // A save whose reload waits out the debounce, stopped before it began.
+    scheduleReloadForTest();
+    stopHmrListener();
+    rmSync(config);
+    await settle();
+
+    expect(reload).not.toHaveBeenCalled();
+    expect(watchedConfigFiles()).toEqual([]);
   });
 
   it("reloads when a file the config imports is saved", async () => {
