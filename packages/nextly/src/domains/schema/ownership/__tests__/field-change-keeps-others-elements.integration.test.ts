@@ -5,8 +5,9 @@
  * plugin's index is built on the column, or its column is on the table, naming the field, the
  * plugin, the element, its kind and its table; the table, the element, the definition, the registry
  * and the migrations folder are left as they were. An element elsewhere on a table the change keeps
- * does not stop it, and keeps its values. A record of other owners' elements that cannot be read
- * refuses the change, never counting them as none.
+ * does not stop it, and keeps its values. A plugin's foreign key pointing at the removed column, or
+ * at the removed join table, refuses it the same way, naming the key. A record of other owners'
+ * elements that cannot be read refuses the change, never counting them as none.
  *
  * As a person meets it: the Schema Builder makes the collection and the field group, a plugin's
  * migrations build on their tables (a schema hook cannot: an entity the Builder made is not known
@@ -36,7 +37,10 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
-import { readIndexNames } from "../../pipeline/live-table-facts";
+import {
+  readForeignKeyColumns,
+  readIndexNames,
+} from "../../pipeline/live-table-facts";
 import { junctionTableNameFor } from "../../services/field-column-descriptor";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
 import { SchemaOwnersRepository } from "../schema-owners-repository";
@@ -69,6 +73,8 @@ const POSTS_FIELDS: Field[] = [
   { name: "meta", type: "group", fields: [{ name: "summary", type: "text" }] },
   TAGS_FIELD,
 ];
+/** A field the plugin's foreign key can point at: unique, and a number, which MySQL can key. */
+const SERIAL_FIELD: Field = { name: "serial", type: "number", unique: true };
 const CARDS_FIELDS: Field[] = [
   { name: "code", type: "text" },
   { name: "note", type: "text" },
@@ -273,23 +279,15 @@ describe.each(getConfiguredTestDialects())(
         ...(await readIndexNames(t.adapter.getDrizzle(), dialect, table)),
       ].sort();
 
-    /** Builds each element as the plugin's migration does, and records it as that run records it. */
-    async function build(t: TestNextly, ...elements: Built[]): Promise<void> {
-      for (const element of elements) {
-        await t.adapter.executeQuery(
-          element.kind === "index"
-            ? `CREATE INDEX ${q(element.name)} ON ${q(element.table)} (${(
-                element.columns ?? []
-              )
-                .map(column =>
-                  dialect === "mysql" && element.prefix !== undefined
-                    ? `${q(column)}(${element.prefix})`
-                    : q(column)
-                )
-                .join(", ")})`
-            : `ALTER TABLE ${q(element.table)} ADD COLUMN ${q(element.name)} ${dialect === "mysql" ? "varchar(64)" : "text"}`
-        );
-      }
+    /** Records each element as the plugin's migration run records it. */
+    async function record(
+      t: TestNextly,
+      elements: readonly {
+        table: string;
+        kind: "index" | "column" | "fk";
+        name: string;
+      }[]
+    ): Promise<void> {
       await new SchemaOwnersRepository(
         (t.adapter as unknown as DrizzleAdapter).getDrizzle(),
         dialect
@@ -307,6 +305,61 @@ describe.each(getConfiguredTestDialects())(
         }))
       );
     }
+
+    /** Builds each element as the plugin's migration does, and records it as that run records it. */
+    async function build(t: TestNextly, ...elements: Built[]): Promise<void> {
+      for (const element of elements) {
+        await t.adapter.executeQuery(
+          element.kind === "index"
+            ? `CREATE INDEX ${q(element.name)} ON ${q(element.table)} (${(
+                element.columns ?? []
+              )
+                .map(column =>
+                  dialect === "mysql" && element.prefix !== undefined
+                    ? `${q(column)}(${element.prefix})`
+                    : q(column)
+                )
+                .join(", ")})`
+            : `ALTER TABLE ${q(element.table)} ADD COLUMN ${q(element.name)} ${dialect === "mysql" ? "varchar(64)" : "text"}`
+        );
+      }
+      await record(t, elements);
+    }
+
+    /**
+     * The plugin's migration adds its own column to POSTS with a foreign key on it pointing at
+     * `references`, and records both. MySQL takes the key as a constraint of its own; SQLite adds
+     * one only with its column.
+     */
+    async function buildKey(
+      t: TestNextly,
+      key: {
+        name: string;
+        column: string;
+        type: string;
+        references: { table: string; column: string };
+      }
+    ): Promise<void> {
+      const add = `ALTER TABLE ${q(POSTS_TABLE)} ADD COLUMN ${q(key.column)} ${key.type}`;
+      const target = `${q(key.references.table)} (${q(key.references.column)})`;
+      await t.adapter.executeQuery(
+        dialect === "mysql"
+          ? `${add}, ADD CONSTRAINT ${q(key.name)} FOREIGN KEY (${q(key.column)}) REFERENCES ${target}`
+          : `${add} CONSTRAINT ${q(key.name)} REFERENCES ${target}`
+      );
+      await record(t, [
+        { table: POSTS_TABLE, kind: "column", name: key.column },
+        { table: POSTS_TABLE, kind: "fk", name: key.name },
+      ]);
+    }
+
+    /** The columns of `table` that carry a foreign key. */
+    const keyedColumnsOf = async (t: TestNextly, table: string) =>
+      [
+        ...(
+          await readForeignKeyColumns(t.adapter.getDrizzle(), dialect, table)
+        ).keys(),
+      ].sort();
 
     const codeIndex = (table: string): Built => ({
       table,
@@ -438,6 +491,67 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(await columnsOf(t, LINKS_TABLE)).toContain(MARKER);
       expect(await filesWritten()).toBe(files);
+    });
+
+    it("refuses removing a field whose column a plugin's foreign key points at, changing nothing", async () => {
+      const t = await boot(dialect);
+      // A unique number, which a key can point at on every dialect: MySQL keys no TEXT column.
+      expect(
+        await savePosts(t, [...(await stored(t)), SERIAL_FIELD])
+      ).toBeUndefined();
+      await buildKey(t, {
+        name: "fco_fk_parent_serial",
+        column: "parent_serial",
+        type: dialect === "mysql" ? "int" : "integer",
+        references: { table: POSTS_TABLE, column: "serial" },
+      });
+      const before = await stateOf(t, POSTS_TABLE);
+      // The fixture's control: the plugin's key stands on its own column, not on `serial`.
+      expect(await keyedColumnsOf(t, POSTS_TABLE)).toContain("parent_serial");
+      expect(await keyedColumnsOf(t, POSTS_TABLE)).not.toContain("serial");
+
+      const refused = await savePosts(
+        t,
+        without(await stored(t), "serial"),
+        dropping("serial")
+      );
+
+      expectNamesTheElement(refused, {
+        field: "serial",
+        kind: "fk",
+        table: POSTS_TABLE,
+      });
+      expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
+      expect(await keyedColumnsOf(t, POSTS_TABLE)).toContain("parent_serial");
+    });
+
+    it("refuses removing a many-to-many whose join table a plugin's foreign key points at, changing nothing", async () => {
+      const t = await boot(dialect);
+      await buildKey(t, {
+        name: "fco_fk_link",
+        column: "link_ref",
+        // The join table's id, as the Builder makes it.
+        type: dialect === "mysql" ? "varchar(36)" : "text",
+        references: { table: LINKS_TABLE, column: "id" },
+      });
+      const before = await stateOf(t, POSTS_TABLE);
+      const links = await columnsOf(t, LINKS_TABLE);
+
+      const refused = await savePosts(
+        t,
+        without(await stored(t), "tags"),
+        dropping("tags")
+      );
+
+      expectNamesTheElement(refused, {
+        field: "tags",
+        kind: "fk",
+        table: POSTS_TABLE,
+      });
+      expect((refused as NextlyError).publicMessage).toContain(LINKS_TABLE);
+      expect(await columnsOf(t, LINKS_TABLE)).toEqual(links);
+      expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
+      expect(await keyedColumnsOf(t, POSTS_TABLE)).toContain("link_ref");
     });
 
     it("applies a removal where the plugin's column and index are elsewhere on the table, keeping them and their values", async () => {

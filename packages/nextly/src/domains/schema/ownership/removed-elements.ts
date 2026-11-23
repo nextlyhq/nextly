@@ -13,6 +13,12 @@
  * expression, a foreign key SQLite gives no name) is refused rather than guessed about. A record that
  * cannot be read refuses the change: it is never taken for "none".
  *
+ * A foreign key pointing at what the change removes is taken with it too: one into a removed table
+ * from a table the change keeps, or one into a removed column, unless the change removes the key's
+ * own columns as well (then it goes with them, judged as an element on its own table). Every key
+ * Nextly makes points at an entry's `id`, which a field change never removes, so such a key is
+ * another's, and is refused unless what records owners names the app as its owner.
+ *
  * An element another owner keeps elsewhere on a table the change keeps does not stop it.
  *
  * @module domains/schema/ownership/removed-elements
@@ -20,7 +26,9 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { SCHEMA_OWNERS_TABLE } from "../../../schemas/schema-owners";
 import { getActiveExtensionSchema } from "../extension/active-schema";
+import type { SchemaOwner } from "../extension/types";
 import type { Deletion } from "../migrate/data-loss-consent";
 import type {
   NextlySchemaSnapshot,
@@ -30,17 +38,21 @@ import type {
 import {
   readForeignKeyColumns,
   readIndexColumns,
+  readReferencingTables,
 } from "../pipeline/live-table-facts";
 
 import {
   describeOwner,
   distinctElements,
   elementsAddedTo,
+  elementsFromOwnerRows,
   readRecordedElementsOn,
   type ElementOnTable,
   type ExtensionSchemaRecord,
   type RecordedElementsAdapter,
 } from "./dependent-elements";
+import type { OwnerRecord } from "./owner-registry";
+import { SchemaOwnersRepository } from "./schema-owners-repository";
 
 /** Where the change's check reads who built what, and the columns each element stands on. */
 export interface RemovedElementsSources {
@@ -56,6 +68,96 @@ export interface RemovedElementsSources {
   foreignKeyColumns(
     table: string
   ): Promise<ReadonlyMap<string, readonly string[]>>;
+  /** The foreign keys the database holds that point at the table, from any table. */
+  keysInto(table: string): Promise<readonly KeyInto[]>;
+}
+
+/** A foreign key pointing at a table: the table it is on, its name, its columns, and the columns it points at. */
+export interface KeyInto {
+  table: string;
+  name: string;
+  columns: readonly string[];
+  referencesColumns: readonly string[];
+}
+
+/**
+ * The foreign keys the database holds that point at `table`, each with the columns it points at,
+ * read from the catalog of every table that references it.
+ */
+export async function liveKeysInto(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string
+): Promise<KeyInto[]> {
+  const referencing = await readReferencingTables(db, dialect, table);
+  if (referencing.length === 0) return [];
+  const { introspectLiveSnapshot } = await import(
+    "../pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(db, dialect, referencing);
+  const target = table.toLowerCase();
+  return snapshot.tables.flatMap(on =>
+    (on.foreignKeys ?? [])
+      .filter(key => key.referencesTable.toLowerCase() === target)
+      .map(key => ({
+        table: on.name,
+        name: key.name,
+        columns: key.columns,
+        referencesColumns: key.referencesColumns,
+      }))
+  );
+}
+
+/**
+ * What a schema push judges by: the compiled extension schema it applies, the owner rows it read
+ * and brought up to date where it found the registry, and the live catalog through `db`. Where it
+ * did not (`rows` undefined, the registry absent or its probe unanswered), the rows are asked of
+ * the database again, failing closed (`readRecordedElementsThrough`).
+ */
+export function pushRemovedElementsSources(input: {
+  db: unknown;
+  dialect: SupportedDialect;
+  extensions: ExtensionSchemaRecord | null;
+  rows: readonly OwnerRecord[] | undefined;
+}): RemovedElementsSources {
+  const { db, dialect, rows } = input;
+  return {
+    extensionSchema: () => Promise.resolve(input.extensions),
+    recordedElements: tables =>
+      rows === undefined
+        ? readRecordedElementsThrough(db, dialect, tables)
+        : Promise.resolve(
+            elementsFromOwnerRows(
+              rows.filter(row => tables.includes(row.tableName))
+            )
+          ),
+    indexColumns: table => readIndexColumns(db, dialect, table),
+    foreignKeyColumns: table => readForeignKeyColumns(db, dialect, table),
+    keysInto: table => liveKeysInto(db, dialect, table),
+  };
+}
+
+/**
+ * The element rows `nextly_schema_owners` keeps for `tables`, read through `db`. A registry the
+ * database lacks has recorded nothing; a question about it that fails is thrown, never taken for an
+ * absent registry, so the check refuses rather than counting the elements as none.
+ */
+export async function readRecordedElementsThrough(
+  db: unknown,
+  dialect: SupportedDialect,
+  tables: readonly string[]
+): Promise<ElementOnTable[]> {
+  if (tables.length === 0) return [];
+  const { introspectTableNames } = await import(
+    "../pipeline/diff/introspect-live"
+  );
+  const present = await introspectTableNames(db, dialect, [
+    SCHEMA_OWNERS_TABLE,
+  ]);
+  if (present.length === 0) return [];
+  return elementsFromOwnerRows(
+    await new SchemaOwnersRepository(db, dialect).read(tables)
+  );
 }
 
 /**
@@ -75,6 +177,7 @@ export function databaseRemovedElementsSources(
       readIndexColumns(adapter.getDrizzle(), dialect, table),
     foreignKeyColumns: table =>
       readForeignKeyColumns(adapter.getDrizzle(), dialect, table),
+    keysInto: table => liveKeysInto(adapter.getDrizzle(), dialect, table),
   };
 }
 
@@ -143,7 +246,10 @@ export function withoutOthersElements(
 
 /** An element another owner built that the change would take with it, and why. */
 interface Taken {
-  element: ElementOnTable;
+  /** The element: its owner is `null` for a key into what is removed that no owner record names. */
+  element: Omit<ElementOnTable, "owner"> & { owner: SchemaOwner | null };
+  /** The removed table it points at, for a key into what is removed rather than on it. */
+  pointsAt?: string;
   /** The field whose removal takes it, where the caller can name one. */
   field?: string;
   /** The removed column it stands on, or none where its table goes whole or its columns are unknown. */
@@ -223,6 +329,9 @@ export async function refuseRemovingOthersElements(args: {
         });
       }
     }
+    found.push(
+      ...(await keysTaken(args, schema, tablesRemoved, columnsRemoved))
+    );
     return found;
   });
   if (taken.length === 0) return;
@@ -234,7 +343,7 @@ export async function refuseRemovingOthersElements(args: {
     logContext: {
       reason: "field-change-removes-others-elements",
       elements: taken.map(({ element, field, column }) => ({
-        owner: describeOwner(element.owner),
+        owner: ownerWords(element.owner),
         kind: element.kind,
         name: element.name,
         table: element.table,
@@ -243,6 +352,125 @@ export async function refuseRemovingOthersElements(args: {
       })),
     },
   });
+}
+
+/**
+ * The foreign keys pointing at what the change removes: into a removed table from a table it keeps,
+ * or into a removed column. One whose owner is the app (`ownerOfKey`) is the app's own to answer for.
+ */
+async function keysTaken(
+  args: {
+    sources: RemovedElementsSources;
+    fieldOf?: (table: string, column?: string) => string | undefined;
+  },
+  schema: ExtensionSchemaRecord | null,
+  tablesRemoved: ReadonlySet<string>,
+  columnsRemoved: ReadonlyMap<string, ReadonlySet<string>>
+): Promise<Taken[]> {
+  const found: Taken[] = [];
+  for (const target of [...tablesRemoved, ...columnsRemoved.keys()]) {
+    const removed = columnsRemoved.get(target);
+    const keys = (await args.sources.keysInto(target)).filter(key =>
+      pointsAtRemoved(key, removed, tablesRemoved, columnsRemoved)
+    );
+    if (keys.length === 0) continue;
+    const on = [...new Set(keys.map(key => key.table))];
+    const known = distinctElements([
+      ...(schema === null ? [] : await elementsAddedTo(schema, on)),
+      ...(await args.sources.recordedElements(on)),
+    ]);
+    for (const key of keys) {
+      const owner = ownerOfKey(key, known, schema);
+      if (owner?.kind !== "app") {
+        found.push(keyTaken(args, key, owner, target, removed));
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Whether a key into `removed`'s table is taken by the change: it points at a removed column (or,
+ * with `removed` undefined, its table is removed whole), and its own columns stay.
+ */
+function pointsAtRemoved(
+  key: KeyInto,
+  removed: ReadonlySet<string> | undefined,
+  tablesRemoved: ReadonlySet<string>,
+  columnsRemoved: ReadonlyMap<string, ReadonlySet<string>>
+): boolean {
+  if (goesWithItsColumns(key, tablesRemoved, columnsRemoved)) return false;
+  return (
+    removed === undefined ||
+    key.referencesColumns.some(column => removed.has(column.toLowerCase()))
+  );
+}
+
+/** A key into `target` as a taken element: the removed column it points at, and its field. */
+function keyTaken(
+  args: { fieldOf?: (table: string, column?: string) => string | undefined },
+  key: KeyInto,
+  owner: SchemaOwner | null,
+  target: string,
+  removed: ReadonlySet<string> | undefined
+): Taken {
+  const column = key.referencesColumns.find(
+    each => removed?.has(each.toLowerCase()) === true
+  );
+  return {
+    element: { owner, kind: "fk", name: key.name, table: key.table },
+    pointsAt: target,
+    ...(column === undefined ? {} : { column }),
+    ...fieldOf(args, target, column),
+  };
+}
+
+/**
+ * Who built a key: the owner of the key element of its name, else of a column element it stands on
+ * (SQLite keeps no key names, so a recorded key is told there by its column), else the plugin whose
+ * table it is on. `null` where none says.
+ */
+function ownerOfKey(
+  key: KeyInto,
+  known: readonly ElementOnTable[],
+  schema: ExtensionSchemaRecord | null
+): SchemaOwner | null {
+  const lower = (name: string) => name.toLowerCase();
+  const onItsTable = known.filter(
+    element => lower(element.table) === lower(key.table)
+  );
+  const named = onItsTable.find(
+    element => element.kind === "fk" && lower(element.name) === lower(key.name)
+  );
+  const column = onItsTable.find(
+    element =>
+      element.kind === "column" &&
+      key.columns.some(each => lower(each) === lower(element.name))
+  );
+  const table = schema?.owners.get(key.table);
+  return (
+    named?.owner ?? column?.owner ?? (table?.kind === "plugin" ? table : null)
+  );
+}
+
+/** Whether the change removes the key's own table, or every column it is on. */
+function goesWithItsColumns(
+  key: KeyInto,
+  tablesRemoved: ReadonlySet<string>,
+  columnsRemoved: ReadonlyMap<string, ReadonlySet<string>>
+): boolean {
+  if (tablesRemoved.has(key.table)) return true;
+  const removed = columnsRemoved.get(key.table);
+  return (
+    removed !== undefined &&
+    key.columns.length > 0 &&
+    key.columns.every(column => removed.has(column.toLowerCase()))
+  );
+}
+
+/** An owner as the refusal's log names it; a key whose owner nothing says is unknown. */
+function ownerWords(owner: SchemaOwner | null): string {
+  return owner === null ? "unknown" : describeOwner(owner);
 }
 
 /** The field the caller names for a removed table or column, where it names one. */
@@ -325,12 +553,21 @@ async function foreignKeyColumns(
 /** One taken element as a person reads it. */
 function describeTaken({
   element,
+  pointsAt,
   field,
   column,
   unknownColumns,
 }: Taken): string {
-  const what = `${describeOwner(element.owner)}'s ${element.kind} "${element.name}" on ${element.table}`;
+  const what =
+    element.owner === null
+      ? `the ${element.kind} "${element.name}" on ${element.table}`
+      : `${describeOwner(element.owner)}'s ${element.kind} "${element.name}" on ${element.table}`;
   const by = field === undefined ? "The change" : `Removing "${field}"`;
+  if (pointsAt !== undefined) {
+    return column === undefined
+      ? `${by} removes ${pointsAt}, which ${what} points at.`
+      : `${by} removes the column ${column} of ${pointsAt}, which ${what} points at.`;
+  }
   if (unknownColumns === true) {
     return `${by} removes columns of ${element.table}, and which columns ${what} stands on cannot be told, so it is not removed blind.`;
   }

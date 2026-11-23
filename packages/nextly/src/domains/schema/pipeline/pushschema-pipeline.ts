@@ -68,7 +68,6 @@ import {
   withinSqliteTransaction,
   withSqliteForeignKeysOff,
 } from "../migrate/sqlite-foreign-keys";
-import { elementsFromOwnerRows } from "../ownership/dependent-elements";
 import {
   dropsPluginMigratedTable,
   pluginMigratedTableSet,
@@ -83,6 +82,7 @@ import {
 } from "../ownership/kept-elements";
 import {
   deletionsOfOperations,
+  pushRemovedElementsSources,
   refuseRemovingOthersElements,
 } from "../ownership/removed-elements";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
@@ -149,7 +149,6 @@ import {
 } from "./kept-scope-fields";
 import { refuseKeysRowsWouldBreak } from "./key-move-refusal";
 import { kitRouteConstraintStatements } from "./kit-route-constraints";
-import { readForeignKeyColumns, readIndexColumns } from "./live-table-facts";
 import {
   desiredUniqueColumns,
   liveTableName,
@@ -1264,32 +1263,6 @@ export class PushSchemaPipeline {
             live: liveSnapshot,
           });
         }
-        // A column or table the push drops takes with it no element another owner built there: an
-        // index, key or check on the column, anything on the table. Refused here too, before any
-        // prompt and before anything runs, judged on the schema and owner rows read above
-        // (`removed-elements.ts`).
-        await refuseRemovingOthersElements({
-          deletions: deletionsOfOperations(operations),
-          dialect,
-          entity: "The schema change",
-          sources: {
-            extensionSchema: () => Promise.resolve(extensions),
-            recordedElements: tables =>
-              Promise.resolve(
-                elementsFromOwnerRows(
-                  (elementOwners?.rows ?? []).filter(row =>
-                    tables.includes(row.tableName)
-                  )
-                )
-              ),
-            indexColumns: table => readIndexColumns(db, dialect, table),
-            foreignKeyColumns: table =>
-              readForeignKeyColumns(db, dialect, table),
-          },
-          // A push has the fields' columns, not their definitions: each column names its field.
-          fieldOf: (_table, column) => column,
-        });
-
         // A field this apply makes translated still has its value on the main table, which the diff
         // drops: the value moves to the default language's companion row first. Planned here, from
         // the live tables, so every caller of the apply moves it the same way; only a column whose
@@ -1424,6 +1397,25 @@ export class PushSchemaPipeline {
             )
           );
         plannedThisTry = { resolvedOps, moved: moves.moved };
+
+        // A column or table the push drops takes with it no element another owner built there (an
+        // index, key or check on the column, anything on the table) and no key pointing at it.
+        // Judged on the answered plan, so a table or column the answers renamed keeps what it
+        // carries rather than reading as dropped; refused here, before anything runs
+        // (`removed-elements.ts`).
+        await refuseRemovingOthersElements({
+          deletions: deletionsOfOperations(resolvedOps),
+          dialect,
+          entity: "The schema change",
+          sources: pushRemovedElementsSources({
+            db,
+            dialect,
+            extensions,
+            rows: elementOwners?.rows,
+          }),
+          // A push has the fields' columns, not their definitions: each column names its field.
+          fieldOf: (_table, column) => column,
+        });
 
         // A column made NOT NULL over rows no answer fills is refused here, before anything runs:
         // every column the answered plan makes NOT NULL, not only those the classifier raised.
