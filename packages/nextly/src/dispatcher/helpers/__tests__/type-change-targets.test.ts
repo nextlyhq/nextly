@@ -2,11 +2,15 @@
  * What the Schema Builder's type picker is told about a saved field: each other type blocked, and
  * why, or marked by what the change can do to the field's values, from the conversion rules.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { FIELD_TYPE_CATALOG } from "../../../collections/fields/catalog";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { typeChangeTargets } from "../type-change-targets";
+import { container } from "../../../di/container";
+import {
+  respondTypeChangeTargets,
+  typeChangeTargets,
+} from "../type-change-targets";
 
 const CANDIDATES = FIELD_TYPE_CATALOG.map(entry => entry.type);
 
@@ -55,3 +59,33 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
     });
   }
 );
+
+describe("the route's answer for a field found by its path", () => {
+  afterEach(() => {
+    container.clear();
+  });
+
+  it("finds a field a group with no name holds on its level, by its own name", async () => {
+    // A stand-in for the site's adapter: the route reads only which database it runs on.
+    container.registerSingleton("adapter", () => ({
+      getCapabilities: () => ({ dialect: "sqlite" }),
+    }));
+    const response = respondTypeChangeTargets({
+      fields: [
+        {
+          name: "",
+          type: "group",
+          fields: [{ name: "subtitle", type: "text" }],
+        },
+      ] as FieldDefinition[],
+      body: { field: ["subtitle"], candidates: ["number"] },
+      builtBy: "collection",
+    });
+    const body = (await response.json()) as {
+      items: { type: string; outcome: string | null }[];
+    };
+    expect(body.items).toEqual([
+      { type: "number", blocked: null, outcome: "may-lose" },
+    ]);
+  });
+});

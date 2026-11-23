@@ -83,6 +83,41 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("judges a field inside a named group by its path", async () => {
+      instance = await createTestNextly(
+        dialect === "sqlite" ? {} : { dialect }
+      );
+      vi.stubEnv("NODE_ENV", "development");
+      await instance.getService("collectionService").createCollection(
+        {
+          name: "tct_nested",
+          label: "Post",
+          fields: [
+            {
+              name: "meta",
+              type: "group",
+              fields: [{ name: "rating", type: "number" }],
+            },
+          ],
+        } as never,
+        {}
+      );
+
+      const inGroup = new Map(
+        (await targetsOf("tct_nested", ["meta", "rating"])).map(t => [
+          t.type,
+          t,
+        ])
+      );
+      expect(inGroup.get("text")).toMatchObject({
+        blocked: null,
+        outcome: "converts",
+      });
+      await expect(
+        targetsOf("tct_nested", ["meta", "missing"])
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
     it("refuses a field the collection does not hold", async () => {
       instance = await createTestNextly(
         dialect === "sqlite" ? {} : { dialect }

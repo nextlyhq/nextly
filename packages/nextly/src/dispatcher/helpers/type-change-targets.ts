@@ -16,7 +16,10 @@ import type {
   ColumnOrigin,
   SupportedDialect,
 } from "../../domains/schema/services/field-column-descriptor";
-import { fieldTypeOnDialect } from "../../domains/schema/value-conversion/type-change/field-type";
+import {
+  fieldTypeInJson,
+  fieldTypeOnDialect,
+} from "../../domains/schema/value-conversion/type-change/field-type";
 import {
   pairBlocked,
   type PairBlockReason,
@@ -43,7 +46,8 @@ export interface TypeChangeTarget {
 /**
  * Each of `candidates` other than the field's own type, judged as a change from `field`, a field
  * as its entity stores it, on the database this runs on. `builtBy` and `componentRow` say where its
- * values are kept, as the save that would make the change reads them.
+ * values are kept, as the save that would make the change reads them; `inJson`, that they are held
+ * inside a named group's or a repeater's JSON value, as the save judges such a field.
  */
 export function typeChangeTargets(args: {
   field: FieldDefinition;
@@ -51,18 +55,18 @@ export function typeChangeTargets(args: {
   dialect: SupportedDialect;
   builtBy: ColumnOrigin;
   componentRow?: boolean;
+  inJson?: boolean;
 }): TypeChangeTarget[] {
   const at = args.componentRow === true ? { componentRow: true } : {};
-  const from = fieldTypeOnDialect(args.field, args.dialect, args.builtBy, at);
+  const typeOf = (field: FieldDefinition) =>
+    args.inJson === true
+      ? fieldTypeInJson(field, args.dialect, args.builtBy)
+      : fieldTypeOnDialect(field, args.dialect, args.builtBy, at);
+  const from = typeOf(args.field);
   return args.candidates
     .filter(type => type !== args.field.type)
     .map(type => {
-      const to = fieldTypeOnDialect(
-        { ...args.field, type } as FieldDefinition,
-        args.dialect,
-        args.builtBy,
-        at
-      );
+      const to = typeOf({ ...args.field, type } as FieldDefinition);
       const blocked = pairBlocked(from, to);
       return {
         type,
@@ -81,15 +85,32 @@ const TargetsRequest = z.object({
   candidates: z.array(z.string().min(1)).max(100).optional(),
 });
 
-/** The field at `path` among `fields`, by name through groups and repeaters, if there is one. */
+/**
+ * The fields on one level as a value is read there: a group with no name holds its fields on the
+ * level it stands on, so they are found there, by their own names.
+ */
+function onLevel(fields: readonly FieldDefinition[]): FieldDefinition[] {
+  return fields.flatMap(field =>
+    field.type === "group" && !field.name
+      ? onLevel(field.fields ?? [])
+      : [field]
+  );
+}
+
+/**
+ * The field at `path` among `fields`, by name through groups and repeaters, if there is one, and
+ * whether its value is held inside a container's JSON value: below a named group or a repeater.
+ */
 function fieldAt(
   fields: readonly FieldDefinition[],
-  path: readonly string[]
-): FieldDefinition | undefined {
+  path: readonly string[],
+  inJson = false
+): { field: FieldDefinition; inJson: boolean } | undefined {
   const [name, ...rest] = path;
-  const found = fields.find(field => field.name === name);
-  if (found === undefined || rest.length === 0) return found;
-  return fieldAt(found.fields ?? [], rest);
+  const found = onLevel(fields).find(field => field.name === name);
+  if (found === undefined) return undefined;
+  if (rest.length === 0) return { field: found, inJson };
+  return fieldAt(found.fields ?? [], rest, true);
 }
 
 /**
@@ -110,24 +131,10 @@ export function respondTypeChangeTargets(args: {
     if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
     throw error;
   }
-  const field = fieldAt(args.fields, request.field);
-  if (field === undefined) {
+  const found = fieldAt(args.fields, request.field);
+  if (found === undefined) {
     throw NextlyError.notFound({
       message: `No saved field ${request.field.join(".")}.`,
-    });
-  }
-  // A field inside a group or a repeater keeps its value in the container's JSON, which its own
-  // column's rules do not describe: judged only once those values are read as the JSON holds them.
-  if (request.field.length > 1) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: `fields.${request.field.join(".")}`,
-          code: "TYPE_CHANGE_NOT_JUDGED",
-          message:
-            "A field inside a group or repeating rows is not judged here yet.",
-        },
-      ],
     });
   }
   const adapter = getAdapterFromDI();
@@ -137,7 +144,8 @@ export function respondTypeChangeTargets(args: {
     });
   }
   const items = typeChangeTargets({
-    field,
+    field: found.field,
+    inJson: found.inJson,
     candidates:
       request.candidates ?? FIELD_TYPE_CATALOG.map(entry => entry.type),
     dialect: adapter.getCapabilities().dialect,
