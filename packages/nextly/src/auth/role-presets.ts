@@ -66,6 +66,45 @@ const ESCALATION_RESOURCES = new Set(["roles", "permissions", "users"]);
 const READ_ONLY_ACTIONS = new Set(["read"]);
 
 /**
+ * System resources whose read the Viewer preset does not take: the staff
+ * accounts and the API keys. Reading them tells who can sign in and what each
+ * key may do, which is not content, and a person given Viewer to look at a
+ * site's content has no need of it.
+ */
+const VIEWER_WITHHELD_READS = new Set(["users", "api-keys"]);
+
+/**
+ * The slugs of the built-in preset roles, the names a collection's
+ * `grants.presets` and a declared permission's `presets` open them by.
+ */
+export const PRESET_ROLE_SLUGS = [
+  "admin",
+  "editor",
+  "author",
+  "viewer",
+] as const;
+
+/** One of the built-in preset roles, by slug. */
+export type PresetRoleSlug = (typeof PRESET_ROLE_SLUGS)[number];
+
+/**
+ * Which presets a permission may reach at all, before each preset's own rule
+ * is asked: `undefined` where every preset may, as each one's rule decides,
+ * or the presets it is opened to, an empty set where it is opened to none.
+ *
+ * Kept apart from {@link RolePreset.grants}, which says what a role MEANS
+ * (an author does not publish), because this says something else: whether a
+ * resource has been opened to the preset roles at all. A collection is
+ * reachable by a preset only once it is opened to it by name, so adding one
+ * never widens what an existing role can do; the seeder works this out from
+ * the configuration and the grants a site held before that rule
+ * (`auth/preset-reach`).
+ */
+export interface PresetReach {
+  presetsFor(permission: PresetPermission): ReadonlySet<string> | undefined;
+}
+
+/**
  * The presets every project starts with.
  *
  * Deliberately few. These are starting points, not an attempt to name every
@@ -123,34 +162,45 @@ export const ROLE_PRESETS: RolePreset[] = [
   {
     slug: "viewer",
     name: "Viewer",
-    description: "Read everything, change nothing",
+    description: "Read content, change nothing",
     level: 10,
-    grants: ({ action }) => READ_ONLY_ACTIONS.has(action),
+    // Every read but the staff accounts' and the API keys'.
+    grants: ({ action, resource }) =>
+      READ_ONLY_ACTIONS.has(action) && !VIEWER_WITHHELD_READS.has(resource),
   },
 ];
 
 /**
- * Which permissions a preset resolves to, against the live permission list. `isWorkflow` says which
- * ones a workflow seeded (`workflowSeededPermissions`), which only the seeder, reading the attached
- * workflows, can tell.
+ * Which permissions a preset resolves to, against the live permission list: those `reach` lets the
+ * preset hold at all, and of them those its own rule grants. `isWorkflow` says which ones a workflow
+ * seeded (`workflowSeededPermissions`), which only the seeder, reading the attached workflows, can
+ * tell.
+ *
+ * `reach` is required rather than defaulted to "every preset": a caller that forgot it would hand
+ * every preset each new collection, which is the widening it exists to prevent.
  */
 export function resolvePreset<P extends PresetPermission>(
   preset: RolePreset,
   permissions: P[],
+  reach: PresetReach,
   isWorkflow: (permission: P) => boolean = () => false
 ): P[] {
-  return permissions.filter(permission =>
-    preset.grants(permission, {
+  return permissions.filter(permission => {
+    const opened = reach.presetsFor(permission);
+    if (opened !== undefined && !opened.has(preset.slug)) return false;
+    return preset.grants(permission, {
       isSystem: isSystemResource(permission.resource),
       isPlugin: permission.owner !== null,
       isWorkflow: isWorkflow(permission),
-    })
-  );
+    });
+  });
 }
 
 /**
  * The preset roles that would end up holding `read-<slug>` for a collection
- * created under that slug.
+ * created under that slug, where it is opened to the presets `openedTo` names:
+ * none of them by default, since a new collection reaches a preset only once
+ * it is opened to it by name.
  *
  * Asked of the predicates rather than answered by a list, for the reason
  * {@link RolePreset.grants} is a predicate at all: which presets cover a
@@ -162,17 +212,23 @@ export function resolvePreset<P extends PresetPermission>(
  * would collide with either is refused at creation — so those two flags are
  * facts about the question, not variables in it.
  */
-export function presetsGrantingReadOf(slug: string): string[] {
+export function presetsGrantingReadOf(
+  slug: string,
+  openedTo: readonly string[] = []
+): string[] {
   const permission: PresetPermission = {
     action: "read",
     resource: slug,
     owner: null,
   };
-  return ROLE_PRESETS.filter(preset =>
-    preset.grants(permission, {
-      isSystem: false,
-      isPlugin: false,
-      isWorkflow: false,
-    })
+  const opened = new Set(openedTo);
+  return ROLE_PRESETS.filter(
+    preset =>
+      opened.has(preset.slug) &&
+      preset.grants(permission, {
+        isSystem: false,
+        isPlugin: false,
+        isWorkflow: false,
+      })
   ).map(preset => preset.slug);
 }

@@ -20,6 +20,7 @@ import { scopeRowsAgree, slugGrants } from "../authenticated-scope";
 import { codeAccessAllows, type ReadAccessCaller } from "../code-access";
 
 import { holdsPermission, isSuperAdmin, type Actor } from "./actor";
+import { superAdminRefusedOn } from "./closed-to-super-admin-refusal";
 import { declaresRule, type AccessTarget } from "./decide";
 import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
@@ -129,12 +130,23 @@ async function userReads(
  * those a read rule's filter matches, with `rbac` the access-control service,
  * or `undefined` when none is registered.
  */
-export function readsEntity(
+export async function readsEntity(
   slug: string,
   caller: ReadAccessCaller,
   rbac: RBACAccessControlService | undefined
 ): Promise<FilteredRead> {
-  return caller.authMethod === "api-key"
-    ? keyReads(slug, caller, rbac)
-    : userReads(slug, caller, rbac);
+  const isKey = caller.authMethod === "api-key";
+  // A collection closed to super-admin is refused to a super-admin, or a key
+  // with super-admin authority, before the shortcuts that pass them.
+  if (
+    await superAdminRefusedOn(slug, {
+      userId: caller.userId,
+      ...(isKey
+        ? { keyHoldsSuperAdmin: caller.keyHoldsSuperAdmin === true }
+        : {}),
+    })
+  ) {
+    return readOf(false);
+  }
+  return isKey ? keyReads(slug, caller, rbac) : userReads(slug, caller, rbac);
 }

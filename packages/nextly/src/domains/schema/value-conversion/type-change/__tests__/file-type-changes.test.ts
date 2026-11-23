@@ -341,6 +341,185 @@ describe("fileTypeChangesOf", () => {
     expect(unrenamed).toEqual([]);
   });
 
+  // SQLite changes a column's type by rebuilding its table: a `__new_` table made in the file and
+  // renamed over the table. That rename is no table the entity had before, so the entity is still
+  // paired through the file's own rename of its table, and judged, as on PostgreSQL and MySQL.
+  it("pairs an entity through its table rename where SQLite's rebuild also renames into place", () => {
+    const before = record({ collections: { posts: posts(TEXT) } });
+    const target = record({
+      collections: { stories: declared({ slug: "stories", fields: [SELECT] }) },
+    });
+
+    const found = fileTypeChangesOf(
+      source(
+        before,
+        target,
+        [
+          'ALTER TABLE "dc_posts" RENAME TO "dc_stories"',
+          'CREATE TABLE "__new_dc_stories" ("id" text PRIMARY KEY, "heading" text)',
+          'INSERT INTO "__new_dc_stories" SELECT "id", "heading" FROM "dc_stories"',
+          'DROP TABLE "dc_stories"',
+          'ALTER TABLE "__new_dc_stories" RENAME TO "dc_stories"',
+        ],
+        "sqlite"
+      )
+    );
+
+    expect(found.map(f => [f.slug, f.input.table])).toEqual([
+      ["stories", "dc_posts"],
+    ]);
+  });
+
+  // A known table rebuilt and then renamed keeps its own name as its origin, never the rebuild's.
+  it("pairs an entity whose table SQLite rebuilds and the file then renames", () => {
+    const before = record({ collections: { posts: posts(TEXT) } });
+    const target = record({
+      collections: { stories: declared({ slug: "stories", fields: [SELECT] }) },
+    });
+
+    const found = fileTypeChangesOf(
+      source(
+        before,
+        target,
+        [
+          'CREATE TABLE "__new_dc_posts" ("id" text PRIMARY KEY, "heading" text)',
+          'INSERT INTO "__new_dc_posts" SELECT "id", "heading" FROM "dc_posts"',
+          'DROP TABLE "dc_posts"',
+          'ALTER TABLE "__new_dc_posts" RENAME TO "dc_posts"',
+          'ALTER TABLE "dc_posts" RENAME TO "dc_stories"',
+        ],
+        "sqlite"
+      )
+    );
+
+    expect(found.map(f => [f.slug, f.input.table])).toEqual([
+      ["stories", "dc_posts"],
+    ]);
+  });
+
+  // Only a relationship's change of storage shape is left to the file's own guard and conversion:
+  // a relationship becoming another type is judged here, as no statement of the file guards it.
+  it("leaves a relationship's change of shape to the file, and judges one becoming a text", () => {
+    const authorOne = {
+      name: "author",
+      type: "relationship",
+      relationTo: "authors",
+    };
+    const authorMany = { ...authorOne, hasMany: true };
+    const authorText = { name: "author", type: "text" };
+    const shaped = fileTypeChangesOf(
+      source(
+        record({ collections: { posts: posts(authorOne) } }),
+        record({ collections: { posts: posts(authorMany) } })
+      )
+    );
+    const retyped = fileTypeChangesOf(
+      source(
+        record({ collections: { posts: posts(authorOne) } }),
+        record({ collections: { posts: posts(authorText) } })
+      )
+    );
+
+    expect(shaped[0]?.input.ignore).toEqual(new Set(["author"]));
+    expect(retyped).toHaveLength(1);
+    expect(retyped[0]?.input.ignore).toBeUndefined();
+  });
+
+  // A change of shape whose conversion carries the links guards only the shape: an author's id
+  // wrapped into a list of media ids, or of posts' ids, is a link to another target, judged here.
+  // One whose guard refuses every held link (to or from naming several collections) is the file's.
+  it("judges a change of shape that also changes the targets, unless the file's guard refuses every link", () => {
+    const authorOne = {
+      name: "author",
+      type: "relationship",
+      relationTo: "authors",
+    };
+    const judged = (to: object) =>
+      fileTypeChangesOf(
+        source(
+          record({ collections: { posts: posts(authorOne) } }),
+          record({ collections: { posts: posts(to) } })
+        )
+      );
+
+    for (const to of [
+      { name: "author", type: "upload", relationTo: "media", hasMany: true },
+      {
+        name: "author",
+        type: "relationship",
+        relationTo: "posts",
+        hasMany: true,
+      },
+    ]) {
+      const found = judged(to);
+      expect(found).toHaveLength(1);
+      expect(found[0]?.input.ignore).toBeUndefined();
+    }
+    const several = judged({
+      name: "author",
+      type: "relationship",
+      relationTo: ["authors", "posts"],
+    });
+    expect(several[0]?.input.ignore).toEqual(new Set(["author"]));
+  });
+
+  // A relationship becoming an upload keeps one link per row, so the file converts and guards
+  // nothing for it: the link to another target is judged here.
+  it("judges a relationship becoming an upload, whose links keep their shape", () => {
+    const found = fileTypeChangesOf(
+      source(
+        record({
+          collections: {
+            posts: posts({
+              name: "author",
+              type: "relationship",
+              relationTo: "authors",
+            }),
+          },
+        }),
+        record({
+          collections: {
+            posts: posts({
+              name: "author",
+              type: "upload",
+              relationTo: "media",
+            }),
+          },
+        })
+      )
+    );
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.input.ignore).toBeUndefined();
+  });
+
+  // An entity the file moves from the Schema Builder to code had its columns made by the Builder:
+  // on MySQL its unbounded text becomes code's bounded one, a change to judge.
+  it("reads the old columns as the old owner made them where the file moves an entity to code", () => {
+    const found = fileTypeChangesOf(
+      source(
+        record({
+          collections: {
+            posts: declared({ slug: "posts", fields: [TEXT] }, "builder"),
+          },
+        }),
+        record({
+          collections: {
+            posts: declared({ slug: "posts", fields: [TEXT] }, "code"),
+          },
+        }),
+        [],
+        "mysql"
+      )
+    );
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.input).toMatchObject({
+      builtBy: "codeFirst",
+      builtByBefore: "collection",
+    });
+  });
+
   it("refuses, without reading a row, a table rename it cannot read beside a field of another type", async () => {
     const before = record({ collections: { posts: posts(TEXT) } });
     const target = record({

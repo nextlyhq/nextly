@@ -4,7 +4,7 @@
  * real program runs in-process against a temporary folder, with fake package
  * managers on PATH (see scaffold-harness).
  */
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +21,7 @@ import {
   captureConsole,
   installFakeManagers,
   makeWorkdir,
+  removeWorkdir,
   printed,
   runCli,
 } from "./scaffold-harness";
@@ -44,7 +45,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  await rm(dir, { recursive: true, force: true });
+  await removeWorkdir(dir);
 });
 
 const allOutput = () => [...ui.out, ...printed].join("\n");

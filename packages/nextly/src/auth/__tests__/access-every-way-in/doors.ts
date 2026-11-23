@@ -1328,6 +1328,7 @@ const READS: ReadonlySet<Row["action"]> = new Set(["read", "list", "count"]);
 const WRITING_SETUPS: ReadonlySet<Row["setup"]> = new Set<Row["setup"]>([
   "service",
   "public",
+  "closed",
 ]);
 
 function writes(row: Row, door: Door): boolean {

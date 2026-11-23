@@ -139,8 +139,10 @@ function revealWhenDrawn(
 ): void {
   window.setTimeout(
     () => {
+      // The panel is gone: nothing left to reveal, so stop looking.
+      if (root.current === null) return;
       const section = [
-        ...(root.current?.querySelectorAll<HTMLElement>("[data-group]") ?? []),
+        ...root.current.querySelectorAll<HTMLElement>("[data-group]"),
       ].find(element => element.dataset.group === group);
       if (section === undefined) {
         if (tries > 1) revealWhenDrawn(root, group, block, tries - 1);
@@ -161,8 +163,10 @@ function focusWhenDrawn(
 ): void {
   window.setTimeout(
     () => {
-      const target = root.current?.querySelector<HTMLElement>(selector);
-      if (target === null || target === undefined) {
+      // The panel is gone: nothing left to focus, so stop looking.
+      if (root.current === null) return;
+      const target = root.current.querySelector<HTMLElement>(selector);
+      if (target === null) {
         if (tries > 1) focusWhenDrawn(root, selector, tries - 1);
         return;
       }
@@ -322,8 +326,7 @@ export function DesignPanel({
       view.choose("type");
       // Handed straight to a button's onClick, `close` is given the click:
       // only a selector names where focus goes.
-      const target =
-        typeof focus === "string" ? focus : "[data-fonts-manage]";
+      const target = typeof focus === "string" ? focus : "[data-fonts-manage]";
       focusWhenDrawn(root, target, REVEAL_TRIES);
     },
     [view]

@@ -70,6 +70,11 @@ import {
   refuseMovesOffTheFile,
   type PushReason,
 } from "../../domains/schema/field-moves/moves-road";
+import {
+  parseFieldRenameAnswers,
+  withFieldRenameAnswers,
+  withoutRenameAnswers,
+} from "../../domains/schema/field-rename-answers";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type {
   BrowserRenameResolution,
@@ -490,6 +495,17 @@ async function withFieldsAsStored(
 }
 
 /**
+ * The API key the request was made with, by id: the acting identity an API key's request carries
+ * (as the workflows routes read it), else undefined for a person's or a trusted call.
+ */
+function requestApiKeyId(): string | undefined {
+  const actor = readAuthenticatedActor();
+  return readAuthenticatedScope() !== undefined && actor?.type === "apiKey"
+    ? actor.id
+    : undefined;
+}
+
+/**
  * Version-history reads for a collection entry.
  *
  * Split out so the dispatcher registration and the auth method set in
@@ -854,9 +870,19 @@ const COLLECTIONS_METHODS: Record<
       if (updatedFields !== undefined) {
         assertValidPluginFieldOptions(updatedFields);
       }
-      const result = await svc.updateCollection(
-        { collectionName: p.collectionName },
-        await withFieldsAsStored(p.collectionName, body)
+      // The request's answers for a field leaving and another arriving: the change runs with
+      // them, so a pair it doesn't answer is refused, not taken for a rename.
+      const renames = parseFieldRenameAnswers(
+        (body as { renames?: unknown }).renames
+      );
+      const result = await withFieldRenameAnswers(renames, async () =>
+        svc.updateCollection(
+          { collectionName: p.collectionName },
+          await withFieldsAsStored(
+            p.collectionName,
+            withoutRenameAnswers(body as Record<string, unknown>)
+          )
+        )
       );
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
@@ -1697,6 +1723,8 @@ const COLLECTIONS_METHODS: Record<
         // permissions of the user that owns it, so a super-admin-owned key
         // cannot read past its scope by inheriting the session bypass.
         authenticatedScope: readAuthenticatedScope(),
+        // The key itself, which `_waitingForMe` names its caller by.
+        apiKeyId: requestApiKeyId(),
         page: p.page !== undefined ? parseInt(String(p.page), 10) : undefined,
         limit:
           rawLimit !== undefined ? parseInt(String(rawLimit), 10) : undefined,
@@ -1717,6 +1745,8 @@ const COLLECTIONS_METHODS: Record<
         translationStatus: isTruthyParam(p["translation-status"]),
         // `?source-locales=1` attaches `_sources`, each translatable value's language.
         sourceLocales: isTruthyParam(p["source-locales"]),
+        // Each row's review state, when the list asks for it (the admin's Review column).
+        reviewState: isTruthyParam(p.reviewState),
         // `?translations=all` attaches every language's values (`_allLocales`).
         translations: parseTranslationsParam(p.translations),
         // `?count=capped` counts the total no further than the list shows.
@@ -1764,6 +1794,7 @@ const COLLECTIONS_METHODS: Record<
         // Same scope judgement as listEntries: a count that ignored the key's
         // own grant would disclose how many rows exist beyond it.
         authenticatedScope: readAuthenticatedScope(),
+        apiKeyId: requestApiKeyId(),
         search: p.search,
         where: parseWhereParam(p.where, p.whereBrackets),
         status,

@@ -1,7 +1,7 @@
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import type { TestNextly } from "@nextlyhq/plugin-sdk/testing";
 
-import { ACCOUNT_PRINCIPAL } from "../http/routes";
+import { ACCOUNT_PRINCIPAL } from "../http/principal";
 
 /** An audit row's target person, as the adapter reads it back. */
 interface TargetOfRow {

@@ -424,7 +424,7 @@ function emptyAtDestination(
  * temporary table's NOT NULL column, so the run stops on that constraint, naming the field in the
  * table and column, before any statement has changed anything. The file places these first.
  *
- * On SQLite a date keeps its own names (`nextly_unreadable_date_<field>`), as released.
+ * On SQLite a date keeps its own names (`nextly_unreadable_date_` and the field's name), as released.
  */
 function unkeptValuesStop(
   target: MoveColumn,

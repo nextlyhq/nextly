@@ -496,9 +496,11 @@ describe.each(getConfiguredTestDialects())(
       it("lists what waits for the key, only where the key may read and take the step", async () => {
         await boot(dialect);
         const id = await entry(app(), PAGES);
+        // Assigned to no one, so the part waits for everyone who may take its stage's step: a
+        // key stands for its roles, never for its owner, so work assigned to Kim by name would
+        // wait for Kim signed in and for none of Kim's keys.
         await seedState(app(), partOf(PAGES, id, null), "writing", {
           definitionHash: HASH,
-          assignee: { kind: "user", id: KIM },
         });
         const writer = await keyOf("writer", [
           ["read", PAGES],
@@ -533,8 +535,8 @@ describe.each(getConfiguredTestDialects())(
             await run({ key: writer.key }, "reviewState", { document: listed })
           )
         ).toMatchObject({ parts: [expect.objectContaining({ part: null })] });
-        // Assigned to Kim, but the reader's key cannot take the stage's step, and the updater's
-        // cannot read the document.
+        // Waiting for every holder, but the reader's key cannot take the stage's step, and the
+        // updater's cannot read the document.
         expect(forReader.items).toEqual([]);
         expect(forUpdater.items).toEqual([]);
       });

@@ -37,6 +37,7 @@ export type {
 
 export type {
   FindArgs,
+  RowReviewState,
   FindByIDArgs,
   CreateArgs,
   UpdateArgs,

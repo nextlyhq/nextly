@@ -229,7 +229,7 @@ describe("a bulk write on a localized collection", () => {
     expect([...new Set(mine.map(v => v.locale))]).toEqual(["en"]);
   });
 
-  it("rolls the batch back when the companion write fails, rather than committing a parent without it", async () => {
+  it("takes the parent back with a companion write that fails, rather than committing a parent without it", async () => {
     const handle = await boot();
     const handler = handle.getService("collectionsHandler");
     const entries = handler.getEntryService() as CollectionEntryService;
@@ -256,15 +256,15 @@ describe("a bulk write on a localized collection", () => {
       }));
 
     expect(result.successful).toBe(0);
-    // The batch aborted as a write-integrity failure, which is the only
-    // reading under which the row count below means anything. This exact
-    // message is emitted ONLY on the integrity-abort path; the same count is
-    // produced by the MAIN insert failing first — a refusal that never wrote a
-    // parent, reported as an ordinary per-item error — so the message is what
-    // separates a rollback from a write that never happened.
-    expect(JSON.stringify(result.errors)).toContain(
-      "could not be completed and was rolled back"
-    );
+    // SQLite's transaction takes a savepoint per created item, so the failed
+    // companion insert takes the item's parent row back with it and the item
+    // fails alone, with the translations write's own failure. That failure is
+    // what separates a parent written and then taken back from a MAIN insert
+    // that failed first, which would give the same row count below but name
+    // the main table, never the translations table.
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toMatchObject({ index: 0 });
+    expect(JSON.stringify(result.errors[0])).toContain("dc_pages_locales");
     // The parent row did not survive: a document whose translations never
     // landed must not be committed as though it had.
     const after = await handle.adapter.executeQuery<{ n: number }>(

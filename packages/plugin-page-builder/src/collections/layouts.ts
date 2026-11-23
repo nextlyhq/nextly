@@ -113,7 +113,9 @@ export function layoutsCollection(): CollectionConfig {
     labels: { singular: "Header & footer set", plural: "Header & footer" },
     fields: [
       text({ name: "title", required: true }),
-      text({ name: "slug", required: true, unique: true }),
+      // Kept once for every language: an identifier the set's write routes
+      // and other documents name, unique on the set's own table.
+      text({ name: "slug", localized: false, required: true, unique: true }),
       textarea({ name: "description" }),
       repeater({
         name: "areas",

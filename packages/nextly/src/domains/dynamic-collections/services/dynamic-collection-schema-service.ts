@@ -37,7 +37,14 @@ import {
   fieldGroupRenamePairs,
   removedAndAddedFields as renameCandidates,
 } from "../../field-groups/storage/field-group-rename";
-import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import {
+  isFieldLocalized,
+  resolveLocalizedFieldNames,
+} from "../../i18n/classify-fields";
+import {
+  answeredRename,
+  declinedRename,
+} from "../../schema/field-rename-answers";
 import {
   builderColumnIsUnique,
   isListMarkedUnique,
@@ -2881,6 +2888,144 @@ ${allColumnDefs.join(",\n")}
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): { from: FieldDefinition; to: FieldDefinition } | null {
+    const pair = this.fieldRenameCandidate(oldFields, newFields);
+    // A change sent with answers that called this pair a drop and an add renames nothing: every
+    // step of it asks here, so none of them takes the pair for a rename.
+    return pair !== null && declinedRename(pair) ? null : pair;
+  }
+
+  /** The column a field is stored in on its entity's row, or none for one that has no column. */
+  columnNameOf(field: FieldDefinition): string | undefined {
+    return fieldProducesColumn(field) ? toSnakeCase(field.name) : undefined;
+  }
+
+  /**
+   * Where a field of the entity on `tableName` is stored, as a key two fields share only when one
+   * place holds both: its column, or the junction table a many-to-many's links live in (two
+   * fields naming one `junctionTable` share it). None for a field with neither. What a
+   * `drop_and_add` answer is refused for when both fields of its pair share one
+   * (`refuseUnansweredRename`): the change would keep the place, and what is in it, as it was.
+   */
+  storageNameOf(tableName: string, field: FieldDefinition): string | undefined {
+    if (usesJunctionTable(field)) {
+      return `junction:${this.junctionShape(tableName, field).table}`;
+    }
+    const column = this.columnNameOf(field);
+    return column === undefined ? undefined : `column:${column}`;
+  }
+
+  /**
+   * Refuse, before anything is written, a `rename` answer for a shared field renamed into a
+   * translated one, while the entity stays translated or as this change turns translation on.
+   * The main table drops the shared column and the companion adds the translated one empty: only a
+   * field translated before the change carries its values onto the companion, and turning
+   * translation on seeds a translated column only from a main column of the same name. So the
+   * rename would lose the values it asked to keep. Renamed first and made translated in a second
+   * change, or answered `drop_and_add`, it passes.
+   */
+  refuseRenameJoiningTranslation(
+    entity: string,
+    candidates: readonly { from: FieldDefinition; to: FieldDefinition }[],
+    localized: { was: boolean; is: boolean }
+  ): void {
+    if (!localized.is) return;
+    const joining = candidates.find(
+      pair =>
+        this.columnNameOf(pair.from) !== undefined &&
+        !isFieldLocalized(pair.from, true) &&
+        isFieldLocalized(pair.to, true) &&
+        answeredRename(pair)
+    );
+    if (!joining) return;
+    const from = joining.from.name;
+    const to = joining.to.name;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "renames",
+          code: "FIELD_RENAME_JOINS_TRANSLATION",
+          message: `${entity}: "${from}" is shared and "${to}" is translated, and a field can't be renamed and made translated in one change without leaving its values behind. Rename "${from}" to "${to}" first and make it translated in a second change, or answer "drop_and_add".`,
+        },
+      ],
+      logContext: { reason: "field-rename-joins-translation", from, to },
+    });
+  }
+
+  /**
+   * Every pair a change could be renaming, whatever it answered about each: a column's, over all
+   * the fields and over the shared and the translated fields apart (a localized entity plans each
+   * on its own table, where one may pair though the whole list does not), a many-to-many's and a
+   * field group's. What a road that takes answers asks an answer for (`refuseUnansweredRename`).
+   */
+  renameCandidatesOf(
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    /** Whether the entity stores per language before and after the change. */
+    localized: { was: boolean; is: boolean } = { was: false, is: false }
+  ): { from: FieldDefinition; to: FieldDefinition }[] {
+    // Classified as storage plans each field (`isFieldLocalized`): an explicit flag, else the
+    // type's default on an entity that stores per language.
+    const translated = (
+      fields: FieldDefinition[],
+      entityLocalized: boolean,
+      yes: boolean
+    ) =>
+      fields.filter(field => isFieldLocalized(field, entityLocalized) === yes);
+    const found = [
+      this.fieldRenameCandidate(oldFields, newFields),
+      this.fieldRenameCandidate(
+        translated(oldFields, localized.was, false),
+        translated(newFields, localized.is, false)
+      ),
+      this.fieldRenameCandidate(
+        translated(oldFields, localized.was, true),
+        translated(newFields, localized.is, true)
+      ),
+      this.junctionRenameCandidate(oldFields, newFields),
+      this.fieldGroupRenameCandidate(oldFields, newFields),
+    ].filter(
+      (pair): pair is { from: FieldDefinition; to: FieldDefinition } =>
+        pair !== null
+    );
+    // Once each: the populations agree on a pair they both see.
+    return found.filter(
+      (pair, i) =>
+        found.findIndex(
+          other =>
+            other.from.name === pair.from.name && other.to.name === pair.to.name
+        ) === i
+    );
+  }
+
+  /**
+   * The translated field among `candidates` (`renameCandidatesOf`) that the running change
+   * answered `drop_and_add` for, by name, or none: what the translated-field preflight is told
+   * the request chose to drop (`archiveFieldsLeavingTranslation`'s `droppedByAnswer`). A shared
+   * field's pair is none of its business, so a change answering one still has every translated
+   * field it removes asked about. Translated as storage planned it before the change.
+   */
+  translatedFieldDroppedByAnswer(
+    candidates: readonly { from: FieldDefinition; to: FieldDefinition }[],
+    wasLocalized: boolean
+  ): string | undefined {
+    return candidates.find(
+      pair =>
+        this.columnNameOf(pair.from) !== undefined &&
+        isFieldLocalized(pair.from, wasLocalized) &&
+        declinedRename(pair)
+    )?.from.name;
+  }
+
+  /**
+   * The one leaving and one arriving field of a compatible type a change could be renaming, or
+   * none, whatever the change answered about it: what a road that takes answers asks for an
+   * answer to (`refuseUnansweredRename`). `detectFieldRename` is this less a pair answered
+   * `drop_and_add`.
+   */
+  fieldRenameCandidate(
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): { from: FieldDefinition; to: FieldDefinition } | null {
     // Paired over the fields whose columns sit on the row (`fieldsStoredOnRow`), as the alter
     // reads them: a field renamed inside a group with no name renames a column of this row, and
     // every caller (the alter, the save's preconditions, the retry after a part-made rename) asks
@@ -2955,6 +3100,16 @@ ${allColumnDefs.join(",\n")}
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): { from: FieldDefinition; to: FieldDefinition } | null {
+    const pair = this.junctionRenameCandidate(oldFields, newFields);
+    // A pair a change answered as a drop and an add moves no links (`declinedRename`).
+    return pair !== null && declinedRename(pair) ? null : pair;
+  }
+
+  /** The many-to-many pair a change could be renaming, whatever it answered about it. */
+  junctionRenameCandidate(
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): { from: FieldDefinition; to: FieldDefinition } | null {
     const { oldOnly, newOnly } = renameCandidates(
       oldFields,
       newFields,
@@ -3000,6 +3155,16 @@ ${allColumnDefs.join(",\n")}
    * one field group at a time.
    */
   detectFieldGroupAssociationRename(
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[]
+  ): { from: FieldDefinition; to: FieldDefinition } | null {
+    const pair = this.fieldGroupRenameCandidate(oldFields, newFields);
+    // A pair a change answered as a drop and an add moves no rows (`declinedRename`).
+    return pair !== null && declinedRename(pair) ? null : pair;
+  }
+
+  /** The field-group pair a change could be renaming, whatever it answered about it. */
+  fieldGroupRenameCandidate(
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): { from: FieldDefinition; to: FieldDefinition } | null {

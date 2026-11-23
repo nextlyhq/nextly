@@ -104,17 +104,22 @@ export function siteCodeSingle(): SingleConfig {
       beforeValidate: [refuseUnmarkedWrite],
       beforeChange: [refuseUnmarkedWrite],
     },
+    // Kept once for every language (`localized: false`): the site's code
+    // is one for the whole site, as its judged entries (`head`, `body`) are,
+    // and `changedBy` is an id.
     fields: [
       // What the person wrote for the head, as it was judged: shown again for
       // editing, never rendered.
       textarea({
         name: "headSource",
+        localized: false,
         label: "Head",
         admin: { readOnly: true },
       }),
       // What the person wrote for the end of the body.
       textarea({
         name: "bodySource",
+        localized: false,
         label: "End of body",
         admin: { readOnly: true },
       }),
@@ -133,6 +138,7 @@ export function siteCodeSingle(): SingleConfig {
       // Who saved it last: `user:<id>`. API keys may not save site code.
       text({
         name: "changedBy",
+        localized: false,
         label: "Changed by",
         admin: { readOnly: true, hidden: true },
       }),

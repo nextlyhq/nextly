@@ -52,6 +52,10 @@ import { col, defineTable } from "../../domains/schema/extension/dsl";
 import { compileAndPublishExtensionSchema } from "../../domains/schema/extension/publish";
 import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
 import {
+  closedMarkOf,
+  declareClosedToSuperAdmin,
+} from "../../auth/access/closed-to-super-admin";
+import {
   collectionDbOptions,
   publishCollectionDbOptions,
 } from "../../domains/collections/services/collection-id";
@@ -2505,6 +2509,65 @@ describe("reloadNextlyConfig", () => {
       await reloadNextlyConfig({ resolver: buildResolver() });
 
       expect(collectionDbOptions("posts")).toEqual({ allowIdOnCreate: true });
+    });
+  });
+
+  /**
+   * Which collections the code closes to super-admin is published when a
+   * reload lands, so a mark saved under `next dev` holds without a restart,
+   * and the marks in force when it started are back when it does not.
+   */
+  describe("collections closed to super-admin", () => {
+    const postsClosed = (closedToSuperAdmin?: boolean) => ({
+      collections: [
+        {
+          slug: "posts",
+          tableName: "dc_posts",
+          fields: [{ name: "body", type: "text" }],
+          ...(closedToSuperAdmin === undefined ? {} : { closedToSuperAdmin }),
+        },
+      ],
+    });
+    const livePosts = () =>
+      liveSnapshot("dc_posts", [
+        ...reservedColumns("dc_posts"),
+        { name: "body", type: "text", nullable: true },
+      ]);
+
+    beforeEach(() => {
+      declareClosedToSuperAdmin([]);
+    });
+
+    it("closes a collection whose code is saved closed, without a restart", async () => {
+      loadConfigSpy.mockResolvedValue({ config: postsClosed(true) });
+      introspectSpy.mockResolvedValue(livePosts());
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(closedMarkOf("posts")).toEqual({ closed: true, setIn: "code" });
+    });
+
+    it("drops a mark the saved code no longer sets", async () => {
+      declareClosedToSuperAdmin([{ slug: "posts", closedToSuperAdmin: true }]);
+      loadConfigSpy.mockResolvedValue({ config: postsClosed() });
+      introspectSpy.mockResolvedValue(livePosts());
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(closedMarkOf("posts")).toEqual({ closed: false, setIn: null });
+    });
+
+    it("keeps the marks in force when the reload does not land", async () => {
+      declareClosedToSuperAdmin([{ slug: "posts", closedToSuperAdmin: true }]);
+      loadConfigSpy.mockResolvedValue({ config: postsClosed(false) });
+      introspectSpy.mockRejectedValue(new Error("connection refused"));
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(closedMarkOf("posts")).toEqual({ closed: true, setIn: "code" });
     });
   });
 
