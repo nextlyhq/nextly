@@ -385,7 +385,7 @@ export function BuilderFieldSettings({
   );
 
   // Above the panel: where a read-only field is defined, and what the field lacks that the save
-  // would refuse it for.
+  // would refuse it for, or why the server refused its move.
   const definedAt = (
     <>
       <DefinedAt reason={reason} onOpenFieldGroup={onOpenFieldGroup} />

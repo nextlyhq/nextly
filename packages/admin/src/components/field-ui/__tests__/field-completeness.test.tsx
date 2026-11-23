@@ -9,6 +9,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { FieldErrorNotice } from "@admin/components/features/schema-builder/FieldErrorNotice";
+import { RefusedMovesProvider } from "@admin/components/features/schema-builder/field-errors-context";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { convertToBuilderField } from "@admin/lib/builder/field-transformers";
 import { builderFieldErrors } from "@admin/lib/builder/field-validators";
@@ -166,6 +167,22 @@ describe("the field's settings panel", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent(
       /"subject" must link to a collection/
+    );
+  });
+
+  it("says why the server refused the field's move", () => {
+    const fields = [field({})];
+
+    render(
+      <RefusedMovesProvider
+        value={new Map([["f1", "Subject cannot move yet."]])}
+      >
+        <FieldErrorNotice fields={fields} fieldId="f1" />
+      </RefusedMovesProvider>
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Subject cannot move yet."
     );
   });
 

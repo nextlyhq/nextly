@@ -13,6 +13,8 @@
 import { resolutionError } from "../../plugins/resolution-error";
 import { AUDIT_KIND_LENGTH } from "../../schemas/audit/widths";
 
+import { CORE_DOTTED_AUDIT_KINDS } from "./core-dotted-kinds";
+
 /** What a plugin says it will write. */
 export interface PluginAuditKind {
   kind: string;
@@ -62,6 +64,15 @@ export function collectPluginAuditKinds(
 ): Map<string, Set<string>> {
   const kinds = new Map<string, Set<string>>();
   for (const entry of declared) {
+    // A kind core writes itself is never a plugin's, whatever its prefix, so
+    // no plugin row can read as one of core's.
+    if (CORE_DOTTED_AUDIT_KINDS.has(entry.kind)) {
+      throw resolutionError(
+        "plugin-audit-kind-reserved",
+        `Plugin "${pluginName}" declares the audit kind "${entry.kind}", which core writes itself.`,
+        { plugin: pluginName, auditKind: entry.kind }
+      );
+    }
     if (!entry.kind.startsWith(`${pluginSlug}.`)) {
       throw resolutionError(
         "plugin-audit-kind-outside-prefix",

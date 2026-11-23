@@ -20,7 +20,11 @@ import type {
 } from "../../../schemas/dynamic-collections";
 import type { CollectionRegistryService } from "../../../services/collections/collection-registry-service";
 import { createLogger } from "../../utils/logger";
-import { demoteCollection, type DemotedCollection } from "../db-sync-demote";
+import {
+  demoteCollection,
+  demotedCollectionIn,
+  type DemotedCollection,
+} from "../db-sync-demote";
 import { promotedCollection } from "../db-sync-promote-collection";
 
 vi.mock("../db-sync-registry", async importOriginal => ({
@@ -173,6 +177,33 @@ describe("a demoted collection's record", () => {
     ).toBe("dc_renamed");
   });
 
+  it("keeps the timestamps setting a record already holds, whatever the configuration now says", async () => {
+    // The configuration turned timestamps on since the record was written: the table was built
+    // without the timestamp columns, and a demote adds no column.
+    const synced = {
+      ...asRecord({
+        slug: "articles",
+        labels: { singular: "Article", plural: "Articles" },
+        tableName: "dc_articles",
+        fields: [],
+        source: "code",
+        schemaHash: "older",
+      }),
+      locked: true,
+      timestamps: false,
+    };
+    const { updated } = await demoted(coded({ timestamps: true }), synced);
+    expect(updated).toHaveLength(1);
+    expect(updated[0].timestamps).toBe(false);
+    // A collection the registry does not hold yet takes the setting its configuration states.
+    expect((await registeredFor(coded({ timestamps: false }))).timestamps).toBe(
+      false
+    );
+    expect((await registeredFor(coded({ timestamps: true }))).timestamps).toBe(
+      true
+    );
+  });
+
   it("keeps the lifecycle when it replaces a record already registered", async () => {
     const existing = asRecord({
       slug: "articles",
@@ -264,5 +295,45 @@ describe("a demoted collection's code-only options", () => {
   it("are not mentioned for a collection without any", async () => {
     const { shown } = await demoted(coded());
     expect(shown).not.toContain("Schema Builder cannot hold");
+  });
+});
+
+describe("which collection a demote may move", () => {
+  const plugin = {
+    name: "@acme/forms",
+    contributes: { collections: [{ slug: "articles" }] },
+  };
+
+  it("is the app's own collection the configuration defines", () => {
+    const collection = coded();
+    expect(demotedCollectionIn("articles", { collections: [collection] })).toBe(
+      collection
+    );
+  });
+
+  it("is never a plugin's, even under an address the configuration also lists", () => {
+    // A plugin registers its collection again at every start, so a hand-over to the Builder would
+    // be taken back by the next one; under a Builder record's address it would mark that record as
+    // handed over from code.
+    const refused = demotedCollectionIn("articles", {
+      collections: [coded()],
+      plugins: [plugin],
+    });
+    expect(refused).toMatchObject({ code: "DEMOTE_PLUGIN_COLLECTION" });
+    expect((refused as { what: string }).what).toContain("@acme/forms");
+  });
+
+  it("is refused as not defined when the configuration has none under the address", () => {
+    expect(
+      demotedCollectionIn("articles", {
+        collections: [],
+        plugins: [
+          {
+            name: "@acme/pages",
+            contributes: { collections: [{ slug: "pages" }] },
+          },
+        ],
+      })
+    ).toMatchObject({ code: "DEMOTE_COLLECTION_NOT_FOUND" });
   });
 });

@@ -147,7 +147,7 @@ function keepsText(to: FieldTypeOnDialect): boolean {
 }
 
 /** Whether two JSON writings are one value, whatever their spacing or key order. */
-function sameJson(stored: string, readsAs: string): boolean {
+export function sameJson(stored: string, readsAs: string): boolean {
   try {
     return (
       canonicalJson(JSON.parse(stored) as unknown) ===

@@ -6,10 +6,9 @@
  * (`builderFieldErrors`), judged over the same fields the outline judges, so the panel, the row
  * and the save always agree.
  */
-import { type JSX, useMemo } from "react";
+import type { JSX } from "react";
 
-import { builderFieldErrors } from "@admin/lib/builder/field-validators";
-
+import { useBuilderFieldErrors } from "./field-errors-context";
 import type { BuilderField } from "./types";
 
 export function FieldErrorNotice({
@@ -20,14 +19,8 @@ export function FieldErrorNotice({
   fields: readonly BuilderField[];
   fieldId: string;
 }): JSX.Element | null {
-  const error = useMemo(
-    () =>
-      builderFieldErrors(
-        fields.filter(field => !field.isSystem),
-        fields
-      ).get(fieldId),
-    [fields, fieldId]
-  );
+  // A move the server refused is the field's error too, as its row shows it.
+  const error = useBuilderFieldErrors(fields).get(fieldId);
   if (!error) return null;
   return (
     <div

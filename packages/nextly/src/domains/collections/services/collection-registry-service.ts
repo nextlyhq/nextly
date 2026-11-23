@@ -41,6 +41,8 @@ import { stopReleasesHolding } from "../../releases/early-stop";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
 import { settingsOf } from "../../schema/migrate-create/entity-settings";
 import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-elements";
+import { DEMOTED_FROM_CODE } from "../../schema/pipeline/demoted-from-code";
+import { isHandedToBuilder } from "../../schema/pipeline/registered-collections";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
@@ -68,13 +70,6 @@ export interface UpdateCollectionOptions {
    */
   handOver?: "builder";
 }
-
-/**
- * What a record handed from the configuration to the Schema Builder carries as its path, in
- * place of the configuration file's: the mark that tells such a record from a collection made in
- * the Builder, whose address a code entry may later take.
- */
-export const DEMOTED_FROM_CODE = "demoted-from-code";
 
 /**
  * Whether an update hands a collection to the Schema Builder: asked for, of a row the app's
@@ -105,9 +100,11 @@ function builderOwnsDeclared(
     | null
     | undefined
 ): boolean {
+  // The pipeline's answer to "handed to the Builder", so the registry and every road that builds a
+  // desired schema leave the same entries to the Builder.
   return (
-    existing?.source === "ui" &&
-    existing.configPath === DEMOTED_FROM_CODE &&
+    !!existing &&
+    isHandedToBuilder(existing) &&
     (config.source ?? "code") === "code"
   );
 }
@@ -1262,6 +1259,14 @@ export class CollectionRegistryService extends BaseRegistryService<
       options.existing === undefined
         ? await this.getCollectionBySlug(recorded.slug)
         : options.existing;
+    // The Schema Builder's collection, still declared in code: its row is the Builder's to change,
+    // as the code-first sync leaves it, so a recorded declaration is not written over it. A judged
+    // write only answers, as the sync's plan does, and says nothing.
+    if (builderOwnsDeclared(origin, existing)) {
+      if (options.judgeOnly !== true)
+        this.warnStillDeclaredInCode(recorded.slug);
+      return "unchanged";
+    }
     const config =
       options.leavesUnsaid === true
         ? withUnsaidKept(recorded, existing, options.cleared)
@@ -1297,15 +1302,15 @@ export class CollectionRegistryService extends BaseRegistryService<
 
   /**
    * Says, once for each address in this process, that a collection the Schema Builder owns is
-   * still declared in the configuration. The sync leaves its registry record to the Builder;
-   * what the configuration's entry still decides elsewhere (the table a development push
-   * builds) is why the entry has to go.
+   * still declared in the configuration. The sync and `nextly migrate` leave its registry record
+   * to the Builder, and the roads that apply schema build its table from that record
+   * (`withoutHandedToBuilder`), so the entry is ignored there; this names it, so it is removed.
    */
   private warnStillDeclaredInCode(slug: string): void {
     if (this.warnedStillInCode.has(slug)) return;
     this.warnedStillInCode.add(slug);
     this.logger.warn(
-      `Collection "${slug}" belongs to the Schema Builder and is still declared in nextly.config. Its registry record is left to the Builder, and its table still follows the configuration's entry until that entry is removed: remove it from the configuration's collections.`,
+      `Collection "${slug}" belongs to the Schema Builder and is still declared in nextly.config. Its registry record and its table follow the Schema Builder, and the configuration's entry is ignored for both: remove it from the configuration's collections.`,
       { slug }
     );
   }

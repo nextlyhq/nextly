@@ -14,7 +14,11 @@
 import { crossEntityProblems } from "../../collections/config/cross-entity-problems";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { validateCollectionConfig } from "../../collections/config/validate-config";
-import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
+import { fieldProducesColumn } from "../../domains/schema/field-rules";
+import {
+  columnsDeclaredBy,
+  fieldsStoredOnRow,
+} from "../../domains/schema/services/field-column-descriptor";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { validateFieldGroupConfig } from "../../field-groups/config/validate-field-group";
 import type { SingleConfig } from "../../singles/config/types";
@@ -129,10 +133,11 @@ const AUTHORED_RULES: ReadonlySet<string> = new Set([
  * column-less `Title` beside the added `title`), which the rules would otherwise call one name
  * declared twice.
  *
- * And the one question the system fields raise beside them: whether another field takes a column
+ * And the two questions the system fields raise beside them: whether another field takes a column
  * one of them holds, asked as `defineCollection` asks it before adding them
  * (`columnsDeclaredBy`). A field a plugin's setup adds by a system field's name does, and the
- * table could not be made, so it is reported.
+ * table could not be made, so it is reported. And whether a column-less field takes one's exact
+ * name (`systemNameClashes`), so the two would share one document key.
  */
 
 function entryProblems<
@@ -157,10 +162,11 @@ function entryProblems<
       AUTHORED_RULES.has(problem.code)
     ),
     ...systemColumnClashes(added, authored),
+    ...systemNameClashes(fields, added),
   ];
 }
 
-/** A field that takes a column a system field holds. */
+/** A field that takes a column, or the exact name, a system field holds. */
 interface ColumnClash {
   path: string;
   code: string;
@@ -211,6 +217,85 @@ function systemColumnClashes(
     }
   }
   return clashes;
+}
+
+/**
+ * Each author's field stored at the document's top level that takes the exact name of one of
+ * `added` but stores no column of its own (a component, a field-group reference, a many-to-many,
+ * a virtual field). `define*` adds a system field when no field holds its column, so it adds one
+ * beside such a field, and the two would read and write one document key: a write offered to
+ * both, a read answered by one. The Builder reserves these names outright; code-first keeps a
+ * field of the name that takes the column (it replaces the system one), so only the column-less
+ * ones are refused. A field that takes the column is `systemColumnClashes`' question.
+ *
+ * The fields at the top level are those `fieldsStoredOnRow` gives, the view `define*` decides by
+ * (`columnsDeclaredBy`): the ones in `fields` and those a group with no name lays out beside
+ * them. It passes by an entry that is not a field, which the validators report.
+ */
+function systemNameClashes(
+  fields: readonly unknown[],
+  added: readonly unknown[]
+): ColumnClash[] {
+  const systemNames = new Set(
+    added.map(field => (field as { name?: unknown }).name)
+  );
+  const system = new Set(added);
+  const clashes: ColumnClash[] = [];
+  for (const field of fieldsStoredOnRow(fields)) {
+    const name = sharedSystemName(field, systemNames, system);
+    if (name === null) continue;
+    clashes.push({
+      path: `${placeOf(fields, field)}.name`,
+      code: "FIELD_NAME_RESERVED",
+      message: `Field '${name}' stores no column of its own, so it cannot use the name '${name}': Nextly keeps its own text field '${name}' on every collection and Single, and the two would share one document key. Rename it, or declare '${name}' as a text field to replace Nextly's.`,
+    });
+  }
+  return clashes;
+}
+
+/** The system name `field` takes without a column of its own, or null where it takes none. */
+function sharedSystemName(
+  field: unknown,
+  systemNames: ReadonlySet<unknown>,
+  system: ReadonlySet<unknown>
+): string | null {
+  if (typeof field !== "object" || field === null || system.has(field)) {
+    return null;
+  }
+  const name = (field as { name?: unknown }).name;
+  if (typeof name !== "string" || !systemNames.has(name)) return null;
+  return fieldProducesColumn(field) ? null : name;
+}
+
+/**
+ * Where `target` sits in `fields`, as `fields[2]` or, inside a group with no name,
+ * `fields[0].fields[1]`: the places `fieldsStoredOnRow` finds a field. Each container is entered
+ * once, so a group that holds itself cannot loop.
+ */
+function placeOf(
+  fields: readonly unknown[],
+  target: object,
+  at = "fields",
+  entered: WeakSet<object> = new WeakSet()
+): string {
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i];
+    if (field === target) return `${at}[${i}]`;
+    const inner = unnamedContainerFields(field);
+    if (inner === null || entered.has(inner)) continue;
+    entered.add(inner);
+    const found = placeOf(inner, target, `${at}[${i}].fields`, entered);
+    if (found !== `${at}[${i}].fields`) return found;
+  }
+  return at;
+}
+
+/** The fields a group with no name holds, or null where `field` is not one. */
+function unnamedContainerFields(field: unknown): readonly unknown[] | null {
+  if (typeof field !== "object" || field === null) return null;
+  const { name, fields } = field as { name?: unknown; fields?: unknown };
+  const named = typeof name === "string" && name.length > 0;
+  return !named && Array.isArray(fields) ? fields : null;
 }
 
 /** `path` within the entity at `kind[index]`, as a path in the whole configuration. */
