@@ -23,7 +23,10 @@ import { fieldLabel } from "@admin/lib/field-label";
 import type { WorkflowStepKind } from "@admin/types/workflows";
 
 import { entryTitleField } from "../entry-title";
-import type { LocaleTranslationMeta } from "../translation-meta";
+import {
+  isFieldTranslated,
+  type LocaleTranslationMeta,
+} from "../translation-meta";
 
 import { EntryTableCell } from "./EntryTableCell";
 import { LanguageChips } from "./LanguageChips";
@@ -458,8 +461,9 @@ const dirOf = (language: TitleLanguage): "rtl" | "ltr" =>
  * title looks the same in either language.
  *
  * A row shows a title in the chosen language only where the read in that language returned one
- * that is not blank. Anything else (not read yet, not translated, a row or field that read did
- * not return, a read that was refused) shows the list's own title, in the default language,
+ * that is present (`isFieldTranslated`). Anything else (not read yet, not translated, a row or
+ * field that read did not return, a read that was refused) shows the list's own title, in the
+ * default language,
  * marked with its language once the read has answered, so a default title is never passed off
  * as a translation. Each title carries its language's `lang` and `dir`.
  */
@@ -474,7 +478,10 @@ function titleInLanguageCell(
       typeof id === "string" || typeof id === "number"
         ? shownIn.titles?.get(String(id))
         : undefined;
-    if (typeof title === "string" && title.trim() !== "") {
+    // Present by the one rule a translated value is judged by, so a structured value (a rich
+    // text title) counts as a translation as a non-blank string does, and the column's own cell
+    // draws it.
+    if (isFieldTranslated(title)) {
       return (
         <span
           lang={shownIn.language.code}

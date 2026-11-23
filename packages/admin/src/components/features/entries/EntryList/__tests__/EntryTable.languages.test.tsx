@@ -160,6 +160,33 @@ describe("EntryTable — titles in a chosen language", () => {
     expect(entriesTable().getAllByText("(English)")).toHaveLength(2);
   });
 
+  it("shows a structured title in the chosen language through the column's own cell", () => {
+    // A rich text title arrives as structured content, not a string: it is a translation all
+    // the same, drawn by the rich text cell.
+    const pages: CollectionForColumns = {
+      ...posts,
+      admin: { useAsTitle: "headline" },
+      fields: [
+        { type: "richText", name: "headline", label: "Headline" } as never,
+      ],
+    };
+    renderTable({
+      collection: pages,
+      entries: [{ id: "p1", headline: { root: { text: "Uno" } } }],
+      titleLanguage: choice({
+        value: "es",
+        titles: new Map<string, unknown>([
+          ["p1", { root: { text: "Hola rica" } }],
+        ]),
+      }),
+    });
+    const shown = entriesTable()
+      .getByText(/Hola rica/)
+      .closest("[data-title-language]");
+    expect(shown).toHaveAttribute("lang", "es");
+    expect(entriesTable().queryByText("(English)")).toBeNull();
+  });
+
   it("writes a right-to-left language's titles right to left", () => {
     renderTable({
       titleLanguage: choice({
