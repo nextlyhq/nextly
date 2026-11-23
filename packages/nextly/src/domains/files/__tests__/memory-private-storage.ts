@@ -27,6 +27,35 @@ export class MemoryPrivateStorage {
   /** How many deletes to refuse next, as a storage that is briefly down would. */
   refuseDeletes = 0;
 
+  /**
+   * Hold reads until this many are waiting, then let them all through: two
+   * requests reading at once are then certain to overlap, whatever the timing.
+   */
+  private readBarrier: { size: number; waiting: Array<() => void> } | null =
+    null;
+
+  /** How many reads are waiting at the barrier now. */
+  get readsWaiting(): number {
+    return this.readBarrier?.waiting.length ?? 0;
+  }
+
+  /** Make the next `size` reads wait for each other. */
+  holdReadsUntil(size: number): void {
+    this.readBarrier = { size, waiting: [] };
+  }
+
+  private async passReadBarrier(): Promise<void> {
+    const barrier = this.readBarrier;
+    if (barrier === null) return;
+    await new Promise<void>(resolve => {
+      barrier.waiting.push(resolve);
+      if (barrier.waiting.length >= barrier.size) {
+        this.readBarrier = null;
+        for (const release of barrier.waiting) release();
+      }
+    });
+  }
+
   /** The storage adapter, as a storage plugin hands it to core. */
   readonly adapter: IStorageAdapter = {
     upload: () => Promise.reject(new Error("public upload refused in test")),
@@ -56,7 +85,10 @@ export class MemoryPrivateStorage {
         : null;
     },
     read: async (key, options) => {
+      // What is stored when the read is asked, as a storage answers it, even
+      // if the read then waits for others.
       const found = this.objects.get(key);
+      await this.passReadBarrier();
       if (!found) return null;
       if (
         options?.maxBytes !== undefined &&

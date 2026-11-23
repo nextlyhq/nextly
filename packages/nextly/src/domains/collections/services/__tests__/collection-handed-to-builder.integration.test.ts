@@ -7,6 +7,9 @@
  * - Only the app's own row moves: a plugin's is refused, as any other change to it is.
  * - A sync that still finds the collection declared in code leaves the Builder's row as it is and
  *   says so once.
+ * - So does `nextly migrate`'s registry write, which brings each row to the configuration a
+ *   migration's snapshot recorded: the Builder's row keeps a field the Builder added. A plugin's
+ *   declaration under the same address is written as before.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -18,10 +21,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
-import {
-  CollectionRegistryService,
-  DEMOTED_FROM_CODE,
-} from "../collection-registry-service";
+import { DEMOTED_FROM_CODE } from "../../../schema/pipeline/demoted-from-code";
+import { CollectionRegistryService } from "../collection-registry-service";
+import { configurationRegistryRows } from "../../../schema/migrate/first-run";
+import { writeRegistryFromSource } from "../../../schema/migrate/registry-writer";
 import { calculateSchemaHash } from "../../../schema/services/schema-hash";
 import { toCodeFirstCollectionConfig } from "../collection-sync-service";
 
@@ -218,6 +221,102 @@ describe.each(getConfiguredTestDialects())(
       const said = warnings.filter(message => message.includes(slug));
       expect(said).toHaveLength(1);
       expect(said[0]).toContain("nextly.config");
+    });
+
+    /**
+     * `nextly migrate`'s registry write of `declared`, as a migration's snapshot recorded it, with
+     * `plugins` the collections a plugin contributes. What it logged as warnings, and how many rows
+     * it wrote.
+     */
+    async function migrateRegistryWrite(
+      declared: ReturnType<typeof defineCollection>,
+      plugins: ReadonlyMap<string, `plugin:${string}`> = new Map()
+    ) {
+      const said: string[] = [];
+      const logger = {
+        info: () => {},
+        debug: () => {},
+        error: () => {},
+        warn: (message: string) => {
+          said.push(message);
+        },
+      };
+      const result = await writeRegistryFromSource(
+        {
+          kind: "snapshot",
+          file: "0002_after_the_demote.sql",
+          entities: configurationRegistryRows({ collections: [declared] }),
+        },
+        {
+          adapter: handle.adapter as never,
+          logger: logger as never,
+          collectionSources: plugins,
+        }
+      );
+      return { said, written: result.written.collection };
+    }
+
+    /** `slug` synced from code, handed to the Builder, and given a field there. */
+    async function handedOverWithBuilderField(slug: string) {
+      await registry.syncCodeFirstCollections([coded(slug)]);
+      await registry.updateCollection(
+        slug,
+        { source: "ui", locked: false, configPath: DEMOTED_FROM_CODE },
+        { handOver: "builder" }
+      );
+      const held = await registry.getCollectionBySlug(slug);
+      const fields = [
+        ...(held?.fields ?? []),
+        { name: "subtitle", type: "text" },
+      ] as never;
+      await registry.updateCollection(slug, {
+        fields,
+        schemaHash: calculateSchemaHash(fields),
+      });
+    }
+
+    const fieldNames = async (slug: string) =>
+      ((await registry.getCollectionBySlug(slug))?.fields ?? []).map(
+        field => field.name
+      );
+
+    it("nextly migrate's registry write leaves the Builder's row of a collection still declared in code, and says so once", async () => {
+      const slug = "chb_migrate_still_coded";
+      await handedOverWithBuilderField(slug);
+      const declared = defineCollection({
+        slug,
+        fields: [text({ name: "title" })],
+      });
+
+      const first = await migrateRegistryWrite(declared);
+      const second = await migrateRegistryWrite(declared);
+
+      expect(first.written).toBe(0);
+      expect(second.written).toBe(0);
+      expect(await fieldNames(slug)).toContain("subtitle");
+      expect(await owner(slug)).toEqual({ source: "ui", locked: false });
+      expect(first.said.filter(message => message.includes(slug))).toHaveLength(
+        1
+      );
+      expect(first.said.join("\n")).toContain("nextly.config");
+    });
+
+    it("nextly migrate's registry write of a plugin's declaration under a handed-over address is as before", async () => {
+      const slug = "chb_migrate_plugin";
+      await handedOverWithBuilderField(slug);
+      const declared = defineCollection({
+        slug,
+        fields: [text({ name: "title" })],
+      });
+
+      const { said, written } = await migrateRegistryWrite(
+        declared,
+        new Map([[slug, "plugin:@test/chb"]])
+      );
+
+      expect(written).toBe(1);
+      expect(await fieldNames(slug)).not.toContain("subtitle");
+      expect(said.filter(message => message.includes(slug))).toEqual([]);
     });
 
     it("a collection made in the Builder, never demoted, is still synced from a code entry under its address", async () => {

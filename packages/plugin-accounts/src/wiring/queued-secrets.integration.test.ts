@@ -255,6 +255,12 @@ describe.each(getConfiguredTestDialects())(
       // Its retry sends the link the invitation was issued with.
       await runJobs(nextly, 60_000);
       expect(sends.map(send => tokenInBody(send.html))).toEqual([token, token]);
+      // The email sent greets by name and says when its link stops working,
+      // from the job's input, beside the link rebuilt at send time.
+      expect(sends[1]?.html).toContain("Hello Ayesha Khan,");
+      expect(sends[1]?.html).toMatch(
+        /The link works until \d{1,2} \w+ \d{4}, \d{1,2}:\d{2} [AP]M \(UTC\)\./
+      );
       const sent = await emailJobs(nextly);
       expect(sent.rows[0]).toMatchObject({ state: "done" });
       expect(sent.text).not.toContain(token);

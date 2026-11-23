@@ -16,6 +16,7 @@ import {
   reserveEmailRequest,
   type EmailRequestVerdict,
 } from "./email-limits";
+import { expiryFor } from "./expiry";
 import { ADDRESS, nameAndAddress } from "./input";
 import { pageLink } from "./links";
 import {
@@ -135,7 +136,17 @@ export async function invite(
     const existing = await accountByAddress(deps.db, address);
     await deps.mail.queue(
       existing === null
-        ? { kind: "invitation", accountId: null, to: address, ...fields }
+        ? {
+            kind: "invitation",
+            accountId: null,
+            to: address,
+            ...fields,
+            // Its template may greet the person by name and say when the
+            // link stops working, in the site's time zone. Inviting again
+            // sends the new link's expiry, through this same path.
+            name,
+            ...expiryFor(minted.expiresAt, settings.timeZone),
+          }
         : {
             kind: "invitation-has-account",
             accountId: existing.id,
