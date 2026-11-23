@@ -372,18 +372,15 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v", "es")).toEqual({ a: "abc" });
     });
 
-    // A family no rule reaches yet keeps today's answer exactly: a date read as text is a form the
-    // database's cast does not write, so the change is refused and nothing changes.
-    it("still refuses a date becoming a text, and changes nothing", async () => {
+    // A date read as text is its ISO instant, a form the database's cast does not write: the save
+    // writes it, from each dialect's stored form (SQLite's seconds included).
+    it("converts a date into a text as its ISO instant", async () => {
       const t = await boot([{ name: "v", type: "date" }]);
       await write(t, "a", { v: "2024-01-02T03:04:05.000Z" });
-      const before = await read(t, "v");
 
-      expect(await save(t, [{ name: "v", type: "text" }])).toMatchObject({
-        code: "VALIDATION_ERROR",
-      });
+      expect(await save(t, [{ name: "v", type: "text" }])).toBeUndefined();
 
-      expect(await read(t, "v")).toEqual(before);
+      expect(await read(t, "v")).toEqual({ a: "2024-01-02T03:04:05.000Z" });
     });
 
     // A value that cannot convert is cleared only with the person's consent, for the count the
