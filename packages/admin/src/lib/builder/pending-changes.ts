@@ -297,7 +297,8 @@ function savedAsRenamed(
 
 /**
  * The path of the field `id` in `placements`: the names of the fields holding it, outermost first,
- * then its own name.
+ * then its own name. A holder with no name (a layout group) stores nothing of its own, so it is no
+ * step of the path.
  */
 function pathOf(id: string, placements: Map<string, Placement>): string[] {
   const path: string[] = [];
@@ -306,9 +307,27 @@ function pathOf(id: string, placements: Map<string, Placement>): string[] {
     at !== null;
     at = placements.get(at)?.parentId ?? null
   ) {
-    path.unshift(placements.get(at)?.field.name ?? "");
+    const name = placements.get(at)?.field.name ?? "";
+    if (at === id || name !== "") path.unshift(name);
   }
   return path;
+}
+
+/**
+ * A field's paths as saved and in the draft, where they differ: a move into or out of a named
+ * group. A move into or out of a layout group keeps the path, and so the stored values, as they
+ * were.
+ */
+function movedPathsOf(
+  id: string,
+  before: Map<string, Placement>,
+  after: Map<string, Placement>
+): { movedFrom: string[]; movedTo: string[] } | undefined {
+  const movedFrom = pathOf(id, before);
+  const movedTo = pathOf(id, after);
+  return movedFrom.join("\u0000") === movedTo.join("\u0000")
+    ? undefined
+    : { movedFrom, movedTo };
 }
 
 /**
@@ -376,12 +395,7 @@ export function pendingChanges(
           was,
           holderChanged || movedInPlace.has(field.id),
           followed.get(field.id) ?? was,
-          holderChanged
-            ? {
-                movedFrom: pathOf(field.id, before),
-                movedTo: pathOf(field.id, after),
-              }
-            : undefined
+          holderChanged ? movedPathsOf(field.id, before, after) : undefined
         )
       );
     } else if (!underAny(field.id, after, added)) {
