@@ -47,7 +47,8 @@ import { hostname } from "node:os";
 import { dirname, join, relative } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { like, type SQL } from "drizzle-orm";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { eq, like, type SQL } from "drizzle-orm";
 import { z } from "zod";
 
 import { loadedDialect } from "../../../database/dialect-tables";
@@ -1053,21 +1054,43 @@ export async function readSavesInProgress(
     .select({ key: table.key, value: table.value })
     .from(table)
     .where(like(table.key, `${KEY_PREFIX}%`));
-  return rows.map(({ key, value }) => {
-    try {
-      const parsed = savedRecord.safeParse(
-        typeof value === "string" ? JSON.parse(value) : value
-      );
-      return parsed.success
-        ? { key, record: parsed.data }
-        : { key, unreadable: "it is not a save's record" };
-    } catch (error) {
-      return {
-        key,
-        unreadable: error instanceof Error ? error.message : String(error),
-      };
-    }
-  });
+  return rows.map(readRowOf);
+}
+
+/**
+ * The record standing for one entity, in one primary-key read through `db`: the adapter's handle,
+ * or an open transaction's, so a write already inside one reads on its own connection. Undefined
+ * where none stands.
+ */
+export async function readSaveInProgressOf(
+  db: unknown,
+  dialect: SupportedDialect,
+  kind: SaveInProgressKind,
+  slug: string
+): Promise<ReadRow | undefined> {
+  const table = loadedDialect(dialect).tables.nextlyMeta;
+  const [row] = await (db as RecordRows)
+    .select({ key: table.key, value: table.value })
+    .from(table)
+    .where(eq(table.key, saveInProgressKey(kind, slug)));
+  return row === undefined ? undefined : readRowOf(row);
+}
+
+/** A record's row parsed: its record, or why it could not be read. */
+function readRowOf({ key, value }: { key: string; value: unknown }): ReadRow {
+  try {
+    const parsed = savedRecord.safeParse(
+      typeof value === "string" ? JSON.parse(value) : value
+    );
+    return parsed.success
+      ? { key, record: parsed.data }
+      : { key, unreadable: "it is not a save's record" };
+  } catch (error) {
+    return {
+      key,
+      unreadable: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 /** A record's row as read: the record, or why it could not be read, by its key. */

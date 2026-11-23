@@ -208,6 +208,7 @@ import {
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
 import type { ReleasesService } from "../../releases/services/releases-service";
+import { refuseReadOverLeftSave } from "../../schema/builder-save/left-save-fields";
 import {
   DEFAULT_DECIMAL_SCALE,
   getColumnDescriptor,
@@ -4190,6 +4191,13 @@ export class CollectionQueryService extends BaseService {
     hookExemptRead?: HookExemptRead;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
     try {
+      // A read that needs a column a Builder save left part-way moved is answered with that
+      // save's refusal, never a database error.
+      await refuseReadOverLeftSave({
+        adapter: this.adapter,
+        kind: "collection",
+        slug: params.collectionName,
+      });
       // An offset that names no row, or one beside a page, is refused before
       // anything is read or any hook runs.
       assertReadOffset(params.offset, params.page);
@@ -5352,6 +5360,13 @@ export class CollectionQueryService extends BaseService {
     settled?: SettledAccessToken
   ): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     try {
+      // A read that needs a column a Builder save left part-way moved is answered with that
+      // save's refusal, never a database error.
+      await refuseReadOverLeftSave({
+        adapter: this.adapter,
+        kind: "collection",
+        slug: params.collectionName,
+      });
       const plan = await this.resolveReadPlan<{ totalDocs: number }>(
         params,
         settledReadIn(settled)
@@ -5434,6 +5449,13 @@ export class CollectionQueryService extends BaseService {
     settled?: SettledAccessToken
   ): Promise<CollectionServiceResult<{ count: number; atLeast: boolean }>> {
     try {
+      // A read that needs a column a Builder save left part-way moved is answered with that
+      // save's refusal, never a database error.
+      await refuseReadOverLeftSave({
+        adapter: this.adapter,
+        kind: "collection",
+        slug: params.collectionName,
+      });
       // A cap that is not a positive integer would reach the query builder as
       // `.limit(NaN)` or a fraction, and fail the read rather than bound it.
       if (!Number.isSafeInteger(params.cap) || params.cap < 1) {
@@ -5494,6 +5516,13 @@ export class CollectionQueryService extends BaseService {
     params: FilteredReadParams & { groupBy: string; bucketLimit?: number }
   ): Promise<CollectionServiceResult<GroupedRows>> {
     try {
+      // A read that needs a column a Builder save left part-way moved is answered with that
+      // save's refusal, never a database error.
+      await refuseReadOverLeftSave({
+        adapter: this.adapter,
+        kind: "collection",
+        slug: params.collectionName,
+      });
       const plan = await this.resolveReadPlan<GroupedRows>(params);
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;
@@ -5630,6 +5659,13 @@ export class CollectionQueryService extends BaseService {
     }
   ): Promise<CollectionServiceResult<TimeseriesPoints>> {
     try {
+      // A read that needs a column a Builder save left part-way moved is answered with that
+      // save's refusal, never a database error.
+      await refuseReadOverLeftSave({
+        adapter: this.adapter,
+        kind: "collection",
+        slug: params.collectionName,
+      });
       const count = boundedIntervalCount(params.intervals);
       assertUsableRowsEnd(params.rowsEnd);
 
@@ -5926,6 +5962,13 @@ export class CollectionQueryService extends BaseService {
     hookExemptRead?: HookExemptRead;
   }): Promise<CollectionServiceResult> {
     try {
+      // A read that needs a column a Builder save left part-way moved is answered with that
+      // save's refusal, never a database error.
+      await refuseReadOverLeftSave({
+        adapter: this.adapter,
+        kind: "collection",
+        slug: params.collectionName,
+      });
       // 1. Check collection-level access FIRST. A read rule that answered a
       // filter limits the read to an entry it matches; one outside it is
       // answered below exactly as a missing entry is.

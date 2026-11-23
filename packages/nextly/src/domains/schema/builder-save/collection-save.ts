@@ -84,13 +84,16 @@ import {
   COMPANION_PARENT_COLUMN,
   COMPANION_STRUCTURAL_COLUMNS,
 } from "../../i18n/companion-columns";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import {
   companionUniqueIndexName,
   translatedColumnNames,
 } from "../../i18n/migration/companion-unique-indexes";
+import { ddlType } from "../../i18n/migration/ddl-types";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
+import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import {
   fieldsTranslatedThrough,
   retypedCompanionColumns,
@@ -191,6 +194,7 @@ import type { ColumnResolution } from "../pipeline/sql-templates/resolution-stat
 import { identifierKey } from "../rename-target";
 import {
   classifyFieldKind,
+  columnsDeclaredBy,
   fieldsStoredOnRow,
   getColumnDescriptor,
   toSnakeCase,
@@ -1160,7 +1164,7 @@ async function judgedStop(
     );
     if (alone !== undefined) withEach.set(change.field, alone);
   }
-  const live = (await liveTable(deps, table)).tables[0];
+  const live = await liveJudgedTable(deps, table, storesPerLanguage(entity));
   const report = judgeStoppedSave({ asked, live, before, withEach });
   if (report === undefined) return undefined;
   const applied = {
@@ -1271,9 +1275,10 @@ function rowsMayHaveStayed(
 }
 
 /**
- * Whether a save reaches past what the judgement reads of the entity's main table: an entity's
- * translations table, where it keeps translatable values, or the fields a field with no name keeps
- * on the row.
+ * Whether a save reaches past what the judgement reads of the entity's tables: a change of where
+ * it keeps its translatable values, which moves every such column between its main table and its
+ * translations table at once, or the fields a field with no name keeps on the row. The
+ * translations table itself is read beside the main one (`desiredTable`, `liveJudgedTable`).
  */
 function pastItsTable(
   previous: UiSchemaEntity,
@@ -1285,8 +1290,7 @@ function pastItsTable(
   // translation switch alone: with values kept per language, an entity not translated still keeps
   // its translatable fields' columns in its translations table.
   return (
-    storesPerLanguage(previous) ||
-    storesPerLanguage(entity) ||
+    storesPerLanguage(previous) !== storesPerLanguage(entity) ||
     unnamed(previous) !== unnamed(entity)
   );
 }
@@ -1311,13 +1315,79 @@ async function desiredTable(
   if (declared === undefined) return undefined;
   const placed = (list: ManifestKind) =>
     list === kind.manifest ? [declared] : [];
-  return buildDesiredSnapshotFromConfig(
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const main = buildDesiredSnapshotFromConfig(
     placed("collections"),
     placed("singles"),
     placed("components"),
-    deps.adapter.getCapabilities().dialect,
+    dialect,
     inputs.latest?.data.snapshot
   ).tables.find(t => t.name === table);
+  if (main === undefined || !storesPerLanguage(entity)) return main;
+  // An entity that keeps its translatable values per language has their columns in its
+  // translations table: each one as the companion's own derive declares it (always nullable, a
+  // translation's column), judged beside the main table's under a name of its own.
+  const translated = declared.fields.flatMap(field => {
+    if (!isFieldLocalized(field, true)) return [];
+    const column = fieldToLocalizedColumnSpec(field, dialect, kind.builtBy);
+    return column === null
+      ? []
+      : [
+          {
+            name: translationsColumnName(column.name),
+            type: ddlType(column, dialect),
+            nullable: true,
+          },
+        ];
+  });
+  return { ...main, columns: [...main.columns, ...translated] };
+}
+
+/**
+ * How a translations-table column is named in the judged table (`desiredTable`,
+ * `liveJudgedTable`): after its table, so no main-table column shares its name.
+ */
+function translationsColumnName(column: string): string {
+  return `_locales.${column}`;
+}
+
+/**
+ * The entity's table as the database has it, as the judgement reads it: the main table, and for an
+ * entity that keeps its translatable values per language (`perLanguage`) its translations table's
+ * own columns beside it (`translationsColumnName`), its structural ones left out as no field makes
+ * them. Undefined where the main table is not there.
+ */
+async function liveJudgedTable(
+  deps: CollectionSaveDeps,
+  table: string,
+  perLanguage: boolean
+): Promise<TableSpec | undefined> {
+  const translations = `${table}_locales`;
+  const live = await liveTables(
+    deps,
+    perLanguage ? [table, translations] : [table]
+  );
+  const main = live.tables.find(t => t.name === table);
+  if (main === undefined || !perLanguage) return main;
+  const structural = new Set(
+    [
+      ...COMPANION_STRUCTURAL_COLUMNS,
+      ...COMPANION_OPTIONAL_STRUCTURAL_COLUMNS,
+    ].map(column => column.toLowerCase())
+  );
+  const columns = (
+    live.tables.find(t => t.name === translations)?.columns ?? []
+  ).filter(column => !structural.has(column.name.toLowerCase()));
+  return {
+    ...main,
+    columns: [
+      ...main.columns,
+      ...columns.map(column => ({
+        ...column,
+        name: translationsColumnName(column.name),
+      })),
+    ],
+  };
 }
 
 /**
@@ -4474,6 +4544,80 @@ async function liveTable(
     ),
     table
   );
+}
+
+/**
+ * The fields of an entity's registry row whose columns its tables do not hold as the row declares
+ * them: a column missing, or standing with another type, nullability or default. Read from the main
+ * table and, where the entity keeps translatable values per language, its translations table, each
+ * column as the entity's own derive declares it (`desiredTable`). The comparison behind the entry
+ * writes and reads held while a Builder save stands left part-way (`left-save-fields`), whichever
+ * road changed the tables and whether the row was written before them or not at all. A field held
+ * on the row by a group with no name is read by its own name, as the row stores it. Undefined
+ * where the entity's table cannot be declared from `registered`.
+ */
+export async function fieldsNotServed(
+  deps: CollectionSaveDeps,
+  entity: { kind: AddressKind; slug: string; registered: UiSchemaEntity }
+): Promise<UnservedField[] | undefined> {
+  const { registered } = entity;
+  const save: CollectionSave = {
+    kind: entity.kind,
+    slug: entity.slug,
+    previous: registered,
+    entity: registered,
+    change: "update",
+  };
+  const current = await loadUiSchema({
+    projectRoot: deps.projectRoot,
+    uiSchemaFile: deps.config.db.uiSchemaFile,
+  });
+  const table = await saveTableOf(deps, save);
+  const desired = await desiredTable(deps, save, current, registered, table);
+  if (desired === undefined) return undefined;
+  const live = await liveJudgedTable(
+    deps,
+    table,
+    storesPerLanguage(registered)
+  );
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const builtBy = kindOf(save).builtBy;
+  const declared = new Map(desired.columns.map(c => [c.name, c]));
+  const standing = new Map((live?.columns ?? []).map(c => [c.name, c]));
+  const unserved: UnservedField[] = [];
+  for (const field of fieldsStoredOnRow(registered.fields)) {
+    if (typeof field.name !== "string") continue;
+    // The field's columns as the declared table holds them: on the main table, or in the
+    // translations table for one kept per language.
+    const translated = fieldToLocalizedColumnSpec(field, dialect, builtBy);
+    const columns = [
+      ...columnsDeclaredBy([field]),
+      ...(translated === null ? [] : [translationsColumnName(translated.name)]),
+    ].flatMap(name => {
+      const column = declared.get(name);
+      return column === undefined ? [] : [column];
+    });
+    const missing = columns.some(column => !standing.has(column.name));
+    const differs = columns.some(column => {
+      const live = standing.get(column.name);
+      return (
+        live !== undefined &&
+        !standsAs(
+          { name: table, columns: [live] },
+          { name: table, columns: [column] }
+        )
+      );
+    });
+    if (missing || differs) unserved.push({ field: field.name, missing });
+  }
+  return unserved;
+}
+
+/** A field of a registry row its tables do not hold as declared (`fieldsNotServed`). */
+export interface UnservedField {
+  field: string;
+  /** Whether a column it declares is not there at all, so a read selecting it would fail. */
+  missing: boolean;
 }
 
 /**

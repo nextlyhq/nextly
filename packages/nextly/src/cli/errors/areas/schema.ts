@@ -162,6 +162,19 @@ function earlierSaveLeft(error: NextlyError): CliErrorParts {
   };
 }
 
+/**
+ * A write or read of entries refused over a field a Builder save left part-way changed and has not
+ * recorded: the message's first sentence names the save and the field.
+ */
+function fieldUnsettled(error: NextlyError): CliErrorParts {
+  const [what = error.publicMessage] = sentences(error.publicMessage);
+  return {
+    what,
+    why: "A Builder save left part-way changed a field this write or read reaches, and the save is not settled yet.",
+    next: "Start the app in development (`next dev`), or save the same collection, Single or field group in the Schema Builder: either settles it. Then try again.",
+  };
+}
+
 /** Whether `error`'s message starts with the words its throw site gives one cause. */
 const startsWith =
   (prefix: string) =>
@@ -451,6 +464,19 @@ export const SCHEMA_CODES = defineCodes({
         code: "CONFLICT",
         reason: "builder-save-left-elsewhere",
         describe: earlierSaveLeft,
+      },
+    ],
+  },
+  // A write or read of entries refused while a Builder save left part-way on MySQL holds a field
+  // it reaches: a change of the save committed without the registry update that follows it.
+  BUILDER_SAVE_FIELD_UNSETTLED: {
+    cause:
+      "A write or read of entries was refused, because a Builder save left part-way changed a field it reaches and is not settled.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "builder-save-field-unsettled",
+        describe: fieldUnsettled,
       },
     ],
   },

@@ -40,6 +40,8 @@ import { consoleLogger } from "../../../../shared/types";
 import { MetaService } from "../../../meta/services/meta-service";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { checksumOf } from "../../migrate/applied-checksums";
+import { splitSqlStatements } from "../../migrate/split-sql";
+import { parseSqlSections } from "../../migrate/sql-sections";
 import { withStopPoints } from "../../migrate/stop-points";
 import { WRITER_LOCK_FILE } from "../../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
@@ -120,16 +122,76 @@ async function registryFieldNames(t: TestNextly): Promise<string[]> {
   return (fields as Array<{ name: string }>).map(field => field.name);
 }
 
-async function liveColumns(t: TestNextly): Promise<string[]> {
+/**
+ * The columns of `table` and of its translations table, where an entity that keeps its
+ * translatable values per language has their columns.
+ */
+async function liveColumns(t: TestNextly, table = TABLE): Promise<string[]> {
+  const tables = [table, `${table}_locales`];
   const live = await introspectLiveSnapshot(
     t.adapter.getDrizzle(),
     t.adapter.dialect,
-    [TABLE]
+    tables
   );
-  return (live.tables.find(each => each.name === TABLE)?.columns ?? []).map(
-    column => column.name
-  );
+  return live.tables
+    .filter(each => tables.includes(each.name))
+    .flatMap(each => each.columns.map(column => column.name));
 }
+
+/**
+ * Where a save is killed: after the statement of its update file this answers yes for, given the
+ * file's statements in run order and the statement's index. Read from the file on disk, as the
+ * runner splits it, never from the database: a query from the stop point would run beside the
+ * save's own open transaction.
+ */
+type KillPoint = (statements: readonly string[], index: number) => boolean;
+
+/** The update file's statements, in run order, for the runner's `unit` name. */
+function statementsOf(unit: string): string[] {
+  const file = sqlFiles().find(name => name === unit || name === `${unit}.sql`);
+  if (file === undefined) return [];
+  const content = readFileSync(join(HISTORY_DIR(), file), "utf-8");
+  return splitSqlStatements(parseSqlSections(content).upSql, "mysql");
+}
+
+/**
+ * What a save that ended before its kill point answered, with its update files' statements, so a
+ * kill point that matched none of them says what they were.
+ */
+function endedFirst(answer: unknown): string {
+  const data =
+    typeof answer === "object" && answer !== null && "publicData" in answer
+      ? ` ${JSON.stringify((answer as { publicData?: unknown }).publicData)}`
+      : "";
+  const files = sqlFiles().map(
+    name => `${name}:\n${statementsOf(name).join("\n---\n")}`
+  );
+  return `${String(answer)}${data}\n${files.join("\n")}`;
+}
+
+/** Whether `statement` is a schema statement naming the column `column`. */
+const altersColumn = (statement: string | undefined, column: string) =>
+  statement !== undefined &&
+  /^\s*ALTER\s+TABLE/i.test(statement) &&
+  statement.includes(`\`${column}\``);
+
+/**
+ * Whether `statement` runs a schema change: an `ALTER TABLE`, or the `EXECUTE` of one the file
+ * prepares (a rename, a column made required).
+ */
+const schemaStatement = (statement: string | undefined) =>
+  statement !== undefined &&
+  /^\s*(ALTER\s+TABLE|EXECUTE)\b/i.test(statement);
+
+/** After the statement that adds `column`. */
+const afterAdding =
+  (column: string): KillPoint =>
+  (all, index) =>
+    altersColumn(all[index], column);
+
+/** After the last statement before the registry row is written: every schema statement ran. */
+const beforeRegistryRow: KillPoint = (all, index) =>
+  /^\s*INSERT\s+INTO\s+`?dynamic_/i.test(all[index + 1] ?? "");
 
 async function recordRow(t: TestNextly): Promise<unknown> {
   const entry = await new MetaService(t.adapter, consoleLogger).getEntry(
@@ -153,13 +215,14 @@ function save(
 }
 
 /**
- * Start a save of `fields` and kill it at the file runner's stop point `at`, in its update file:
- * the step there runs, then the save never returns. Resolves once it has stopped there.
+ * Start a save of `fields` and kill it at the file runner's stop point `at`, in whichever of its
+ * files `at` names: the step there runs, then the save never returns. Resolves once it has
+ * stopped there.
  */
 async function killSave(
   t: TestNextly,
   fields: BuilderField[],
-  at: string,
+  at: KillPoint,
   answers: Record<string, unknown> = {}
 ): Promise<void> {
   let reached: () => void = () => undefined;
@@ -170,9 +233,9 @@ async function killSave(
   let armed = true;
   stopped = withStopPoints(
     async point => {
-      if (!armed || !point.endsWith(`: ${at}`) || !point.includes("_update")) {
-        return;
-      }
+      const after = /^(.*): after statement (\d+)$/.exec(point);
+      if (!armed || after === null) return;
+      if (!at(statementsOf(after[1]!), Number(after[2]) - 1)) return;
       armed = false;
       reached();
       await new Promise<void>((_, reject) => {
@@ -183,7 +246,7 @@ async function killSave(
   ).catch((error: unknown) => error);
   const outcome = await Promise.race([
     there.then(() => "reached"),
-    stopped.then(answer => `the save ended first: ${String(answer)}`),
+    stopped.then(answer => `the save ended first: ${endedFirst(answer)}`),
   ]);
   expect(outcome, "the save never reached the kill point").toBe("reached");
 }
@@ -228,20 +291,43 @@ function settle(t: TestNextly): Promise<SettledSave[]> {
   });
 }
 
-describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
-  "a Builder save killed inside its migration file, settled (%s)",
-  dialect => {
+/**
+ * The two layouts a database keeps translatable values in: on the main tables, as databases made
+ * before per-language storage do, and per language in translations tables, as every installation
+ * keeps them now. A stop is judged on both.
+ */
+const LAYOUTS = [
+  { layout: "translatable values on the main table", perLanguage: false },
+  { layout: "translatable values per language", perLanguage: true },
+] as const;
+
+describe.each(
+  getConfiguredTestDialects()
+    .filter(d => d === "mysql")
+    .flatMap(dialect => LAYOUTS.map(layout => ({ dialect, ...layout })))
+)(
+  "a Builder save killed inside its migration file, settled ($dialect, $layout)",
+  ({ dialect, perLanguage }) => {
+    /**
+     * A text field kept on the main table in either layout: with values kept per language it is
+     * shared (`localized: false`), so the save changes the main table alone, in one file, which is
+     * what a stop inside a file is judged for there.
+     */
+    const field = (name: string): BuilderField =>
+      perLanguage ? { ...text(name), localized: false } : text(name);
+
     async function boot(): Promise<TestNextly> {
       vi.stubEnv("NODE_ENV", "development");
       current = await createTestNextly({
         dialect,
         basePath,
         db: { migrationsDir: HISTORY, uiSchemaFile: DEFINITION },
+        perLanguageStorage: perLanguage,
       });
       await dispatchSingles(
         "createSingle",
         {},
-        { slug: SLUG, label: SLUG, fields: [text("heading")] }
+        { slug: SLUG, label: SLUG, fields: [field("heading")] }
       );
       return current;
     }
@@ -252,8 +338,8 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
 
       await killSave(
         t,
-        [text("heading"), text("subtitle"), text("summary")],
-        "after statement 1"
+        [field("heading"), field("subtitle"), field("summary")],
+        afterAdding("subtitle")
       );
       // The kill left the table half-changed: the first column added, the second not.
       const killedAt = await liveColumns(t);
@@ -284,7 +370,7 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
       expect(await registryFieldNames(t)).toEqual(["heading", "subtitle"]);
 
       // The rest saved again: a second file, the table and registry complete.
-      await save(t, [text("heading"), text("subtitle"), text("summary")]);
+      await save(t, [field("heading"), field("subtitle"), field("summary")]);
       expect(sqlFiles().filter(f => !before.includes(f))).toHaveLength(2);
       expect(await liveColumns(t)).toContain("summary");
       expect(await registryFieldNames(t)).toEqual([
@@ -298,8 +384,8 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
     async function killedAfterFirstAdd(t: TestNextly): Promise<void> {
       await killSave(
         t,
-        [text("heading"), text("subtitle"), text("summary")],
-        "after statement 1"
+        [field("heading"), field("subtitle"), field("summary")],
+        afterAdding("subtitle")
       );
       const killedAt = await liveColumns(t);
       expect(killedAt).toContain("subtitle");
@@ -353,9 +439,9 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
     /**
      * `heading` renamed to `headline` and `count` added. MySQL's file adds `count` first, then
      * renames by a prepared statement (set, prepare, execute, deallocate), then writes the registry
-     * row: killed after its first statement, the rename has not run; after its fourth, both have.
+     * row: killed after the addition, the rename has not run; before the registry row, both have.
      */
-    const renamed = [text("headline"), { name: "count", type: "number" }];
+    const renamed = [field("headline"), { name: "count", type: "number" }];
     const renameAnswers = {
       renameResolutions: [
         {
@@ -372,11 +458,15 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
         },
       ],
     };
+    /** After `count` is added, with the rename still to run. */
+    const addedBeforeRename: KillPoint = (all, index) =>
+      afterAdding("count")(all, index) &&
+      all.slice(index + 1).some(statement => /^\s*EXECUTE\b/i.test(statement));
 
     it("settles a rename that had not run beside an addition that had, keeping the field under its old name", async () => {
       const t = await boot();
       const before = sqlFiles();
-      await killSave(t, renamed, "after statement 1", renameAnswers);
+      await killSave(t, renamed, addedBeforeRename, renameAnswers);
       const killedAt = await liveColumns(t);
       expect(killedAt).toContain("count");
       expect(killedAt).toContain("heading");
@@ -401,7 +491,7 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
     it("settles a rename and an addition that both ran before the registry row was written, as all of the save", async () => {
       const t = await boot();
       const before = sqlFiles();
-      await killSave(t, renamed, "after statement 4", renameAnswers);
+      await killSave(t, renamed, beforeRegistryRow, renameAnswers);
       const killedAt = await liveColumns(t);
       expect(killedAt).toContain("count");
       expect(killedAt).toContain("headline");
@@ -426,14 +516,17 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
     it("leaves a save whose file changes rows of its own, stopped after its schema statement, as it stands", async () => {
       const t = await boot();
       // A collection whose save deletes the entry with no value for the field it makes required:
-      // the delete is the save's own row change, which the tables' shape says nothing of.
+      // the delete is the save's own row change, which the tables' shape says nothing of. The
+      // field stays on the main table in either layout (`localized: false`), where the delete
+      // reads it.
       const slug = "stopped_posts";
       const table = `dc_${slug}`;
+      const note = { name: "note", type: "text", localized: false };
       await dispatchCollections(
         {} as ServiceContainer,
         "createCollection",
         {},
-        { name: slug, label: slug, fields: [text("heading"), text("note")] }
+        { name: slug, label: slug, fields: [text("heading"), note] }
       );
       await t.nextly.create({
         collection: slug,
@@ -455,15 +548,15 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
       });
       stopped = withStopPoints(
         async point => {
-          if (
-            !armed ||
-            !point.includes("_update") ||
-            !/: after statement \d+$/.test(point)
-          ) {
-            return;
-          }
+          const after = /^(.*_update[^:]*): after statement (\d+)$/.exec(point);
+          if (!armed || after === null) return;
           // Past the delete and the schema statement after it: both are lasting on MySQL.
-          if (!point.endsWith(": after statement 2")) return;
+          const all = statementsOf(after[1]!);
+          const index = Number(after[2]) - 1;
+          const deleted = all
+            .slice(0, index)
+            .some(statement => /^\s*DELETE\b/i.test(statement));
+          if (!deleted || !schemaStatement(all[index])) return;
           armed = false;
           reached();
           await new Promise<void>((_, reject) => {
@@ -477,10 +570,7 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
             "applySchemaChanges",
             { collectionName: slug },
             {
-              fields: [
-                text("heading"),
-                { name: "note", type: "text", required: true },
-              ],
+              fields: [text("heading"), { ...note, required: true }],
               confirmed: true,
               schemaVersion: Number(version?.schema_version ?? 1),
               eventResolutions: [
@@ -494,7 +584,7 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
       ).catch((error: unknown) => error);
       const outcome = await Promise.race([
         there.then(() => "reached"),
-        stopped.then(answer => `the save ended first: ${String(answer)}`),
+        stopped.then(answer => `the save ended first: ${endedFirst(answer)}`),
       ]);
       expect(outcome, "the save never reached the kill point").toBe("reached");
       await clearStoppedHolds(t);
@@ -509,6 +599,33 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
         [...before, ...written].sort()
       );
     }, 300_000);
+
+    // With values kept per language, a Single's translatable fields change in a file of their own
+    // after the one that writes its registry row: a stop there is not one file's, and is not judged
+    // yet. It stays as it stopped, refusing, rather than settled wrongly.
+    it.runIf(perLanguage)(
+      "leaves a save of translatable fields stopped in its translations file as it stands",
+      async () => {
+        const t = await boot();
+        const before = sqlFiles();
+        await killSave(
+          t,
+          [field("heading"), text("subtitle"), text("summary")],
+          afterAdding("subtitle")
+        );
+        const killedAt = await liveColumns(t);
+        expect(killedAt).toContain("subtitle");
+        expect(killedAt).not.toContain("summary");
+        await clearStoppedHolds(t);
+
+        const settled = await settle(t);
+
+        expect(settled.map(s => s.outcome)).toEqual(["left"]);
+        expect(await recordRow(t), "the record stays").toBeDefined();
+        expect(sqlFiles().filter(f => !before.includes(f)).length).toBe(2);
+      },
+      300_000
+    );
 
     it("leaves a save stopped inside its file whose record does not say what its files carry, as it stands", async () => {
       const t = await boot();

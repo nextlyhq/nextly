@@ -184,6 +184,7 @@ import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
+import { refuseReadOverLeftSave } from "../../schema/builder-save/left-save-fields";
 import {
   fieldsStoredOnRow,
   getColumnDescriptor,
@@ -1510,6 +1511,9 @@ export class SingleQueryService extends BaseService {
       slug,
       locale: options.locale,
     });
+    // A read that needs a column a Builder save left part-way moved is answered with that save's
+    // refusal, never a database error.
+    await refuseReadOverLeftSave({ adapter: this.adapter, kind: "single", slug });
 
     // ONE instant for this read. Both visibility checks below resolve releases
     // against it, so a release becoming due between them cannot admit the row

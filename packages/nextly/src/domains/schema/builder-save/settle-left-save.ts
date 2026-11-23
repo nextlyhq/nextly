@@ -36,6 +36,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import {
   parseUiSchema,
   type UiSchemaEntity,
+  type UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
 import type { AddressKind } from "../../../shared/address-rule";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
@@ -61,6 +62,7 @@ import { assertWriterHold } from "../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { collectionOwnTables } from "../services/field-column-descriptor";
+import { loadUiSchema } from "../ui-schema/loader";
 import { uiToMinimal } from "../ui-schema/merge";
 
 import {
@@ -68,7 +70,9 @@ import {
   checkSaveHistory,
   type CollectionSaveDeps,
   companionDriftItems,
+  fieldsNotServed,
   judgeLeftStop,
+  type UnservedField,
   type LeftStop,
   saveKindOf,
   settleRemovedFileAttempts,
@@ -506,6 +510,63 @@ async function leftStopOf(
     file,
     keepAside: deps.keepsStoppedAside === true,
   });
+}
+
+/**
+ * The fields of the entity a save the process left part-way stands over whose columns the tables do
+ * not hold as its registry row declares them (`fieldsNotServed`): for the writes and reads Nextly
+ * makes while the save stands unsettled (`left-save-fields`). The row's fields are laid over the
+ * entity's settings as the definition holds them (the record's own definition where the file no
+ * longer names it). Undefined where that cannot be read, or the app registered no Builder setup:
+ * the caller then holds every field. Read with the app's Builder setup, on demand, as the settle
+ * reads it.
+ */
+export async function fieldsNotServedOf(
+  adapter: DrizzleAdapter,
+  record: LeftSave,
+  registryFields: readonly unknown[]
+): Promise<UnservedField[] | undefined> {
+  const { container } = await import("../../../di/container");
+  if (!container.has("builderSaveSetup")) return undefined;
+  const setup = container.get<BuilderSaveSetup>("builderSaveSetup");
+  const writer = await writerDepsOf({
+    adapter,
+    projectRoot: setup.projectRoot,
+    migrationsDir: setup.migrationsDir,
+    logger: { info: () => undefined, warn: () => undefined },
+    writeRegistry: () => Promise.resolve(false),
+  });
+  if (writer === undefined) return undefined;
+  const defined =
+    definedIn(
+      await loadUiSchema({
+        projectRoot: setup.projectRoot,
+        uiSchemaFile: setup.config.db.uiSchemaFile,
+      }),
+      record
+    ) ??
+    definedEntity(record.definitionAfter, record.kind, record.slug) ??
+    definedEntity(record.definitionBefore, record.kind, record.slug);
+  if (defined === null) return undefined;
+  return fieldsNotServed(writer, {
+    kind: record.kind,
+    slug: record.slug,
+    registered: {
+      ...defined,
+      fields: registryFields as UiSchemaEntity["fields"],
+    },
+  });
+}
+
+/** The entity `record` saved, as `manifest` holds it, or null where it holds none. */
+function definedIn(
+  manifest: UiSchemaManifest,
+  record: LeftSave
+): UiSchemaEntity | null {
+  const list = manifest[saveKindOf(record.kind).manifest] as
+    | readonly UiSchemaEntity[]
+    | undefined;
+  return list?.find(entity => entity.slug === record.slug) ?? null;
 }
 
 /**

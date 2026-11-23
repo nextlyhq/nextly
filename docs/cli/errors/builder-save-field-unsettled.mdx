@@ -1,0 +1,27 @@
+---
+title: BUILDER_SAVE_FIELD_UNSETTLED
+description: "A write or read of entries was refused, because a Builder save left part-way changed a field it reaches and is not settled."
+---
+
+## Cause
+
+A write or read of entries was refused, because a Builder save left part-way changed a field it reaches and is not settled.
+
+On MySQL, a Schema Builder save applies its changes one schema statement at a time, and each one is kept as it runs. When the app stops in the middle of a save (a crash, a restart, a killed process), a change can be in the database while the record of the collection, Single or field group still describes the field as it was. Until the save is settled, Nextly refuses every write that sets such a field, from any process on the database, with nothing of the write applied, and a read that needs a column the tables no longer hold under its recorded name gets the same answer instead of a database error. Writes that set no such field go on.
+
+Builder saves run only in development, so this never reaches a production site. PostgreSQL and SQLite apply a save's file whole or not at all, so they never meet it.
+
+## Fix
+
+Start the app in development (`next dev`) on this project, or save the same entity again in the Schema Builder: either settles the save, recording what of it applied. Then try the write again.
+
+If the start's log says it left the save as it was, the save's own refusal names the way out: see [`BUILDER_SAVE_EARLIER_LEFT`](/docs/cli/errors/builder-save-earlier-left).
+
+## Example
+
+```text
+✗ A Builder save of the collection "posts" was left part-way, and it changed the field "heading" without recording it yet.
+  Why:  A Builder save left part-way changed a field this write or read reaches, and the save is not settled yet.
+  Next: Start the app in development (`next dev`), or save the collection in the Schema Builder: either settles it. Then try again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-save-field-unsettled  (BUILDER_SAVE_FIELD_UNSETTLED)
+```

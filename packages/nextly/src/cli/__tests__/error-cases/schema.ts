@@ -3,6 +3,7 @@
  *
  * @module cli/__tests__/error-cases/schema
  */
+import { heldFieldsRefusal } from "../../../domains/schema/builder-save/left-save-fields";
 import { clearLeftoverStorage } from "../../../domains/schema/services/leftover-storage";
 import {
   assertAdapterPostgresSchema,
@@ -157,6 +158,10 @@ export const SCHEMA_CASES = {
         saves: ["collection:posts"],
       },
     }),
+  // As a write of entries is refused over a field a Builder save left part-way holds, from the
+  // refusal's own builder.
+  BUILDER_SAVE_FIELD_UNSETTLED: () =>
+    heldFieldsRefusal("collection", "posts", ["heading"]),
   // As a Builder save is refused over an earlier save's record that cannot be read.
   BUILDER_SAVE_RECORD_UNREADABLE: () =>
     NextlyError.conflict({

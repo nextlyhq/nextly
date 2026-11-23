@@ -315,6 +315,7 @@ import {
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import { refuseWriteOverLeftSave } from "../../schema/builder-save/left-save-fields";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import {
   fieldsStoredOnRow,
@@ -6904,6 +6905,13 @@ export class CollectionMutationService extends BaseService {
       // Refused first when the collection is removed from code, before any
       // read of the entry, so a refused write changes nothing.
       await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+      // And where a Builder save left part-way holds the field it rewrites.
+      await refuseWriteOverLeftSave({
+        adapter: this.adapter,
+        kind: "collection",
+        slug: params.collectionName,
+        data: { [request.field]: true },
+      });
       check = versionCheckFor(versionBodyOf(request), { exempt: false });
       const { collection, fields, tableName } =
         await this.readCollectionWriteMeta(params.collectionName);
@@ -8944,6 +8952,14 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // Refused too, with nothing written, where a Builder save left part-way holds a field the
+    // write sets.
+    await refuseWriteOverLeftSave({
+      adapter: this.adapter,
+      kind: "collection",
+      slug: params.collectionName,
+      data: body,
+    });
     // A publish made without review, and why, read off the body for the publish gate and never
     // stored; see updateEntry.
     const withoutReview = withoutReviewOfBody(body);
@@ -16773,6 +16789,14 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", rawParams.collectionName);
+    // Refused too, with nothing written, where a Builder save left part-way holds a field the
+    // write sets.
+    await refuseWriteOverLeftSave({
+      adapter: this.adapter,
+      kind: "collection",
+      slug: rawParams.collectionName,
+      data: body,
+    });
     // {@link EVERY_LOCALE} is a SWEEP INSTRUCTION, not a write locale, and the
     // body of this method must never see it as one. Resolved here, once, so the
     // fourteen places below that read `params.locale` keep receiving a real
@@ -22182,6 +22206,15 @@ export class CollectionMutationService extends BaseService {
     await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
       executor: tx.getDrizzle(),
     });
+    // Refused too where a Builder save left part-way holds a field it sets, read on the same
+    // transaction.
+    await refuseWriteOverLeftSave({
+      adapter: this.adapter,
+      kind: "collection",
+      slug: params.collectionName,
+      data: body,
+      tx: tx.getDrizzle(),
+    });
     // What the create claims about where its translated values came from,
     // read before the key is dropped with the version.
     const provenance = this.provenanceOf(
@@ -23099,6 +23132,14 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code; see createEntryWrite.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
       executor: tx.getDrizzle(),
+    });
+    // And where a Builder save left part-way holds a field it sets; see createEntryWrite.
+    await refuseWriteOverLeftSave({
+      adapter: this.adapter,
+      kind: "collection",
+      slug: params.collectionName,
+      data: body,
+      tx: tx.getDrizzle(),
     });
     // How this item is judged, decided before the version and `_overwrite`
     // are dropped, as on updateEntry: an item that gives a version is judged
