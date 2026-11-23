@@ -151,6 +151,33 @@ export function fieldTypeOnDialect(
   });
 }
 
+/**
+ * The type `field` has where its value is held inside a JSON value, as a named group's and a
+ * repeater's fields are: what the field reads, with nothing a column of its own bounds, as a list's
+ * items are read. A text holds any length; a number is a JSON number, whole unless the field allows
+ * fractions; a date is the ISO text a JavaScript date writes, to the millisecond and unbounded.
+ */
+export function fieldTypeInJson(
+  field: FieldDefinition,
+  dialect: SupportedDialect,
+  builtBy: ColumnOrigin
+): FieldTypeOnDialect {
+  // Read as a field group's row reads it: a many-to-many held inside JSON keeps its links there, as
+  // a list, not in a join table.
+  const read: FieldTypeOnDialect = {
+    ...fieldTypeOnDialect(field, dialect, builtBy, { componentRow: true }),
+  };
+  delete read.textBound;
+  if (read.number !== undefined) {
+    read.number = { kind: "json", whole: !numberFieldStoresFractions(field) };
+  }
+  if (read.date !== undefined) read.date = JSON_DATE;
+  return read;
+}
+
+/** A date held inside a JSON value: the ISO text a JavaScript date writes, to the millisecond. */
+const JSON_DATE: DateColumn = { fractionDigits: 3 };
+
 /** How one field type reads on a database. */
 type TypeReader = (
   field: FieldDefinition,
