@@ -18,6 +18,7 @@
  * pending changes, a non-destructive confirm styled as a delete, and a move
  * that sends a partial order.
  */
+import { QueryClient } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -111,8 +112,25 @@ async function open(
     Promise.resolve(preview(code))
   );
   api.changeLanguages.mockResolvedValue(list);
-  render(<LanguagesContent />);
+  // Kept while nothing reads it, unlike the shared test client's, so a test
+  // can look at a query no screen holds.
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  render(<LanguagesContent />, { queryClient });
   await screen.findByRole("list", { name: "Languages in use" });
+  return queryClient;
+}
+
+/** A promise settled from outside, for a read held in flight. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
 }
 
 const row = (name: string) => {
@@ -340,6 +358,40 @@ describe("Settings › Languages", () => {
     expect(
       within(dialog).getByRole("button", { name: "Make Spanish the default" })
     ).toBeDisabled();
+    expect(api.changeLanguages).not.toHaveBeenCalled();
+  });
+
+  it("offers make default only from a summary read now, not one being read again or one whose read failed", async () => {
+    const queryClient = await open();
+    const user = await choose("Spanish", "Make default…");
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "Make Spanish the default?",
+    });
+    await within(dialog).findByText("Content in each language");
+    const confirm = within(dialog).getByRole("button", {
+      name: "Make Spanish the default",
+    });
+    expect(confirm).toBeEnabled();
+
+    // Read again: the earlier summary is still shown, but not confirmable.
+    const again = deferred<DefaultChangeSummary>();
+    api.previewDefaultChange.mockReturnValueOnce(again.promise);
+    void queryClient.invalidateQueries({
+      queryKey: ["languages", "default-preview", "es"],
+    });
+    await waitFor(() => expect(confirm).toBeDisabled());
+    expect(dialog).toHaveTextContent("Content in each language");
+
+    // That read fails: the dialog says so, and still offers no confirm.
+    again.reject(new Error("The server is unavailable."));
+    expect(
+      await within(dialog).findByRole("button", { name: "Retry" })
+    ).toBeInTheDocument();
+    expect(confirm).toBeDisabled();
+
+    // Read again successfully: confirmable once more.
+    await user.click(within(dialog).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(confirm).toBeEnabled());
     expect(api.changeLanguages).not.toHaveBeenCalled();
   });
 

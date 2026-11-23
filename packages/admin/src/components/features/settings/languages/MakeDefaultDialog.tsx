@@ -39,13 +39,16 @@ export function MakeDefaultDialog({
   const preview = useDefaultChangePreview(language.code);
   const summary = preview.data;
   const to = language.label;
+  // Confirmed only from a summary read now: not while it is being read again,
+  // when what is shown may be a summary from before, nor after a read failed.
+  const readNow = !preview.isFetching && !preview.error;
 
   return (
     <LanguageConfirmDialog
       {...save}
       title={`Make ${to} the default?`}
       change={
-        summary && summary.pendingInCurrentDefault === 0
+        summary && readNow && summary.pendingInCurrentDefault === 0
           ? { kind: "setDefault", code: language.code, confirmed: true }
           : undefined
       }
