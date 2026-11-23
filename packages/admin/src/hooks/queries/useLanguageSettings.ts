@@ -91,6 +91,9 @@ export function useChangeLanguages(): UseMutationResult<
   return useMutation<LanguageList, Error, LanguageChange>({
     mutationFn: change => changeLanguages(change),
     onSuccess: async list => {
+      // A read of the list still in flight began before the change, and would
+      // land after it with the list as it was.
+      await queryClient.cancelQueries({ queryKey: languageKeys.list() });
       queryClient.setQueryData(languageKeys.list(), list);
       await Promise.all([
         queryClient.invalidateQueries({

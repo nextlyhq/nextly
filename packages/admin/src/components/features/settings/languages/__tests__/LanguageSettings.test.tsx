@@ -442,6 +442,39 @@ describe("Settings › Languages", () => {
     expect(queryClient.getQueryState(unrelated)?.isInvalidated).toBe(false);
   });
 
+  it("keeps the saved list when a read of the list begun before the change lands after it", async () => {
+    const queryClient = await open();
+    // A read of the list in flight, answering the list as it was.
+    const stale = deferred<LanguageList>();
+    api.listLanguages.mockReturnValueOnce(stale.promise);
+    void queryClient.invalidateQueries({ queryKey: ["languages", "list"] });
+    await waitFor(() => expect(api.listLanguages).toHaveBeenCalledTimes(2));
+
+    // The move is saved, and the server answers the new order.
+    api.changeLanguages.mockResolvedValueOnce({
+      lockedByConfig: false,
+      languages: [
+        { ...ENGLISH, position: 1 },
+        { ...SPANISH, position: 0 },
+        ARABIC,
+      ],
+    });
+    await choose("English", "Move down");
+    await waitFor(() => expect(api.changeLanguages).toHaveBeenCalled());
+    const names = () =>
+      within(screen.getByRole("list", { name: "Languages in use" }))
+        .getAllByRole("listitem")
+        .map(item => item.querySelector("span")?.textContent);
+    await waitFor(() =>
+      expect(names()).toEqual(["Spanish", "English", "Arabic"])
+    );
+
+    // The earlier read lands now; the saved order stays.
+    stale.resolve(THREE);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(names()).toEqual(["Spanish", "English", "Arabic"]);
+  });
+
   it("moves a language by sending every language in the new order", async () => {
     await open();
     await choose("English", "Move down");
