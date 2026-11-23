@@ -276,7 +276,22 @@ describe.each(getConfiguredTestDialects())(
           { localized: true }
         );
 
-        expect(JSON.stringify(refused)).toContain("view tcc_view");
+        // The save's own refusal, before any statement: SQLite's error for the swap names the
+        // view too, so the code and the words are what tell them apart.
+        expect(refused).toMatchObject({
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: "fields.v",
+                code: "TYPE_CHANGE_BLOCKED",
+                message: expect.stringContaining(
+                  "while view tcc_view depends on the table"
+                ),
+              }),
+            ],
+          },
+        });
         expect(await read(t, "v", "en")).toEqual({ a: "12" });
       }
     );
@@ -826,21 +841,20 @@ describe.each(getConfiguredTestDialects())(
 
     // A save its push applies converts by the push's own statements, the database's cast, outside
     // any transaction a conversion could share: it is judged as that cast, and nothing is written
-    // ahead of the push. A Required field added over the rows, which the review's answer fills,
-    // keeps a collection's save on its push, which fills them.
+    // ahead of the push. A relationship switched from one entry to many in the same save reaches
+    // its storage, which only the push plans from the live table, so the save keeps its push.
     it("judges a type change by the cast where the save's push applies it, converting nothing ahead of it", async () => {
-      const t = await boot([{ name: "v", type: "chips" }]);
+      const related = (hasMany: boolean) => ({
+        name: "rel",
+        type: "relationship",
+        relationTo: SLUG,
+        ...(hasMany ? { hasMany: true } : {}),
+      });
+      const t = await boot([{ name: "v", type: "chips" }, related(false)]);
       await write(t, "one", { v: ["a"] });
 
       expect(
-        await save(
-          t,
-          [
-            { name: "v", type: "text" },
-            { name: "r", type: "text", required: true },
-          ],
-          { resolutions: { r: { action: "provide_default", value: "x" } } }
-        )
+        await save(t, [{ name: "v", type: "text" }, related(true)])
       ).toMatchObject(refusedAs("TYPE_CHANGE_BLOCKED", "Rewriting values"));
 
       expect(await read(t, "v")).toEqual({ one: ["a"] });
