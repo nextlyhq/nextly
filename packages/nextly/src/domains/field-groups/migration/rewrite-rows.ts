@@ -30,6 +30,7 @@ import type {
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { MetaService } from "../../meta/services/meta-service";
+import { reachStopPoint } from "../../schema/migrate/stop-points";
 
 import {
   clearBatchCursor,
@@ -37,6 +38,7 @@ import {
   writeBatchCursor,
 } from "./batch-cursor";
 import type { MigrationSession } from "./session";
+import { REWRITE_BATCH_COMMITTED } from "./stop-point-names";
 
 /**
  * Rows per batch.
@@ -139,6 +141,9 @@ export async function rewriteRowsInBatches(args: {
 
     if (outcome.reached === null) break;
     after = outcome.reached;
+    // A batch committed and its progress not yet recorded: the window a killed run leaves the
+    // most to work out, so a test can stop the run here.
+    await reachStopPoint(REWRITE_BATCH_COMMITTED);
     // Recorded only now, with the batch committed. A cursor written inside the
     // transaction would be rolled back with it and stay honest, but one written
     // before the commit could outlive a batch that failed and step the next run

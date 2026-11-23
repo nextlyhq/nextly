@@ -46,6 +46,10 @@ import {
   assertLedgersSettled,
 } from "../data-steps";
 import { withMigrationSession, type MigrationDialect } from "../session";
+import {
+  RENAME_STEP_COMMITTED,
+  REWRITE_BATCH_COMMITTED,
+} from "../stop-point-names";
 
 import {
   LIVE_COLLECTION,
@@ -68,8 +72,8 @@ const LEASE_SECONDS = 3;
  * cursor is written; the rename point is after one rename has committed and before the next.
  */
 const STOP_POINTS = [
-  { point: "field-groups:rewrite:batch-committed", dialects: "all" },
-  { point: "field-groups:rename:committed", dialects: "mysql" },
+  { point: REWRITE_BATCH_COMMITTED, dialects: "all" },
+  { point: RENAME_STEP_COMMITTED, dialects: "mysql" },
 ] as const;
 
 let site: StorageGenerationSite | undefined;
