@@ -29,6 +29,8 @@ import {
   text,
 } from "../../../config";
 import { createAdapter } from "../../../database/factory";
+import type { SchemaHook } from "../../../domains/schema/extension/draft";
+import { col } from "../../../domains/schema/extension/dsl";
 import { shutdownServices } from "../../../di/register";
 import { runFieldGroupMigration } from "../../../domains/field-groups/migration/run";
 import { forgetFieldGroupStorageNames } from "../../../domains/field-groups/storage/resolve-storage-names";
@@ -186,6 +188,22 @@ async function newestSnapshot(): Promise<{
   };
 }
 
+/**
+ * The app's own column on the card's table and an index on its type column, by the names a new
+ * project's history keeps them under: what `nextly migrate` must compile on an empty database.
+ */
+const onCardTable: SchemaHook = ({ schema }) => {
+  schema.extendTable("fg_np_card", {
+    columns: { np_note: col.shortText({ nullable: true }) },
+    indexes: [{ columns: ["_field_group_type"] }],
+  });
+};
+const WITH_CARD_EXTENSION = defineConfig({
+  collections: [posts],
+  fieldGroups: [card],
+  db: { migrationsDir: "./migrations", schema: { extend: [onCardTable] } },
+});
+
 describe.each(getConfiguredTestDialects())(
   "a new project's migrations (%s)",
   dialect => {
@@ -222,6 +240,33 @@ describe.each(getConfiguredTestDialects())(
         backupConfirmed: true,
       });
       expect(outcome).toMatchObject({ ran: false, reason: "already-migrated" });
+    });
+
+    // Compiled before the run creates the registry, the app's contributions are read on the
+    // names the history keeps, not on legacy names an absent registry would suggest.
+    it("compile the app's contributions to a field group's table on the history's names", async () => {
+      const url = await openDatabase(dialect);
+      loaded.config = WITH_CARD_EXTENSION;
+      setNonInteractive(true);
+      const created = await run(context =>
+        runMigrateCreate("init", { cwd: dir }, context)
+      );
+      expect(created.exit, created.said).toBeUndefined();
+
+      const applied = await migrate();
+
+      expect(applied.exit, applied.said).toBeUndefined();
+      const adapter = await connect(dialect, url);
+      const columns = (
+        await adapter.executeQuery<{ name: string }>(
+          dialect === "sqlite"
+            ? `SELECT name FROM pragma_table_info('fg_np_card')`
+            : dialect === "mysql"
+              ? "SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fg_np_card'"
+              : "SELECT column_name AS name FROM information_schema.columns WHERE table_name = 'fg_np_card'"
+        )
+      ).map(row => row.name);
+      expect(columns).toContain("np_note");
     });
 
     // The control: a history on the legacy names sets a new database up on them.
