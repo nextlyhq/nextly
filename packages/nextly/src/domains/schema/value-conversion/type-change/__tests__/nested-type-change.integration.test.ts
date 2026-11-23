@@ -256,7 +256,13 @@ describe.each(getConfiguredTestDialects())(
     // Every object inherits a member named `constructor`, a name the Builder allows a field.
     it("reads a group's object without the field as holding no value, whatever the field's name", async () => {
       const t = await boot("writer", leaf("constructor", "text"));
-      const id = await entry(t, {}, []);
+      // Written with no group at all, then left holding objects without the field, as rows saved
+      // before the field was added hold them.
+      const created = (await t.nextly.create({
+        collection: SLUG,
+        data: { heading: "h" },
+      } as never)) as unknown as { item: { id: unknown } };
+      const id = String(created.item.id);
       await t.adapter.executeQuery(
         `UPDATE ${q(TABLE)} SET ${q("details")} = '{}', ${q("items")} = '[{}]' WHERE ${q("id")} = '${id}'`
       );
