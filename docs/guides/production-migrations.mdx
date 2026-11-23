@@ -1374,6 +1374,8 @@ A pair that shares no stored value, such as two names that differ only in letter
 
 ### Upgrading Nextly
 
+Upgrading a site that already holds content: follow [Upgrading an existing site](/docs/guides/upgrading), which gives the commands in order, what each asks, and how to check the result.
+
 Nextly's packages (`nextly` and every `@nextlyhq/*` package) are released together and must be installed at one release. `nextly upgrade` moves all of them at once, with the package manager the project is installed with (npm, pnpm, Yarn with `node_modules`, or bun), found from its lockfile or its `packageManager` field:
 
 ```bash

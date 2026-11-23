@@ -1,0 +1,181 @@
+---
+title: Upgrading an existing site
+description: Upgrade a site that already holds content to this release of Nextly. Back up first, write the upgrade's migration, apply it, and check the result.
+---
+
+This guide is for a site that already runs an earlier release of Nextly and holds content. It
+walks through the upgrade in the order the commands must run, explains what the upgrade moves,
+and shows how to check the result.
+
+A new project, or one that has never been deployed, needs none of this: run
+`npx nextly migrate:create` and `npx nextly migrate` as usual.
+
+## What changes when you upgrade
+
+What the upgrade moves depends on the release your site runs now.
+
+### From 0.0.2-alpha.78 or earlier
+
+Since 0.0.2-alpha.79, every site keeps its translatable fields per language, including a site with
+only one language. A translatable field is a text-like field (text, textarea, rich text, and
+similar) that is not marked `localized: false`. Its values move from the entity's own table into
+the entity's translations table, `<table>_locales`, where each document's values become the row
+of your default language. For example, `dc_posts.title` moves to `dc_posts_locales.title`.
+
+Fields marked `localized: false` stay where they are. So do numbers, dates, checkboxes,
+relationships and JSON. See [Choose what gets translated](/docs/localization#choose-what-gets-translated).
+
+The move copies every value first and only then removes the old column, but it does remove the
+old column. That is why the upgrade asks you to confirm a backup and to consent to each column
+it removes.
+
+<Callout type="warn">
+  On SQLite, the 0.0.2-alpha.79 upgrade of a database holding form submissions
+  removed six of their fields (spam reason, notes, IP address, user agent,
+  edited by and title) before their values were copied. If your SQLite site has
+  form submissions and still runs 0.0.2-alpha.78 or earlier, skip 0.0.2-alpha.79
+  and upgrade straight to this release, which copies every value before it
+  removes a column, on every database.
+</Callout>
+
+### From 0.0.2-alpha.79
+
+Your site already keeps its translatable fields per language. This release keeps the form
+builder's record fields once for every language instead: a submission's spam reason, notes, IP
+address, user agent, page, editor and title, and the text fields of its notification sends,
+resend requests and uploads. They describe the record, not content written in a language.
+
+`nextly migrate:create` writes the move back, as for any field that
+[stops being translated](/docs/localization#when-a-field-stops-being-translated). Each field's
+default-language value becomes its value on the entity's own table. Any other language's value is
+copied to the localization archive. Then the field's column in `<table>_locales` is removed, so
+the same consent applies as below.
+
+## 1. Back up the database
+
+Take a backup of the production database before you start, and check that you can restore it.
+The upgrade rewrites stored data in place, so the backup is the only way back to the state
+before it. With a backup, a failed step can be undone. Without one it can't, even when
+nothing was lost.
+
+Use your host's backup feature, or a dump: `pg_dump` for PostgreSQL, `mysqldump` for MySQL, or
+a copy of the database file for SQLite, taken while the site is not writing to it.
+
+## 2. Upgrade the packages
+
+Move `nextly` and every `@nextlyhq/*` package to the new release together, as
+[Upgrading Nextly](/docs/guides/production-migrations#upgrading-nextly) describes.
+
+## 3. Write the upgrade's migration
+
+On your own machine, with `DATABASE_URL` pointing at a copy of the production database or at a
+development database with the same migrations applied, run:
+
+```bash
+npx nextly migrate:create --name upgrade
+```
+
+It compares your configuration with your latest migration and writes one migration for your own
+tables (`<timestamp>_upgrade.sql`), and, beside it, the files that move stored values:
+
+- From 0.0.2-alpha.78 or earlier: for each collection and Single with translatable fields, a file
+  that creates its translations table, copies the values in, and then removes the old columns
+  (`<timestamp>_enable_localization_<slug>.sql`). An entity with no stored values to move gets a
+  file that only creates the translations table (`<timestamp>_create_localization_<slug>.sql`),
+  and a unique translated field gets its per-language index
+  (`<timestamp>_unique_localization_<slug>.sql`).
+- From 0.0.2-alpha.79: for each form builder collection, a file that runs before the main
+  migration and copies other languages' values to the archive
+  (`<timestamp>_archive_localization_<slug>.sql`), and one that runs after it, copies the default
+  language's value into the entity's own table, and removes the column from the translations
+  table (`<timestamp>_shared_localization_<slug>.sql`).
+
+Because those files remove columns, `migrate:create` lists each column and asks before writing
+anything. The list says where each column's values go, for example
+`column dc_posts.title: translation turned on for posts; its values move to dc_posts_locales first`
+when upgrading from 0.0.2-alpha.78 or earlier, or
+`column dc_form_submissions_locales.notes: notes stops being translated in form-submissions; its other languages are kept in the archive`
+when upgrading from 0.0.2-alpha.79. Answer yes to write the files.
+
+With no terminal to ask (in CI, or with `--non-interactive`), it refuses with
+[`DATA_LOSS_CONSENT_REQUIRED`](/docs/cli/errors/data-loss-consent-required) and writes nothing.
+The refusal's `Next:` line gives the exact consent. Read the list, then pass that consent:
+
+```bash
+npx nextly migrate:create --name upgrade --non-interactive \
+  --accept-data-loss=dc_posts.title,dc_posts.slug
+```
+
+Name exactly the columns the list shows, not a bare `--accept-data-loss`. That way, if a later
+change would remove a column you didn't expect, it is refused rather than covered.
+
+Commit the new files in your migrations folder, with their snapshots in `meta/`.
+
+## 4. Apply it
+
+Run `nextly migrate` against the production database, from your deploy step or your machine,
+before the new build serves:
+
+```bash
+npx nextly migrate
+```
+
+At a terminal it asks whether the database is backed up, and asks before it removes a column.
+
+In a deploy script there is nobody to ask, so pass both answers:
+
+```bash
+npx nextly migrate --backup-confirmed \
+  --accept-data-loss=dc_posts.title,dc_posts.slug
+```
+
+- `--backup-confirmed` states that the database is backed up. Without it, and with no terminal,
+  `nextly migrate` stops with
+  [`DATA_STEPS_BACKUP_NOT_CONFIRMED`](/docs/cli/errors/data-steps-backup-not-confirmed) before it
+  applies anything when it would rewrite data an earlier release stored, naming the step that
+  needs it. Upgrading from 0.0.2-alpha.78 or earlier, that is
+  `store translatable values per language`. The flag is ignored when there is nothing to bring up
+  to date, so it is safe to keep in a deploy script.
+- `--accept-data-loss` is the same consent as in step 3. `nextly migrate` asks for it again on
+  every database it runs on.
+
+The migrations apply in order. Each translation file copies its entity's values to where they
+now live and only then removes the old columns. After them, `nextly migrate` brings the rest
+of the data an earlier release stored up to date, as
+[Upgrading an existing database](/docs/guides/production-migrations#upgrading-an-existing-database)
+describes.
+
+## 5. Check the upgrade
+
+```bash
+npx nextly migrate:check
+```
+
+It should report nothing pending. Then:
+
+- open a few entries of each collection and Single in the admin, and check that their titles,
+  slugs and text read as before;
+- if your site serves more than one language, check that each language still shows its own
+  values;
+- check that your site's pages still render the same content.
+
+## If a step refuses
+
+Every refusal says what it found, changes nothing, and names its fix. The ones an upgrade may
+meet:
+
+| Code                                                                                  | What it means here                                                               | What to do                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`DATA_LOSS_CONSENT_REQUIRED`](/docs/cli/errors/data-loss-consent-required)           | A command would remove the columns whose values move, and nobody could be asked. | Read the list, then run the command again with the `--accept-data-loss=` its `Next:` line gives, or at a terminal.                                                                |
+| [`DATA_STEPS_BACKUP_NOT_CONFIRMED`](/docs/cli/errors/data-steps-backup-not-confirmed) | `nextly migrate` would rewrite stored data and no backup was confirmed.          | Back up, then run it again with `--backup-confirmed`.                                                                                                                             |
+| [`SCHEMA_DRIFT`](/docs/cli/errors/schema-drift)                                       | `nextly migrate` found configuration changes that no migration records yet.      | Run step 3 first, commit the files, then `nextly migrate`.                                                                                                                        |
+| [`MIGRATION_APPLY_FAILED`](/docs/cli/errors/migration-apply-failed)                   | A migration failed while it ran. The files before it stay applied.               | Stop and read the message. Restore the backup from step 1, or follow [Recovering from a failed migration](/docs/guides/production-migrations#recovering-from-a-failed-migration). |
+
+If anything looks wrong after the upgrade, restore the backup from step 1. Then report what you
+saw, with the command's output.
+
+## Related
+
+- [Production migrations](/docs/guides/production-migrations)
+- [Localization](/docs/localization)
+- [A migration that deletes data](/docs/guides/production-migrations#a-migration-that-deletes-data)

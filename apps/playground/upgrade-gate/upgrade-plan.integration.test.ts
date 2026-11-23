@@ -12,11 +12,20 @@
  * 1. `nextly migrate:create`, which writes a migration for whatever this
  *    release now derives differently from the same collections, Singles and
  *    components (a declared index, a column type), as `migrate:check` would
- *    report it in the site's CI;
- * 2. `nextly migrate`, which reconciles the core tables and applies that
- *    migration and any plugin module;
+ *    report it in the site's CI. Where it moves a column's values (into a
+ *    translations table) and drops the column, it asks consent; with no
+ *    terminal, `--accept-data-loss` names exactly the columns the upgrade
+ *    is judged to move (`UPGRADE_CONSENT`), so a deletion beyond them refuses;
+ * 2. `nextly migrate --backup-confirmed`, which reconciles the core tables,
+ *    applies that migration and any plugin module, and brings stored data up
+ *    to date, asking the same consent again for this database;
  * 3. `nextly migrate:check`, which must then find the migrations whole and
  *    the configuration recorded.
+ *
+ * Before the first step the install is given content (`values.ts`): one entry
+ * in each content table, a distinct value in every free-text column. After the
+ * upgrade every one of those values must still be where Nextly keeps it, so an
+ * upgrade that moved values wrongly, or dropped them, fails here.
  *
  * The operations planned are read from the database itself: its catalog before
  * and after, compared element by element (`catalog.ts`). So whatever the
@@ -38,7 +47,7 @@ import { promisify } from "node:util";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { ALLOWED_OPERATIONS } from "./allowlist";
+import { ALLOWED_OPERATIONS, UPGRADE_CONSENT } from "./allowlist";
 import {
   judge,
   operationsBetween,
@@ -53,6 +62,7 @@ import {
   type ScratchDatabase,
 } from "./database";
 import { BASELINE_DIR, siteEnvironment, type BaselineMeta } from "./record";
+import { lostValues, seedContent, type SeededValue } from "./values";
 
 const run = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -83,6 +93,7 @@ describe.each(dialects())(
     let database: ScratchDatabase;
     let before: Catalog;
     let environment: NodeJS.ProcessEnv;
+    let seeded: SeededValue[];
 
     beforeAll(async () => {
       scratch = mkdtempSync(join(tmpdir(), "upgrade-gate-"));
@@ -110,6 +121,7 @@ describe.each(dialects())(
         { recursive: true }
       );
       before = await readCatalog(dialect, database.url);
+      seeded = await seedContent(dialect, database.url, before);
       // The playground as the recorder ran it (`siteEnvironment`).
       environment = siteEnvironment(process.env, {
         databaseUrl: database.url,
@@ -154,13 +166,18 @@ describe.each(dialects())(
         "migrate:create",
         "--name",
         "upgrade",
-        "--non-interactive"
+        "--non-interactive",
+        `--accept-data-loss=${UPGRADE_CONSENT.join(",")}`
       );
       expect(outcome.code, outcome.output).toBe(0);
     });
 
     it("migrate applies the upgrade", async () => {
-      const outcome = await nextly("migrate");
+      const outcome = await nextly(
+        "migrate",
+        "--backup-confirmed",
+        `--accept-data-loss=${UPGRADE_CONSENT.join(",")}`
+      );
       expect(outcome.code, outcome.output).toBe(0);
     });
 
@@ -174,6 +191,12 @@ describe.each(dialects())(
         verdict,
         verdictMessage(verdict, dialect, `nextly ${meta.release}`)
       ).toEqual({ unexpected: [], stale: [] });
+    });
+
+    it("keeps every value the install held", async () => {
+      // The control: the install was given values to keep.
+      expect(seeded.length).toBeGreaterThan(0);
+      expect(await lostValues(dialect, database.url, seeded)).toEqual([]);
     });
 
     it("leaves migrate:check nothing to report", async () => {
