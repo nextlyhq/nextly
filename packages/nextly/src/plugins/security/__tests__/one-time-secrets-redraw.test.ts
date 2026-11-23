@@ -3,8 +3,9 @@
  *
  * Six digits repeat about once in a million resends. A holder of the earlier
  * code could then spend its successor, with a fresh budget of tries, so a draw
- * that repeats the live code is drawn again. The random source is held to a
- * repeat here, which a real one produces too rarely to test.
+ * that repeats the live code is drawn again. A code is derived from its row's
+ * id, so the id source is held to a repeat here, which a real one produces
+ * too rarely to test.
  *
  * An attempt that loses its write to a replacing mint is not judged, or
  * charged, against the replacement. The race is placed exactly with a hook on
@@ -14,16 +15,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createOneTimeSecrets } from "../one-time-secrets";
 
-const draws = vi.hoisted(() => ({ queue: [] as number[], calls: 0 }));
+const draws = vi.hoisted(() => ({ queue: [] as string[], calls: 0 }));
 
 vi.mock("node:crypto", async importOriginal => {
   const actual = await importOriginal<typeof import("node:crypto")>();
   return {
     ...actual,
-    randomInt: (...args: unknown[]) => {
+    randomUUID: () => {
       draws.calls++;
-      const next = draws.queue.shift();
-      return next ?? (actual.randomInt as (...a: unknown[]) => number)(...args);
+      return draws.queue.shift() ?? actual.randomUUID();
     },
   };
 });
@@ -118,14 +118,16 @@ describe("a replacement code", () => {
         maxWrongTries: 3,
       });
 
-    draws.queue = [42];
+    draws.queue = ["row-1"];
     const first = await mint();
-    // The second mint's first draw repeats the live code; its second does not.
-    draws.queue = [42, 7];
+    // The second mint's first id is the live code's, so it derives the same
+    // code; its second id does not.
+    draws.queue = ["row-1", "row-2"];
     const second = await mint();
 
-    expect(first.code).toBe("000042");
-    expect(second.code).toBe("000007");
+    expect(first.ref).toBe("row-1");
+    expect(second.ref).toBe("row-2");
+    expect(second.code).not.toBe(first.code);
     expect(draws.calls).toBe(3);
   });
 });
@@ -149,11 +151,9 @@ describe("an attempt that loses its write to a replacing mint", () => {
         maxWrongTries: 3,
       });
 
-    draws.queue = [42];
     const earlier = await mint();
     // The replacement is minted after the attempt read the earlier code and
     // before its write, which then loses.
-    draws.queue = [7];
     store.beforeCodeWrite.run = async () => {
       await mint();
     };

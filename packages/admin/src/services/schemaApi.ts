@@ -1,6 +1,7 @@
 // API service for schema preview/apply endpoints.
 // Used by the visual schema builder save flow.
 import { protectedApi } from "@admin/lib/api/protectedApi";
+import { changedRowDeletesData } from "@admin/lib/builder/review-deletes-data";
 
 import type { ActionResponse } from "../lib/api/response-types";
 
@@ -168,6 +169,36 @@ export interface SchemaPreviewConversion {
  * The part of an apply's body that confirms the reviewed conversions: their keys, or nothing when
  * there are none, so a save with nothing to convert sends what it always has.
  */
+/** A removed field's values the person confirmed deleting, as the review counted them. */
+export interface ConfirmedDeletion {
+  field: string;
+  count: number;
+}
+
+/**
+ * The values each field the reviewed preview removes, or changes so it loses them
+ * (`changedRowDeletesData`), holds, as it counted them: what the review's Save confirms deleting. The
+ * server deletes only where each count still holds when it deletes, and refuses, naming the new
+ * count, where one changed; a confirmed field whose column stays is not compared.
+ */
+export function confirmedDeletionsOf(
+  preview: Pick<SchemaPreviewResponse, "changes">
+): ConfirmedDeletion[] {
+  return [
+    ...preview.changes.removed,
+    ...preview.changes.changed.filter(changedRowDeletesData),
+  ].map(field => ({ field: field.name, count: field.rowCount }));
+}
+
+/** The apply body's confirmed counts, left out where the save removes no field. */
+function confirmedDeletionsBody(
+  confirmedDeletions: readonly ConfirmedDeletion[] | undefined
+): { confirmedDeletions?: readonly ConfirmedDeletion[] } {
+  return confirmedDeletions !== undefined && confirmedDeletions.length > 0
+    ? { confirmedDeletions }
+    : {};
+}
+
 export function acknowledgedConversionsBody(
   acknowledgedConversions: readonly string[] | undefined
 ): { acknowledgedConversions?: readonly string[] } {
@@ -272,6 +303,8 @@ export const schemaApi = {
     status?: boolean,
     // The keys of the conversions the review listed and its Save confirmed.
     acknowledgedConversions?: readonly string[],
+    // The values of each removed field the review counted, which its Save confirmed deleting.
+    confirmedDeletions?: readonly ConfirmedDeletion[],
     // The fields the save moves into or out of a group, as its preview sent them.
     hints?: SchemaSaveHints
   ): Promise<SchemaApplyResponse> => {
@@ -286,6 +319,7 @@ export const schemaApi = {
       ...(localized !== undefined ? { localized } : {}),
       ...(status !== undefined ? { status } : {}),
       ...acknowledgedConversionsBody(acknowledgedConversions),
+      ...confirmedDeletionsBody(confirmedDeletions),
       ...saveHintsBody(hints),
     });
     return {

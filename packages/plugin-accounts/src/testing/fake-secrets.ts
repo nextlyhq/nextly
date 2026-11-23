@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomInt } from "node:crypto";
+import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 
 import type { OneTimeSecrets, SecretData, TxOption } from "../core/ports";
 
@@ -15,6 +15,13 @@ const PURPOSE = /^[a-z][a-z0-9.-]{0,63}$/;
 
 interface StoredSecret {
   readonly kind: "token" | "code";
+  /** What `reveal` finds it by, as core's row id. */
+  readonly ref: string;
+  /**
+   * The secret as minted, which core derives again rather than keeps: held
+   * here, in memory only, so `reveal` can answer as core does.
+   */
+  readonly secret: string;
   readonly purpose: string;
   readonly subject: string;
   /** A token's SHA-256, or a code as typed. */
@@ -78,11 +85,11 @@ export class FakeOneTimeSecrets implements OneTimeSecrets {
   async mintToken(
     input: Parameters<OneTimeSecrets["mintToken"]>[0],
     options?: TxOption
-  ): Promise<{ token: string; expiresAt: Date }> {
+  ): ReturnType<OneTimeSecrets["mintToken"]> {
     await roundTrip();
     checkCommon(input, MINUTE, 30 * DAY);
     const token = randomBytes(32).toString("base64url");
-    const stored = this.#store("token", input, hashOf(token), 0);
+    const stored = this.#store("token", input, token, hashOf(token), 0);
     this.#transactions.write("mintToken", options, () => {
       if (input.voidEarlier === true)
         this.#voidLive("token", input.purpose, input.subject);
@@ -96,13 +103,13 @@ export class FakeOneTimeSecrets implements OneTimeSecrets {
       data: stored.data,
     });
 
-    return { token, expiresAt: new Date(stored.expiresAt) };
+    return { token, expiresAt: new Date(stored.expiresAt), ref: stored.ref };
   }
 
   async mintCode(
     input: Parameters<OneTimeSecrets["mintCode"]>[0],
     options?: TxOption
-  ): Promise<{ code: string; expiresAt: Date }> {
+  ): ReturnType<OneTimeSecrets["mintCode"]> {
     await roundTrip();
     checkCommon(input, MINUTE, 60 * MINUTE);
     const digits = input.digits ?? 6;
@@ -122,7 +129,7 @@ export class FakeOneTimeSecrets implements OneTimeSecrets {
     const live = this.#liveCode(input.purpose, input.subject);
     let code = this.drawCode(digits);
     while (code === live) code = this.drawCode(digits);
-    const stored = this.#store("code", input, code, input.maxWrongTries);
+    const stored = this.#store("code", input, code, code, input.maxWrongTries);
     this.#transactions.write("mintCode", options, () => {
       this.#voidLive("code", input.purpose, input.subject);
       this.#stored.push(stored);
@@ -135,7 +142,7 @@ export class FakeOneTimeSecrets implements OneTimeSecrets {
       data: stored.data,
     });
 
-    return { code, expiresAt: new Date(stored.expiresAt) };
+    return { code, expiresAt: new Date(stored.expiresAt), ref: stored.ref };
   }
 
   async peekToken(input: {
@@ -220,6 +227,22 @@ export class FakeOneTimeSecrets implements OneTimeSecrets {
     };
   }
 
+  /** As core: the secret a ref names, while it is live; a voided one is no secret at all. */
+  async reveal(input: { ref: string }): ReturnType<OneTimeSecrets["reveal"]> {
+    this.#transactions.assertNone("reveal");
+    await roundTrip();
+    const found = this.#live(
+      this.#stored.find(secret => secret.ref === input.ref)
+    );
+    if (!found.ok) return found;
+
+    return {
+      ok: true,
+      secret: found.stored.secret,
+      expiresAt: new Date(found.stored.expiresAt),
+    };
+  }
+
   async voidFor(
     input: { subject: string; purposes?: readonly string[] },
     options?: TxOption
@@ -248,11 +271,14 @@ export class FakeOneTimeSecrets implements OneTimeSecrets {
       expiresInMs: number;
       data?: SecretData;
     },
+    secret: string,
     value: string,
     triesLeft: number
   ): StoredSecret {
     return {
       kind,
+      ref: randomUUID(),
+      secret,
       purpose: input.purpose,
       subject: input.subject,
       value,
@@ -288,13 +314,24 @@ export class FakeOneTimeSecrets implements OneTimeSecrets {
     | { ok: true; stored: StoredSecret }
     | { ok: false; reason: "invalid" | "expired" | "spent" } {
     const hash = hashOf(input.token);
-    const stored = this.#stored.find(
-      secret =>
-        secret.kind === "token" &&
-        secret.purpose === input.purpose &&
-        secret.value === hash
+
+    return this.#live(
+      this.#stored.find(
+        secret =>
+          secret.kind === "token" &&
+          secret.purpose === input.purpose &&
+          secret.value === hash
+      )
     );
-    // As core: a voided token is no token at all; only a spent one says so.
+  }
+
+  /** A secret found, if it can still be used, or why not. */
+  #live(
+    stored: StoredSecret | undefined
+  ):
+    | { ok: true; stored: StoredSecret }
+    | { ok: false; reason: "invalid" | "expired" | "spent" } {
+    // As core: a voided secret is no secret at all; only a spent one says so.
     if (stored === undefined || stored.state === "void")
       return { ok: false, reason: "invalid" };
     if (stored.state === "spent" || stored.claimed)

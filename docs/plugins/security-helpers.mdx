@@ -323,8 +323,50 @@ open: a wrong code's charge must stand even if a later step rolls back, or a
 visitor could guess without limit by making each attempt fail. The cost is that
 a code whose effect fails stays spent, and the person asks for a new one.
 
+### Sending a secret from a job
+
+Mail is usually sent from a job, so a page answers without waiting for the
+mail server. Queue the `ref` a mint returns, never the token or code: a job's
+input is stored in the jobs table, and is kept there after the job runs.
+`reveal` derives the secret again from its `ref` when the job runs, on any
+instance of the site.
+
+```ts
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+
+/** When the reset is asked for: queue the link's ref. */
+async function queueResetEmail(ctx: PluginContext, accountId: string) {
+  const { ref } = await ctx.security.secrets.mintToken({
+    purpose: "password-reset",
+    subject: accountId,
+    expiresInMs: 60 * 60 * 1000,
+  });
+  await ctx.services.jobs.queue({
+    task: "my-plugin:send-reset",
+    input: { accountId, ref },
+  });
+}
+
+/** In the job: the token again, while it can still be used. */
+async function resetLinkAtSend(ctx: PluginContext, ref: string) {
+  const revealed = await ctx.security.secrets.reveal({ ref });
+  // Spent, replaced or expired since it was queued: there is nothing to send.
+  if (!revealed.ok) return null;
+  return `https://shop.example/reset?token=${encodeURIComponent(revealed.secret)}`;
+}
+```
+
+`reveal` answers `invalid`, `expired` or `spent` once the secret can no longer
+be used, so a job queued before a newer link replaced it sends nothing stale.
+Only your plugin's own secrets can be revealed, and only while the install
+reads with the secret they were minted under. A `ref` is not itself a secret.
+
 ### What they guarantee
 
+- **Derived, never kept.** A token or code is derived from the `ref` a mint
+  returns, under a key derived from the install's secret for this use alone.
+  Neither the secrets table nor a job that queued the `ref` holds the secret,
+  and a copy of the database without the install's secret cannot derive it.
 - **Stored only as a keyed hash.** A token or code is kept as an HMAC under a
   key derived from the install's secret for this use alone, so a copy of the
   database cannot recover even a 6-digit code by trying every value. When the

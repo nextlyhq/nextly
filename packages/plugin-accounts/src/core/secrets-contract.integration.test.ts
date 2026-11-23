@@ -35,9 +35,19 @@ function answer(value: object): object {
   return rest;
 }
 
+/** A reveal's answer, with whether it gave back the secret the mint did in place of the secret. */
+async function revealed(
+  secrets: OneTimeSecrets,
+  ref: string,
+  minted: string
+): Promise<object> {
+  const answer = await secrets.reveal({ ref });
+  return answer.ok ? { ok: true, same: answer.secret === minted } : answer;
+}
+
 /**
- * Every answer the scenario gets, in order: tokens peeked, spent and spent
- * again; another purpose's and an unknown token; a subject's secrets voided;
+ * Every answer the scenario gets, in order: tokens revealed, peeked, spent
+ * and spent again; another purpose's and an unknown token; a subject's secrets voided;
  * a code's wrong tries running out; a new code voiding the earlier one; and
  * a secret minted in a transaction that rolls back, and in one that commits.
  */
@@ -48,10 +58,12 @@ async function transcript(
   const log: unknown[] = [];
   const link = { purpose: "verify-link", subject: "s1", expiresInMs: HOUR };
 
-  const { token } = await secrets.mintToken({
+  const { token, ref } = await secrets.mintToken({
     ...link,
     data: { change: "c1" },
   });
+  log.push(await revealed(secrets, ref, token));
+  log.push(await revealed(secrets, "no-such-ref", token));
   log.push(answer(await secrets.peekToken({ purpose: "verify-link", token })));
   log.push(
     answer(await secrets.consumeToken({ purpose: "verify-link", token }))
@@ -59,6 +71,7 @@ async function transcript(
   log.push(
     answer(await secrets.consumeToken({ purpose: "verify-link", token }))
   );
+  log.push(await revealed(secrets, ref, token));
   log.push(answer(await secrets.peekToken({ purpose: "reset", token })));
   log.push(
     answer(await secrets.peekToken({ purpose: "verify-link", token: "nope" }))
@@ -66,6 +79,7 @@ async function transcript(
 
   const voided = await secrets.mintToken({ ...link, subject: "s2" });
   log.push(await secrets.voidFor({ subject: "s2" }));
+  log.push(await revealed(secrets, voided.ref, voided.token));
   log.push(
     answer(
       await secrets.peekToken({ purpose: "verify-link", token: voided.token })
@@ -80,6 +94,7 @@ async function transcript(
   log.push(await secrets.consumeCode({ ...code, code: first.code }));
   const earlier = await secrets.mintCode({ ...code, maxWrongTries: 5 });
   const later = await secrets.mintCode({ ...code, maxWrongTries: 5 });
+  log.push(await revealed(secrets, later.ref, later.code));
   // A new code never repeats the one it replaced, so the earlier code is
   // always a wrong try against the later one.
   log.push(await secrets.consumeCode({ ...code, code: earlier.code }));
@@ -129,7 +144,7 @@ describe.each(getConfiguredTestDialects())(
       const fake = fakeAccountsCore();
 
       const real = await transcript(booted.ctx.security.secrets, booted.ctx.db);
-      expect(real).toHaveLength(14);
+      expect(real).toHaveLength(19);
       expect(await transcript(fake.secrets, fake.watch(booted.ctx.db))).toEqual(
         real
       );

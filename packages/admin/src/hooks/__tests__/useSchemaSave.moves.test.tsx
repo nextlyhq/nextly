@@ -133,7 +133,7 @@ describe("a save that moves a field", () => {
     act(() => result.current.confirmApply({}, []));
 
     await waitFor(() => expect(applyFn).toHaveBeenCalled());
-    expect(applyFn).toHaveBeenCalledWith(FIELDS, 4, {}, [], [], HINTS);
+    expect(applyFn).toHaveBeenCalledWith(FIELDS, 4, {}, [], [], HINTS, []);
     expect(onNoChanges).not.toHaveBeenCalled();
   });
 

@@ -249,9 +249,20 @@ export type StoppedSavePublicData = {
   }>;
 };
 
+/**
+ * What a Builder save refused after part of it applied names: the refusal, by its code and, for a
+ * count that changed, its issues by field. Kept under `refused` rather than as issues at the top,
+ * which a client shows in the message's place: the message says the save stopped part way and how
+ * to settle it.
+ */
+export type RefusedPartwayPublicData = {
+  refused: { code: string; errors?: ValidationPublicData["errors"] };
+};
+
 export type PublicData =
   | ValidationPublicData
   | StoppedSavePublicData
+  | RefusedPartwayPublicData
   | StaleVersionPublicData
   | VersionRequiredPublicData
   | SampleContentPublicData

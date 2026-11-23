@@ -632,28 +632,41 @@ function lostReadsNotice(
 
 /**
  * Decides, once per site, whether it is told which reads its visitors lost:
- * due where an earlier boot seeded this database and the Public role is not
- * made yet, so that boot ran a release from before visitors were judged by
- * it. A new install's first boot finds nothing seeded, so it is not told.
- * Neither is a site whose Public role was made before this was recorded, as
- * what its visitors read then can no longer be told. Recorded at the start of
- * the first boot's seeding, the one time the two can be told apart, and never
- * changed after.
+ * due where an earlier run seeded this database, the Public role is not made
+ * yet, and no release that judges visitors by it set the preset roles' grants,
+ * so the seeding came from a release from before visitors were judged by it.
+ * A new install's first run finds nothing seeded, so it is not told. Neither
+ * is a site whose Public role was made before this was recorded, as what its
+ * visitors read then can no longer be told, nor one whose preset grants a
+ * `nextly migrate` from such a release set without making the Public role (as
+ * 0.0.2-alpha.75's did): its visitors could not read a collection with no read
+ * rule before this run either. Recorded at the start of the first run's
+ * seeding, the one time these can be told apart, and never changed after.
  */
 export async function recordPublicReadNotice({
   meta,
   publicRoleMade,
   seededBefore,
+  presetGrantsRecorded,
 }: {
   meta: Pick<PublicReadGrantSeeding["meta"], "get" | "insertIfAbsent">;
   publicRoleMade: () => Promise<boolean>;
-  /** Whether a boot before this one seeded the database. */
+  /** Whether a run before this one seeded the database. */
   seededBefore: () => Promise<boolean>;
+  /**
+   * Whether the release that set the preset roles' grants is recorded
+   * (`preset_grants_release`): only `nextly migrate` from a release that
+   * judges visitors by the Public role writes it.
+   */
+  presetGrantsRecorded: () => Promise<boolean>;
 }): Promise<void> {
   if ((await meta.get<NoticeState>(PUBLIC_READ_NOTICE_META_KEY)) !== null) {
     return;
   }
-  const due = !(await publicRoleMade()) && (await seededBefore());
+  const due =
+    !(await publicRoleMade()) &&
+    (await seededBefore()) &&
+    !(await presetGrantsRecorded());
   const state: NoticeState = due ? "due" : "not-due";
   await meta.insertIfAbsent(PUBLIC_READ_NOTICE_META_KEY, state);
 }

@@ -7,8 +7,8 @@ import {
 import { MINUTE, type FlowDeps } from "./deps";
 import { EMAIL_REQUESTS } from "./email-limits";
 import { admitEmailRequest, type EmailRequestRefusal } from "./email-request";
-import { pageLink } from "./links";
 import { PURPOSES } from "./purposes";
+import { secretFields, type MintedSecret } from "./secret-fields";
 
 export type ResetRequestResult = { status: "accepted" } | EmailRequestRefusal;
 
@@ -32,10 +32,10 @@ export async function requestPasswordReset(
   if (admitted.status === "refused") return admitted;
   const { account } = admitted;
   if (account !== null && account.deactivatedAt === null && admitted.mayEmail) {
-    const token = await deps.db.transaction(tx =>
+    const minted = await deps.db.transaction(tx =>
       mintResetLink(deps, tx, account)
     );
-    if (token !== null) await queueResetLink(deps, account, token);
+    if (minted !== null) await queueResetLink(deps, account, minted);
   }
 
   return { status: "accepted" };
@@ -53,9 +53,9 @@ export async function mintResetLink(
   deps: Pick<FlowDeps, "core" | "settings">,
   tx: AccountsDb,
   account: Pick<AccountRow, "id" | "securityVersion">
-): Promise<string | null> {
+): Promise<MintedSecret | null> {
   if (!(await holdAtVersion(tx, account))) return null;
-  const { token } = await deps.core.secrets.mintToken(
+  const { token, ref } = await deps.core.secrets.mintToken(
     {
       purpose: PURPOSES.reset,
       subject: account.id,
@@ -64,19 +64,19 @@ export async function mintResetLink(
     { tx }
   );
 
-  return token;
+  return { token, ref };
 }
 
 /** Emails an account the reset link minted for it. */
 export async function queueResetLink(
   deps: Pick<FlowDeps, "settings" | "mail">,
   account: Pick<AccountRow, "id" | "address">,
-  token: string
+  minted: MintedSecret
 ): Promise<void> {
   await deps.mail.queue({
     kind: "reset-password",
     accountId: account.id,
     to: account.address,
-    link: pageLink(deps.settings, "reset", token),
+    ...secretFields(deps.settings, "reset-password", { link: minted }),
   });
 }

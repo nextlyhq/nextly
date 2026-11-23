@@ -38,6 +38,7 @@ describe("a save's moves, as each service sends them", () => {
           undefined,
           undefined,
           undefined,
+          undefined,
           hints
         ),
     ],
