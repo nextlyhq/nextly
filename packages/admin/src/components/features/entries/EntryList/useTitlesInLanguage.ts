@@ -20,6 +20,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
+import { shouldRetryQuery } from "@admin/lib/api/query-retry";
 import { entryApi, entryKeys, type FindParams } from "@admin/services/entryApi";
 
 export interface TitlesInLanguage {
@@ -75,9 +76,10 @@ export function useTitlesInLanguage({
     },
     enabled: asked,
     staleTime: 30_000,
-    // A refusal is the server's answer for this reader and language; asking again changes
-    // nothing.
-    retry: false,
+    // The admin's own rule for a read, whatever the client's default: a refusal is the server's
+    // answer for this reader and language and is not asked again, while a failure another try
+    // may answer differently (no response, a timeout, a server error) is.
+    retry: shouldRetryQuery,
   });
   const failed = asked && query.isError;
   const titles = useMemo(() => {

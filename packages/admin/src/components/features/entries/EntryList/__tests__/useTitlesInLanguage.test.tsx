@@ -1,7 +1,8 @@
 /**
  * The titles read for "Titles in": the rows on screen, by id, in the chosen language with no
  * fallback, so a title the language does not have is not filled in with the default's; only
- * what that read returned is offered as a title in that language; a refused read says so; and
+ * what that read returned is offered as a title in that language; a refused read says so, asked
+ * once, while a failure another try may answer is asked again; and
  * nothing is read while the default language is shown.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -26,6 +27,20 @@ function wrapper({ children }: { children: ReactNode }) {
     <QueryClientProvider client={createTestQueryClient()}>
       {children}
     </QueryClientProvider>
+  );
+}
+
+/** The server's refusal of a read in a language this reader may not see. */
+const refusal = () =>
+  Object.assign(new Error("You can't see posts in Spanish."), { status: 403 });
+
+/** A client whose queries retry `retry` times by default, with no wait between tries. */
+function wrapperRetrying(retry = 1) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry, retryDelay: 0, gcTime: 0 } },
+  });
+  return ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
 }
 
@@ -78,20 +93,33 @@ describe("useTitlesInLanguage", () => {
   });
 
   it("says the read failed when the server refuses it, and offers no titles", async () => {
-    find.mockRejectedValue(new Error("You can't see posts in Spanish."));
-    // A client that retries by default, as an application's may: the read itself must not.
-    const retrying = new QueryClient({
-      defaultOptions: { queries: { retry: 1, retryDelay: 0, gcTime: 0 } },
-    });
+    find.mockRejectedValue(refusal());
+    // A client that retries by default, as an application's may: the refusal is still asked once.
     const { result } = renderHook(() => useTitlesInLanguage(ARGS), {
-      wrapper: ({ children }: { children: ReactNode }) => (
-        <QueryClientProvider client={retrying}>{children}</QueryClientProvider>
-      ),
+      wrapper: wrapperRetrying(),
     });
     await waitFor(() => expect(result.current.failed).toBe(true));
     expect(result.current.titles?.size).toBe(0);
     // Asked once: a refusal is the answer for this reader and language.
     expect(find).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks again after a failure another try may answer, and offers what it returns", async () => {
+    // A client that never retries by default: the read retries on its own rule.
+    find
+      .mockRejectedValueOnce(
+        Object.assign(new Error("The server is unavailable."), { status: 503 })
+      )
+      .mockResolvedValueOnce({
+        items: [{ id: "p1", title: "Hola" }],
+        meta: {},
+      });
+    const { result } = renderHook(() => useTitlesInLanguage(ARGS), {
+      wrapper: wrapperRetrying(0),
+    });
+    await waitFor(() => expect(result.current.titles?.get("p1")).toBe("Hola"));
+    expect(result.current.failed).toBe(false);
+    expect(find).toHaveBeenCalledTimes(2);
   });
 
   it("offers no titles once a later read fails, though an earlier one answered", async () => {
@@ -109,7 +137,7 @@ describe("useTitlesInLanguage", () => {
     });
     await waitFor(() => expect(result.current.titles?.get("p1")).toBe("Hola"));
 
-    find.mockRejectedValueOnce(new Error("You can't see posts in Spanish."));
+    find.mockRejectedValueOnce(refusal());
     await act(() => client.refetchQueries());
     await waitFor(() => expect(result.current.failed).toBe(true));
     expect(result.current.titles?.size).toBe(0);
