@@ -101,11 +101,20 @@ async function seed(t: TestNextly): Promise<string> {
   return lost;
 }
 
-/** A code-first collection holding `fields`. */
-const declaring = (fields: unknown[]) =>
+/** A code-first collection holding `fields`, beside the collections `others` declares. */
+const declaring = (fields: unknown[], others: unknown[] = []) =>
   defineConfig({
-    collections: [defineCollection({ slug: SLUG, fields: fields as never })],
+    collections: [
+      ...(others as never[]),
+      defineCollection({ slug: SLUG, fields: fields as never }),
+    ],
   });
+
+/** The collection a relationship links to. */
+const TARGETS = defineCollection({
+  slug: "tsr_targets",
+  fields: [{ name: "name", type: "text" }] as never,
+});
 
 const priced = (type: string) => [{ name: "price", type }];
 const detailed = (type: string) => [
@@ -234,7 +243,8 @@ describe.each(getConfiguredTestDialects())(
       if (!serverUrl) throw new Error(`${SERVER_URL_ENV[dialect]} is not set`);
       const name = `nextly_tsr_${randomBytes(8).toString("hex")}`;
       const server = await createAdapter({ type: dialect, url: serverUrl });
-      await server.executeQuery(createDatabaseStatement(dialect, name));
+      // Registered first: a create that fails still leaves the connection to close, and the drop
+      // names the database only if it exists.
       closing.push(async () => {
         try {
           await server.executeQuery(dropDatabaseStatement(dialect, name));
@@ -242,6 +252,7 @@ describe.each(getConfiguredTestDialects())(
           await server.disconnect();
         }
       });
+      await server.executeQuery(createDatabaseStatement(dialect, name));
       const url = new URL(serverUrl);
       url.pathname = `/${name}`;
       vi.stubEnv("DATABASE_URL", url.toString());
@@ -255,8 +266,11 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** `nextly db:sync` over `fields`, with nobody to ask: what it threw and logged, if anything. */
-    async function dbSync(fields: unknown[]): Promise<string | undefined> {
-      loaded.config = declaring(fields);
+    async function dbSync(
+      fields: unknown[],
+      others: unknown[] = []
+    ): Promise<string | undefined> {
+      loaded.config = declaring(fields, others);
       clearCachedSnapshot();
       clearLiveSnapshots();
       setNonInteractive(true);
@@ -337,6 +351,36 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(held).toContain("x@y.co");
     }, 240_000);
+
+    // On SQLite one link and an email are both a text column, and only one side keeps links, so no
+    // statement plans the change: the Builder's judgement does.
+    it.runIf(dialect === "sqlite")(
+      "refuses db:sync of a relationship becoming an email that keeps its column, over a held link",
+      async () => {
+        const linked = (type: string) => [
+          {
+            name: "contact",
+            type,
+            ...(type === "relationship" ? { relationTo: "tsr_targets" } : {}),
+          },
+        ];
+        const adapter = await syncDatabase();
+        expect(await dbSync(linked("relationship"), [TARGETS])).toBeUndefined();
+        await written(adapter, "contact", { [ids.readable]: ids.unreadable });
+
+        const refused = await dbSync(linked("email"), [TARGETS]);
+
+        expect(refused).toContain(
+          `Collection '${SLUG}': field 'contact' cannot change from relationship to email`
+        );
+        expect(
+          await adapter.executeQuery(
+            `SELECT ${q("contact")} AS contact FROM ${q(TABLE)}`
+          )
+        ).toEqual([{ contact: ids.unreadable }]);
+      },
+      240_000
+    );
 
     it("refuses db:sync of a change that keeps its column, over a value the new type can't read, changing nothing", async () => {
       const adapter = await syncDatabase();

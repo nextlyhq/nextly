@@ -12,6 +12,7 @@ import { sql } from "drizzle-orm";
 import { isVirtualField } from "../../../../collections/fields/virtual";
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import { addressableFields } from "../../../../shared/addressable-fields";
 import {
   isFieldLocalized,
   resolveLocalizedFieldNames,
@@ -76,16 +77,15 @@ const CONTAINERS = new Set(["group", "repeater"]);
 
 /**
  * A container field's own fields that hold a value, by name, a group with no name inside it read
- * through. A virtual field, or a container's whole subtree when it is virtual, stores nothing,
- * as a virtual field on the row has no column.
+ * through. A virtual field, or a container's whole subtree when it is virtual, a group with no name
+ * included, stores nothing, as a virtual field on the row has no column.
  */
 function containedFields(field: FieldDefinition): FieldDefinition[] {
-  const fields = (field as { fields?: unknown }).fields;
-  return Array.isArray(fields)
-    ? fieldsStoredOnRow(fields as FieldDefinition[]).filter(
-        inner => !isVirtualField(inner)
-      )
-    : [];
+  return (
+    addressableFields((field as { fields?: unknown }).fields, {
+      descendInto: container => !isVirtualField(container),
+    }) as unknown as FieldDefinition[]
+  ).filter(inner => !isVirtualField(inner));
 }
 
 /**

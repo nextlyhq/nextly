@@ -246,9 +246,10 @@ function unseenByCodeFirstRule(
 /**
  * Whether a type change plans no statement: its column keeps its type on the database, each read
  * where the entity keeps its fields (`at`: a field group's on its own rows), whatever a rename does
- * to its name. Never a relationship's: a change of how it keeps its links is planned as a conversion
- * of its own (a reference list) even where its column's type stays, as on SQLite, and is the
- * code-first rule's.
+ * to its name. Never a relationship becoming another: a change of how it keeps its links is planned
+ * as a conversion of its own (a reference list) even where its column's type stays, as on SQLite,
+ * and is the code-first rule's. A relationship becoming a field of another kind, or one becoming a
+ * relationship, plans none where the column stays, and is judged here.
  */
 function plansNoStatement(
   change: FieldTypeChange,
@@ -256,7 +257,7 @@ function plansNoStatement(
   at: ColumnAt
 ): boolean {
   if (
-    change.fromType.family === "relationship" ||
+    change.fromType.family === "relationship" &&
     change.toType.family === "relationship"
   ) {
     return false;

@@ -148,6 +148,20 @@ describe("fieldTypeChangesOf, for fields held inside JSON", () => {
     ).toEqual([]);
   });
 
+  it("gives none for a field of a virtual group with no name, which stores nothing", () => {
+    const group = (type: string) =>
+      field("details", "group", {
+        fields: [
+          {
+            type: "group",
+            options: { virtual: true },
+            fields: [field("when", type)],
+          },
+        ],
+      });
+    expect(changesOf([group("date")], [group("email")])).toEqual([]);
+  });
+
   it("gives none for a virtual field, or a field of a virtual container, which stores nothing", () => {
     const group = (inner: FieldDefinition) =>
       field("details", "group", { fields: [inner] });
