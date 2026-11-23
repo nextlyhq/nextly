@@ -14,12 +14,16 @@
  * - the fields, from the newest snapshot of the migrations applied or about to apply
  *   (`readRegistrySource`), over the registry rows, which hold an entity no snapshot records;
  * - the database's foreign keys, less those the files remove: the table holding one dropped and
- *   not created again, its constraint dropped by name, or one of its columns dropped.
+ *   not created again, its constraint dropped by name, or one of its columns dropped. Into a
+ *   collection's tables too, which the Builder's delete leaves to the field that holds a key: a
+ *   key whose field the run removes and that the run leaves standing would be stripped by a
+ *   `CASCADE`, or refuse the drop part-way on MySQL.
  *
  * @module domains/schema/migrate/used-entity-drops
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   assertNothingDependsOn,
   databaseDependentsSources,
@@ -98,6 +102,45 @@ export async function refuseDropsOfUsedEntities(
         .map(entity => entity.slug),
     }
   );
+  await refuseKeysIntoRetiredCollections(args, retiring, statements);
+}
+
+/**
+ * Refuses the run when a foreign key the database holds into a retiring collection's tables, from
+ * a table no retiring entity owns, is still there once `statements` have run (`keysLeftAfter`).
+ */
+async function refuseKeysIntoRetiredCollections(
+  args: UsedEntityDropsArgs,
+  retiring: readonly {
+    kind: string;
+    slug: string;
+    tables: readonly string[];
+  }[],
+  statements: readonly string[]
+): Promise<void> {
+  const collections = retiring.filter(entity => entity.kind === "collection");
+  if (collections.length === 0) return;
+  const own = new Set(
+    retiring.flatMap(entity => entity.tables.map(table => table.toLowerCase()))
+  );
+  const database = databaseDependentsSources(
+    args.adapter,
+    args.extensionSchema
+  );
+  const live =
+    (await database.liveKeysInto?.(
+      collections.flatMap(entity => entity.tables)
+    )) ?? [];
+  const left = (
+    await keysLeftAfter(live, args.db, args.dialect, statements)
+  ).filter(key => !own.has(key.table.toLowerCase()));
+  if (left.length === 0) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message: `${collections.map(entity => `"${entity.slug}"`).join(", ")} cannot be dropped while a foreign key still points into its tables after the migrations: ${left
+      .map(key => `${key.table} → ${key.referencesTable}`)
+      .join(", ")}. Drop those keys in a migration before the drop.`,
+  });
 }
 
 /** The database's dependents, read as they will be once `statements` have run. */

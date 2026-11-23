@@ -176,12 +176,18 @@ export async function captureRetiredDocuments(
   );
   if (dropped.size === 0) return;
   const retiring = (await readCoveredEntities(db, dialect)).flatMap(entity => {
-    const table = dropped.get(entity.table.toLowerCase());
-    return entity.excluded !== true &&
-      entity.kind !== "fieldGroup" &&
-      table !== undefined
-      ? [{ entity, table }]
-      : [];
+    const droppedAs = dropped.get(entity.table.toLowerCase());
+    if (
+      entity.excluded === true ||
+      entity.kind === "fieldGroup" ||
+      droppedAs === undefined
+    ) {
+      return [];
+    }
+    // Read and locked by the name the catalog holds it under: the registry's own spelling (a
+    // quoted mixed-case name on PostgreSQL), or the name an earlier unit renamed it to.
+    const table = renamedBefore.has(droppedAs) ? droppedAs : entity.table;
+    return [{ entity, table }];
   });
   if (retiring.length === 0) return;
   // Only a table still there is read: a statement naming a missing table aborts the transaction on
@@ -193,7 +199,7 @@ export async function captureRetiredDocuments(
   );
   let seq = await lastSeq(db, dialect);
   for (const { entity, table } of retiring) {
-    if (!standing.has(table)) continue;
+    if (!standing.has(table.toLowerCase())) continue;
     seq += 1;
     const head: CaptureHead = {
       file: unit.source,

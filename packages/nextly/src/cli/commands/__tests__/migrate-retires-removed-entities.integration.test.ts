@@ -29,7 +29,10 @@ import {
   type DataLossConsent,
 } from "../../../domains/schema/migrate/data-loss-consent";
 import { CHUNK } from "../../../domains/schema/migrate/retired-documents";
-import { KILL_AT_VARIABLE } from "../../../domains/schema/migrate/stop-points";
+import {
+  KILL_AT_VARIABLE,
+  withStopPoints,
+} from "../../../domains/schema/migrate/stop-points";
 import { refuseDropsOfUsedEntities } from "../../../domains/schema/migrate/used-entity-drops";
 import {
   LOCK_DIALECTS,
@@ -42,6 +45,7 @@ import {
 } from "../../__tests__/helpers/run-nextly";
 import { createLogger } from "../../utils/logger";
 import { migrateCore } from "../migrate";
+import { downDatabaseDeps } from "../migrate-down";
 
 const logger = createLogger({ quiet: true });
 
@@ -547,6 +551,54 @@ describe.each(LOCK_DIALECTS)(
       ).resolves.toBeUndefined();
     }, 180_000);
 
+    it("captures a quoted mixed-case table under the spelling the catalog holds", async () => {
+      // Only PostgreSQL keeps a quoted name's case apart.
+      if (dialect !== "postgresql") return;
+      const mixed = `${P}_Mixed`;
+      file([
+        `CREATE TABLE "${mixed}" (id varchar(36) PRIMARY KEY, title varchar(64))`,
+        `INSERT INTO "${mixed}" (id, title) VALUES ('q1', 'a')`,
+      ]);
+      expect((await migrate()).applied).toBe(1);
+      await register("collection", "mixed", mixed, `${P}_mixed_links`);
+      file([`DROP TABLE "${mixed}"`]);
+
+      const run = await migrate(
+        resolveDataLossConsent({ flag: mixed, env: {} })
+      );
+
+      expect(run.applied).toBe(1);
+      expect(await deletionsOf("collection", "mixed")).toEqual({ q1: 1 });
+      expect(await captures()).toBe(0);
+    }, 180_000);
+
+    it("refuses a drop of a collection a foreign key still points into once the run is done", async () => {
+      // SQLite drops a key only by rebuilding its table, which is judged as keeping it.
+      if (dialect === "sqlite") return;
+      const key = `${P}_pages_post`;
+      await adapter.executeQuery(
+        `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36)`
+      );
+      await adapter.executeQuery(
+        `ALTER TABLE ${pages} ADD CONSTRAINT ${key} FOREIGN KEY (post_id) REFERENCES ${posts} (id)`
+      );
+      const run = (first: string[]) => [
+        { label: "x.sql", statements: [...first, ...POSTS_DROPPED] },
+      ];
+
+      // No field names `posts`: the key alone keeps it.
+      await expect(judge(run([]))).rejects.toThrow(new RegExp(pages));
+      await expect(
+        judge(
+          run([
+            dialect === "mysql"
+              ? `ALTER TABLE ${pages} DROP FOREIGN KEY ${key}`
+              : `ALTER TABLE ${pages} DROP CONSTRAINT ${key}`,
+          ])
+        )
+      ).resolves.toBeUndefined();
+    }, 180_000);
+
     /**
      * `nextly migrate` as a real process over this database, as a deploy runs it, killing itself at
      * `killAt` where one is named (`stop-points.ts`). Each run clears the lock a killed one left.
@@ -655,21 +707,65 @@ describe.each(LOCK_DIALECTS)(
       2 * PROCESS_TIMEOUT
     );
 
+    /** A collection, `extra`, whose file's DOWN drops it. */
+    const extra = `${P}_extra`;
+    const EXTRA_DOWN = [`DROP TABLE ${extra}_links`, `DROP TABLE ${extra}`];
+
+    /** `extra`'s file, applied, with `extra` registered and two documents; answers its name. */
+    async function extraApplied(): Promise<string> {
+      const name = file(
+        [
+          `CREATE TABLE ${extra} (id varchar(36) PRIMARY KEY, title varchar(64))`,
+          `CREATE TABLE ${extra}_links (id varchar(36) PRIMARY KEY, source_id varchar(36), target_id varchar(36))`,
+          `INSERT INTO ${extra} (id, title) VALUES ('x1', 'a'), ('x2', 'b')`,
+        ],
+        false,
+        EXTRA_DOWN
+      );
+      expect((await migrate()).applied).toBe(1);
+      await register("collection", "extra", extra, `${extra}_links`);
+      return name;
+    }
+
+    it("reports a DOWN rolled back when its events fail after its commit, and the next run records them", async () => {
+      const name = await extraApplied();
+      const deps = await downDatabaseDeps({ adapter, dialect, logger });
+
+      const ran = await withStopPoints(
+        point => {
+          if (point === "collection extra: recorded deletion events") {
+            throw new Error("stopped");
+          }
+        },
+        () =>
+          deps.execDown(
+            EXTRA_DOWN,
+            { source: name, transaction: true, direction: "down" },
+            async handle => {
+              await deps.recordRolledBack(name, handle);
+            }
+          )
+      );
+
+      expect(ran).toBe(EXTRA_DOWN.length);
+      expect(await adapter.tableExists(extra)).toBe(false);
+      expect(await deletionsOf("collection", "extra")).toEqual({});
+      expect(await captures()).toBeGreaterThan(0);
+
+      // The next run records them before it applies the file again.
+      await migrate();
+
+      expect(await deletionsOf("collection", "extra")).toEqual({
+        x1: 1,
+        x2: 1,
+      });
+      expect(await captures()).toBe(0);
+    }, 180_000);
+
     it(
       "ends each document of an entity a DOWN drops once migrate:down commits it",
       async () => {
-        const extra = `${P}_extra`;
-        file(
-          [
-            `CREATE TABLE ${extra} (id varchar(36) PRIMARY KEY, title varchar(64))`,
-            `CREATE TABLE ${extra}_links (id varchar(36) PRIMARY KEY, source_id varchar(36), target_id varchar(36))`,
-            `INSERT INTO ${extra} (id, title) VALUES ('x1', 'a'), ('x2', 'b')`,
-          ],
-          false,
-          [`DROP TABLE ${extra}_links`, `DROP TABLE ${extra}`]
-        );
-        expect((await migrate()).applied).toBe(1);
-        await register("collection", "extra", extra, `${extra}_links`);
+        await extraApplied();
 
         const down = await nextlyProcess([
           "migrate:down",
