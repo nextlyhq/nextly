@@ -40,9 +40,14 @@ import {
 } from "../../../plugins/test-nextly";
 import {
   registerBeforeOperationHook,
+  registerHook,
   unregisterBeforeOperationHook,
+  unregisterHook,
 } from "../../../hooks";
-import type { BeforeOperationHandler } from "../../../hooks/types";
+import type {
+  BeforeOperationHandler,
+  HookHandler,
+} from "../../../hooks/types";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
 import { reportPrincipalDeleted } from "../../audit/erase-principal";
@@ -589,6 +594,35 @@ describe.each(getConfiguredTestDialects())(
       expect((await download(OWNED, mine, await staff("reader"))).status).toBe(
         200
       );
+    });
+
+    it("opens a file whose entry a read hook presents under another id", async () => {
+      // `afterRead` shapes what a read returns, its `id` included; which
+      // entry was read is the stored row's id, not the presented one.
+      const present: HookHandler = ctx => ({
+        ...(ctx.data as Record<string, unknown>),
+        id: `shown-${String((ctx.data as { id?: unknown }).id)}`,
+      });
+      registerHook("afterRead", STREAMED, present);
+      try {
+        const res = await download(
+          STREAMED,
+          files.ready.id,
+          await staff("reader")
+        );
+        expect(res.status).toBe(200);
+        expect(
+          Buffer.from(await res.arrayBuffer()).equals(files.ready.bytes)
+        ).toBe(true);
+        const opened = await new Nextly().files.download({
+          collection: STREAMED,
+          id: files.ready.id,
+          user: { id: ids.reader },
+        });
+        expect(opened.id).toBe(files.ready.id);
+      } finally {
+        unregisterHook("afterRead", STREAMED, present);
+      }
     });
 
     it("keeps which file was opened when the person who opened it is erased", async () => {

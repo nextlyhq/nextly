@@ -63,29 +63,26 @@ function notFound(slug: string, reason: string): never {
 
 /**
  * Open the file `id` of collection `slug`. `readChecked` reads the entry as
- * the caller, through the collection's checked read, and answers `null` when
- * the caller may not read it or it does not exist; it is the precondition,
- * asked before anything else is read or written. `reader` is who the audit
- * row names.
+ * the caller, through the collection's checked read, and answers the stored
+ * id of the entry it read (`resolvedEntryId`), or `null` when the caller may
+ * not read it or it does not exist; it is the precondition, asked before
+ * anything else is read or written. `reader` is who the audit row names.
  *
  * The caller's read and the trusted read that finds the key must both be of
- * entry `id`. A read hook may point a read at another entry; a file is opened
- * only when the entry the caller was allowed to read is the one asked for, so
- * the key of one entry is never handed over on the strength of another.
+ * entry `id`, by the stored row's id rather than the `id` a read hook may
+ * present. A `beforeOperation` hook may point a read at another entry; a file
+ * is opened only when the entry the caller was allowed to read is the one
+ * asked for, so the key of one entry is never handed over on the strength of
+ * another.
  */
 export async function openFile(
   slug: string,
   id: string,
-  readChecked: () => Promise<{ id?: unknown; fileStatus?: unknown } | null>,
+  readChecked: () => Promise<string | null>,
   reader: FileReader
 ): Promise<OpenedFile> {
   const { policy } = filesCollection(slug);
-  const readable = await readChecked();
-  if (
-    readable === null ||
-    String(readable.id) !== id ||
-    readable.fileStatus !== "ready"
-  ) {
+  if ((await readChecked()) !== id) {
     notFound(slug, "file-not-readable-by-caller");
   }
 
@@ -93,7 +90,6 @@ export async function openFile(
   const key = entry?.storageKey;
   if (
     entry === null ||
-    String(entry.id) !== id ||
     entry.fileStatus !== "ready" ||
     typeof key !== "string"
   ) {
@@ -149,7 +145,7 @@ export async function openFileForRequest(
 ): Promise<OpenedFile> {
   const { policy } = filesCollection(slug);
   const caller = await fileCaller(request, policy.principals);
-  const readChecked = async (): Promise<{ fileStatus?: unknown } | null> => {
+  const readChecked = async (): Promise<string | null> => {
     const read = await asFileCaller(caller, () =>
       collections().getEntry({
         request,
@@ -159,7 +155,7 @@ export async function openFileForRequest(
         ...checkedAs(caller),
       })
     );
-    if (read.success) return (read.data as { fileStatus?: unknown }) ?? null;
+    if (read.success) return read.resolvedEntryId ?? null;
     if (read.statusCode === 403 || read.statusCode === 404) return null;
     return unwrapServiceResult(read, {
       reason: "file-entry-not-read",

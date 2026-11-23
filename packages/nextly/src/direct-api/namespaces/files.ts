@@ -88,11 +88,11 @@ function readerOf(args: FileDownloadArgs): FileReader {
   });
 }
 
-/** The entry, read as `args` names, or `null` when refused or missing. */
+/** The stored id of the entry read as `args` names, or `null` when refused or missing. */
 async function readEntryAs(
   args: FileDownloadArgs,
   reader: FileReader
-): Promise<{ fileStatus?: unknown } | null> {
+): Promise<string | null> {
   const read = () =>
     collections().getEntry({
       collectionName: args.collection,
@@ -110,7 +110,7 @@ async function readEntryAs(
     reader.type === "principal" ? (args.principal ?? null) : null,
     read
   );
-  if (found.success) return (found.data as { fileStatus?: unknown }) ?? null;
+  if (found.success) return found.resolvedEntryId ?? null;
   if (found.statusCode === 403 || found.statusCode === 404) return null;
   return unwrapServiceResult(found, {
     reason: "file-entry-not-read",

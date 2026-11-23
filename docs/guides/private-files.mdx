@@ -169,7 +169,7 @@ export async function openContract(contractId: string, userId: string) {
 }
 ```
 
-The same checks apply. A call that names neither a `user` nor a `principal` is refused; trusted code opening a file for nobody must say `overrideAccess: true`. A script acting for an API key passes the key's maker as `user` and the key's id as `apiKeyId`, and the audit row names the key. Inside a named query, `files.download` is refused like every other call.
+The same checks apply. A call that names neither a `user` nor a `principal` is refused; trusted code opening a file for nobody must say `overrideAccess: true`. A script acting for an API key passes three things: the key's maker as `user`, the key's authenticated scope as `actor`, and the key's id as `apiKeyId`. Without `actor`, the read is judged by the maker's permissions rather than the key's own, so a scoped key would open what it was never given. With `apiKeyId`, the audit row names the key. Inside a named query, `files.download` is refused like every other call.
 
 ## The audit trail
 

@@ -294,7 +294,11 @@ export interface FileEntry {
   createdAt?: unknown;
 }
 
-/** The entry `id` of `slug` as trusted code reads it, or `null`. */
+/**
+ * The entry `id` of `slug` as trusted code reads it, or `null`. Bound to
+ * `id`: a read a hook pointed at another entry is `null`, and the entry
+ * carries its stored id, whatever id a read hook presents it under.
+ */
 export async function fileEntry(
   slug: string,
   id: string
@@ -312,7 +316,9 @@ export async function fileEntry(
       collection: slug,
     });
   }
-  return (found.data as FileEntry | null) ?? null;
+  const data = found.data as FileEntry | null;
+  if (data === null || found.resolvedEntryId !== id) return null;
+  return { ...data, id };
 }
 
 /** The one refusal for an upload that is missing or not the caller's. */
