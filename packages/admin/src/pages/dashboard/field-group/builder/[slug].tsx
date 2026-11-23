@@ -375,6 +375,9 @@ export default function FieldGroupBuilderEditPage({
   const schemaSave = useSchemaSave({
     slug,
     missingSlugMessage: "Field group slug is missing",
+    // Wired as each kind's Builder page wires the one save hook, to its own service: the options
+    // read alike by design, as the pages do.
+    // fallow-ignore-next-line code-duplication
     label: displayLabel(settings, entitySlug),
     confirmation,
     // Judged against the fields as last saved, so a draft that changes a
@@ -415,8 +418,6 @@ export default function FieldGroupBuilderEditPage({
     settingChanges: pending.settingChanges,
     fieldGroupsFirst: groupsFirst.fieldGroupsFirst,
   });
-  const { handleSave, confirmApply, reviewedSettingChanges, refusedMoves } =
-    schemaSave;
 
   // Discard all on an unsaved field group discards the field group itself: it
   // leaves this tab, and the editor returns to the list.
@@ -469,7 +470,7 @@ export default function FieldGroupBuilderEditPage({
         groupsFirst.release();
       }}
       savedFieldIds={savedFieldIds}
-      onSave={handleSave}
+      onSave={schemaSave.handleSave}
       settings={settings}
       onSettingsChange={onSettingsChange}
       unsavedAddress={unsavedAddress}
@@ -533,7 +534,7 @@ export default function FieldGroupBuilderEditPage({
       saveHeld={saveHeld}
       savingLabel="Saving field group changes…"
       // A move the server refused is marked at its field.
-      refusedMoves={refusedMoves}
+      refusedMoves={schemaSave.refusedMoves}
     >
       <ReconcileFieldGroupDialog
         open={reconcileOpen}
@@ -548,9 +549,9 @@ export default function FieldGroupBuilderEditPage({
         confirmation={confirmation}
         kind={FIELD_GROUP_BUILDER_CONFIG.kind}
         entityName={slug}
-        onConfirm={confirmApply}
+        onConfirm={schemaSave.confirmApply}
         creating={unsaved !== undefined}
-        settingChanges={reviewedSettingChanges}
+        settingChanges={schemaSave.reviewedSettingChanges}
         fieldGroupCreates={groupsFirst.creates}
       />
     </BuilderPageLayout>

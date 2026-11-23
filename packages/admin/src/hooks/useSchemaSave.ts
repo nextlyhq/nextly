@@ -26,6 +26,7 @@ import { useRestart } from "@admin/context/RestartContext";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { acknowledgedConversionsOf } from "@admin/lib/builder/brought-up-to-date";
 import {
+  type DraftMove,
   draftMovesOf,
   moveWithOtherChangeRefusal,
   movesHints,
@@ -217,6 +218,49 @@ const NO_REFUSED_MOVES: ReadonlyMap<string, string> = new Map();
 /** No pending change, as one constant so the callbacks keep their identity across renders. */
 const NO_PENDING_CHANGES: readonly PendingChange[] = [];
 
+/**
+ * The server's refusals of a draft's moves (`refusedMovesOf`), kept with the draft and the
+ * settings they judged: an edit, an undo or a settings change since is judged afresh by the next
+ * save, so the refusals mark no field once the draft is another.
+ */
+function useMoveRefusals(
+  moves: readonly DraftMove[],
+  pendingChanges: readonly PendingChange[],
+  previewedWith: unknown
+): {
+  refusedMoves: ReadonlyMap<string, string>;
+  markRefusedMoves: (err: unknown) => void;
+  clearRefusedMoves: () => void;
+} {
+  const sentWith = JSON.stringify(previewedWith ?? null);
+  const [refused, setRefused] = useState<{
+    changes: readonly PendingChange[];
+    sentWith: string;
+    byField: ReadonlyMap<string, string>;
+  } | null>(null);
+  const markRefusedMoves = useCallback(
+    (err: unknown) => {
+      const byField = refusedMovesOf(err, moves);
+      setRefused(
+        byField.size === 0
+          ? null
+          : { changes: pendingChanges, sentWith, byField }
+      );
+    },
+    [moves, pendingChanges, sentWith]
+  );
+  const clearRefusedMoves = useCallback(() => setRefused(null), []);
+  const judged =
+    refused !== null &&
+    refused.changes === pendingChanges &&
+    refused.sentWith === sentWith;
+  return {
+    refusedMoves: judged ? refused.byField : NO_REFUSED_MOVES,
+    markRefusedMoves,
+    clearRefusedMoves,
+  };
+}
+
 export function useSchemaSave({
   slug,
   missingSlugMessage,
@@ -245,30 +289,11 @@ export function useSchemaSave({
   );
   const hints = useMemo(() => movesHints(moves), [moves]);
   const movesAny = moves.length > 0;
-  // The server's refusals of those moves, kept with the draft and the settings they judged: an
-  // edit, an undo or a settings change since is judged afresh by the next save, so marks no field.
-  const sentWith = JSON.stringify(previewedWith ?? null);
-  const [refused, setRefused] = useState<{
-    changes: readonly PendingChange[];
-    sentWith: string;
-    byField: ReadonlyMap<string, string>;
-  } | null>(null);
-  const refusedMoves =
-    refused !== null &&
-    refused.changes === pendingChanges &&
-    refused.sentWith === sentWith
-      ? refused.byField
-      : NO_REFUSED_MOVES;
-  const markRefusedMoves = useCallback(
-    (err: unknown) => {
-      const byField = refusedMovesOf(err, moves);
-      setRefused(
-        byField.size === 0
-          ? null
-          : { changes: pendingChanges, sentWith, byField }
-      );
-    },
-    [moves, pendingChanges, sentWith]
+  // The server's refusals of those moves, marked at each field while the draft is the one judged.
+  const { refusedMoves, markRefusedMoves, clearRefusedMoves } = useMoveRefusals(
+    moves,
+    pendingChanges,
+    previewedWith
   );
   // The entities the save creates first, by kind and address: part of what a review agrees to,
   // as the fields are, so a confirmation creates exactly the entities the review listed.
@@ -313,7 +338,7 @@ export function useSchemaSave({
       }
 
       // Each save is judged afresh: a move refused before may be accepted now.
-      setRefused(null);
+      clearRefusedMoves();
       // Busy until the preview is answered and acted on, so Discard all
       // cannot clear the editor while this save may still keep its values.
       confirmation.beginPreview();
@@ -379,6 +404,7 @@ export function useSchemaSave({
     movesAny,
     withOtherChange,
     markRefusedMoves,
+    clearRefusedMoves,
   ]);
 
   const confirmApply = useCallback(

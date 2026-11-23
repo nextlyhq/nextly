@@ -58,6 +58,11 @@ import { BuilderOverlays, type ActiveOverlay } from "./BuilderOverlays";
 import { BuilderReadOnlyNotice } from "./BuilderReadOnlyNotice";
 import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 import { BuilderToolbar } from "./BuilderToolbar";
+import {
+  NO_REFUSED_MOVES,
+  RefusedMovesProvider,
+  useBuilderFieldErrors,
+} from "./field-errors-context";
 import { crumbsByPointer } from "./outline/FocusCrumbs";
 import { LazyFormPreview } from "./outline/LazyFormPreview";
 import { Outline, type OutlineCallbacks } from "./outline/Outline";
@@ -157,7 +162,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     saveHeld,
     onDiscard,
     pageBuilderHref,
-    refusedMoves,
+    refusedMoves = NO_REFUSED_MOVES,
     children,
   } = props;
   // The fields the save would refuse, from the map the outline marks its rows from, in its order.
@@ -202,7 +207,10 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           errorIds={errorIds}
           onShowError={fieldId => onActiveChange({ kind: "edit", fieldId })}
         />
-        <BuilderWorkspace {...props} />
+        {/* The field's row and its settings read the refused moves from here. */}
+        <RefusedMovesProvider value={refusedMoves}>
+          <BuilderWorkspace {...props} />
+        </RefusedMovesProvider>
 
         <BuilderOverlays
           active={active}
@@ -255,7 +263,6 @@ function BuilderWorkspace(
     | "pending"
     | "lifecycleEnabled"
     | "storedHooks"
-    | "refusedMoves"
   >
 ): JSX.Element {
   const { builder, pending } = props;
@@ -346,7 +353,6 @@ function EditedFieldSettings({
   pending,
   lifecycleEnabled,
   namedByHooks,
-  refusedMoves,
 }: Pick<
   Props,
   | "active"
@@ -357,7 +363,6 @@ function EditedFieldSettings({
   | "locked"
   | "pending"
   | "lifecycleEnabled"
-  | "refusedMoves"
 > & {
   /** The field names the stored hooks name (`fieldsNamedByHooks`). */
   namedByHooks: ReadonlyMap<string, string>;
@@ -400,7 +405,6 @@ function EditedFieldSettings({
       // Draft/Published as the save judges it.
       savedFields={pending.saved}
       lifecycleEnabled={lifecycleEnabled}
-      refusedMoves={refusedMoves}
       onFieldChange={builder.handleFieldUpdate}
       onFieldDelete={fieldId => {
         builder.handleFieldDelete(fieldId);
@@ -472,7 +476,6 @@ function FieldListRegion({
   moveContext,
   openFieldGroup,
   renameCallbacks,
-  refusedMoves,
 }: Pick<
   Props,
   | "config"
@@ -484,7 +487,6 @@ function FieldListRegion({
   | "active"
   | "onActiveChange"
   | "onDuplicateField"
-  | "refusedMoves"
 > & {
   /** What the move rule needs beyond the fields, for every way of moving one. */
   moveContext: MoveContext;
@@ -498,15 +500,7 @@ function FieldListRegion({
   const selectedId = active.kind === "edit" ? active.fieldId : null;
   // The same map the save's refusal is read from, so a row marked with an
   // error is a row the save refuses: with each move the server refused.
-  const errors = useMemo(
-    () =>
-      builderFieldErrors(
-        builder.fields.filter(field => !field.isSystem),
-        builder.fields,
-        refusedMoves
-      ),
-    [builder.fields, refusedMoves]
-  );
+  const errors = useBuilderFieldErrors(builder.fields);
   const systemFields = useMemo(
     () => builder.fields.filter(field => field.isSystem),
     [builder.fields]

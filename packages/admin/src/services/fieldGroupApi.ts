@@ -19,15 +19,12 @@ import type { ApiFieldGroup } from "@admin/types/entities";
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
 import { protectedApi } from "../lib/api/protectedApi";
-import type {
-  ActionResponse,
-  MutationResponse,
-} from "../lib/api/response-types";
+import type { MutationResponse } from "../lib/api/response-types";
 
 import { withListOwner, type ListOwner } from "./list-owner";
 import {
-  acknowledgedConversionsBody,
-  saveHintsBody,
+  applySchemaAt,
+  previewSchemaAt,
   type FieldResolution,
   type SchemaApplyResponse,
   type SchemaPreviewResponse,
@@ -253,16 +250,11 @@ export const fieldGroupApi: FieldGroupApiType = {
     localized?: boolean,
     // The fields the save moves into or out of a group, as its apply sends them.
     hints?: SchemaSaveHints
-  ): Promise<SchemaPreviewResponse> => {
-    return protectedApi.post<SchemaPreviewResponse>(
-      `/field-groups/schema/${fieldGroupSlug}/preview`,
-      {
-        fields,
-        ...(localized !== undefined ? { localized } : {}),
-        ...saveHintsBody(hints),
-      }
-    );
-  },
+  ): Promise<SchemaPreviewResponse> =>
+    previewSchemaAt(`/field-groups/schema/${fieldGroupSlug}`, fields, {
+      localized,
+      hints,
+    }),
 
   /**
    * Apply confirmed component schema changes via PushSchemaPipeline.
@@ -281,26 +273,18 @@ export const fieldGroupApi: FieldGroupApiType = {
     acknowledgedConversions?: readonly string[],
     // The fields the save moves into or out of a group, as its preview sent them.
     hints?: SchemaSaveHints
-  ): Promise<SchemaApplyResponse> => {
-    const result = await protectedApi.post<
-      ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
-    >(`/field-groups/schema/${fieldGroupSlug}/apply`, {
+  ): Promise<SchemaApplyResponse> =>
+    applySchemaAt(
+      `/field-groups/schema/${fieldGroupSlug}`,
       fields,
-      confirmed: true,
-      schemaVersion,
-      resolutions,
-      renameResolutions,
-      ...(localized !== undefined ? { localized } : {}),
-      ...acknowledgedConversionsBody(acknowledgedConversions),
-      ...saveHintsBody(hints),
-    });
-    return {
-      success: true,
-      message: result.message,
-      newSchemaVersion: result.newSchemaVersion,
-      toastSummary: result.toastSummary,
-    };
-  },
+      {
+        schemaVersion,
+        resolutions,
+        renameResolutions,
+        acknowledgedConversions,
+      },
+      { localized, hints }
+    ),
 
   /**
    * What repairing this field group's stored definition WOULD change.

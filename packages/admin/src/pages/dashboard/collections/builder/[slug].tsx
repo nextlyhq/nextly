@@ -436,6 +436,9 @@ export default function CollectionBuilderEditPage({
   const schemaSave = useSchemaSave({
     slug,
     missingSlugMessage: "Collection slug is missing",
+    // Wired as each kind's Builder page wires the one save hook, to its own service: the options
+    // read alike by design, as the pages do.
+    // fallow-ignore-next-line code-duplication
     label: displayLabel(settings, entitySlug),
     confirmation,
     // Judged against the fields as last saved, so a draft that changes a
@@ -478,8 +481,6 @@ export default function CollectionBuilderEditPage({
     settingChanges: pending.settingChanges,
     fieldGroupsFirst: groupsFirst.fieldGroupsFirst,
   });
-  const { handleSave, confirmApply, reviewedSettingChanges, refusedMoves } =
-    schemaSave;
 
   // Discard all on an unsaved collection discards the collection itself: it
   // leaves this tab, and the editor returns to the list.
@@ -543,7 +544,7 @@ export default function CollectionBuilderEditPage({
         groupsFirst.release();
       }}
       savedFieldIds={savedFieldIds}
-      onSave={handleSave}
+      onSave={schemaSave.handleSave}
       settings={settings}
       // As the save judges names: Draft/Published on as stored, or as the pending settings turn it
       // on, since its columns stand until the save that turns it off lands.
@@ -567,7 +568,7 @@ export default function CollectionBuilderEditPage({
       saveHeld={saveHeld}
       savingLabel="Saving collection changes…"
       // A move the server refused is marked at its field.
-      refusedMoves={refusedMoves}
+      refusedMoves={schemaSave.refusedMoves}
     >
       <BuilderSchemaChangeDialogs
         draftRenames={draftRenamesOf(pending.changes)}
@@ -575,9 +576,9 @@ export default function CollectionBuilderEditPage({
         confirmation={confirmation}
         kind={COLLECTION_BUILDER_CONFIG.kind}
         entityName={slug}
-        onConfirm={confirmApply}
+        onConfirm={schemaSave.confirmApply}
         creating={unsaved !== undefined}
-        settingChanges={reviewedSettingChanges}
+        settingChanges={schemaSave.reviewedSettingChanges}
         fieldGroupCreates={groupsFirst.creates}
       />
     </BuilderPageLayout>

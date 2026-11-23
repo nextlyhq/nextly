@@ -6,32 +6,21 @@
  * (`builderFieldErrors`), judged over the same fields the outline judges, so the panel, the row
  * and the save always agree.
  */
-import { type JSX, useMemo } from "react";
+import type { JSX } from "react";
 
-import { builderFieldErrors } from "@admin/lib/builder/field-validators";
-
+import { useBuilderFieldErrors } from "./field-errors-context";
 import type { BuilderField } from "./types";
 
 export function FieldErrorNotice({
   fields,
   fieldId,
-  refusedMoves,
 }: {
   /** The whole field tree, built-in fields included, as the outline is built from. */
   fields: readonly BuilderField[];
   fieldId: string;
-  /** The server's refusals of the draft's moves, by field id, as the outline marks them. */
-  refusedMoves?: ReadonlyMap<string, string>;
 }): JSX.Element | null {
-  const error = useMemo(
-    () =>
-      builderFieldErrors(
-        fields.filter(field => !field.isSystem),
-        fields,
-        refusedMoves
-      ).get(fieldId),
-    [fields, fieldId, refusedMoves]
-  );
+  // A move the server refused is the field's error too, as its row shows it.
+  const error = useBuilderFieldErrors(fields).get(fieldId);
   if (!error) return null;
   return (
     <div

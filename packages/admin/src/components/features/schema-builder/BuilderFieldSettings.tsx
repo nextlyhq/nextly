@@ -148,8 +148,6 @@ type Props = {
   lifecycleEnabled?: boolean;
   /** How Rename… stands for the field (`FieldRename`). */
   rename?: FieldRename;
-  /** The server's refusals of the draft's moves, by field id, shown as the field's error. */
-  refusedMoves?: ReadonlyMap<string, string>;
 };
 
 /** The names of the named containers above a field, outermost first: the path the save finds it by. */
@@ -363,7 +361,6 @@ export function BuilderFieldSettings({
   savedFields,
   lifecycleEnabled = false,
   rename,
-  refusedMoves,
 }: Props): JSX.Element | null {
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const placement = findFieldPlacement(fields, fieldId) ?? fallbackPlacement;
@@ -392,11 +389,7 @@ export function BuilderFieldSettings({
   const definedAt = (
     <>
       <DefinedAt reason={reason} onOpenFieldGroup={onOpenFieldGroup} />
-      <FieldErrorNotice
-        fields={fields}
-        fieldId={field.id}
-        refusedMoves={refusedMoves}
-      />
+      <FieldErrorNotice fields={fields} fieldId={field.id} />
     </>
   );
 
