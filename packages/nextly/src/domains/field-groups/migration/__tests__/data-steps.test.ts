@@ -171,7 +171,10 @@ describe("rewriting the wire key inside the ledgers", () => {
   // A row the walk did not reach is not "not finished yet" — the walk ran to the
   // end of the table — so this refuses and names the row rather than reporting a
   // postcondition that a retry would silently re-attempt.
-  it("refuses, naming the row, when one was left behind", async () => {
+  it("rewrites a row a running site wrote while the step ran, and passes", async () => {
+    // A server saving content during the run writes under the spelling it knows. The step's own
+    // check finds that row; another pass rewrites it, as the first would have, rather than
+    // failing a run the site is serving through.
     const target = world();
     const step = stepNamed(target, "data:nextly_versions.snapshot");
     await step.run(target.session);
@@ -180,11 +183,81 @@ describe("rewriting the wire key inside the ledgers", () => {
       snapshot: { _componentType: "late" },
     });
 
-    await expect(step.verify(target.session)).rejects.toMatchObject({
+    await expect(step.verify(target.session)).resolves.toBe(true);
+    expect(
+      target.rows("nextly_versions").find(row => row.id === "v2")?.snapshot
+    ).toEqual({ _fieldGroupType: "late" });
+  });
+
+  /** A versions ledger that records when each row was written, as the real one does. */
+  function timedWorld() {
+    return world({
+      nextly_versions: {
+        columns: ["id", "snapshot", "updatedAt", "createdAt"],
+        rows: [
+          {
+            id: "v1",
+            snapshot: { _componentType: "hero" },
+            updatedAt: new Date("2026-01-01T00:00:00Z"),
+            createdAt: new Date("2026-01-01T00:00:00Z"),
+          },
+        ],
+      },
+    });
+  }
+
+  /** A session that writes an old-spelling row stamped `at()` before every transaction. */
+  function alwaysWriting(
+    target: ReturnType<typeof timedWorld>,
+    at: () => Date
+  ): typeof target.session {
+    let late = 0;
+    return {
+      ...target.session,
+      inTransaction: async <T>(
+        work: Parameters<typeof target.session.inTransaction>[0]
+      ): Promise<T> => {
+        // Ahead of every batch and every check: a writer no number of passes catches.
+        target.insert("nextly_versions", {
+          id: `late-${String(++late)}`,
+          snapshot: { _componentType: "late" },
+          updatedAt: at(),
+          createdAt: at(),
+        });
+        return (await target.session.inTransaction(work)) as T;
+      },
+    } as typeof target.session;
+  }
+
+  it("passes while a running site keeps writing old-spelling rows after the step began", async () => {
+    // A site that never stops saving: every row it writes after the step began is one a complete
+    // rewrite at that moment would not have touched, so the step finishes rather than chasing them.
+    const target = timedWorld();
+    const step = stepNamed(target, "data:nextly_versions.snapshot");
+    await step.run(target.session);
+
+    await expect(
+      step.verify(alwaysWriting(target, () => new Date(Date.now() + 1000)))
+    ).resolves.toBe(true);
+    expect(
+      target.rows("nextly_versions").find(row => row.id === "v1")?.snapshot
+    ).toEqual({ _fieldGroupType: "hero" });
+  });
+
+  it("refuses, naming the row, when a row written before the step began still carries the old spelling", async () => {
+    // A row that predates the step and was not rewritten is one the walk missed, whatever else is
+    // being written: the step refuses and names it rather than passing over it.
+    const target = timedWorld();
+    const step = stepNamed(target, "data:nextly_versions.snapshot");
+    await step.run(target.session);
+
+    await expect(
+      step.verify(alwaysWriting(target, () => new Date("2026-01-02T00:00:00Z")))
+    ).rejects.toMatchObject({
       logContext: {
         reason: "row rewrite did not reach every row",
         table: "nextly_versions",
-        row: "v2",
+        row: expect.stringMatching(/^late-/),
       },
     });
   });

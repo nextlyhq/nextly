@@ -105,24 +105,45 @@ export const FIELD_GROUP_STORAGE_VOCABULARY: FieldGroupStorageVocabulary = {
  * for growth but not the other would be a guess about which fills up first.
  */
 const CONTENT_TARGETS: readonly RowRewriteTarget[] = [
-  { table: "nextly_versions", documentProperty: "snapshot" },
-  { table: "nextly_events", documentProperty: "payload" },
+  // A version's autosave rewrites its row in place, so its last write is `updatedAt`.
+  {
+    table: "nextly_versions",
+    documentProperty: "snapshot",
+    writtenAt: ["updatedAt", "createdAt"],
+  },
+  {
+    table: "nextly_events",
+    documentProperty: "payload",
+    writtenAt: ["createdAt"],
+  },
 ];
+
+/**
+ * The moment a content step began, to the whole second: the precision SQLite keeps its timestamps
+ * at. A row written in the same second counts as written during the step; one that existed then
+ * was read by the step's walk, which rewrites every row it reads.
+ */
+function stepBeganAt(now: Date): Date {
+  return new Date(Math.floor(now.getTime() / 1000) * 1000);
+}
+
+/** What rewrites a stored document's wire key from one vocabulary to the other. */
+function wireKeyRewrite(
+  from: FieldGroupStorageVocabulary,
+  to: FieldGroupStorageVocabulary
+): (document: unknown) => unknown {
+  return document =>
+    rewriteContentKey(document, from.wireTypeKey, to.wireTypeKey);
+}
 
 /**
  * Ask the ledger surfaces whether they are still rewritten, and refuse if not.
  *
- * The body of {@link settleLedgersStep}'s verify, exposed so a caller can ask
- * the same question without running a migration.
+ * The question {@link settleLedgersStep}'s verify asks, asked without changing anything: a step's
+ * own verify rewrites rows written while it ran before it answers, and this only reads, so a
+ * caller can ask it of a database without running, or finishing, a migration.
  *
- * Both ways a verifier can report residue are honoured, because a step is free
- * to choose either: a ledger walk THROWS, naming the offending row, while
- * `MigrationStep.verify` is declared to answer a boolean. Reading only the
- * throws would accept every surface that reports by returning — so the returned
- * answer is what decides, and the throw is allowed to pass through.
- *
- * @throws a step's own refusal where it raises one, and otherwise a refusal
- * naming the steps that answered false.
+ * @throws a refusal naming each ledger that still holds a row carrying the old vocabulary.
  */
 export async function assertLedgersSettled(args: {
   session: MigrationSession;
@@ -131,9 +152,17 @@ export async function assertLedgersSettled(args: {
   from: FieldGroupStorageVocabulary;
   to: FieldGroupStorageVocabulary;
 }): Promise<void> {
+  const rewrite = wireKeyRewrite(args.from, args.to);
   const unsettled: string[] = [];
-  for (const step of buildDataMigrationSteps(args)) {
-    if (!(await step.verify(args.session))) unsettled.push(step.id);
+  for (const target of CONTENT_TARGETS) {
+    const row = await findUnrewrittenRow({
+      session: args.session,
+      target,
+      rewrite,
+    });
+    if (row !== undefined) {
+      unsettled.push(`data:${target.table}.${target.documentProperty}`);
+    }
   }
   if (unsettled.length > 0) {
     throw NextlyError.serviceUnavailable({
@@ -227,6 +256,13 @@ export function buildDataMigrationSteps(args: {
  * site's history. `verify` rescans the whole table rather than trusting where
  * the batches got to, which is what keeps the checkpoint an optimisation: a
  * cursor that was wrong fails the step instead of passing one that skipped rows.
+ *
+ * The site stays up while this runs, so a server saving content writes rows
+ * under the spelling it knows while the step walks. `verify` rewrites those in
+ * one more pass, then decides on the rows written before the step began: a row
+ * written since is one a complete rewrite at that moment would not have touched
+ * either, and a site that never stops saving would keep any check that counted
+ * it from ever passing.
  */
 function contentStep(args: {
   meta: MetaService;
@@ -237,12 +273,14 @@ function contentStep(args: {
 }): MigrationStep {
   const { meta, migrationId, target, from, to } = args;
   const stepId = `data:${target.table}.${target.documentProperty}`;
-  const rewrite = (document: unknown): unknown =>
-    rewriteContentKey(document, from.wireTypeKey, to.wireTypeKey);
+  const rewrite = wireKeyRewrite(from, to);
+  // When this process's run of the step began; a verify with no run before it judges every row.
+  let began: Date | undefined;
 
   return {
     id: stepId,
     async run(session) {
+      began = stepBeganAt(new Date());
       await rewriteRowsInBatches({
         session,
         meta,
@@ -253,10 +291,27 @@ function contentStep(args: {
       });
     },
     async verify(session) {
+      // Rows written while the step ran carry the spelling their writer knows: rewritten by one
+      // more pass, as the first would have, so less is left behind.
+      if (
+        (await findUnrewrittenRow({ session, target, rewrite })) !== undefined
+      ) {
+        await rewriteRowsInBatches({
+          session,
+          meta,
+          migrationId,
+          stepId,
+          target,
+          rewrite,
+        });
+      }
+      // Decided on the rows written before the step began: one of those the walk missed is a
+      // defect, while one written since is traffic.
       const unrewritten = await findUnrewrittenRow({
         session,
         target,
         rewrite,
+        ...(began === undefined ? {} : { writtenBefore: began }),
       });
       if (unrewritten === undefined) return true;
       // Named rather than merely reported false. A row the walk did not reach is

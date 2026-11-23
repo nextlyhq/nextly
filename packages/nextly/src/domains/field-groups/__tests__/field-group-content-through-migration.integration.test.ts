@@ -14,7 +14,9 @@
  * - every save either succeeds, and is found afterwards under the current names, or is refused
  *   with `FIELD_GROUP_STORAGE_MOVING`, and then succeeds when retried as the refusal says: a server
  *   that wrote under a legacy name would leave its save where no reader looks;
- * - no legacy table or registry is left, and none is created again.
+ * - no legacy table or registry is left, and none is created again;
+ * - and back: the same server, still never restarted, serves through a rollback (`--down`) the
+ *   same way, and the run finishes though the server saves throughout it, in both directions.
  *
  * @module domains/field-groups/__tests__/field-group-content-through-migration.integration.test
  */
@@ -159,9 +161,31 @@ describe.each(getConfiguredTestDialects())(
       };
       expect(item.card?.heading).toBe("after");
       expect(await legacyObjects(site.adapter, dialect)).toEqual([]);
+      const upPoints = atPoints.length;
 
-      // The run stopped where the server was asked, so "throughout" was more than before and after.
-      expect(atPoints.length).toBeGreaterThan(2);
+      // And back: a rollback, the same server still never restarted, saving throughout it.
+      expected = "after";
+      const back = await withStopPoints(visit, () =>
+        site!.migrateStorage({ direction: "down" })
+      );
+      expect(back.ran).toBe(true);
+      expect(await readHeading(server, id), "read after the rollback").toBe(
+        expected
+      );
+      answer = await ask(server, `save ${id} rolled-back`);
+      if (answer !== "OK") {
+        expect(answer).toMatch(/^REFUSED FIELD_GROUP_STORAGE_MOVING /);
+        answer = await ask(server, `save ${id} rolled-back`);
+      }
+      expect(answer, "a save after the rollback, retried as it says").toBe(
+        "OK"
+      );
+      expect(await readHeading(server, id)).toBe("rolled-back");
+
+      // Both runs stopped where the server was asked, so "throughout" was more than before and
+      // after, each way.
+      expect(upPoints).toBeGreaterThan(2);
+      expect(atPoints.length - upPoints).toBeGreaterThan(2);
     }, 300_000);
   }
 );

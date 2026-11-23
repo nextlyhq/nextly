@@ -74,6 +74,12 @@ export interface RowRewriteTarget {
    * that path speaks property names.
    */
   readonly documentProperty: string;
+  /**
+   * The properties that record when a row was last written, latest first where a ledger keeps
+   * more than one (a version's autosave rewrites its row in place). What tells a row a running
+   * site wrote while a rewrite ran from a row the rewrite missed (`findUnrewrittenRow`).
+   */
+  readonly writtenAt?: readonly string[];
 }
 
 /** How one stored document becomes its rewritten self. Must be idempotent. */
@@ -83,6 +89,19 @@ export type DocumentRewrite = (document: unknown) => unknown;
 interface DocumentRow {
   id: string;
   document: unknown;
+  /** When the row was last written, where the target records it and the read asked. */
+  writtenAt?: Date;
+}
+
+/** A stored timestamp as a date: drivers return a Date, an ISO string or epoch seconds. */
+function asDate(value: unknown): Date | undefined {
+  if (value instanceof Date) return value;
+  if (typeof value === "string" && value.length > 0) {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  }
+  if (typeof value === "number") return new Date(value * 1000);
+  return undefined;
 }
 
 /**
@@ -181,8 +200,14 @@ export async function findUnrewrittenRow(args: {
   session: MigrationSession;
   target: RowRewriteTarget;
   rewrite: DocumentRewrite;
+  /**
+   * Only a row last written before this counts. A row written at or after it, by a site saving
+   * content while a rewrite ran, is one a complete rewrite at this moment would not have touched
+   * either. Absent, every row counts, as for a database nothing writes to.
+   */
+  writtenBefore?: Date;
 }): Promise<string | undefined> {
-  const { session, target, rewrite } = args;
+  const { session, target, rewrite, writtenBefore } = args;
 
   let after: string | null = null;
   for (;;) {
@@ -191,12 +216,22 @@ export async function findUnrewrittenRow(args: {
       // Read without locking: this establishes a fact rather than preparing a
       // write, and taking write locks across a whole ledger would block every
       // writer for the length of the scan to no purpose.
-      const read = await readBatch(ctx, target, from, { lock: false });
+      const read = await readBatch(ctx, target, from, {
+        lock: false,
+        writtenAt: writtenBefore !== undefined,
+      });
       if (!read.ok) return read;
 
       let last: string | null = null;
       for (const row of read.rows) {
         last = row.id;
+        if (
+          writtenBefore !== undefined &&
+          row.writtenAt !== undefined &&
+          row.writtenAt.getTime() >= writtenBefore.getTime()
+        ) {
+          continue;
+        }
         if (documentDiffers(row.document, rewrite(row.document))) {
           return { ok: true as const, found: row.id, last };
         }
@@ -227,10 +262,11 @@ async function readBatch(
   ctx: TransactionContext,
   target: RowRewriteTarget,
   from: string | null,
-  options: { lock: boolean }
+  options: { lock: boolean; writtenAt?: boolean }
 ): Promise<BatchRead> {
+  const writtenAt = options.writtenAt === true ? (target.writtenAt ?? []) : [];
   const rows = await ctx.select<Record<string, unknown>>(target.table, {
-    columns: [ID_PROPERTY, target.documentProperty],
+    columns: [ID_PROPERTY, target.documentProperty, ...writtenAt],
     ...(from === null
       ? {}
       : { where: { and: [{ column: ID_PROPERTY, op: ">", value: from }] } }),
@@ -250,7 +286,15 @@ async function readBatch(
     if (!document.ok) return document;
     const id = readRowId(row, target.table);
     if (!id.ok) return id;
-    narrowed.push({ id: id.value, document: document.value });
+    // The latest of the times the row records: the first property that holds one.
+    const when = writtenAt
+      .map(property => asDate(row[property]))
+      .find((value): value is Date => value !== undefined);
+    narrowed.push({
+      id: id.value,
+      document: document.value,
+      ...(when === undefined ? {} : { writtenAt: when }),
+    });
   }
   return { ok: true, rows: narrowed };
 }

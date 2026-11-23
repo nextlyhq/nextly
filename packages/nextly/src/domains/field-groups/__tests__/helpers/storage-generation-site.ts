@@ -148,9 +148,10 @@ export interface StorageGenerationSite {
   ): Promise<TestNextly>;
   /** A configuration reload of `declared`, as a saved edit triggers it. */
   configurationReload(declared: Declared): Promise<void>;
-  /** `migrate:field-groups --apply --backup-confirmed`, or its preview. */
+  /** `migrate:field-groups --apply --backup-confirmed`, or its preview, or with `--down` its rollback. */
   migrateStorage(options?: {
     dryRun?: boolean;
+    direction?: "up" | "down";
   }): Promise<{ reason?: string; ran: boolean }>;
   /** The storage migration's marker, as the migration reads it. */
   marker(): Promise<Awaited<ReturnType<typeof readMigrationState>>>;
@@ -271,11 +272,11 @@ export async function openStorageGenerationSite(
       loaded.config = configOf(declared);
       await reloadNextlyConfig();
     },
-    async migrateStorage({ dryRun = false } = {}) {
+    async migrateStorage({ dryRun = false, direction = "up" } = {}) {
       const outcome = await runFieldGroupMigration({
         adapter: database.adapter,
         logger: SILENT as never,
-        direction: "up",
+        direction,
         dryRun,
         // The suite creates and drops this database itself.
         backupConfirmed: true,
