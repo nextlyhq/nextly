@@ -40,19 +40,27 @@ const seams = vi.hoisted(() => ({
   /** How many statements `fileFailure` matched and replaced, so a case can see it was reached. */
   fileFailureHits: 0,
 }));
+// The step after the file is the road's `after` (`collectionFileRoad`), which the dialog takes
+// from this module, so it is wrapped there.
 vi.mock("../../services/collection-schema-apply", async original => {
   const actual =
     await original<typeof import("../../services/collection-schema-apply")>();
   return {
     ...actual,
-    reconcileCollectionCompanionAfterFile: async (
-      ...args: Parameters<typeof actual.reconcileCollectionCompanionAfterFile>
+    collectionFileRoad: (
+      ...args: Parameters<typeof actual.collectionFileRoad>
     ) => {
-      if (seams.reconcileFails) {
-        seams.reconcileFails = false;
-        throw new Error("the translations table's step failed");
-      }
-      return actual.reconcileCollectionCompanionAfterFile(...args);
+      const road = actual.collectionFileRoad(...args);
+      return {
+        ...road,
+        after: async () => {
+          if (seams.reconcileFails) {
+            seams.reconcileFails = false;
+            throw new Error("the translations table's step failed");
+          }
+          return road.after();
+        },
+      };
     },
   };
 });

@@ -19,12 +19,19 @@
  * `SQLITE_PUSH_KEEPS_PART_WAY` says which, and moves its cases between the two. A save that rolled
  * back whole never reaches the judgement of what applied at all.
  *
- * A collection's update through the push settles the same way: the collection metadata service
- * hands the writer its registry write for the settle, with the fields that applied, and brings
- * this process's running shape to them, so a write and a read through the API reach what landed.
+ * A collection's update settles the same way on either of its roads, its own file or the push (an
+ * update filling the entries already there keeps the push): the collection metadata service hands
+ * the writer its registry write for the settle, with the fields that applied, and brings this
+ * process's running shape to them, so a write and a read through the API reach what landed.
  *
  * Where what the settle writes fails, the save is left as it stopped, its record that it is in
  * progress kept, and the failure that stopped it is still the one reported, the settle's after it.
+ *
+ * A collection's update turning Draft/Published on adds columns of the system, not fields, which
+ * the judgement of what applied does not name. Stopped part-way on MySQL it is refused as part-way,
+ * its file kept and recorded nowhere, and the next save is refused naming `nextly migrate:resolve`;
+ * after `--failed-cleanup` and `nextly migrate`, or the rest finished by hand and `--applied`, it is
+ * on whole. On PostgreSQL and SQLite the stop rolls back whole and the next save turns it on.
  *
  * Not covered here: a translated field's rename stopped between its two tables; on the push a stop
  * after a drop, since the push drops a column holding data only on the dialog's answer for it;
@@ -62,7 +69,14 @@ import { clearRegistryRowCache } from "../../../dynamic-collections/services/col
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { MetaService } from "../../../meta/services/meta-service";
 import { consoleLogger } from "../../../../shared/types";
+import { checksumOf } from "../../migrate/applied-checksums";
 import { NO_CONSENT } from "../../migrate/data-loss-consent";
+import { resolveMigration } from "../../migrate/resolve";
+import { parseSqlSections } from "../../migrate/sql-sections";
+import {
+  marksNoTransaction,
+  splitSqlStatements,
+} from "../../migrate/split-sql";
 import { parseSnapshotFile } from "../../migrate-create/snapshot-io";
 import {
   acquireWriterHold,
@@ -236,6 +250,51 @@ function keepsPartWay(dialect: TestDialect, path: SavePath): boolean {
   );
 }
 
+/**
+ * The admin's update of a collection that the development push applies: each field the save adds
+ * states a default, which fills the entries already there, and an update that fills keeps the push
+ * (`updateRunsFile`).
+ */
+function pushedUpdate(): SavePath {
+  // The fields the collection was made with, so the save tells the ones it adds.
+  let made = new Set<string>();
+  return {
+    name: "a collection's update (the push)",
+    kind: "collection",
+    slug: "sts_notes",
+    table: "dc_sts_notes",
+    registry: "dynamic_collections",
+    push: true,
+    create: async (_t, fields) => {
+      made = new Set(fields.map(field => String(field.name)));
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: "sts_notes", label: "sts_notes", fields }
+      );
+    },
+    save: (_t, fields) =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: "sts_notes" },
+        {
+          fields: fields.map(field =>
+            made.has(String(field.name)) ? field : { ...field, default: "x" }
+          ),
+        }
+      ),
+    store: async (t, values) => {
+      await t.nextly.create({ collection: "sts_notes", data: values } as never);
+    },
+    read: async t => {
+      const found = await t.nextly.find({ collection: "sts_notes" } as never);
+      return (found.items[0] ?? {}) as Record<string, unknown>;
+    },
+  };
+}
+
 const PATHS: readonly SavePath[] = [
   {
     name: "a collection's Builder apply",
@@ -362,36 +421,36 @@ const PATHS: readonly SavePath[] = [
       >,
   },
   {
-    // The admin's update of a collection, which the development push applies.
-    name: "a collection's update (the push)",
+    // The admin's update of an untranslated collection, adding fields: its own file.
+    name: "a collection's update (its migration file)",
     kind: "collection",
-    slug: "sts_notes",
-    table: "dc_sts_notes",
+    slug: "sts_items",
+    table: "dc_sts_items",
     registry: "dynamic_collections",
-    push: true,
     create: async (_t, fields) => {
       await dispatchCollections(
         {} as ServiceContainer,
         "createCollection",
         {},
-        { name: "sts_notes", label: "sts_notes", fields }
+        { name: "sts_items", label: "sts_items", fields }
       );
     },
     save: (_t, fields) =>
       dispatchCollections(
         {} as ServiceContainer,
         "updateCollection",
-        { collectionName: "sts_notes" },
+        { collectionName: "sts_items" },
         { fields }
       ),
     store: async (t, values) => {
-      await t.nextly.create({ collection: "sts_notes", data: values } as never);
+      await t.nextly.create({ collection: "sts_items", data: values } as never);
     },
     read: async t => {
-      const found = await t.nextly.find({ collection: "sts_notes" } as never);
+      const found = await t.nextly.find({ collection: "sts_items" } as never);
       return (found.items[0] ?? {}) as Record<string, unknown>;
     },
   },
+  pushedUpdate(),
 ];
 
 /**
@@ -725,6 +784,239 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(expected);
     }
 
+    // Turning Draft/Published on adds the column that records when an entry was first published,
+    // then the status column: columns of the system, not fields, which the judgement of a stopped
+    // save (`judgeStoppedSave`) does not name. Stopped between the two, the save's file runs in one
+    // transaction on PostgreSQL and SQLite, rolled back whole; on MySQL the first column stays, and
+    // the save is refused as part-way, its file kept, for `nextly migrate:resolve`.
+    const drafts = {
+      name: "Draft/Published",
+      table: "dc_sts_drafts",
+    } as SavePath;
+
+    /** Turn Draft/Published on for the collection, as the admin's update sends it. */
+    const turnOn = () =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: "sts_drafts" },
+        { fields: [text("heading")], status: true }
+      );
+
+    /** Whether the registry records Draft/Published on for the collection. */
+    async function statusRegistered(t: TestNextly): Promise<boolean> {
+      clearRegistryRowCache();
+      const [row] = await t.adapter.select<{ status: unknown }>(
+        "dynamic_collections",
+        {
+          columns: ["status"],
+          where: { and: [{ column: "slug", op: "=", value: "sts_drafts" }] },
+        }
+      );
+      return row?.status === true || Number(row?.status) === 1;
+    }
+
+    /**
+     * A collection holding an entry whose update turning Draft/Published on stopped at its status
+     * column: the save's answer, and the migration files it left beside the ones before it.
+     */
+    async function stoppedTurningOn(t: TestNextly) {
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: "sts_drafts", label: "sts_drafts", fields: [text("heading")] }
+      );
+      await t.nextly.create({
+        collection: "sts_drafts",
+        data: { heading: "Hello" },
+      } as never);
+      const folderBefore = filesBelow(history());
+      const failed = failStatement(t, adding(drafts.table, "status"));
+
+      const outcome = await outcomeOf(turnOn());
+
+      expect(failed(), "no statement adding `status` was met").toBe(1);
+      vi.restoreAllMocks();
+      vi.stubEnv("NODE_ENV", "development");
+      const left = filesBelow(history()).filter(
+        f => f.endsWith(".sql") && !folderBefore.includes(f)
+      );
+      return { outcome, left };
+    }
+
+    /** The collection with Draft/Published on, whole: both columns, the registry, every file applied. */
+    async function expectTurnedOnWhole(t: TestNextly): Promise<void> {
+      const after = await liveColumns(t, drafts.table);
+      expect(after).toEqual(
+        expect.arrayContaining(["first_published_at", "status"])
+      );
+      expect(await statusRegistered(t)).toBe(true);
+      const applied = await appliedFiles(t);
+      expect(
+        filesBelow(history()).filter(
+          f => f.endsWith(".sql") && !f.includes("/") && !applied.includes(f)
+        )
+      ).toEqual([]);
+      expect(
+        (await t.nextly.find({ collection: "sts_drafts" } as never)).items
+      ).toEqual([expect.objectContaining({ heading: "Hello" })]);
+      await expectReplayGives(drafts, after);
+    }
+
+    it.skipIf(dialect === "mysql")(
+      "a collection's update turning Draft/Published on, stopped at its status column, rolls back whole and saves again whole",
+      async () => {
+        const t = await boot();
+        const { outcome, left } = await stoppedTurningOn(t);
+
+        expect(outcome.failed, "the save was reported as going through").toBe(
+          true
+        );
+        const live = await liveColumns(t, drafts.table);
+        expect(live).not.toContain("first_published_at");
+        expect(live).not.toContain("status");
+        expect(left, "the files of a save that changed nothing").toEqual([]);
+
+        const again = await outcomeOf(turnOn());
+
+        expect(
+          again.failed ? messageOf(again.error) : undefined,
+          "the save again"
+        ).toBeUndefined();
+        await expectTurnedOnWhole(t);
+      },
+      300_000
+    );
+
+    /**
+     * On MySQL, the stopped save's refusal and the next save's: each names the kept file and
+     * `nextly migrate:resolve`, and nothing is recorded, adopted or undone.
+     */
+    async function refusedAsPartWay(t: TestNextly): Promise<string> {
+      const { outcome, left } = await stoppedTurningOn(t);
+      expect(outcome.failed, "the save was reported as going through").toBe(
+        true
+      );
+      // The staging: the first column committed before the failing statement ran.
+      const live = await liveColumns(t, drafts.table);
+      expect(live).toContain("first_published_at");
+      expect(live).not.toContain("status");
+      expect(left, "the save's kept file").toHaveLength(1);
+      const file = left[0]!;
+      expect(outcome.failed && messageOf(outcome.error)).toMatch(
+        new RegExp(`${file} failed part-way.*nextly migrate:resolve`, "s")
+      );
+      expect(await appliedFiles(t)).not.toContain(file);
+      expect(await statusRegistered(t)).toBe(false);
+
+      const again = await outcomeOf(turnOn());
+
+      expect(again.failed, "the save again went through").toBe(true);
+      expect(again.failed && messageOf(again.error)).toMatch(
+        new RegExp(`${file} has an unresolved attempt.*migrate:resolve`, "s")
+      );
+      expect(await liveColumns(t, drafts.table)).toEqual(live);
+      expect(await appliedFiles(t)).not.toContain(file);
+      return file;
+    }
+
+    /** `nextly migrate:resolve` on `file`, as the command runs it, verified against its snapshot. */
+    function resolveFile(
+      t: TestNextly,
+      file: string,
+      mode: "applied" | "failed-cleanup"
+    ) {
+      const content = () => readFileSync(join(history(), file), "utf8");
+      return resolveMigration({
+        mode,
+        filename: file,
+        dialect,
+        repo: new SchemaEventsRepository(
+          t.adapter.getDrizzle() as never,
+          dialect
+        ),
+        fileExists: () => Promise.resolve(existsSync(join(history(), file))),
+        loadTargetSnapshot: async () => {
+          const name = file.replace(/\.sql$/, ".snapshot.json");
+          const { snapshot } = parseSnapshotFile(
+            readFileSync(join(history(), "meta", name), "utf8"),
+            name
+          );
+          return {
+            ...snapshot,
+            tables: snapshot.tables.filter(each => each.name === drafts.table),
+          };
+        },
+        marksNoTransaction: () =>
+          Promise.resolve(marksNoTransaction(content())),
+        fileChecksum: () => Promise.resolve(checksumOf(content())),
+        introspectLive: () =>
+          introspectLiveSnapshot(t.adapter.getDrizzle(), t.adapter.dialect, [
+            drafts.table,
+          ]),
+      });
+    }
+
+    it.runIf(dialect === "mysql")(
+      "a collection's update turning Draft/Published on, stopped at its status column, is refused as part-way, and after `--failed-cleanup` `nextly migrate` turns it on whole",
+      async () => {
+        const t = await boot();
+        const file = await refusedAsPartWay(t);
+
+        // The statements that ran reversed by hand, the attempt cleaned up, and the file run again.
+        await t.adapter.executeQuery(
+          `ALTER TABLE \`${drafts.table}\` DROP COLUMN \`first_published_at\``
+        );
+        await resolveFile(t, file, "failed-cleanup");
+        await migrated(t);
+
+        expect(await appliedFiles(t)).toContain(file);
+        // The save asked again has nothing left to do.
+        const again = await outcomeOf(turnOn());
+        expect(
+          again.failed ? messageOf(again.error) : undefined,
+          "the save again"
+        ).toBeUndefined();
+        await expectTurnedOnWhole(t);
+      },
+      300_000
+    );
+
+    it.runIf(dialect === "mysql")(
+      "a collection's update turning Draft/Published on, stopped at its status column, is refused as part-way, and once finished by hand and resolved applied is on whole",
+      async () => {
+        const t = await boot();
+        const file = await refusedAsPartWay(t);
+
+        // The file's remaining statements run by hand, and the file marked applied.
+        const statements = splitSqlStatements(
+          parseSqlSections(readFileSync(join(history(), file), "utf8")).upSql
+        )
+          .map(statement => statement.trim())
+          .filter(statement => statement.length > 0);
+        const remaining = statements.slice(
+          statements.findIndex(statement =>
+            adding(drafts.table, "status").test(statement)
+          )
+        );
+        expect(remaining.length, statements.join("\n")).toBeGreaterThan(0);
+        for (const statement of remaining) {
+          await t.adapter.executeQuery(statement);
+        }
+        await resolveFile(t, file, "applied");
+
+        expect(await appliedFiles(t)).toContain(file);
+        const again = await outcomeOf(turnOn());
+        expect(
+          again.failed ? messageOf(again.error) : undefined,
+          "the save again"
+        ).toBeUndefined();
+        await expectTurnedOnWhole(t);
+      },
+      300_000
+    );
+
     describe.each(PATHS)("$name", path => {
       beforeEach(() => {
         vi.mocked(judgeStoppedSave).mockClear();
@@ -933,7 +1225,13 @@ describe.each(getConfiguredTestDialects())(
               "updateCollection",
               { collectionName: path.slug },
               {
-                fields: [text("heading"), text("alpha"), text("beta")],
+                // Each added field states a default, which fills the entries already there and
+                // keeps the update on the push, as `pushedUpdate`'s saves do.
+                fields: [
+                  text("heading"),
+                  { ...text("alpha"), default: "x" },
+                  { ...text("beta"), default: "x" },
+                ],
                 useAsTitle: "beta",
               }
             )

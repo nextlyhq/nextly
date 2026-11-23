@@ -10,9 +10,9 @@
  * property nobody listed here is held too.
  *
  * Every road a Builder save takes to the database is driven: a collection's schema dialog,
- * translated or not, a Single's and a field group's schema dialog, and a Single's settings save run
- * the migration file the save writes where the save moves no values; a collection's settings save
- * runs the development push. A SQLite rebuild that cannot keep what
+ * translated or not, a Single's and a field group's schema dialog, a Single's settings save and an
+ * untranslated collection's settings save run the migration file the save writes where the save
+ * moves no values. A SQLite rebuild that cannot keep what
  * it would drop must refuse, say why, and leave the table as it was. A file over a default given by
  * hand, which its snapshot does not record, is refused as drift and changes nothing.
  *
@@ -79,17 +79,16 @@ interface Road {
 }
 
 /**
- * The known losses of a collection road the push still applies: the push restates the table from
- * its declared schema, and the road keeps it because the file road lacks checks only the push's
- * apply makes (`why`).
+ * A settings save's answer that `heading` leaving and `renamed` arriving is a rename: that road
+ * renames a field only when the request says so.
  */
-const pushedCollection = (why: string): NonNullable<Road["known"]> =>
-  Object.fromEntries(
-    [RENAME, RENAME_NOT_NULL, HAND_DEFAULT].map(name => [
-      name,
-      { on: ["sqlite", "postgresql", "mysql"] as const, why },
-    ])
-  );
+function renameAnswer(renamed: string | undefined): {
+  renames?: Array<{ from: string; to: string; choice: "rename" }>;
+} {
+  return renamed === undefined
+    ? {}
+    : { renames: [{ from: "heading", to: renamed, choice: "rename" }] };
+}
 
 /** The Single both of its roads change. */
 async function createHero(_t: TestNextly, fields: Field[]): Promise<void> {
@@ -140,14 +139,9 @@ const ROADS: Road[] = [
       ),
   },
   {
-    name: "a collection's settings save (the push)",
+    name: "a collection's settings save (its migration file)",
     table: "dc_posts",
-    known: pushedCollection(
-      "the update road stays on the push for the checks its apply makes and the file road lacks: " +
-        "index names held elsewhere (refuseIndexNamesTaken), a unique index left under another " +
-        "name (dropUniquenessLeftOn), the part-applied recoveries, keeping or refusing a column " +
-        "no field made, the fills from stated defaults, and a many-to-many made one-to-one unique"
-    ),
+    runsFile: true,
     async create(t, fields) {
       await t
         .getService("collectionService")
@@ -158,13 +152,14 @@ const ROADS: Road[] = [
           {}
         );
     },
-    // The update road (`updateCollection`), which detects its own renames.
-    save: (_t, fields) =>
+    // The update road (`updateCollection`), which renames a field only when the request answers
+    // the pair as a rename.
+    save: (_t, fields, renamed) =>
       dispatchCollections(
         {} as ServiceContainer,
         "updateCollection",
         { collectionName: "posts" },
-        { fields }
+        { fields, ...renameAnswer(renamed) }
       ),
   },
   {
@@ -278,8 +273,12 @@ const ROADS: Road[] = [
     // dialog's save does where the push would carry no values.
     runsFile: true,
     create: createHero,
-    save: (_t, fields) =>
-      dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields }),
+    save: (_t, fields, renamed) =>
+      dispatchSingles(
+        "updateSingleSchema",
+        { slug: "hero" },
+        { fields, ...renameAnswer(renamed) }
+      ),
   },
   {
     // A translated Single renaming a shared field: no companion value moves, so its own file runs.
@@ -293,8 +292,12 @@ const ROADS: Road[] = [
         { slug: "tale", label: "Tale", localized: true, fields }
       );
     },
-    save: (_t, fields) =>
-      dispatchSingles("updateSingleSchema", { slug: "tale" }, { fields }),
+    save: (_t, fields, renamed) =>
+      dispatchSingles(
+        "updateSingleSchema",
+        { slug: "tale" },
+        { fields, ...renameAnswer(renamed) }
+      ),
   },
   {
     name: "a field group (its migration file)",

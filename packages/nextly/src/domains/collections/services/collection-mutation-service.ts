@@ -293,6 +293,7 @@ import {
   translationProvenancePresent,
 } from "../../i18n/provenance/record-provenance";
 import {
+  configuredLocale,
   isValidLocale,
   resolveLocaleChain,
   resolveRequestedLocale,
@@ -1167,6 +1168,25 @@ function upsertsTranslation(args: {
           )))) &&
     Object.keys(localizedUpdate.companionData).length > 0
   );
+}
+
+/**
+ * The entry `row` as written in a language: its main row with the language's
+ * translated values, `translation`, laid over it. Every installation keeps its
+ * translatable fields in the per-language table, so the main row alone holds
+ * no title, slug or other text field the write did not name. A field the
+ * language holds no value for is `undefined` in `translation`, and never hides
+ * a value the main row still holds.
+ */
+function withTranslation(
+  row: Record<string, unknown>,
+  translation: Record<string, unknown>
+): Record<string, unknown> {
+  const entry = { ...row };
+  for (const [name, value] of Object.entries(translation)) {
+    if (value !== undefined || !(name in entry)) entry[name] = value;
+  }
+  return entry;
 }
 
 /**
@@ -3662,6 +3682,23 @@ export class CollectionMutationService extends BaseService {
       resolveRequestedLocale(this.localization, locale) ===
         this.localization.defaultLocale;
     return { localizedFieldNames, enforceLocalizedRequired };
+  }
+
+  /**
+   * `params` with its write locale named by the configured code: an older spelling of a configured
+   * language (`pt_BR` for `pt-BR`), accepted for one release, is written under the code the rows
+   * are stored under (`configuredLocale`), never under the older one. A code that names no
+   * configured language is left as given, for the write to refuse.
+   */
+  private inConfiguredLocale<P extends { locale?: string | null }>(
+    params: P
+  ): P {
+    const locale = params.locale;
+    if (typeof locale !== "string" || !this.localization) return params;
+    const configured = configuredLocale(this.localization, locale);
+    return configured === undefined || configured === locale
+      ? params
+      : { ...params, locale: configured };
   }
 
   /**
@@ -6406,9 +6443,15 @@ export class CollectionMutationService extends BaseService {
           scopeSlug: params.collectionName,
           entryId: params.entryId,
         };
+        // An entry that is not translated has one pending change, kept by
+        // part: its shared draft goes with its language's.
+        const withShared =
+          params.shared !== true &&
+          draftsKeptByPart() &&
+          (collection as { localized?: boolean }).localized !== true;
         const { removed, judged: before } = await removePendingChangeJudged(
           tx,
-          { ref: discardedRef, locale: draftLocale },
+          { ref: discardedRef, locale: draftLocale, withShared },
           judging.check,
           () => this.refuseIfPendingChangeMoved(tx, judging, staleWrite),
           { main: undefined, language: undefined }
@@ -6481,7 +6524,12 @@ export class CollectionMutationService extends BaseService {
               ...(params.shared === true
                 ? { parts: { shared: true } }
                 : draftLocale
-                  ? { parts: { locales: [draftLocale] } }
+                  ? {
+                      parts: {
+                        locales: [draftLocale],
+                        ...(withShared ? { shared: true } : {}),
+                      },
+                    }
                   : {}),
             }
           );
@@ -8843,7 +8891,7 @@ export class CollectionMutationService extends BaseService {
     // A create moves the shared part (`WHOLE_DOCUMENT`), as its hooks are
     // told, whether the entry service or a batch sent it.
     return withWriteParts(WHOLE_DOCUMENT, () =>
-      this.createEntryInParts(params, body, depth)
+      this.createEntryInParts(this.inConfiguredLocale(params), body, depth)
     );
   }
 
@@ -15795,8 +15843,10 @@ export class CollectionMutationService extends BaseService {
     // rows and the library they read are kept per language whether or not
     // the host is, so the request's language is the one an ordinary update
     // and the draft's snapshot use; without it they read the default. An
-    // empty one is no language, as the write's own locale check reads it.
-    const judgedIn = draftLocale ?? (params.locale || undefined);
+    // empty one is no language, as the write's own locale check reads it,
+    // whether it reaches here as the request's or as the draft's key, which
+    // every document has now that each keeps its values per language.
+    const judgedIn = draftLocale || params.locale || undefined;
     await this.fieldGroupDataService.validateComponentDataInTransaction(tx, {
       parentId: params.entryId,
       parentTable: collectionTableName(collection, params.collectionName),
@@ -16575,10 +16625,11 @@ export class CollectionMutationService extends BaseService {
    * told its languages.
    */
   async updateEntry(
-    rawParams: UpdateEntryParams,
+    requested: UpdateEntryParams,
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    const rawParams = this.inConfiguredLocale(requested);
     return this.inUpdateParts(
       {
         collectionName: rawParams.collectionName,
@@ -19613,10 +19664,17 @@ export class CollectionMutationService extends BaseService {
       // `updated` is the OLD published content. Everything that reports what this
       // update produced — the response, the afterUpdate/afterChange hooks — uses
       // the pending draft document instead.
-      const responseSource = (workingDraftDocument ?? updated) as Record<
-        string,
-        unknown
-      >;
+      //
+      // A live write answers with the entry in the language written: the
+      // re-fetched main row holds the shared values only, so the translated
+      // values read on the write's transaction are laid over it, as the
+      // after-hooks are handed them. A value the language holds none of never
+      // hides one the main row still has.
+      const updatedEntry = withTranslation(
+        updated as Record<string, unknown>,
+        writtenTranslation
+      );
+      const responseSource = workingDraftDocument ?? updatedEntry;
       // Stamped BEFORE the hooks run, not only on the response below.
       //
       // A draft edit leaves `status` at the live parent's value, so a document
@@ -19642,7 +19700,9 @@ export class CollectionMutationService extends BaseService {
           readRevalidateConfig(collection),
           {
             id: params.entryId,
-            slug: readStringField(updated as Record<string, unknown>, "slug"),
+            // A declared slug is translatable, kept with the language's
+            // values rather than on the main row.
+            slug: readStringField(updatedEntry, "slug"),
             previousSlug,
             locale: localizedUpdate?.writeLocale,
           }
@@ -22575,12 +22635,16 @@ export class CollectionMutationService extends BaseService {
         // it rolls back with the main row. A brand-new parent has no row to
         // conflict with, which is why this inserts where the update path upserts.
         if (localizedWrite) {
-          // A failure here is a write-integrity failure: the parent row is
-          // already written. Reported as a soft per-item failure, a batch under
-          // `stopOnError: false` would carry on and commit a document whose
-          // translations never landed — the row would exist with no content in
-          // any language. Marked, the batch loop aborts and the transaction
-          // rolls back, exactly as a failed component save does.
+          // A failure here is a write-integrity failure where nothing but the
+          // whole transaction can take the parent row back: reported as a soft
+          // per-item failure, a batch under `stopOnError: false` would carry on
+          // and commit a document whose translations never landed — the row
+          // would exist with no content in any language. Marked, the batch loop
+          // aborts and the transaction rolls back, exactly as a failed component
+          // save does. Under a savepoint the failure takes the parent row back
+          // with it, so it is answered as what it is: a translated value held
+          // by another entry of a unique field, for one, is a duplicate the
+          // caller can tell apart, not an unexpected error.
           try {
             await this.insertCompanionRow(
               tx,
@@ -22593,7 +22657,7 @@ export class CollectionMutationService extends BaseService {
               }
             );
           } catch (error: unknown) {
-            throw markWriteIntegrityFailure(error);
+            throw undoesAlone ? error : markWriteIntegrityFailure(error);
           }
           // Split out of the insert, so the returned row lacks them: merge them
           // back for the hooks, the event and the response. Under the FIELD's
@@ -23168,6 +23232,23 @@ export class CollectionMutationService extends BaseService {
 
       let currentData: Record<string, unknown> = { ...body };
 
+      // The entry as its hooks are handed it, as an update outside a
+      // transaction hands it (`hookOriginal` there): its translated values in
+      // the language this write is for, the default, included. Under
+      // per-language storage the main row alone holds none of them, so a hook
+      // reading the entry's title would find nothing.
+      const hookOriginal: Record<string, unknown> = options.runHooks
+        ? {
+            ...existingEntry,
+            ...(await this.translationIn(
+              params.collectionName,
+              existingEntry.id,
+              undefined,
+              tx
+            )),
+          }
+        : existingEntry;
+
       // Shared context between all hooks in this request
       // Seeded from the caller, like the non-transactional pipelines. An
       // empty literal here meant a hook context reached every write EXCEPT
@@ -23209,7 +23290,7 @@ export class CollectionMutationService extends BaseService {
           collection: params.collectionName,
           operation: "update" as const,
           data: currentData,
-          originalData: existingEntry,
+          originalData: hookOriginal,
           user: params.user,
           context: sharedContext,
           // Bind DB-reading hooks (e.g. the built-in sanitization hook) to the
@@ -23322,7 +23403,7 @@ export class CollectionMutationService extends BaseService {
           collection: params.collectionName,
           operation: "update",
           data: finalData,
-          originalData: existingEntry,
+          originalData: hookOriginal,
           storedHooks,
           queryDatabase: this.queryDatabaseFn,
           user: params.user,
@@ -24549,7 +24630,7 @@ export class CollectionMutationService extends BaseService {
           // as changing again.
           originalData: priorWorkingDraftDocument
             ? markedDraft(priorWorkingDraftDocument)
-            : existingEntry,
+            : hookOriginal,
           user: params.user,
           context: sharedContext,
           // Bind an after-hook that reads via context.executor to the caller's

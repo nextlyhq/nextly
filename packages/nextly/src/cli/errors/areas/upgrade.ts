@@ -42,6 +42,22 @@ function leftAsItWas(error: NextlyError): string {
     : "Nothing was changed.";
 }
 
+/**
+ * A localisation step's refusal, whose message states what was found, then the step that settles
+ * it, then that nothing was changed: the sentence before that closing one is the next step.
+ */
+function foundThenStep(message: string, why: string): CliErrorParts {
+  const closing = " Nothing was changed.";
+  const body = message.endsWith(closing)
+    ? message.slice(0, -closing.length)
+    : message;
+  const end = body.lastIndexOf(". ");
+  if (end === -1) {
+    return { what: body, why, next: "Run `nextly migrate` again." };
+  }
+  return { what: body.slice(0, end + 1), why, next: body.slice(end + 2) };
+}
+
 export const UPGRADE_CODES = defineCodes({
   UPGRADE_CANCELLED: {
     cause:
@@ -167,6 +183,34 @@ export const UPGRADE_CODES = defineCodes({
           whatThenNext(
             error.publicMessage,
             `\`nextly migrate\` moves the migration records of an earlier release into "${eventsTable(error)}", and the table there does not have the columns it writes. Nothing was changed.`
+          ),
+      },
+    ],
+  },
+  MIGRATE_LANGUAGE_CODES_COLLIDE: {
+    cause:
+      "Two language codes, configured or stored, become one code once written in standard form, so `nextly migrate` changed nothing.",
+    from: [
+      {
+        code: "NEXTLY_LANGUAGE_CODES_COLLIDE",
+        describe: error =>
+          foundThenStep(
+            error.publicMessage,
+            "`nextly migrate` keeps every language under its standard code, and these two would become one, putting two languages' values in one place. Nothing was changed."
+          ),
+      },
+    ],
+  },
+  MIGRATE_LOCALIZATION_UNRESOLVED: {
+    cause:
+      "`nextly migrate` found stored translations it cannot move into the layout this release keeps without choosing between two values, so it changed nothing.",
+    from: [
+      {
+        code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
+        describe: error =>
+          foundThenStep(
+            error.publicMessage,
+            "`nextly migrate` moves stored translations into the layout this release keeps, and moves nothing it would have to guess at. Nothing was changed."
           ),
       },
     ],

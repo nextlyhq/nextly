@@ -10,11 +10,11 @@ import { createHash } from "node:crypto";
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { DEMOTED_FROM_CODE } from "../../domains/collections/services/collection-registry-service";
 import {
   toCodeFirstCollectionConfig,
   type CodeFirstCollectionSource,
 } from "../../domains/collections/services/collection-sync-service";
-import { DEMOTED_FROM_CODE } from "../../domains/collections/services/collection-registry-service";
 import { assertNoMigrationInFlight } from "../../domains/field-groups/migration/sync-guard";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { serializeCollection } from "../../domains/schema/services/code-generator";

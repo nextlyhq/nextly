@@ -31,35 +31,57 @@ export function addressClaimsCollection(): CollectionConfig {
     // of the admin's navigation, and the access rules below keep it off the
     // wire.
     internal: true,
+    // Every field is kept once for all languages (`localized: false`): a
+    // claim is one fact about one address, and the store's reads and locks
+    // judge these columns on the claim's own row. Kept per language, MySQL
+    // read them from a snapshot under a locked read and missed a waiter.
     fields: [
       text({
         name: "claimKey",
+        localized: false,
         label: "Claim key",
         required: true,
         unique: true,
       }),
       // Indexed: the waiting report pages and counts by kind alone, and the
       // lock rows kept for every address ever claimed outgrow the waits.
-      text({ name: "kind", label: "Kind", required: true, index: true }),
-      text({ name: "locale", label: "Locale" }),
+      text({
+        name: "kind",
+        localized: false,
+        label: "Kind",
+        required: true,
+        index: true,
+      }),
+      text({ name: "locale", localized: false, label: "Locale" }),
       // The address as the key spells it, so a report reads it back without
       // parsing keys. Long text, so an address of any length fits.
-      textarea({ name: "path", label: "Path" }),
+      textarea({ name: "path", localized: false, label: "Path" }),
       // Indexed because releasing a document's claims finds them by holder,
       // and the addresses listed for pre-rendering are those of entry
       // holders' collections.
       text({
         name: "holderCollection",
+        localized: false,
         label: "Holder collection",
         index: true,
       }),
-      text({ name: "holderId", label: "Holder id", index: true }),
+      text({
+        name: "holderId",
+        localized: false,
+        label: "Holder id",
+        index: true,
+      }),
       // For an address claim, the stored key of the space that would hold
       // it, so a list paginating there finds the addresses already inside.
-      text({ name: "space", label: "Space", index: true }),
+      text({ name: "space", localized: false, label: "Space", index: true }),
       // For a waiting row, the stored key of the claim it waits on, so
       // releasing that claim finds who is waiting for it.
-      text({ name: "blockedBy", label: "Blocked by", index: true }),
+      text({
+        name: "blockedBy",
+        localized: false,
+        label: "Blocked by",
+        index: true,
+      }),
     ],
     access: {
       // Functions returning a constant rather than bare `false`: access rules

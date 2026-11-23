@@ -11,6 +11,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
+import { PushSchemaPipeline } from "../../schema/pipeline/pushschema-pipeline";
 import {
   indexNameForColumn,
   uniqueIndexNameForColumn,
@@ -397,21 +398,52 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     }
   );
 
-  it("turns Draft/Published on when the status column is already there", async () => {
-    // As a save MySQL refused part-way leaves it: the column added, the registry unchanged.
+  /** Whether the registry records Draft/Published on for `slug`. */
+  async function registeredStatus(slug: string): Promise<boolean> {
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+    const [row] = await query<{ status: unknown }>(
+      `SELECT ${q("status")} AS status FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${slug}'`
+    );
+    return row?.status === true || Number(row?.status) === 1;
+  }
+
+  // A status column added by hand, in a shape neither the migration history nor the save's own
+  // file gives it, is drift: the save is refused, naming it, and changes nothing. A save stopped
+  // part-way is told apart by its records, not by the table's shape.
+  it("refuses turning Draft/Published on over a status column added by hand, and saves once it is gone", async () => {
     await postsWith([{ name: "heading", type: "text" }], [{ heading: "One" }]);
     const q = (name: string) =>
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
     await query(
       `ALTER TABLE ${q("dc_posts")} ADD COLUMN ${q("status")} VARCHAR(20) DEFAULT 'draft'`
     );
+    const columnsBefore = await columnsOf("dc_posts");
+    const turnOn = () =>
+      handler().updateCollection(
+        { collectionName: "posts" },
+        { fields: [{ name: "heading", type: "text" }], status: true }
+      );
 
-    const saved = await handler().updateCollection(
-      { collectionName: "posts" },
-      { fields: [{ name: "heading", type: "text" }], status: true }
-    );
+    const refused = (await turnOn()) as {
+      success: boolean;
+      code?: string;
+      message?: string;
+    };
+
+    expect(refused.success, JSON.stringify(refused)).toBe(false);
+    expect(refused.code).toBe("NEXTLY_MIGRATION_DRIFT");
+    expect(refused.message).toContain("+ dc_posts.status present in DB");
+    expect(await columnsOf("dc_posts")).toEqual(columnsBefore);
+    expect(await registeredStatus("posts")).toBe(false);
+
+    // The way on the refusal names: the table put back as the history records it.
+    await query(`ALTER TABLE ${q("dc_posts")} DROP COLUMN ${q("status")}`);
+    const saved = await turnOn();
 
     expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await columnsOf("dc_posts")).toContain("status");
+    expect(await registeredStatus("posts")).toBe(true);
   });
 
   it("checks a field whose column is not deployed yet without reading it", async () => {
@@ -609,7 +641,9 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     expect(update.migrationSQL).toMatch(/ADD COLUMN .status./);
   });
 
-  it("turns Draft/Published off when the status column is already gone", async () => {
+  // A status column dropped by hand is drift as one added by hand is: the save turning
+  // Draft/Published off is refused, naming it, and changes nothing.
+  it("refuses turning Draft/Published off over a status column dropped by hand", async () => {
     const created = await handler().createCollection({
       name: "posts",
       label: "Post",
@@ -618,13 +652,18 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     });
     expect(created.success, JSON.stringify(created)).toBe(true);
     await query(`ALTER TABLE ${q("dc_posts")} DROP COLUMN ${q("status")}`);
+    const columnsBefore = await columnsOf("dc_posts");
 
-    const saved = await handler().updateCollection(
+    const refused = (await handler().updateCollection(
       { collectionName: "posts" },
       { fields: [shortHeading], status: false }
-    );
+    )) as { success: boolean; code?: string; message?: string };
 
-    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(refused.success, JSON.stringify(refused)).toBe(false);
+    expect(refused.code).toBe("NEXTLY_MIGRATION_DRIFT");
+    expect(refused.message).toContain("- dc_posts.status absent from DB");
+    expect(await columnsOf("dc_posts")).toEqual(columnsBefore);
+    expect(await registeredStatus("posts")).toBe(true);
   });
 
   it("indexes a field whose index a refused save already created", async () => {
@@ -734,6 +773,36 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     expect(off.success, JSON.stringify(off)).toBe(true);
     // Recorded not unique, and not enforced either.
     expect((await createPost({ heading: "One" })).success).toBe(true);
+  });
+
+  it("drops the unique index Unique adopted when the same save renames the field and turns Unique off", async () => {
+    // As above, with the field renamed in the save that turns Unique off: the index follows the
+    // column to its new name, so the save is still one that stops the field being unique, and
+    // keeps the push, which drops it.
+    await postsWith([shortHeading], [{ heading: "One" }]);
+    await query(
+      `CREATE UNIQUE INDEX ${q("legacy_heading_unique")} ON ${q("dc_posts")} (${q("heading")})`
+    );
+    const on = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [{ ...shortHeading, unique: true }] }
+    );
+    expect(on.success, JSON.stringify(on)).toBe(true);
+    const pushed = vi.spyOn(PushSchemaPipeline.prototype, "apply");
+    try {
+      const off = await handler().updateCollection(
+        { collectionName: "posts" },
+        { fields: [{ ...shortHeading, name: "headline" }] }
+      );
+
+      expect(off.success, JSON.stringify(off)).toBe(true);
+      expect(pushed, "the push").toHaveBeenCalled();
+      expect(await registeredFields("posts")).toEqual(["headline"]);
+      // Recorded not unique, and not enforced either.
+      expect((await createPost({ headline: "One" })).success).toBe(true);
+    } finally {
+      pushed.mockRestore();
+    }
   });
 
   it("writes the unique index again into the file of a save that turns Unique back on", async () => {

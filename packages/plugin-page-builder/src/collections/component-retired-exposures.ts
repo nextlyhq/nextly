@@ -78,16 +78,28 @@ export function componentRetiredCollection(): CollectionConfig {
     // authored. `internal` keeps it out of the admin's navigation; the access
     // rules below keep it out of everything else.
     internal: true,
+    // Kept once for every language (`localized: false`): each field is an
+    // id or key the plugin writes, never text an editor translates.
     fields: [
       // Not `key`, which is a reserved word in SQL and refused as a field name.
-      text({ name: "identity", required: true, unique: true }),
+      text({
+        name: "identity",
+        localized: false,
+        required: true,
+        unique: true,
+      }),
       // Indexed because every read asks for the ids of the components one
       // document places.
-      text({ name: "componentId", required: true, index: true }),
-      text({ name: "kind", required: true }),
+      text({
+        name: "componentId",
+        localized: false,
+        required: true,
+        index: true,
+      }),
+      text({ name: "kind", localized: false, required: true }),
       // Long text: an exposure id has no length bound, and a short text column
       // is `varchar(255)` on MySQL.
-      textarea({ name: "exposureId", required: true }),
+      textarea({ name: "exposureId", localized: false, required: true }),
     ],
     access: {
       // Written by the plugin through the Direct API, which overrides access.

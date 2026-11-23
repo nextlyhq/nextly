@@ -43,8 +43,8 @@ export function normaliseAddress(address: string): string {
 }
 
 /**
- * Creates an unverified account, or answers `taken` when the address already
- * has one. The database decides, by the unique normalised address, so of two
+ * Creates an account, unverified unless `verified` says how its address was
+ * proven, or answers `taken` when the address already has one. The database decides, by the unique normalised address, so of two
  * sign-ups that race for one address exactly one is created. On PostgreSQL a
  * refusal inside a transaction aborts it, so a caller in one ends it there.
  */
@@ -57,6 +57,8 @@ export async function createAccount(
     passwordHash: string | null;
     /** When it was made, on the flows' clock; the database's when absent. */
     createdAt?: Date;
+    /** The address already proven, when and by what, for an account that signs in at once. */
+    verified?: { at: Date; by: string };
   }
 ): Promise<{ status: "created"; account: AccountRow } | { status: "taken" }> {
   try {
@@ -66,6 +68,13 @@ export async function createAccount(
       name: input.name,
       passwordHash: input.passwordHash,
       ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+      ...(input.verified === undefined
+        ? {}
+        : {
+            verifiedAt: input.verified.at,
+            verifiedBy: input.verified.by,
+            lastSignedInAt: input.verified.at,
+          }),
     });
     return { status: "created", account };
   } catch (error) {

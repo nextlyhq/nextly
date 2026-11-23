@@ -21,6 +21,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { PresetDeclarationSource } from "../../../auth/preset-reach";
 import { withCommandServicesLent } from "../../../cli/utils/lend-command-services";
 import type { Logger } from "../../../cli/utils/logger";
 import type { SanitizedNextlyConfig } from "../../../collections/config/define-config";
@@ -191,7 +192,17 @@ export async function seedAccessOnCommandConnection(
   pooled: DrizzleAdapter,
   configResult: { config: SanitizedNextlyConfig; configPath?: string | null },
   logger: Logger,
-  options: { pluginsAsGiven?: boolean } = {}
+  options: {
+    pluginsAsGiven?: boolean;
+    /**
+     * The whole configuration whose collections, permissions and
+     * `presetGrants` open them to the preset roles, where `config` names only
+     * part of it, as a plugin's install does: the preset grants are set over
+     * every stored permission, so they are resolved with every opening, not
+     * only the installed plugin's.
+     */
+    presetsDeclaredBy?: PresetDeclarationSource;
+  } = {}
 ): Promise<void> {
   // Each seeder's progress is detail here; its warnings and errors are the operator's.
   const seedLogger: ServiceLogger = {
@@ -238,6 +249,9 @@ export async function seedAccessOnCommandConnection(
           config: declaring,
           logger: seedLogger,
           takeBackUndeclared: options.pluginsAsGiven !== true,
+          ...(options.presetsDeclaredBy === undefined
+            ? {}
+            : { presetsDeclaredBy: options.presetsDeclaredBy }),
         })
       );
       if (leftTo !== undefined) {

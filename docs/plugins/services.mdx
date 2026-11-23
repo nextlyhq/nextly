@@ -69,6 +69,23 @@ page has to show _something_. Pass `fallbackLocale: false` when the question is 
 the translation _exists_ — a sitemap deciding whether to list a language, say — and the
 default's value standing in would mislead you.
 
+A public read answers for its language only: an entry not published in that language is
+not found, even when its default is. Pass `wholeDocumentFallback: true` to
+`findEntryById` to read it instead in the first language of its fallback chain that it is
+published in, as `?fallback=document` does on the REST API. The entry says which language
+answered in `_locale`, and each language is still read as the caller. Every other method
+refuses the option with a `400`.
+
+```ts
+// A French visitor is sent to the French page once it is published, and to the
+// published default until then.
+const page = await ctx.services.collections.findEntryById("pages", id, {
+  as: "public",
+  locale: "fr",
+  wholeDocumentFallback: true,
+});
+```
+
 What an unconfigured code means depends on the verb, and deliberately so. A **read**
 resolves it to the default, the same way `?locale=` does on the REST API, so a wrong
 query string still shows a page. A **write** is refused with a `400`, so a typo cannot

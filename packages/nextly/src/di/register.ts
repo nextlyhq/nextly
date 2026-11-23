@@ -30,8 +30,12 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
-import type { AnyRelations, Table } from "drizzle-orm";
+import type { AnyRelations } from "drizzle-orm";
 
+import {
+  declareClosedToSuperAdmin,
+  useStoredClosedMarks,
+} from "../auth/access/closed-to-super-admin";
 import { authUiProblems } from "../auth/handlers/auth-ui";
 import {
   buildAuthRouterDeps,
@@ -43,6 +47,7 @@ import {
   unkeyedStrategyWarnings,
 } from "../auth/handlers/proxy-posture";
 import { resetPasswordPolicy } from "../auth/password/policy";
+import type { PresetRoleSlug } from "../auth/role-presets";
 import { issueSetupTokenAtBoot } from "../auth/setup-token/setup-gate";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
@@ -91,7 +96,8 @@ import type { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
   mainTableFields,
   publishesPerLanguage,
-  setPerLanguageStorage,
+  perLanguageStorageEnabled,
+  warnPerLanguageStorageSetting,
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
 import { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
@@ -106,6 +112,7 @@ import { limitsInMemoryWarning } from "../domains/limits/limits-in-memory-warnin
 import { selectLimitStore } from "../domains/limits/select-limit-store";
 import { stopDeleteWindowTimers } from "../domains/media/delete-window-timers";
 import type { MetaService } from "../domains/meta";
+import { readStoredClosedMarks } from "../domains/meta/closed-to-super-admin-marks";
 import type { NoticesService } from "../domains/notices/notices-service";
 import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import type { PreviewConfig } from "../domains/preview/route-config";
@@ -116,7 +123,10 @@ import { clearParticipants } from "../domains/public-addresses/participants";
 import type { ReleasesService } from "../domains/releases/services/releases-service";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
-import { compileAndPublishExtensionSchema } from "../domains/schema/extension/publish";
+import {
+  compileAndPublishExtensionSchema,
+  declaresExtensionSchema,
+} from "../domains/schema/extension/publish";
 import { registerExtensionTables } from "../domains/schema/extension/register-tables";
 import {
   clearFieldTypes,
@@ -369,12 +379,16 @@ import {
   takesDevelopmentStartHold,
   withDevelopmentStartSchemaLock,
 } from "./development-start-schema-lock";
-import { readLayoutScanEntities } from "./layout-scan-entities";
+import {
+  declaredLaidOutEntitiesAsStored,
+  readLayoutScanEntities,
+} from "./layout-scan-entities";
 import {
   type LoadedBuilderEntity,
   loadBuilderEntities,
   loadDynamicTables,
 } from "./load-dynamic-tables";
+import { registerConfigTablesQuietly } from "./register-config-tables";
 import { forgetRegisteredLocalization } from "./registered-localization";
 import {
   registerAuthServices,
@@ -529,6 +543,12 @@ export interface NextlyServiceConfig {
   /** @experimental App-declared custom permissions, seeded like plugin permissions (D36). */
   permissions?: PluginPermission[];
 
+  /**
+   * @experimental The collections the app opens to the preset roles, by
+   * slug, read when the preset roles' grants are set.
+   */
+  presetGrants?: Readonly<Record<string, readonly PresetRoleSlug[]>>;
+
   /** @experimental App-declared role bundles, seeded like plugin roles (D67). */
   roles?: PluginRole[];
   /**
@@ -630,11 +650,9 @@ export interface NextlyServiceConfig {
   webhookAuditEnabled?: boolean;
 
   /**
-   * Whether every translatable field is kept per language from the start
-   * (`experimental.perLanguageStorage`). Carried from the sanitized config; absent, which is off,
-   * when built without app config.
-   *
-   * @experimental
+   * What the configuration wrote of the deprecated `experimental.perLanguageStorage`, which
+   * chooses no layout: read only so the start warns a site that still writes it. Absent where it
+   * writes nothing.
    */
   perLanguageStorage?: boolean;
 }
@@ -1342,7 +1360,21 @@ async function registerServicesOnce(
       await refuseMixedStorageInConfig(
         adapter,
         transformedConfig,
-        transformedConfig.perLanguageStorage === true
+        // The layout this installation keeps, which no configuration chooses any longer.
+        perLanguageStorageEnabled()
+      );
+      // Every installation keeps its translatable fields per language: the setting no longer
+      // chooses a layout, and a site that still sets it is told so.
+      warnPerLanguageStorageSetting(
+        transformedConfig.perLanguageStorage,
+        message => resolvedLogger.warn?.(message)
+      );
+      // A configured code written the earlier way (`pt_BR`) is read in standard form (`pt-BR`):
+      // the start says so, and refuses while rows are still stored under the older spelling.
+      await refuseOlderCodesStillStored(
+        adapter,
+        transformedConfig,
+        resolvedLogger
       );
 
       // ----------------------------------------
@@ -1694,7 +1726,6 @@ async function resolveBootConfig(
   // registry registers no table before this either, and the choice is made here once: a reload
   // refuses to change it. A site restarted over the database it laid out would otherwise register
   // its tables as if the setting were off, naming translatable columns its main tables lack.
-  setPerLanguageStorage(transformedSetupConfig.perLanguageStorage === true);
   const {
     config: contributedConfig,
     deferredExtends,
@@ -2028,14 +2059,18 @@ async function prepareBootSchema(
   // had just filled one. Passing the value makes the boot path independent of
   // how the two modules happen to be resolved.
   // Each field group's stored table, so a contribution to a group attaches to the table the group
-  // is in: `fg_<slug>` on a site whose field-group storage was migrated.
+  // is in: `fg_<slug>` on a site whose field-group storage was migrated. Read only where a plugin
+  // or the app declares an extension schema: with none, the compile below reads no seed, and the
+  // three catalog and registry reads would be waits the start makes for nothing.
   const { declaredFieldGroupStorage } = await import(
     "../domains/field-groups/services/field-group-stored-tables"
   );
-  const fieldGroups = await declaredFieldGroupStorage(
-    adapter,
-    transformedConfig.fieldGroups
-  );
+  const fieldGroups = declaresExtensionSchema({
+    plugins: transformedPlugins,
+    config: transformedConfig,
+  })
+    ? await declaredFieldGroupStorage(adapter, transformedConfig.fieldGroups)
+    : undefined;
   return compileAndPublishExtensionSchema({
     ...(fieldGroups === undefined
       ? {}
@@ -2127,43 +2162,6 @@ async function publishStoredRecordingPolicies(
   setStoredRecordingRefresher(() =>
     publishStoredWebhookRecordingPolicies(adapter, configOwnedSlugs)
   );
-}
-
-/**
- * Belt-and-suspenders: also register every code-first collection and
- * single from the supplied config directly into the resolver. The
- * `loadDynamicTables` pass inside initializeSchemaRegistry reads from
- * the `dynamic_collections` / `dynamic_singles` DB tables and swallows
- * errors on failure, which means a silent read hiccup (SQLite driver
- * quirk, partially-written row, wrong JSON shape on the `fields`
- * column) leaves code-first tables invisible at runtime. Registering
- * straight from the loaded `NextlyConfig` sidesteps that failure mode
- * entirely for code-first tables - the DB is still the source of
- * truth for UI-created tables via `loadDynamicTables`.
- */
-export async function registerConfigTablesQuietly(
-  schemaRegistry: SchemaRegistry | undefined,
-  transformedConfig: NextlyServiceConfig,
-  adapter: DrizzleAdapter,
-  logger: Logger,
-  overrides?: { differed: boolean }
-): Promise<void> {
-  if (!schemaRegistry) return;
-  try {
-    await registerConfigTablesInResolver(
-      schemaRegistry,
-      transformedConfig,
-      adapter,
-      logger,
-      overrides
-    );
-  } catch (err) {
-    // Non-fatal: the DB-backed pass may still have registered these
-    // tables. Log at debug so real issues surface during dev.
-    logger.debug?.(
-      `[registerServices] Could not register config tables into resolver: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
 }
 
 /** One config entity's fields, as `replaceFieldFunctions` takes them. */
@@ -2318,7 +2316,9 @@ async function reconcileBuilderTargets<T>(
   });
   // A field extended onto a Builder entity joins that entity's fields, so a pair it would make
   // with one already there is judged against the entity's registry row, before anything below
-  // writes.
+  // writes. A pair sharing a stored value is refused even where the row already holds it: the start
+  // stops, and the way out is to rename one of the two in the Builder's definition file, then
+  // `nextly migrate:create` and `nextly migrate`.
   await assertConfiguredSiblingFields(
     {
       collections: entities.collections,
@@ -2620,7 +2620,25 @@ async function addMissingCompanionColumns(
       reconcileFailure = error;
     }
   );
-  if (inStep) return;
+  if (inStep) {
+    // Its per-language unique indexes once its columns are in step, as the
+    // development reload makes them: a plugin's unique translatable field is
+    // enforced in each language.
+    const { reconcileCompanionUniquesAtStart } = await import(
+      "../domains/i18n/runtime/companion-unique-reconcile"
+    );
+    await reconcileCompanionUniquesAtStart(
+      ctx.adapter,
+      {
+        builtBy: entity.builtBy,
+        slug: entity.slug,
+        tableName: entity.tableName,
+        fields: entity.fields as { name: string; type: string }[],
+      },
+      message => ctx.logger.warn?.(message)
+    );
+    return;
+  }
   throw NextlyError.internal({
     ...(reconcileFailure instanceof Error ? { cause: reconcileFailure } : {}),
     logContext: {
@@ -4259,177 +4277,6 @@ function publishWebhookRecordingPolicies(config: RecordingPolicyConfig): void {
   }
 }
 
-/**
- * Register every code-first collection and single from the config as a
- * runtime Drizzle schema in the resolver. Complements `loadDynamicTables`
- * which reads the same data from the `dynamic_*` DB registry; having both
- * paths makes the resolver correct even when the DB read silently fails
- * or when a just-synced row hasn't been flushed yet.
- *
- * No-op for tables that are already registered (e.g. from the DB pass).
- *
- * Exported for its test.
- */
-export async function registerConfigTablesInResolver(
-  registry: SchemaRegistry,
-  config: NextlyServiceConfig,
-  adapter: DrizzleAdapter,
-  logger: Partial<Logger>,
-  /**
-   * Told, where given, whether a table this registers replaced one the
-   * registry pass had registered with different columns: the definitions
-   * the start serves then differ from the stored registry, and the start's
-   * load may not be recorded as following it (`definitionsLoaded`).
-   */
-  overrides?: { differed: boolean }
-): Promise<void> {
-  const dialect = adapter.getCapabilities().dialect;
-  const { entityKind, getColumns } = await import("drizzle-orm");
-  /**
-   * A table's columns as it reads and writes them, sorted: each column's
-   * Drizzle class, which holds its decoder and encoder (`SQLiteBoolean` and
-   * `SQLiteInteger` are both `integer`), its SQL type, and every setting it
-   * was built with, the name, nullability and mode among them. A function
-   * setting (a mapper, a default) is rebuilt with each column, so it is
-   * described by its source. Read through `getColumns`, Drizzle v1's column
-   * accessor, typed as a `Table` so it returns the column map rather than a
-   * view's selected fields.
-   */
-  const columnsOf = (table: unknown): string =>
-    Object.values(getColumns(table as Table))
-      .map(column =>
-        JSON.stringify([
-          Reflect.get(column.constructor, entityKind) as unknown,
-          column.getSQLType(),
-          describeSetting(column, entityKind),
-        ])
-      )
-      .sort()
-      .join("\n");
-  // Every registration below goes through here, so a replacement of a
-  // registry-backed table with columns that differ in any of that is seen.
-  const observed: Pick<SchemaRegistry, "registerDynamicSchema"> = {
-    registerDynamicSchema: (tableName, table) => {
-      if (overrides !== undefined && registry.hasTable(tableName)) {
-        const existing = registry.getTable(tableName);
-        if (
-          typeof existing === "object" &&
-          existing !== null &&
-          columnsOf(existing) !== columnsOf(table)
-        ) {
-          overrides.differed = true;
-        }
-      }
-      registry.registerDynamicSchema(tableName, table);
-    },
-  };
-  // Loaded here, as the generators it calls were, so they stay out of this
-  // module's own load.
-  const { registerEntityRuntimeTables } = await import(
-    "./register-runtime-tables"
-  );
-
-  // Collections: table name convention is `dc_<slug-with-underscores>`.
-  for (const collection of config.collections ?? []) {
-    try {
-      const slug = (collection as { slug: string }).slug;
-      const dbName = (collection as { dbName?: string }).dbName;
-      const fields = (collection as { fields?: unknown[] }).fields ?? [];
-      if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
-      const baseTableName = dbName ?? slug.replace(/-/g, "_");
-      const tableName = baseTableName.startsWith("dc_")
-        ? baseTableName
-        : `dc_${baseTableName}`;
-      // The status flag gives the runtime table its system status column,
-      // which Draft/Published CRUD reads and writes; the localized one leaves
-      // the translatable columns to the companion.
-      registerEntityRuntimeTables(
-        observed,
-        {
-          slug,
-          tableName,
-          fields: fields as FieldDefinition[],
-          status: (collection as { status?: boolean }).status === true,
-          localized: (collection as { localized?: boolean }).localized === true,
-        },
-        dialect
-      );
-    } catch (err) {
-      logger.debug?.(
-        `[registerServices] Failed to register collection "${(collection as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
-
-  // Singles: table name convention is `single_<slug-with-underscores>`.
-  // so every code path agrees on the physical table name.
-  const { resolveSingleTableName } = await import(
-    "../domains/singles/services/resolve-single-table-name"
-  );
-  for (const single of config.singles ?? []) {
-    try {
-      const slug = (single as { slug: string }).slug;
-      const dbName = (single as { dbName?: string }).dbName;
-      const fields = (single as { fields?: unknown[] }).fields ?? [];
-      if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
-      const tableName = resolveSingleTableName({ slug, dbName });
-      // The same registration as a collection's, so a localized single's
-      // main table leaves out the columns its migrations put on the companion.
-      registerEntityRuntimeTables(
-        observed,
-        {
-          slug,
-          tableName,
-          fields: fields as FieldDefinition[],
-          status: (single as { status?: boolean }).status === true,
-          localized: (single as { localized?: boolean }).localized === true,
-        },
-        dialect
-      );
-    } catch (err) {
-      logger.debug?.(
-        `[registerServices] Failed to register single "${(single as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
-}
-
-/**
- * A column setting as comparable data: functions by their source, objects by
- * their Drizzle kind and their own settings in key order. The column's table,
- * and its `config` (the settings it was built from, which it holds again on
- * itself), are left out, and a value met again on the way is not followed.
- */
-function describeSetting(
-  value: unknown,
-  kind: symbol,
-  seen: Set<object> = new Set()
-): unknown {
-  if (typeof value === "function") return `fn:${String(value)}`;
-  if (typeof value === "bigint") return `bigint:${value}`;
-  if (typeof value !== "object" || value === null) return value;
-  if (seen.has(value)) return "[seen]";
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.map(item => describeSetting(item, kind, seen));
-  }
-  if (value instanceof Date) return `date:${value.toISOString()}`;
-  const ownKind: unknown =
-    typeof value.constructor === "function"
-      ? Reflect.get(value.constructor, kind)
-      : undefined;
-  return [
-    typeof ownKind === "string" ? ownKind : null,
-    Object.keys(value)
-      .filter(key => key !== "table" && key !== "config")
-      .sort()
-      .map(key => [
-        key,
-        describeSetting((value as Record<string, unknown>)[key], kind, seen),
-      ]),
-  ];
-}
-
 function logStorageConfiguration(
   mediaStorage: MediaStorage,
   storagePlugins: StoragePlugin[] | undefined,
@@ -4472,6 +4319,13 @@ function registerCodeDefinedAccess(
 ): void {
   const rbacService = container.get<RBACAccessControlService>(
     "rbacAccessControlService"
+  );
+  // Which collections the configuration closes to super-admin, and how the
+  // marks set in the admin are read: registered with the rules, so every way
+  // in that asks the rules asks these too.
+  declareClosedToSuperAdmin(transformedConfig.collections ?? []);
+  useStoredClosedMarks(executor =>
+    readStoredClosedMarks(container.get<MetaService>("metaService"), executor)
   );
   // The targets a command asks the same rules through (`codeDefinedAccessTargets`).
   for (const target of codeDefinedAccessTargets(transformedConfig)) {
@@ -4948,7 +4802,7 @@ async function syncCodeFirstCollections(
             const { ensureCompanionTable } = await import(
               "../domains/i18n/runtime/companion-io"
             );
-            await ensureCompanionTable(adapter, {
+            const created = await ensureCompanionTable(adapter, {
               // This branch boots entities declared in nextly.config.ts.
               builtBy: "codeFirst" as const,
               slug,
@@ -4957,6 +4811,19 @@ async function syncCodeFirstCollections(
               dialect: syncDialect,
               status: publishesPerLanguage(desired),
             });
+            // A table made here gets its per-language unique indexes, as
+            // `nextly migrate` makes them: the table alone would accept a
+            // unique value twice.
+            if (created) {
+              const { reconcileCompanionUniquesAtStart } = await import(
+                "../domains/i18n/runtime/companion-unique-reconcile"
+              );
+              await reconcileCompanionUniquesAtStart(
+                adapter,
+                { builtBy: "codeFirst" as const, slug, tableName, fields },
+                message => logger.warn?.(message)
+              );
+            }
             const { buildCompanionRuntimeTable } = await import(
               "../domains/i18n/runtime/companion-registration"
             );
@@ -5164,7 +5031,7 @@ async function syncCodeFirstComponents(
             const { ensureCompanionTable } = await import(
               "../domains/i18n/runtime/companion-io"
             );
-            await ensureCompanionTable(adapter, {
+            const created = await ensureCompanionTable(adapter, {
               // A code-first component's companion, created on a fresh boot.
               builtBy: "codeFirst" as const,
               slug,
@@ -5173,6 +5040,23 @@ async function syncCodeFirstComponents(
               dialect,
               status: false,
             });
+            // A table made here gets its per-language unique indexes, as
+            // `nextly migrate` makes them.
+            if (created) {
+              const { reconcileCompanionUniquesAtStart } = await import(
+                "../domains/i18n/runtime/companion-unique-reconcile"
+              );
+              await reconcileCompanionUniquesAtStart(
+                adapter,
+                {
+                  builtBy: "codeFirst" as const,
+                  slug,
+                  tableName,
+                  fields: compConfig.fields as { name: string; type: string }[],
+                },
+                message => logger.warn?.(message)
+              );
+            }
             const { buildCompanionRuntimeTable } = await import(
               "../domains/i18n/runtime/companion-registration"
             );
@@ -5381,7 +5265,7 @@ async function reconcileSingleTablesForBoot(
             const { ensureCompanionTable } = await import(
               "../domains/i18n/runtime/companion-io"
             );
-            await ensureCompanionTable(adapter, {
+            const created = await ensureCompanionTable(adapter, {
               // From codeFirstConfig, so the pipeline owns this table.
               builtBy: "codeFirst" as const,
               slug: single.slug,
@@ -5393,6 +5277,23 @@ async function reconcileSingleTablesForBoot(
                 status: hasStatus,
               }),
             });
+            // A table made here gets its per-language unique indexes, as
+            // `nextly migrate` makes them.
+            if (created) {
+              const { reconcileCompanionUniquesAtStart } = await import(
+                "../domains/i18n/runtime/companion-unique-reconcile"
+              );
+              await reconcileCompanionUniquesAtStart(
+                adapter,
+                {
+                  builtBy: "codeFirst" as const,
+                  slug: single.slug,
+                  tableName: single.tableName,
+                  fields,
+                },
+                message => logger.warn?.(message)
+              );
+            }
             const { buildCompanionRuntimeTable } = await import(
               "../domains/i18n/runtime/companion-registration"
             );
@@ -6475,6 +6376,96 @@ async function entitiesTheLayoutCanRefuse<T extends { tableName: string }>(
 }
 
 /**
+ * For each configured code the configuration writes the earlier way, a warning naming the code it
+ * is read as; and a refusal while the database still stores rows under an older spelling of a
+ * configured language, since the site would read that language under the standard code and find
+ * nothing. `nextly migrate` moves them. The older spellings are found from the rows as well as the
+ * configuration, so a configuration already corrected to the standard code is still refused.
+ *
+ * The scan reads every translation table, so a start that finds nothing records it in `nextly_meta`
+ * for the languages it was configured with (`OLDER_CODES_CHECKED_KEY`), and a later start with the
+ * same languages does not scan again. Recording is an optimisation: a database it cannot be written
+ * to is scanned at each start instead.
+ */
+async function refuseOlderCodesStillStored(
+  adapter: DrizzleAdapter,
+  config: NextlyServiceConfig,
+  logger: Logger
+): Promise<void> {
+  const olderCodes = config.localization?.olderCodes ?? [];
+  for (const { from, to } of olderCodes) {
+    logger.warn(
+      `localization names the language "${from}", which is read as "${to}". Write "${to}" in the ` +
+        `configuration: the older spelling is accepted for one release.`
+    );
+  }
+  const codes = (config.localization?.locales ?? []).map(locale =>
+    typeof locale === "string" ? locale : locale.code
+  );
+  const {
+    OLDER_CODES_CHECKED_KEY,
+    olderCodesCheckedFor,
+    olderSpellingsOf,
+    storedOlderSpellings,
+    tablesHoldingCode,
+  } = await import("../domains/i18n/older-codes");
+  // An older spelling is the underscore form of a configured code with a part after its language
+  // (`olderSpellingsOf`, which the scan matches stored codes against). Where no configured code
+  // has one, and the configuration names no older spelling, no row can be under one: nothing is
+  // scanned for and nothing recorded, so the start reads and writes no `nextly_meta` row for it.
+  if (olderCodes.length === 0 && olderSpellingsOf(codes).size === 0) return;
+  const { MetaService } = await import("../domains/meta/services/meta-service");
+  const meta = new MetaService(adapter, logger);
+  const checked = olderCodesCheckedFor(codes);
+  const recorded = await meta
+    .get<string>(OLDER_CODES_CHECKED_KEY)
+    .catch(() => null);
+  if (olderCodes.length === 0 && recorded === checked) return;
+  const declared = await declaredLaidOutEntitiesAsStored(
+    adapter,
+    config,
+    startRegistryNow()
+  );
+  const entities = [
+    ...declared,
+    ...(await readLayoutScanEntities(
+      adapter,
+      new Set(declared.map(entity => entity.tableName)),
+      startRegistryNow()
+    )),
+  ];
+  const translationTables: string[] = [];
+  for (const entity of entities) {
+    const table = `${entity.tableName}_locales`;
+    if (await adapter.tableExists(table)) translationTables.push(table);
+  }
+  const spellings = new Map(olderCodes.map(({ from, to }) => [from, to]));
+  for (const { from, to } of await storedOlderSpellings(
+    adapter,
+    translationTables,
+    codes
+  )) {
+    spellings.set(from, to);
+  }
+  for (const [from, to] of spellings) {
+    const holding = await tablesHoldingCode(adapter, translationTables, from);
+    if (holding.length === 0) continue;
+    throw new NextlyError({
+      code: "NEXTLY_LANGUAGE_CODES_NOT_UPGRADED",
+      publicMessage:
+        `This database still stores content under the language code "${from}", which the site now ` +
+        `reads as "${to}". Run \`nextly migrate\` to move it, then restart.`,
+      logContext: { from, to, tables: holding },
+    });
+  }
+  await meta.set(OLDER_CODES_CHECKED_KEY, checked).catch((error: unknown) => {
+    logger.debug(
+      `Could not record that no older language code is stored: ${String(error)}`
+    );
+  });
+}
+
+/**
  * Refuses the boot of a site keeping every translatable field per language over a database whose
  * main tables still hold the translatable columns of an entity: one its configuration declares, or
  * one the Schema Builder made, read from the registries (`readLayoutScanEntities`).
@@ -6485,72 +6476,16 @@ async function refuseMixedStorageInConfig(
   // Which layout the setting chooses: a database laid out in the other is refused.
   perLanguage: boolean
 ): Promise<void> {
-  const [
-    { refuseMixedStorage },
-    { resolveSingleTableName },
-    { resolveCollectionTableName },
-    { readStoredFieldGroupTables, storedOrNewTableName },
-  ] = await Promise.all([
-    import("../domains/i18n/per-language-storage-layout"),
-    import("../domains/singles/services/resolve-single-table-name"),
-    import("../domains/schema/utils/resolve-table-name"),
-    import("../domains/field-groups/services/field-group-stored-tables"),
-  ]);
-  // A declared field group's table as its registry row names it, or, for one the registry does
-  // not hold yet, its name under the naming this site's storage is on. So it is matched with its
-  // own registry row below rather than judged a second time as a Builder entity, and the
-  // undeclared-languages check reads its real translation table. Only read when the configuration
-  // declares a group. A registry that cannot be read is left to the registry scan below, which
-  // refuses naming the registry it could not read.
-  const storedFieldGroups =
-    (config.fieldGroups ?? []).length === 0
-      ? undefined
-      : await readStoredFieldGroupTables(adapter);
-  const fieldGroupTableOf = (slug: string): string =>
-    storedOrNewTableName(
-      storedFieldGroups?.usable === true
-        ? storedFieldGroups
-        : { tables: new Map(), naming: "legacy" },
-      slug
-    );
-  type Entity = Parameters<typeof refuseMixedStorage>[1][number];
-  const fieldsOf = (entity: { fields?: unknown }) =>
-    (entity.fields ?? []) as Entity["fields"];
-  const entities: Entity[] = [
-    ...(config.collections ?? []).map(
-      (c): Entity => ({
-        kind: "collection",
-        slug: c.slug,
-        tableName: resolveCollectionTableName(
-          c.slug,
-          (c as { dbName?: string }).dbName
-        ),
-        fields: fieldsOf(c),
-        localized: (c as { localized?: unknown }).localized,
-      })
-    ),
-    ...(config.singles ?? []).map(
-      (s): Entity => ({
-        kind: "single",
-        slug: s.slug,
-        tableName: resolveSingleTableName({
-          slug: s.slug,
-          dbName: (s as { dbName?: string }).dbName,
-        }),
-        fields: fieldsOf(s),
-        localized: (s as { localized?: unknown }).localized,
-      })
-    ),
-    ...(config.fieldGroups ?? []).map(
-      (g): Entity => ({
-        kind: "component",
-        slug: g.slug,
-        tableName: fieldGroupTableOf(g.slug),
-        fields: fieldsOf(g),
-        localized: (g as { localized?: unknown }).localized,
-      })
-    ),
-  ];
+  const { refuseMixedStorage } = await import(
+    "../domains/i18n/per-language-storage-layout"
+  );
+  // Each declared field group under its stored table, so it is matched with its own registry row
+  // and the undeclared-languages check reads its real translation table.
+  const entities = await declaredLaidOutEntitiesAsStored(
+    adapter,
+    config,
+    startRegistryNow()
+  );
   const declaredTables = new Set(entities.map(entity => entity.tableName));
   // At a development start, an entity whose declaration a start already brought in line under the
   // same settings is not read again: nothing about its layout can have changed since.
@@ -6563,13 +6498,12 @@ async function refuseMixedStorageInConfig(
   );
   // The Schema Builder's entities, by their registered tables; one the configuration also declares
   // is judged as the configuration describes it.
-  judged.push(
-    ...(await readLayoutScanEntities(
-      adapter,
-      declaredTables,
-      startRegistryNow()
-    ))
+  const builderEntities = await readLayoutScanEntities(
+    adapter,
+    declaredTables,
+    startRegistryNow()
   );
+  judged.push(...builderEntities);
   await refuseMixedStorage(
     adapter,
     await entitiesTheLayoutCanRefuse(adapter, judged, perLanguage),
@@ -6592,9 +6526,11 @@ async function refuseMixedStorageInConfig(
       await storedLanguageReader(adapter).rows()
     );
     if (stored === undefined) {
+      // Every entity the site holds, the Schema Builder's too: a translation kept by one known
+      // only from its registry row reads as gone as surely as one the configuration declares.
       await refuseUndeclaredLanguages(
         adapter,
-        entities,
+        [...entities, ...builderEntities],
         IMPLICIT_LANGUAGE.code
       );
     }

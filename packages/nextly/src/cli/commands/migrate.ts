@@ -79,6 +79,11 @@ import {
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { seedAccessOnCommandConnection } from "../../domains/schema/migrate/command-access";
 import {
+  checkCompanionFiles,
+  judgeCompanionFiles,
+  warnOfSnapshotlessFile,
+} from "../../domains/schema/migrate/companion-drift";
+import {
   planCoreDeletions,
   planCoreReconcile,
   reconcileCore,
@@ -110,6 +115,7 @@ import {
   applyFailedError,
   reconcileFile,
   runRecordedAttempt,
+  snapshotsEquivalent,
 } from "../../domains/schema/migrate/drift-reconcile";
 import {
   leftoverTranslationsTables,
@@ -218,6 +224,13 @@ import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { danglingReferences } from "../../domains/schema/migrate/sqlite-foreign-keys";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
 import {
+  endsTheRun,
+  isStoppedAtPoint,
+  reachStopPoint,
+  withStopPoints,
+  type StopPointHook,
+} from "../../domains/schema/migrate/stop-points";
+import {
   adoptUniqueIndexesAlreadyThere,
   type AdoptedUniqueIndex,
   refuseUniqueIndexesOverRepeats,
@@ -279,6 +292,11 @@ import {
   newestAppliedAppMigration,
   writeRegistryRows,
 } from "../../domains/schema/schema-version";
+import {
+  fileTypeChangeRefusals,
+  fileTypeChangesOf,
+  refuseFileTypeChanges,
+} from "../../domains/schema/value-conversion/type-change/file-type-changes";
 import { provisionUserFieldStorage } from "../../domains/users/services/provision-user-field-storage";
 import { UserExtSchemaService } from "../../domains/users/services/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
@@ -331,6 +349,7 @@ import {
   coreUpgradeSource,
   judgeCoreDeletions,
 } from "./upgrade-steps/core-upgrade-consent";
+import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 // Re-exported for the callers that import it from this command. Other
 // commands import it from cli/utils, which does not pull this one in.
 export { installRegistryResolver };
@@ -742,6 +761,8 @@ export async function runMigrate(
       logger,
       backupConfirmed: options.backupConfirmed === true,
       lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
+      // The site the data steps bring an earlier release's content in step with.
+      site: upgradeSiteOf(configResult.config),
     });
 
     const ended = await moveEarlierRecords({
@@ -1301,6 +1322,13 @@ export interface MigrateCoreDeps {
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
   /**
+   * For tests: called at each named point the run reaches (`stop-points.ts`): before and after
+   * each statement of a file, once a file is recorded applied, as a dropped entity's registry row
+   * goes, once the registry write commits, and as what a dropped entity left goes. One that throws
+   * fails the run there.
+   */
+  stopAt?: StopPointHook;
+  /**
    * What the run does with the registry rows the migrations record:
    * `write` (the default, for `nextly migrate` and the production boot
    * step) brings each to the newest applied snapshot; `insert-missing`
@@ -1578,6 +1606,23 @@ export async function previewMigrate(args: {
     logger,
     pendingModules.length > 0
   );
+  // The field type changes of the first change a real run applies, judged as the run judges them:
+  // only the first, since nothing before a later one is run here. Behind pending plugin modules,
+  // which run first and may change the tables these files judge, none is: each change's file is
+  // named as not checked, rather than listed as though nothing would be refused.
+  if (pendingFiles.length > 0) {
+    await previewFileTypeChanges(
+      listed.map(({ file }) => file),
+      pendingFiles,
+      {
+        db,
+        dialect,
+        metaDir: resolve(args.migrationsDir, "meta"),
+        behindModules: pendingModules.length > 0,
+      },
+      logger
+    );
+  }
   // The translations tables deleted entities left, which a real run judges with its files'
   // deletions and drops under the consent: listed as it lists them, with the consent it needs.
   const leftovers = await leftoverTranslationsOf(
@@ -1599,6 +1644,24 @@ export async function previewMigrate(args: {
     dialect
   )) {
     logger.info(`  ✖ a real run would refuse ${file}: ${message}`);
+  }
+  // The translations tables a real run checks before its first file, judged the same way.
+  const { refusal: companionRefusal } = await judgeCompanionFiles({
+    db,
+    dialect,
+    applied: listed.filter(each => each.done).map(each => each.file),
+    pending: listed.filter(each => !each.done).map(each => each.file),
+    runs: new Set(pendingFiles.map(file => file.name)),
+    snapshotOf: name =>
+      loadTargetSnapshot(resolve(args.migrationsDir, "meta"), name),
+  });
+  if (companionRefusal !== undefined) {
+    logger.info(
+      `  ✖ a real run would refuse ${companionRefusal.migration}.sql: the translations table ${companionRefusal.table} lacks what the migrations record of it`
+    );
+    for (const item of companionRefusal.items) {
+      logger.info(`      ${item.kind} ${item.detail}`);
+    }
   }
   await previewOldBuilderFiles({ ...args, logger });
   if (hasLedger) await previewChangedFiles(rows, args, logger);
@@ -1868,6 +1931,58 @@ function previewPendingFile(
   // (`MIGRATION_NOT_PROVEN`); one that finds it at neither end refuses it for drift. Neither is
   // previewed: both depend on where the live schema stands.
   logger.info(`    UP, as written in the file:\n${m.upSql.trim()}`);
+}
+
+/**
+ * What a real run would refuse of the changes it applies, by their field type changes
+ * (`fileTypeChangeRefusals`). Only a change nothing runs before is judged here, after the newest
+ * snapshot before it, as the run judges it: a later one meets the database as the files before it
+ * leave it, which a dry run does not run, so each later change that changes a field's type is
+ * named as judged when the run reaches it, never listed as clean.
+ */
+async function previewFileTypeChanges(
+  files: readonly ParsedMigration[],
+  pending: readonly ParsedMigration[],
+  args: {
+    db: unknown;
+    dialect: SupportedDialect;
+    metaDir: string;
+    /** Plugin modules run first: no change is judged, each is named as not checked. */
+    behindModules: boolean;
+  },
+  logger: Pick<CommandContext["logger"], "info">
+): Promise<void> {
+  const runs = new Set(pending);
+  let at = files.indexOf(pending[0]);
+  if (at < 0) return;
+  let before = await newestSnapshotBefore(files, at, args.metaDir);
+  let first = !args.behindModules;
+  while (at < files.length && runs.has(files[at])) {
+    const change = await changeFilesFrom(files, at, args.metaDir, file =>
+      runs.has(file)
+    );
+    if (change === null) {
+      // A file that heads no change runs as written, so what follows is no longer this database.
+      first = false;
+      at += 1;
+      continue;
+    }
+    const source = change.source(before, args.dialect);
+    if (first) {
+      for (const refusal of await fileTypeChangeRefusals(args.db, source)) {
+        logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
+      }
+    } else if (fileTypeChangesOf(source).length > 0) {
+      logger.info(
+        args.behindModules
+          ? `  ⚠ field type changes in ${source.filename} were not checked: plugin modules run first, so a real run judges them only after those`
+          : `  ⚠ field type changes in ${source.filename} are judged when the run reaches it: a dry run does not run the files before it`
+      );
+    }
+    before = change.target;
+    first = false;
+    at += change.files.length;
+  }
 }
 
 /** A unit's deletions as the dry run lists them, with the consent a real run needs; nothing when none. */
@@ -2737,6 +2852,11 @@ async function addDocumentColumnsFor(deps: MigrateCoreDeps): Promise<void> {
 export async function migrateCore(
   deps: MigrateCoreDeps
 ): Promise<MigrateCoreResult> {
+  // A test's stop points (`stopAt`), installed for this run alone: the run itself goes on below.
+  if (deps.stopAt !== undefined) {
+    const { stopAt, ...run } = deps;
+    return withStopPoints(stopAt, () => migrateCore(run));
+  }
   // Refused HERE rather than in `runMigrate`, because this function is also
   // reached from `runMigrationsOnBoot` and from boot-apply. A refusal in the
   // command alone would let a production boot apply migrations that silently
@@ -2872,14 +2992,22 @@ export async function migrateCore(
       debug: (m: string) => deps.logger.debug(m),
     },
   });
+  /**
+   * The registry rows of the files that applied before one failed with `error`, except after a
+   * test's stop at a point (`stop-points.ts`), which ends the run where it stands.
+   */
+  const recordMetadataAfter = async (error: unknown): Promise<void> => {
+    if (!isStoppedAtPoint(error)) await recordMetadata();
+  };
   const recordMetadata = async (): Promise<void> => {
     deps.logger.info("Phase 3: recording migration metadata...");
     try {
       metadata = await reconcileMetadata(metadataArgs());
     } catch (error) {
       // A run that lost the schema lock stops here: it is not a bookkeeping
-      // failure to warn about and carry on from into Phase 4's writes.
-      if (isSchemaLockLost(error)) throw error;
+      // failure to warn about and carry on from into Phase 4's writes. Nor is
+      // a test's stop at a point (`stop-points.ts`).
+      if (endsTheRun(error)) throw error;
       // The whole pass failed, so nothing was read: say so in the result
       // rather than returning zeroes that read like "nothing needed doing".
       metadata = {
@@ -2920,6 +3048,15 @@ export async function migrateCore(
           await assertSchemaLockHeld();
           await deps.markOrphanedPermissions?.(scope, applied.name);
         };
+  /**
+   * What follows an applied app migration: its orphaned permissions marked, then the point a test
+   * stops the run at once the file and that are done (`stop-points.ts`), since a later run passes
+   * over a recorded file and nothing of it may be left for one.
+   */
+  const afterApplied = async (applied: AppliedAppMigration): Promise<void> => {
+    await markOrphans?.(applied);
+    await reachStopPoint(`${applied.name}.sql: recorded applied`);
+  };
   const dz = deps.adapter as unknown as DrizzleAdapter;
   /**
    * Store the registry record on `tx` at the point the database is now at,
@@ -3205,13 +3342,13 @@ export async function migrateCore(
           runFiles,
           judgedFiles,
           firstRun.beforeApply,
-          markOrphans
+          afterApplied
         ));
       } catch (error) {
         // A file failed after earlier ones applied: their registry rows are
         // still written, from the newest snapshot that did apply, before the
         // failure ends the run.
-        await recordMetadata();
+        await recordMetadataAfter(error);
         throw error;
       }
 
@@ -4795,6 +4932,95 @@ async function refusePendingFilesTheServerCannotHold(args: {
   }
 }
 
+/**
+ * The companion files `migrate:create` writes ahead of their change's own file
+ * (`generate.ts`' `beforeMain`): an entity's translation turned off, a field leaving translation's
+ * archive, and a field joining translation's move. The others are written after it.
+ */
+const WRITTEN_AHEAD: ReadonlySet<string> = new Set([
+  "disable",
+  "archive",
+  "joins",
+]);
+
+/**
+ * Whether `migrate:create` wrote `file` ahead of its change's own file: one of the kinds it always
+ * writes there (`WRITTEN_AHEAD`), or a `unique` file that drops per-language unique indexes, which
+ * runs first of all. A `unique` file that adds them is written after its change, and its header
+ * names the fields it indexes; one that only drops them names none.
+ */
+function writtenAhead(file: ParsedMigration): boolean {
+  const intent = file.localization;
+  if (intent === undefined) return false;
+  if (WRITTEN_AHEAD.has(intent.kind)) return true;
+  return intent.kind === "unique" && intent.spec.unique === undefined;
+}
+
+/**
+ * The files one change between two snapshots is written in, from `files[at]`: the companion files
+ * `migrate:create` writes ahead of the change's own file, each declaring what it is for
+ * (`localization`; a translated field's moves and renames among them), and that file, whose
+ * snapshot records the change. Null where `files[at]` begins no such change: a hand-written file,
+ * which states no field types and runs as it is written, before anything after it is judged; or a
+ * change whose own file `within` leaves out (the run stops before it).
+ */
+async function changeFilesFrom(
+  files: readonly ParsedMigration[],
+  at: number,
+  metaDir: string,
+  within: (file: ParsedMigration) => boolean = () => true
+): Promise<{
+  /** The change's own file's snapshot: what the next change is judged after. */
+  target: SnapshotFile;
+  files: readonly ParsedMigration[];
+  /** What `refuseFileTypeChanges` is asked with, judged after the change `before` records. */
+  source: (
+    before: SnapshotFile | null,
+    dialect: SupportedDialect
+  ) => Parameters<typeof refuseFileTypeChanges>[1];
+} | null> {
+  for (let end = at; end < files.length; end += 1) {
+    if (!within(files[end])) return null;
+    const target = await loadTargetSnapshot(metaDir, files[end].name);
+    if (target === null) {
+      // Only a companion `migrate:create` writes ahead of its change's own file heads that change
+      // (`writtenAhead`). Any other (one written after its own change's file, as a field leaving
+      // translation's `shared` copy and a `unique` file adding indexes are; a hand-written file)
+      // runs before the next change is judged, never inside it.
+      if (!writtenAhead(files[end])) return null;
+      continue;
+    }
+    const written = files.slice(at, end + 1);
+    return {
+      target,
+      files: written,
+      source: (before, dialect) => ({
+        filename: `${files[end].name}.sql`,
+        before: before?.entities,
+        target: target.entities,
+        statements: written.flatMap(file =>
+          splitSqlStatements(file.upSql, dialect, file)
+        ),
+        dialect,
+      }),
+    };
+  }
+  return null;
+}
+
+/** The newest snapshot of a file before `files[at]`, or null where none before it has one. */
+async function newestSnapshotBefore(
+  files: readonly ParsedMigration[],
+  at: number,
+  metaDir: string
+): Promise<SnapshotFile | null> {
+  for (let i = at - 1; i >= 0; i -= 1) {
+    const snapshot = await loadTargetSnapshot(metaDir, files[i].name);
+    if (snapshot !== null) return snapshot;
+  }
+  return null;
+}
+
 async function loadTargetSnapshot(
   metaDir: string,
   name: string
@@ -5149,6 +5375,18 @@ export async function runFileMigrations(args: {
     all.filter(m => plan.runs.has(m)),
     args.judged
   );
+  // The translations tables the pending companion files are about, compared with what the
+  // migrations around this point record of them, before any file applies: a table or column
+  // both the last applied and the newest pending snapshot name, and the database lacks, is
+  // drift and ends the run here.
+  const companions = await checkCompanionFiles({
+    db,
+    dialect,
+    applied: all.filter(m => plan.done.has(m)),
+    pending: all.filter(m => !plan.done.has(m)),
+    runs: new Set(all.filter(m => plan.runs.has(m)).map(m => m.name)),
+    snapshotOf: name => loadTargetSnapshot(metaDir, name),
+  });
 
   // The last file this run applied, which a run that lost the schema lock names, so the operator
   // knows where the database stands.
@@ -5157,8 +5395,11 @@ export async function runFileMigrations(args: {
   // not wrapped in a transaction, or any file on MySQL, where DDL commits as it runs. A lost lock
   // names it, since the database may then stand part-way through it.
   let running: string | undefined;
+  // The last file of the newest change whose field type changes were judged: each change is judged
+  // once, at its first file, before any of its files runs.
+  let judgedThrough = -1;
   try {
-    for (const m of all) {
+    for (const [index, m] of all.entries()) {
       const filename = `${m.name}.sql`;
       running = undefined;
       const targetFile = await loadTargetSnapshot(metaDir, m.name);
@@ -5223,6 +5464,21 @@ export async function runFileMigrations(args: {
       // A column made unique while its entries repeat a value: refused here too, before any
       // statement, where MySQL would otherwise keep every statement before the index's.
       await refuseUniqueIndexesOverRepeats(db, dialect, upStatements, filename);
+      // A field type change is judged over the values its column holds here, as a Schema Builder
+      // save judges it, once per change and before the first of the change's files runs, while
+      // every old column still holds its values: a value the new type cannot read refuses the run
+      // before any statement, naming the field, its rows and the file (`refuseFileTypeChanges`).
+      // It is taken here, with the files as written, and asked once the database is read below.
+      let typeChanges: Parameters<typeof refuseFileTypeChanges>[1] | undefined;
+      if (index > judgedThrough) {
+        const change = await changeFilesFrom(all, index, metaDir, file =>
+          plan.runs.has(file)
+        );
+        if (change !== null) {
+          judgedThrough = index + change.files.length - 1;
+          typeChanges = change.source(beforeFile, dialect);
+        }
+      }
       // A file adding per-language unique indexes is refused here, before the ledger records an
       // attempt and before any statement, where one cannot hold. It also answers with the UP to
       // run on THIS database, which leaves out an index already installed here.
@@ -5248,6 +5504,64 @@ export async function runFileMigrations(args: {
         before,
       });
       m.upSql = adoption.upSql;
+      // The database as this file finds it, read before the caller's last word below so the type
+      // change judgement can ask where it stands. Read only; nothing is written before the file.
+      let sides: ReturnType<typeof narrowToContributions> | undefined;
+      if (target) {
+        // Recompute the managed-table scope per file: tables created by earlier
+        // migrations in THIS run must be visible to this file's drift check.
+        // Capturing it once before the loop left it empty on a fresh DB, so the
+        // 2nd+ migration saw its tables as "absent" and aborted with false drift.
+        const liveTables = await safeListTables(adapter);
+        // Managed main tables only, for the same reason `migrate:resolve` uses
+        // this predicate: a localized companion never appears in the snapshot this
+        // is diffed against, so including one reports drift that is not there.
+        // Junctions are excluded alongside companions: neither is declared by
+        // config, so neither can appear in the snapshot this is compared against,
+        // and including one reports drift that no migration could ever resolve.
+        //
+        // The snapshots on either side of this file ARE the declaration, so a
+        // table named in them is a real one however much its name resembles the
+        // `<mainA>_<mainB>_<field>` shape a relationship produces.
+        const declared = new Set([
+          ...before.tables.map(t => t.name),
+          ...target.tables.map(t => t.name),
+        ]);
+        const managed = snapshotComparableTables(
+          liveTables,
+          declared,
+          args.knownJunctions
+        );
+        // Tables the app only contributes to are judged on the app's elements
+        // alone; see `narrowToContributions`.
+        sides = narrowToContributions({
+          before,
+          target,
+          // Without the indexes the file adopted, which its snapshot before it does not record.
+          // On a table the file itself creates they stay: a table that is there already, with
+          // them, is the file's own end, as where a migration written to record a merge
+          // creates a table an earlier one of the merge made.
+          live: withoutAdoptedIndexes(
+            await introspectLiveSnapshot(db, dialect, managed),
+            adoptedOnTablesOf(before, adoption.adopted)
+          ),
+          contributions: mergeContributions(
+            beforeContributions,
+            targetFile?.contributions ?? {}
+          ),
+        });
+      }
+      // Where the database already stands at this file's end (its statements committed, as MySQL
+      // commits each, and its ledger row never written), the reconcile records it without running
+      // a statement: no value is converted, and the column holds the new type already, so there
+      // is nothing to judge. Read as the source, it would refuse values the run never converts.
+      const atItsEnd =
+        sides !== undefined &&
+        !snapshotsEquivalent(sides.live, sides.before) &&
+        snapshotsEquivalent(sides.live, sides.target);
+      if (typeChanges !== undefined && !atItsEnd) {
+        await refuseFileTypeChanges(db, typeChanges);
+      }
       // The caller's last word before the file applies, every refusal of it passed.
       await args.beforeApply?.(m.name);
 
@@ -5258,10 +5572,13 @@ export async function runFileMigrations(args: {
         if (m.transaction === false || dialect === "mysql") running = filename;
         return executeSql(...statement);
       };
-      if (!target) {
-        // No paired snapshot (hand-written migration): run verbatim + record.
-        logger.warn(
-          `No snapshot for ${filename}; applying verbatim without drift checks.`
+      if (!target || sides === undefined) {
+        // No paired snapshot: run verbatim + record. A hand-written file is said to have no
+        // drift check; a companion file had its table checked before the run's first file.
+        warnOfSnapshotlessFile(
+          message => logger.warn(message),
+          filename,
+          companions
         );
         // With no snapshot to place the database, a failed attempt that may
         // have left statements applied is refused here as the reconcile
@@ -5306,48 +5623,6 @@ export async function runFileMigrations(args: {
         continue;
       }
 
-      // Recompute the managed-table scope per file: tables created by earlier
-      // migrations in THIS run must be visible to this file's drift check.
-      // Capturing it once before the loop left it empty on a fresh DB, so the
-      // 2nd+ migration saw its tables as "absent" and aborted with false drift.
-      const liveTables = await safeListTables(adapter);
-      // Managed main tables only, for the same reason `migrate:resolve` uses
-      // this predicate: a localized companion never appears in the snapshot this
-      // is diffed against, so including one reports drift that is not there.
-      // Junctions are excluded alongside companions: neither is declared by
-      // config, so neither can appear in the snapshot this is compared against,
-      // and including one reports drift that no migration could ever resolve.
-      //
-      // The snapshots on either side of this file ARE the declaration, so a
-      // table named in them is a real one however much its name resembles the
-      // `<mainA>_<mainB>_<field>` shape a relationship produces.
-      const declared = new Set([
-        ...before.tables.map(t => t.name),
-        ...target.tables.map(t => t.name),
-      ]);
-      const managed = snapshotComparableTables(
-        liveTables,
-        declared,
-        args.knownJunctions
-      );
-      // Tables the app only contributes to are judged on the app's elements
-      // alone; see `narrowToContributions`.
-      const sides = narrowToContributions({
-        before,
-        target,
-        // Without the indexes the file adopted, which its snapshot before it does not record.
-        // On a table the file itself creates they stay: a table that is there already, with
-        // them, is the file's own end, as where a migration written to record a merge
-        // creates a table an earlier one of the merge made.
-        live: withoutAdoptedIndexes(
-          await introspectLiveSnapshot(db, dialect, managed),
-          adoptedOnTablesOf(before, adoption.adopted)
-        ),
-        contributions: mergeContributions(
-          beforeContributions,
-          targetFile?.contributions ?? {}
-        ),
-      });
       // A field whose type this file changes has its entity's registry row
       // written with the file, not at the run's end, so no write is judged
       // against the type the column no longer has (`typeChangedRowsWriter`).
@@ -5418,6 +5693,7 @@ export async function runFileMigrations(args: {
               : [],
         }),
       });
+      // The file and its ledger row have committed (`stop-points.ts`).
       applied++;
       lastApplied = filename;
       appliedFiles.push(filename);

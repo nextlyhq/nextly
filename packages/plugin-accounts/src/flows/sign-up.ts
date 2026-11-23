@@ -15,7 +15,7 @@ import {
   reserveEmailRequest,
   type EmailRequestVerdict,
 } from "./email-limits";
-import { ADDRESS, NAME } from "./input";
+import { nameAndAddress } from "./input";
 import { pageLink } from "./links";
 import {
   breachedPasswordRefusal,
@@ -31,6 +31,7 @@ import {
 
 /** Why a sign-up was refused, said to the visitor. */
 export type SignUpRefusal =
+  | "sign-up-closed"
   | "invalid-name"
   | "invalid-address"
   | NewPasswordRefusal;
@@ -65,16 +66,19 @@ class AddressTaken extends Error {}
  * one, it queues a "someone tried to sign up" email to the address instead.
  * Either way it hashes the password and answers alike, with a sign-up
  * browser token, and starts no session: one starts at verification, in the
- * browser that signed up, or at a sign-in.
+ * browser that signed up, or at a sign-in. Where the site has closed
+ * sign-up, it refuses before reading anything the visitor sent, so every
+ * address is answered alike and nothing is counted, hashed or emailed.
  */
 export async function signUp(
   deps: FlowDeps,
   input: SignUpInput
 ): Promise<SignUpResult> {
-  const name = NAME.safeParse(input.name);
-  if (!name.success) return { status: "refused", reason: "invalid-name" };
-  const address = ADDRESS.safeParse(input.address);
-  if (!address.success) return { status: "refused", reason: "invalid-address" };
+  if (deps.settings.signUp === "closed")
+    return { status: "refused", reason: "sign-up-closed" };
+  const given = nameAndAddress(input);
+  if (given.status === "refused") return given;
+  const { name, address } = given;
 
   const local = await localPasswordRefusal(deps, input.password);
   if (local !== null) return { status: "refused", reason: local };
@@ -82,7 +86,7 @@ export async function signUp(
   // flood of sign-ups would make the site do.
   const verdict = await reserveEmailRequest(deps, {
     kind: EMAIL_REQUESTS.signUp,
-    addressKey: normaliseAddress(address.data),
+    addressKey: normaliseAddress(address),
     client: input.client,
   });
   if (verdict.status === "refused") return verdict;
@@ -94,8 +98,8 @@ export async function signUp(
 
   try {
     return await createAndMint(deps, {
-      name: name.data,
-      address: address.data,
+      name,
+      address,
       passwordHash,
       createdAt: deps.now(),
     });
@@ -103,7 +107,7 @@ export async function signUp(
     if (!(error instanceof AddressTaken)) throw error;
   }
 
-  return answerTaken(deps, address.data, input.browserToken);
+  return answerTaken(deps, address, input.browserToken);
 }
 
 async function createAndMint(

@@ -22,6 +22,8 @@ import type {
   ReviewScopeKind,
 } from "../../schemas/review-states/types";
 
+import type { WaitingPosition } from "./waiting-cursor";
+
 /** A document a workflow is attached to: a collection's entry, or a Single. */
 export interface ReviewDocument {
   scopeKind: ReviewScopeKind;
@@ -211,6 +213,40 @@ export async function readScopeReviewStates(
   return states;
 }
 
+/** Ids per statement: SQLite binds 999 values at most, the lowest of the dialects. */
+const ENTRY_IDS_PER_READ = 500;
+
+/**
+ * Every part with a review state of each of `entryIds`, documents of one collection or Single:
+ * a page of a list read at once, a statement per 500 documents, never one per document.
+ *
+ * @experimental
+ */
+export async function readReviewStatesOfDocuments(
+  db: ReviewStatesDb,
+  scope: { scopeKind: ReviewDocument["scopeKind"]; scopeSlug: string },
+  entryIds: readonly string[]
+): Promise<ReviewState[]> {
+  const states: ReviewState[] = [];
+  for (let at = 0; at < entryIds.length; at += ENTRY_IDS_PER_READ) {
+    const rows = await db.select<ReviewStateRow>(REVIEW_STATES_TABLE, {
+      where: {
+        and: [
+          { column: "scopeKind", op: "=", value: scope.scopeKind },
+          { column: "scopeSlug", op: "=", value: scope.scopeSlug },
+          {
+            column: "entryId",
+            op: "IN",
+            value: entryIds.slice(at, at + ENTRY_IDS_PER_READ),
+          },
+        ],
+      },
+    });
+    states.push(...rows.map(fromRow));
+  }
+  return states;
+}
+
 /** A stage of one collection or Single, as a filter on review states names it. */
 export interface ScopedStageFilter {
   kind: ReviewScopeKind;
@@ -220,16 +256,27 @@ export interface ScopedStageFilter {
 
 /**
  * How one stage of one collection or Single splits for a caller's waiting list. Parts assigned to
- * the caller or one of their roles (`mine`), and, where `unassigned`, parts no one is assigned,
- * wait for them by the stage alone: their own work. The rest of the stage waits for them only where
- * the part itself says so: its assignee, or its stage's default reviewer, may not take it on that
- * part (lost the step, or brought the part in where the step refuses that).
+ * the caller or one of their roles (`mine` in {@link WaitingTerms}), and, where `unassigned`,
+ * parts no one is assigned, wait for them by the stage alone: their own work. The rest of the stage
+ * waits for them only where the part itself says so: its assignee, or its stage's default reviewer,
+ * may not take it on that part (lost the step, or brought the part in where the step refuses
+ * that).
  *
  * @experimental
  */
 export interface WaitingStageTerms extends ScopedStageFilter {
-  mine: readonly ReviewAssignee[];
   unassigned: boolean;
+}
+
+/**
+ * A caller's waiting list's terms: who they stand for (`mine`, the same in every stage, so named
+ * once) and each stage they take a step out of.
+ *
+ * @experimental
+ */
+export interface WaitingTerms {
+  mine: readonly ReviewAssignee[];
+  stages: readonly WaitingStageTerms[];
 }
 
 /** Which of a stage's parts a read takes: the caller's own work, or the rest of the stage. */
@@ -291,52 +338,91 @@ function inStage(scoped: ScopedStageFilter): WhereClause {
 }
 
 /**
- * The filter for `share` of each stage `terms` names, or null where it can match nothing. The two
- * shares split every part of a stage between them, each part into exactly one.
+ * The filter for `share` of the one stage `term` names, given `assigned` (the share's assignee
+ * filter, built once for every stage), or null where it can match nothing. The two shares split
+ * every part of a stage between them, each part into exactly one.
  */
 function waitingWhere(
-  terms: readonly WaitingStageTerms[],
-  share: WaitingShare
+  term: WaitingStageTerms,
+  share: WaitingShare,
+  assigned: WhereClause | null
 ): WhereClause | null {
-  const stages = terms.flatMap((term): WhereClause[] => {
-    const whose = (
-      share === "own"
-        ? [assignedTo(term.mine), term.unassigned ? UNASSIGNED : null]
-        : [assignedToOthers(term.mine), term.unassigned ? null : UNASSIGNED]
-    ).filter((clause): clause is WhereClause => clause !== null);
-    return whose.length === 0 ? [] : [{ and: [inStage(term), { or: whose }] }];
-  });
-  return stages.length === 0 ? null : { or: stages };
+  const unassigned = share === "own" ? term.unassigned : !term.unassigned;
+  const whose = [assigned, unassigned ? UNASSIGNED : null].filter(
+    (clause): clause is WhereClause => clause !== null
+  );
+  return whose.length === 0 ? null : { and: [inStage(term), { or: whose }] };
+}
+
+/**
+ * "Past `after` in the waiting list's order": entered the stage later, or at the same time with a
+ * greater key. Entry time and key order every part exactly once, so a read from a position never
+ * repeats or skips one.
+ */
+function pastPosition(after: WaitingPosition): WhereClause {
+  return {
+    or: [
+      { column: "enteredAt", op: ">", value: after.enteredAt },
+      {
+        and: [
+          { column: "enteredAt", op: "=", value: after.enteredAt },
+          { column: "partKey", op: ">", value: after.partKey },
+        ],
+      },
+    ],
+  };
 }
 
 /**
  * `share` of the review states in the stages `terms` names, oldest entry into their stage first, at
- * most `limit` of them past the first `offset`: the candidates a waiting list decides part by part, read checks and pages
- * from. Bounded, as a stage may hold any number of parts.
+ * most `limit` of them, starting just past `after` where it is given: the candidates a waiting list
+ * decides part by part, read checks and pages from. Bounded, as a stage may hold any number of
+ * parts.
+ *
+ * Read a stage at a time, each read in the waiting index's order within its one stage (so its limit
+ * stops the index scan, where an OR across stages would sort every match first), and merged: the
+ * first `limit` of all of them are the first `limit` of the share.
  *
  * @experimental
  */
 export async function readWaitingReviewStates(
   db: ReviewStatesDb,
-  terms: readonly WaitingStageTerms[],
+  terms: WaitingTerms,
   share: WaitingShare,
   limit: number,
-  // How many of the share's states, in this order, an earlier window already read.
-  offset = 0
+  // The position of the last state an earlier read consumed: a keyset, so a read deep in a long
+  // list costs what its first does.
+  after?: WaitingPosition
 ): Promise<ReviewState[]> {
-  const where = waitingWhere(terms, share);
-  if (where === null) return [];
-  const rows = await db.select<ReviewStateRow>(REVIEW_STATES_TABLE, {
-    where,
-    // Stable across pages: entry into the stage, then the row's own key.
-    orderBy: [
-      { column: "enteredAt", direction: "asc" },
-      { column: "partKey", direction: "asc" },
-    ],
-    limit,
-    ...(offset > 0 ? { offset } : {}),
-  });
-  return rows.map(fromRow);
+  // Who the share's parts are assigned to, the caller's ids named once for every stage.
+  const assigned =
+    share === "own" ? assignedTo(terms.mine) : assignedToOthers(terms.mine);
+  const merged: ReviewState[] = [];
+  for (const term of terms.stages) {
+    const whose = waitingWhere(term, share, assigned);
+    if (whose === null) continue;
+    const rows = await db.select<ReviewStateRow>(REVIEW_STATES_TABLE, {
+      where:
+        after === undefined ? whose : { and: [whose, pastPosition(after)] },
+      // Stable across pages: entry into the stage, then the row's own key.
+      orderBy: [
+        { column: "enteredAt", direction: "asc" },
+        { column: "partKey", direction: "asc" },
+      ],
+      limit,
+    });
+    merged.push(...rows.map(fromRow));
+  }
+  return merged.sort(waitingOrder).slice(0, limit);
+}
+
+/**
+ * Where `state` stands in the waiting list's order: its entry into the stage and its key.
+ *
+ * @experimental
+ */
+export function waitingPosition(state: ReviewState): WaitingPosition {
+  return { enteredAt: state.enteredAt, partKey: orderKey(state) };
 }
 
 /**

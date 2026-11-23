@@ -207,7 +207,9 @@ export async function loadDynamicTables(
      * caller that emits DDL has to describe a column the way its creator built it, and these
      * tables hold both kinds. `undefined` where the registry is too old to say.
      */
-    builderOwned: boolean | undefined
+    builderOwned: boolean | undefined,
+    /** The entity's slug, which its content and history are addressed by. */
+    slug: string
   ) => Promise<void>,
   options: DynamicTableLoadOptions = {}
 ): Promise<DynamicTableLoadResult> {
@@ -335,7 +337,8 @@ export async function loadDynamicTables(
           fields,
           hasStatus,
           localized,
-          builderOwned
+          builderOwned,
+          String(row.slug)
         );
         result.registered += 1;
       } catch (err) {

@@ -86,6 +86,11 @@ export interface FindParams {
    */
   translationStatus?: boolean;
   /**
+   * Request each row's review state under `_review` (`?reviewState=true`): each part where it
+   * stands in the collection's workflow, as the Review column and the bulk moves read it.
+   */
+  reviewState?: boolean;
+  /**
    * Count the total no further than the server's cap (`?count=capped`), so a
    * very large list says "1000+" instead of counting every row.
    */
@@ -392,6 +397,10 @@ export const buildFindQuery = (params: FindParams): string => {
   }
   if (params.cappedCount) {
     query.set("count", "capped");
+  }
+  // Opt into each row's review state, for a collection a workflow holds.
+  if (params.reviewState) {
+    query.set("reviewState", "true");
   }
 
   return query.toString();

@@ -13,145 +13,307 @@
  */
 import type { AllowedOperation } from "./catalog";
 
-/** Why the role index is safe: an index on an existing column, no row changes. */
-const ROLE_INDEX =
-  "The index on user_roles.role_id that the last-super-admin check reads by. It adds an index over an existing column and changes no row.";
+/**
+ * The form builder's record fields stop being translated (#5104): a
+ * submission's spam reason, notes, IP address, user agent, page, editor and
+ * title, and the text fields of its sends, resend requests and uploads. Each
+ * gets its column on the entity's own table back, filled with the default
+ * language's value before any setting it carries is applied; any other
+ * language's value is copied to the localization archive; then its column in
+ * the translations table is dropped, under the consent in `UPGRADE_CONSENT`.
+ * `upgrade-plan.integration.test.ts` checks every seeded value is still kept.
+ */
+const FORM_RECORD_SHARED =
+  "A form builder record field stops being translated: its default-language value moves to the entity's own table and other languages go to the localization archive before its translations column is dropped, with consent. No value is lost.";
 
-/** Why the version history's new column is safe. */
-const FIELD_SOURCES =
-  "A REST restore records, on the version it writes, which version each restored field came from. The column is new and nullable, so existing versions read as recording no sources.";
-
-/** Why the version history's changed-parts columns are safe. */
-const CHANGED_PARTS =
-  "A version now records which languages it changed and whether it changed the shared part. Both columns are new and nullable with no default, so existing versions read as unknown and keep every value they had.";
+/** Why a submission's form column becomes nullable. */
+const FORM_ID_NULLABLE =
+  "A submission's form column becomes nullable (#5104), so an installation holding a submission without one can upgrade; the form builder refuses a submission without its form when it is written. Dropping NOT NULL keeps every value.";
 
 /**
- * The form builder's own collections, which it declares and which upgrade with
- * it. Each is the plugin's declaration changing, as an app's config change
- * would, not Nextly deriving something new from an unchanged declaration.
+ * The columns the upgrade removes, each once its values are kept elsewhere:
+ * the form builder's record fields (a submission's spam reason, notes, IP
+ * address, user agent, page, editor and title; the text fields of its sends,
+ * resend requests and uploads) stop being translated, so each field's
+ * default-language value moves back to its entity's own table, any other
+ * language's value goes to the localization archive, and its column in the
+ * translations table is dropped. The gate passes exactly these as
+ * `--accept-data-loss`, so a deletion beyond them is refused, and
+ * `upgrade-plan.integration.test.ts` checks every value is still kept after.
+ * The same on every dialect.
  */
-const FORM_BUILDER_SENDS =
-  "The form builder now queues each notification of a submission as a row, and records each resend. New tables of the plugin's own; nothing existing moves.";
-const FORM_BUILDER_UPLOADS =
-  "The form builder now records the files a submission uploaded, so deleting the submission deletes them. A new table of the plugin's own.";
-const FORM_BUILDER_PAGE =
-  "A submission now keeps the page it was sent from. New and nullable: existing submissions read as sent from no recorded page.";
-const FORM_BUILDER_ASKED =
-  "A submission now keeps the questions it was asked, as the form stood when it was answered. New and nullable: existing submissions hold none, and keep every answer they had.";
-const FORM_BUILDER_TITLE =
-  "The submission's title became a declared, optional field. Dropping NOT NULL keeps every existing value and refuses nothing a site wrote before.";
+export const UPGRADE_CONSENT: readonly string[] = [
+  "dc_form_submissions_locales.spam_reason",
+  "dc_form_submissions_locales.notes",
+  "dc_form_submissions_locales.ip_address",
+  "dc_form_submissions_locales.user_agent",
+  "dc_form_submissions_locales.page",
+  "dc_form_submissions_locales.edited_by",
+  "dc_form_submissions_locales.title",
+  "dc_form_submission_sends_locales.send_key",
+  "dc_form_submission_sends_locales.notification_name",
+  "dc_form_submission_sends_locales.state",
+  "dc_form_submission_sends_locales.retired_by",
+  "dc_form_submission_sends_locales.requested_by",
+  "dc_form_submission_sends_locales.resend",
+  "dc_form_uploads_locales.field",
+  "dc_form_submission_resends_locales.notification",
+  "dc_form_submission_resends_locales.requested_by",
+];
 
 export const ALLOWED_OPERATIONS: readonly AllowedOperation[] = [
   {
-    operation: "create index user_roles.user_roles_role_id_idx: (role_id)",
-    dialects: ["sqlite"],
-    reason: ROLE_INDEX,
+    operation:
+      "add column dc_form_submission_resends.notification: text not null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "add column dc_form_submission_resends.requested_by: text null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
   },
   {
     operation:
-      "create index user_roles.user_roles_role_id_idx: USING btree (role_id)",
-    dialects: ["postgresql"],
-    reason: ROLE_INDEX,
+      "add column dc_form_submission_sends.notification_name: text null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
   },
   {
-    operation:
-      "create index user_roles.user_roles_role_id_idx: btree (role_id)",
-    dialects: ["mysql"],
-    reason: ROLE_INDEX,
+    operation: "add column dc_form_submission_sends.requested_by: text null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
   },
   {
-    operation: "add column nextly_versions.field_sources: text null",
-    dialects: ["sqlite"],
-    reason: FIELD_SOURCES,
+    operation: "add column dc_form_submission_sends.resend: text null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
   },
   {
-    operation: "add column nextly_versions.field_sources: jsonb null",
-    dialects: ["postgresql"],
-    reason: FIELD_SOURCES,
+    operation: "add column dc_form_submission_sends.retired_by: text null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
   },
   {
-    operation: "add column nextly_versions.field_sources: json null",
-    dialects: ["mysql"],
-    reason: FIELD_SOURCES,
+    operation: "add column dc_form_submission_sends.send_key: text not null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
   },
   {
-    operation: "add column nextly_versions.changed_locales: text null",
-    dialects: ["sqlite"],
-    reason: CHANGED_PARTS,
+    operation: "add column dc_form_submission_sends.state: text null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
   },
   {
-    operation: "add column nextly_versions.changed_locales: jsonb null",
-    dialects: ["postgresql"],
-    reason: CHANGED_PARTS,
+    operation: "add column dc_form_submissions.edited_by: text null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
   },
   {
-    operation: "add column nextly_versions.changed_locales: json null",
-    dialects: ["mysql"],
-    reason: CHANGED_PARTS,
+    operation: "add column dc_form_submissions.ip_address: text null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
   },
   {
-    operation: "add column nextly_versions.shared_changed: integer null",
-    dialects: ["sqlite"],
-    reason: CHANGED_PARTS,
-  },
-  {
-    operation: "add column nextly_versions.shared_changed: boolean null",
-    dialects: ["postgresql"],
-    reason: CHANGED_PARTS,
-  },
-  {
-    operation: "add column nextly_versions.shared_changed: tinyint(1) null",
-    dialects: ["mysql"],
-    reason: CHANGED_PARTS,
-  },
-  {
-    operation: "create table dc_form_submission_sends",
-    reason: FORM_BUILDER_SENDS,
-  },
-  {
-    operation: "create table dc_form_submission_resends",
-    reason: FORM_BUILDER_SENDS,
-  },
-  {
-    operation: "create table dc_form_uploads",
-    reason: FORM_BUILDER_UPLOADS,
+    operation: "add column dc_form_submissions.notes: text null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
   },
   {
     operation: "add column dc_form_submissions.page: text null",
-    dialects: ["sqlite", "postgresql"],
-    reason: FORM_BUILDER_PAGE,
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "add column dc_form_submissions.spam_reason: text null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "add column dc_form_submissions.title: text null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "add column dc_form_submissions.user_agent: text null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "add column dc_form_uploads.field: text not null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "change column dc_form_submissions.form: text not null -> text null",
+    dialects: ["postgresql", "sqlite"],
+    reason: FORM_ID_NULLABLE,
+  },
+  {
+    operation: "drop column dc_form_submission_resends_locales.notification",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submission_resends_locales.requested_by",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submission_sends_locales.notification_name",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submission_sends_locales.requested_by",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submission_sends_locales.resend",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submission_sends_locales.retired_by",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submission_sends_locales.send_key",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submission_sends_locales.state",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submissions_locales.edited_by",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submissions_locales.ip_address",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submissions_locales.notes",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submissions_locales.page",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submissions_locales.spam_reason",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submissions_locales.title",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_submissions_locales.user_agent",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation: "drop column dc_form_uploads_locales.field",
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "add column dc_form_submission_resends.notification: varchar(255) not null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "add column dc_form_submission_resends.requested_by: varchar(255) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "add column dc_form_submission_sends.notification_name: varchar(255) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "add column dc_form_submission_sends.requested_by: varchar(255) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "add column dc_form_submission_sends.resend: varchar(255) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "add column dc_form_submission_sends.retired_by: varchar(255) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "add column dc_form_submission_sends.send_key: varchar(255) not null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "add column dc_form_submission_sends.state: varchar(255) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "add column dc_form_submissions.edited_by: varchar(255) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "add column dc_form_submissions.ip_address: varchar(255) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "add column dc_form_submissions.notes: text null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
   },
   {
     operation:
       "add column dc_form_submissions.page: text null collate utf8mb4_0900_ai_ci",
     dialects: ["mysql"],
-    reason: FORM_BUILDER_PAGE,
-  },
-  {
-    operation: "add column dc_form_submissions.asked: text null",
-    dialects: ["sqlite"],
-    reason: FORM_BUILDER_ASKED,
-  },
-  {
-    operation: "add column dc_form_submissions.asked: jsonb null",
-    dialects: ["postgresql"],
-    reason: FORM_BUILDER_ASKED,
-  },
-  {
-    operation: "add column dc_form_submissions.asked: json null",
-    dialects: ["mysql"],
-    reason: FORM_BUILDER_ASKED,
+    reason: FORM_RECORD_SHARED,
   },
   {
     operation:
-      "change column dc_form_submissions.title: text not null -> text null",
-    dialects: ["sqlite", "postgresql"],
-    reason: FORM_BUILDER_TITLE,
+      "add column dc_form_submissions.spam_reason: varchar(255) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
   },
   {
     operation:
-      "change column dc_form_submissions.title: varchar(255) not null collate utf8mb4_0900_ai_ci -> varchar(255) null collate utf8mb4_0900_ai_ci",
+      "add column dc_form_submissions.title: varchar(255) null collate utf8mb4_0900_ai_ci",
     dialects: ["mysql"],
-    reason: FORM_BUILDER_TITLE,
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "add column dc_form_submissions.user_agent: varchar(255) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "add column dc_form_uploads.field: varchar(255) not null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_RECORD_SHARED,
+  },
+  {
+    operation:
+      "change column dc_form_submissions.form: varchar(36) not null collate utf8mb4_0900_ai_ci -> varchar(36) null collate utf8mb4_0900_ai_ci",
+    dialects: ["mysql"],
+    reason: FORM_ID_NULLABLE,
   },
 ];

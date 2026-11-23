@@ -227,10 +227,24 @@ export class RoleInheritanceService extends BaseService {
    * @returns Array of ancestor role IDs (excluding the starting roleId)
    */
   async listAncestorRoles(roleId: string): Promise<string[]> {
+    return this.listAncestorRolesOfAll([roleId]);
+  }
+
+  /**
+   * Every ancestor of any of `roleIds`, in one breadth-first walk up from all
+   * of them together: a read per level of the hierarchy (per 50 roles), not a
+   * walk per role. A starting role is included only where it is an ancestor
+   * of another. {@link listAncestorRoles} is this asked of one role.
+   *
+   * Safety limit: MAX_ROLE_HIERARCHY_DEPTH roles visited per starting role,
+   * the bound a walk from each alone would have.
+   */
+  async listAncestorRolesOfAll(roleIds: readonly string[]): Promise<string[]> {
+    if (roleIds.length === 0) return [];
     // Up the inheritance, as far as the limit reaches: a list, so a walk cut
     // short is the part it reached.
     const { ids } = await walkRoleGraph(
-      [roleId],
+      roleIds,
       async batch =>
         (
           await (this.db as RBACDatabaseInstance).query.roleInherits.findMany({
@@ -238,7 +252,10 @@ export class RoleInheritanceService extends BaseService {
             columns: { parentRoleId: true },
           })
         ).map(r => r.parentRoleId),
-      { seedsVisited: false, limit: MAX_ROLE_HIERARCHY_DEPTH }
+      {
+        seedsVisited: false,
+        limit: MAX_ROLE_HIERARCHY_DEPTH * new Set(roleIds).size,
+      }
     );
     return ids;
   }

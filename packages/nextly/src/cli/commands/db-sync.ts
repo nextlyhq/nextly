@@ -117,9 +117,10 @@ import {
   syncUserFields,
 } from "./dev-build";
 import { ensureCoreTables, productionSyncRefusal } from "./dev-server";
-import { planWithStoredData, storedDataOfRun } from "./stored-data-of-run";
 import { createDebouncedSync } from "./dev-watcher";
+import { planWithStoredData, storedDataOfRun } from "./stored-data-of-run";
 import { syncSchemaInOrder } from "./sync-schema";
+import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 
 // ============================================================================
 // Types
@@ -346,6 +347,8 @@ export async function runDbSync(
   const storedData = storedDataOfRun({
     adapter: adapter as unknown as DrizzleAdapter,
     command: "nextly db:sync",
+    // The site the data steps bring an earlier release's content in step with.
+    site: upgradeSiteOf(configResult.config),
     // The sync goes on registering tables in the registry it installed.
     restoreResolver: () =>
       (adapter as unknown as DrizzleAdapter).setTableResolver(schemaRegistry),
@@ -596,6 +599,7 @@ async function reportSyncDryRun(
       storedDataOfRun({
         adapter: adapter as unknown as DrizzleAdapter,
         command: "nextly db:sync",
+        site: upgradeSiteOf(configResult.config),
         logger,
         backupConfirmed: options.backupConfirmed === true,
         lockTtlSeconds: undefined,

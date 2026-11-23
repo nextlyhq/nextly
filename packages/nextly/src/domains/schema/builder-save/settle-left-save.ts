@@ -83,7 +83,26 @@ export interface SettledSave {
   outcome: SettledOutcome;
   /** What the settle could not do, to say to whoever is told: a definition edited since, say. */
   notes: string[];
+  /**
+   * Why the record of a save settled "all" still stands, where it does: `registry-row` where the
+   * entity has no registry row to bring up (a create stopped before writing it), which the start's
+   * migrate step adds from the newest applied snapshot; `saved-definition` where the record keeps no
+   * saved definition it can read, so its row may stand stale and nothing here brings it up. Absent
+   * where the record cleared, and for the other outcomes.
+   */
+  keptFor?: KeptFor;
+  /**
+   * Set where the save deleted the entity and this settle finished that delete, its registry row
+   * removed: a delete of the entity asked again after it has nothing left to do.
+   */
+  removed?: true;
 }
+
+/** Why an "all" record stands (`SettledSave.keptFor`). */
+export type KeptFor = "registry-row" | "saved-definition";
+
+/** What a settle of an "all" record says beside its outcome. */
+type AllFacts = Pick<SettledSave, "keptFor" | "removed">;
 
 /** What the settle works with. */
 export interface SettleDeps {
@@ -98,11 +117,6 @@ export interface SettleDeps {
     warn(message: string): void;
   };
   /**
-   * The registry row's write for a Single or a field group whose save landed whole: its fields and
-   * whether it is translated, as the saved definition holds them. A collection's waits on its own
-   * service, and its record stays (`settleLeftSave`).
-   */
-  /**
    * Keep the record of a save left "pending" rather than clear it: at a Builder save, which cannot
    * run the save's remaining files and is refused until a start has.
    */
@@ -110,21 +124,13 @@ export interface SettleDeps {
   /** Only the records with these ids, where given: those a settle before a save left standing. */
   only?: ReadonlySet<string>;
   /**
-   * Whether the entity's registry row already holds the saved fields and translation flag. For a
-   * collection, whose row this step does not write.
-   */
-  registryHolds(entity: {
-    kind: AddressKind;
-    slug: string;
-    saved: SavedEntity | null;
-  }): Promise<boolean>;
-  /**
-   * Answers whether the row now stands as the save left it: brought up or already so, or removed
-   * for a delete. False where there is no row to bring up (a create stopped before its row was
-   * written), which the settle cannot make.
+   * The registry row's write for an entity whose save landed whole: its fields and whether it is
+   * translated, as the saved definition holds them. Answers whether the row now stands as the save
+   * left it: brought up or already so, or removed for a delete. False where there is no row to
+   * bring up (a create stopped before its row was written), which the settle cannot make.
    */
   writeRegistry(entity: {
-    kind: "single" | "fieldGroup";
+    kind: AddressKind;
     slug: string;
     /** The entity as the saved definition holds it; null where the save deleted it. */
     saved: SavedEntity | null;
@@ -227,13 +233,15 @@ export async function settleBeforeBuilderSave(
   adapter: DrizzleAdapter,
   migrationsDir: string,
   logger: SettleDeps["logger"]
-): Promise<string[]> {
+): Promise<SettledSave[]> {
   const settled = await settleHeld(adapter, migrationsDir, logger);
   const pending = settled.filter(s => s.outcome === "pending");
   if (pending.length > 0) throw pendingSaveRefusal(pending);
   // The records this settle judged: those still standing (left, or a collection's kept for its
-  // registry row) are judged again after the save; one cleared is not read again.
-  return settled.map(s => s.id);
+  // registry row) are judged again after the save, by id; one cleared is not read again. The save
+  // is told of each, so one asking for what a settled save already did (a delete it finished) is
+  // answered as done.
+  return settled;
 }
 
 /**
@@ -261,11 +269,10 @@ async function settleHeld(
   only?: ReadonlySet<string>
 ): Promise<SettledSave[]> {
   // Loaded on demand, as the exclusion loads the writer hold: this runs only where a save writes.
-  const [{ container }, { settleRegistryReader, settleRegistryWriter }] =
-    await Promise.all([
-      import("../../../di/container"),
-      import("./settle-registry"),
-    ]);
+  const [{ container }, { settleRegistryWriter }] = await Promise.all([
+    import("../../../di/container"),
+    import("./settle-registry"),
+  ]);
   if (!container.has("builderSaveSetup")) return [];
   const setup = container.get<{ projectRoot: string; database: string }>(
     "builderSaveSetup"
@@ -279,7 +286,6 @@ async function settleHeld(
     keepPending: true,
     ...(only === undefined ? {} : { only }),
     writeRegistry: settleRegistryWriter(adapter),
-    registryHolds: settleRegistryReader(adapter),
   });
 }
 
@@ -305,21 +311,27 @@ async function settleLeftSave(
   record: LeftSave
 ): Promise<SettledSave> {
   const notes: string[] = [];
-  const outcome = await settledOutcome(deps, record, notes);
+  const kept: AllFacts = {};
+  const outcome = await settledOutcome(deps, record, notes, kept);
   return {
     id: record.id,
     kind: record.kind,
     slug: record.slug,
     outcome,
     notes,
+    ...kept,
   };
 }
 
-/** What `settleLeftSave` did, with what it could not do added to `notes`. */
+/**
+ * What `settleLeftSave` did, with what it could not do added to `notes`, and in `kept` why an "all"
+ * record stays, where it does, and whether it finished a delete.
+ */
 async function settledOutcome(
   deps: SettleDeps,
   record: LeftSave,
-  notes: string[]
+  notes: string[],
+  kept: AllFacts
 ): Promise<SettledOutcome> {
   if (record.applies !== true) {
     // Made outside development, the save left its files for `nextly migrate`: its tables stand
@@ -359,7 +371,7 @@ async function settledOutcome(
   // "all" or "pending": the saved definition stands, which its files are written from.
   notes.push(...(await keepSavedDefinition(deps, record)));
   if (judged === "pending") return settlePending(deps, record);
-  return settleAll(deps, repo, record, files, notes);
+  return settleAll(deps, repo, record, files, notes, kept);
 }
 
 /** A save none of which applied: its files go and its definition is put back, by rule. */
@@ -498,13 +510,18 @@ async function settlePending(
   return "pending";
 }
 
-/** A save that applied whole: its files recorded applied, its registry row brought up. */
+/**
+ * A save that applied whole: its files recorded applied, its registry row brought up, or removed
+ * for a delete (`kept.removed`). Where its record stays, `kept` says why, so a start settles it
+ * again or holds back what its row would mislead.
+ */
 async function settleAll(
   deps: SettleDeps,
   repo: SchemaEventsRepository,
   record: LeftSave,
   files: readonly string[],
-  notes: string[]
+  notes: string[],
+  kept: AllFacts
 ): Promise<SettledOutcome> {
   for (const filename of files) {
     if (!(await repo.isFileApplied(filename))) {
@@ -534,27 +551,11 @@ async function settleAll(
     notes.push(
       "the saved definition is not kept; the registry row is left as it is"
     );
+    kept.keptFor = "saved-definition";
     return "all";
   }
-  if (record.kind === "collection") {
-    // A collection's registry row is written by its own service, which this step cannot reach
-    // yet. Where the row already holds the saved fields (a retry's push wrote it), there is nothing
-    // left to bring up and the record clears; otherwise its files are recorded and it stays.
-    if (
-      await deps.registryHolds({ kind: "collection", slug: record.slug, saved })
-    ) {
-      await clearSettledSave(deps.adapter, deps.projectRoot, record);
-      deps.logger.info(
-        `Settled a Builder save of the ${described(record)} that applied whole before it stopped: its files are recorded applied, and its registry row already holds the saved fields.`
-      );
-      return "all";
-    }
-    deps.logger.warn(
-      `A Builder save of the ${described(record)} applied whole before it stopped, and its files are now recorded applied, but its registry row cannot be brought up here yet. Its record stays.`
-    );
-    notes.push("the collection's registry row is not brought up yet");
-    return "all";
-  }
+  // Every kind's row, a collection's included, is brought up the one way: the registry tables
+  // keep a save's fields, translation flag and schema version in the same columns.
   if (
     !(await deps.writeRegistry({ kind: record.kind, slug: record.slug, saved }))
   ) {
@@ -564,8 +565,10 @@ async function settleAll(
       `A Builder save of the ${described(record)} applied whole before it stopped, and its files are now recorded applied, but it has no registry row to bring up. Its record stays.`
     );
     notes.push("no registry row to bring up");
+    kept.keptFor = "registry-row";
     return "all";
   }
+  if (saved === null) kept.removed = true;
   await clearSettledSave(deps.adapter, deps.projectRoot, record);
   deps.logger.info(
     `Settled a Builder save of the ${described(record)} that applied whole before it stopped: its files are recorded applied and its registry row brought up.`
@@ -698,7 +701,8 @@ async function movedPast(
 }
 
 /** The registry table an entity of `kind` is recorded in. */
-async function registryTableOf(
+/** The registry table an entity of `kind` keeps its row in. */
+export async function registryTableOf(
   adapter: DrizzleAdapter,
   kind: AddressKind
 ): Promise<string> {

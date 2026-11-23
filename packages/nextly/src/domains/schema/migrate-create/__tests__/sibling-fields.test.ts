@@ -121,7 +121,9 @@ describe("judgeMigrationSiblingFields: the migrate commands' decision table", ()
 });
 
 describe("reportMigrationSiblingFields", () => {
-  it("warns once per existing pair, naming the entity, the container, both fields and what they share", () => {
+  // A recorded pair sharing a stored value is refused like a new one; one sharing none is warned
+  // about once and keeps working.
+  it("refuses a recorded pair sharing a column or key, and warns once per recorded pair sharing none", () => {
     const fields = [
       text("fooBar"),
       text("foo_bar"),
@@ -136,11 +138,15 @@ describe("reportMigrationSiblingFields", () => {
       logger
     );
 
-    expect(refused).toEqual([]);
-    expect(logger.error).not.toHaveBeenCalled();
+    expect(describePairs(refused)).toEqual([
+      "collection:posts the top level fooBar/foo_bar",
+      "collection:posts group 'seo' headline/headline",
+    ]);
+    expect(logger.error.mock.calls.map(([line]) => line)).toEqual([
+      "Collection 'posts': fields 'fooBar' and 'foo_bar' at the top level share the column 'foo_bar'. Rename one of them so each has its own column.",
+      "Collection 'posts': fields 'headline' and 'headline' in group 'seo' share the key 'headline'. Rename one of them so each has its own key.",
+    ]);
     expect(logger.warn.mock.calls.map(([line]) => line)).toEqual([
-      "Collection 'posts': fields 'fooBar' and 'foo_bar' at the top level already share the column 'foo_bar'. They keep working; rename one of them so each keeps its own value.",
-      "Collection 'posts': fields 'headline' and 'headline' in group 'seo' already share the key 'headline'. They keep working; rename one of them so each keeps its own value.",
       "Collection 'posts': fields 'fooBar' and 'foo_bar' in group 'meta' would both become the column 'foo_bar'. They keep working; rename one of them.",
     ]);
   });

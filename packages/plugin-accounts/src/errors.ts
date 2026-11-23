@@ -16,6 +16,7 @@ export type AccountsErrorCode =
   | "ACCOUNTS_NOT_STARTED"
   | "ACCOUNTS_CROSS_SITE"
   | "ACCOUNTS_INVALID_INPUT"
+  | "ACCOUNTS_SIGN_UP_CLOSED"
   | "ACCOUNTS_WRONG_CREDENTIALS"
   | "ACCOUNTS_WAIT"
   | "ACCOUNTS_TOO_MANY_REQUESTS"
@@ -67,6 +68,11 @@ const CODES: Record<AccountsErrorCode, readonly [number, string]> = {
   ACCOUNTS_CROSS_SITE: [403, "This request was refused."],
   /** A field the request needs is missing or not one (`data.reason` names the rule). */
   ACCOUNTS_INVALID_INPUT: [400, "Some of what was sent cannot be used."],
+  /**
+   * The site has closed sign-up. Every sign-up is refused with it before
+   * anything it names is read, so it says nothing about any address.
+   */
+  ACCOUNTS_SIGN_UP_CLOSED: [403, "This site isn't taking sign-ups."],
   /** The address or the password is wrong, or a refusal that must look like it. */
   ACCOUNTS_WRONG_CREDENTIALS: [
     401,
