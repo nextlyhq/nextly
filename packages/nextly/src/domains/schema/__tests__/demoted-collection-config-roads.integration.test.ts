@@ -205,7 +205,10 @@ async function recordFields(adapter: DrizzleAdapter): Promise<string[]> {
     adapter,
     quiet as never
   ).getCollectionBySlug(POSTS.slug);
-  return (record?.fields ?? []).map(field => field.name);
+  // A group with no name has none of its own: listed as such, not dropped.
+  return (record?.fields ?? []).map(
+    field => field.name ?? "<group with no name>"
+  );
 }
 
 /** `nextly db:sync --demote`, answered yes. */
