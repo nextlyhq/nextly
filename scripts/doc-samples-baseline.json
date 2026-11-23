@@ -136,6 +136,10 @@
       "samples": 16,
       "compiled": 10
     },
+    "docs/guides/private-files.mdx": {
+      "samples": 2,
+      "compiled": 2
+    },
     "docs/guides/production-migrations.mdx": {
       "samples": 3,
       "compiled": 2

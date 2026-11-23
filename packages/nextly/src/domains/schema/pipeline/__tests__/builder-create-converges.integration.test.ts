@@ -82,6 +82,7 @@ function makePipeline(
     preCleanupExecutor: noopPreCleanupExecutor,
     migrationJournal: noopMigrationJournal,
     notifier: noopNotifier,
+    adapter: undefined,
   });
 }
 

@@ -166,6 +166,30 @@ describe("moveDataStatements on SQLite", () => {
     ]);
   });
 
+  // A column the move adds, or the way back puts back, may carry a database default (a table an
+  // earlier version made, described as it stands): an entry whose group says null must read null,
+  // not that default, once its key is cleared.
+  it("carries an explicit JSON null out of a group as NULL, over the column's default", () => {
+    const db = table("title text DEFAULT 'untitled'");
+    db.exec(
+      `INSERT INTO dc_posts (id, meta) VALUES (1, '{"title":null}'), (2, '{"title":"Kept"}'), (3, '{}');`
+    );
+    const out = moveDataStatements(
+      { from: key("meta", "title"), to: column("title") },
+      sqlite("text")
+    );
+    run(db, out.copy);
+    run(db, out.clearSource);
+    expect(
+      db.prepare("SELECT id, title, meta FROM dc_posts ORDER BY id").all()
+    ).toEqual([
+      { id: 1, title: null, meta: "{}" },
+      { id: 2, title: "Kept", meta: "{}" },
+      // No key: nothing said, so the column's default stands, as for any row the move did not reach.
+      { id: 3, title: "untitled", meta: "{}" },
+    ]);
+  });
+
   it("keeps a boolean a JSON boolean in the group, and 1 or 0 in its column", () => {
     const db = table("featured integer");
     db.exec(`INSERT INTO dc_posts (id, featured) VALUES (1, 1), (2, 0);`);
@@ -481,6 +505,8 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
     );
     expect(out.copy).toEqual([
       `UPDATE "dc_posts" SET "views" = ("meta" #>> '{"views"}')::integer WHERE jsonb_typeof("meta" #> '{"views"}') IS NOT NULL AND jsonb_typeof("meta" #> '{"views"}') <> 'null';`,
+      // An explicit JSON null arrives as NULL, over any default the column has.
+      `UPDATE "dc_posts" SET "views" = NULL WHERE ("meta" #> '{"views"}') IS NOT NULL AND NOT (jsonb_typeof("meta" #> '{"views"}') IS NOT NULL AND jsonb_typeof("meta" #> '{"views"}') <> 'null');`,
     ]);
     expect(out.clearSource).toEqual([
       `UPDATE "dc_posts" SET "meta" = "meta" #- '{"views"}' WHERE ("meta" #> '{"views"}') IS NOT NULL AND ("views" IS NOT NULL OR NOT (jsonb_typeof("meta" #> '{"views"}') IS NOT NULL AND jsonb_typeof("meta" #> '{"views"}') <> 'null'));`,
@@ -509,6 +535,7 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
     );
     expect(out.copy).toEqual([
       "UPDATE `dc_posts` SET `title` = JSON_UNQUOTE(JSON_EXTRACT(`meta`, '$.\"title\"')) WHERE JSON_TYPE(JSON_EXTRACT(`meta`, '$.\"title\"')) IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(`meta`, '$.\"title\"')) <> 'NULL';",
+      "UPDATE `dc_posts` SET `title` = NULL WHERE JSON_CONTAINS_PATH(`meta`, 'one', '$.\"title\"') AND NOT (JSON_TYPE(JSON_EXTRACT(`meta`, '$.\"title\"')) IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(`meta`, '$.\"title\"')) <> 'NULL');",
     ]);
     expect(out.clearSource).toEqual([
       "UPDATE `dc_posts` SET `meta` = JSON_REMOVE(`meta`, '$.\"title\"') WHERE JSON_CONTAINS_PATH(`meta`, 'one', '$.\"title\"') AND (`title` IS NOT NULL OR NOT (JSON_TYPE(JSON_EXTRACT(`meta`, '$.\"title\"')) IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(`meta`, '$.\"title\"')) <> 'NULL'));",

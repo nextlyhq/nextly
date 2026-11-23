@@ -720,6 +720,7 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       preCleanupExecutor: new RealPreCleanupExecutor(),
       migrationJournal: noopMigrationJournal,
       notifier: noopNotifier,
+      adapter: undefined,
     });
     const databaseName =
       dialect === "mysql"
@@ -1351,11 +1352,44 @@ describeEachDialect("a shared field that becomes translated", dialect => {
           return value.bind(target);
         },
       });
-    return vi
+    const handles = vi
       .spyOn(adapter, "getDrizzle")
       .mockImplementation((...args: unknown[]) =>
         wrap(realGetDrizzle(...args) as object)
       );
+    // And on the handle an adapter transaction hands its work: a SQLite push runs its apply in the
+    // adapter's own transaction, through that transaction's handle rather than the adapter's.
+    const original = current.adapter.transaction.bind(current.adapter);
+    const transactions = vi
+      .spyOn(current.adapter, "transaction")
+      .mockImplementation(((
+        work: Parameters<typeof original>[0],
+        options?: Parameters<typeof original>[1]
+      ) =>
+        original(
+          tx =>
+            work(
+              new Proxy(tx, {
+                get(target, property) {
+                  const value: unknown = Reflect.get(target, property);
+                  if (typeof value !== "function") return value;
+                  const bound = (value as (...a: unknown[]) => unknown).bind(
+                    target
+                  );
+                  return property === "getDrizzle"
+                    ? (...args: unknown[]) => wrap(bound(...args) as object)
+                    : bound;
+                },
+              })
+            ),
+          options
+        )) as typeof original);
+    return {
+      mockRestore: () => {
+        transactions.mockRestore();
+        handles.mockRestore();
+      },
+    };
   }
 
   it("keeps English's value when a field that left translation comes back", async () => {

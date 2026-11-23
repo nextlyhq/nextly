@@ -5,12 +5,21 @@
  * @module cli/errors/areas/migrations
  */
 
+import {
+  perLanguageDriftNext,
+  perLanguageMoveWhy,
+  type PerLanguageMove,
+} from "../../../domains/i18n/per-language-move-guidance";
 import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-consent";
-import { dialectVariantOf } from "../../../domains/schema/migrate/dialect-variant";
+import {
+  dialectVariantOf,
+  migrationNameOf,
+} from "../../../domains/schema/migrate/dialect-variant";
 import { shellQuote } from "../../../domains/schema/migrate/drift-error";
 import {
   BLANK_FILE_LINE,
   HISTORY_FORKED_REASON,
+  MIGRATION_PLACE_STATED_TWICE_REASON,
 } from "../../../domains/schema/migrate/history-line";
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
 import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
@@ -530,6 +539,26 @@ function forkedHistoryParts(error: NextlyError): CliErrorParts {
     : { what: part("what"), why: part("why"), next: part("next") };
 }
 
+/**
+ * A migration whose files state different places, as the three parts it was built from
+ * (`placeStatedTwiceError`); the whole message stands where they are not there.
+ */
+function placeStatedTwiceParts(error: NextlyError): CliErrorParts {
+  const parts = error.logContext?.parts as
+    | Partial<Record<"what" | "why" | "next", unknown>>
+    | undefined;
+  const { what, why, next } = parts ?? {};
+  return typeof what === "string" &&
+    typeof why === "string" &&
+    typeof next === "string"
+    ? { what, why, next }
+    : {
+        what: error.publicMessage,
+        why: "A migration has one place in the history, and its files state two.",
+        next: "Make the `-- Parent:` and `-- Merges:` lines the same in every file of the migration, or keep them in the base file alone.",
+      };
+}
+
 /** A writer of migration files that another overtook, as its three parts. */
 function overtakenParts(error: NextlyError): CliErrorParts {
   return refusalParts(error, "Another run wrote a migration meanwhile.");
@@ -569,6 +598,17 @@ export const MIGRATION_CODES = defineCodes({
         code: "CONFLICT",
         reason: HISTORY_FORKED_REASON,
         describe: forkedHistoryParts,
+      },
+    ],
+  },
+  MIGRATION_PLACE_STATED_TWICE: {
+    cause:
+      "The files of one migration (its base file and a dialect's variant) state different places in the history, so the command refused and changed nothing.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: MIGRATION_PLACE_STATED_TWICE_REASON,
+        describe: placeStatedTwiceParts,
       },
     ],
   },
@@ -1342,17 +1382,29 @@ export function migrationSnapshotMissing(
   sqlName: string,
   metaDir: string
 ): CliError {
-  // As `migrate:resolve` finds a file: a dialect's variant by the name its group shares. Quoted
-  // as one shell argument, since a hand-added file's name may hold a space or a quote.
-  const resolveName = shellQuote(
-    dialectVariantOf(sqlName)?.baseName ?? sqlName.replace(/\.sql$/, "")
-  );
+  // As `migrate:resolve` finds a file and migrate:check pairs it with a snapshot: a dialect's
+  // variant by the name its group shares.
+  const group = migrationNameOf(sqlName);
   return new CliError("MISSING_SNAPSHOT", {
     what: `\`${sqlName}\` has no paired snapshot file in ${metaDir}.`,
-    why: `Nothing is at \`${sqlName.replace(/\.sql$/, "")}.snapshot.json\`, which \`migrate:create\` writes beside every migration it generates, and the file does not say it is a blank migration, which has none; a migration generated before snapshots were written has none either.`,
-    // A file already applied keeps its name: under a new one the database would run it again.
-    next: `Restore the snapshot if it was deleted. For SQL you wrote yourself: if no database has applied the file, re-create it with \`nextly migrate:create --blank\` and copy the SQL across; if one has, add the line \`${BLANK_FILE_LINE}\` to its header instead, then accept the edit with \`nextly migrate:resolve --applied ${resolveName} --skip-verify\` on every database that has applied it. Otherwise delete the file.`,
+    why: `Nothing is at \`${group}.snapshot.json\`, which \`migrate:create\` writes beside every migration it generates, and the file does not say it is a blank migration, which has none; a migration generated before snapshots were written has none either.`,
+    next: snapshotMissingNext(sqlName, group),
   });
+}
+
+/**
+ * What to do about a file `migrationSnapshotMissing` names. A file already applied keeps its
+ * name: under a new one the database would run it again. A dialect's variant keeps its file
+ * too: `migrate:create --blank` writes a file every dialect runs, which one dialect's SQL is not.
+ */
+function snapshotMissingNext(sqlName: string, group: string): string {
+  // Quoted as one shell argument, since a hand-added file's name may hold a space or a quote.
+  const accept = `accept the edit with \`nextly migrate:resolve --applied ${shellQuote(group)} --skip-verify\` on every database that has applied it`;
+  const mark = `add the line \`${BLANK_FILE_LINE}\` to its header`;
+  if (dialectVariantOf(sqlName) !== undefined) {
+    return `Restore the snapshot if it was deleted. For SQL you wrote yourself for this dialect, ${mark}; if a database has applied the file, then ${accept}. Otherwise delete the file.`;
+  }
+  return `Restore the snapshot if it was deleted. For SQL you wrote yourself: if no database has applied the file, re-create it with \`nextly migrate:create --blank\` and copy the SQL across; if one has, ${mark} instead, then ${accept}. Otherwise delete the file.`;
 }
 
 /** A snapshot file that could not be read, in `SnapshotFileError`'s words. */
@@ -1384,11 +1436,23 @@ export function snapshotWithoutMigration(
 const CREATE_MIGRATION =
   'Run `nextly migrate:create --name="<migration-name>"` and commit the result.';
 
-/** Schema changes no migration holds, each as a line of the drift list. */
+/**
+ * Schema changes no migration holds, each as a line of the drift list. Where some are text-like
+ * fields moving to their per-language table (`moves`), the move is explained and the two safe
+ * ways forward replace the bare remedy, which would read as consent to drop the columns.
+ */
 export function schemaChangeWithoutMigration(
   count: number,
-  lines: readonly string[]
+  lines: readonly string[],
+  moves: readonly PerLanguageMove[] = []
 ): CliError {
+  if (moves.length > 0) {
+    return new CliError("SCHEMA_DRIFT", {
+      what: `${count} pending schema change(s) detected.`,
+      why: [...lines, perLanguageMoveWhy(moves)].join("\n"),
+      next: perLanguageDriftNext(moves, count, CREATE_MIGRATION),
+    });
+  }
   return new CliError("SCHEMA_DRIFT", {
     what: `${count} pending schema change(s) detected.`,
     why: lines.join("\n"),

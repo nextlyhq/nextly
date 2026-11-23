@@ -49,6 +49,10 @@ import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
 import type { TextFieldConfig } from "../fields/types/text";
 
 import {
+  fileSystemFields,
+  type CollectionFilesConfig,
+} from "./collection-files";
+import {
   asDeclaredFields,
   toTitleCase,
   systemFieldsBeside,
@@ -862,6 +866,26 @@ export interface CollectionConfig {
   siteContent?: boolean;
 
   /**
+   * Makes each entry of this collection one file, kept so that no public
+   * address ever serves it: the accepted types, the largest size, and how a
+   * download is answered. The collection gains the fields every file needs
+   * (`filename`, `mimeType`, `size`, `sha256`, `storageKey`, `fileStatus`,
+   * `rejectReason`, `uploadedByKind`, `uploadedById`), which only Nextly
+   * writes; `storageKey` is never returned to a caller. Who may upload or
+   * open a file is this collection's `access`. It has no drafts, versions,
+   * localization or public address, and is hidden in the admin unless
+   * `admin.hidden` says otherwise.
+   *
+   * @example
+   * ```typescript
+   * files: { visibility: "private", accept: ["application/pdf"], maxSize: 10 * 1024 * 1024 }
+   * ```
+   *
+   * @experimental
+   */
+  files?: CollectionFilesConfig;
+
+  /**
    * @experimental Internal/private storage (D30). The collection stays in the
    * merged schema — relatable and accessible via `ctx.services` / `ctx.db.raw` —
    * but is hidden from the content-admin navigation (implies `admin.hidden`).
@@ -1351,9 +1375,13 @@ export function defineCollection<
   // setup may repair the problem and must leave what a valid declaration gives; only where the
   // problem makes normalizing itself throw is the entry returned as declared. Either way it is
   // marked (`markDeclaredByDefine`), which tells the start to refuse it rather than warn.
+  // A collection of files is judged with the fields it gains for them, as the
+  // start judges it, so a field of the author's taking one of their names is
+  // refused here too.
+  const fileFields = config.files === undefined ? [] : fileSystemFields();
   const accepted = validateCollectionConfig({
     ...config,
-    fields: asDeclaredFields(config.fields),
+    fields: [...fileFields, ...asDeclaredFields(config.fields)],
   }).valid;
   try {
     // ============================================================
@@ -1363,7 +1391,10 @@ export function defineCollection<
     // matching the Schema Builder behavior. If the user already defined
     // fields with these names, their definitions take priority.
 
-    const systemFields = systemFieldsBeside(config.fields);
+    // A collection of files also carries each file's own fields, after
+    // title and slug. Unlike those, an author's field never replaces one:
+    // these are written only by Nextly, and one withholds the storage key.
+    const systemFields = [...systemFieldsBeside(config.fields), ...fileFields];
 
     // Prepend system fields so they appear first in the form
     const fieldsWithSystem = withOwnAddressRule(
@@ -1392,7 +1423,13 @@ export function defineCollection<
         ...config.admin,
         // `internal: true` implies hidden-from-nav (D30); explicit admin.hidden
         // still wins if set. The collection remains fully functional otherwise.
-        hidden: config.internal === true ? true : config.admin?.hidden,
+        // A collection of files has no admin screen of its own yet, so it is
+        // hidden unless the config says otherwise.
+        hidden:
+          config.internal === true
+            ? true
+            : (config.admin?.hidden ??
+              (config.files === undefined ? undefined : true)),
         pagination: {
           defaultLimit: config.admin?.pagination?.defaultLimit ?? 10,
           limits: config.admin?.pagination?.limits ?? [10, 25, 50, 100],

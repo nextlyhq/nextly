@@ -576,7 +576,7 @@ exports[`each code, as a command ends with it > BUILDER_SAVE_EARLIER_LEFT 1`] = 
 exports[`each code, as a command ends with it > BUILDER_SAVE_LEFT_PART_WAY 1`] = `
 "✗ A Builder save was left part-way, so the database does not match its migrations yet.
   Why:  Left part-way: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio.
-  Next: To settle it, start the app in development (\`next dev\`) on this project: its start settles the save.
+  Next: To settle it, run \`nextly migrate\`, or start the app in development (\`next dev\`), on this project: either settles the save.
   Docs: https://nextlyhq.com/docs/cli/errors/builder-save-left-part-way  (BUILDER_SAVE_LEFT_PART_WAY)"
 `;
 
@@ -838,6 +838,13 @@ exports[`each code, as a command ends with it > DEMOTE_COLLECTION_NOT_FOUND 1`] 
   Why:  \`--demote\` moves a collection defined in \`nextly.config.ts\` to the Schema Builder, and its \`collections\` array has none with this slug.
   Next: Check the slug against the \`collections\` array in \`nextly.config.ts\`. A collection built in the Schema Builder is already there and needs no demotion.
   Docs: https://nextlyhq.com/docs/cli/errors/demote-collection-not-found  (DEMOTE_COLLECTION_NOT_FOUND)"
+`;
+
+exports[`each code, as a command ends with it > DEMOTE_PLUGIN_COLLECTION 1`] = `
+"✗ Collection 'posts' is contributed by the plugin '@acme/forms', so it cannot be demoted.
+  Why:  \`--demote\` hands a collection the app's own \`nextly.config.ts\` defines to the Schema Builder. A plugin registers its collections again at every start, so a plugin's collection stays the plugin's.
+  Next: Leave 'posts' to '@acme/forms', and change it through that plugin's options.
+  Docs: https://nextlyhq.com/docs/cli/errors/demote-plugin-collection  (DEMOTE_PLUGIN_COLLECTION)"
 `;
 
 exports[`each code, as a command ends with it > DROP_OF_FOREIGN_TABLE 1`] = `
@@ -1109,6 +1116,13 @@ exports[`each code, as a command ends with it > MIGRATION_NOT_WRITTEN 1`] = `
   Why:  The files already placed were removed; the folder is as it was.
   Next: Check that the migrations folder can be written to and has room, then run \`migrate:create\` again.
   Docs: https://nextlyhq.com/docs/cli/errors/migration-not-written  (MIGRATION_NOT_WRITTEN)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_PLACE_STATED_TWICE 1`] = `
+"✗ The files of migration 20261021_090000_seed state different places in the history: \`20261021_090000_seed.sql\` states \`-- Parent: 20261020_120000_add_posts\`, and \`20261021_090000_seed.mysql.sql\` states \`-- Parent: 20261019_080000_init\`.
+  Why:  A dialect's variant runs in place of the base file on its dialect and is the same migration, so the migration has one place in the history.
+  Next: Make the \`-- Parent:\` and \`-- Merges:\` lines the same in every file of 20261021_090000_seed that states them, or keep them in the base file alone.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-place-stated-twice  (MIGRATION_PLACE_STATED_TWICE)"
 `;
 
 exports[`each code, as a command ends with it > MIGRATION_SQL_UNCHECKABLE 1`] = `

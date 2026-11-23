@@ -11,6 +11,8 @@
  *
  * @module components/features/settings/EmailTemplateForm/written/chip-names
  */
+import { storableVariablePath } from "nextly/api/email-template-preview-types";
+
 import type { EmailTemplateVariableField } from "@admin/services/emailTemplateApi";
 
 import type { TemplateFormVariable } from "../schema";
@@ -124,14 +126,14 @@ export function listPaths(
   const declared = variables.filter(variable => variable.name);
   const isList = (variable: TemplateFormVariable) =>
     variable.presentation?.type === "list";
-  return [
+  return storable([
     ...declared.flatMap(variable =>
       isList(variable)
         ? [variable.name]
         : lists(variable.presentation?.fields ?? [], variable.name)
     ),
     ...declared.filter(v => !isList(v)).map(v => v.name),
-  ];
+  ]);
 }
 
 /**
@@ -146,10 +148,94 @@ function fieldPaths(
   return fields.flatMap(field => {
     if (field.type === "list") return [];
     const path = `${prefix}.${field.name}`;
-    return field.fields && field.fields.length > 0
-      ? fieldPaths(field.fields, path)
-      : [path];
+    // An object is never a value, even one declared without fields.
+    if (field.type === "object" || (field.fields && field.fields.length > 0)) {
+      return fieldPaths(field.fields ?? [], path);
+    }
+    return [path];
   });
+}
+
+/**
+ * Every path a value can be read from here, for a link's address or a
+ * block's condition: inside a list the item and every field inside it first,
+ * then each declared variable and every field inside it. Containers are
+ * offered too, as a condition can ask whether one has a value. A list field
+ * is offered itself (whether it has items), not what its items hold, which
+ * only a list block repeating over it can reach.
+ */
+export function variablePaths(
+  variables: readonly TemplateFormVariable[],
+  list?: string
+): string[] {
+  const inside = (
+    fields: readonly EmailTemplateVariableField[],
+    prefix: string
+  ): string[] =>
+    fields.flatMap(field => {
+      const path = `${prefix}.${field.name}`;
+      if (field.type === "list" || !field.fields) return [path];
+      return [path, ...inside(field.fields, path)];
+    });
+  const item =
+    list === undefined
+      ? []
+      : ["item", ...inside(partAt(variables, list)?.fields ?? [], "item")];
+  // A declared list is offered itself, as a list field is: what its items
+  // hold is only reachable inside a list block repeating over it.
+  const declared = variables.flatMap(variable => {
+    if (!variable.name) return [];
+    if (variable.presentation?.type === "list") return [variable.name];
+    return [
+      variable.name,
+      ...inside(variable.presentation?.fields ?? [], variable.name),
+    ];
+  });
+  return storable([
+    ...item,
+    // Inside a list, `item` is the loop's: a variable declared as `item` is
+    // out of reach there, so it is not offered.
+    ...(list === undefined ? declared : declared.filter(p => !inItem(p))),
+  ]);
+}
+
+/**
+ * The paths a link's address can come from: values that are text, not the
+ * objects and lists a condition may ask about. Inside a list the item's
+ * fields come first, or `item` itself for a list of plain values, then each
+ * declared variable's own value fields.
+ */
+export function addressPaths(
+  variables: readonly TemplateFormVariable[],
+  list?: string
+): string[] {
+  const declared = variables.flatMap(variable => {
+    if (!variable.name || variable.presentation?.type === "list") return [];
+    const fields = variable.presentation?.fields ?? [];
+    // A declared object is never a value itself, fields or none.
+    return fields.length > 0 || variable.presentation?.type === "object"
+      ? fieldPaths(fields, variable.name)
+      : [variable.name];
+  });
+  return storable([
+    ...(list === undefined ? [] : itemPaths(variables, list)),
+    // Inside a list, `item` is the loop's, as for every other choice.
+    ...(list === undefined ? declared : declared.filter(p => !inItem(p))),
+  ]);
+}
+
+/** Whether `path` is `item` or a path under it. */
+function inItem(path: string): boolean {
+  return path === "item" || path.startsWith("item.");
+}
+
+/**
+ * The paths a written email can store, asked of its document's own rule:
+ * a declaration may name a field `first-name`, or a name the compiler keeps
+ * for itself, or one too long, and no block can refer to those.
+ */
+function storable(paths: readonly string[]): string[] {
+  return paths.filter(path => storableVariablePath(path));
 }
 
 /**
@@ -161,5 +247,5 @@ export function itemPaths(
   list: string
 ): string[] {
   const fields = partAt(variables, list)?.fields ?? [];
-  return fields.length > 0 ? fieldPaths(fields, "item") : ["item"];
+  return fields.length > 0 ? storable(fieldPaths(fields, "item")) : ["item"];
 }

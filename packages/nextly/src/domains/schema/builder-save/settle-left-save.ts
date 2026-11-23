@@ -42,7 +42,7 @@ import {
   recordAlreadyApplied,
   snapshotsEquivalent,
 } from "../migrate/drift-reconcile";
-import { blankWrittenFrom } from "../migrate/history-line";
+import { blankMigrationsWrittenFrom } from "../migrate/history-line";
 import { splitSqlStatements } from "../migrate/split-sql";
 import { parseSqlSections } from "../migrate/sql-sections";
 import { tablesChangedIn } from "../migrate/statement-targets";
@@ -53,6 +53,7 @@ import {
   parseSnapshotFile,
   snapshotPathOf,
 } from "../migrate-create/snapshot-io";
+import { assertWriterHold } from "../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { collectionOwnTables } from "../services/field-column-descriptor";
@@ -123,6 +124,11 @@ export interface SettleDeps {
   keepPending?: boolean;
   /** Only the records with these ids, where given: those a settle before a save left standing. */
   only?: ReadonlySet<string>;
+  /**
+   * Judge a save made outside development by its files and its definition (`settleByFiles`):
+   * `nextly migrate` only, which applies such a save's files. Elsewhere such a record stays.
+   */
+  byFiles?: boolean;
   /**
    * The registry row's write for an entity whose save landed whole: its fields and whether it is
    * translated, as the saved definition holds them. Answers whether the row now stands as the save
@@ -333,6 +339,9 @@ async function settledOutcome(
   notes: string[],
   kept: AllFacts
 ): Promise<SettledOutcome> {
+  if (record.applies === false && deps.byFiles === true) {
+    return settleByFiles(deps, record, notes);
+  }
   if (record.applies !== true) {
     // Made outside development, the save left its files for `nextly migrate`: its tables stand
     // where it started whether or not it finished, so they cannot say how far it got, and removing
@@ -374,6 +383,106 @@ async function settledOutcome(
   return settleAll(deps, repo, record, files, notes, kept);
 }
 
+/**
+ * A save made outside development, judged by its files at `nextly migrate`'s start: it applied
+ * none of them itself, so its tables say nothing, and it writes its definition last, once every
+ * file is in place.
+ * - Its definition as it saved it: every file was written. The record clears, and the run applies
+ *   the files as any others.
+ * - Its definition as it found it: it stopped before it finished. Its own files are withdrawn, as
+ *   the save's own failure withdraws them, where none is applied and none was written from since.
+ * - Anything else stays left: a file this database has applied (never removed, whatever else
+ *   holds), a file that cannot be told as its own, or a definition edited since.
+ */
+async function settleByFiles(
+  deps: SettleDeps,
+  record: LeftSave,
+  notes: string[]
+): Promise<SettledOutcome> {
+  const repo = new SchemaEventsRepository(
+    deps.adapter.getDrizzle(),
+    deps.adapter.getCapabilities().dialect
+  );
+  const { files, unclear } = await filesOfSave(deps, record);
+  const stays = (why: string): SettledOutcome => {
+    deps.logger.warn(
+      `A Builder save of the ${described(record)} was made outside development and left part-way, and ${why}. It is not settled; its record stays.`
+    );
+    notes.push(why);
+    return "left";
+  };
+  if (unclear.length > 0) {
+    return stays(`${unclear.join(", ")} cannot be told as its own or not`);
+  }
+  // A file the save named that is gone from the folder can be neither run nor withdrawn, and
+  // whether it applied cannot be read from it: the save is not settled around it.
+  const missing = (record.files ?? []).filter(name => !files.includes(name));
+  if (missing.length > 0) {
+    return stays(
+      `${missing.join(", ")}, which it wrote, is gone from the migration folder`
+    );
+  }
+  const applied = await appliedOf(repo, files);
+  if (applied.length > 0) {
+    return stays(`${applied.join(", ")} is applied here already`);
+  }
+  const definition = await definitionAgainstRecord(deps, record);
+  if (definition === "saved") {
+    await clearSettledSave(deps.adapter, deps.projectRoot, record);
+    deps.logger.info(
+      `A Builder save of the ${described(record)} was made outside development and stopped after writing all its files; they run now.`
+    );
+    return "all";
+  }
+  if (definition !== "before") {
+    return stays(`${record.definitionFile} has changed since it started`);
+  }
+  const dependents = await dependentsOf(deps, files);
+  if (dependents.length > 0) {
+    return stays(`${dependents.join(", ")} was written from its files since`);
+  }
+  await removeSaveFiles(deps, repo, files);
+  await clearSettledSave(deps.adapter, deps.projectRoot, record);
+  deps.logger.info(
+    `A Builder save of the ${described(record)} was made outside development and stopped before it finished${files.length > 0 ? `; its files ${files.join(", ")} are removed` : ""}. Save it again.`
+  );
+  return "none";
+}
+
+/** Of `files`, those this database's ledger records applied: never removed by a settle. */
+async function appliedOf(
+  repo: SchemaEventsRepository,
+  files: readonly string[]
+): Promise<string[]> {
+  const applied: string[] = [];
+  for (const filename of files) {
+    if (await repo.isFileApplied(filename)) applied.push(filename);
+  }
+  return applied;
+}
+
+/**
+ * Remove a save's own files and their snapshots, none of them applied, clearing a failed attempt a
+ * file left in the ledger as the save's own withdrawal does.
+ */
+async function removeSaveFiles(
+  deps: SettleDeps,
+  repo: SchemaEventsRepository,
+  files: readonly string[]
+): Promise<void> {
+  // Still the folder's writer, where the settle holds it (`nextly migrate`, a Builder save): one
+  // that stalled past its hold's lease removes nothing beneath the writer that took the folder.
+  await assertWriterHold(deps.migrationsDir);
+  for (const filename of files) {
+    await settleRemovedFileAttempts(deps.adapter, repo, filename);
+    await rm(join(deps.migrationsDir, filename), { force: true });
+    await rm(
+      snapshotPathOf(join(deps.migrationsDir, "meta"), baseName(filename)),
+      { force: true }
+    );
+  }
+}
+
 /** A save none of which applied: its files go and its definition is put back, by rule. */
 async function settleNone(
   deps: SettleDeps,
@@ -406,15 +515,16 @@ async function settleNone(
     notes.push(`${dependents.join(", ")} was written from the save's files`);
     return "left";
   }
-  for (const filename of files) {
-    // A failed attempt a file left in the ledger is cleared as the save's own withdrawal does.
-    await settleRemovedFileAttempts(deps.adapter, repo, filename);
-    await rm(join(deps.migrationsDir, filename), { force: true });
-    await rm(
-      snapshotPathOf(join(deps.migrationsDir, "meta"), baseName(filename)),
-      { force: true }
+  // A file this database has applied is never removed, whatever the tables say.
+  const applied = await appliedOf(repo, files);
+  if (applied.length > 0) {
+    deps.logger.warn(
+      `A Builder save of the ${described(record)} stopped before any of it applied, but ${applied.join(", ")} is recorded applied here, so its files are not removed. Its record stays.`
     );
+    notes.push(`${applied.join(", ")} is recorded applied`);
+    return "left";
   }
+  await removeSaveFiles(deps, repo, files);
   notes.push(...(await putDefinitionBack(deps, record, definition)));
   await clearSettledSave(deps.adapter, deps.projectRoot, record);
   deps.logger.info(
@@ -446,15 +556,16 @@ async function dependentsOf(
       dependents.push(own);
     }
   }
-  // And each blank migration (a file with no snapshot, written by hand after `migrate:create
-  // --blank`), whose header states the migration it was written after.
-  for (const file of await sqlFilesIn(deps.migrationsDir)) {
-    const own = baseName(file);
-    if (saves.has(own) || withSnapshot.has(own)) continue;
-    const content = await readIfPresent(join(deps.migrationsDir, file));
-    if (blankWrittenFrom(content ?? "").some(parent => saves.has(parent))) {
-      dependents.push(own);
-    }
+  // And each blank migration (no snapshot, written by hand after `migrate:create --blank`),
+  // whose header states the migration it was written after: read once with its dialect variants
+  // and named by its migration, as the history reads the folder. Where its files state different
+  // places, any of them naming one of the save's files keeps it, so nothing is removed under it.
+  for (const [own, from] of await blankMigrationsWrittenFrom(
+    deps.migrationsDir,
+    withSnapshot
+  )) {
+    if (saves.has(own)) continue;
+    if (from.some(parent => saves.has(parent))) dependents.push(own);
   }
   return dependents.sort();
 }

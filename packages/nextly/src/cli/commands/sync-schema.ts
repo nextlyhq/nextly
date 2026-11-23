@@ -20,6 +20,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { configTheCodeOwnsIn } from "../../di/load-dynamic-tables";
 import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 // A type only: the module itself is loaded when a sync has fields leaving translation.
 import type * as LeavingMove from "../../domains/i18n/runtime/fields-leaving-on-reload";
@@ -101,6 +102,8 @@ export async function fieldsLeavingForSync(
   recordedBefore: Awaited<ReturnType<typeof readRecordedEntities>>;
   mover: typeof LeavingMove | undefined;
   leaving: Awaited<ReturnType<typeof LeavingMove.fieldsLeavingUnder>>;
+  /** The configuration the fields leaving were judged from (`configTheCodeOwnsIn`). */
+  owned: LoadConfigResult["config"];
 }> {
   const { config } = configResult;
   const live = adapter as unknown as DrizzleAdapter;
@@ -123,17 +126,21 @@ export async function fieldsLeavingForSync(
     moves && recordedBefore !== undefined
       ? await import("../../domains/i18n/runtime/fields-leaving-on-reload")
       : undefined;
+  // The configuration as code still owns it: a collection a demote handed to the Schema Builder
+  // keeps its translated fields as the Builder's record has them, whatever its code entry says, so
+  // nothing of it is judged as leaving translation. Read only where a move is judged.
+  const owned = mover ? await configTheCodeOwnsIn(live, config) : config;
   // A field group's table is the one its config names, as the companion passes take it.
   const leaving = mover
     ? await mover.fieldsLeavingUnder(
         live,
-        config,
+        owned,
         new Map(),
         recordedBefore,
         m => report.error(m)
       )
     : { entries: [], refused: [] };
-  return { recordedBefore, mover, leaving };
+  return { recordedBefore, mover, leaving, owned };
 }
 
 /**
@@ -151,7 +158,7 @@ export async function syncSchemaInOrder(
   const { config } = configResult;
   const live = adapter as unknown as DrizzleAdapter;
   const autoSync = options.autoSync !== false;
-  const { recordedBefore, mover, leaving } = await fieldsLeavingForSync(
+  const { recordedBefore, mover, leaving, owned } = await fieldsLeavingForSync(
     configResult,
     adapter,
     options,
@@ -206,7 +213,7 @@ export async function syncSchemaInOrder(
       adapter: live,
       entries: leaving.entries,
       deferred: new Set(),
-      config,
+      config: owned,
       blockedBy: [],
       // The config as it is, whose leaving fields' values are now shared.
       push: async () => {
@@ -220,7 +227,7 @@ export async function syncSchemaInOrder(
   } finally {
     if (!moved) {
       await keepRecordedTranslated(
-        { mover, live, recordedBefore },
+        { mover, live, recordedBefore, owned },
         configResult,
         adapter,
         options,
@@ -244,6 +251,8 @@ async function keepRecordedTranslated(
     mover: typeof LeavingMove;
     live: DrizzleAdapter;
     recordedBefore: Awaited<ReturnType<typeof readRecordedEntities>>;
+    /** The configuration the run judged the fields leaving from (`fieldsLeavingForSync`). */
+    owned: LoadConfigResult["config"];
   },
   configResult: LoadConfigResult,
   adapter: CLIDatabaseAdapter,
@@ -255,7 +264,7 @@ async function keepRecordedTranslated(
     // Asked again only to find them; its refusals were reported when the run first asked.
     const still = await run.mover.fieldsLeavingUnder(
       run.live,
-      config,
+      run.owned,
       new Map(),
       run.recordedBefore,
       () => undefined

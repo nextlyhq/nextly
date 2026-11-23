@@ -90,6 +90,11 @@ code only: no endpoint or action offers it to a visitor.
   which the site edits in the admin like its other emails. The link lands on
   `pages.acceptInvitation` (`/account/invitation` by default). Pass
   `sendEmail: false` to send the returned `link` or `token` some other way.
+  Besides `{{link}}`, the template is given `{{name}}`, the name invited
+  with, and when the link stops working: `{{expiresAt}}` (ISO 8601, UTC) and
+  `{{expiresAtText}}`, such as "30 November 2026, 5:00 PM", written in
+  `{{timeZone}}`, the plugin's `timeZone` option (an IANA name such as
+  `Asia/Karachi`; UTC when unset).
 - **The link** is a one-purpose link kept by core only as a hash, for that
   address alone. It lasts `invitationLinkDays` (7 by default, 1 to 30) and is
   spent once. Inviting the same address again replaces the earlier link, and

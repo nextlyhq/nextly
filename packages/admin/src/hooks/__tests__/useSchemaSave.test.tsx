@@ -404,7 +404,8 @@ describe("confirmApply", () => {
 
     await waitFor(() => expect(onApplied).toHaveBeenCalledWith(FIELDS));
     // The version applied is the one the user was shown, not a re-read.
-    expect(applyFn).toHaveBeenCalledWith(FIELDS, 9, {}, [], []);
+    // No field moved: nothing to hint.
+    expect(applyFn).toHaveBeenCalledWith(FIELDS, 9, {}, [], [], undefined, []);
     expect(startRestart).toHaveBeenCalledTimes(1);
     expect(stopRestart).toHaveBeenCalledWith(
       true,
@@ -451,7 +452,61 @@ describe("confirmApply", () => {
         9,
         {},
         [],
-        ["dc_posts", "body"]
+        ["dc_posts", "body"],
+        undefined,
+        []
+      )
+    );
+  });
+
+  // The review showed how many values each field it removes holds, and its Save confirmed
+  // deleting those: the apply sends each count, so the server deletes only where it still holds.
+  it("confirms the count the reviewed preview showed for each field it removes", async () => {
+    const confirmation = confirmationStub(
+      preview({
+        hasDestructiveChanges: true,
+        classification: "destructive",
+        changes: {
+          added: [],
+          removed: [
+            {
+              name: "note",
+              type: "text",
+              rowCount: 3,
+              classification: "destructive",
+            },
+            {
+              name: "empty",
+              type: "text",
+              rowCount: 0,
+              classification: "safe",
+            },
+          ],
+          changed: [],
+          unchanged: [],
+        },
+      })
+    );
+    const applyFn = vi.fn(() =>
+      Promise.resolve({ success: true, message: "ok" })
+    );
+    const { result } = setup({ confirmation, applyFn });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() =>
+      expect(applyFn).toHaveBeenCalledWith(
+        FIELDS,
+        9,
+        {},
+        [],
+        [],
+        // No field moved: nothing to hint.
+        undefined,
+        [
+          { field: "note", count: 3 },
+          { field: "empty", count: 0 },
+        ]
       )
     );
   });
@@ -842,7 +897,10 @@ describe("a rename the Builder made", () => {
           choice: "rename",
         },
       ],
-      // No conversion to confirm.
+      // No conversion to confirm, and no field moved.
+      [],
+      undefined,
+      // No removed field whose count to confirm.
       []
     );
   });
@@ -871,7 +929,10 @@ describe("a rename the Builder made", () => {
           choice: "rename",
         },
       ],
-      // No conversion to confirm.
+      // No conversion to confirm, and no field moved.
+      [],
+      undefined,
+      // No removed field whose count to confirm.
       []
     );
   });

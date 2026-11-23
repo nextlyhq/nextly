@@ -85,6 +85,7 @@ import { declaresOwnId } from "../fields/repeater-row-identity";
 // C7/D16 — accept plugin-registered custom field types (must be registered
 // before the config is validated; see field-type-registry).
 
+import { filesProblems } from "./collection-files";
 import type { CollectionConfig } from "./define-collection";
 
 export { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS };
@@ -175,7 +176,10 @@ export type ValidationErrorCode =
   | "DB_ALLOW_ID_ON_CREATE_INVALID"
   | "DB_SLUG_PATHS_INVALID"
   // Public address errors
-  | "PUBLIC_ADDRESS_INVALID";
+  | "PUBLIC_ADDRESS_INVALID"
+  // A `files` option that is malformed, or beside a setting a collection of
+  // files cannot have.
+  | "FILES_INVALID";
 
 /**
  * A single validation error with path and context.
@@ -919,6 +923,12 @@ export function validateCollectionConfig(
   }
 
   validateDbOptions(config.db, errors);
+
+  // A collection whose entries are files: the option's own shape, the
+  // settings it cannot be beside, and the fields it needs for each file.
+  for (const problem of filesProblems(config)) {
+    errors.push({ ...problem, code: "FILES_INVALID" });
+  }
 
   // Judged by the rule every public address is, so a template a plugin
   // supplies for a Builder type and one declared here never disagree.

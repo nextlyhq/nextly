@@ -24,6 +24,7 @@ const REQUIRED = {
     "consumeToken",
     "consumeCode",
     "voidFor",
+    "reveal",
   ],
   opaque: ["create", "hash", "equal"],
   limits: ["reserve", "release", "reset", "check", "clientKey"],

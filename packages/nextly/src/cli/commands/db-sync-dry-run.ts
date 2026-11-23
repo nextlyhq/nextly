@@ -22,6 +22,7 @@ import type {
   ClassifierEvent,
   TypeChangeEvent,
 } from "../../domains/schema/pipeline/resolution/types";
+import { configTheCodeOwns } from "../../domains/schema/pipeline/registered-collections";
 import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import {
   describeClassed,
@@ -145,11 +146,13 @@ async function assertSyncAllowed(
     logger: context.logger,
     action: "db:sync",
   });
+  // As the sync judges them: a handed-over collection's code entry is ignored (`configTheCodeOwns`).
   const registered = await loadBuilderEntities(adapter);
-  await assertConfiguredAddresses(configResult.config, registered, table =>
+  const owned = configTheCodeOwns(configResult.config, registered.collections);
+  await assertConfiguredAddresses(owned, registered, table =>
     adapter.tableExists(table)
   );
-  await assertConfiguredSiblingFields(configResult.config, registered, table =>
+  await assertConfiguredSiblingFields(owned, registered, table =>
     adapter.tableExists(table)
   );
   assertPluginFieldDeclarations(configResult.config);

@@ -90,7 +90,7 @@ function TargetFields({
   const invalid = problemId ? true : undefined;
   if (draft.target === "address") {
     return (
-      <div className="grid gap-1.5">
+      <div className="grid min-w-0 gap-1.5">
         <Label htmlFor={`${id}-address`}>Address</Label>
         <Input
           id={`${id}-address`}
@@ -106,11 +106,13 @@ function TargetFields({
   }
   return (
     <>
-      <div className="grid gap-1.5">
+      <div className="grid min-w-0 gap-1.5">
         <Label htmlFor={`${id}-variable`}>Variable</Label>
+        {/* As wide as its column, not its longest option: a long variable
+            name would otherwise widen the dialog or card past a phone. */}
         <select
           id={`${id}-variable`}
-          className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+          className="h-9 w-full min-w-0 max-w-full truncate rounded-md border border-input bg-background px-2 text-sm"
           value={draft.variable}
           onChange={event => edit({ variable: event.target.value })}
         >
@@ -122,7 +124,7 @@ function TargetFields({
           ))}
         </select>
       </div>
-      <div className="grid gap-1.5">
+      <div className="grid min-w-0 gap-1.5">
         <Label htmlFor={`${id}-fallback`}>Fallback address (optional)</Label>
         <Input
           id={`${id}-fallback`}
@@ -177,7 +179,7 @@ export function LinkDialog({
           </DialogDescription>
         </DialogHeader>
         <form
-          className="grid gap-3"
+          className="grid min-w-0 gap-3"
           onSubmit={event => {
             event.preventDefault();
             // A dialog is drawn outside the workbench but sits inside its form in
