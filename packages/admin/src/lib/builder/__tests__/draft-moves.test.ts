@@ -146,6 +146,51 @@ describe("the moves a draft makes", () => {
     expect(movesOf(current)).toEqual([]);
   });
 
+  // A group's value holds its fields' values, so a group moved whole is one move: a move for a
+  // field inside it as well would overlap, which the server refuses.
+  it("sends one move for a named group moved whole", () => {
+    const current = [
+      text("title"),
+      text("summary"),
+      group("billing", [
+        text("iban"),
+        group("address", [text("street"), text("city")]),
+      ]),
+    ];
+    expect(movesOf(current)).toEqual([
+      { from: ["address"], to: ["billing", "address"] },
+    ]);
+  });
+
+  it("still sends the move of a field that also leaves the group moved", () => {
+    const current = [
+      text("title"),
+      text("summary"),
+      text("street"),
+      group("billing", [text("iban"), group("address", [text("city")])]),
+    ];
+    expect(movesOf(current)).toEqual([
+      { from: ["address", "street"], to: ["street"] },
+      { from: ["address"], to: ["billing", "address"] },
+    ]);
+  });
+
+  // A layout group stores nothing of its own: moved into a named group, each field it holds moves.
+  it("sends the moves of a layout group's fields, never one for the layout group", () => {
+    const layout = text("box", {
+      type: "group",
+      name: "",
+      fields: [text("street")],
+    });
+    const moves = draftMovesOf(
+      pendingChanges(
+        [text("title"), layout, group("meta", [])],
+        [text("title"), group("meta", [layout])]
+      )
+    ).moves.map(m => ({ from: m.from, to: m.to }));
+    expect(moves).toEqual([{ from: ["street"], to: ["meta", "street"] }]);
+  });
+
   it("holds back a field moved and renamed in the same draft", () => {
     const current = [
       text("title"),
