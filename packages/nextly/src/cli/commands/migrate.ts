@@ -187,6 +187,7 @@ import {
   asServiceLogger,
   deletionEventsOfRetiredDocuments,
   reconcileMigrationMetadata,
+  settleRetiredDocumentEvents,
 } from "../../domains/schema/migrate/reconcile-metadata";
 import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import {
@@ -3375,6 +3376,7 @@ export async function migrateCore(
           seedAccess,
           retiredDocumentEvents: () =>
             deletionEventsOfRetiredDocuments(metadataArgs()),
+          settleRetirements: () => settleRetiredDocumentEvents(metadataArgs()),
         }
       );
       // A file that deletes data runs only with consent covering each
@@ -3620,6 +3622,11 @@ function firstRunSteps(
      * it, they are recorded on their own, and before the files, those of a DOWN.
      */
     retiredDocumentEvents: () => Promise<void>;
+    /**
+     * The same, failing when it cannot finish: before any file applies, so a file a DOWN's capture
+     * waits on is not applied again over it.
+     */
+    settleRetirements: () => Promise<void>;
   }
 ): {
   beforeFiles: () => Promise<void>;
@@ -3651,7 +3658,7 @@ function firstRunSteps(
   return {
     beforeFiles: async () => {
       // What a stopped `migrate:down` left to record is settled before any file applies again.
-      await commits.retiredDocumentEvents();
+      await commits.settleRetirements();
       if (plan.kind === "from-applied-snapshot") {
         await commits.commitFirstRun(standings);
       }

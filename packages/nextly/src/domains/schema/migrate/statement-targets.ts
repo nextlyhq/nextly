@@ -677,25 +677,47 @@ export function foreignKeysAddedBy(
   let table: string | undefined;
   if (cursor.accept("CREATE", "TABLE")) {
     cursor.acceptCondition();
-    table = cursor.name();
+    table = localTableName(cursor, dialect);
     // The column and constraint list, read as clauses of its own.
     if (!cursor.accept("(")) return [];
   } else if (cursor.accept("ALTER", "TABLE")) {
     cursor.acceptCondition();
-    table = cursor.name();
+    cursor.accept("ONLY");
+    table = localTableName(cursor, dialect);
   }
   if (table === undefined) return [];
   const on = table;
   return cursor.clauses().flatMap(clause => {
-    const key = addedKeyIn(new StatementCursor(clause), on);
+    const key = addedKeyIn(new StatementCursor(clause), on, dialect);
     return key === undefined ? [] : [key];
   });
+}
+
+/**
+ * The table a statement names next, plain or qualified: a qualified one by its name where the
+ * qualifier is the app's own (`public` on PostgreSQL, `main` on SQLite, the database on MySQL,
+ * which is not known here and so counts), undefined where it names another schema's.
+ */
+function localTableName(
+  cursor: StatementCursor,
+  dialect: SupportedDialect
+): string | undefined {
+  const qualified = cursor.qualifiedName();
+  if (qualified === undefined) return cursor.name();
+  const own =
+    dialect === "postgresql"
+      ? qualified.qualifier === "public"
+      : dialect === "sqlite"
+        ? qualified.qualifier === "main"
+        : true;
+  return own ? qualified.name : undefined;
 }
 
 /** The foreign key one clause adds on `table`, or undefined when it adds none. */
 function addedKeyIn(
   clause: StatementCursor,
-  table: string
+  table: string,
+  dialect: SupportedDialect
 ): AddedForeignKey | undefined {
   clause.accept("ADD");
   const name = clause.accept("CONSTRAINT") ? clause.name() : undefined;
@@ -712,7 +734,7 @@ function addedKeyIn(
   }
   while (!clause.done()) {
     if (clause.accept("REFERENCES")) {
-      const referencesTable = clause.name();
+      const referencesTable = localTableName(clause, dialect);
       return referencesTable === undefined
         ? undefined
         : { table, referencesTable, name, columns };
@@ -723,37 +745,69 @@ function addedKeyIn(
 }
 
 /**
- * The tables PostgreSQL's DROP TABLE statements name, spelled as PostgreSQL stores them: an
- * unquoted name folded to lower case, a quoted one as written, a qualified one by its last part.
+ * The tables PostgreSQL statements drop and create, spelled as PostgreSQL stores them: an unquoted
+ * name folded to lower case, a quoted one as written. A name qualified by a schema other than
+ * `public` is another schema's table, and is in neither. Created means by a CREATE TABLE, or as the
+ * name an ALTER TABLE renames a table to.
  */
-export function postgresDropSpellings(
+export interface PostgresTableSpellings {
+  dropped: Set<string>;
+  created: Set<string>;
+}
+
+/** The tables `statements` drop and create on PostgreSQL (`PostgresTableSpellings`). */
+export function postgresTableSpellings(
   statements: readonly string[]
-): Set<string> {
-  const spellings = new Set<string>();
+): PostgresTableSpellings {
+  const spellings: PostgresTableSpellings = {
+    dropped: new Set(),
+    created: new Set(),
+  };
+  const add = (into: Set<string>, name: string | undefined) => {
+    if (name !== undefined) into.add(name);
+  };
   for (const statement of statements) {
     const cursor = cursorOf(statement, "postgresql");
-    if (!cursor.accept("DROP", "TABLE")) continue;
-    cursor.acceptCondition();
-    let current: string | undefined;
-    for (
-      let token = cursor.peek();
-      token !== undefined;
-      token = cursor.peek()
-    ) {
-      cursor.at += 1;
-      if (token === "CASCADE" || token === "RESTRICT") break;
-      if (token === ",") {
-        if (current !== undefined) spellings.add(current);
-        current = undefined;
-      } else if (typeof token === "string") {
-        if (token !== ".") current = token.toLowerCase();
-      } else if (token.kind === "name") {
-        current = token.written ?? token.name;
+    if (cursor.accept("DROP", "TABLE")) {
+      cursor.acceptCondition();
+      do add(spellings.dropped, postgresSpellingAt(cursor));
+      while (cursor.accept(","));
+    } else if (cursor.accept("CREATE", "TABLE")) {
+      cursor.acceptCondition();
+      add(spellings.created, postgresSpellingAt(cursor));
+    } else if (cursor.accept("ALTER", "TABLE")) {
+      cursor.acceptCondition();
+      cursor.accept("ONLY");
+      postgresSpellingAt(cursor);
+      if (cursor.accept("RENAME", "TO")) {
+        add(spellings.created, postgresSpellingAt(cursor));
       }
     }
-    if (current !== undefined) spellings.add(current);
   }
   return spellings;
+}
+
+/**
+ * The table name at `cursor`, plain or qualified, consumed, spelled as PostgreSQL stores it;
+ * undefined for one qualified by a schema other than `public`, or for no name.
+ */
+function postgresSpellingAt(cursor: StatementCursor): string | undefined {
+  const parts: string[] = [];
+  for (let token = cursor.peek(); token !== undefined; token = cursor.peek()) {
+    if (typeof token === "string") {
+      // An unquoted `s.t` is one word.
+      if (!/^[A-Z_][A-Z0-9_$]*(\.[A-Z_][A-Z0-9_$]*)*$/i.test(token)) break;
+      parts.push(...token.toLowerCase().split("."));
+    } else if (token.kind === "name" && token.name !== undefined) {
+      parts.push(token.written ?? token.name);
+    } else {
+      break;
+    }
+    cursor.at += 1;
+    if (!cursor.accept(".")) break;
+  }
+  if (parts.length === 1) return parts[0];
+  return parts.length === 2 && parts[0] === "public" ? parts[1] : undefined;
 }
 
 /** A registry row a statement writes: the registry table and the row's slug. */

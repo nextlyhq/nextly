@@ -283,10 +283,14 @@ function registriesToRead(
  * there but cannot be read makes the read cover no entity at all: from the
  * other registry alone, an entity could claim a table the unread one's entity
  * would have disputed. Every table is then covered only where it is named.
+ * With `failClosed`, a registry that is there but cannot be read throws
+ * instead: a caller retiring an entity by its table must not take an unread
+ * registry for one that holds none.
  */
 export async function readCoveredEntities(
   db: unknown,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  failClosed = false
 ): Promise<CoveredEntity[]> {
   let present: Set<string>;
   try {
@@ -299,7 +303,8 @@ export async function readCoveredEntities(
         )
       ).map(name => name.toLowerCase())
     );
-  } catch {
+  } catch (error) {
+    if (failClosed) throw error;
     return [];
   }
   const entities: CoveredEntity[] = [];
@@ -311,7 +316,8 @@ export async function readCoveredEntities(
         dialect,
         sql`SELECT ${sql.identifier("slug")}, ${sql.identifier("table_name")}, ${sql.identifier("fields")}, ${sql.identifier("source")} FROM ${sql.identifier(registry.table)}`
       );
-    } catch {
+    } catch (error) {
+      if (failClosed) throw error;
       return [];
     }
     for (const row of rows) {

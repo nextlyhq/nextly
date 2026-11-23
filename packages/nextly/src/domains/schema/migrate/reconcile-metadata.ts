@@ -641,6 +641,21 @@ async function holdersInPlace(deps: ReconcileMetadataDeps): Promise<boolean> {
  * tries again; a lost lock or a test's stop ends the run. Nothing while a registry write is open:
  * the first run's commit, which writes the registry instead, records them once it lands.
  */
+/**
+ * The deletion events captures still owe, recorded before something that would change what they
+ * are judged by: a DOWN rolling back the file an UP's capture waits on, or an UP applying again a
+ * file a DOWN's capture waits on. Unlike the step every Phase 3 takes, a failure here is thrown,
+ * so the change waits until the events are in.
+ */
+export async function settleRetiredDocumentEvents(
+  deps: Pick<ReconcileMetadataDeps, "adapter" | "logger">
+): Promise<void> {
+  const events = await recordRetiredDocumentEvents(deps.adapter);
+  for (const name of events.recorded) {
+    deps.logger.info(`Recorded the deletion of every document of ${name}.`);
+  }
+}
+
 export async function deletionEventsOfRetiredDocuments(
   deps: Pick<ReconcileMetadataDeps, "adapter" | "logger">
 ): Promise<void> {

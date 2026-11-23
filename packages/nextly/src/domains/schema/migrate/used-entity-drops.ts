@@ -41,7 +41,6 @@ import type {
   ExtensionSchemaRecord,
   LiveKeyInto,
 } from "../ownership/dependent-elements";
-import { tablesCreatedBy } from "../ownership/drop-guard";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 
 import { readCoveredEntities } from "./entity-coverage";
@@ -54,7 +53,7 @@ import { elementsDroppedBy } from "./statement-judgement";
 import {
   type AddedForeignKey,
   foreignKeysAddedBy,
-  postgresDropSpellings,
+  postgresTableSpellings,
 } from "./statement-targets";
 
 /** The run's files, as the ledger names them, with their statements. */
@@ -87,7 +86,10 @@ export async function refuseDropsOfUsedEntities(
   const dropped = tablesTheStatementsRetire(statements, args.dialect);
   if (dropped.size === 0) return;
   const retires = retiredTableMatcher(dropped, statements, args.dialect);
-  const retiring = (await readCoveredEntities(args.db, args.dialect)).filter(
+  // An unread registry refuses: taken for one that holds nothing, it would let the drop through.
+  const retiring = (
+    await readCoveredEntities(args.db, args.dialect, true)
+  ).filter(
     entity =>
       entity.excluded !== true &&
       entity.kind !== "fieldGroup" &&
@@ -162,17 +164,20 @@ function retiredTableMatcher(
   if (dialect !== "postgresql") {
     return table => dropped.has(table.toLowerCase());
   }
-  const spelled = postgresDropSpellings(statements);
+  const spelled = postgresTableSpellings(statements);
   const foldedOnly = new Set(
-    [...spelled]
+    [...spelled.dropped]
       .filter(
-        name => name !== name.toLowerCase() && !spelled.has(name.toLowerCase())
+        name =>
+          name !== name.toLowerCase() &&
+          !spelled.dropped.has(name.toLowerCase())
       )
       .map(name => name.toLowerCase())
   );
+  // A mixed-case table the statements make again under its own spelling is rebuilt, not retired.
   return table =>
     table !== table.toLowerCase()
-      ? spelled.has(table)
+      ? spelled.dropped.has(table) && !spelled.created.has(table)
       : dropped.has(table) && !foldedOnly.has(table);
 }
 
@@ -289,9 +294,9 @@ async function fieldOwnersAfter(
 
 /**
  * The foreign keys among `keys` still there once `statements` have run: a key whose table they
- * drop and do not create again goes, and so does one whose every constraint into the table it
- * points at they drop by name or by one of its columns. A table they drop and create again keeps
- * its keys, as what the new table declares is not read.
+ * drop goes, and so does one whose every constraint into the table it points at they drop by name
+ * or by one of its columns. A table they drop and create again has only the keys its new
+ * definition declares, which `keysAddedInto` reads.
  */
 async function keysLeftAfter(
   keys: readonly LiveKeyInto[],
@@ -301,17 +306,11 @@ async function keysLeftAfter(
 ): Promise<LiveKeyInto[]> {
   if (keys.length === 0) return [];
   const dropped = tablesTheStatementsDrop(statements, dialect);
-  const created = new Set(
-    tablesCreatedBy(statements, dialect).map(name => name.toLowerCase())
-  );
   const removed = elementsDroppedBy(statements, dialect);
   const left: LiveKeyInto[] = [];
   for (const key of keys) {
     const table = key.table.toLowerCase();
-    if (dropped.has(table)) {
-      if (created.has(table)) left.push(key);
-      continue;
-    }
+    if (dropped.has(table)) continue;
     if (!removed.tables.has(table)) {
       left.push(key);
       continue;

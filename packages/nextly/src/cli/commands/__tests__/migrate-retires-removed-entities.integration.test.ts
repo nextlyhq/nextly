@@ -14,7 +14,7 @@
  * second retirement in one run, and a DOWN's drop under `migrate:down` are covered too. And a drop of a collection another one's field
  * still names is refused, with nothing removed, unless the run itself removes what uses it.
  */
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,7 +28,10 @@ import {
   resolveDataLossConsent,
   type DataLossConsent,
 } from "../../../domains/schema/migrate/data-loss-consent";
-import { CHUNK } from "../../../domains/schema/migrate/retired-documents";
+import {
+  captureRetiredDocuments,
+  CHUNK,
+} from "../../../domains/schema/migrate/retired-documents";
 import {
   KILL_AT_VARIABLE,
   withStopPoints,
@@ -475,6 +478,43 @@ describe.each(LOCK_DIALECTS)(
       expect(await captures()).toBe(0);
     }, 180_000);
 
+    /** `nextly_content_events` renamed away, so no event can be written, and back. */
+    const eventsAway = () =>
+      adapter.executeQuery(
+        `ALTER TABLE nextly_content_events RENAME TO ${P}_events_away`
+      );
+    const eventsBack = () =>
+      adapter.executeQuery(
+        `ALTER TABLE ${P}_events_away RENAME TO nextly_content_events`
+      );
+
+    /** A capture stored as the run stores one (`retired-documents.ts`), for `head`, holding `ids`. */
+    async function storeCapture(
+      head: {
+        file: string;
+        kind: "collection" | "single";
+        slug: string;
+        table: string;
+        direction: "up" | "down";
+        seq: number;
+      },
+      ids: string[]
+    ) {
+      const hash = (text: string) =>
+        createHash("sha256").update(text).digest("hex").slice(0, 32);
+      const prefix = `retired_documents:${hash(head.file)}:${hash(`${head.kind}:${head.slug}:${head.direction}`)}:`;
+      for (const [key, value] of [
+        [`${prefix}head`, head],
+        [`${prefix}0`, { ids, deletions: {} }],
+      ] as const) {
+        await adapter.insert("nextly_meta", {
+          key,
+          value: JSON.stringify(value),
+          updatedAt: new Date(),
+        });
+      }
+    }
+
     /** Whether the refusal lets `files` through, each with its statements. */
     function judge(files: { label: string; statements: string[] }[]) {
       return refuseDropsOfUsedEntities({
@@ -655,6 +695,220 @@ describe.each(LOCK_DIALECTS)(
       ).rejects.toThrow(/upper/);
     }, 180_000);
 
+    it("settles the captures of other entities when one cannot be recorded, keeping that one", async () => {
+      const name = dropBoth();
+      const stopped = await migrate(bothConsent(), point => {
+        if (point === "files recorded") throw new Error("stopped");
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(stopped).toBeDefined();
+      // Taken first, and its event refused: a slug longer than an event holds.
+      await storeCapture(
+        {
+          file: name,
+          kind: "collection",
+          slug: "x".repeat(600),
+          table: `${P}_gone`,
+          direction: "up",
+          seq: 0,
+        },
+        ["z1"]
+      );
+
+      await migrate();
+
+      expect(await deletionsOf("collection", "posts")).toEqual(EACH_ONCE);
+      expect(await deletionsOf("single", "home")).toEqual(EACH_ONCE);
+      // The one that failed waits for the next run.
+      expect(await captures()).toBe(2);
+    }, 180_000);
+
+    it("captures nothing, and refuses nothing, where nextly_meta is not there", async () => {
+      await adapter.executeQuery("DROP TABLE nextly_meta");
+
+      await expect(
+        captureRetiredDocuments(
+          adapter.getDrizzle(),
+          dialect,
+          {
+            source: "x.sql",
+            transaction: true,
+            retirements: { renamedBefore: new Map() },
+          },
+          POSTS_DROPPED,
+          0,
+          false
+        )
+      ).resolves.toBeUndefined();
+    }, 180_000);
+
+    it("refuses the drop when the registry is there but cannot be read", async () => {
+      await pagesNamePosts();
+      await adapter.executeQuery(
+        `ALTER TABLE dynamic_collections RENAME COLUMN table_name TO ${P}_unread`
+      );
+      try {
+        await expect(
+          judge([{ label: "x.sql", statements: POSTS_DROPPED }])
+        ).rejects.toThrow();
+      } finally {
+        await adapter.executeQuery(
+          `ALTER TABLE dynamic_collections RENAME COLUMN ${P}_unread TO table_name`
+        );
+      }
+    }, 180_000);
+
+    it("refuses a drop of a collection renamed by an earlier file of the run, as its own drop", async () => {
+      await pagesNamePosts();
+
+      await expect(
+        judge([
+          {
+            label: "a.sql",
+            statements: [`ALTER TABLE ${posts} RENAME TO ${posts}_moved`],
+          },
+          {
+            label: "b.sql",
+            statements: [
+              `DROP TABLE ${posts}_tags`,
+              `DROP TABLE ${posts}_locales`,
+              `DROP TABLE ${posts}_moved`,
+            ],
+          },
+        ])
+      ).rejects.toThrow(/posts/);
+    }, 180_000);
+
+    it("judges a foreign key into a dropped Single by each DROP clause, and a renamed column as kept", async () => {
+      // SQLite drops a key only by rebuilding its table.
+      if (dialect === "sqlite") return;
+      const key = `${P}_pages_home2`;
+      await adapter.executeQuery(
+        `ALTER TABLE ${pages} ADD COLUMN home_id varchar(36)`
+      );
+      await adapter.executeQuery(
+        `ALTER TABLE ${pages} ADD CONSTRAINT ${key} FOREIGN KEY (home_id) REFERENCES ${home} (id)`
+      );
+      const homeDropped = [
+        `DROP TABLE ${home}_links`,
+        `DROP TABLE ${home}_locales`,
+        `DROP TABLE ${home}`,
+      ];
+      const run = (first: string[]) => [
+        { label: "x.sql", statements: [...first, ...homeDropped] },
+      ];
+
+      // The key's DROP beside a clause read nowhere here still takes it away.
+      await expect(
+        judge(
+          run([
+            dialect === "mysql"
+              ? `ALTER TABLE ${pages} DROP FOREIGN KEY ${key}, MODIFY COLUMN title varchar(64) NOT NULL`
+              : `ALTER TABLE ${pages} DROP CONSTRAINT ${key}, ALTER COLUMN title SET NOT NULL`,
+          ])
+        )
+      ).resolves.toBeUndefined();
+      // A renamed column keeps its key.
+      await expect(
+        judge(run([`ALTER TABLE ${pages} RENAME COLUMN home_id TO home_ref`]))
+      ).rejects.toThrow(/home/);
+      // A table made again without the key has none.
+      await expect(
+        judge(
+          run([
+            `DROP TABLE ${pages}`,
+            `CREATE TABLE ${pages} (id varchar(36) PRIMARY KEY, title varchar(64))`,
+          ])
+        )
+      ).resolves.toBeUndefined();
+    }, 180_000);
+
+    it("refuses a drop a schema-qualified key the run adds points into", async () => {
+      // Only PostgreSQL's `public` is read here as the app's own schema.
+      if (dialect !== "postgresql") return;
+
+      await expect(
+        judge([
+          {
+            label: "x.sql",
+            statements: [
+              `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36)`,
+              `ALTER TABLE public.${pages} ADD CONSTRAINT ${P}_pages_q FOREIGN KEY (post_id) REFERENCES public.${posts} (id)`,
+              ...POSTS_DROPPED,
+            ],
+          },
+        ])
+      ).rejects.toThrow(new RegExp(pages));
+    }, 180_000);
+
+    it("retires a mixed-case table only where its own spelling is dropped and not made again", async () => {
+      // Only PostgreSQL keeps a quoted name's case apart.
+      if (dialect !== "postgresql") return;
+      const upper = `${P}_Spell`;
+      await adapter.executeQuery(
+        `CREATE TABLE "${upper}" (id varchar(36) PRIMARY KEY)`
+      );
+      await register("collection", "spell", upper, `${upper}_links`);
+      // `pages` names it.
+      await adapter.delete("dynamic_collections", {
+        and: [{ column: "slug", op: "=", value: "pages" }],
+      });
+      await register("collection", "pages", pages, `${pages}_refs`, [
+        { name: "spell", type: "relationship", options: { target: "spell" } },
+      ]);
+
+      // Another schema's table of that spelling.
+      await expect(
+        judge([
+          {
+            label: "x.sql",
+            statements: [`DROP TABLE IF EXISTS archive."${upper}"`],
+          },
+        ])
+      ).resolves.toBeUndefined();
+      // Rebuilt in place, beside an unrelated drop.
+      await expect(
+        judge([
+          {
+            label: "x.sql",
+            statements: [
+              `CREATE TABLE "${upper}_new" (id varchar(36) PRIMARY KEY)`,
+              `DROP TABLE "${upper}"`,
+              `ALTER TABLE "${upper}_new" RENAME TO "${upper}"`,
+              `DROP TABLE IF EXISTS ${P}_unrelated`,
+            ],
+          },
+        ])
+      ).resolves.toBeUndefined();
+    }, 180_000);
+
+    it("keeps the capture of a quoted mixed-case table while a lower-case one of its name stands", async () => {
+      // Only PostgreSQL keeps a quoted name's case apart.
+      if (dialect !== "postgresql") return;
+      const upper = `${P}_Twin`;
+      file([
+        `CREATE TABLE "${upper}" (id varchar(36) PRIMARY KEY, title varchar(64))`,
+        `CREATE TABLE ${upper.toLowerCase()} (id varchar(36) PRIMARY KEY)`,
+        `INSERT INTO "${upper}" (id, title) VALUES ('t1', 'a')`,
+      ]);
+      expect((await migrate()).applied).toBe(1);
+      await register("collection", "twin", upper, `${upper}_links`);
+      file([`DROP TABLE "${upper}"`]);
+
+      const run = await migrate(
+        resolveDataLossConsent({
+          flag: `${upper},${upper.toLowerCase()}`,
+          env: {},
+        })
+      );
+
+      expect(run.applied).toBe(1);
+      expect(await deletionsOf("collection", "twin")).toEqual({ t1: 1 });
+      expect(await captures()).toBe(0);
+    }, 180_000);
+
     /**
      * `nextly migrate` as a real process over this database, as a deploy runs it, killing itself at
      * `killAt` where one is named (`stop-points.ts`). Each run clears the lock a killed one left.
@@ -816,6 +1070,62 @@ describe.each(LOCK_DIALECTS)(
         x2: 1,
       });
       expect(await captures()).toBe(0);
+    }, 180_000);
+
+    it("refuses to roll back while an UP's capture cannot be recorded", async () => {
+      dropBoth();
+      const stopped = await migrate(bothConsent(), point => {
+        if (point === "files recorded") throw new Error("stopped");
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(stopped).toBeDefined();
+      const deps = await downDatabaseDeps({ adapter, dialect, logger });
+      expect(deps.settleRetirements).toBeDefined();
+
+      await eventsAway();
+      try {
+        await expect(deps.settleRetirements?.()).rejects.toThrow();
+      } finally {
+        await eventsBack();
+      }
+      expect(await captures()).toBeGreaterThan(0);
+    }, 180_000);
+
+    it("applies no file again while a DOWN's capture cannot be recorded", async () => {
+      const name = await extraApplied();
+      const deps = await downDatabaseDeps({ adapter, dialect, logger });
+      await withStopPoints(
+        point => {
+          if (point === "collection extra: recorded deletion events") {
+            throw new Error("stopped");
+          }
+        },
+        () =>
+          deps.execDown(
+            EXTRA_DOWN,
+            { source: name, transaction: true, direction: "down" },
+            async handle => {
+              await deps.recordRolledBack(name, handle);
+            }
+          )
+      );
+
+      await eventsAway();
+      try {
+        await expect(migrate()).rejects.toThrow();
+        expect(await adapter.tableExists(extra)).toBe(false);
+      } finally {
+        await eventsBack();
+      }
+
+      await migrate();
+
+      expect(await deletionsOf("collection", "extra")).toEqual({
+        x1: 1,
+        x2: 1,
+      });
     }, 180_000);
 
     it(

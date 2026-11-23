@@ -82,6 +82,7 @@ import { recordPluginSchemaVersionFromLedger } from "../../domains/schema/migrat
 import {
   deletionEventsOfRetiredDocuments,
   type ReconcileLogger,
+  settleRetiredDocumentEvents,
 } from "../../domains/schema/migrate/reconcile-metadata";
 import { refuseRequiredColumnsOverNulls } from "../../domains/schema/migrate/required-column-guard";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
@@ -1329,7 +1330,7 @@ function settlerOf(
 ): (() => Promise<void>) | undefined {
   return logger === undefined
     ? undefined
-    : () => deletionEventsOfRetiredDocuments({ adapter, logger });
+    : () => settleRetiredDocumentEvents({ adapter, logger });
 }
 
 /**

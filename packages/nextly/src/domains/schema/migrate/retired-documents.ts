@@ -37,6 +37,7 @@ import { and, eq, inArray, like, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 
 import { loadedDialect } from "../../../database/dialect-tables";
+import { NextlyError } from "../../../errors/nextly-error";
 import { contentEventsTables } from "../../../schemas/content-events";
 import { recordWriteEvent } from "../../content-events/write-event";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
@@ -51,7 +52,7 @@ import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 import { readCoveredEntities } from "./entity-coverage";
 import type { MigrationUnit } from "./migration-transaction";
 import { renamesIn, tablesDroppedBy } from "./statement-targets";
-import { reachStopPoint } from "./stop-points";
+import { endsTheRun, reachStopPoint } from "./stop-points";
 
 /** Every capture's `nextly_meta` keys start with this. */
 const KEY_PREFIX = "retired_documents:";
@@ -175,21 +176,26 @@ export async function captureRetiredDocuments(
     ])
   );
   if (dropped.size === 0) return;
-  const retiring = (await readCoveredEntities(db, dialect)).flatMap(entity => {
-    const droppedAs = dropped.get(entity.table.toLowerCase());
-    if (
-      entity.excluded === true ||
-      entity.kind === "fieldGroup" ||
-      droppedAs === undefined
-    ) {
-      return [];
+  const retiring = (await readCoveredEntities(db, dialect, true)).flatMap(
+    entity => {
+      const droppedAs = dropped.get(entity.table.toLowerCase());
+      if (
+        entity.excluded === true ||
+        entity.kind === "fieldGroup" ||
+        droppedAs === undefined
+      ) {
+        return [];
+      }
+      // Read and locked by the name the catalog holds it under: the registry's own spelling (a
+      // quoted mixed-case name on PostgreSQL), or the name an earlier unit renamed it to.
+      const table = renamedBefore.has(droppedAs) ? droppedAs : entity.table;
+      return [{ entity, table }];
     }
-    // Read and locked by the name the catalog holds it under: the registry's own spelling (a
-    // quoted mixed-case name on PostgreSQL), or the name an earlier unit renamed it to.
-    const table = renamedBefore.has(droppedAs) ? droppedAs : entity.table;
-    return [{ entity, table }];
-  });
+  );
   if (retiring.length === 0) return;
+  // A database whose `nextly_meta` is not there yet (one `migrate:down` rolls back from before it)
+  // has nowhere to keep a capture: its documents are retired with no event, as before.
+  if (!(await metaStands(db, dialect))) return;
   // Only a table still there is read: a statement naming a missing table aborts the transaction on
   // PostgreSQL.
   const standing = await standingTables(
@@ -199,7 +205,7 @@ export async function captureRetiredDocuments(
   );
   let seq = await lastSeq(db, dialect);
   for (const { entity, table } of retiring) {
-    if (!standing.has(table.toLowerCase())) continue;
+    if (!standing.has(tableKey(table, dialect))) continue;
     seq += 1;
     const head: CaptureHead = {
       file: unit.source,
@@ -319,7 +325,7 @@ export async function forgetCapturesOfStandingTables(
 ): Promise<void> {
   if (!capturesFor(unit)) return;
   if (tablesTheStatementsDrop(statements, dialect).size === 0) return;
-  if ((await standingTables(db, dialect, ["nextly_meta"])).size === 0) return;
+  if (!(await metaStands(db, dialect))) return;
   const heads = await readHeads(
     db,
     dialect,
@@ -332,7 +338,7 @@ export async function forgetCapturesOfStandingTables(
     heads.map(({ head }) => head.table)
   );
   for (const { head } of heads) {
-    if (standing.has(head.table.toLowerCase())) {
+    if (standing.has(tableKey(head.table, dialect))) {
       await forgetPrefix(db, dialect, entityPrefix(head));
     }
   }
@@ -355,6 +361,11 @@ export interface RetiredDocumentEvents {
  * before its writes and before its commit. A capture is settled once its file is recorded as the
  * drop leaves it: applied for an UP, rolled back for a DOWN. Answers which entities' events went
  * and which captures wait.
+ *
+ * A capture that fails is kept for the next run, and the captures of other entities still settle;
+ * a later capture of the same entity waits behind it, since its counts take the earlier one's
+ * events as recorded. A lost lock, or a test's stop, ends the pass at once. Once every capture has
+ * had its turn, the failures are thrown together.
  */
 export async function recordRetiredDocumentEvents(
   adapter: DrizzleAdapter
@@ -362,45 +373,75 @@ export async function recordRetiredDocumentEvents(
   const dialect = adapter.getCapabilities().dialect;
   const db = adapter.getDrizzle();
   const result: RetiredDocumentEvents = { recorded: [], left: [] };
-  if ((await standingTables(db, dialect, ["nextly_meta"])).size === 0) {
-    return result;
-  }
+  if (!(await metaStands(db, dialect))) return result;
   const heads = (await readHeads(db, dialect, KEY_PREFIX)).sort(
     (a, b) => a.head.seq - b.head.seq
   );
+  const waiting = new Set<string>();
+  const failed: string[] = [];
   for (const { head } of heads) {
     const name = `${head.kind} ${head.slug}`;
-    const prefix = entityPrefix(head);
-    const applied = await new SchemaEventsRepository(db, dialect).isFileApplied(
-      head.file
-    );
-    if (applied !== (head.direction === "up")) {
-      // The file is not where its drop leaves it: where the entity's table stands, nothing of it
-      // was retired, and a run that drops it again captures again.
-      if ((await standingTables(db, dialect, [head.table])).size > 0) {
-        await forgetPrefix(db, dialect, prefix);
-      } else {
-        result.left.push(name);
-      }
-      continue;
+    if (waiting.has(name)) continue;
+    try {
+      const outcome = await settleCapture(adapter, head);
+      if (outcome !== "forgotten") result[outcome].push(name);
+    } catch (error) {
+      if (endsTheRun(error)) throw error;
+      waiting.add(name);
+      failed.push(
+        `${name} (${error instanceof Error ? error.message : String(error)})`
+      );
     }
-    for (const key of await idKeys(db, dialect, prefix)) {
-      await adapter.transaction(async tx => {
-        await assertSchemaLockHeld();
-        const captured = await readIds(tx.getDrizzle(), dialect, key);
-        if (captured !== undefined) {
-          await recordDeletions(tx, adapter, dialect, head, captured);
-        }
-        await reachStopPoint(`${name}: recorded deletion events`);
-        await forgetKey(tx.getDrizzle(), dialect, key);
-        // The commit is what lands the events: refused, and undone, by a run that lost the lock.
-        await assertSchemaLockHeld();
-      });
-    }
-    await forgetKey(db, dialect, `${prefix}${HEAD}`);
-    result.recorded.push(name);
+  }
+  if (failed.length > 0) {
+    throw NextlyError.internal({
+      cause: new Error(
+        `The deletion events of ${failed.join("; ")} were not recorded; the capture waits for the next run.`
+      ),
+      logContext: { reason: "retired-documents-unrecorded", failed },
+    });
   }
   return result;
+}
+
+/**
+ * Settles one capture: forgotten where its file is not where its drop leaves it and the table
+ * stands, left where the table is gone, and otherwise its events recorded, row by row.
+ */
+async function settleCapture(
+  adapter: DrizzleAdapter,
+  head: CaptureHead
+): Promise<"recorded" | "left" | "forgotten"> {
+  const dialect = adapter.getCapabilities().dialect;
+  const db = adapter.getDrizzle();
+  const name = `${head.kind} ${head.slug}`;
+  const prefix = entityPrefix(head);
+  const applied = await new SchemaEventsRepository(db, dialect).isFileApplied(
+    head.file
+  );
+  if (applied !== (head.direction === "up")) {
+    // The file is not where its drop leaves it: where the entity's table stands, nothing of it
+    // was retired, and a run that drops it again captures again.
+    const standing = await standingTables(db, dialect, [head.table]);
+    if (!standing.has(tableKey(head.table, dialect))) return "left";
+    await forgetPrefix(db, dialect, prefix);
+    return "forgotten";
+  }
+  for (const key of await idKeys(db, dialect, prefix)) {
+    await adapter.transaction(async tx => {
+      await assertSchemaLockHeld();
+      const captured = await readIds(tx.getDrizzle(), dialect, key);
+      if (captured !== undefined) {
+        await recordDeletions(tx, adapter, dialect, head, captured);
+      }
+      await reachStopPoint(`${name}: recorded deletion events`);
+      await forgetKey(tx.getDrizzle(), dialect, key);
+      // The commit is what lands the events: refused, and undone, by a run that lost the lock.
+      await assertSchemaLockHeld();
+    });
+  }
+  await forgetKey(db, dialect, `${prefix}${HEAD}`);
+  return "recorded";
 }
 
 /**
@@ -470,6 +511,24 @@ function hashOf(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 32);
 }
 
+/**
+ * The `nextly_meta` rows `condition` selects, each key with its value. Read, as every write below
+ * is made, through a statement: the handle a unit hands the capture may be a session's, which runs
+ * statements and nothing else.
+ */
+function metaRows(
+  db: unknown,
+  dialect: SupportedDialect,
+  condition: SQL | undefined
+): Promise<{ key: unknown; value: unknown }[]> {
+  const { nextlyMeta } = loadedDialect(dialect).tables;
+  return querySqlRows<{ key: unknown; value: unknown }>(
+    db,
+    dialect,
+    sql`SELECT ${nextlyMeta.key} AS ${sql.identifier("key")}, ${nextlyMeta.value} AS ${sql.identifier("value")} FROM ${nextlyMeta} WHERE ${condition}`
+  );
+}
+
 /** Every capture's head under `prefix`, with its key; a row that cannot be read as one is passed over. */
 async function readHeads(
   db: unknown,
@@ -477,10 +536,11 @@ async function readHeads(
   prefix: string
 ): Promise<{ key: string; head: CaptureHead }[]> {
   const { nextlyMeta } = loadedDialect(dialect).tables;
-  const rows = await (db as MetaDatabase)
-    .select({ key: nextlyMeta.key, value: nextlyMeta.value })
-    .from(nextlyMeta)
-    .where(like(nextlyMeta.key, `${prefix}%:${HEAD}`));
+  const rows = await metaRows(
+    db,
+    dialect,
+    like(nextlyMeta.key, `${prefix}%:${HEAD}`)
+  );
   return rows.flatMap(row => {
     const head = parsed(headSchema, row.value);
     return head === undefined ? [] : [{ key: String(row.key), head }];
@@ -494,10 +554,7 @@ async function idKeys(
   prefix: string
 ): Promise<string[]> {
   const { nextlyMeta } = loadedDialect(dialect).tables;
-  const rows = await (db as MetaDatabase)
-    .select({ key: nextlyMeta.key })
-    .from(nextlyMeta)
-    .where(like(nextlyMeta.key, `${prefix}%`));
+  const rows = await metaRows(db, dialect, like(nextlyMeta.key, `${prefix}%`));
   return rows
     .map(row => String(row.key))
     .filter(key => !key.endsWith(`:${HEAD}`));
@@ -510,10 +567,7 @@ async function readIds(
   key: string
 ): Promise<CapturedIds | undefined> {
   const { nextlyMeta } = loadedDialect(dialect).tables;
-  const [row] = await (db as MetaDatabase)
-    .select({ value: nextlyMeta.value })
-    .from(nextlyMeta)
-    .where(eq(nextlyMeta.key, key));
+  const [row] = await metaRows(db, dialect, eq(nextlyMeta.key, key));
   return row === undefined ? undefined : parsed(idsSchema, row.value);
 }
 
@@ -539,11 +593,12 @@ async function store(
   value: unknown
 ): Promise<void> {
   const { nextlyMeta } = loadedDialect(dialect).tables;
-  await (db as MetaDatabase).insert(nextlyMeta).values({
-    key,
-    value: JSON.stringify(value),
-    updatedAt: new Date(),
-  });
+  // Each value encoded by its column, as an insert through the table encodes it.
+  await runStatement(
+    db,
+    dialect,
+    sql`INSERT INTO ${nextlyMeta} (${sql.identifier(nextlyMeta.key.name)}, ${sql.identifier(nextlyMeta.value.name)}, ${sql.identifier(nextlyMeta.updatedAt.name)}) VALUES (${sql.param(key, nextlyMeta.key)}, ${sql.param(JSON.stringify(value), nextlyMeta.value)}, ${sql.param(new Date(), nextlyMeta.updatedAt)})`
+  );
 }
 
 /** Forgets the row under `key`, on `db`. */
@@ -553,7 +608,11 @@ async function forgetKey(
   key: string
 ): Promise<void> {
   const { nextlyMeta } = loadedDialect(dialect).tables;
-  await (db as MetaDatabase).delete(nextlyMeta).where(eq(nextlyMeta.key, key));
+  await runStatement(
+    db,
+    dialect,
+    sql`DELETE FROM ${nextlyMeta} WHERE ${eq(nextlyMeta.key, key)}`
+  );
 }
 
 /** Forgets every row under `prefix`, on `db`. */
@@ -563,19 +622,39 @@ async function forgetPrefix(
   prefix: string
 ): Promise<void> {
   const { nextlyMeta } = loadedDialect(dialect).tables;
-  await (db as MetaDatabase)
-    .delete(nextlyMeta)
-    .where(like(nextlyMeta.key, `${prefix}%`));
+  await runStatement(
+    db,
+    dialect,
+    sql`DELETE FROM ${nextlyMeta} WHERE ${like(nextlyMeta.key, `${prefix}%`)}`
+  );
 }
 
-/** Which of `tables` are there, lower-cased. */
+/**
+ * How a table's name is compared on `dialect`: as the catalog spells it on PostgreSQL, which keeps
+ * a quoted name's case (`"Topics"` and `topics` are two tables), lower-cased elsewhere.
+ */
+function tableKey(name: string, dialect: SupportedDialect): string {
+  return dialect === "postgresql" ? name : name.toLowerCase();
+}
+
+/** Which of `tables` are there, each as `tableKey` gives it. */
 async function standingTables(
   db: unknown,
   dialect: SupportedDialect,
   tables: readonly string[]
 ): Promise<Set<string>> {
   const found = await introspectTableNames(db, dialect, [...tables]);
-  return new Set(found.map(name => name.toLowerCase()));
+  return new Set(found.map(name => tableKey(name, dialect)));
+}
+
+/** Whether `nextly_meta`, where captures are kept, is there. */
+async function metaStands(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<boolean> {
+  return (await standingTables(db, dialect, ["nextly_meta"])).has(
+    "nextly_meta"
+  );
 }
 
 /** Runs a statement that returns no rows, as each dialect's Drizzle handle runs one. */
@@ -590,17 +669,4 @@ function runStatement(
       ? (db as { run(q: SQL): unknown }).run(statement)
       : (db as { execute(q: SQL): Promise<unknown> }).execute(statement)
   );
-}
-
-/** The `nextly_meta` handle this module reads and writes through. */
-interface MetaDatabase {
-  select(fields: Record<string, unknown>): {
-    from(table: unknown): {
-      where(condition: SQL | undefined): PromiseLike<Record<string, unknown>[]>;
-    };
-  };
-  insert(table: unknown): {
-    values(values: Record<string, unknown>): PromiseLike<unknown>;
-  };
-  delete(table: unknown): { where(condition: SQL): PromiseLike<unknown> };
 }
