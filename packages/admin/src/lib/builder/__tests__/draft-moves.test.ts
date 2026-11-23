@@ -6,9 +6,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
+import { parseApiError } from "@admin/lib/api/parseApiError";
 import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 
-import { draftMovesOf, movesHints, previewWithMoves } from "../draft-moves";
+import {
+  draftMovesOf,
+  movesHints,
+  previewWithMoves,
+  refusedMovesOf,
+} from "../draft-moves";
 import { pendingChanges } from "../pending-changes";
 
 const text = (id: string, overrides: Partial<BuilderField> = {}) =>
@@ -190,5 +196,62 @@ describe("the review of a save with moves", () => {
         },
       ]).hasChanges
     ).toBe(true);
+  });
+});
+
+describe("the server's refusal of a move", () => {
+  const moves = [
+    {
+      fieldId: "f-summary",
+      label: "Summary",
+      from: ["summary"],
+      to: ["address", "summary"],
+    },
+  ];
+  const refusal = (
+    errors: { path?: string; code?: string; message?: string }[]
+  ) =>
+    parseApiError(
+      {
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Validation failed.",
+          requestId: "req_x",
+          data: { errors },
+        },
+      },
+      400
+    );
+
+  it("marks the moved field, by the path it moves to, with the message as written", () => {
+    const refused = refusedMovesOf(
+      refusal([
+        {
+          path: "address.summary",
+          code: "FIELD_MOVE_REFUSED",
+          message: "Summary cannot move yet.",
+        },
+      ]),
+      moves
+    );
+    expect([...refused]).toEqual([["f-summary", "Summary cannot move yet."]]);
+  });
+
+  it("marks no field for another kind of refusal, a path no move names, or a failed request", () => {
+    const refused = refusedMovesOf(
+      refusal([
+        { path: "address.summary", code: "REQUIRED", message: "Needed." },
+        {
+          path: "billing.summary",
+          code: "FIELD_MOVE_REFUSED",
+          message: "Not this one.",
+        },
+      ]),
+      moves
+    );
+    expect(refused.size).toBe(0);
+    expect(refusedMovesOf(new TypeError("Failed to fetch"), moves).size).toBe(
+      0
+    );
   });
 });

@@ -15,18 +15,22 @@ import type { BuilderField } from "./types";
 export function FieldErrorNotice({
   fields,
   fieldId,
+  refusedMoves,
 }: {
   /** The whole field tree, built-in fields included, as the outline is built from. */
   fields: readonly BuilderField[];
   fieldId: string;
+  /** The server's refusals of the draft's moves, by field id, as the outline marks them. */
+  refusedMoves?: ReadonlyMap<string, string>;
 }): JSX.Element | null {
   const error = useMemo(
     () =>
       builderFieldErrors(
         fields.filter(field => !field.isSystem),
-        fields
+        fields,
+        refusedMoves
       ).get(fieldId),
-    [fields, fieldId]
+    [fields, fieldId, refusedMoves]
   );
   if (!error) return null;
   return (

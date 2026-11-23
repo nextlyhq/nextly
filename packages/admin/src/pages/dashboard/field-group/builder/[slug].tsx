@@ -372,7 +372,7 @@ export default function FieldGroupBuilderEditPage({
     [settings, entitySlug]
   );
 
-  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
+  const schemaSave = useSchemaSave({
     slug,
     missingSlugMessage: "Field group slug is missing",
     label: displayLabel(settings, entitySlug),
@@ -415,6 +415,8 @@ export default function FieldGroupBuilderEditPage({
     settingChanges: pending.settingChanges,
     fieldGroupsFirst: groupsFirst.fieldGroupsFirst,
   });
+  const { handleSave, confirmApply, reviewedSettingChanges, refusedMoves } =
+    schemaSave;
 
   // Discard all on an unsaved field group discards the field group itself: it
   // leaves this tab, and the editor returns to the list.
@@ -530,6 +532,8 @@ export default function FieldGroupBuilderEditPage({
       // Save waits while an unsaved entity's new address is checked.
       saveHeld={saveHeld}
       savingLabel="Saving field group changes…"
+      // A move the server refused is marked at its field.
+      refusedMoves={refusedMoves}
     >
       <ReconcileFieldGroupDialog
         open={reconcileOpen}

@@ -433,7 +433,7 @@ export default function CollectionBuilderEditPage({
 
   // i18n: preview and apply carry the same toggle, so the resolutions the user
   // is asked for match the DDL that actually runs.
-  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
+  const schemaSave = useSchemaSave({
     slug,
     missingSlugMessage: "Collection slug is missing",
     label: displayLabel(settings, entitySlug),
@@ -469,6 +469,8 @@ export default function CollectionBuilderEditPage({
     settingChanges: pending.settingChanges,
     fieldGroupsFirst: groupsFirst.fieldGroupsFirst,
   });
+  const { handleSave, confirmApply, reviewedSettingChanges, refusedMoves } =
+    schemaSave;
 
   // Discard all on an unsaved collection discards the collection itself: it
   // leaves this tab, and the editor returns to the list.
@@ -555,6 +557,8 @@ export default function CollectionBuilderEditPage({
       // Save waits while an unsaved entity's new address is checked.
       saveHeld={saveHeld}
       savingLabel="Saving collection changes…"
+      // A move the server refused is marked at its field.
+      refusedMoves={refusedMoves}
     >
       <BuilderSchemaChangeDialogs
         draftRenames={draftRenamesOf(pending.changes)}

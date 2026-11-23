@@ -124,6 +124,11 @@ type Props = {
   onDiscard?: () => void;
   /** Where the Page Builder opens for this entity, when it offers to. */
   pageBuilderHref?: string;
+  /**
+   * The server's refusals of the draft's moves, by field id (`useSchemaSave`): each field is
+   * marked with its refusal as with any error, on its row, in its settings and in the count.
+   */
+  refusedMoves?: ReadonlyMap<string, string>;
   /** Page-owned dialogs — the schema-change confirmations, and any of the
    *  page's own. Mounted inside the frame so they share its stacking context. */
   children?: ReactNode;
@@ -152,6 +157,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     saveHeld,
     onDiscard,
     pageBuilderHref,
+    refusedMoves,
     children,
   } = props;
   // The fields the save would refuse, from the map the outline marks its rows from, in its order.
@@ -159,10 +165,11 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     () => [
       ...builderFieldErrors(
         builder.fields.filter(field => !field.isSystem),
-        builder.fields
+        builder.fields,
+        refusedMoves
       ).keys(),
     ],
-    [builder.fields]
+    [builder.fields, refusedMoves]
   );
   // While changes are pending, every way out asks first: an in-app link, the
   // field group's editor, the browser's back, a reload and closing the tab.
@@ -248,6 +255,7 @@ function BuilderWorkspace(
     | "pending"
     | "lifecycleEnabled"
     | "storedHooks"
+    | "refusedMoves"
   >
 ): JSX.Element {
   const { builder, pending } = props;
@@ -338,6 +346,7 @@ function EditedFieldSettings({
   pending,
   lifecycleEnabled,
   namedByHooks,
+  refusedMoves,
 }: Pick<
   Props,
   | "active"
@@ -348,6 +357,7 @@ function EditedFieldSettings({
   | "locked"
   | "pending"
   | "lifecycleEnabled"
+  | "refusedMoves"
 > & {
   /** The field names the stored hooks name (`fieldsNamedByHooks`). */
   namedByHooks: ReadonlyMap<string, string>;
@@ -390,6 +400,7 @@ function EditedFieldSettings({
       // Draft/Published as the save judges it.
       savedFields={pending.saved}
       lifecycleEnabled={lifecycleEnabled}
+      refusedMoves={refusedMoves}
       onFieldChange={builder.handleFieldUpdate}
       onFieldDelete={fieldId => {
         builder.handleFieldDelete(fieldId);
@@ -461,6 +472,7 @@ function FieldListRegion({
   moveContext,
   openFieldGroup,
   renameCallbacks,
+  refusedMoves,
 }: Pick<
   Props,
   | "config"
@@ -472,6 +484,7 @@ function FieldListRegion({
   | "active"
   | "onActiveChange"
   | "onDuplicateField"
+  | "refusedMoves"
 > & {
   /** What the move rule needs beyond the fields, for every way of moving one. */
   moveContext: MoveContext;
@@ -484,14 +497,15 @@ function FieldListRegion({
 }): JSX.Element {
   const selectedId = active.kind === "edit" ? active.fieldId : null;
   // The same map the save's refusal is read from, so a row marked with an
-  // error is a row the save refuses.
+  // error is a row the save refuses: with each move the server refused.
   const errors = useMemo(
     () =>
       builderFieldErrors(
         builder.fields.filter(field => !field.isSystem),
-        builder.fields
+        builder.fields,
+        refusedMoves
       ),
-    [builder.fields]
+    [builder.fields, refusedMoves]
   );
   const systemFields = useMemo(
     () => builder.fields.filter(field => field.isSystem),

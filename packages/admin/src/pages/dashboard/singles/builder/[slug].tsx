@@ -390,7 +390,7 @@ export default function SingleBuilderEditPage({
     [settings, entitySlug]
   );
 
-  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
+  const schemaSave = useSchemaSave({
     slug,
     missingSlugMessage: "Single slug is missing",
     label: displayLabel(settings, entitySlug),
@@ -432,6 +432,8 @@ export default function SingleBuilderEditPage({
     settingChanges: pending.settingChanges,
     fieldGroupsFirst: groupsFirst.fieldGroupsFirst,
   });
+  const { handleSave, confirmApply, reviewedSettingChanges, refusedMoves } =
+    schemaSave;
 
   // Discard all on an unsaved Single discards the Single itself: it leaves
   // this tab, and the editor returns to the list.
@@ -518,6 +520,8 @@ export default function SingleBuilderEditPage({
       // Save waits while an unsaved entity's new address is checked.
       saveHeld={saveHeld}
       savingLabel="Saving Single changes…"
+      // A move the server refused is marked at its field.
+      refusedMoves={refusedMoves}
     >
       <BuilderSchemaChangeDialogs
         draftRenames={draftRenamesOf(pending.changes)}

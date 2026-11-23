@@ -11,6 +11,7 @@
  */
 import { fieldColumnName } from "nextly/config";
 
+import { validationIssues } from "@admin/lib/api/parseApiError";
 import type {
   SchemaPreviewResponse,
   SchemaSaveHints,
@@ -22,6 +23,8 @@ import { reviewDeletesData } from "./review-deletes-data";
 
 /** One saved field the draft moves into or out of a group. */
 export interface DraftMove {
+  /** The field's id in the draft, so a refusal of its move is shown at its row. */
+  fieldId: string;
   /** What the field is called, for the sentence that names it. */
   label: string;
   /** Its path as saved: the names of the fields holding it, then its own. */
@@ -56,7 +59,12 @@ export function draftMovesOf(changes: readonly PendingChange[]): {
       withOtherChange.push(label);
       continue;
     }
-    moves.push({ label, from: change.movedFrom, to: change.movedTo });
+    moves.push({
+      fieldId: change.fieldId,
+      label,
+      from: change.movedFrom,
+      to: change.movedTo,
+    });
   }
   return { moves, withOtherChange };
 }
@@ -78,6 +86,31 @@ export function movesHints(
 /** A path as the review names it: `meta.subtitle`. */
 export function movePath(path: readonly string[]): string {
   return path.join(".");
+}
+
+/** The code the server's refusal of a move carries, at the path the field moves to. */
+const MOVE_REFUSED = "FIELD_MOVE_REFUSED";
+
+/**
+ * The server's refusals of a save's moves, by the moved field's id, each with its message as the
+ * server wrote it: a refusal names its move by the path the field moves to. One that names no move
+ * of the draft marks no field; the save's toast still carries every message.
+ */
+export function refusedMovesOf(
+  error: unknown,
+  moves: readonly DraftMove[]
+): ReadonlyMap<string, string> {
+  const fieldAt = new Map(moves.map(move => [movePath(move.to), move.fieldId]));
+  const refused = new Map<string, string>();
+  for (const issue of validationIssues(error)) {
+    if (issue.code !== MOVE_REFUSED || issue.message === undefined) continue;
+    const fieldId =
+      issue.path === undefined ? undefined : fieldAt.get(issue.path);
+    if (fieldId !== undefined && !refused.has(fieldId)) {
+      refused.set(fieldId, issue.message);
+    }
+  }
+  return refused;
 }
 
 /**

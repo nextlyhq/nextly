@@ -169,6 +169,22 @@ describe("the field's settings panel", () => {
     );
   });
 
+  it("says why the server refused the field's move", () => {
+    const fields = [field({})];
+
+    render(
+      <FieldErrorNotice
+        fields={fields}
+        fieldId="f1"
+        refusedMoves={new Map([["f1", "Subject cannot move yet."]])}
+      />
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Subject cannot move yet."
+    );
+  });
+
   it("says nothing for a field with no error", () => {
     const fields = [field({ type: "relationship", relationTo: "posts" })];
 

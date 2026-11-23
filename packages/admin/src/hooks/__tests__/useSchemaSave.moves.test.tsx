@@ -1,12 +1,14 @@
 // A save that moves a field into or out of a group sends the move on its preview and its apply,
 // and is applied even where the preview finds no column to change (a move between two groups):
 // its values move in the migration it writes. A field moved and renamed in the same save is
-// refused before anything is asked of the server.
+// refused before anything is asked of the server, and a move the server refuses is marked at its
+// field until the draft changes.
 import { act, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderHook } from "@admin/__tests__/utils";
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
+import { parseApiError } from "@admin/lib/api/parseApiError";
 import type { PendingChange } from "@admin/lib/builder/pending-changes";
 import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 import type { FieldDefinition } from "@admin/types/collection";
@@ -158,5 +160,62 @@ describe("a save that moves a field", () => {
     expect(toastError).toHaveBeenCalledWith(
       expect.stringContaining("Save the move and the other change separately")
     );
+  });
+});
+
+describe("a move the server refuses", () => {
+  beforeEach(() => {
+    toastError.mockClear();
+  });
+
+  const refusal = parseApiError(
+    {
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Validation failed.",
+        requestId: "req_x",
+        data: {
+          errors: [
+            {
+              path: "billing.street",
+              code: "FIELD_MOVE_REFUSED",
+              message: "Street cannot move yet.",
+            },
+          ],
+        },
+      },
+    },
+    400
+  );
+
+  it("is marked at its field, with the server's message, until the draft changes", async () => {
+    const { result, rerender } = renderHook(
+      ({ changes }: { changes: PendingChange[] }) =>
+        useSchemaSave({
+          slug: "posts",
+          missingSlugMessage: "Collection slug is missing",
+          label: "Posts",
+          confirmation: confirmationStub(),
+          getValidatedFields: () => FIELDS,
+          preview: () => Promise.reject(refusal),
+          apply: vi.fn(),
+          onNoChanges: vi.fn(),
+          onApplied: vi.fn(),
+          pendingChanges: changes,
+        }),
+      { initialProps: { changes: [MOVED] } }
+    );
+
+    act(() => result.current.handleSave());
+
+    await waitFor(() =>
+      expect([...result.current.refusedMoves]).toEqual([
+        ["street", "Street cannot move yet."],
+      ])
+    );
+    expect(toastError).toHaveBeenCalledWith("Street cannot move yet.");
+    // An edit since: the next save is judged afresh, so the field is no longer marked.
+    rerender({ changes: [{ ...MOVED }] });
+    expect(result.current.refusedMoves.size).toBe(0);
   });
 });
