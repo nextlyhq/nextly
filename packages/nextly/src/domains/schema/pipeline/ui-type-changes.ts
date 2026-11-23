@@ -220,7 +220,7 @@ function configuredInput(
   })) {
     const pair =
       change.within?.container ??
-      (keepsColumn(change, dialect, input) ? change : undefined);
+      (plansNoStatement(change, dialect, input) ? change : undefined);
     if (pair === undefined || taken.has(pair.to.name)) continue;
     taken.add(pair.to.name);
     previous.push(pair.from);
@@ -230,14 +230,22 @@ function configuredInput(
 }
 
 /**
- * Whether a type change keeps its column: the same name and the same type on the database, each
- * read where the entity keeps its fields (`at`: a field group's on its own rows).
+ * Whether a type change plans no statement: its column keeps its name and its type on the database,
+ * each read where the entity keeps its fields (`at`: a field group's on its own rows). Never a
+ * relationship's: a change of how it keeps its links is planned as a conversion of its own (a
+ * reference list) even where its column's type stays, as on SQLite, and is the code-first rule's.
  */
-function keepsColumn(
+function plansNoStatement(
   change: FieldTypeChange,
   dialect: SupportedDialect,
   at: ColumnAt
 ): boolean {
+  if (
+    change.fromType.family === "relationship" ||
+    change.toType.family === "relationship"
+  ) {
+    return false;
+  }
   const from = columnDescriptorAt(change.from, dialect, at);
   const to = columnDescriptorAt(change.to, dialect, at);
   return (
