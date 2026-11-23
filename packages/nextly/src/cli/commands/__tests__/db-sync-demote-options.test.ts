@@ -36,7 +36,9 @@ vi.mock("../db-sync-registry", async importOriginal => ({
 /** What a demote of `collection` writes, with `existing` the record already registered. */
 async function demoted(
   collection: DemotedCollection,
-  existing: DynamicCollectionRecord | null = null
+  existing: DynamicCollectionRecord | null = null,
+  /** The dialect of the database the demote runs on, as its adapter states it. */
+  dialect?: "postgresql" | "mysql" | "sqlite"
 ) {
   const registered: DynamicCollectionInsert[] = [];
   const updated: Partial<DynamicCollectionInsert>[] = [];
@@ -62,7 +64,7 @@ async function demoted(
     collection,
     logger: createLogger({ quiet: true }),
     registry,
-    adapter: {} as never,
+    adapter: (dialect === undefined ? {} : { dialect }) as never,
     confirm: async code => {
       shown = code;
       return true;
@@ -264,6 +266,12 @@ describe("a demoted collection's record", () => {
     }
   );
 
+  it("is registered with the hash the registry compares fields by, as an update writes it", async () => {
+    // A different hash for the same fields reads as a schema change at the Builder's first save.
+    const record = await registeredFor(coded());
+    expect(record.schemaHash).toBe(calculateSchemaHash(record.fields as never));
+  });
+
   it("writes its fields, names and table", async () => {
     const collection = coded();
     const record = await registeredFor(collection);
@@ -289,12 +297,48 @@ describe("a demoted collection's code-only options", () => {
         indexes: [{ fields: ["body"], unique: true }],
       })
     );
-    expect(shown).toContain("hooks, indexes.");
+    expect(shown).toContain("hooks.");
+  });
+
+  it("say its compound indexes go at the next schema sync, not when its code entry is removed", async () => {
+    // Once demoted, the code entry is ignored by every schema sync, so the indexes it declares are
+    // not in the schema the next sync applies, whether or not the entry is still there.
+    const { shown } = await demoted(
+      coded({
+        hooks: { beforeCreate: [() => undefined] },
+        indexes: [{ fields: ["body"], unique: true }],
+      })
+    );
+    expect(shown).toContain(
+      "Its compound indexes are dropped at the next schema sync"
+    );
+    expect(shown).not.toContain("indexes.");
   });
 
   it("are not mentioned for a collection without any", async () => {
     const { shown } = await demoted(coded());
     expect(shown).not.toContain("Schema Builder cannot hold");
+    expect(shown).not.toContain("compound indexes");
+  });
+});
+
+describe("a demoted collection's columns", () => {
+  it("are named where the Schema Builder's column rules describe them differently, on the database's dialect", async () => {
+    // A text field stating no width is VARCHAR(255) on a code-first MySQL table and TEXT on a
+    // Schema Builder one. From the next sync the table is the Builder's, so the column widens.
+    const { shown } = await demoted(coded(), null, "mysql");
+    expect(shown).toContain(
+      "From the next schema sync its table follows the Schema Builder's column rules"
+    );
+    expect(shown).toMatch(/body \(varchar\(255\) to text\)/);
+    // `slug` keeps its column: both builders bound it, since it is indexed.
+    expect(shown).not.toMatch(/\bslug \(/);
+  });
+
+  it("are not mentioned where both rules describe every column the same way", async () => {
+    // SQLite stores every text field as TEXT, whoever built the table.
+    const { shown } = await demoted(coded(), null, "sqlite");
+    expect(shown).not.toContain("column rules");
   });
 });
 

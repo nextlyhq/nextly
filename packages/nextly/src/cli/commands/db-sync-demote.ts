@@ -5,8 +5,6 @@
 // collection in code hand off schema editing to the Visual Schema Builder
 // without re-creating anything.
 
-import { createHash } from "node:crypto";
-
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -19,8 +17,11 @@ import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { pluginCollectionSources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
 import { DEMOTED_FROM_CODE } from "../../domains/schema/pipeline/demoted-from-code";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
+import { getColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveCollectionTableName } from "../../domains/schema/utils/resolve-table-name";
+import type { SupportedDialect } from "../../database/schema-registry";
+import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { DynamicCollectionInsert } from "../../schemas/dynamic-collections/types";
 import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import { reportDryRun, type DryRunPlan } from "../dry-run";
@@ -75,13 +76,14 @@ export interface DemotedCollection extends CodeFirstCollectionSource<unknown> {
 /**
  * The options a code collection can set that no registry record holds, each with what it is.
  * Functions (access rules, hooks, endpoints, a workflow) cannot be stored as data, and the rest
- * have no column, so the Schema Builder's collection goes without them.
+ * have no column, so the Schema Builder's collection goes without them. Compound indexes are not
+ * listed here: they stop at the next schema sync rather than when the entry is removed, so the note
+ * names them on a line of their own (`droppedOnDemoteNote`).
  */
 const NOT_CARRIED_BY_A_RECORD = {
   access: "access rules",
   hooks: "hooks",
   endpoints: "endpoints",
-  indexes: "indexes",
   search: "search settings",
   workflow: "a workflow",
   db: "database options",
@@ -119,7 +121,7 @@ export async function demoteCollection(
   const fields = collection.fields ?? [];
 
   const confirmed = await registry.getCollectionBySlug(slug);
-  const note = droppedOnDemoteNote(collection);
+  const note = droppedOnDemoteNote(collection, args.adapter.dialect);
   const preview = [
     serializeCollection({ slug, fields: fields as never[] }),
     ...note.map(line => `// ${line}`),
@@ -217,9 +219,9 @@ function demotedWrite(
       slug: collection.slug,
       ...options,
       source: "ui",
-      schemaHash: createHash("sha256")
-        .update(JSON.stringify(options.fields))
-        .digest("hex"),
+      // The hash the registry compares fields by, as the update above writes it: a hash of another
+      // kind made the Builder's first save of unchanged fields read as a schema change.
+      schemaHash: calculateSchemaHash(options.fields),
       configPath: DEMOTED_FROM_CODE,
     },
   };
@@ -241,21 +243,77 @@ async function assertDemotedWriteAllowed(
 }
 
 /**
- * The lines that go with a demote when the collection sets options no registry record holds:
- * the Schema Builder's collection goes without them, so they stop applying once its code entry
- * is removed. None where it sets no such option.
+ * The lines that go with a demote: what changes for the collection that the Schema Builder's
+ * record cannot say. None where nothing does.
+ *
+ * - Options no registry record holds (`NOT_CARRIED_BY_A_RECORD`): the Builder's collection goes
+ *   without them, so they stop applying once its code entry is removed.
+ * - Its compound indexes: every schema sync ignores the code entry of a collection handed to the
+ *   Builder (`withoutHandedToBuilder`), so the indexes it declares are dropped at the next sync,
+ *   whether or not the entry is still there.
+ * - Its columns the Builder's column rules describe differently (`builderRulesChangeColumns`),
+ *   which the next sync changes, on the database's dialect when the run knows it.
  */
-export function droppedOnDemoteNote(collection: DemotedCollection): string[] {
+export function droppedOnDemoteNote(
+  collection: DemotedCollection,
+  dialect?: SupportedDialect
+): string[] {
   const dropped: string[] = Object.entries(NOT_CARRIED_BY_A_RECORD)
     .filter(([key]) => collection[key as keyof DemotedCollection] !== undefined)
     .map(([, what]) => what);
   const admin = collection.admin as { preview?: unknown } | undefined;
   if (admin?.preview !== undefined) dropped.push("its preview link");
-  if (dropped.length === 0) return [];
+  const changed =
+    dialect === undefined
+      ? []
+      : builderRulesChangeColumns(collection.fields ?? [], dialect);
   return [
-    "It sets options the Schema Builder cannot hold, which stop once its code entry is removed:",
-    `${dropped.join(", ")}.`,
+    ...(dropped.length === 0
+      ? []
+      : [
+          "It sets options the Schema Builder cannot hold, which stop once its code entry is removed:",
+          `${dropped.join(", ")}.`,
+        ]),
+    ...(collection.indexes === undefined
+      ? []
+      : [
+          "Its compound indexes are dropped at the next schema sync (db:sync, or a reload under next dev): the Schema Builder cannot hold them.",
+        ]),
+    ...(changed.length === 0
+      ? []
+      : [
+          "From the next schema sync its table follows the Schema Builder's column rules, which change:",
+          `${changed.join(", ")}.`,
+        ]),
   ];
+}
+
+/**
+ * Each of `fields`' columns that the Schema Builder's column rules describe differently from the
+ * code-first rules its table was built with, as `name (before to after)`. Once demoted, the schema
+ * syncs describe the table by the Builder's rules (`builtByFor`), so they change these columns:
+ * on MySQL, a text field stating no width is VARCHAR(255) from code and TEXT in the Builder.
+ * Both sides come from the one field-to-column mapping (`getColumnDescriptor`), so this names
+ * exactly what the sync's diff will see.
+ */
+function builderRulesChangeColumns(
+  fields: readonly unknown[],
+  dialect: SupportedDialect
+): string[] {
+  const changed: string[] = [];
+  for (const field of fields as FieldDefinition[]) {
+    const fromCode = getColumnDescriptor(field, dialect, "codeFirst");
+    const inBuilder = getColumnDescriptor(field, dialect, "collection");
+    if (fromCode === null || inBuilder === null) continue;
+    // The type as the dialect states it, width included where the dialect has one (MySQL's
+    // `varchar(255)`); a width the dialect does not store, as on SQLite, changes no column.
+    const before = fromCode.dialectType.toLowerCase();
+    const after = inBuilder.dialectType.toLowerCase();
+    if (before !== after) {
+      changed.push(`${fromCode.name} (${before} to ${after})`);
+    }
+  }
+  return changed;
 }
 
 /**
@@ -307,7 +365,7 @@ async function previewDemotion(args: {
     });
     const write = demotedWrite(args.collection, current);
     await assertDemotedWriteAllowed(args.registry, write);
-    const note = droppedOnDemoteNote(args.collection);
+    const note = droppedOnDemoteNote(args.collection, args.adapter.dialect);
     return {
       ...(note.length > 0 ? { notes: [note.join("\n")] } : {}),
       changes: [

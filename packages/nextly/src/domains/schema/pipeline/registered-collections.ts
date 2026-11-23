@@ -15,6 +15,7 @@
  * @module domains/schema/pipeline/registered-collections
  */
 
+import { pluginCollectionSources } from "../migrate/plugin/plugin-collection-sources";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 
 import { DEMOTED_FROM_CODE } from "./demoted-from-code";
@@ -95,6 +96,39 @@ export function withoutHandedToBuilder<T extends { slug?: string | null }>(
       !handedOver.has(entry.slug) ||
       pluginSlugs.has(entry.slug)
   );
+}
+
+/**
+ * `config` as code still owns it: its collections without those a demote handed to the Schema
+ * Builder (`withoutHandedToBuilder`), with a plugin's kept by the rule a start gives a collection
+ * its origin by (`pluginCollectionSources`), and every other part as it is.
+ *
+ * For the passes that read the configuration's entities themselves: the translations-table passes
+ * and the checks of new addresses and sibling fields. Each then ignores such an entry as the schema
+ * roads do, as if it had been removed: its `localized` setting provisions or restores no
+ * translations table the Builder's collection keeps, and a pair of fields added to it refuses
+ * nothing.
+ *
+ * Not for building a desired schema: there the configuration still has to name the collection, or
+ * the Builder's row merged in for its address would read as one removed from code. Those roads
+ * filter the collections themselves (`withoutHandedToBuilder`).
+ */
+export function configTheCodeOwns<
+  C extends {
+    collections?: readonly { slug?: string | null }[];
+    plugins?: Parameters<typeof pluginCollectionSources>[0];
+  },
+>(config: C, registered: readonly RegisteredCollectionRow[]): C {
+  if (config.collections === undefined) return config;
+  const collections = withoutHandedToBuilder(
+    config.collections,
+    registered,
+    pluginCollectionSources(config.plugins ?? [])
+  );
+  // A copy with the collections replaced, typed as the configuration it was given (`C & ...`).
+  return collections.length === config.collections.length
+    ? config
+    : Object.assign({}, config, { collections });
 }
 
 /**

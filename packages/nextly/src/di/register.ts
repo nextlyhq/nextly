@@ -156,6 +156,7 @@ import {
   resolvePostgresSchema,
   setActivePostgresSchema,
 } from "../domains/schema/services/postgres-schema";
+import { configTheCodeOwns } from "../domains/schema/pipeline/registered-collections";
 import { assertConfiguredSiblingFields } from "../domains/schema/sibling-fields";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
 import type { SingleMetadataService } from "../domains/singles/services/single-metadata-service";
@@ -2272,14 +2273,20 @@ async function reconcileBuilderTargets<T>(
   // The configuration's addresses, judged by the one address rule before the boot writes
   // anything. Only an address no registry row holds, and whose table does not exist yet, is new
   // and judged, against every address used; an existing entity keeps its address, whatever the
-  // rule now says of it.
-  await assertConfiguredAddresses(transformedConfig, builderEntities, table =>
+  // rule now says of it. A collection a demote handed to the Schema Builder is judged by its
+  // record alone: the code entry still in the configuration is ignored, as the schema roads ignore
+  // it (`configTheCodeOwns`), so an edit to it cannot stop the start.
+  const configuredByCode = configTheCodeOwns(
+    transformedConfig,
+    builderEntities.collections
+  );
+  await assertConfiguredAddresses(configuredByCode, builderEntities, table =>
     tableExistsAtStart(adapter, table)
   );
   // Their sibling fields, by the one sibling rule and as early: a pair an entity's registry row
   // does not hold is new and refused; one it holds keeps working.
   await assertConfiguredSiblingFields(
-    transformedConfig,
+    configuredByCode,
     builderEntities,
     table => adapter.tableExists(table)
   );
