@@ -154,21 +154,61 @@ describe("LanguageChips", () => {
     ).toBeInTheDocument();
   });
 
-  it("caps the chips and accounts for the rest in the row's name", () => {
+  it("caps the chips, and shows the rest, each named and opened, behind a control", async () => {
+    // Seven languages, the seventh out of date: past the first six it is reachable only through
+    // the control, and once shown it is a chip like the others, state and way in included.
     useBranding.mockReturnValue({
       locales: {
         ...FIVE,
         locales: [
           locale("en", "English"),
-          ...Array.from({ length: 9 }, (_, i) => locale(`l${i}`, `Lang ${i}`)),
+          ...Array.from({ length: 5 }, (_, i) => locale(`l${i}`, `Lang ${i}`)),
+          locale("sv", "Swedish"),
         ],
       },
     });
-    render(<LanguageChips translations={{}} onOpenLocale={vi.fn()} />);
-    expect(screen.getAllByRole("button")).toHaveLength(6);
+    const onOpenLocale = vi.fn();
+    render(
+      <LanguageChips
+        translations={{
+          en: { translated: true, status: "published" },
+          sv: { translated: true, status: "published", stale: true },
+        }}
+        onOpenLocale={onOpenLocale}
+      />
+    );
+    const group = screen.getByRole("group", {
+      name: /2 of 7 languages translated/,
+    });
     expect(
-      screen.getByRole("group", { name: /0 of 10 languages translated/ })
-    ).toBeInTheDocument();
+      within(group).getAllByRole("button", { name: /^Open in/ })
+    ).toHaveLength(6);
+    expect(
+      within(group).queryByRole("button", { name: /^Open in Swedish/ })
+    ).toBeNull();
+
+    const more = within(group).getByRole("button", {
+      name: "Show 1 more language",
+    });
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    more.focus();
+    await userEvent.keyboard("{Enter}");
+
+    const swedish = within(group).getByRole("button", {
+      name: "Open in Swedish, SV, out of date, live",
+    });
+    expect(chipState(swedish)).toBe("outOfDate");
+    await userEvent.click(swedish);
+    expect(onOpenLocale).toHaveBeenCalledWith("sv");
+
+    const fewer = within(group).getByRole("button", {
+      name: "Fewer languages",
+    });
+    expect(fewer).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(fewer);
+    expect(
+      within(group).queryByRole("button", { name: /^Open in Swedish/ })
+    ).toBeNull();
   });
 
   it("renders nothing on a site with one language", () => {

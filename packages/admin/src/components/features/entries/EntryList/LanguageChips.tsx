@@ -16,7 +16,7 @@
  * @module components/features/entries/EntryList/LanguageChips
  */
 
-import { useId, type JSX, type ReactNode } from "react";
+import { useId, useState, type JSX, type ReactNode } from "react";
 
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
@@ -37,8 +37,9 @@ import {
 } from "./language-chips";
 
 /**
- * How many chips a row shows before it summarises the rest. A row is scanned, not read: past a
- * handful of chips the column sets the table's width. The rest stay in the group's name.
+ * How many chips a row shows before the rest wait behind a "+N" control. A row is scanned, not
+ * read: past a handful of chips the column sets the table's width. The control shows the rest,
+ * each named and opened as the first ones are.
  */
 const MAX_CHIPS = 6;
 
@@ -114,6 +115,8 @@ export function LanguageChips({
   className,
 }: LanguageChipsProps): JSX.Element | null {
   const { enabled, locales = [] } = useLocalization();
+  // Whether the chips past the first few are shown, after the reader asked for them.
+  const [showsAll, setShowsAll] = useState(false);
   if (!enabled || locales.length < 2) return null;
 
   // The group's name answers for the whole row, every language included, so the chips a long
@@ -127,8 +130,9 @@ export function LanguageChips({
     missing.length === 0
       ? `All ${total} languages translated`
       : `${translated} of ${total} languages translated; missing ${missing.join(", ")}`;
-  const shown = locales.slice(0, MAX_CHIPS);
-  const overflow = locales.length - shown.length;
+  // The languages past the first few, which wait behind the control at the row's end.
+  const beyond = Math.max(0, locales.length - MAX_CHIPS);
+  const shown = showsAll ? locales : locales.slice(0, MAX_CHIPS);
 
   return (
     <span
@@ -177,13 +181,27 @@ export function LanguageChips({
           </button>
         );
       })}
-      {overflow > 0 && (
-        <span
-          aria-hidden="true"
-          className="text-[11px] text-muted-foreground tabular-nums"
+      {beyond > 0 && (
+        // The rest of the languages, one press away: each then has a chip of its own, with its
+        // state and its way in, rather than a count nobody can open. The name holds the words
+        // shown, so the control is reached by what it says.
+        <button
+          type="button"
+          aria-expanded={showsAll}
+          aria-label={
+            showsAll
+              ? "Fewer languages"
+              : `Show ${beyond} more ${beyond === 1 ? "language" : "languages"}`
+          }
+          onClick={event => {
+            // The row itself navigates; this only shows more or less of it.
+            event.stopPropagation();
+            setShowsAll(all => !all);
+          }}
+          className="inline-flex h-5 items-center rounded-sm px-1 text-[11px] text-muted-foreground tabular-nums hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
         >
-          +{overflow}
-        </span>
+          {showsAll ? "Fewer" : `+${beyond}`}
+        </button>
       )}
     </span>
   );
