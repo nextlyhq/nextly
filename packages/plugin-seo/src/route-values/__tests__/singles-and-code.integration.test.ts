@@ -115,7 +115,7 @@ async function ok<T>(response: Promise<Response>): Promise<T> {
  * The site: posts, notes only some of which anyone may read, and a Home page
  * Single. With `drafts`, it is in two languages and has two Singles keeping
  * working drafts as declared: one plain, and one holding a component kept
- * per language, which core keeps from holding drafts.
+ * per language, whose draft core keeps by language as every document's.
  */
 async function boot(dialect: TestDialect, options: { drafts?: boolean } = {}) {
   const seen: { ctx?: PluginContext } = {};
@@ -467,9 +467,12 @@ describe.each(getConfiguredTestDialects())(
         types.map(type => [type.slug, type.drafts])
       );
       expect(drafts["single:about"]).toBe(true);
-      // Its component is kept per language and the Single is not, so core
-      // writes its live document and the table may change it.
-      expect(drafts["single:promo"]).toBe(false);
+      // Its component is kept per language and the Single is not: core keeps
+      // every document's working draft by language, so this one's is kept as
+      // well, and the table holds its changes as drafts too.
+      expect(drafts["single:promo"]).toBe(true);
+      // And only where it keeps them: Home declares none.
+      expect(drafts["single:home"]).toBe(false);
     });
 
     it("finds a Single's field group, and dry-runs and applies it beside a collection's", async () => {

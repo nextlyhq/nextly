@@ -9,6 +9,9 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { container } from "../../di/container";
+
+import { attachedWorkflowSummary, workflowAttachedTo } from "./registry";
 import type { Workflow } from "./types";
 import {
   readWorkflowSettings,
@@ -52,4 +55,37 @@ export async function readStagePresentation(
   const settings = (await readWorkflowSettings(adapter, workflow.slug))
     ?.settings;
   return stage => stagePresentation(workflow, settings, stage);
+}
+
+/**
+ * The workflow a collection or Single is attached to, as its schema read names it
+ * (`attachedWorkflowSummary`), each stage under the label every other surface shows it by: the
+ * one saved in Settings, else the code's. Null where none is attached.
+ *
+ * @experimental
+ */
+export async function shownWorkflowSummary(
+  kind: "collection" | "single",
+  slug: string
+): Promise<ReturnType<typeof attachedWorkflowSummary>> {
+  const summary = attachedWorkflowSummary(kind, slug);
+  const registered = workflowAttachedTo(kind, slug);
+  if (
+    summary === null ||
+    registered === undefined ||
+    !container.has("adapter")
+  ) {
+    return summary;
+  }
+  const shown = await readStagePresentation(
+    container.get<DrizzleAdapter>("adapter"),
+    registered.workflow
+  );
+  return {
+    ...summary,
+    stages: summary.stages.map(stage => ({
+      ...stage,
+      label: shown(stage.name).label,
+    })),
+  };
 }

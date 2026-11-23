@@ -9,10 +9,111 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { resolveFieldGroupRegistryName } from "../domains/field-groups/storage/resolve-storage-names";
 import type { LaidOutEntity } from "../domains/i18n/per-language-storage-layout";
 import { tableExistsAtStart } from "../domains/schema/pipeline/diff/start-catalog-scope";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../domains/schema/utils/resolve-table-name";
+import { resolveSingleTableName } from "../domains/singles/services/resolve-single-table-name";
 import { NextlyError } from "../errors/nextly-error";
 
 import { loadDynamicTables } from "./load-dynamic-tables";
 import type { StartRegistry } from "./start-reads";
+
+/** The entities a configuration declares, as `declaredLaidOutEntities` reads it. */
+export interface DeclaringConfig {
+  collections?: readonly { slug: string; fields?: unknown }[];
+  singles?: readonly { slug: string; fields?: unknown }[];
+  fieldGroups?: readonly { slug: string; fields?: unknown }[];
+}
+
+/**
+ * Every collection, Single and component the configuration declares, by the table it is stored
+ * in: the entities the boot's storage-layout check and `nextly migrate`'s data steps judge
+ * alongside the Schema Builder's (`readLayoutScanEntities`). A component's table is
+ * `fieldGroupTableOf`'s, by default its name under the earlier naming; a caller that can read the
+ * registry passes its stored names (`declaredLaidOutEntitiesAsStored`).
+ */
+function declaredLaidOutEntities(
+  config: DeclaringConfig,
+  fieldGroupTableOf: (slug: string) => string = resolveComponentTableName
+): LaidOutEntity[] {
+  const fieldsOf = (entity: { fields?: unknown }) =>
+    (entity.fields ?? []) as LaidOutEntity["fields"];
+  const localizedOf = (entity: object) =>
+    (entity as { localized?: unknown }).localized;
+  const statusOf = (entity: object) =>
+    (entity as { status?: unknown }).status === true;
+  const dbNameOf = (entity: object) => (entity as { dbName?: string }).dbName;
+  return [
+    ...(config.collections ?? []).map(
+      (c): LaidOutEntity => ({
+        kind: "collection",
+        slug: c.slug,
+        tableName: resolveCollectionTableName(c.slug, dbNameOf(c)),
+        fields: fieldsOf(c),
+        localized: localizedOf(c),
+        status: statusOf(c),
+      })
+    ),
+    ...(config.singles ?? []).map(
+      (s): LaidOutEntity => ({
+        kind: "single",
+        slug: s.slug,
+        tableName: resolveSingleTableName({
+          slug: s.slug,
+          dbName: dbNameOf(s),
+        }),
+        fields: fieldsOf(s),
+        localized: localizedOf(s),
+        status: statusOf(s),
+      })
+    ),
+    ...(config.fieldGroups ?? []).map(
+      (g): LaidOutEntity => ({
+        kind: "component",
+        slug: g.slug,
+        tableName: fieldGroupTableOf(g.slug),
+        fields: fieldsOf(g),
+        localized: localizedOf(g),
+      })
+    ),
+  ];
+}
+
+/**
+ * `declaredLaidOutEntities`, each declared field group under the table its registry row names, or,
+ * for one the registry does not hold yet, its name under the naming this site's storage is on. So
+ * a field group is matched with its own registry row rather than judged a second time as a Builder
+ * entity, and its real translation table is the one read. The registry is read only when the
+ * configuration declares a group; one that cannot be read leaves the earlier naming, for the
+ * registry scan (`readLayoutScanEntities`) to refuse naming the registry it could not read.
+ */
+export async function declaredLaidOutEntitiesAsStored(
+  adapter: DrizzleAdapter,
+  config: DeclaringConfig,
+  /** The registries a production start read once, when it is one (`di/start-reads`). */
+  registry?: StartRegistry
+): Promise<LaidOutEntity[]> {
+  if ((config.fieldGroups ?? []).length === 0) {
+    return declaredLaidOutEntities(config);
+  }
+  // Loaded only where a group is declared, as the start loads the rest of the layout check.
+  const { readStoredFieldGroupTables, storedOrNewTableName } = await import(
+    "../domains/field-groups/services/field-group-stored-tables"
+  );
+  const stored = await readStoredFieldGroupTables(
+    adapter,
+    registry === undefined
+      ? undefined
+      : async table => (await registry.read(table)).rows()
+  );
+  const names = stored.usable
+    ? stored
+    : { tables: new Map<string, string>(), naming: "legacy" as const };
+  return declaredLaidOutEntities(config, slug =>
+    storedOrNewTableName(names, slug)
+  );
+}
 
 /**
  * Every Builder entity a registry holds that the configuration does not declare (`declared`, by
@@ -50,14 +151,17 @@ export async function readLayoutScanEntities(
     const { failures } = await loadDynamicTables(
       adapter,
       registryTable,
-      (tableName, fields, _status, localized) => {
+      (tableName, fields, status, localized, builderOwned, slug) => {
         if (declared.has(tableName)) return Promise.resolve();
         entities.push({
           kind,
-          slug: tableName,
+          // The slug the registry records, which content and history are addressed by.
+          slug,
           tableName,
           fields: fields as LaidOutEntity["fields"],
           localized,
+          status,
+          ...(builderOwned === undefined ? {} : { builderOwned }),
         });
         return Promise.resolve();
       },

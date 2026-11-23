@@ -24,6 +24,9 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { MetaService } from "../domains/meta/services/meta-service";
+import { consoleLogger } from "../shared/types";
+
 /**
  * Set once a start's SQLite timestamp repairs have run, so a later start scans nothing. Its value
  * says which have: a date alone, as it was first written, means this one; `TimestampRepairsDone`
@@ -36,6 +39,31 @@ export const TIMESTAMP_REPAIR_META_KEY = "sqlite.timestampRepair.v1";
 export interface TimestampRepairsDone {
   at: string;
   registries: true;
+}
+
+/**
+ * Tells the start's mark that the registries' repair is owed again, where a start had recorded it
+ * done: the mark goes back to the date alone, which a start reads as "the text repair has run,
+ * the registries' has not". For a `nextly migrate` whose registries' repair failed, so a start
+ * before the next run repairs them too. A mark that does not say the registries are done is left
+ * as it is.
+ */
+export async function rearmRegistryTimestampRepair(
+  adapter: DrizzleAdapter
+): Promise<void> {
+  const meta = new MetaService(adapter, consoleLogger);
+  const done = await meta.get<string | TimestampRepairsDone>(
+    TIMESTAMP_REPAIR_META_KEY
+  );
+  if (typeof done !== "object" || done === null || !done.registries) return;
+  // The date the mark carried, or now where it carried none: a date alone is what a start
+  // reads as the text repair done.
+  await meta.set(
+    TIMESTAMP_REPAIR_META_KEY,
+    typeof done.at === "string" && done.at !== ""
+      ? done.at
+      : new Date().toISOString()
+  );
 }
 
 /**

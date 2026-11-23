@@ -91,6 +91,12 @@ export function fieldTypeChangesOf(args: {
   renamed?: ReadonlyMap<string, string>;
   dialect: SupportedDialect;
   builtBy: ColumnOrigin;
+  /**
+   * The creator of the table the previous fields' columns were made by, where it is not
+   * `builtBy`'s: an entity whose ownership the change moves between the Schema Builder and code
+   * has its old columns as the old owner made them.
+   */
+  builtByBefore?: ColumnOrigin;
   /** Whether the fields are kept on a field group's row (`columnDescriptorAt`). */
   componentRow?: boolean;
 }): FieldTypeChange[] {
@@ -98,6 +104,7 @@ export function fieldTypeChangesOf(args: {
     builtBy: args.builtBy,
     ...(args.componentRow === true ? { componentRow: true } : {}),
   };
+  const atBefore = { ...at, builtBy: args.builtByBefore ?? args.builtBy };
   const oldNameOf = new Map(
     [...(args.renamed ?? new Map<string, string>())].map(([from, to]) => [
       to,
@@ -112,15 +119,23 @@ export function fieldTypeChangesOf(args: {
   for (const to of fieldsStoredOnRow(args.next)) {
     const from = byName.get(oldNameOf.get(to.name) ?? to.name);
     if (from === undefined) continue;
-    if (
-      columnDescriptorAt(from, args.dialect, at) === null ||
-      columnDescriptorAt(to, args.dialect, at) === null
-    ) {
-      continue;
-    }
-    const fromType = fieldTypeOnDialect(from, args.dialect, args.builtBy, at);
+    const columnBefore = columnDescriptorAt(from, args.dialect, atBefore);
+    const columnAfter = columnDescriptorAt(to, args.dialect, at);
+    if (columnBefore === null || columnAfter === null) continue;
+    const fromType = fieldTypeOnDialect(
+      from,
+      args.dialect,
+      atBefore.builtBy,
+      atBefore
+    );
     const toType = fieldTypeOnDialect(to, args.dialect, args.builtBy, at);
-    if (!sameType(fromType, toType)) {
+    // Where the entity changes owner, one field type is made as two columns (the Builder's
+    // unbounded text, code's bounded one on MySQL): the column the new owner makes is a change too,
+    // which the judgement of its values, reading each one's bound, then weighs.
+    const columnChanges =
+      args.builtByBefore !== undefined &&
+      columnBefore.dialectType !== columnAfter.dialectType;
+    if (!sameType(fromType, toType) || columnChanges) {
       changes.push({ to, from, fromType, toType });
     }
   }
@@ -686,6 +701,10 @@ export interface EntityTypeChangeInput {
   componentRow?: boolean;
   /** The fields whose lost values the owner consented to clearing, by name. */
   acknowledged?: ReadonlySet<string>;
+  /** Fields whose change another check answers for, by their new name: not judged here. */
+  ignore?: ReadonlySet<string>;
+  /** The creator of the entity's table before the change, where its ownership moves (`fieldTypeChangesOf`). */
+  builtByBefore?: ColumnOrigin;
 }
 
 /**
@@ -704,8 +723,11 @@ export async function fieldTypeChangeRefusals(
     ...(entity.renamed !== undefined ? { renamed: entity.renamed } : {}),
     dialect,
     builtBy: entity.builtBy,
+    ...(entity.builtByBefore !== undefined
+      ? { builtByBefore: entity.builtByBefore }
+      : {}),
     ...(entity.componentRow === true ? { componentRow: true } : {}),
-  });
+  }).filter(change => entity.ignore?.has(change.to.name) !== true);
   if (changes.length === 0) return [];
   const pending =
     entity.migrationStatus === undefined

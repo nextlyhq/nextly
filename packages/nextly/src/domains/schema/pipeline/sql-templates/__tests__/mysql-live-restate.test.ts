@@ -7,6 +7,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  guardedIndexDrop,
+  mysqlLiveRunAt,
   mysqlLiveStatements,
   plainMysqlEquivalents,
   restatedColumn,
@@ -176,5 +178,56 @@ describe("a restatement that leaves out the character set and collation", () => 
         characterSet: "restated",
       })
     ).toEqual(restatedColumn("dc_posts", "body", { type: "text" }));
+  });
+});
+
+// An index the snapshot does not record, dropped only where it stands when the file runs: the guard
+// reads it as the drop it amounts to, and a run with anything changed stays refused.
+describe("a guarded index drop", () => {
+  const run = guardedIndexDrop("dc_posts", "posts_code_key");
+
+  it("is read as the plain drop of that index", () => {
+    expect(mysqlLiveRunAt(run, 0)).toEqual({
+      kind: "drop-index",
+      tableName: "dc_posts",
+      indexName: "posts_code_key",
+    });
+    expect(plainMysqlEquivalents(["SELECT 1", ...run])).toEqual([
+      "SELECT 1",
+      "DROP INDEX `posts_code_key` ON `dc_posts`",
+    ]);
+  });
+
+  it("drops only where an index of that name stands, and does nothing elsewhere", () => {
+    expect(run[0]).toContain("INDEX_NAME = 'posts_code_key'");
+    expect(run[0]).toContain("TABLE_NAME = 'dc_posts'");
+    expect(run[0]).toContain("'DO 0'");
+  });
+
+  it("reads a name holding an apostrophe back as it is", () => {
+    expect(mysqlLiveRunAt(guardedIndexDrop("o'brien", "o'key"), 0)).toEqual({
+      kind: "drop-index",
+      tableName: "o'brien",
+      indexName: "o'key",
+    });
+  });
+
+  it("reads a name holding a backslash back as it is, which its literal spells with CONCAT", () => {
+    const run = guardedIndexDrop("dc_po\\sts", "posts\\key");
+    expect(run[0]).toContain("CONCAT(");
+    expect(mysqlLiveRunAt(run, 0)).toEqual({
+      kind: "drop-index",
+      tableName: "dc_po\\sts",
+      indexName: "posts\\key",
+    });
+  });
+
+  it("leaves a run with anything changed as written, so the guard still refuses it", () => {
+    const changed = [
+      run[0].replace("'DO 0'", "'DROP TABLE `dc_posts`'"),
+      ...run.slice(1),
+    ];
+    expect(mysqlLiveRunAt(changed, 0)).toBeUndefined();
+    expect(plainMysqlEquivalents(changed)).toEqual(changed);
   });
 });

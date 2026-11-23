@@ -44,6 +44,7 @@ import type { Logger } from "../../../shared/types";
 import { CollectionRegistryService } from "../../collections/services/collection-registry-service";
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { liveColumnNames } from "../pipeline/diff/introspect-live";
@@ -153,7 +154,11 @@ function columnOf(
   return descriptor?.name ?? null;
 }
 
-/** The names of a row's fields that live in its `_locales` companion. */
+/**
+ * The names of a row's fields that live in its `_locales` companion: its
+ * translatable ones wherever its values are kept per language
+ * (`storesPerLanguage`), which every installation does, translated or not.
+ */
 function localizedNamesOf(row: RegistryRow): ReadonlySet<string> {
   const fields = (row.fields ?? []).filter(
     (field): field is { type: string; name: string } =>
@@ -162,7 +167,7 @@ function localizedNamesOf(row: RegistryRow): ReadonlySet<string> {
       typeof (field as { type?: unknown }).type === "string" &&
       typeof (field as { name?: unknown }).name === "string"
   );
-  return new Set(resolveLocalizedFieldNames(fields, row.localized === true));
+  return new Set(resolveLocalizedFieldNames(fields, storesPerLanguage(row)));
 }
 
 /**

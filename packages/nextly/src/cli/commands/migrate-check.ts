@@ -9,7 +9,8 @@
  *      hash recorded in its paired `.snapshot.json` (someone edited
  *      the file after `migrate:create` generated it).
  *   2. MISSING_SNAPSHOT   - A `.sql` file has no paired `.snapshot.json`
- *      (operator deleted the snapshot or the file was added by hand).
+ *      (operator deleted the snapshot or the file was added by hand). A
+ *      blank migration (`isBlankMigration`) has none by design and passes.
  *   3. INVALID_SNAPSHOT   - A `.snapshot.json` file is malformed
  *      (corrupted JSON, hand-edited, or written by a future nextly
  *      version with an incompatible envelope).
@@ -67,6 +68,7 @@ import {
 } from "../../domains/schema/migrate/file-deletions";
 import {
   forkedHistoryError,
+  isBlankMigration,
   unrecordedMerges,
 } from "../../domains/schema/migrate/history-line";
 import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
@@ -292,6 +294,45 @@ async function failOnUnrecordedMerge(
 }
 
 /**
+ * How one migration file fails its pairing with its snapshot, or undefined where it passes:
+ * the snapshot is malformed (INVALID_SNAPSHOT), missing (MISSING_SNAPSHOT), or records a hash
+ * the file no longer has (CHECKSUM_MISMATCH). Its own function so `runChecks` stays one list of
+ * checks rather than every branch of each.
+ */
+async function snapshotPairingError(
+  migrationsDir: string,
+  metaDir: string,
+  sqlName: string
+): Promise<CliError | undefined> {
+  const sqlContent = await readFile(resolve(migrationsDir, sqlName), "utf-8");
+  // Localization/companion migrations are snapshot-less by design (they carry
+  // cross-table seed SQL run verbatim), so skip the snapshot-pairing checks
+  // rather than flagging them MISSING_SNAPSHOT.
+  if (sqlContent.includes(LOCALIZATION_MIGRATION_MARKER)) return undefined;
+  let result;
+  try {
+    result = await verifyMigrationHash(metaDir, sqlName, sqlContent);
+  } catch (err) {
+    // A distinct INVALID_SNAPSHOT code so the operator can tell "snapshot file
+    // is corrupt / version-mismatched" (fix = regenerate or upgrade nextly)
+    // apart from "snapshot is missing entirely" (fix = git checkout).
+    if (err instanceof SnapshotFileError) {
+      return migrationSnapshotInvalid(err.message);
+    }
+    throw err;
+  }
+  if (result.ok) return undefined;
+  if (result.expected === undefined) {
+    // A blank migration is its author's SQL, which `migrate:create --blank` pairs with no
+    // snapshot, so none is missing. One that does have a snapshot is held to it above, as
+    // any file is.
+    if (isBlankMigration(sqlContent)) return undefined;
+    return migrationSnapshotMissing(sqlName, metaDir);
+  }
+  return migrationFileEdited(sqlName, result.expected, result.actual);
+}
+
+/**
  * F11 PR 4: pure-input check pipeline. Extracted so unit tests can call
  * it with a tmp `migrationsDir` + a hand-built desired snapshot, without
  * spinning up the loadConfig + validateDatabaseEnv plumbing.
@@ -383,33 +424,12 @@ export async function runChecks(args: {
   const templateFiles = await templateMigrationFiles(migrationsDir, metaDir);
   for (const sqlName of sqlFiles) {
     if (templateFiles.has(sqlName)) continue;
-    const sqlContent = await readFile(resolve(migrationsDir, sqlName), "utf-8");
-    // Localization/companion migrations are snapshot-less by design (they carry
-    // cross-table seed SQL run verbatim), so skip the snapshot-pairing checks
-    // rather than flagging them MISSING_SNAPSHOT.
-    if (sqlContent.includes(LOCALIZATION_MIGRATION_MARKER)) continue;
-    let result;
-    try {
-      result = await verifyMigrationHash(metaDir, sqlName, sqlContent);
-    } catch (err) {
-      // F11 PR 4 review fix #3: distinct INVALID_SNAPSHOT code so the
-      // operator can tell "snapshot file is corrupt / version-mismatched"
-      // (fix = regenerate or upgrade nextly) apart from "snapshot is
-      // missing entirely" (fix = git checkout).
-      if (err instanceof SnapshotFileError) {
-        return exitWithError(logger, migrationSnapshotInvalid(err.message));
-      }
-      throw err;
-    }
-    if (!result.ok && result.expected === undefined) {
-      return exitWithError(logger, migrationSnapshotMissing(sqlName, metaDir));
-    }
-    if (!result.ok) {
-      return exitWithError(
-        logger,
-        migrationFileEdited(sqlName, result.expected, result.actual)
-      );
-    }
+    const unpaired = await snapshotPairingError(
+      migrationsDir,
+      metaDir,
+      sqlName
+    );
+    if (unpaired !== undefined) return exitWithError(logger, unpaired);
   }
 
   // Check 3: missing migration per snapshot.

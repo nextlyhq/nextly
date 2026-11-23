@@ -295,7 +295,7 @@ describeEachDialect("a field named with capitals", (dialect: TestDialect) => {
         path: "fields",
         code: "FIELD_NAME_DUPLICATE",
         message:
-          "Collection 'clash': fields 'metaTitle' and 'meta_title' at the top level would both become the column 'meta_title'. Rename one of them.",
+          "Collection 'clash': fields 'metaTitle' and 'meta_title' at the top level share the column 'meta_title'. Rename one of them so each has its own column.",
       },
     ]);
     expect(await current.adapter.tableExists("dc_clash")).toBe(false);

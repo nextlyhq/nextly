@@ -43,6 +43,7 @@ import { clearRegistryRowCache } from "../../domains/dynamic-collections/service
 import { DynamicCollectionService } from "../../domains/dynamic-collections/services/dynamic-collection-service";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { fieldsAsFirstPushed } from "../../domains/i18n/migration/archive-preflight";
+import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
 import {
   publishesPerLanguage,
   storesPerLanguage,
@@ -69,6 +70,11 @@ import {
   refuseMovesOffTheFile,
   type PushReason,
 } from "../../domains/schema/field-moves/moves-road";
+import {
+  parseFieldRenameAnswers,
+  withFieldRenameAnswers,
+  withoutRenameAnswers,
+} from "../../domains/schema/field-rename-answers";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type {
   BrowserRenameResolution,
@@ -406,6 +412,20 @@ function dialogConfirmations(
   };
 }
 
+/** The dialog's confirmations as the change's `confirmedBeside`, where it sent any. */
+function dialogConfirmationsBeside(
+  tableName: string,
+  resolutions: Record<string, FieldResolution> | undefined,
+  confirmedDeletions: ReturnType<typeof readConfirmedDeletions>
+): { confirmedBeside?: LegacyResolutionsBundle } {
+  const { legacy } = dialogConfirmations(
+    tableName,
+    resolutions,
+    confirmedDeletions
+  );
+  return legacy === undefined ? {} : { confirmedBeside: legacy };
+}
+
 /** The save's answer of the counts confirmed, where the body sent them; nothing otherwise. */
 function confirmedDeletionsAnswer(
   confirmedDeletions: z.infer<
@@ -472,6 +492,17 @@ async function withFieldsAsStored(
     ...body,
     fields: fieldsAsStored(sent, collection, [], { keepBuiltIns: true }),
   };
+}
+
+/**
+ * The API key the request was made with, by id: the acting identity an API key's request carries
+ * (as the workflows routes read it), else undefined for a person's or a trusted call.
+ */
+function requestApiKeyId(): string | undefined {
+  const actor = readAuthenticatedActor();
+  return readAuthenticatedScope() !== undefined && actor?.type === "apiKey"
+    ? actor.id
+    : undefined;
 }
 
 /**
@@ -839,9 +870,19 @@ const COLLECTIONS_METHODS: Record<
       if (updatedFields !== undefined) {
         assertValidPluginFieldOptions(updatedFields);
       }
-      const result = await svc.updateCollection(
-        { collectionName: p.collectionName },
-        await withFieldsAsStored(p.collectionName, body)
+      // The request's answers for a field leaving and another arriving: the change runs with
+      // them, so a pair it doesn't answer is refused, not taken for a rename.
+      const renames = parseFieldRenameAnswers(
+        (body as { renames?: unknown }).renames
+      );
+      const result = await withFieldRenameAnswers(renames, async () =>
+        svc.updateCollection(
+          { collectionName: p.collectionName },
+          await withFieldsAsStored(
+            p.collectionName,
+            withoutRenameAnswers(body as Record<string, unknown>)
+          )
+        )
       );
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
@@ -1263,6 +1304,13 @@ const COLLECTIONS_METHODS: Record<
             legacyResolutions: resolutions
               ? { tableName, byFieldName: resolutions }
               : undefined,
+            // A translated field's values the push's companion step drops are confirmed by name
+            // as on the file road, the counted deletions included (`dialogConfirmations`).
+            ...dialogConfirmationsBeside(
+              tableName,
+              resolutions,
+              confirmedDeletions
+            ),
           };
           let pushedSummary: PushSummary | undefined;
           // A push that fails after changing the database keeps its files, recorded applied
@@ -1418,6 +1466,23 @@ const COLLECTIONS_METHODS: Record<
             // where the registry write runs in the file's transaction.
             settled: storedFields => {
               refreshRuntime(storedFields);
+              bumpSchemaVersion();
+            },
+            // The change landed, its file recorded and its fields with it: only the renamed field's
+            // provenance move failed, and logged the statements that finish it. The row is
+            // written with the fields as the save wrote them and its version moved on, so a client
+            // holding the old one is refused, as a Single's is; the answer says the change landed
+            // (`provenanceNotMoved`). Where the row cannot be written either, that is logged too,
+            // and the answer stays the move's.
+            provenanceNotMoved: async storedFields => {
+              refreshRuntime(storedFields);
+              try {
+                await writeRow(storedFields, false);
+              } catch (rowError) {
+                consoleLogger.error(
+                  `[applySchemaChanges] The registry row of '${p.collectionName}' was not written after its rename, so its version did not move on: ${rowError instanceof Error ? rowError.message : String(rowError)}`
+                );
+              }
               bumpSchemaVersion();
             },
             appliedBy: push.appliedBy,
@@ -1658,6 +1723,8 @@ const COLLECTIONS_METHODS: Record<
         // permissions of the user that owns it, so a super-admin-owned key
         // cannot read past its scope by inheriting the session bypass.
         authenticatedScope: readAuthenticatedScope(),
+        // The key itself, which `_waitingForMe` names its caller by.
+        apiKeyId: requestApiKeyId(),
         page: p.page !== undefined ? parseInt(String(p.page), 10) : undefined,
         limit:
           rawLimit !== undefined ? parseInt(String(rawLimit), 10) : undefined,
@@ -1678,6 +1745,8 @@ const COLLECTIONS_METHODS: Record<
         translationStatus: isTruthyParam(p["translation-status"]),
         // `?source-locales=1` attaches `_sources`, each translatable value's language.
         sourceLocales: isTruthyParam(p["source-locales"]),
+        // Each row's review state, when the list asks for it (the admin's Review column).
+        reviewState: isTruthyParam(p.reviewState),
         // `?translations=all` attaches every language's values (`_allLocales`).
         translations: parseTranslationsParam(p.translations),
         // `?count=capped` counts the total no further than the list shows.
@@ -1725,6 +1794,7 @@ const COLLECTIONS_METHODS: Record<
         // Same scope judgement as listEntries: a count that ignored the key's
         // own grant would disclose how many rows exist beyond it.
         authenticatedScope: readAuthenticatedScope(),
+        apiKeyId: requestApiKeyId(),
         search: p.search,
         where: parseWhereParam(p.where, p.whereBrackets),
         status,
@@ -2453,6 +2523,12 @@ async function saveThroughWriter(
      */
     settled?: (fields: FieldDefinition[]) => void;
     /**
+     * Where the file ran and what it does not reach stopped at a renamed field's provenance move
+     * (`isProvenanceNotMoved`): what the caller does with the change that landed, given the fields
+     * as the save wrote them, before that failure is passed on.
+     */
+    provenanceNotMoved?: (fields: FieldDefinition[]) => Promise<void>;
+    /**
      * The questions the push asks before it changes anything, asked where the save's file rather
      * than the push carries the change, before anything is written: a dialog's request that leaves
      * one unanswered is refused as the push refuses it (`refuseUnansweredDialogQuestions`).
@@ -2517,7 +2593,7 @@ async function saveThroughWriter(
           }
         : beforeWrite
   );
-  if (runsFile) await change.fileRoad?.after();
+  if (runsFile) await afterTheFile(change, prepared.fields);
   return {
     fields: prepared.fields,
     applied: result.applied,
@@ -2525,6 +2601,27 @@ async function saveThroughWriter(
     ...(result.checked === undefined ? {} : { checked: result.checked }),
     registryWritten: inFile,
   };
+}
+
+/**
+ * What a save's file does not reach, brought in step once the file ran (`fileRoad.after`). Where
+ * that stops at a renamed field's provenance move (`isProvenanceNotMoved`), the file is recorded,
+ * so the change it carried landed as the save prepared it: the caller is handed `fields`, the ones
+ * the file and the definition hold, before the failure is passed on.
+ */
+async function afterTheFile(
+  change: {
+    fileRoad?: { after: () => Promise<void> };
+    provenanceNotMoved?: (fields: FieldDefinition[]) => Promise<void>;
+  },
+  fields: FieldDefinition[]
+): Promise<void> {
+  try {
+    await change.fileRoad?.after();
+  } catch (error) {
+    if (isProvenanceNotMoved(error)) await change.provenanceNotMoved?.(fields);
+    throw error;
+  }
 }
 
 /**

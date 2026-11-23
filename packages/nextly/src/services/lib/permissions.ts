@@ -26,7 +26,7 @@ import {
 } from "../../auth/access/request-memo";
 import type { GrantedPermission } from "../../auth/authenticated-scope";
 import { isDatabaseBusy } from "../../database/errors";
-import { getDialectTables } from "../../database/index";
+import { env, getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
 import {
   PUBLIC_ROLE_SLUG,
@@ -53,9 +53,10 @@ import {
 import {
   cacheExpiry,
   soonestExpiry,
-  userRoleAssignmentsInForce,
+  usersRoleAssignmentsInForce,
   type ResolvedRoles,
 } from "./role-assignments";
+import { type UserIdMatch, userIdMatchFor } from "./user-id-match";
 
 if (typeof window !== "undefined") {
   throw new Error(
@@ -121,12 +122,19 @@ class PermissionChecker {
   // request's memo of the configured database must never serve.
   private readonly ownDatabase: boolean;
 
+  // How the database the reads run on compares user ids (`userIdMatchFor`):
+  // MySQL without regard to case, so an assignment row may spell a user's id
+  // in another case and still be that user's; PostgreSQL and SQLite exactly.
+  private readonly sameUser: UserIdMatch;
+
   constructor(dialect?: string) {
     // The tables of the dialect the reads run on: the caller's, when it reads
     // through a database of its own, whose dialect the process's setting need
     // not name; the configured one otherwise.
     this.t = dialect ? getDialectTables(dialect) : getTablesLazy();
     this.ownDatabase = dialect !== undefined;
+    // The same dialect `getDialectTables` resolves the tables by.
+    this.sameUser = userIdMatchFor(dialect || env.DB_DIALECT);
   }
 
   async hasPermission(
@@ -271,26 +279,55 @@ class PermissionChecker {
 
   /**
    * The user's role assignments in force now, and the soonest expiry among
-   * them. A lapsed assignment grants nothing, so it is left out here, where
-   * every permission and super-admin decision starts.
+   * them: {@link directRoleAssignments} asked of one user.
    */
   private async getDirectRoleAssignments(
     userId: string,
     // Optional transaction-bound executor; see `hasPermission`.
     executor?: unknown
   ): Promise<ResolvedRoles> {
+    const assigned = (await this.directRoleAssignments([userId], executor)).get(
+      userId
+    );
+    return assigned ?? { roleIds: new Set(), validUntil: soonestExpiry([]) };
+  }
+
+  /**
+   * Each of `userIds`' role assignments in force now, and the soonest expiry
+   * among each one's, read in one statement. A lapsed assignment grants
+   * nothing, so it is left out here, where every permission and super-admin
+   * decision starts.
+   */
+  async directRoleAssignments(
+    userIds: readonly string[],
+    // Optional transaction-bound executor; see `hasPermission`.
+    executor?: unknown
+  ): Promise<Map<string, ResolvedRoles>> {
+    const byUser = new Map<string, ResolvedRoles>();
+    if (userIds.length === 0) return byUser;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { userRoles } = this.t as any;
     const rows = (await rbacQuery(executor)
-      .select({ roleId: userRoles.roleId, expiresAt: userRoles.expiresAt })
+      .select({
+        userId: userRoles.userId,
+        roleId: userRoles.roleId,
+        expiresAt: userRoles.expiresAt,
+      })
       .from(userRoles)
       .where(
-        userRoleAssignmentsInForce(userRoles, userId, new Date())
-      )) as Array<{ roleId: string; expiresAt: Date | null }>;
-    return {
-      roleIds: new Set(rows.map(r => String(r.roleId))),
-      validUntil: soonestExpiry(rows),
-    };
+        usersRoleAssignmentsInForce(userRoles, userIds, new Date())
+      )) as Array<{ userId: string; roleId: string; expiresAt: Date | null }>;
+    // Each assignment row counts for every requested id the database matched
+    // it to: an exact-only sort would drop, on MySQL, a row the statement
+    // itself matched, and with it a role the user holds.
+    for (const userId of new Set(userIds)) {
+      const own = rows.filter(row => this.sameUser(String(row.userId), userId));
+      byUser.set(userId, {
+        roleIds: new Set(own.map(row => String(row.roleId))),
+        validUntil: soonestExpiry(own),
+      });
+    }
+    return byUser;
   }
 
   private async roleSetHasPermission(
@@ -789,6 +826,21 @@ export async function resolveUserRoles(
   executor?: unknown
 ): Promise<ResolvedRoles> {
   return new PermissionChecker().resolveRoles(userId, executor);
+}
+
+/**
+ * The roles each of `userIds` is assigned directly and in force now, read in
+ * one statement: the assignments every permission and super-admin decision
+ * starts from, before inheritance. For work that asks about many people at
+ * once, by the roles that hold a permission, inheritance included.
+ */
+export async function directRoleIdsOfUsers(
+  userIds: readonly string[]
+): Promise<Map<string, ReadonlySet<string>>> {
+  const assigned = await new PermissionChecker().directRoleAssignments(userIds);
+  return new Map(
+    [...assigned].map(([userId, roles]) => [userId, roles.roleIds])
+  );
 }
 
 /**
@@ -1411,14 +1463,21 @@ export async function isSuperAdmin(
  * when the roles cannot be read: for a reader on the pool that must tell "not
  * a super-admin" from "could not tell", such as one that answers many
  * questions from a single read and would otherwise answer them all as a
- * non-admin. The same decision `isSuperAdmin` asks, from the same actor.
+ * non-admin, or one that refuses a super-admin, for which "not one" would let
+ * them through. The same decision `isSuperAdmin` asks, from the same actor on
+ * the pool, or on the caller's transaction where `executor` is given.
  *
  * @throws NextlyError when the roles cannot be read.
  */
-export async function isSuperAdminOrRefuse(userId: string): Promise<boolean> {
+export async function isSuperAdminOrRefuse(
+  userId: string,
+  executor?: unknown
+): Promise<boolean> {
   if (!userId) return false;
   try {
-    return await superAdminForRequest(userId);
+    return executor === undefined
+      ? await superAdminForRequest(userId)
+      : await decideSuperAdmin(userId, executor);
   } catch (cause) {
     throw unreadable(cause, { reason: "roles-unreadable", userId });
   }

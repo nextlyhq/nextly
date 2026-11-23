@@ -24,7 +24,7 @@ import { flowDeps } from "../test-support/flow-deps";
 import { fakeAccountsCore } from "../testing";
 
 import { cookieName } from "./cookies";
-import { ACCOUNT_PRINCIPAL } from "./routes";
+import { ACCOUNT_PRINCIPAL } from "./principal";
 
 const ADDRESS = "dana@example.com";
 

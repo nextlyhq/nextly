@@ -34,7 +34,7 @@ import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/serv
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 import { appLocalization } from "../i18n/configured-locales";
 import { storesPerLanguage } from "../i18n/per-language-storage";
-import { isValidLocale } from "../i18n/resolve-locale";
+import { configuredLocale } from "../i18n/resolve-locale";
 import type { UserContext } from "../singles/types";
 
 import { applyComponentReadAccess } from "./component-read-access";
@@ -341,7 +341,8 @@ function usableLocale(versionLocale: string | null): string | null {
   // Without languages there is no locale to validate against, and nothing
   // reads one either.
   if (!localization) return null;
-  return isValidLocale(localization, versionLocale) ? versionLocale : null;
+  // An older spelling of a configured language is read as the code its rows are stored under.
+  return configuredLocale(localization, versionLocale) ?? null;
 }
 
 /**

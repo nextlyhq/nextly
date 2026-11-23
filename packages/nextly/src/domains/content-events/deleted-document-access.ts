@@ -23,6 +23,7 @@
  * @module domains/content-events/deleted-document-access
  */
 
+import { superAdminRefusedOn } from "../../auth/access/closed-to-super-admin-refusal";
 import {
   canReadEntity,
   getRBACService,
@@ -71,6 +72,18 @@ export async function mayReadDeletedDocument(
   // rules, not hooks. It needs the row, which is gone, so no caller can be
   // shown to have passed it, and the history stays closed to all of them.
   if (hooksMayNarrowReads(owner)) return false;
+  // A collection closed to super-admin keeps its deleted documents' history
+  // from them too, before the super-admin answer below.
+  if (
+    await superAdminRefusedOn(slug, {
+      userId: caller.userId ?? undefined,
+      ...(caller.authMethod === "api-key"
+        ? { keyHoldsSuperAdmin: caller.keyHoldsSuperAdmin === true }
+        : {}),
+    })
+  ) {
+    return false;
+  }
   const rule = getRBACService()?.getRegisteredAccess(slug)?.read;
   if (typeof rule === "function") {
     // Only super-admin authority passes a rule that needs the row: a

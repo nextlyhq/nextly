@@ -29,6 +29,10 @@ type EmailRequests = {
     readonly address: typeof LIMIT_RULES.resetAddress;
     readonly token: typeof LIMIT_RULES.resetToken;
   };
+  readonly invitation: {
+    readonly address: typeof LIMIT_RULES.invitationAddress;
+    readonly token: null;
+  };
 };
 
 /** Each kind of request that sends an email: its address's rule, and its tokens' where it takes them. */
@@ -39,6 +43,7 @@ export const EMAIL_REQUESTS: EmailRequests = {
     token: LIMIT_RULES.resendToken,
   },
   reset: { address: LIMIT_RULES.resetAddress, token: LIMIT_RULES.resetToken },
+  invitation: { address: LIMIT_RULES.invitationAddress, token: null },
 };
 
 /**

@@ -66,6 +66,7 @@ import {
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { ServiceContainer } from "../../../services";
 import { _resetEnvCache } from "../../../shared/lib/env";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 
 const SERVER_URL_ENV = {
   postgresql: "TEST_POSTGRES_URL",
@@ -190,6 +191,16 @@ interface Shape {
 const said = (kind: Kind, rest: string) =>
   `${ENTITY[kind].label} '${ENTITY[kind].slug}': ${rest} Rename one of them.`;
 
+/** The refusal of a pair sharing one stored value: the column or key, and that each needs its own. */
+const saidSharing = (
+  kind: Kind,
+  pair: string,
+  shared: { column: string } | { key: string }
+) =>
+  "column" in shared
+    ? `${ENTITY[kind].label} '${ENTITY[kind].slug}': ${pair} share the column '${shared.column}'. Rename one of them so each has its own column.`
+    : `${ENTITY[kind].label} '${ENTITY[kind].slug}': ${pair} share the key '${shared.key}'. Rename one of them so each has its own key.`;
+
 /** For roads that take any spelling: a column pair in a group, a case pair at the top level. */
 const SPELLING_SHAPES: Shape[] = [
   {
@@ -209,10 +220,9 @@ const SPELLING_SHAPES: Shape[] = [
     shape: "`Body` beside `body` at the top level",
     apply: fields => [...fields, { name: "Body", type: "text" }],
     message: kind =>
-      said(
-        kind,
-        "fields 'body' and 'Body' at the top level differ only in letter case."
-      ),
+      saidSharing(kind, "fields 'body' and 'Body' at the top level", {
+        column: "body",
+      }),
   },
 ];
 
@@ -278,16 +288,17 @@ const REPEAT_SHAPES: Shape[] = [
         { name: "note", type: "text" },
       ]),
     message: kind =>
-      said(kind, "fields 'note' and 'note' in group 'seo' have the same name."),
+      saidSharing(kind, "fields 'note' and 'note' in group 'seo'", {
+        key: "note",
+      }),
   },
   {
     shape: "`body` twice at the top level",
     apply: fields => [...fields, { name: "body", type: "text" }],
     message: kind =>
-      said(
-        kind,
-        "fields 'body' and 'body' at the top level have the same name."
-      ),
+      saidSharing(kind, "fields 'body' and 'body' at the top level", {
+        column: "body",
+      }),
   },
 ];
 
@@ -358,6 +369,23 @@ async function stateOf(
 function storedFields(row: Record<string, unknown> | null): Field[] {
   const fields = row?.fields;
   return (typeof fields === "string" ? JSON.parse(fields) : fields) as Field[];
+}
+
+/**
+ * The entity's registry row made to hold `fields`, as a row an earlier version accepted holds them:
+ * written straight to the row, with the process's cached rows forgotten.
+ */
+async function storeFields(
+  adapter: DrizzleAdapter,
+  kind: Kind,
+  fields: Field[]
+): Promise<void> {
+  const { registry, slug } = ENTITY[kind];
+  const json = JSON.stringify(fields).replaceAll("'", "''");
+  await adapter.executeQuery(
+    `UPDATE ${registry} SET fields = '${json}' WHERE slug = '${slug}'`
+  );
+  clearRegistryRowCache();
 }
 
 /** A Builder save as a development server runs it, where a save applies its DDL at once. */
@@ -902,6 +930,48 @@ for (const dialect of getConfiguredTestDialects()) {
               expect(stored.map(field => field.name)).toContain("summary");
             }
           }
+        });
+      });
+    }
+
+    // An entity an earlier version let hold two fields sharing one column: every road that
+    // changes it refuses until one is renamed, whatever the change is, and writes nothing.
+    for (const road of ROADS.filter(candidate => !candidate.creates)) {
+      it(`${road.road} refuses a change to an entity that already holds two fields sharing a column`, async () => {
+        const t = await boot();
+        const adapter = t.adapter as unknown as DrizzleAdapter;
+        await inDevelopment(async () => {
+          expect(await outcomeOf(() => builderCreate[road.kind](BASE))).toEqual(
+            { accepted: true }
+          );
+          const created = storedFields(
+            (await stateOf(adapter, dialect, road.kind)).row
+          );
+          const body = created.find(field => field.name === "body");
+          expect(body).toBeDefined();
+          // A second `body`, as the row of an entity saved before the rule holds it.
+          await storeFields(adapter, road.kind, [...created, { ...body! }]);
+          const before = await stateOf(adapter, dialect, road.kind);
+          const held = storedFields(before.row);
+          const clean = road.keepsTable ? relabelled : withSummary;
+
+          expect(await outcomeOf(() => road.send(t, clean(held)))).toEqual(
+            refusal(
+              saidSharing(
+                road.kind,
+                "fields 'body' and 'body' at the top level",
+                {
+                  column: "body",
+                }
+              )
+            )
+          );
+          expect(await stateOf(adapter, dialect, road.kind)).toEqual(before);
+
+          // The control: the same change with the second `body` gone goes through.
+          expect(await outcomeOf(() => road.send(t, clean(created)))).toEqual({
+            accepted: true,
+          });
         });
       });
     }

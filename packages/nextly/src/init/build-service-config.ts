@@ -16,6 +16,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { pluginConsentFromConfig } from "../plugins/plugin-consent";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { consoleLogger } from "../shared/types";
+import { perLanguageStorageWritten } from "../shared/types/per-language-storage-written";
 import { getImageProcessor } from "../storage/image-processor";
 
 /**
@@ -163,6 +164,13 @@ export function buildServiceConfig(
       serviceConfig.permissions = nextlyConfig.permissions;
     }
 
+    // The collections the app opens to the preset roles, forwarded for the
+    // seeder that sets their grants: dropped here, every collection the app
+    // opened by slug would stay closed to them.
+    if (!serviceConfig.presetGrants && nextlyConfig?.presetGrants) {
+      serviceConfig.presetGrants = nextlyConfig.presetGrants;
+    }
+
     // If users config not explicitly provided, use from nextly.config.ts
     if (!serviceConfig.users && nextlyConfig?.users) {
       serviceConfig.users = nextlyConfig.users;
@@ -283,13 +291,16 @@ export function buildServiceConfig(
       serviceConfig.webhookAuditEnabled = nextlyConfig.webhookAuditEnabled;
     }
 
-    // Per-language storage, chosen once for the site: carried so registration publishes the
-    // choice the config makes rather than the default.
+    // What the configuration wrote of the deprecated per-language storage setting, which chooses
+    // no layout: carried so the start warns a site that still writes it, and only such a site.
+    const written = nextlyConfig
+      ? perLanguageStorageWritten(nextlyConfig)
+      : undefined;
     if (
       serviceConfig.perLanguageStorage === undefined &&
-      nextlyConfig?.perLanguageStorage !== undefined
+      written !== undefined
     ) {
-      serviceConfig.perLanguageStorage = nextlyConfig.perLanguageStorage;
+      serviceConfig.perLanguageStorage = written;
     }
   }
 

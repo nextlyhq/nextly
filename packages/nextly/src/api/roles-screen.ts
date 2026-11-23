@@ -17,21 +17,48 @@
  * @module api/roles-screen
  */
 
+import { z } from "zod";
+
+import {
+  closedMarkOf,
+  noteStoredClosedMark,
+  refreshStoredClosedMarks,
+  type ClosedToSuperAdminMark,
+} from "../auth/access/closed-to-super-admin";
 import { declaresRule } from "../auth/access/decide";
 import {
   COLLECTION_ACTIONS,
   SINGLE_ACTIONS,
 } from "../auth/access/route-gate-adapters";
 import { getRBACService } from "../auth/code-access";
+import { validateOrigin } from "../auth/csrf/validate";
+import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
+import { countsOf } from "../auth/handlers/unknown-source";
+import { authRateLimiter } from "../auth/middleware/rate-limiter";
 import { getService } from "../di";
+import { buildAuditLogWriter } from "../domains/audit/audit-log-writer";
+import { changingRoleGrants } from "../domains/auth/services/role-grants-changed";
+import { expireContentAfterGrantsChange } from "../domains/flush-content-change";
+import { writeStoredClosedMark } from "../domains/meta/closed-to-super-admin-marks";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
+import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
+import { env } from "../lib/env";
 import { bootedPlugins } from "../route-handler/auth-handler";
+import { isSuperAdmin } from "../services/lib/permissions";
 import { contentKinds } from "../services/lib/registered-content-slugs";
 
 import { PRIVATE_NO_STORE_HEADERS } from "./authenticated-read";
-import { respondList, SKIP_DATE_FORMATTING_HEADER } from "./response-shapes";
-import { requireRoutePermission } from "./route-auth";
+import { readJsonBody } from "./read-json-body";
+import {
+  respondAction,
+  respondList,
+  SKIP_DATE_FORMATTING_HEADER,
+} from "./response-shapes";
+import {
+  requireRouteAuthentication,
+  requireRoutePermission,
+} from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
 /** One collection or Single, as the roles screen shows it. */
@@ -44,6 +71,13 @@ export interface RolesScreenEntity {
   plugin: string | null;
   /** The operations whose code-defined access declares a rule. */
   declaredRules: string[];
+  /**
+   * For a collection, whether it is closed to super-admin and where that is
+   * set; absent for a Single, which cannot be closed.
+   *
+   * @experimental
+   */
+  closedToSuperAdmin?: ClosedToSuperAdminMark;
 }
 
 /**
@@ -97,6 +131,8 @@ export const getRolesScreen = withErrorHandler(async (req: Request) => {
       : [];
   };
 
+  // The marks set in the admin as they stand, not as last read here.
+  await refreshStoredClosedMarks();
   const items: RolesScreenEntity[] = [];
   for (const { slug, labels } of collections) {
     if (kinds.get(slug) !== "collection") continue;
@@ -106,6 +142,7 @@ export const getRolesScreen = withErrorHandler(async (req: Request) => {
       labels,
       plugin: pluginCollections.get(slug) ?? null,
       declaredRules: declaredRulesOf(slug, COLLECTION_ACTIONS),
+      closedToSuperAdmin: closedMarkOf(slug),
     });
   }
   for (const { slug, label } of singles) {
@@ -139,5 +176,146 @@ export const getRolesScreen = withErrorHandler(async (req: Request) => {
         [SKIP_DATE_FORMATTING_HEADER]: "1",
       },
     }
+  );
+});
+
+/** How many changes of the mark one account may try in a window. */
+const PASSWORD_TRIES_PER_WINDOW = 10;
+
+/** The window those tries are counted in: 15 minutes. */
+const PASSWORD_TRIES_WINDOW_MS = 15 * 60 * 1000;
+
+/** What a change of a collection's closed-to-super-admin mark sends. */
+const closedMarkChange = z.strictObject({
+  collection: z.string().min(1),
+  closed: z.boolean(),
+  /** The super-admin's own password, entered again for this change. */
+  password: z.string().min(1),
+});
+
+/**
+ * `PATCH /roles/screen/closed-to-super-admin`: closes a collection to
+ * super-admin, or opens it to them again.
+ *
+ * Only a super-admin, signed in with a session, may: a key cannot enter a
+ * password. The request must come from the site's own origin, and the
+ * super-admin's password is asked again and checked before anything changes,
+ * so a session left open, or a stolen session cookie, cannot remove the mark.
+ * A collection whose code sets the mark is refused: the code decides it. The
+ * change and the stored marks are written in one transaction, then the audit
+ * log records who changed it, when, the collection, and its value before and
+ * after. A change to what it already is writes nothing.
+ *
+ * @experimental
+ */
+export const setClosedToSuperAdmin = withErrorHandler(async (req: Request) => {
+  const caller = await requireRouteAuthentication(req);
+  if (caller.authMethod !== "session") {
+    throw NextlyError.personOnly({
+      doing: "close a collection to super-admin",
+      logContext: { authMethod: caller.authMethod },
+    });
+  }
+  if (!validateOrigin(req, env.NEXTLY_ALLOWED_ORIGINS_PARSED ?? [])) {
+    throw NextlyError.csrfFailed({
+      logContext: { reason: "closed-to-super-admin-cross-site" },
+    });
+  }
+  if (!(await isSuperAdmin(caller.userId))) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "closed-to-super-admin-not-super-admin" },
+    });
+  }
+  const parsed = closedMarkChange.safeParse(await readJsonBody(req));
+  if (!parsed.success) {
+    throw NextlyError.validation({
+      errors: parsed.error.issues.map(issue => ({
+        path: issue.path.join("."),
+        code: "INVALID",
+        message: `${issue.message}.`,
+      })),
+    });
+  }
+  const { collection, closed, password } = parsed.data;
+  await getCachedNextly();
+
+  const collections = await getService(
+    "collectionRegistryService"
+  ).getAllLabels();
+  if (!collections.some(entry => entry.slug === collection)) {
+    throw NextlyError.notFound({ logContext: { collection } });
+  }
+  await refreshStoredClosedMarks();
+  if (closedMarkOf(collection).setIn === "code") {
+    throw NextlyError.conflict({
+      reason: "state",
+      message:
+        "This collection's code says whether it is closed to super-admin, so it can't be changed here.",
+      logContext: { collection },
+    });
+  }
+  // A session holder cannot guess the password here: each account gets a
+  // few tries a window, counted where core's sign-in limits are counted, so
+  // every instance shares them.
+  const { authRateLimit } = buildAuthRouterDeps(
+    getService as (name: string) => unknown
+  );
+  const attempt = await authRateLimiter(countsOf(authRateLimit)).check(
+    `closed-to-super-admin:${caller.userId}`,
+    PASSWORD_TRIES_PER_WINDOW,
+    PASSWORD_TRIES_WINDOW_MS
+  );
+  if (!attempt.allowed) {
+    throw NextlyError.rateLimited({
+      retryAfterSeconds: Math.max(
+        1,
+        Math.ceil((attempt.resetAt.getTime() - Date.now()) / 1000)
+      ),
+      logContext: { reason: "closed-to-super-admin-password-tries" },
+    });
+  }
+  // The password before anything is read for the change, and before
+  // anything is written.
+  await getService("authService").confirmPassword(caller.userId, password);
+
+  const adapter = getService("adapter");
+  const meta = getService("metaService");
+  let before = false;
+  // A read cached before a close must not be served after it, a super-admin's
+  // included, and a cached read is not keyed by the mark: so a change expires
+  // every cached content read, as a change of grants does. The expiry is
+  // queued before the write (`changingRoleGrants`), so it is owed even if
+  // this process stops right after the commit; withdrawn where nothing
+  // changed.
+  await changingRoleGrants(async () => {
+    await adapter.transaction(async tx => {
+      before = await writeStoredClosedMark(
+        meta,
+        tx.getDrizzle(),
+        collection,
+        closed
+      );
+    });
+    noteStoredClosedMark(collection, closed);
+    if (before !== closed) await expireContentAfterGrantsChange();
+  });
+  if (before !== closed) {
+    await buildAuditLogWriter(getService as (name: string) => unknown).write({
+      kind: "collection-super-admin-access-changed",
+      actorUserId: caller.userId,
+      userAgent: req.headers.get("user-agent"),
+      metadata: {
+        collection,
+        before: before ? "closed" : "open",
+        after: closed ? "closed" : "open",
+        source: "admin",
+      },
+    });
+  }
+  return respondAction(
+    closed
+      ? "The collection is closed to super-admin."
+      : "The collection is open to super-admin.",
+    { item: { collection, closedToSuperAdmin: closedMarkOf(collection) } }
   );
 });

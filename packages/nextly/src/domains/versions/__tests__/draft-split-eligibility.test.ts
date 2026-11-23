@@ -5,7 +5,7 @@
  * disqualifier so the two can never present a status-less save as a draft while
  * the server writes the live row.
  */
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import {
@@ -18,6 +18,9 @@ import {
   setPerLanguageStorage,
 } from "../../i18n/per-language-storage";
 import type { ComponentSchemas } from "../restore-snapshot";
+
+// A case that stands in for an earlier release's layout leaves the one every installation runs.
+afterEach(() => _resetPerLanguageStorage());
 
 const textFields = [
   { name: "title", type: "text" },
@@ -145,7 +148,8 @@ describe("isDraftSplitEligible", () => {
       ).toBe(true);
     });
 
-    it("still turns them off when a stored field names it too", () => {
+    it("still turns them off when a stored field names it too (an earlier release's layout)", () => {
+      setPerLanguageStorage(false);
       const storedHero = {
         name: "banner",
         type: "component",
@@ -168,7 +172,8 @@ describe("isDraftSplitEligible", () => {
   // keyed with no language, while the component stores a value per language,
   // so one draft would mix several languages' edits: a collection's as well as
   // a Single's.
-  it("is off for a non-localized document that reaches a localized component", () => {
+  it("is off for a non-localized document that reaches a localized component (an earlier release's layout)", () => {
+    setPerLanguageStorage(false);
     for (const entityKind of ["single", "collection"] as const) {
       expect(
         evaluateDraftSplitEligibility({

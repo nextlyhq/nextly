@@ -25,6 +25,12 @@
  * Where what the settle writes fails, the save is left as it stopped, its record that it is in
  * progress kept, and the failure that stopped it is still the one reported, the settle's after it.
  *
+ * A collection's update turning Draft/Published on adds columns of the system, not fields, which
+ * the judgement of what applied does not name. Stopped part-way on MySQL it is refused as part-way,
+ * its file kept and recorded nowhere, and the next save is refused naming `nextly migrate:resolve`;
+ * after `--failed-cleanup` and `nextly migrate`, or the rest finished by hand and `--applied`, it is
+ * on whole. On PostgreSQL and SQLite the stop rolls back whole and the next save turns it on.
+ *
  * Not covered here: a translated field's rename stopped between its two tables; on the push a stop
  * after a drop, since the push drops a column holding data only on the dialog's answer for it;
  * and a translated collection's Builder apply, whose push sends its statements on a connection
@@ -61,7 +67,14 @@ import { clearRegistryRowCache } from "../../../dynamic-collections/services/col
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { MetaService } from "../../../meta/services/meta-service";
 import { consoleLogger } from "../../../../shared/types";
+import { checksumOf } from "../../migrate/applied-checksums";
 import { NO_CONSENT } from "../../migrate/data-loss-consent";
+import { resolveMigration } from "../../migrate/resolve";
+import { parseSqlSections } from "../../migrate/sql-sections";
+import {
+  marksNoTransaction,
+  splitSqlStatements,
+} from "../../migrate/split-sql";
 import { parseSnapshotFile } from "../../migrate-create/snapshot-io";
 import {
   acquireWriterHold,
@@ -762,6 +775,239 @@ describe.each(getConfiguredTestDialects())(
         "the folder replayed on an empty database"
       ).toEqual(expected);
     }
+
+    // Turning Draft/Published on adds the column that records when an entry was first published,
+    // then the status column: columns of the system, not fields, which the judgement of a stopped
+    // save (`judgeStoppedSave`) does not name. Stopped between the two, the save's file runs in one
+    // transaction on PostgreSQL and SQLite, rolled back whole; on MySQL the first column stays, and
+    // the save is refused as part-way, its file kept, for `nextly migrate:resolve`.
+    const drafts = {
+      name: "Draft/Published",
+      table: "dc_sts_drafts",
+    } as SavePath;
+
+    /** Turn Draft/Published on for the collection, as the admin's update sends it. */
+    const turnOn = () =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: "sts_drafts" },
+        { fields: [text("heading")], status: true }
+      );
+
+    /** Whether the registry records Draft/Published on for the collection. */
+    async function statusRegistered(t: TestNextly): Promise<boolean> {
+      clearRegistryRowCache();
+      const [row] = await t.adapter.select<{ status: unknown }>(
+        "dynamic_collections",
+        {
+          columns: ["status"],
+          where: { and: [{ column: "slug", op: "=", value: "sts_drafts" }] },
+        }
+      );
+      return row?.status === true || Number(row?.status) === 1;
+    }
+
+    /**
+     * A collection holding an entry whose update turning Draft/Published on stopped at its status
+     * column: the save's answer, and the migration files it left beside the ones before it.
+     */
+    async function stoppedTurningOn(t: TestNextly) {
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: "sts_drafts", label: "sts_drafts", fields: [text("heading")] }
+      );
+      await t.nextly.create({
+        collection: "sts_drafts",
+        data: { heading: "Hello" },
+      } as never);
+      const folderBefore = filesBelow(history());
+      const failed = failStatement(t, adding(drafts.table, "status"));
+
+      const outcome = await outcomeOf(turnOn());
+
+      expect(failed(), "no statement adding `status` was met").toBe(1);
+      vi.restoreAllMocks();
+      vi.stubEnv("NODE_ENV", "development");
+      const left = filesBelow(history()).filter(
+        f => f.endsWith(".sql") && !folderBefore.includes(f)
+      );
+      return { outcome, left };
+    }
+
+    /** The collection with Draft/Published on, whole: both columns, the registry, every file applied. */
+    async function expectTurnedOnWhole(t: TestNextly): Promise<void> {
+      const after = await liveColumns(t, drafts.table);
+      expect(after).toEqual(
+        expect.arrayContaining(["first_published_at", "status"])
+      );
+      expect(await statusRegistered(t)).toBe(true);
+      const applied = await appliedFiles(t);
+      expect(
+        filesBelow(history()).filter(
+          f => f.endsWith(".sql") && !f.includes("/") && !applied.includes(f)
+        )
+      ).toEqual([]);
+      expect(
+        (await t.nextly.find({ collection: "sts_drafts" } as never)).items
+      ).toEqual([expect.objectContaining({ heading: "Hello" })]);
+      await expectReplayGives(drafts, after);
+    }
+
+    it.skipIf(dialect === "mysql")(
+      "a collection's update turning Draft/Published on, stopped at its status column, rolls back whole and saves again whole",
+      async () => {
+        const t = await boot();
+        const { outcome, left } = await stoppedTurningOn(t);
+
+        expect(outcome.failed, "the save was reported as going through").toBe(
+          true
+        );
+        const live = await liveColumns(t, drafts.table);
+        expect(live).not.toContain("first_published_at");
+        expect(live).not.toContain("status");
+        expect(left, "the files of a save that changed nothing").toEqual([]);
+
+        const again = await outcomeOf(turnOn());
+
+        expect(
+          again.failed ? messageOf(again.error) : undefined,
+          "the save again"
+        ).toBeUndefined();
+        await expectTurnedOnWhole(t);
+      },
+      300_000
+    );
+
+    /**
+     * On MySQL, the stopped save's refusal and the next save's: each names the kept file and
+     * `nextly migrate:resolve`, and nothing is recorded, adopted or undone.
+     */
+    async function refusedAsPartWay(t: TestNextly): Promise<string> {
+      const { outcome, left } = await stoppedTurningOn(t);
+      expect(outcome.failed, "the save was reported as going through").toBe(
+        true
+      );
+      // The staging: the first column committed before the failing statement ran.
+      const live = await liveColumns(t, drafts.table);
+      expect(live).toContain("first_published_at");
+      expect(live).not.toContain("status");
+      expect(left, "the save's kept file").toHaveLength(1);
+      const file = left[0]!;
+      expect(outcome.failed && messageOf(outcome.error)).toMatch(
+        new RegExp(`${file} failed part-way.*nextly migrate:resolve`, "s")
+      );
+      expect(await appliedFiles(t)).not.toContain(file);
+      expect(await statusRegistered(t)).toBe(false);
+
+      const again = await outcomeOf(turnOn());
+
+      expect(again.failed, "the save again went through").toBe(true);
+      expect(again.failed && messageOf(again.error)).toMatch(
+        new RegExp(`${file} has an unresolved attempt.*migrate:resolve`, "s")
+      );
+      expect(await liveColumns(t, drafts.table)).toEqual(live);
+      expect(await appliedFiles(t)).not.toContain(file);
+      return file;
+    }
+
+    /** `nextly migrate:resolve` on `file`, as the command runs it, verified against its snapshot. */
+    function resolveFile(
+      t: TestNextly,
+      file: string,
+      mode: "applied" | "failed-cleanup"
+    ) {
+      const content = () => readFileSync(join(history(), file), "utf8");
+      return resolveMigration({
+        mode,
+        filename: file,
+        dialect,
+        repo: new SchemaEventsRepository(
+          t.adapter.getDrizzle() as never,
+          dialect
+        ),
+        fileExists: () => Promise.resolve(existsSync(join(history(), file))),
+        loadTargetSnapshot: async () => {
+          const name = file.replace(/\.sql$/, ".snapshot.json");
+          const { snapshot } = parseSnapshotFile(
+            readFileSync(join(history(), "meta", name), "utf8"),
+            name
+          );
+          return {
+            ...snapshot,
+            tables: snapshot.tables.filter(each => each.name === drafts.table),
+          };
+        },
+        marksNoTransaction: () =>
+          Promise.resolve(marksNoTransaction(content())),
+        fileChecksum: () => Promise.resolve(checksumOf(content())),
+        introspectLive: () =>
+          introspectLiveSnapshot(t.adapter.getDrizzle(), t.adapter.dialect, [
+            drafts.table,
+          ]),
+      });
+    }
+
+    it.runIf(dialect === "mysql")(
+      "a collection's update turning Draft/Published on, stopped at its status column, is refused as part-way, and after `--failed-cleanup` `nextly migrate` turns it on whole",
+      async () => {
+        const t = await boot();
+        const file = await refusedAsPartWay(t);
+
+        // The statements that ran reversed by hand, the attempt cleaned up, and the file run again.
+        await t.adapter.executeQuery(
+          `ALTER TABLE \`${drafts.table}\` DROP COLUMN \`first_published_at\``
+        );
+        await resolveFile(t, file, "failed-cleanup");
+        await migrated(t);
+
+        expect(await appliedFiles(t)).toContain(file);
+        // The save asked again has nothing left to do.
+        const again = await outcomeOf(turnOn());
+        expect(
+          again.failed ? messageOf(again.error) : undefined,
+          "the save again"
+        ).toBeUndefined();
+        await expectTurnedOnWhole(t);
+      },
+      300_000
+    );
+
+    it.runIf(dialect === "mysql")(
+      "a collection's update turning Draft/Published on, stopped at its status column, is refused as part-way, and once finished by hand and resolved applied is on whole",
+      async () => {
+        const t = await boot();
+        const file = await refusedAsPartWay(t);
+
+        // The file's remaining statements run by hand, and the file marked applied.
+        const statements = splitSqlStatements(
+          parseSqlSections(readFileSync(join(history(), file), "utf8")).upSql
+        )
+          .map(statement => statement.trim())
+          .filter(statement => statement.length > 0);
+        const remaining = statements.slice(
+          statements.findIndex(statement =>
+            adding(drafts.table, "status").test(statement)
+          )
+        );
+        expect(remaining.length, statements.join("\n")).toBeGreaterThan(0);
+        for (const statement of remaining) {
+          await t.adapter.executeQuery(statement);
+        }
+        await resolveFile(t, file, "applied");
+
+        expect(await appliedFiles(t)).toContain(file);
+        const again = await outcomeOf(turnOn());
+        expect(
+          again.failed ? messageOf(again.error) : undefined,
+          "the save again"
+        ).toBeUndefined();
+        await expectTurnedOnWhole(t);
+      },
+      300_000
+    );
 
     describe.each(PATHS)("$name", path => {
       beforeEach(() => {

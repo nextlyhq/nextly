@@ -118,6 +118,7 @@ import {
   toSnakeCase,
 } from "./field-column-descriptor";
 import { withSchemaChangeExcluded } from "./schema-change-exclusion";
+import { unconfirmedTranslatedDrops } from "./translated-drops";
 
 /**
  * The fields the registry records for a collection before a Schema Builder change, as it records
@@ -347,6 +348,13 @@ export interface CollectionSchemaChange {
   renameResolutions: BrowserRenameResolution[];
   eventResolutions: Resolution[];
   legacyResolutions?: LegacyResolutionsBundle;
+  /**
+   * The answers that confirm, by field name, the values the change drops beside the push (a
+   * translated field's column in the translations table, `unconfirmedTranslatedDrops`), where they
+   * differ from `legacyResolutions`: the dialog's counted deletions confirm them too, as on its
+   * file road. Absent, `legacyResolutions` answers them.
+   */
+  confirmedBeside?: LegacyResolutionsBundle;
   /**
    * Whether every pair on the collection's own table not answered above, from a column the change
    * confirms dropping, is a drop and an add: the Builder save's rule, which detects its own
@@ -683,6 +691,24 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         source: sourceArg,
         promptChannel: channelArg,
         databaseName,
+        // A translated field's values the companion's step after the push drops, asked of the push
+        // by field name, as the save's own file road asks them.
+        unconfirmedDropsBeside: async () => {
+          const legacy = change.confirmedBeside ?? change.legacyResolutions;
+          const unconfirmed = await unconfirmedTranslatedDrops({
+            tableName,
+            builtBy: "collection",
+            dialect,
+            oldFields: (change.collection.fields ??
+              []) as unknown as FieldDefinition[],
+            newFields: change.fields,
+            wasLocalized: change.wasLocalized,
+            isLocalized: change.isLocalized,
+            renameResolutions: change.renameResolutions,
+            ...(legacy === undefined ? {} : { legacy }),
+          });
+          return unconfirmed.map(field => field.name);
+        },
         // Tagged with the collection, so the notifications name what changed.
         uiTargetSlug: slug,
         uiTargetKind: "collection" as const,

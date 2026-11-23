@@ -146,6 +146,17 @@ export const SCHEMA_CASES = {
         saves: ["builder-save-in-progress:collection:posts"],
       },
     }),
+  // As a Builder save is refused while an earlier save's remaining migration files have not run.
+  BUILDER_SAVE_EARLIER_LEFT: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        'An earlier Builder save stopped between its migration files (collection "posts"), and the rest of them have not run yet. Start the app in development (`next dev`): its start finishes the previous save. Then save again.',
+      logContext: {
+        reason: "builder-save-pending-files",
+        saves: ["collection:posts"],
+      },
+    }),
   // As a Builder save is refused over an earlier save's record that cannot be read.
   BUILDER_SAVE_RECORD_UNREADABLE: () =>
     NextlyError.conflict({

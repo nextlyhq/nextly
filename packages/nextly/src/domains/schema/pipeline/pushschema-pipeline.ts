@@ -842,6 +842,15 @@ export class PushSchemaPipeline {
      */
     defaultLocale?: string;
     /**
+     * The values the caller's own steps beside this apply drop outside the tables it diffs (a
+     * translated field's column in the entity's translations table), as the names of the fields no
+     * answer confirms. Asked at the prompt stage, after every refusal of the plan and before
+     * anything runs: a name refuses the apply as its own unanswered question does
+     * (`PromptCancelledError`), with nothing dropped. Absent, the apply asks only of the tables it
+     * diffs.
+     */
+    unconfirmedDropsBeside?: () => Promise<readonly string[]>;
+    /**
      * How the apply waits for a table another database session is using (`PipelineBusyTable`).
      * Absent, the bounds come from the environment (`NEXTLY_LOCK_TIMEOUT`,
      * `NEXTLY_LOCK_TIMEOUT_TOTAL`, else the defaults) and each notice goes to the logger, so every
@@ -1431,6 +1440,9 @@ export class PushSchemaPipeline {
           desired: args.desired,
           operations: resolvedOps,
         });
+        // What the caller's steps beside the apply would drop with no answer naming it, asked last
+        // of the prompt stage, so the plan's own refusals come first.
+        await refuseUnconfirmedDropsBeside(args.unconfirmedDropsBeside);
 
         // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
         //
@@ -2726,6 +2738,24 @@ export class PushSchemaPipeline {
     // itself is left as it is: busy-table detection reads it.
     return applyFailureCode(err) ?? "INTERNAL_ERROR";
   }
+}
+
+/**
+ * Refuse an apply whose caller's steps beside it would drop values no answer confirms
+ * (`unconfirmedDropsBeside`), as an unanswered question refuses it (`PromptCancelledError`), with
+ * nothing run; nothing to ask where the caller gives none.
+ */
+async function refuseUnconfirmedDropsBeside(
+  unconfirmedDropsBeside: (() => Promise<readonly string[]>) | undefined
+): Promise<void> {
+  if (unconfirmedDropsBeside === undefined) return;
+  const unconfirmed = await unconfirmedDropsBeside();
+  if (unconfirmed.length === 0) return;
+  consoleLogger.warn(
+    `[Nextly schema] Not applied: the change drops the translated values of ` +
+      `${unconfirmed.join(", ")}, which no answer confirms by field name.`
+  );
+  throw new PromptCancelledError();
 }
 
 /**

@@ -63,15 +63,22 @@ function sameIndex(
  * and by what tells the admin which fields are the host's own.
  */
 function builtInSubmissionFields(formSlug: string): FieldConfig[] {
+  // Every field here describes the submission (who sent it, from where, how
+  // it was handled), not content written in a language, so each text field
+  // is `localized: false`: kept once for every language on the main table.
   return [
     // ============================================================
     // Form Relationship
     // ============================================================
+    // Every submission belongs to a form, and the plugin's write seam
+    // refuses one without it (`prepareSubmissionForWrite`). It is not
+    // `required` here because that would make the column NOT NULL, and an
+    // installation from a release that kept it nullable could hold a row
+    // without one: its upgrade would then be refused.
     relationship({
       name: "form",
       label: "Form",
       relationTo: formSlug,
-      required: true,
       admin: {
         readOnly: true,
         description: "The form this submission belongs to",
@@ -118,6 +125,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
 
     text({
       name: "spamReason",
+      localized: false,
       label: "Spam Reason",
       admin: {
         readOnly: true,
@@ -131,6 +139,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
     // ============================================================
     textarea({
       name: "notes",
+      localized: false,
       label: "Internal Notes",
       admin: {
         description: "Notes visible only to admins (not shown to submitter)",
@@ -142,6 +151,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
     // ============================================================
     text({
       name: "ipAddress",
+      localized: false,
       label: "IP Address",
       admin: {
         readOnly: true,
@@ -151,6 +161,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
 
     text({
       name: "userAgent",
+      localized: false,
       label: "User Agent",
       admin: {
         readOnly: true,
@@ -163,6 +174,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
     // exceed what a short text column holds on MySQL.
     textarea({
       name: "page",
+      localized: false,
       label: "Page",
       admin: { hidden: true },
     }),
@@ -192,6 +204,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
 
     text({
       name: "editedBy",
+      localized: false,
       label: "Edited By",
       admin: {
         readOnly: true,
@@ -205,9 +218,13 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
     // taken from a caller, and empty when the form allows several responses
     // or the submission is spam. Unique per form (see `indexes`), so two
     // submissions with the same value cannot both be stored.
+    // Shared by every language: the unique index above is built on the main
+    // table, and one person's response is one response whatever language
+    // they answered in.
     text({
       name: "responseKey",
       label: "One-response key",
+      localized: false,
       admin: { hidden: true },
     }),
 
@@ -226,6 +243,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
     // taken from a caller.
     text({
       name: "title",
+      localized: false,
       label: "Sender",
       admin: { hidden: true },
     }),
