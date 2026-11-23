@@ -352,6 +352,30 @@ describe("a demoted collection's columns", () => {
     expect(shown).not.toMatch(/\bbody \(/);
   });
 
+  it("include the fields a group with no name keeps on the collection's own row", async () => {
+    // A presentational group stores its fields as columns of the collection's table, so the next
+    // sync changes them as it changes a top-level field.
+    const { shown } = await demoted(
+      coded({
+        localized: true,
+        fields: [
+          {
+            type: "group",
+            fields: [
+              { name: "sku", type: "text", localized: false },
+              { name: "caption", type: "text" },
+            ],
+          },
+        ],
+      }),
+      null,
+      "mysql"
+    );
+    expect(shown).toMatch(/sku \(varchar\(255\) to text\)/);
+    // Its translatable field is kept per language, like a top-level one.
+    expect(shown).not.toMatch(/\bcaption \(/);
+  });
+
   it("are not mentioned where both rules describe every column the same way", async () => {
     // SQLite stores every text field as TEXT, whoever built the table.
     const { shown } = await demoted(coded(), null, "sqlite");

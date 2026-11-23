@@ -18,7 +18,10 @@ import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { pluginCollectionSources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
 import { DEMOTED_FROM_CODE } from "../../domains/schema/pipeline/demoted-from-code";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
-import { getColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
+import {
+  fieldsStoredOnRow,
+  getColumnDescriptor,
+} from "../../domains/schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveCollectionTableName } from "../../domains/schema/utils/resolve-table-name";
 import type { SupportedDialect } from "../../database/schema-registry";
@@ -299,11 +302,14 @@ function builderRulesChangeColumns(
   collection: DemotedCollection,
   dialect: SupportedDialect
 ): string[] {
-  // The main table's columns only: a field kept per language has its column in the collection's
-  // translations table instead (`mainTableFields`), which this note does not describe.
+  // The fields stored on the collection's row, by the walk the schema pipeline takes
+  // (`fieldsStoredOnRow`): a group with no name keeps its fields there, as columns of the table,
+  // and has no column of its own to describe. Then the main table's only: a field kept per
+  // language has its column in the collection's translations table instead (`mainTableFields`),
+  // which this note does not describe.
   const fields = mainTableFields(
     collection,
-    (collection.fields ?? []) as FieldDefinition[]
+    fieldsStoredOnRow((collection.fields ?? []) as FieldDefinition[])
   );
   const changed: string[] = [];
   for (const field of fields) {
