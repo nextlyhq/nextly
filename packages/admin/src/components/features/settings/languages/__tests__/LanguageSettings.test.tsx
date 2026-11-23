@@ -451,10 +451,22 @@ describe("Settings › Languages", () => {
     ).toBeInTheDocument();
   });
 
-  it("lists a removed language apart and adds it back with its content", async () => {
+  it("lists a removed language apart and adds it back with its content and its fallback", async () => {
+    // French fell back to Spanish, then German; German has been removed since,
+    // and the server refuses a fallback naming a language not in use.
+    const german = language("de", "German", 3, { active: false });
     await open({
       lockedByConfig: false,
-      languages: [ENGLISH, language("fr", "French", 1, { active: false })],
+      languages: [
+        ENGLISH,
+        SPANISH,
+        language("fr", "French", 2, {
+          active: false,
+          direction: "ltr",
+          fallback: ["es", "de"],
+        }),
+        german,
+      ],
     });
 
     const removed = screen.getByRole("list", { name: "Removed languages" });
@@ -468,6 +480,7 @@ describe("Settings › Languages", () => {
         code: "fr",
         label: "French",
         direction: "ltr",
+        fallback: ["es"],
       })
     );
   });

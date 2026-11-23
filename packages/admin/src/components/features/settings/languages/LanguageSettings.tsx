@@ -123,14 +123,18 @@ export function LanguageSettings({
     );
   };
   // A removed language added again with its old details, which brings its
-  // kept content back.
+  // kept content back. Its fallback keeps only the languages still in use: the
+  // server refuses a fallback naming a removed one, and a removed one would be
+  // skipped on reading anyway.
   const addBack = (language: LanguageView) => {
+    const inUse = new Set(active.map(each => each.code));
     changeLanguages.mutate(
       {
         kind: "add",
         code: language.code,
         label: language.label,
         direction: language.direction,
+        fallback: language.fallback.filter(code => inUse.has(code)),
       },
       {
         onError: error => {
