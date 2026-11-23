@@ -231,7 +231,10 @@ describe("a collection a demote handed to the Schema Builder", () => {
     const config = {
       collections: coded,
       plugins: [
-        { name: "@acme/blog", contributes: { collections: [{ slug: "posts" }] } },
+        {
+          name: "@acme/blog",
+          contributes: { collections: [{ slug: "posts" }] },
+        },
       ],
     };
     expect(configTheCodeOwns(config, [handedOver])).toBe(config);
