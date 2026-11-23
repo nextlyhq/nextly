@@ -398,7 +398,7 @@ importers:
         version: link:../../packages/ui
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.22.5)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
       mysql2:
         specifier: ^3.23.1
         version: 3.23.1(@types/node@22.20.5)
@@ -543,7 +543,7 @@ importers:
     dependencies:
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.22.5)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
     devDependencies:
       '@nextlyhq/tsconfig':
         specifier: workspace:*
@@ -577,7 +577,7 @@ importers:
         version: link:../adapter-drizzle
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.22.5)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
       mysql2:
         specifier: ^3.23.1
         version: 3.23.1(@types/node@22.20.5)
@@ -614,7 +614,7 @@ importers:
         version: link:../adapter-drizzle
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.22.5)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
       pg:
         specifier: ^8.16.3
         version: 8.16.3
@@ -657,7 +657,7 @@ importers:
         version: 12.11.1
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.22.5)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
     devDependencies:
       '@nextlyhq/tsconfig':
         specifier: workspace:*
@@ -1321,7 +1321,7 @@ importers:
         version: 1.0.0-rc.4
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
+        version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.22.5)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7)
       file-type:
         specifier: ^21
         version: 21.3.4(supports-color@7.2.0)
@@ -6662,8 +6662,8 @@ packages:
       oxc-resolver:
         optional: true
 
-  effect@3.21.2:
-    resolution: {integrity: sha512-rXd2FGDM8KdjSIrc+mqEELo7ScW7xTVxEf1iInmPSpIde9/nyGuFM710cjTo7/EreGXiUX2MOonPpprbz2XHCg==}
+  effect@3.22.5:
+    resolution: {integrity: sha512-AdIU4llI19BzhJ4xUBZix7kS8oiYSlCsJ61j3UM3UyJw9ecDrsrrweDFm/Ku1nHbJWMLoynK+1Me4it3Zkmjpw==}
 
   electron-to-chromium@1.5.422:
     resolution: {integrity: sha512-UvA/32XqrLDdZSn7Jllo1AYNcWji/G0d5M0GTViE7KoGBiMunw3a34Sb2KO4ZZyrSEhqsxFoVhWWJshdyfKqJA==}
@@ -10142,10 +10142,10 @@ snapshots:
 
   '@drizzle-team/brocli@0.12.0': {}
 
-  '@effect/platform@0.90.3(effect@3.21.2)':
+  '@effect/platform@0.90.3(effect@3.22.5)':
     dependencies:
       '@opentelemetry/semantic-conventions': 1.43.0
-      effect: 3.21.2
+      effect: 3.22.5
       find-my-way-ts: 0.1.6
       msgpackr: 1.12.1
       multipasta: 0.2.9
@@ -12768,7 +12768,7 @@ snapshots:
   '@uploadthing/shared@7.1.10':
     dependencies:
       '@uploadthing/mime-types': 0.3.6
-      effect: 3.21.2
+      effect: 3.22.5
       sqids: 0.3.0
 
   '@vercel/blob@2.0.0':
@@ -13420,19 +13420,19 @@ snapshots:
       get-tsconfig: 4.14.0
       jiti: 2.7.0
 
-  drizzle-orm@1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.21.2)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7):
+  drizzle-orm@1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.11.1)(effect@3.22.5)(mysql2@3.23.1(@types/node@22.20.5))(pg@8.16.3)(zod@4.6.7):
     optionalDependencies:
       '@types/better-sqlite3': 7.6.13
       '@types/pg': 8.15.5
       better-sqlite3: 12.11.1
-      effect: 3.21.2
+      effect: 3.22.5
       mysql2: 3.23.1(@types/node@22.20.5)
       pg: 8.16.3
       zod: 4.6.7
 
   dts-resolver@3.0.0: {}
 
-  effect@3.21.2:
+  effect@3.22.5:
     dependencies:
       '@standard-schema/spec': 1.1.0
       fast-check: 3.23.2
@@ -16002,11 +16002,11 @@ snapshots:
 
   uploadthing@7.7.4(next@16.4.2(@babel/core@7.29.7(supports-color@7.2.0))(@playwright/test@1.64.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(tailwindcss@4.3.2):
     dependencies:
-      '@effect/platform': 0.90.3(effect@3.21.2)
+      '@effect/platform': 0.90.3(effect@3.22.5)
       '@standard-schema/spec': 1.0.0-beta.4
       '@uploadthing/mime-types': 0.3.6
       '@uploadthing/shared': 7.1.10
-      effect: 3.21.2
+      effect: 3.22.5
     optionalDependencies:
       next: 16.4.2(@babel/core@7.29.7(supports-color@7.2.0))(@playwright/test@1.64.1)(@types/node@22.20.5)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       tailwindcss: 4.3.2
