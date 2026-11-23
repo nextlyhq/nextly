@@ -48,6 +48,13 @@ export interface PendingChange {
   previousType?: string;
   /** For an added or deleted container, how many fields it holds, at any depth. */
   inside?: number;
+  /**
+   * For a move into or out of a field that holds others (a group): its path as saved and as the
+   * draft places it, each the names of the fields holding it, outermost first, then its own name.
+   * Absent for a move among its siblings, which changes no field's place in the stored values.
+   */
+  movedFrom?: string[];
+  movedTo?: string[];
 }
 
 /** How a row of the outline shows its field's pending changes. */
@@ -289,17 +296,35 @@ function savedAsRenamed(
 }
 
 /**
+ * The path of the field `id` in `placements`: the names of the fields holding it, outermost first,
+ * then its own name.
+ */
+function pathOf(id: string, placements: Map<string, Placement>): string[] {
+  const path: string[] = [];
+  for (
+    let at: string | null = id;
+    at !== null;
+    at = placements.get(at)?.parentId ?? null
+  ) {
+    path.unshift(placements.get(at)?.field.name ?? "");
+  }
+  return path;
+}
+
+/**
  * What changed in a field that was saved and is still here. `followed` is the field as saved with
- * the draft's renames carried through its condition, which its settings are compared with.
+ * the draft's renames carried through its condition, which its settings are compared with. A move
+ * to another holder carries its paths (`movedPaths`).
  */
 function changesOfKept(
   field: BuilderField,
   was: BuilderField,
   moved: boolean,
-  followed: BuilderField = was
+  followed: BuilderField = was,
+  movedPaths?: { movedFrom: string[]; movedTo: string[] }
 ): PendingChange[] {
   const changes: PendingChange[] = [];
-  if (moved) changes.push(changeOf("moved", field));
+  if (moved) changes.push(changeOf("moved", field, movedPaths));
   if ((was.name ?? "") !== (field.name ?? "")) {
     changes.push(
       changeOf("renamed", field, {
@@ -343,11 +368,21 @@ export function pendingChanges(
   for (const field of currentOrder) {
     const was = before.get(field.id)?.field;
     if (was !== undefined) {
-      const moved =
-        before.get(field.id)?.parentId !== after.get(field.id)?.parentId ||
-        movedInPlace.has(field.id);
+      const holderChanged =
+        before.get(field.id)?.parentId !== after.get(field.id)?.parentId;
       changes.push(
-        ...changesOfKept(field, was, moved, followed.get(field.id) ?? was)
+        ...changesOfKept(
+          field,
+          was,
+          holderChanged || movedInPlace.has(field.id),
+          followed.get(field.id) ?? was,
+          holderChanged
+            ? {
+                movedFrom: pathOf(field.id, before),
+                movedTo: pathOf(field.id, after),
+              }
+            : undefined
+        )
       );
     } else if (!underAny(field.id, after, added)) {
       // A field added inside an added field comes with it.

@@ -52,6 +52,7 @@ import {
 import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { singleCreatePayload } from "@admin/lib/builder/create-request";
+import { draftMovesOf } from "@admin/lib/builder/draft-moves";
 import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
 import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
@@ -399,11 +400,17 @@ export default function SingleBuilderEditPage({
     getValidatedFields: () => getValidatedFields(pending.saved),
     // Its renames of saved fields are the save's to answer, as renames.
     pendingChanges: pending.changes,
-    preview: fields =>
+    preview: (fields, hints) =>
       unsaved
         ? Promise.resolve(createPreview(fields))
-        : singleApi.previewSchemaChanges(entitySlug, fields, localized, drafts),
-    apply: (fields, version, resolutions, renames, acknowledged) =>
+        : singleApi.previewSchemaChanges(
+            entitySlug,
+            fields,
+            localized,
+            drafts,
+            hints
+          ),
+    apply: (fields, version, resolutions, renames, acknowledged, hints) =>
       unsaved
         ? createUnsaved(fields)
         : singleApi.applySchemaChanges(
@@ -414,7 +421,8 @@ export default function SingleBuilderEditPage({
             renames,
             localized,
             drafts,
-            acknowledged
+            acknowledged,
+            hints
           ),
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
@@ -513,6 +521,7 @@ export default function SingleBuilderEditPage({
     >
       <BuilderSchemaChangeDialogs
         draftRenames={draftRenamesOf(pending.changes)}
+        draftMoves={draftMovesOf(pending.changes).moves}
         confirmation={confirmation}
         kind={SINGLE_BUILDER_CONFIG.kind}
         entityName={slug}

@@ -61,6 +61,7 @@ import {
 import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { fieldGroupCreatePayload } from "@admin/lib/builder/create-request";
+import { draftMovesOf } from "@admin/lib/builder/draft-moves";
 import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
 import { fieldGroupEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import {
@@ -384,11 +385,16 @@ export default function FieldGroupBuilderEditPage({
     // The i18n flag, as for the other kinds: the preview reports what a field
     // leaving translation moves to the archive, which depends on it. An
     // unsaved field group's review is its create, built here.
-    preview: fields =>
+    preview: (fields, hints) =>
       unsaved
         ? Promise.resolve(createPreview(fields))
-        : fieldGroupApi.previewSchemaChanges(entitySlug, fields, localized),
-    apply: (fields, version, resolutions, renames, acknowledged) =>
+        : fieldGroupApi.previewSchemaChanges(
+            entitySlug,
+            fields,
+            localized,
+            hints
+          ),
+    apply: (fields, version, resolutions, renames, acknowledged, hints) =>
       unsaved
         ? createUnsaved(fields)
         : fieldGroupApi.applySchemaChanges(
@@ -398,7 +404,8 @@ export default function FieldGroupBuilderEditPage({
             resolutions,
             renames,
             localized,
-            acknowledged
+            acknowledged,
+            hints
           ),
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
@@ -533,6 +540,7 @@ export default function FieldGroupBuilderEditPage({
 
       <BuilderSchemaChangeDialogs
         draftRenames={draftRenamesOf(pending.changes)}
+        draftMoves={draftMovesOf(pending.changes).moves}
         confirmation={confirmation}
         kind={FIELD_GROUP_BUILDER_CONFIG.kind}
         entityName={slug}

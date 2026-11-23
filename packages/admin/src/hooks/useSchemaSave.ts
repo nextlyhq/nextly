@@ -25,6 +25,11 @@ import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { acknowledgedConversionsOf } from "@admin/lib/builder/brought-up-to-date";
+import {
+  draftMovesOf,
+  moveWithOtherChangeRefusal,
+  movesHints,
+} from "@admin/lib/builder/draft-moves";
 import type { PendingChange } from "@admin/lib/builder/pending-changes";
 import {
   draftRenamesOf,
@@ -37,6 +42,7 @@ import type {
   FieldResolution,
   SchemaPreviewResponse,
   SchemaRenameResolution,
+  SchemaSaveHints,
 } from "@admin/services/schemaApi";
 import type { FieldDefinition } from "@admin/types/collection";
 
@@ -118,14 +124,19 @@ export interface UseSchemaSaveOptions {
   label: string;
   confirmation: SchemaChangeConfirmation;
   getValidatedFields: () => FieldDefinition[] | null;
-  preview: (fields: FieldDefinition[]) => Promise<SchemaPreviewResponse>;
+  /** `hints`: the fields the draft moves into or out of a group, sent on preview and apply alike. */
+  preview: (
+    fields: FieldDefinition[],
+    hints: SchemaSaveHints | undefined
+  ) => Promise<SchemaPreviewResponse>;
   apply: (
     fields: FieldDefinition[],
     schemaVersion: number,
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[],
     /** The keys of the conversions the reviewed preview listed, which its Save confirmed. */
-    acknowledgedConversions: string[]
+    acknowledgedConversions: string[],
+    hints: SchemaSaveHints | undefined
   ) => Promise<SchemaApplyOutcome>;
   /**
    * The preview found nothing to migrate: persist the settings. Run at once
@@ -212,6 +223,14 @@ export function useSchemaSave({
     () => draftRenamesOf(pendingChanges),
     [pendingChanges]
   );
+  // The saved fields the draft moves into or out of a group, read from the same pending changes:
+  // sent on the preview and the apply, so the migration the save writes keeps their values.
+  const { moves, withOtherChange } = useMemo(
+    () => draftMovesOf(pendingChanges),
+    [pendingChanges]
+  );
+  const hints = useMemo(() => movesHints(moves), [moves]);
+  const movesAny = moves.length > 0;
   // The entities the save creates first, by kind and address: part of what a review agrees to,
   // as the fields are, so a confirmation creates exactly the entities the review listed.
   const creates = JSON.stringify(
@@ -248,12 +267,17 @@ export function useSchemaSave({
 
       const fields = getValidatedFields();
       if (!fields) return;
+      // A field moved and renamed or retyped in one save cannot keep its values through both.
+      if (withOtherChange.length > 0) {
+        toast.error(moveWithOtherChangeRefusal(withOtherChange));
+        return;
+      }
 
       // Busy until the preview is answered and acted on, so Discard all
       // cannot clear the editor while this save may still keep its values.
       confirmation.beginPreview();
       try {
-        const previewed = await preview(fields);
+        const previewed = await preview(fields, hints);
         if (!mounted.current) return;
         // A rename the preview does not offer as one would not keep the field's values with it, so
         // nothing is put in front of the person to confirm. Judged before a preview with no change
@@ -267,9 +291,11 @@ export function useSchemaSave({
           toast.error(renameNotOffered(missing));
           return;
         }
-        // Nothing to migrate, no setting changed and no field group to create: nothing to review.
+        // Nothing to migrate, no setting changed, no field group to create and no field moved:
+        // nothing to review. A move between two groups changes no column, yet its values move.
         if (
           !previewed.hasChanges &&
+          !movesAny &&
           settingChanges.length === 0 &&
           !createsAny
         ) {
@@ -278,7 +304,13 @@ export function useSchemaSave({
         }
         previewedFields.current.set(
           previewed,
-          JSON.stringify({ fields, previewedWith, settingChanges, creates })
+          JSON.stringify({
+            fields,
+            previewedWith,
+            settingChanges,
+            creates,
+            hints,
+          })
         );
         setReviewedSettingChanges(settingChanges);
         confirmation.request(previewed);
@@ -300,6 +332,9 @@ export function useSchemaSave({
     settingChanges,
     createsAny,
     creates,
+    hints,
+    movesAny,
+    withOtherChange,
   ]);
 
   const confirmApply = useCallback(
@@ -314,7 +349,13 @@ export function useSchemaSave({
       if (
         shown !== undefined &&
         shown !==
-          JSON.stringify({ fields, previewedWith, settingChanges, creates })
+          JSON.stringify({
+            fields,
+            previewedWith,
+            settingChanges,
+            creates,
+            hints,
+          })
       ) {
         confirmation.settle();
         toast.error(
@@ -325,8 +366,8 @@ export function useSchemaSave({
 
       // Only settings changed, or field groups to create: the review was of
       // them, and its confirmation creates the groups and saves the settings.
-      // Nothing is migrated, so nothing restarts.
-      if (!previewed.hasChanges) {
+      // Nothing is migrated, so nothing restarts. A save that moves a field is applied.
+      if (!previewed.hasChanges && !movesAny) {
         void (async () => {
           confirmation.beginApply();
           try {
@@ -368,7 +409,8 @@ export function useSchemaSave({
               previewed.renamed ?? []
             ),
             // Every conversion the dialog listed: its Save confirms them all.
-            acknowledgedConversionsOf(previewed)
+            acknowledgedConversionsOf(previewed),
+            hints
           );
           if (!result.success) {
             stopRestart(
@@ -416,6 +458,8 @@ export function useSchemaSave({
       onNoChanges,
       fieldGroupsFirst,
       creates,
+      hints,
+      movesAny,
     ]
   );
 

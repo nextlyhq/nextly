@@ -40,10 +40,12 @@ import {
 } from "./publishParts";
 import {
   acknowledgedConversionsBody,
+  saveHintsBody,
   type FieldResolution,
   type SchemaApplyResponse,
   type SchemaPreviewResponse,
   type SchemaRenameResolution,
+  type SchemaSaveHints,
 } from "./schemaApi";
 
 /**
@@ -120,7 +122,8 @@ type SingleApiType = {
     slug: string,
     fields: unknown[],
     localized?: boolean,
-    status?: boolean
+    status?: boolean,
+    hints?: SchemaSaveHints
   ) => Promise<SchemaPreviewResponse>;
   readonly applySchemaChanges: (
     slug: string,
@@ -130,7 +133,8 @@ type SingleApiType = {
     renameResolutions?: SchemaRenameResolution[],
     localized?: boolean,
     status?: boolean,
-    acknowledgedConversions?: readonly string[]
+    acknowledgedConversions?: readonly string[],
+    hints?: SchemaSaveHints
   ) => Promise<SchemaApplyResponse>;
   readonly remove: (slug: string) => Promise<{ message: string }>;
   readonly getDocument: (
@@ -265,7 +269,9 @@ export const singleApi: SingleApiType = {
     // The pending Draft/Published toggle, so a field taking one of the lifecycle's own names is
     // refused when the same save turns the lifecycle on. Judged with, never applied: the settings
     // save that follows the fields sets it. Undefined leaves the stored flag alone in charge.
-    status?: boolean
+    status?: boolean,
+    // The fields the save moves into or out of a group, as its apply sends them.
+    hints?: SchemaSaveHints
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
       `/singles/schema/${slug}/preview`,
@@ -273,6 +279,7 @@ export const singleApi: SingleApiType = {
         fields,
         ...(localized !== undefined ? { localized } : {}),
         ...(status !== undefined ? { status } : {}),
+        ...saveHintsBody(hints),
       }
     );
   },
@@ -294,7 +301,9 @@ export const singleApi: SingleApiType = {
     // The pending Draft/Published toggle, judged with as the preview is (see above).
     status?: boolean,
     // The keys of the conversions the review listed and its Save confirmed.
-    acknowledgedConversions?: readonly string[]
+    acknowledgedConversions?: readonly string[],
+    // The fields the save moves into or out of a group, as its preview sent them.
+    hints?: SchemaSaveHints
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -307,6 +316,7 @@ export const singleApi: SingleApiType = {
       ...(localized !== undefined ? { localized } : {}),
       ...(status !== undefined ? { status } : {}),
       ...acknowledgedConversionsBody(acknowledgedConversions),
+      ...saveHintsBody(hints),
     });
     return {
       success: true,

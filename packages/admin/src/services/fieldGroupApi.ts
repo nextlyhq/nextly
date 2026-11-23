@@ -27,10 +27,12 @@ import type {
 import { withListOwner, type ListOwner } from "./list-owner";
 import {
   acknowledgedConversionsBody,
+  saveHintsBody,
   type FieldResolution,
   type SchemaApplyResponse,
   type SchemaPreviewResponse,
   type SchemaRenameResolution,
+  type SchemaSaveHints,
 } from "./schemaApi";
 
 /**
@@ -153,7 +155,8 @@ type FieldGroupApiType = {
   readonly previewSchemaChanges: (
     fieldGroupSlug: string,
     fields: unknown[],
-    localized?: boolean
+    localized?: boolean,
+    hints?: SchemaSaveHints
   ) => Promise<SchemaPreviewResponse>;
   readonly applySchemaChanges: (
     fieldGroupSlug: string,
@@ -162,7 +165,8 @@ type FieldGroupApiType = {
     resolutions?: Record<string, FieldResolution>,
     renameResolutions?: SchemaRenameResolution[],
     localized?: boolean,
-    acknowledgedConversions?: readonly string[]
+    acknowledgedConversions?: readonly string[],
+    hints?: SchemaSaveHints
   ) => Promise<SchemaApplyResponse>;
   readonly previewReconcile: (
     fieldGroupSlug: string
@@ -246,11 +250,17 @@ export const fieldGroupApi: FieldGroupApiType = {
     fields: unknown[],
     // i18n: mirrors schemaApi.preview and the apply below, so the preview diffs against the
     // localization state the apply will run with, and reports fields leaving translation.
-    localized?: boolean
+    localized?: boolean,
+    // The fields the save moves into or out of a group, as its apply sends them.
+    hints?: SchemaSaveHints
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
       `/field-groups/schema/${fieldGroupSlug}/preview`,
-      { fields, ...(localized !== undefined ? { localized } : {}) }
+      {
+        fields,
+        ...(localized !== undefined ? { localized } : {}),
+        ...saveHintsBody(hints),
+      }
     );
   },
 
@@ -268,7 +278,9 @@ export const fieldGroupApi: FieldGroupApiType = {
     // fields provisions the companion in the same request. Undefined leaves the persisted value.
     localized?: boolean,
     // The keys of the conversions the review listed and its Save confirmed.
-    acknowledgedConversions?: readonly string[]
+    acknowledgedConversions?: readonly string[],
+    // The fields the save moves into or out of a group, as its preview sent them.
+    hints?: SchemaSaveHints
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -280,6 +292,7 @@ export const fieldGroupApi: FieldGroupApiType = {
       renameResolutions,
       ...(localized !== undefined ? { localized } : {}),
       ...acknowledgedConversionsBody(acknowledgedConversions),
+      ...saveHintsBody(hints),
     });
     return {
       success: true,

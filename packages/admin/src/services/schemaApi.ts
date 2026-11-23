@@ -121,6 +121,33 @@ export interface SchemaPreviewResponse {
    * absent when there is nothing to convert, and from an older server.
    */
   conversions?: SchemaPreviewConversion[];
+  /**
+   * The lines the save's own review gives beside the change, shown as they are: each conversion,
+   * fill and delete it writes, and each field it moves into or out of a group, with the column
+   * properties the move does not carry. Absent from an older server.
+   */
+  notices?: string[];
+}
+
+/** One field a save moves into or out of a group: its path as saved, and as the save leaves it. */
+export interface SchemaFieldMove {
+  from: string[];
+  to: string[];
+}
+
+/**
+ * What a save tells the server beyond its fields: each field it moves into or out of a group, so
+ * the migration it writes copies every value along the move rather than dropping the field.
+ */
+export interface SchemaSaveHints {
+  moves: SchemaFieldMove[];
+}
+
+/** The part of a preview's or an apply's body that carries the hints: nothing without them. */
+export function saveHintsBody(hints: SchemaSaveHints | undefined): {
+  hints?: SchemaSaveHints;
+} {
+  return hints === undefined ? {} : { hints };
 }
 
 /** One conversion a save makes to a table an earlier Nextly version made, as the preview names it. */
@@ -203,7 +230,9 @@ export const schemaApi = {
     // The pending Draft/Published toggle, so a field taking one of the lifecycle's own names is
     // refused when the same save turns the lifecycle on. Judged with, never applied: the settings
     // save that follows the fields sets it. Undefined leaves the stored flag alone in charge.
-    status?: boolean
+    status?: boolean,
+    // The fields the save moves into or out of a group, as its apply sends them.
+    hints?: SchemaSaveHints
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
       `/collections/schema/${slug}/preview`,
@@ -211,6 +240,7 @@ export const schemaApi = {
         fields,
         ...(localized !== undefined ? { localized } : {}),
         ...(status !== undefined ? { status } : {}),
+        ...saveHintsBody(hints),
       }
     );
   },
@@ -241,7 +271,9 @@ export const schemaApi = {
     // The pending Draft/Published toggle, judged with as the preview is (see above).
     status?: boolean,
     // The keys of the conversions the review listed and its Save confirmed.
-    acknowledgedConversions?: readonly string[]
+    acknowledgedConversions?: readonly string[],
+    // The fields the save moves into or out of a group, as its preview sent them.
+    hints?: SchemaSaveHints
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -254,6 +286,7 @@ export const schemaApi = {
       ...(localized !== undefined ? { localized } : {}),
       ...(status !== undefined ? { status } : {}),
       ...acknowledgedConversionsBody(acknowledgedConversions),
+      ...saveHintsBody(hints),
     });
     return {
       success: true,

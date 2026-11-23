@@ -29,6 +29,7 @@ import {
   broughtUpToDateLines,
   lossLinesOf,
 } from "@admin/lib/builder/brought-up-to-date";
+import { movePath, type DraftMove } from "@admin/lib/builder/draft-moves";
 import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
 import { reviewDeletesData } from "@admin/lib/builder/review-deletes-data";
 import type { SettingChange } from "@admin/lib/builder/settings-changes";
@@ -72,6 +73,13 @@ interface SchemaChangeDialogProps {
    * not asked.
    */
   decidedRenames?: readonly KeptRename[];
+  /** The fields the save moves into or out of a group: shown as moves whose values are kept. */
+  moves?: readonly DraftMove[];
+  /**
+   * The save's own review lines (`notices`), for a save that moves a field: each move with the
+   * column properties it does not carry, in the server's words.
+   */
+  notices?: readonly string[];
   warnings: string[];
   interactiveFields: InteractiveField[];
   // Fields that stop being translated: what moves to the archive, or why the change is refused.
@@ -101,6 +109,8 @@ export function SchemaChangeDialog({
   changes,
   renamed,
   decidedRenames = [],
+  moves = [],
+  notices = [],
   warnings,
   interactiveFields,
   leavingTranslation = [],
@@ -325,6 +335,7 @@ export function SchemaChangeDialog({
         )}
 
         <DecidedRenames renames={decidedRenames} />
+        <KeptMoves moves={moves} notices={notices} conversions={conversions} />
         <LeavingTranslationNotice fields={leavingTranslation} />
         <JoiningTranslationNotice fields={joiningTranslation} />
         <BroughtUpToDate conversions={conversions} />
@@ -686,6 +697,44 @@ function DecidedRenames({
           <code className="font-mono text-xs">{c.from}</code> is renamed to{" "}
           <code className="font-mono text-xs">{c.to}</code>. Its values are
           kept.
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The fields the save moves into or out of a group, each kept with every value, then the save's
+ * own lines on them: what each move does not carry. Only for a save with moves; a line the review
+ * already lists as a conversion (`BroughtUpToDate`) is not repeated, matched by that conversion's
+ * own words.
+ */
+function KeptMoves({
+  moves,
+  notices,
+  conversions,
+}: {
+  moves: readonly DraftMove[];
+  notices: readonly string[];
+  conversions: readonly SchemaPreviewConversion[];
+}): JSX.Element | null {
+  if (moves.length === 0) return null;
+  const lines = notices.filter(
+    notice => !conversions.some(c => notice.includes(c.change))
+  );
+  return (
+    <ul className="space-y-1 rounded-md border border-border bg-primary/5 p-3 text-sm">
+      {moves.map(move => (
+        <li key={`${movePath(move.from)}->${movePath(move.to)}`}>
+          <code className="font-mono text-xs">{movePath(move.from)}</code> is
+          moved to{" "}
+          <code className="font-mono text-xs">{movePath(move.to)}</code>. Its
+          values are kept.
+        </li>
+      ))}
+      {lines.map(line => (
+        <li key={line} className="text-muted-foreground">
+          {line}
         </li>
       ))}
     </ul>
