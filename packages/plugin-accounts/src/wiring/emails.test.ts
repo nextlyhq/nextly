@@ -16,6 +16,7 @@ const SAMPLES: {
     link: "L",
     code: "123456",
     notMeLink: "N",
+    refs: { link: "ref-1", code: "ref-2", notMeLink: "ref-3" },
   },
   "sign-up-taken": {
     ...base,
@@ -24,19 +25,31 @@ const SAMPLES: {
     signInLink: "S",
     resetLink: "R",
   },
-  "reset-password": { ...base, kind: "reset-password", link: "L" },
-  "reset-required": { ...base, kind: "reset-required", link: "L" },
+  "reset-password": {
+    ...base,
+    kind: "reset-password",
+    link: "L",
+    refs: { link: "ref-1" },
+  },
+  "reset-required": {
+    ...base,
+    kind: "reset-required",
+    link: "L",
+    refs: { link: "ref-1" },
+  },
   "address-change-asked": {
     ...base,
     kind: "address-change-asked",
     newAddress: "new@example.com",
     cancelLink: "C",
+    refs: { cancelLink: "ref-1" },
   },
   "confirm-new-address": {
     ...base,
     kind: "confirm-new-address",
     link: "L",
     code: "123456",
+    refs: { link: "ref-1", code: "ref-2" },
   },
   "address-in-use": { ...base, kind: "address-in-use" },
   "address-changed": {
@@ -51,6 +64,7 @@ const SAMPLES: {
     accountId: null,
     to: "dana@example.com",
     link: "L",
+    refs: { link: "ref-1" },
   },
   "invitation-has-account": {
     ...base,
@@ -124,7 +138,7 @@ describe("the accounts email templates", () => {
     expect(marked).toEqual(secret.map(templateSlug).sort());
   });
 
-  it("never hands a template the recipient or the account's id", () => {
+  it("never hands a template the recipient, the account's id or its secrets' refs", () => {
     expect(Object.keys(emailVariables(SAMPLES["reset-password"]))).toEqual([
       "link",
     ]);

@@ -19,10 +19,10 @@ import { endAccountSessions } from "../storage/sessions";
 import { HOUR, MINUTE, type FlowDeps } from "./deps";
 import { provenHolder, sessionHolder } from "./holder";
 import { ADDRESS } from "./input";
-import { pageLink } from "./links";
 import { queueNotice } from "./mail";
 import { attemptSucceeded, type AttemptRefusal } from "./password-attempt";
 import { PURPOSES } from "./purposes";
+import { secretFields, type MintedSecret } from "./secret-fields";
 import { spendCode } from "./spend-code";
 import { codeDigits } from "./verification-email";
 
@@ -96,7 +96,9 @@ export async function requestAddressChange(
     accountId: account.id,
     to: account.address,
     newAddress: parsed.data,
-    cancelLink: pageLink(deps.settings, "cancelAddressChange", secrets.cancel),
+    ...secretFields(deps.settings, "address-change-asked", {
+      cancelLink: secrets.cancel,
+    }),
   });
   if (other !== null) {
     await deps.mail.queue({
@@ -109,8 +111,10 @@ export async function requestAddressChange(
       kind: "confirm-new-address",
       accountId: account.id,
       to: parsed.data,
-      link: pageLink(deps.settings, "confirmAddress", secrets.link),
-      code: secrets.code,
+      ...secretFields(deps.settings, "confirm-new-address", {
+        link: secrets.link,
+        code: secrets.code,
+      }),
     });
   }
 
@@ -154,9 +158,9 @@ async function askChange(
   tx: AccountsDb,
   input: { account: AccountRow; newAddress: string; free: boolean; now: Date }
 ): Promise<{
-  cancel: string;
-  link: string | null;
-  code: string | null;
+  cancel: MintedSecret;
+  link: MintedSecret | null;
+  code: MintedSecret | null;
 } | null> {
   const { core, settings } = deps;
   const subject = input.account.id;
@@ -178,7 +182,7 @@ async function askChange(
     },
     { tx }
   );
-  if (!input.free) return { cancel: cancel.token, link: null, code: null };
+  if (!input.free) return { cancel, link: null, code: null };
   const link = await core.secrets.mintToken(
     { purpose: PURPOSES.addressChangeLink, subject, expiresInMs: lifeMs, data },
     { tx }
@@ -195,7 +199,7 @@ async function askChange(
     { tx }
   );
 
-  return { cancel: cancel.token, link: link.token, code: code.code };
+  return { cancel, link, code };
 }
 
 export type AddressChangeResult =

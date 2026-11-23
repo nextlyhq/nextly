@@ -1,6 +1,13 @@
 import type { FlowDeps } from "./deps";
 
 /**
+ * The refs of the one-time secrets an email carries, by the field each
+ * fills. Only the refs are queued: the send asks core for each secret
+ * again, so a queued job's row never holds one.
+ */
+export type SecretRefs<Field extends string> = Readonly<Record<Field, string>>;
+
+/**
  * The emails the accounts plugin sends, as the flows ask for them. A flow
  * queues an email rather than sending it, so the time an answer takes never
  * depends on a mail server, and a free address and a taken one answer alike.
@@ -18,6 +25,7 @@ export type AccountsEmail =
       link: string;
       code: string;
       notMeLink: string;
+      refs: SecretRefs<"link" | "code" | "notMeLink">;
     }
   | {
       /** A sign-up named an address that already has an account. */
@@ -35,6 +43,7 @@ export type AccountsEmail =
       accountId: string;
       to: string;
       link: string;
+      refs: SecretRefs<"link">;
     }
   | {
       /** Too many wrong passwords in a row: only a reset, or a known browser, signs it in now. */
@@ -42,6 +51,7 @@ export type AccountsEmail =
       accountId: string;
       to: string;
       link: string;
+      refs: SecretRefs<"link">;
     }
   | {
       /** To the old address: a change of address was asked for, with a link that cancels it. */
@@ -50,6 +60,7 @@ export type AccountsEmail =
       to: string;
       newAddress: string;
       cancelLink: string;
+      refs: SecretRefs<"cancelLink">;
     }
   | {
       /** To a free new address: its link and code, which confirm the change inside the holder's session. */
@@ -58,6 +69,7 @@ export type AccountsEmail =
       to: string;
       link: string;
       code: string;
+      refs: SecretRefs<"link" | "code">;
     }
   | {
       /** To a new address that is another account's: someone tried to use it. */
@@ -94,6 +106,7 @@ export type AccountsEmail =
       accountId: null;
       to: string;
       link: string;
+      refs: SecretRefs<"link">;
     }
   | {
       /** The site invited an address that already has an account: sign in instead. */
