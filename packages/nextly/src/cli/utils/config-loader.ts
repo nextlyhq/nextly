@@ -705,20 +705,25 @@ function asCause(error: unknown): Error | undefined {
  * Refuses the configuration's problems, and the Builder's definitions' beside them
  * (`builderProblemsFor`), every one named rather than the first.
  */
-function refuseConfigurationProblems(args: {
+async function refuseConfigurationProblems(args: {
   /** The app's own entities, as the plugins' setups left them, where the app declared them. */
   appConfig: Parameters<typeof configurationProblems>[0];
   config: SanitizedNextlyConfig;
-  builderEntities: BuilderEntities;
+  /** What a road above already read of the Builder's definitions, else read here. */
+  builderEntities: BuilderEntities | undefined;
+  cwd: string;
   configPath: string;
   options: LoadConfigOptions;
-}): void {
+}): Promise<void> {
+  const builderEntities =
+    args.builderEntities ??
+    (await readBuilderEntities(args.cwd, args.config.db?.uiSchemaFile));
   const problems: ReturnType<typeof configurationProblems> = [
     ...configurationProblems(args.appConfig, args.config),
     // The Builder's definitions, by the same rules: reported with the configuration's for a
     // command that reads the entities, warned of for a running site.
     ...builderProblemsFor(
-      args.builderEntities,
+      builderEntities,
       args.config,
       args.config.db?.uiSchemaFile,
       args.options
@@ -1093,12 +1098,11 @@ async function loadConfigInternal(
     // field's type is judged against them.
     // The app's own entities, in the form the plugins' setups left them, placed where the app
     // declared them; a plugin's contributions keep the checks of their own type.
-    refuseConfigurationProblems({
+    await refuseConfigurationProblems({
       appConfig,
       config,
-      builderEntities:
-        builderEntitiesRead ??
-        (await readBuilderEntities(cwd, config.db?.uiSchemaFile)),
+      builderEntities: builderEntitiesRead,
+      cwd,
       configPath,
       options,
     });
