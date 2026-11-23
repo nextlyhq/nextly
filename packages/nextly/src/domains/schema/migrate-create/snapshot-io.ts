@@ -133,31 +133,44 @@ export interface SnapshotFile {
 
 /**
  * The field-group names a snapshot's point of the history is on: `"current"` when it says so,
- * otherwise legacy, which is what every snapshot written before the record existed was on. The
- * one reading of the record, for every command that follows the history's naming.
+ * otherwise read from its field-group tables (those with a field group's system columns). The one
+ * reading of the record, for every command that follows the history's naming.
  *
- * Refused for an unmarked snapshot whose field-group tables (those with a field group's system
- * columns) record the current type column (`_field_group_type`): an earlier release wrote it after
- * the site's field groups moved, when the record did not exist yet, so it is on the current names
- * and does not say so. Read as legacy, the next migration would plan to drop each `fg_` table and
- * create a `comp_` copy. Another table's own column of that name says nothing about the names.
+ * Every snapshot written before the record existed is unmarked, and nearly all are legacy. But an
+ * earlier release could write one after the site's field groups moved, with the current names in
+ * it: its field-group tables then hold the current type column (`_field_group_type`), which only
+ * a moved database has, so it is read as current. Read as legacy, the next migration would plan
+ * to drop each `fg_` table and create a `comp_` copy. One that also holds a slug-derived `comp_`
+ * table on the legacy column is on neither naming and is refused. Another table's own column of
+ * that name says nothing about the names.
  */
 export function snapshotFieldGroupNaming(
   file: Pick<SnapshotFile, "fieldGroupStorage" | "snapshot" | "migration">
 ): FieldGroupNaming {
   if (file.fieldGroupStorage === "current") return "current";
-  const onCurrentNames = file.snapshot.tables
-    .filter(table => {
-      const columns = new Set(table.columns.map(column => column.name));
-      return [...FIELD_GROUP_SYSTEM_COLUMNS, MIGRATION_TARGET.columnType].every(
-        column => columns.has(column)
-      );
-    })
+  const groupTables = file.snapshot.tables.filter(table =>
+    FIELD_GROUP_SYSTEM_COLUMNS.every(column => holdsColumn(table, column))
+  );
+  const onCurrent = groupTables
+    .filter(table => holdsColumn(table, MIGRATION_TARGET.columnType))
     .map(table => table.name);
-  if (onCurrentNames.length > 0) {
-    throw fieldGroupHistoryNamesUnrecordedError(file.migration, onCurrentNames);
+  if (onCurrent.length === 0) return "legacy";
+  const onLegacy = groupTables
+    .filter(
+      table =>
+        table.name.startsWith(STORAGE_FORMAT.tablePrefix) &&
+        holdsColumn(table, STORAGE_FORMAT.columns.type) &&
+        !holdsColumn(table, MIGRATION_TARGET.columnType)
+    )
+    .map(table => table.name);
+  if (onLegacy.length > 0) {
+    throw fieldGroupHistoryNamesUnrecordedError(
+      file.migration,
+      onCurrent,
+      onLegacy
+    );
   }
-  return "legacy";
+  return "current";
 }
 
 /** The columns every field group's table carries, whatever its names: what tells one apart. */
@@ -168,13 +181,23 @@ const FIELD_GROUP_SYSTEM_COLUMNS = [
   STORAGE_FORMAT.columns.order,
 ];
 
+/** Whether `table` has a column named `column`. */
+function holdsColumn(
+  table: { columns: readonly { name: string }[] },
+  column: string
+): boolean {
+  return table.columns.some(held => held.name === column);
+}
+
 /**
- * The refusal of a snapshot an earlier release wrote on the current field-group names without
- * recording them. The way on is a new history from the database as it stands.
+ * The refusal of an unmarked snapshot that holds field groups under both namings: tables on the
+ * current type column, which only a moved database has, beside slug-derived legacy tables. The way
+ * on is a new history from the database as it stands.
  */
 export function fieldGroupHistoryNamesUnrecordedError(
   migration: string | undefined,
-  tables: readonly string[]
+  current: readonly string[],
+  legacy: readonly string[]
 ): NextlyError {
   const which =
     migration === undefined
@@ -183,13 +206,14 @@ export function fieldGroupHistoryNamesUnrecordedError(
   return new NextlyError({
     code: "VALIDATION_ERROR",
     publicMessage:
-      `${which} keeps field groups under the current names (${tables.join(", ")} with ${MIGRATION_TARGET.columnType}) and does not record that it does. ` +
-      "An earlier release wrote it after this site's field groups moved, and read as the legacy names the next migration would drop those tables and create legacy copies. " +
+      `${which} holds field groups under both the current names (${current.join(", ")} with ${MIGRATION_TARGET.columnType}) and the legacy ones (${legacy.join(", ")} with ${STORAGE_FORMAT.columns.type}), and does not record which names the history is on. ` +
+      "An earlier release wrote it after this site's field groups moved, and no reading of it plans against the tables the database holds. " +
       "Nothing was written or applied. Re-baseline the history with `nextly migrate:baseline`: it lists how to clear the existing migrations, then records the tables as the database holds them.",
     logContext: {
       reason: "field-group-history-names-unrecorded",
       ...(migration === undefined ? {} : { migration }),
-      tables: [...tables],
+      current: [...current],
+      legacy: [...legacy],
     },
   });
 }

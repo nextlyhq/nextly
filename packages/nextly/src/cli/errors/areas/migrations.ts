@@ -1319,7 +1319,7 @@ export const MIGRATION_CODES = defineCodes({
   },
   FIELD_GROUP_HISTORY_NAMES_UNRECORDED: {
     cause:
-      "A migration snapshot an earlier release wrote keeps field groups under the current names without recording that it does.",
+      "A migration snapshot an earlier release wrote holds field groups under both the current and the legacy names, and records neither.",
     from: [
       {
         code: "VALIDATION_ERROR",

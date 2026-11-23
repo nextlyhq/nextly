@@ -576,9 +576,11 @@ export const MIGRATION_CASES = {
   FIELD_GROUP_HISTORY_BEHIND_STORAGE: () =>
     fieldGroupHistoryBehindStorageError(),
   FIELD_GROUP_HISTORY_NAMES_UNRECORDED: () =>
-    fieldGroupHistoryNamesUnrecordedError("20261101_120000_000_add_banner", [
-      "fg_banner",
-    ]),
+    fieldGroupHistoryNamesUnrecordedError(
+      "20261101_120000_000_add_banner",
+      ["fg_banner"],
+      ["comp_card"]
+    ),
   FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED: () =>
     fieldGroupTypeColumnNotRecordedError(["fg_banner"]),
   DATABASE_BEHIND_MIGRATIONS: () =>

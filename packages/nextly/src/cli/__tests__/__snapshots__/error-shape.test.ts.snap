@@ -862,8 +862,8 @@ exports[`each code, as a command ends with it > FIELD_GROUP_HISTORY_BEHIND_STORA
 `;
 
 exports[`each code, as a command ends with it > FIELD_GROUP_HISTORY_NAMES_UNRECORDED 1`] = `
-"✗ The snapshot of migration 20261101_120000_000_add_banner keeps field groups under the current names (fg_banner with _field_group_type) and does not record that it does.
-  Why:  An earlier release wrote it after this site's field groups moved, and read as the legacy names the next migration would drop those tables and create legacy copies.
+"✗ The snapshot of migration 20261101_120000_000_add_banner holds field groups under both the current names (fg_banner with _field_group_type) and the legacy ones (comp_card with _component_type), and does not record which names the history is on.
+  Why:  An earlier release wrote it after this site's field groups moved, and no reading of it plans against the tables the database holds.
   Next: Nothing was written or applied. Re-baseline the history with \`nextly migrate:baseline\`: it lists how to clear the existing migrations, then records the tables as the database holds them.
   Docs: https://nextlyhq.com/docs/cli/errors/field-group-history-names-unrecorded  (FIELD_GROUP_HISTORY_NAMES_UNRECORDED)"
 `;

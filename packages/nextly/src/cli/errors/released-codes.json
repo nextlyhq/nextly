@@ -56,7 +56,7 @@
   "FIELDS_LEAVING_TRANSLATION_NOT_MOVED": "`db:sync` could not move the values of a field that stops being translated, so the field keeps them in its translations table.",
   "FIELD_GROUP_BACKUP_NOT_CONFIRMED": "`migrate:field-groups --apply` was run without `--backup-confirmed`, so it changed nothing.",
   "FIELD_GROUP_HISTORY_BEHIND_STORAGE": "The database's field groups were moved to the current names while the project's migration history is still on the legacy names.",
-  "FIELD_GROUP_HISTORY_NAMES_UNRECORDED": "A migration snapshot an earlier release wrote keeps field groups under the current names without recording that it does.",
+  "FIELD_GROUP_HISTORY_NAMES_UNRECORDED": "A migration snapshot an earlier release wrote holds field groups under both the current and the legacy names, and records neither.",
   "FIELD_GROUP_MIGRATION_IN_FLIGHT": "A field-group storage migration is part-way through on this database, so the command refused to change its schema.",
   "FIELD_GROUP_NAMES_DIFFER_FROM_HISTORY": "A migration was planned with field groups under names the project's migration history is not on.",
   "FIELD_GROUP_NAMES_OPTION_INVALID": "`--field-group-names` was given to `nextly migrate:create` with a value other than `current`, or with `--blank`, `--plugin` or `--record-snapshot`.",
