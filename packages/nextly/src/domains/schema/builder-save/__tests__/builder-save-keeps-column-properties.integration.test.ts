@@ -78,6 +78,18 @@ interface Road {
   save(t: TestNextly, fields: Field[], renamed?: string): Promise<unknown>;
 }
 
+/**
+ * A settings save's answer that `heading` leaving and `renamed` arriving is a rename: that road
+ * renames a field only when the request says so.
+ */
+function renameAnswer(renamed: string | undefined): {
+  renames?: Array<{ from: string; to: string; choice: "rename" }>;
+} {
+  return renamed === undefined
+    ? {}
+    : { renames: [{ from: "heading", to: renamed, choice: "rename" }] };
+}
+
 /** The Single both of its roads change. */
 async function createHero(_t: TestNextly, fields: Field[]): Promise<void> {
   await dispatchSingles(
@@ -140,13 +152,14 @@ const ROADS: Road[] = [
           {}
         );
     },
-    // The update road (`updateCollection`), which detects its own renames.
-    save: (_t, fields) =>
+    // The update road (`updateCollection`), which renames a field only when the request answers
+    // the pair as a rename.
+    save: (_t, fields, renamed) =>
       dispatchCollections(
         {} as ServiceContainer,
         "updateCollection",
         { collectionName: "posts" },
-        { fields }
+        { fields, ...renameAnswer(renamed) }
       ),
   },
   {
@@ -260,8 +273,12 @@ const ROADS: Road[] = [
     // dialog's save does where the push would carry no values.
     runsFile: true,
     create: createHero,
-    save: (_t, fields) =>
-      dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields }),
+    save: (_t, fields, renamed) =>
+      dispatchSingles(
+        "updateSingleSchema",
+        { slug: "hero" },
+        { fields, ...renameAnswer(renamed) }
+      ),
   },
   {
     // A translated Single renaming a shared field: no companion value moves, so its own file runs.
@@ -275,8 +292,12 @@ const ROADS: Road[] = [
         { slug: "tale", label: "Tale", localized: true, fields }
       );
     },
-    save: (_t, fields) =>
-      dispatchSingles("updateSingleSchema", { slug: "tale" }, { fields }),
+    save: (_t, fields, renamed) =>
+      dispatchSingles(
+        "updateSingleSchema",
+        { slug: "tale" },
+        { fields, ...renameAnswer(renamed) }
+      ),
   },
   {
     name: "a field group (its migration file)",

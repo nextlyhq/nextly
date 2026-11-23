@@ -39,6 +39,8 @@ export function toCollectionForColumns(
         localized?: boolean;
         /** Removed from code: the table offers nothing that writes. */
         removedFromCode?: boolean;
+        /** The workflow that holds the collection's publishing, with its steps. */
+        workflow?: CollectionForColumns["workflow"];
       }
     | undefined,
   slug: string,
@@ -84,6 +86,9 @@ export function toCollectionForColumns(
     // Forwarded so the bulk actions, and the row selection and row Delete that
     // follow them, are withheld from a collection removed from code.
     ...(collection.removedFromCode === true ? { removedFromCode: true } : {}),
+    // Forwarded so the list asks for each row's review state, draws its Review column and its
+    // filters, and offers the workflow's bulk moves.
+    ...(collection.workflow ? { workflow: collection.workflow } : {}),
     // Forwarded so the row Delete and the bulk Delete are withheld from a
     // collection whose entries are deleted through an action of their own.
     ...(collection.admin?.disableDelete === true

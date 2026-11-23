@@ -27,7 +27,7 @@
  * @module dom-kind-ban.test
  */
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -38,9 +38,13 @@ import {
 import type { Node as AstNode } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
-import { TEST_MODULE, collectModules } from "./source-modules";
+import { TEST_MODULE, collectModules, modulePath } from "./source-modules";
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
+
+/** A file's path beneath `src`, with "/" as the lists here write it. */
+const fromSrc = (file: string): string =>
+  modulePath(SRC_DIR, file, relative, sep);
 
 /**
  * The DOM constructors this realm defines, read off the realm rather than
@@ -122,7 +126,7 @@ function productFiles(): string[] {
 
 describe("node kinds are asked through dom-kind", () => {
   const files = productFiles();
-  const paths = files.map(file => relative(SRC_DIR, file));
+  const paths = files.map(file => fromSrc(file));
 
   it("reads the files it claims to", () => {
     // By membership rather than by count: a scan reduced to a stray directory
@@ -144,7 +148,7 @@ describe("node kinds are asked through dom-kind", () => {
   it("finds no DOM-constructor instanceof in any product file", () => {
     const offenders = files.flatMap(file =>
       domInstanceofChecks(readFileSync(file, "utf8"), file).map(
-        name => `${relative(SRC_DIR, file)}: instanceof ${name}`
+        name => `${fromSrc(file)}: instanceof ${name}`
       )
     );
     expect(offenders).toEqual([]);

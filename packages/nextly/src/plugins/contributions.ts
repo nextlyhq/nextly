@@ -1,5 +1,6 @@
 import type { ZodObject, ZodRawShape, ZodTypeAny } from "zod";
 
+import type { PresetRoleSlug } from "../auth/role-presets";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   FieldStoragePrimitive,
@@ -65,6 +66,16 @@ export interface PluginPermission {
    * that explains its own danger in its own voice is one people stop reading.
    */
   danger?: boolean;
+  /**
+   * The preset roles (`admin`, `editor`, `author`, `viewer`) that may hold
+   * this permission, each still by its own rule (only Admin takes a
+   * plugin's permission, and Viewer its `read`). `[]` keeps it from every
+   * preset, so only a role granted it by name holds it: for a permission
+   * that opens private data. Left out, every preset's own rule decides.
+   *
+   * @experimental
+   */
+  presets?: readonly PresetRoleSlug[];
 }
 
 /**

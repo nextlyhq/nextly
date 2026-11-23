@@ -5,8 +5,8 @@ import { and, eq, sql, type Column, type SQL } from "drizzle-orm";
 import { loadedDialect } from "../../../database/dialect-tables";
 import { NextlyError } from "../../../errors/nextly-error";
 import { BaseService } from "../../../shared/base-service";
+import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import type { Logger } from "../../../shared/types";
-import { affectedRowCount } from "../../auth/services/auth-service";
 
 /**
  * A key's stored value plus whether the key exists.

@@ -63,7 +63,7 @@ import {
   type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
-import type { OfferedListFilter } from "./plugin-filters";
+import type { ListFilter } from "./plugin-filters";
 import type { DeclaredBulkAction } from "./useDeclaredBulkActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import {
@@ -72,6 +72,10 @@ import {
   type EntryRow,
   type EntryVersions,
 } from "./useEntrySelection";
+import {
+  BulkMoveResultNote,
+  useWorkflowBulkMoves,
+} from "./useWorkflowBulkMoves";
 
 // ============================================================================
 // Types
@@ -173,7 +177,7 @@ export interface EntryTableProps {
   /** Callback when the language filter changes. */
   onTranslationFilterChange?: (filter: TranslationListFilter | null) => void;
   /** The filters plugins offer this list (`contributes.admin.filters`). */
-  pluginFilters?: readonly OfferedListFilter[];
+  pluginFilters?: readonly ListFilter[];
   /** The option each plugin filter has chosen, by filter name. */
   chosenPluginFilters?: ReadonlyMap<string, string>;
   /** Choose a plugin filter's option, or `null` to clear it. */
@@ -242,7 +246,7 @@ function PluginFilterMenuSections({
   onChange,
   separateFirst,
 }: {
-  filters: readonly OfferedListFilter[];
+  filters: readonly ListFilter[];
   chosen: ReadonlyMap<string, string> | undefined;
   onChange: ((name: string, value: string | null) => void) | undefined;
   /** Whether a section of the list's own comes before the first. */
@@ -381,6 +385,17 @@ export const EntryTable: ForwardRefExoticComponent<
     () => getEntryTitleField(collection),
     [collection]
   );
+
+  // The workflow's moves over the selection, each refusal named by the row's title.
+  const bulkMoves = useWorkflowBulkMoves({
+    collection,
+    offered: offered.workflowMoves,
+    rows: entries,
+    titleOf: (row, id) => {
+      const title = row && titleField ? row[titleField] : undefined;
+      return typeof title === "string" && title !== "" ? title : id;
+    },
+  });
 
   // A plugin's column decided by a read of its own (whether the collection
   // has what the column shows) is registered once that read answers. Asked
@@ -549,6 +564,11 @@ export const EntryTable: ForwardRefExoticComponent<
   return (
     // The table draws its columns from the ask the hold above was decided by.
     <HeldPluginColumnsPass.Provider value={pass}>
+      {bulkMoves.dialogs}
+      {/* What the last workflow move did, each refusal named, until the next one. */}
+      {bulkMoves.result ? (
+        <BulkMoveResultNote result={bulkMoves.result} />
+      ) : null}
       <ListView<EntryRow>
         search={{
           value: globalFilter,
@@ -714,6 +734,7 @@ export const EntryTable: ForwardRefExoticComponent<
                 declaredBulkActions,
                 selected
               )}
+              workflowMoves={bulkMoves.movesFor(selected)}
             />
           ) : undefined
         }

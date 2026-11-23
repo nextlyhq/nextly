@@ -73,6 +73,12 @@ import { BaseService } from "../../../shared/base-service";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
+  parseFieldRenameAnswers,
+  withFieldRenameAnswers,
+  withoutRenameAnswers,
+  type FieldRenameAnswer,
+} from "../../schema/field-rename-answers";
+import {
   parseFieldRewrite,
   rewriteCallerOf,
   rewritesSingle,
@@ -135,6 +141,12 @@ export interface UpdateCollectionInput {
   description?: string;
   icon?: string;
   fields?: FieldDefinition[];
+  /**
+   * @experimental For a field `fields` removes and another of the same type it adds, whether
+   * that is a rename (`"rename"`, keeping the values) or not (`"drop_and_add"`). A change
+   * that makes such a pair without answering it is refused, never taken for a rename.
+   */
+  renames?: FieldRenameAnswer[];
 }
 
 /**
@@ -635,9 +647,14 @@ export class CollectionService extends BaseService {
   ): Promise<Collection> {
     this.logger.debug("Updating collection", { collectionName, input });
 
-    const result = await this.metadataService.updateCollection(
-      { collectionName },
-      input
+    // Run with the input's answers, so a pair it doesn't answer is refused, not guessed.
+    const result = await withFieldRenameAnswers(
+      parseFieldRenameAnswers(input.renames),
+      () =>
+        this.metadataService.updateCollection(
+          { collectionName },
+          withoutRenameAnswers(input)
+        )
     );
 
     if (!result.success) {
@@ -1123,6 +1140,10 @@ export class CollectionService extends BaseService {
       collectionName,
       entryId,
       ...forwardedFromContext(context),
+      // A read of one document only, so it is named here rather than in the
+      // seam every facade method spreads: a list or a write has no first
+      // published language to answer in.
+      wholeDocumentFallback: context.wholeDocumentFallback,
     });
 
     if (!result.success) {

@@ -30,6 +30,7 @@ import type { TeardownAdapter } from "../../collections/services/teardown-adapte
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import type { BuilderSaveSetup } from "../../schema/builder-save/collection-save";
+import type { SettledSave } from "../../schema/builder-save/settle-left-save";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
@@ -828,14 +829,36 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         migrationsDir: this.builderSave?.migrationsDir,
         issuesDdl: true,
       },
-      () => this.deleteComponentExcluded(slug)
+      settledBefore => this.deleteComponentExcluded(slug, settledBefore)
     );
   }
 
-  private async deleteComponentExcluded(slug: string): Promise<void> {
+  private async deleteComponentExcluded(
+    slug: string,
+    settledBefore: readonly SettledSave[] = []
+  ): Promise<void> {
     this.logger.debug("Deleting Component", { slug });
 
-    const existing = await this.getRecordForWrite(slug);
+    const existing = await this.findRecordForWrite(slug);
+    if (existing === null) {
+      // A delete asked again after one stopped part-way on MySQL: the settle before this one found
+      // its drops applied and finished it, removing the registry row. What was asked is done, so it
+      // is answered as deleted; a field group that was never there is still not found.
+      if (
+        settledBefore.some(
+          save =>
+            save.kind === "fieldGroup" &&
+            save.slug === slug &&
+            save.removed === true
+        )
+      ) {
+        this.logger.info("Component deleted", { slug });
+        return;
+      }
+      throw NextlyError.notFound({
+        logContext: { entity: this.resourceType, slug },
+      });
+    }
 
     if (existing.locked) {
       // Defined in code, as the caller is told; the slug goes to the log.

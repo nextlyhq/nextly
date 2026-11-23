@@ -30,7 +30,7 @@
  * @module user-words.test
  */
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
@@ -167,8 +167,17 @@ function docsProse(page: string): string[] {
     .filter(paragraph => paragraph !== "");
 }
 
+/**
+ * A relative path written with "/" whatever the platform, as the lists here
+ * are: on Windows `relative` and a recursive `readdirSync` answer with "\\".
+ */
+function posixPath(path: string): string {
+  return path.split(sep).join("/");
+}
+
 function shippedSources(dir: string): string[] {
   return readdirSync(dir, { recursive: true, encoding: "utf8" })
+    .map(posixPath)
     .filter(name => /\.tsx?$/.test(name))
     .filter(
       name => !/\.test(?:-d)?\.tsx?$|\.d\.ts$|(?:^|\/)__tests__\//.test(name)
@@ -207,7 +216,7 @@ function findingsIn(
 ): WordFinding[] {
   return files.flatMap(file =>
     brokenRules(read(file), rules).map(text => ({
-      file: relative(join(SRC_DIR, "../../.."), file),
+      file: posixPath(relative(join(SRC_DIR, "../../.."), file)),
       text,
     }))
   );
@@ -247,7 +256,9 @@ describe("the words an author reads", () => {
   it("reads the files it claims to", () => {
     // By membership, not by count: a scan reduced to a stray folder still
     // reads SOME files. These hold the library names.
-    const read = shippedSources(SRC_DIR).map(file => relative(SRC_DIR, file));
+    const read = shippedSources(SRC_DIR).map(file =>
+      posixPath(relative(SRC_DIR, file))
+    );
     expect(read).toEqual(
       expect.arrayContaining([
         "overview/admin-panel.ts",

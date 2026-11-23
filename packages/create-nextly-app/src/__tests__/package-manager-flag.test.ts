@@ -5,7 +5,7 @@
  * field. Fake managers on PATH report fixed versions (see scaffold-harness).
  */
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +21,7 @@ import {
   captureConsole,
   installFakeManagers,
   makeWorkdir,
+  removeWorkdir,
   runCli,
 } from "./scaffold-harness";
 
@@ -46,7 +47,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  await rm(dir, { recursive: true, force: true });
+  await removeWorkdir(dir);
 });
 
 async function scaffold(launcher: Manager, selected: Manager) {

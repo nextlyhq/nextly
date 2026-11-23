@@ -26,6 +26,9 @@ import type { BreakpointRemovalParts } from "./breakpoints";
 import { componentStoreOf, pagesOptions, storeIsOwn } from "./options";
 import type { Definition } from "./state";
 
+/** Every built-in preset role, by slug. */
+const PRESET_ROLES = ["admin", "editor", "author", "viewer"] as const;
+
 // The index is contributed unconditionally, alongside the pages it
 // describes. Its table existing is what lets the maintenance path write
 // to it without a first-run branch, exactly as the site style single is
@@ -42,7 +45,7 @@ export function pluginCollections(
   def: Definition
 ): NonNullable<PluginContributions["collections"]> {
   const { opts, state, configStyle } = def;
-  return [
+  const collections: NonNullable<PluginContributions["collections"]> = [
     pagesCollection(
       pagesOptions(
         opts,
@@ -75,6 +78,14 @@ export function pluginCollections(
     // they are, rather than meeting a collection that disappeared.
     usageBackfillStateCollection(),
   ];
+  // Open to every preset role, each by its own rule (an Author does not
+  // publish or delete, a Viewer reads), as before collections started closed
+  // to them: a new site's editors work on its pages. A collection that already
+  // says which presets it is open to keeps its own word.
+  return collections.map(collection => ({
+    ...collection,
+    grants: collection.grants ?? { presets: PRESET_ROLES },
+  }));
 }
 
 // The Site Style global: one versioned, access-controlled document the

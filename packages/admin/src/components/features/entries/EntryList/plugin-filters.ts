@@ -23,6 +23,21 @@ export type OfferedListFilter = NonNullable<
   PluginMetadata["listFilters"]
 >[number];
 
+/**
+ * A filter the toolbar offers, whoever declared it: a plugin's (`OfferedListFilter`), or the
+ * list's own review filters, whose options carry the server's top-level keys (`_stage`, ...) that
+ * a plugin's `where` type does not name. The toolbar reads only what both have.
+ */
+export interface ListFilter {
+  name: string;
+  label: string;
+  options: readonly {
+    value: string;
+    label: string;
+    where: Record<string, unknown>;
+  }[];
+}
+
 /** The URL parameter a chosen option is kept in. */
 const PLUGIN_FILTER_PARAM = "pf";
 
@@ -53,7 +68,7 @@ export function listFiltersFor(
  * out; for a filter named twice, the first stands.
  */
 export function chosenPluginFilters(
-  offered: readonly OfferedListFilter[],
+  offered: readonly ListFilter[],
   params: readonly string[]
 ): Map<string, string> {
   const chosen = new Map<string, string>();
@@ -72,7 +87,7 @@ export function chosenPluginFilters(
 
 /** The `where` each chosen option adds to the list's request, in the toolbar's order. */
 export function pluginFilterWheres(
-  offered: readonly OfferedListFilter[],
+  offered: readonly ListFilter[],
   chosen: ReadonlyMap<string, string>
 ): Record<string, unknown>[] {
   return offered.flatMap(filter => {
@@ -84,7 +99,7 @@ export function pluginFilterWheres(
 
 /** The chosen options as `pf` values, in the toolbar's order. */
 function pluginFilterParams(
-  offered: readonly OfferedListFilter[],
+  offered: readonly ListFilter[],
   chosen: ReadonlyMap<string, string>
 ): string[] {
   return offered.flatMap(filter => {
@@ -99,7 +114,7 @@ function pluginFilterParams(
  * before it. Every other parameter is kept as it is.
  */
 export function writePluginFilterParams(
-  offered: readonly OfferedListFilter[],
+  offered: readonly ListFilter[],
   chosen: ReadonlyMap<string, string>
 ): void {
   setSearchParams({
