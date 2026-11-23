@@ -771,15 +771,14 @@ describe.each(getConfiguredTestDialects())(
       "a file adding a column whose key references a table named generated: %s",
       async (_case, made) => {
         await dbSync(true);
-        // An unquoted table name that is also a word opening a column constraint, kept in a schema
-        // of this file's own: the quoted schema is one token, the bare `generated` after it the
-        // word the case is about.
-        const schema = `${SLUG}_keyword`;
-        const target = `${q(schema)}.generated`;
+        // An unquoted table name that is also a word opening a column constraint. It cannot take
+        // the file's prefix or another schema: the case is the bare word itself, and a key into
+        // another schema is not one migrate reads as the app's. No other file makes a table of
+        // this name; a leftover one is dropped first, and the table is dropped again below.
         try {
-          await query(`CREATE SCHEMA ${q(schema)}`);
-          await query(`CREATE TABLE ${target} (id varchar(36) PRIMARY KEY)`);
-          const inline = `${q("owner")} varchar(36) CONSTRAINT ${q(`${TABLE}_owner_fk`)} REFERENCES ${target} (id)`;
+          await query("DROP TABLE IF EXISTS generated CASCADE");
+          await query("CREATE TABLE generated (id varchar(36) PRIMARY KEY)");
+          const inline = `${q("owner")} varchar(36) CONSTRAINT ${q(`${TABLE}_owner_fk`)} REFERENCES generated (id)`;
           const add = `ALTER TABLE ${q(TABLE)} ADD COLUMN ${inline} DEFERRABLE INITIALLY DEFERRED`;
           await query(
             made === "same"
@@ -805,7 +804,7 @@ describe.each(getConfiguredTestDialects())(
           );
           expect(await ledger(two)).toEqual([]);
         } finally {
-          await query(`DROP SCHEMA IF EXISTS ${q(schema)} CASCADE`);
+          await query("DROP TABLE IF EXISTS generated CASCADE");
         }
       }
     );
