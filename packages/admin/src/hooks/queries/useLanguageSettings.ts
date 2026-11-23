@@ -18,7 +18,9 @@ import {
 } from "@tanstack/react-query";
 
 import { useAuthSession } from "@admin/hooks/queries/useAuthSession";
+import { singleDocumentKeys } from "@admin/hooks/queries/useSingles";
 import { ADMIN_WORKSPACE_KEY } from "@admin/hooks/useSchemaUpdateInvalidation";
+import { entryKeys } from "@admin/services/entryApi";
 import {
   changeLanguages,
   listLanguages,
@@ -75,7 +77,10 @@ export function useDefaultChangePreview(
 /**
  * Makes one change. The answer is the list after it, so it replaces the cached
  * list at once. Every summary read before it is stale, and so is the admin's
- * workspace, whose language list the editor and the rail read.
+ * workspace, whose language list the editor and the rail read. So are the
+ * entries and Single documents read so far: a read that names no language is
+ * answered in the default, and a removed or added language changes what a
+ * read in it answers.
  */
 export function useChangeLanguages(): UseMutationResult<
   LanguageList,
@@ -92,6 +97,8 @@ export function useChangeLanguages(): UseMutationResult<
           queryKey: languageKeys.defaultPreviews(),
         }),
         queryClient.invalidateQueries({ queryKey: ADMIN_WORKSPACE_KEY }),
+        queryClient.invalidateQueries({ queryKey: entryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: singleDocumentKeys.all() }),
       ]);
     },
   });

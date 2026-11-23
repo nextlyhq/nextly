@@ -419,6 +419,29 @@ describe("Settings › Languages", () => {
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
   });
 
+  it("marks the entries and Single documents read so far stale once a change is saved", async () => {
+    const queryClient = await open();
+    // Reads as the editor and the lists keep them: an entry, a list, a Single.
+    const entry = ["entries", "detail", "posts", "p1"];
+    const entries = ["entries", "list", "posts"];
+    const single = ["single-documents", "detail", "homepage"];
+    // And one no language change touches, as the control.
+    const unrelated = ["dashboard", "stats"];
+    for (const key of [entry, entries, single, unrelated]) {
+      queryClient.setQueryData(key, { stored: true });
+    }
+
+    await choose("English", "Move down");
+    await waitFor(() => expect(api.changeLanguages).toHaveBeenCalled());
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(entry)?.isInvalidated).toBe(true)
+    );
+    expect(queryClient.getQueryState(entries)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(single)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(unrelated)?.isInvalidated).toBe(false);
+  });
+
   it("moves a language by sending every language in the new order", async () => {
     await open();
     await choose("English", "Move down");
