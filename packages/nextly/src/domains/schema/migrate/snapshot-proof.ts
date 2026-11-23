@@ -691,14 +691,24 @@ function mysqlIndexElement(
   clause: StatementCursor,
   table: string
 ): NamedObject[] {
-  const unique = clause.accept("UNIQUE");
-  const index = clause.accept("INDEX") || clause.accept("KEY");
-  if (!unique && !index) return [];
-  const name = clause.name();
-  return name === undefined
+  const { kinds, name } = indexHeadOf(clause, "mysql");
+  const plain =
+    kinds.length > 0 && kinds.every(kind => MYSQL_NAMED_INDEX_KINDS.has(kind));
+  return !plain || name === undefined
     ? []
-    : [{ kind: "index", table, name, tail: clause.rest(), unique }];
+    : [
+        {
+          kind: "index",
+          table,
+          name,
+          tail: clause.rest(),
+          unique: kinds.includes("UNIQUE"),
+        },
+      ];
 }
+
+/** The kind words of a MySQL index asked about by its name: a plain or unique index or key. */
+const MYSQL_NAMED_INDEX_KINDS = new Set(["UNIQUE", "INDEX", "KEY"]);
 
 /** The index a `CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] n ON [ONLY] t` creates. */
 function createdIndexOf(
@@ -814,14 +824,30 @@ function columnConstraints(
   );
   return opened.flatMap(at => {
     if (definition[at] !== "CONSTRAINT") return [];
-    // The name, then the kind: the name may be a word that opens a constraint itself, so the
-    // constraint's words end at the first opener after both.
-    const end = opened.find(next => next > at + 2) ?? definition.length;
+    // The name, then the kind and what the kind names: either may be a word that opens a
+    // constraint itself, so the constraint's words end at the first opener after them.
+    const named = kindEnd(definition, at + 2);
+    const end = opened.find(next => next > named) ?? definition.length;
     return namedConstraint(
       new StatementCursor(definition.slice(at + 1, end)),
       table
     ).map(object => ({ ...object, column }));
   });
+}
+
+/**
+ * The position of the last token a column constraint's kind word reaches: after `REFERENCES`,
+ * the table it references, schema-qualified or not, whose unquoted name may be a word that opens
+ * a constraint itself (a table named `generated`). The kind word's own position for any other.
+ */
+function kindEnd(
+  definition: readonly StatementToken[],
+  kindAt: number
+): number {
+  if (definition[kindAt] !== "REFERENCES") return kindAt;
+  const target = new StatementCursor(definition.slice(kindAt + 1));
+  if (target.qualifiedName() === undefined) target.name();
+  return kindAt + target.at;
 }
 
 /** What a drop by name removes: an index, any constraint, or a constraint of one kind. */
@@ -1522,7 +1548,12 @@ function statementShown(statement: string, file: FileContext): boolean {
   const cursor = cursorOf(statement, file.dialect, EXACT);
   const reader = STATEMENT_READERS.find(([words]) => cursor.accept(...words));
   if (reader !== undefined) return reader[1](cursor, file, statement);
-  if (cursor.accept("ALTER", "TABLE")) return alterTableShown(cursor, file);
+  if (cursor.accept("ALTER", "TABLE")) {
+    return (
+      alterTableShown(cursor, file) &&
+      !addsColumnKeyStatingMore(statement, file.dialect)
+    );
+  }
   return isSessionSetting(cursor, file.dialect);
 }
 
@@ -1551,44 +1582,163 @@ function createTableShown(
   return file.objects.tables.has(name) || file.goneLater.has(name);
 }
 
-/** Words that open an index or key MySQL declares inside a `CREATE TABLE` body. */
-const MYSQL_TABLE_INDEX_WORDS = new Set([
-  "INDEX",
-  "KEY",
+/**
+ * Words that open an index, key or exclusion a table declares as an element of its own, in a
+ * `CREATE TABLE` body or after `ALTER TABLE ... ADD`, on each dialect.
+ */
+const TABLE_INDEX_WORDS: Record<SupportedDialect, ReadonlySet<string>> = {
+  mysql: new Set(["INDEX", "KEY", "UNIQUE", "PRIMARY", "FULLTEXT", "SPATIAL"]),
+  postgresql: new Set(["UNIQUE", "PRIMARY", "EXCLUDE"]),
+  sqlite: new Set(["UNIQUE", "PRIMARY"]),
+};
+
+/** Kinds of index no snapshot records at all: full-text, spatial and exclusion. */
+const UNRECORDED_INDEX_KINDS = new Set(["FULLTEXT", "SPATIAL", "EXCLUDE"]);
+
+/** Words naming an index's kind, before its name and definition. */
+const INDEX_KIND_WORDS = new Set([
+  "FOREIGN",
   "UNIQUE",
   "PRIMARY",
+  "KEY",
+  "INDEX",
   "FULLTEXT",
   "SPATIAL",
+  "EXCLUDE",
 ]);
 
 /**
- * Whether a MySQL `CREATE TABLE` declares in its body an index the snapshot cannot show: a
- * full-text or spatial one, or one that states a direction, a NULL order or a method
- * (`statesIndexOrder`), as `CREATE INDEX` and `ALTER TABLE ... ADD INDEX` are read.
+ * Whether a `CREATE TABLE` declares in its body an index the snapshot cannot show
+ * (`tableIndexStatesMore`), on any dialect: read as `CREATE INDEX` and `ALTER TABLE ... ADD`
+ * are, so one form answers the same however it is written.
  */
 function declaresIndexBeyondSnapshot(
   statement: string,
   dialect: SupportedDialect
 ): boolean {
-  if (dialect !== "mysql") return false;
-  return (createdBodyOf(statement, dialect)?.clauses ?? []).some(
-    tableIndexStatesMore
+  const elements = createdBodyOf(statement, dialect)?.clauses ?? [];
+  return (
+    elements.some(clause => tableIndexStatesMore(clause, dialect)) ||
+    columnDefinitions(statement, dialect).some(([, definition]) =>
+      columnKeyStatesMore(definition)
+    )
   );
 }
 
-/** One `CREATE TABLE` body clause: an index or key, `CONSTRAINT n` first or not, stating more. */
-function tableIndexStatesMore(clause: StatementCursor): boolean {
-  if (clause.accept("CONSTRAINT")) clause.name();
-  const opens = clause.peek();
-  if (typeof opens !== "string" || !MYSQL_TABLE_INDEX_WORDS.has(opens)) {
-    return false;
-  }
-  return (
-    opens === "FULLTEXT" ||
-    opens === "SPATIAL" ||
-    statesIndexOrder(clause.rest())
+/**
+ * Whether a column's definition declares on the column a unique or primary key that states a
+ * direction, a NULL order (`NULLS NOT DISTINCT`) or a method: `c text UNIQUE NULLS NOT DISTINCT`,
+ * SQLite's `id integer PRIMARY KEY DESC`. Each key's words run from its kind to the column's next
+ * constraint.
+ */
+function columnKeyStatesMore(definition: readonly StatementToken[]): boolean {
+  const opened = topLevelPositions(definition, at =>
+    opensColumnConstraint(definition, at)
+  );
+  return opened.some((at, k) => {
+    const kind = definition[at];
+    if (kind !== "UNIQUE" && kind !== "PRIMARY") return false;
+    const end = opened[k + 1] ?? definition.length;
+    return statesIndexOrder(definition.slice(at + 1, end));
+  });
+}
+
+/** Whether a statement adds a column whose definition declares such a key (`columnKeyStatesMore`). */
+function addsColumnKeyStatingMore(
+  statement: string,
+  dialect: SupportedDialect
+): boolean {
+  return columnsAdded(statement, dialect).some(([, , definition]) =>
+    columnKeyStatesMore(definition)
   );
 }
+
+/**
+ * One table element, `CONSTRAINT n` first or not: an index, key or exclusion of a kind no
+ * snapshot records, or one that states a direction, a NULL order (`NULLS NOT DISTINCT`
+ * included) or a method (`statesIndexOrder`). False for a column or any other element.
+ */
+function tableIndexStatesMore(
+  clause: StatementCursor,
+  dialect: SupportedDialect
+): boolean {
+  if (clause.accept("CONSTRAINT")) skipConstraintName(clause);
+  const opens = tableIndexOpening(clause, dialect);
+  if (opens === undefined) return false;
+  return (
+    UNRECORDED_INDEX_KINDS.has(opens) ||
+    statesIndexOrder(indexDefinitionOf(clause, dialect))
+  );
+}
+
+/**
+ * The word a table element opens with where it is an index, key or exclusion on `dialect`, or
+ * undefined for a column. PostgreSQL lets a column be named `exclude`: an exclusion is
+ * `EXCLUDE USING ...` or `EXCLUDE (...)`.
+ */
+function tableIndexOpening(
+  clause: StatementCursor,
+  dialect: SupportedDialect
+): string | undefined {
+  const opens = clause.peek();
+  if (typeof opens !== "string" || !TABLE_INDEX_WORDS[dialect].has(opens)) {
+    return undefined;
+  }
+  const after = clause.peek(1);
+  if (opens === "EXCLUDE" && after !== "USING" && after !== "(") {
+    return undefined;
+  }
+  return opens;
+}
+
+/**
+ * Reads past the name after `CONSTRAINT`, where there is one: MySQL lets it be left out
+ * (`CONSTRAINT UNIQUE (c)`), so a kind word next is the key's own unless another kind word
+ * follows it.
+ */
+function skipConstraintName(clause: StatementCursor): void {
+  if (!isIndexKind(clause.peek()) || isIndexKind(clause.peek(1))) clause.name();
+}
+
+/**
+ * The tokens of an index or key after its kind words and, on MySQL, after the index's own
+ * optional name (`INDEX nulls (c)`, `UNIQUE KEY n USING BTREE (c)`): what `statesIndexOrder`
+ * reads, so an unquoted name such as `nulls` is not taken for an order. With no kind word
+ * first, the whole rest.
+ */
+function indexDefinitionOf(
+  clause: StatementCursor,
+  dialect: SupportedDialect
+): StatementToken[] {
+  indexHeadOf(clause, dialect);
+  return clause.rest();
+}
+
+/**
+ * Reads an index's kind words and, on MySQL, the index's own optional name after them
+ * (`UNIQUE KEY n`, `FOREIGN KEY n`): the one reading of both, for the named-object reader and the
+ * definition reader alike. The name is undefined where none is written.
+ */
+function indexHeadOf(
+  clause: StatementCursor,
+  dialect: SupportedDialect
+): { kinds: string[]; name?: string } {
+  const kinds: string[] = [];
+  for (let next = clause.peek(); isIndexKind(next); next = clause.peek()) {
+    clause.accept(next);
+    kinds.push(next);
+  }
+  const named =
+    dialect === "mysql" &&
+    kinds.length > 0 &&
+    clause.peek() !== "(" &&
+    !clause.isWord("USING");
+  return { kinds, name: named ? clause.name() : undefined };
+}
+
+/** Whether a token is a word naming an index's kind (`INDEX_KIND_WORDS`). */
+const isIndexKind = (token: StatementToken | undefined): token is string =>
+  typeof token === "string" && INDEX_KIND_WORDS.has(token);
 
 /** `DROP TABLE [IF EXISTS] a[, b...] [CASCADE|RESTRICT]`, of tables the file may change. */
 function dropTablesShown(cursor: StatementCursor, file: FileContext): boolean {
@@ -1873,23 +2023,28 @@ function elementFollows(
   adding: boolean
 ): boolean {
   if (adding && clause.accept("CONSTRAINT"))
-    return namedConstraintAdded(clause);
+    return namedConstraintAdded(clause, file.dialect);
   const next = clause.peek();
   if (typeof next !== "string") return clause.name() !== undefined;
-  if (adding && MYSQL_INDEX_ELEMENTS.has(next) && file.dialect === "mysql") {
-    return !statesIndexOrder(clause.rest());
+  // An index, key or exclusion added without a name is read as the table body reads it.
+  if (adding && TABLE_INDEX_WORDS[file.dialect].has(next)) {
+    return !tableIndexStatesMore(clause, file.dialect);
   }
   return elementWord(next, file.dialect) || plainColumnName(next);
 }
 
-/** Words after `ADD` that open an index or key in MySQL's `ALTER TABLE`. */
-const MYSQL_INDEX_ELEMENTS = new Set(["INDEX", "KEY", "UNIQUE"]);
-
 /** A named constraint added must be of a kind the snapshot records: not an `EXCLUDE`, say. */
-function namedConstraintAdded(clause: StatementCursor): boolean {
+function namedConstraintAdded(
+  clause: StatementCursor,
+  dialect: SupportedDialect
+): boolean {
   if (clause.name() === undefined) return false;
-  // A unique or primary key is an index: one that states an order is not shown (`statesIndexOrder`).
-  return nextIn(clause, CONSTRAINT_KINDS) && !statesIndexOrder(clause.rest());
+  // A unique or primary key is an index: one that states an order is not shown
+  // (`statesIndexOrder`), read past its kind words and, on MySQL, its index's own name.
+  return (
+    nextIn(clause, CONSTRAINT_KINDS) &&
+    !statesIndexOrder(indexDefinitionOf(clause, dialect))
+  );
 }
 
 /** A word naming the element an `ADD` or `DROP` clause changes. */
