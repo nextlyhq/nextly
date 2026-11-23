@@ -108,13 +108,28 @@ async function readEntry(
   return (body.item ?? body) as Record<string, unknown>;
 }
 
-/** Save the draft, confirming the review: it names each move as kept. */
-async function saveConfirming(page: Page, move?: string): Promise<void> {
+/**
+ * Save the draft, confirming the review: it names each move as kept. Waits for
+ * the save's last write, the collection's settings, which lands after the
+ * fields show as saved: one still on its way holds the schema, and the next
+ * change (the test's own clean-up among them) would be refused meanwhile.
+ */
+async function saveConfirming(
+  page: Page,
+  slug: string,
+  move?: string
+): Promise<void> {
   await page.getByRole("button", { name: "Save", exact: true }).click();
   const review = page.getByRole("alertdialog");
   await expect(review).toBeVisible();
   if (move) await expect(review).toContainText(move);
+  const settingsSaved = page.waitForResponse(
+    response =>
+      response.request().method() === "PATCH" &&
+      new URL(response.url()).pathname === `${API}/collections/${slug}`
+  );
   await review.getByRole("button").last().click();
+  expect((await settingsSaved).ok()).toBe(true);
   await expect(review).toHaveCount(0);
   await expect(
     page.getByText("No unsaved changes", { exact: true })
@@ -210,6 +225,7 @@ test.describe("moving fields in the Builder outline", () => {
     await expect(row(page, "meta/summary_a")).toBeVisible();
     await saveConfirming(
       page,
+      slug,
       "summary_a is moved to meta.summary_a. Its values are kept."
     );
     await expect
@@ -222,6 +238,7 @@ test.describe("moving fields in the Builder outline", () => {
     await expect(row(page, "summary_a")).toBeVisible();
     await saveConfirming(
       page,
+      slug,
       "meta.summary_a is moved to summary_a. Its values are kept."
     );
     await expect
