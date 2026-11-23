@@ -1,12 +1,12 @@
 /**
- * How a promote's or demote's registry write takes the schema lock, by whether the lock's table is
- * there (`withCollectionRegistryWrite`):
+ * How a promote's or demote's registry write takes the schema lock (`withCollectionRegistryWrite`):
  *
- * - the table there: the lock is taken without creating anything, as before;
- * - the table missing: the lock is taken creating it, so the write holds the lock's row;
+ * - the lock is taken making its tables where they are missing, so the write holds the lock's row
+ *   on a database no run has made them on; nothing is asked of the database before the lock, whose
+ *   own first access waits for a busy SQLite database in tries;
  * - a refusal of the creation for the role's rights, before the work ran: the lock is taken again
- *   without creating anything, as before. Where another run has made the table since, that holds
- *   its row; where it is still missing, the write says once that it runs without it;
+ *   without creating anything, as before. Where the table is there, that holds its row; where it
+ *   is still missing, the write says once that it runs without it;
  * - any other failure before the work (a busy database, a lost connection, a held lock), and any
  *   failure once the work started, is thrown as it was, never retried: the write never runs
  *   without the lock it could have had, and the registry is never written twice.
@@ -90,20 +90,13 @@ describe("a promote's or demote's registry write and the schema lock's table", (
     exclusion.failures = [];
   });
 
-  it("takes the lock creating nothing where the table is there", async () => {
-    const { result, log, work } = await write(adapterAnswering(true));
-
-    await expect(result).resolves.toBe("written");
-    expect(exclusion.calls).toEqual([false]);
-    expect(work).toHaveBeenCalledTimes(1);
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
-  it("takes the lock creating its table where it is missing", async () => {
-    const { result, log, work } = await write(adapterAnswering(false));
+  it("takes the lock making its tables, and asks the database nothing before it", async () => {
+    const adapter = adapterAnswering();
+    const { result, log, work } = await write(adapter);
 
     await expect(result).resolves.toBe("written");
     expect(exclusion.calls).toEqual([true]);
+    expect(adapter.tableExists).not.toHaveBeenCalled();
     expect(work).toHaveBeenCalledTimes(1);
     expect(log.warn).not.toHaveBeenCalled();
   });
@@ -115,7 +108,7 @@ describe("a promote's or demote's registry write and the schema lock's table", (
     "goes on as before, saying so, where %s refuses the role the table",
     async (_, denied) => {
       exclusion.failures = [denied];
-      const { result, log, work } = await write(adapterAnswering(false, false));
+      const { result, log, work } = await write(adapterAnswering(false));
 
       await expect(result).resolves.toBe("written");
       expect(exclusion.calls).toEqual([true, false]);
@@ -127,9 +120,9 @@ describe("a promote's or demote's registry write and the schema lock's table", (
     }
   );
 
-  it("takes the lock without creating anything, and says nothing, where another run made the table meanwhile", async () => {
+  it("takes the lock without creating anything, and says nothing, where the table is there", async () => {
     exclusion.failures = [POSTGRES_DENIED];
-    const { result, log, work } = await write(adapterAnswering(false, true));
+    const { result, log, work } = await write(adapterAnswering(true));
 
     await expect(result).resolves.toBe("written");
     expect(exclusion.calls).toEqual([true, false]);
@@ -151,10 +144,12 @@ describe("a promote's or demote's registry write and the schema lock's table", (
     "throws %s before the work as it was, and never writes without the lock",
     async (_, failure) => {
       exclusion.failures = [failure];
-      const { result, log, work } = await write(adapterAnswering(false, false));
+      const adapter = adapterAnswering();
+      const { result, log, work } = await write(adapter);
 
       await expect(result).rejects.toBe(failure);
       expect(exclusion.calls).toEqual([true]);
+      expect(adapter.tableExists).not.toHaveBeenCalled();
       expect(work).not.toHaveBeenCalled();
       expect(log.warn).not.toHaveBeenCalled();
     }
@@ -162,7 +157,7 @@ describe("a promote's or demote's registry write and the schema lock's table", (
 
   it("throws a failure from the work itself, and never writes twice", async () => {
     exclusion.failures = ["in-work"];
-    const { result, work } = await write(adapterAnswering(false, false));
+    const { result, work } = await write(adapterAnswering());
 
     await expect(result).rejects.toThrow("failed in the work");
     expect(exclusion.calls).toEqual([true]);
@@ -172,7 +167,7 @@ describe("a promote's or demote's registry write and the schema lock's table", (
   it("keeps the refusal it was given where asking for the table then fails", async () => {
     exclusion.failures = [POSTGRES_DENIED];
     const { result, work } = await write(
-      adapterAnswering(false, new Error("connection terminated"))
+      adapterAnswering(new Error("connection terminated"))
     );
 
     await expect(result).rejects.toBe(POSTGRES_DENIED);
