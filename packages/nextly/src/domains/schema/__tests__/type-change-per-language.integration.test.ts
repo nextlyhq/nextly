@@ -1,13 +1,14 @@
 /**
  * A field type change on per-language storage, the layout every installation runs: a text field's
  * values live in each language's row of the entity's translations table, so the Schema Builder
- * save converts them there, its migration file carries the conversion, `nextly migrate` converts a
- * second database's own values in that table alike, and `migrate:down` converts them back. Proved
- * on SQLite, PostgreSQL and MySQL, values read back through the Direct API.
+ * save converts them there, a value that cannot convert cleared only on a confirmed count, its
+ * migration file carries the conversion, `nextly migrate` converts a second database's own values
+ * in that table alike under its consent, and `migrate:down` takes them back. Proved on SQLite,
+ * PostgreSQL and MySQL, values read back through the Direct API.
  *
  * What separates the right answer from plausible wrong ones: a conversion that reaches only the
- * entity's own table converts nothing here, as the values are not there; one that runs only the
- * file's cast refuses a text no cast reads the same way on every database.
+ * entity's own table converts nothing here, as the values are not there; a save left to the
+ * database's cast cannot clear a value it keeps, so it refuses one no address reads.
  */
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -206,94 +207,94 @@ async function read(t: TestNextly): Promise<Record<string, unknown>> {
 describe.each(getConfiguredTestDialects())(
   "a type change on per-language storage converts each language's value, saved and deployed alike (%s)",
   dialect => {
-    it("converts a text field's whole numbers into a number in its translations table, and keeps an empty one empty", async () => {
+    // A text becoming an email stays translatable, so its values stay in the translations table:
+    // the type change a translatable field makes there. A number is not translatable, so a text
+    // becoming one also leaves translation, which a save refuses until the two are made apart.
+    const email = { name: "v", type: "email" };
+
+    it("converts a text field into an email in its translations table, and keeps an empty one empty", async () => {
       const t = await boot(dialect);
       await createPosts([{ name: "v", type: "text" }]);
-      await write(t, "a", { v: "12" });
+      await write(t, "a", { v: "a@b.co" });
       await write(t, "b", {});
 
-      await save(t, [{ name: "v", type: "number" }]);
+      await save(t, [email]);
 
-      expect(await read(t)).toEqual({ a: 12, b: null });
+      expect(await read(t)).toEqual({ a: "a@b.co", b: null });
     });
 
     it("clears a value that cannot convert once the clear is confirmed with its count, and converts the rest", async () => {
       const t = await boot(dialect);
       await createPosts([{ name: "v", type: "text" }]);
-      await write(t, "kept", { v: "12" });
-      await write(t, "lost", { v: "abc" });
+      await write(t, "kept", { v: "a@b.co" });
+      await write(t, "lost", { v: "not an address" });
 
-      await save(t, [{ name: "v", type: "number" }], {
+      await save(t, [email], {
         confirmedClears: [{ field: "v", count: 1 }],
       });
 
-      expect(await read(t)).toEqual({ kept: 12, lost: null });
+      expect(await read(t)).toEqual({ kept: "a@b.co", lost: null });
     });
 
     it("refuses a change that would lose a value when no clear is confirmed, and changes nothing", async () => {
       const t = await boot(dialect);
       await createPosts([{ name: "v", type: "text" }]);
-      await write(t, "kept", { v: "12" });
-      await write(t, "lost", { v: "abc" });
+      await write(t, "kept", { v: "a@b.co" });
+      await write(t, "lost", { v: "not an address" });
 
-      await expect(
-        save(t, [{ name: "v", type: "number" }])
-      ).rejects.toMatchObject(
+      await expect(save(t, [email])).rejects.toMatchObject(
         refusedSaying("Confirm clearing the values that cannot convert")
       );
 
-      expect(await read(t)).toEqual({ kept: "12", lost: "abc" });
+      expect(await read(t)).toEqual({ kept: "a@b.co", lost: "not an address" });
     });
 
     it("converts a deploy's own values when nextly migrate replays the file, clearing one that cannot convert only with consent", async () => {
       const first = await boot(dialect);
       await createPosts([{ name: "v", type: "text" }]);
       const created = await filesWritten();
-      await write(first, "kept", { v: "12" });
-      await save(first, [{ name: "v", type: "number" }]);
+      await write(first, "kept", { v: "a@b.co" });
+      await save(first, [email]);
       await first.destroy();
       instance = undefined;
 
       const second = await boot(dialect);
       await migrateFolder(second, created);
-      await write(second, "whole", { v: "34" });
+      await write(second, "address", { v: "c@d.co" });
       await write(second, "word", { v: "zzz" });
 
       await expect(migrateFolder(second)).rejects.toThrow();
-      expect(await read(second)).toEqual({ whole: "34", word: "zzz" });
+      expect(await read(second)).toEqual({ address: "c@d.co", word: "zzz" });
 
       await migrateFolder(
         second,
         undefined,
         resolveDataLossConsent({ flag: true, env: {} })
       );
-      expect(await read(second)).toEqual({ whole: 34, word: null });
+      expect(await read(second)).toEqual({ address: "c@d.co", word: null });
     });
 
-    it("converts a deploy's own values back when migrate:down rolls the change back", async () => {
-      const float = { name: "v", type: "number", options: { format: "float" } };
+    it("takes a deploy's own values back when migrate:down rolls the change back", async () => {
       const first = await boot(dialect);
       await createPosts([{ name: "v", type: "text" }]);
       const created = await filesWritten();
-      await write(first, "kept", { v: "12" });
-      await save(first, [float]);
+      await write(first, "kept", { v: "a@b.co" });
+      await save(first, [email]);
       await first.destroy();
       instance = undefined;
 
       const second = await boot(dialect);
       await migrateFolder(second, created);
-      await write(second, "whole", { v: "34" });
-      await write(second, "part", { v: "7.5" });
+      await write(second, "address", { v: "c@d.co" });
       await migrateFolder(
         second,
         undefined,
         resolveDataLossConsent({ flag: true, env: {} })
       );
-      expect(await read(second)).toEqual({ whole: 34, part: 7.5 });
 
       await migrateDown(second);
 
-      expect(await read(second)).toEqual({ whole: "34", part: "7.5" });
+      expect(await read(second)).toEqual({ address: "c@d.co" });
     });
   }
 );
