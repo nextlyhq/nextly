@@ -121,7 +121,7 @@ export function objectOf(
  * A variable's starting test value: its declared example, else a value of its
  * type, else today's sample for its name.
  */
-export function startingValue(declaration: SampleDeclaration): unknown {
+function startingValue(declaration: SampleDeclaration): unknown {
   const presentation = declaration.presentation ?? {};
   return (
     presentation.example ??

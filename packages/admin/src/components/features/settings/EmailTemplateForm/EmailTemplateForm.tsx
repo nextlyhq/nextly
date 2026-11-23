@@ -22,12 +22,7 @@ import { EnvelopeBar } from "./EnvelopeBar";
 import { InboxStrip, shownInboxLine } from "./InboxStrip";
 import { OwnershipNotices } from "./OwnershipNotices";
 import { regionsForRefusal } from "./refusal-routing";
-import {
-  editedValues,
-  recordValues,
-  suppliedNamesFor,
-  type SampleEdits,
-} from "./sample-data";
+import { suppliedNamesFor } from "./sample-data";
 import {
   DEFAULT_VALUES,
   EMAIL_TEMPLATE_FORM_ID,
@@ -40,6 +35,7 @@ import { SendTestDialog } from "./SendTestDialog";
 import { PreviewPane } from "./TemplatePreview";
 import { useDerivedTemplateState } from "./useDerivedTemplateState";
 import { useOwnershipActs, type OwnershipActs } from "./useOwnershipActs";
+import { useSampleEdits } from "./useSampleEdits";
 import { useTemplateVariables } from "./useTemplateVariables";
 import { useVariableInsertion } from "./useVariableInsertion";
 import { VariableChips } from "./VariablesRail";
@@ -170,6 +166,17 @@ function ContentColumn({
   );
 }
 
+/** The test data's declared variables while the form declares none yet. */
+const NO_VARIABLES: ReadonlyArray<{ name: string }> = [];
+
+/** The saved template's id: a template not yet created has none. */
+function savedIdOf(
+  mode: EmailTemplateFormProps["mode"],
+  template: EmailTemplateFormProps["template"]
+): string | undefined {
+  return mode === "edit" ? template?.id : undefined;
+}
+
 export function EmailTemplateForm({
   mode,
   template,
@@ -189,7 +196,6 @@ export function EmailTemplateForm({
   });
   const reveal = (panel: RevealRequest["panel"]) =>
     setRevealRequest(previous => ({ panel, seq: previous.seq + 1 }));
-  const [sampleEdits, setSampleEdits] = useState<SampleEdits | null>(null);
   const [sendTestOpen, setSendTestOpen] = useState(false);
 
   // The row being edited keeps its kind; layouts are wrappers, not bodies.
@@ -305,9 +311,10 @@ export function EmailTemplateForm({
     [form, insertCodedVariable]
   );
 
+  const sampleEditing = useSampleEdits(variables ?? NO_VARIABLES);
   const derived = useDerivedTemplateState({
     variables,
-    sampleEdits,
+    sampleEdits: sampleEditing.sampleEdits,
     subject,
     htmlContent,
     plainTextContent,
@@ -461,28 +468,14 @@ export function EmailTemplateForm({
                 sampleText={derived.sampleText}
                 sampleData={derived.sampleData}
                 variables={variables ?? []}
-                onFieldChange={(variableName, value) =>
-                  setSampleEdits(current => ({
-                    values: {
-                      ...editedValues(current),
-                      [variableName]: value,
-                    },
-                  }))
-                }
-                onJsonChange={json => setSampleEdits({ json })}
-                onReset={() => setSampleEdits(null)}
+                onFieldChange={sampleEditing.onFieldChange}
+                onJsonChange={sampleEditing.onJsonChange}
+                onReset={sampleEditing.onReset}
                 sampleError={derived.sampleError}
                 check={variableCheck}
                 onDeclare={owns ? declareVariable : undefined}
-                templateId={isEdit ? template?.id : undefined}
-                onRecord={values =>
-                  setSampleEdits(current => ({
-                    values: {
-                      ...editedValues(current),
-                      ...recordValues(values, variables ?? []),
-                    },
-                  }))
-                }
+                templateId={savedIdOf(mode, template)}
+                onRecord={sampleEditing.onRecord}
               />
             )
           }

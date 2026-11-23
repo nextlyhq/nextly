@@ -55,7 +55,7 @@ export interface EmailSampleRecords {
 }
 
 /** The most records a list offers. */
-export const SAMPLE_RECORDS_LIMIT = 20;
+const SAMPLE_RECORDS_LIMIT = 20;
 
 /** The largest record a load hands back, as JSON text. */
 const MAX_RECORD_BYTES = 64 * 1024;
