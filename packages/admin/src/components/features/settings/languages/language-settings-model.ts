@@ -20,13 +20,24 @@ export function languageName(
   return languages.find(language => language.code === code)?.label ?? code;
 }
 
-/** A fallback list in words: "None", "English" or "Spanish, then English". */
+/**
+ * A fallback list in words: "None", "English" or "Spanish, then English". A
+ * language whose name another language shares is named with its code too,
+ * "English (en-US)", as the fallback picker names it.
+ */
 export function fallbackPhrase(
   languages: readonly LanguageView[],
   fallback: readonly string[]
 ): string {
   if (fallback.length === 0) return "None";
-  return fallback.map(code => languageName(languages, code)).join(", then ");
+  return fallback
+    .map(code => {
+      const name = languageName(languages, code);
+      const shared =
+        languages.filter(language => language.label === name).length > 1;
+      return shared ? `${name} (${code})` : name;
+    })
+    .join(", then ");
 }
 
 /** A count of stored items, in words. */

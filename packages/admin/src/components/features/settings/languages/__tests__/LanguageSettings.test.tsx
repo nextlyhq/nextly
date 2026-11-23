@@ -178,6 +178,24 @@ describe("Settings › Languages", () => {
     expect(within(row("Spanish")).queryByText("Default")).toBeNull();
   });
 
+  it("names a fallback with its code where two languages share its name", async () => {
+    await open({
+      lockedByConfig: true,
+      languages: [
+        language("en-GB", "English", 0, { isDefault: true }),
+        language("en-US", "English", 1, { fallback: ["en-GB"] }),
+        language("es", "Spanish", 2, { fallback: ["en-US", "en-GB"] }),
+        language("fr", "French", 3, { fallback: ["es"] }),
+      ],
+    });
+
+    expect(
+      within(row("Spanish")).getByText("English (en-US), then English (en-GB)")
+    ).toBeInTheDocument();
+    // A name no other language shares stays as it is.
+    expect(within(row("French")).getByText("Spanish")).toBeInTheDocument();
+  });
+
   it("shows the languages the configuration declares, read-only, in their order", async () => {
     await open({ ...THREE, lockedByConfig: true });
 
