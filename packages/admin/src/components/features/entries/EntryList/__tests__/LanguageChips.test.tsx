@@ -68,11 +68,15 @@ describe("LanguageChips", () => {
   });
 
   it.each([
-    ["English", "live", "Open in English, live"],
-    ["Spanish", "changes", "Open in Spanish, live, with unpublished changes"],
-    ["French", "outOfDate", "Open in French, out of date, live"],
-    ["German", "draft", "Open in German, draft"],
-    ["Arabic", "missing", "Open in Arabic, missing"],
+    ["English", "live", "Open in English (EN), live"],
+    [
+      "Spanish",
+      "changes",
+      "Open in Spanish (ES), live, with unpublished changes",
+    ],
+    ["French", "outOfDate", "Open in French (FR), out of date, live"],
+    ["German", "draft", "Open in German (DE), draft"],
+    ["Arabic", "missing", "Open in Arabic (AR), missing"],
   ])("draws %s as the %s chip, named in words", (_language, state, name) => {
     render(<LanguageChips translations={EVERY_STATE} onOpenLocale={vi.fn()} />);
     const chip = screen.getByRole("button", { name });
@@ -106,7 +110,9 @@ describe("LanguageChips", () => {
       />
     );
     expect(
-      chipState(screen.getByRole("button", { name: "Open in Spanish, draft" }))
+      chipState(
+        screen.getByRole("button", { name: "Open in Spanish (ES), draft" })
+      )
     ).toBe("draft");
   });
 
@@ -124,7 +130,7 @@ describe("LanguageChips", () => {
   it("draws plain chips, named, where there is nowhere to open", () => {
     render(<LanguageChips translations={EVERY_STATE} />);
     expect(screen.queryAllByRole("button")).toHaveLength(0);
-    expect(screen.getByText("Arabic, missing")).toBeInTheDocument();
+    expect(screen.getByText("Arabic (AR), missing")).toBeInTheDocument();
   });
 
   it("names the row's languages as a whole, the missing ones by name", () => {

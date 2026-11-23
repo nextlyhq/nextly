@@ -314,7 +314,7 @@ describe("the entry list's languages, drawn", () => {
     expect(
       within(screen.getByRole("table", { name: "Entries table" })).getByRole(
         "button",
-        { name: /^Open in Spanish, out of date/ }
+        { name: /^Open in Spanish \(ES\), out of date/ }
       )
     ).toBeInTheDocument();
     expect(

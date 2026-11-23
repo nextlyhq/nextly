@@ -123,21 +123,23 @@ test("shows each page's languages as chips, with the key", async ({ page }) => {
 
   const lantern = visibleRow(page, LANTERN_REVISED);
   await expect(
-    lantern.getByRole("button", { name: "Open in English, live" })
+    lantern.getByRole("button", { name: "Open in English (EN), live" })
   ).toBeVisible();
   await expect(
-    lantern.getByRole("button", { name: "Open in Spanish, out of date, live" })
+    lantern.getByRole("button", {
+      name: "Open in Spanish (ES), out of date, live",
+    })
   ).toBeVisible();
   await expect(
-    lantern.getByRole("button", { name: "Open in Arabic, missing" })
+    lantern.getByRole("button", { name: "Open in Arabic (AR), missing" })
   ).toBeVisible();
 
   const harbour = visibleRow(page, HARBOUR);
   await expect(
-    harbour.getByRole("button", { name: "Open in Spanish, missing" })
+    harbour.getByRole("button", { name: "Open in Spanish (ES), missing" })
   ).toBeVisible();
   await expect(
-    harbour.getByRole("button", { name: "Open in Arabic, live" })
+    harbour.getByRole("button", { name: "Open in Arabic (AR), live" })
   ).toBeVisible();
 
   const key = page.getByRole("list", { name: "Language key" });
@@ -149,6 +151,9 @@ test("shows each page's languages as chips, with the key", async ({ page }) => {
     /^Missing/,
   ]);
 
+  // Scanned with the search cleared: its clear button is the shared search
+  // field's, not this list's.
+  await page.locator("[data-entry-search-input]").fill("");
   await expectNoAxeViolations(page, { include: "main" });
 });
 
