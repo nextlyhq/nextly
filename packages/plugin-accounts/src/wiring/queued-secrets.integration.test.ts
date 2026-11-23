@@ -6,7 +6,7 @@
  * a site boots it, on core's own secrets, job runner and email service, on
  * each dialect. Only the email provider is the test's: a plugin's, stored
  * as the default, which hands the test the email a person would be sent,
- * and whose failures quote that whole email back.
+ * and whose failures quote its link back.
  *
  * @module wiring/queued-secrets.integration.test
  */
@@ -103,7 +103,8 @@ describe.each(getConfiguredTestDialects())(
 
     /**
      * A provider that hands the test each email, and fails when told to with
-     * an error, and a cause, that quote the whole email back.
+     * an error, and a cause, that quote the email's link back, as a provider
+     * refusing a link might.
      */
     const echoing = definePlugin({
       name: "echoing-mailer",
@@ -119,9 +120,10 @@ describe.each(getConfiguredTestDialects())(
             createAdapter: () => ({
               send: async ({ html }) => {
                 sends.push({ html });
+                const link = /href="([^"]+)"/.exec(html)?.[1] ?? "";
                 if ((answers.shift() ?? "sent") === "throws")
-                  throw new Error(`The provider refused: ${html}`, {
-                    cause: new Error(`It could not take ${html}`),
+                  throw new Error(`The provider refused ${link}`, {
+                    cause: new Error(`It could not take ${link}`),
                   });
                 return { success: true, messageId: "<sent@echo.example>" };
               },
@@ -262,7 +264,9 @@ describe.each(getConfiguredTestDialects())(
       const recorded = await deliveries(nextly);
       expect(recorded.failed).toHaveLength(1);
       expect(recorded.text).not.toContain(token);
-      expect(logged.some(line => line.includes("could not take"))).toBe(true);
+      expect(logged.filter(line => line.includes("could not take"))).toEqual([
+        expect.stringContaining("could not take [secret]"),
+      ]);
       expect(logged.filter(line => line.includes(token))).toEqual([]);
     });
 
