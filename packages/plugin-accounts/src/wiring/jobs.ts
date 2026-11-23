@@ -2,8 +2,20 @@ import { defineJob, type JobDefinition } from "@nextlyhq/plugin-sdk";
 
 import type { AccountsEmail } from "../flows/mail";
 
-/** The job that sends one queued email. Namespaced, since core reserves its own prefixes. */
-export const SEND_EMAIL_JOB = "accounts:send-email";
+/**
+ * The job that sends one queued email, its secrets queued by ref.
+ * Namespaced, since core reserves its own prefixes. A slug of its own, not
+ * the earlier one: an instance still running the earlier code during a
+ * deployment does not know it, and core leaves the job for an instance that
+ * does, rather than that instance sending the email with its links blank.
+ */
+export const SEND_EMAIL_JOB = "accounts:send-email-by-ref";
+
+/**
+ * The slug emails were queued under before their secrets were queued by
+ * ref, still run for the jobs queued then, which hold their links whole.
+ */
+export const SEND_EMAIL_JOB_BEFORE_REFS = "accounts:send-email";
 
 /** The job that keeps the plugin's tables swept. */
 export const SWEEP_JOB = "accounts:sweep";
@@ -39,10 +51,13 @@ export interface SendAttempt {
  * nothing more.
  */
 export function sendEmailJob(
-  send: (email: QueuedAccountsEmail, attempt: SendAttempt) => Promise<void>
+  send: (email: QueuedAccountsEmail, attempt: SendAttempt) => Promise<void>,
+  slug:
+    | typeof SEND_EMAIL_JOB
+    | typeof SEND_EMAIL_JOB_BEFORE_REFS = SEND_EMAIL_JOB
 ): JobDefinition {
   return defineJob({
-    slug: SEND_EMAIL_JOB,
+    slug,
     retry: { maxAttempts: SEND_ATTEMPTS },
     handler: async (input, context) => {
       const email = input?.email;

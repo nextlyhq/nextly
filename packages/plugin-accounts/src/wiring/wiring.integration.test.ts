@@ -30,7 +30,12 @@ import { recordEmailSent } from "../storage/sent-emails";
 import { startSession } from "../storage/sessions";
 import { TEST_ORIGIN } from "../test-support/boot";
 
-import { SEND_EMAIL_JOB, sendEmailJob, SWEEP_JOB } from "./jobs";
+import {
+  SEND_EMAIL_JOB,
+  SEND_EMAIL_JOB_BEFORE_REFS,
+  sendEmailJob,
+  SWEEP_JOB,
+} from "./jobs";
 import { accountPrincipals, sendQueuedEmail, sweepAll } from "./runtime";
 import { accountsServices } from "../server/installed";
 import { bootAccounts } from "../test-support/boot";
@@ -87,6 +92,7 @@ describe.each(getConfiguredTestDialects())(
 
       expect(plugin.contributes?.jobs?.map(job => job.slug)).toEqual([
         SEND_EMAIL_JOB,
+        SEND_EMAIL_JOB_BEFORE_REFS,
         SWEEP_JOB,
       ]);
       expect(plugin.contributes?.events).toEqual([

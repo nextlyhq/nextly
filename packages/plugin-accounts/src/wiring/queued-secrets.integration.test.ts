@@ -2,14 +2,20 @@
  * A queued email's one-time link is never at rest in core's jobs table: not
  * in the job's input when it is queued, not after it is sent, and not in the
  * error a failed send leaves on the row, however many times it fails. Nor
- * in a log line along the way. The plugin runs as a site boots it, on
- * core's own secrets and core's own job runner, on each dialect; only the
- * email provider is a stand-in, which hands the test the link a person
- * would be sent.
+ * on a delivery record, nor in a log line along the way. The plugin runs as
+ * a site boots it, on core's own secrets, job runner and email service, on
+ * each dialect. Only the email provider is the test's: a plugin's, stored
+ * as the default, which hands the test the email a person would be sent,
+ * and whose failures quote that whole email back.
  *
  * @module wiring/queued-secrets.integration.test
  */
-import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import {
+  defineEmailProvider,
+  definePlugin,
+  type PluginContext,
+  type PluginEmailTemplate,
+} from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -26,10 +32,17 @@ import { TEST_ORIGIN } from "../test-support/boot";
 
 import { SEND_EMAIL_JOB } from "./jobs";
 
-/** What one send was handed, and how the stand-in provider answers it. */
+/** What one send handed the provider: the email's body. */
 interface Send {
-  slug: string;
-  variables: Record<string, unknown>;
+  html: string;
+}
+
+/** The part of the email template service a start uses to store owners' templates. */
+interface TemplateOwners {
+  configureOwnership(input: {
+    plugins: Array<{ name: string; templates: readonly PluginEmailTemplate[] }>;
+  }): void;
+  ensureBuiltInTemplates(): Promise<void>;
 }
 
 /** Every line logged while a test runs, by core, the plugin or the console. */
@@ -49,6 +62,11 @@ function keepingLogger(prefix: string) {
     warn: keep("warn"),
     error: keep("error"),
   };
+}
+
+/** The token the first link in an email's body carries. */
+function tokenInBody(html: string): string {
+  return tokenIn(/href="([^"]+)"/.exec(html)?.[1]);
 }
 
 /** The token a link carries. */
@@ -84,10 +102,39 @@ describe.each(getConfiguredTestDialects())(
     });
 
     /**
-     * Boots the plugin on core's own secrets and job runner. The plugin's
-     * context is the one core built, but for its email service's
-     * `sendWithTemplate`, which records the send in place of a provider,
-     * and its logger, which keeps every line.
+     * A provider that hands the test each email, and fails when told to with
+     * an error, and a cause, that quote the whole email back.
+     */
+    const echoing = definePlugin({
+      name: "echoing-mailer",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      contributes: {
+        emailProviders: [
+          defineEmailProvider({
+            type: "echoing-mailer",
+            label: "Echoing Mailer",
+            configFields: [],
+            parseConfig: () => ({}),
+            createAdapter: () => ({
+              send: async ({ html }) => {
+                sends.push({ html });
+                if ((answers.shift() ?? "sent") === "throws")
+                  throw new Error(`The provider refused: ${html}`, {
+                    cause: new Error(`It could not take ${html}`),
+                  });
+                return { success: true, messageId: "<sent@echo.example>" };
+              },
+            }),
+          }),
+        ],
+      },
+    });
+
+    /**
+     * Boots the plugin on core's own secrets, job runner and email service,
+     * the echoing provider the default. The plugin's context is the one core
+     * built, but for its logger, which keeps every line.
      */
     async function boot(): Promise<{
       ctx: PluginContext;
@@ -99,30 +146,11 @@ describe.each(getConfiguredTestDialects())(
         dialect,
         logger: keepingLogger("core"),
         plugins: [
+          echoing,
           {
             ...plugin,
             init: async (ctx: PluginContext) => {
-              const email = Object.create(ctx.services.email, {
-                sendWithTemplate: {
-                  value: async (
-                    slug: string,
-                    _to: string,
-                    variables: Record<string, unknown>
-                  ) => {
-                    sends.push({ slug, variables });
-                    if ((answers.shift() ?? "sent") === "throws")
-                      throw new Error(
-                        `The provider refused: ${JSON.stringify(variables)}`
-                      );
-                    return { success: true };
-                  },
-                },
-              }) as PluginContext["services"]["email"];
-              const services = Object.create(ctx.services, {
-                email: { value: email },
-              }) as PluginContext["services"];
               const watched = Object.create(ctx, {
-                services: { value: services },
                 logger: { value: keepingLogger("plugin") },
               }) as PluginContext;
               await plugin.init?.(watched);
@@ -133,7 +161,42 @@ describe.each(getConfiguredTestDialects())(
       });
       current = nextly;
       if (captured === undefined) throw new Error("the plugin did not start");
+      // What a real start does after boot, which the test instance does not:
+      // store the plugin's own templates, read from its contributions.
+      const owners = nextly.getService(
+        "emailTemplateService"
+      ) as unknown as TemplateOwners;
+      owners.configureOwnership({
+        plugins: [
+          {
+            name: plugin.name,
+            templates: plugin.contributes?.emailTemplates ?? [],
+          },
+        ],
+      });
+      await owners.ensureBuiltInTemplates();
+      await nextly.nextly.emailProviders.create({
+        data: {
+          name: "Echoing",
+          type: "echoing-mailer",
+          fromEmail: "site@shop.example.com",
+          configuration: {},
+          isDefault: true,
+        },
+      });
       return { ctx: captured, nextly };
+    }
+
+    /** Every delivery record, every column, as text, and the failed ones. */
+    async function deliveries(nextly: TestNextly) {
+      const all = await nextly.adapter.select<Record<string, unknown>>(
+        "email_deliveries",
+        {}
+      );
+      return {
+        failed: all.filter(row => row.status === "failed"),
+        text: JSON.stringify(all),
+      };
     }
 
     /** One pass of core's job runner, at `offsetMs` past now, keeping every finished row. */
@@ -149,17 +212,19 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
-    /** The plugin's email jobs, every column of every row, as text. */
+    /**
+     * The plugin's email jobs, and every column of every row of the jobs
+     * table, whatever its job, as text.
+     */
     async function emailJobs(nextly: TestNextly) {
-      const rows = await nextly.adapter.select<Record<string, unknown>>(
+      const all = await nextly.adapter.select<Record<string, unknown>>(
         "nextly_jobs",
-        {
-          where: {
-            and: [{ column: "slug", op: "=", value: SEND_EMAIL_JOB }],
-          },
-        }
+        {}
       );
-      return { rows, text: JSON.stringify(rows) };
+      return {
+        rows: all.filter(row => row.slug === SEND_EMAIL_JOB),
+        text: JSON.stringify(all),
+      };
     }
 
     it("keeps an invitation's link out of its job's row and every log, queued, failed and sent", async () => {
@@ -182,23 +247,22 @@ describe.each(getConfiguredTestDialects())(
       await runJobs(nextly, 0);
       const failed = await emailJobs(nextly);
       expect(failed.rows[0]).toMatchObject({ state: "pending" });
-      expect(String(failed.rows[0]?.lastError)).toContain("provider refused");
+      expect(String(failed.rows[0]?.lastError)).toContain("did not send");
       expect(failed.text).not.toContain(token);
 
       // Its retry sends the link the invitation was issued with.
       await runJobs(nextly, 60_000);
-      expect(sends.map(send => send.slug)).toEqual([
-        "accounts-invitation",
-        "accounts-invitation",
-      ]);
-      expect(sends.map(send => tokenIn(send.variables.link))).toEqual([
-        token,
-        token,
-      ]);
+      expect(sends.map(send => tokenInBody(send.html))).toEqual([token, token]);
       const sent = await emailJobs(nextly);
       expect(sent.rows[0]).toMatchObject({ state: "done" });
       expect(sent.text).not.toContain(token);
 
+      // The failed attempt is recorded, and logged with the provider's own
+      // words, but never the link it quoted.
+      const recorded = await deliveries(nextly);
+      expect(recorded.failed).toHaveLength(1);
+      expect(recorded.text).not.toContain(token);
+      expect(logged.some(line => line.includes("could not take"))).toBe(true);
       expect(logged.filter(line => line.includes(token))).toEqual([]);
     });
 
@@ -215,7 +279,7 @@ describe.each(getConfiguredTestDialects())(
 
       // The first invitation's link was voided by the second: its email is
       // not sent, as its link would be refused, and its job ends.
-      expect(sends.map(send => tokenIn(send.variables.link))).toEqual([
+      expect(sends.map(send => tokenInBody(send.html))).toEqual([
         tokenIn(newer.link),
       ]);
       const jobs = await emailJobs(nextly);
@@ -255,15 +319,18 @@ describe.each(getConfiguredTestDialects())(
       for (let pass = 0; pass < 5; pass += 1)
         await runJobs(nextly, pass * 30_000);
       expect(sends).toHaveLength(5);
-      const token = tokenIn(sends[0]?.variables.link);
-      expect(sends.map(send => tokenIn(send.variables.link))).toEqual(
+      const token = tokenInBody(sends[0]?.html ?? "");
+      expect(sends.map(send => tokenInBody(send.html))).toEqual(
         Array.from({ length: 5 }, () => token)
       );
 
       const gaveUp = await emailJobs(nextly);
       expect(gaveUp.rows[0]).toMatchObject({ state: "failed" });
-      expect(String(gaveUp.rows[0]?.lastError)).toContain("provider refused");
+      expect(String(gaveUp.rows[0]?.lastError)).toContain("did not send");
       expect(gaveUp.text).not.toContain(token);
+      const recorded = await deliveries(nextly);
+      expect(recorded.failed).toHaveLength(5);
+      expect(recorded.text).not.toContain(token);
       expect(logged.filter(line => line.includes(token))).toEqual([]);
     });
   }
