@@ -11,7 +11,7 @@
  *   released across a read of its registry row `FOR SHARE`, which then lasts until the write's
  *   transaction ends.
  * - PostgreSQL: the entity's advisory lock, shared (`shareEntityOnPostgres`), until the write's
- *   transaction ends; then the same registry read.
+ *   transaction ends; then a plain read of its registry row, the lock being the hold.
  * - SQLite: the entity's lock in this process (`shareEntityInProcess`), which `entryTransaction`
  *   takes before the write's transaction opens; a write on a transaction already open is refused
  *   while a save holds it (`refuseWhileHeldInProcess`).
@@ -139,20 +139,49 @@ export async function holdEntityForWrite(
   } else if (dialect === "sqlite" && options?.sharedInProcess !== true) {
     refuseWhileHeldInProcess(adapter, entity);
   }
+  // The registry row as it stands once held: on MySQL the share side's own read, `FOR SHARE`;
+  // elsewhere a plain read, the entity's lock being the hold, so concurrent writes lock no row of
+  // the registry.
+  const row =
+    dialect === "mysql"
+      ? await heldRegistryRowOnMysql(tx, entity, holder)
+      : await tx.selectOne<{ id: unknown; schema_version: unknown }>(
+          "dynamic_collections",
+          {
+            columns: ["id", "schema_version"],
+            where: { and: [{ column: "slug", op: "=", value: entity.slug }] },
+          }
+        );
+  if (loaded !== undefined) {
+    await refuseChanged(tx, entity, loaded, {
+      present: row !== null && row !== undefined,
+      id: row === null || row === undefined ? undefined : String(row.id),
+      version:
+        row === null || row === undefined
+          ? undefined
+          : Number(row.schema_version),
+    });
+  }
+  if (held === undefined) heldIn.set(tx, new Set([key]));
+  else held.add(key);
+}
+
+/** The collection's registry row read by MySQL's share side (`holdCollectionsIn`), or none. */
+async function heldRegistryRowOnMysql(
+  tx: TransactionContext,
+  entity: EntityRef,
+  holder: CollectionHolder
+): Promise<{ id: unknown; schema_version: unknown } | undefined> {
   const { existing, ids, versions } = await holder.holdCollectionsIn(
     tx,
     [entity.slug],
     "share"
   );
-  if (loaded !== undefined) {
-    await refuseChanged(tx, entity, loaded, {
-      present: existing.includes(entity.slug),
-      id: ids.get(entity.slug),
-      version: versions.get(entity.slug),
-    });
-  }
-  if (held === undefined) heldIn.set(tx, new Set([key]));
-  else held.add(key);
+  if (!existing.includes(entity.slug)) return undefined;
+  return {
+    id: ids.get(entity.slug),
+    schema_version: versions.get(entity.slug),
+  };
 }
 
 /**

@@ -36,6 +36,8 @@ function refusedAtTheHold() {
   const mutation = {
     resolveTransitionAuthorization: vi.fn(async () => undefined),
     warmLocalizedReadiness: vi.fn(async () => undefined),
+    // The registry row the batch is made for, read before its transaction opens.
+    loadedRegistryRowFor: vi.fn(async () => undefined),
     entryTransaction: vi.fn(async () => {
       throw refusal;
     }),

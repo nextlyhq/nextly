@@ -161,6 +161,9 @@ export function createMockAdapter(db: MockRecord): MockRecord {
           getDrizzle: () => db,
           lockRow: vi.fn().mockResolvedValue(undefined),
           execute: vi.fn().mockResolvedValue([]),
+          // The collection's hold, which an entry write takes first in its transaction: on
+          // PostgreSQL its advisory lock, got at once here, as no save holds it.
+          queryStatement: vi.fn().mockResolvedValue([{ held: true }]),
           selectOne: vi.fn().mockResolvedValue(null),
           // No pending versions row: a delete reads them on the transaction
           // for the languages it removes. A write reads back the entry's

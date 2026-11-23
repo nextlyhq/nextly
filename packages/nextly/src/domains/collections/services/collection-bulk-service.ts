@@ -1778,7 +1778,13 @@ export class CollectionBulkService extends BaseService {
             state
           );
         },
-        { isolationLevel: "read committed" }
+        { isolationLevel: "read committed" },
+        // Compared, under the hold, with the registry row the batch was made for: a field its
+        // entries set that a save removed while it waited is refused by name.
+        await this.mutationService.loadedRegistryRowFor(
+          params.collectionName,
+          entries
+        )
       );
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case). Any outbox events an
@@ -2076,7 +2082,13 @@ export class CollectionBulkService extends BaseService {
             state
           );
         },
-        { isolationLevel: "read committed" }
+        { isolationLevel: "read committed" },
+        // Compared, under the hold, with the registry row the batch was made for: a field its
+        // entries set that a save removed while it waited is refused by name.
+        await this.mutationService.loadedRegistryRowFor(
+          params.collectionName,
+          entries.map(entry => entry.data)
+        )
       );
       committed = true;
     } catch (error: unknown) {
@@ -2408,7 +2420,8 @@ export class CollectionBulkService extends BaseService {
           callbackThrew = true;
           throw innerError;
         }
-      });
+        // Compared, under the hold, with the registry row the batch was made for.
+      }, undefined, await this.mutationService.loadedRegistryRowFor(params.collectionName));
       committed = true;
     } catch (error: unknown) {
       // The shared transaction rolled back — either stopOnError tripped on a

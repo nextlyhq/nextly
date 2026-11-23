@@ -134,6 +134,9 @@ describe("a create", () => {
         fn({
           getDrizzle: () => mockDb,
           lockRow: vi.fn().mockResolvedValue(undefined),
+          // The collection's hold an entry write takes first: on PostgreSQL its advisory lock, got
+          // at once here, as no save holds it.
+          queryStatement: vi.fn().mockResolvedValue([{ held: true }]),
           execute: vi.fn().mockResolvedValue([]),
           selectOne: vi.fn().mockResolvedValue(null),
           select: revisionReadingSelect(),

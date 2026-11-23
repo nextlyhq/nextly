@@ -6561,7 +6561,8 @@ export class CollectionMutationService extends BaseService {
           );
         }
         return removed;
-      })
+        // Compared, under the hold, with the registry row this discard loaded.
+      }, undefined, loadedRegistryRowOf(collection))
       .catch(async (error: unknown) => {
         // Out of date: answered after the rollback, from the entry as it is now.
         const refused = await this.refusalAfterRollback(
@@ -6659,11 +6660,16 @@ export class CollectionMutationService extends BaseService {
       );
       judging = await this.pendingChangeJudging(params, collection);
       const judged = judging;
-      const took = await this.entryTransaction(params.collectionName, tx =>
-        this.takeLiveInTx(tx, collection, params, grants, {
-          judging: judged,
-          holder: staleWrite,
-        })
+      // Compared, under the hold, with the registry row this take loaded.
+      const took = await this.entryTransaction(
+        params.collectionName,
+        tx =>
+          this.takeLiveInTx(tx, collection, params, grants, {
+            judging: judged,
+            holder: staleWrite,
+          }),
+        undefined,
+        loadedRegistryRowOf(collection)
       );
       if (!took) {
         throw NextlyError.notFound({
@@ -6951,28 +6957,34 @@ export class CollectionMutationService extends BaseService {
         params.authenticatedScope
       );
       const actor = actorForWrite(call.actor, params.user);
-      const done = await this.entryTransaction(params.collectionName, tx =>
-        this.rewriteFieldInTx(tx, {
-          call,
-          params,
-          collection,
-          fields,
-          tableName,
-          field: field.name,
-          localized,
-          translatedIn: translated ? (locale ?? null) : undefined,
-          languageStatusTable:
-            languageStatus && companion
-              ? {
-                  table: companion.table,
-                  companionTableName: companion.companionTableName,
-                }
-              : null,
-          check,
-          staleWrite,
-          grants,
-          actor,
-        })
+      // Compared, under the hold, with the registry row this rewrite loaded: the field it writes,
+      // removed by a save while it waited, is refused by name.
+      const done = await this.entryTransaction(
+        params.collectionName,
+        tx =>
+          this.rewriteFieldInTx(tx, {
+            call,
+            params,
+            collection,
+            fields,
+            tableName,
+            field: field.name,
+            localized,
+            translatedIn: translated ? (locale ?? null) : undefined,
+            languageStatusTable:
+              languageStatus && companion
+                ? {
+                    table: companion.table,
+                    companionTableName: companion.companionTableName,
+                  }
+                : null,
+            check,
+            staleWrite,
+            grants,
+            actor,
+          }),
+        undefined,
+        loadedRegistryRowOf(collection, { [field.name]: true })
       );
       committed = true;
       // Answered once durable: a release holding the entry is judged again,
@@ -12612,7 +12624,8 @@ export class CollectionMutationService extends BaseService {
         // written and before it commits: a publish only, since an unpublish closes no review. A
         // gate that finds what it judged has changed throws, and the whole move rolls back.
         if (gateVerdict !== undefined) await gateVerdict.settle();
-      }, transactionOptions);
+        // Compared, under the hold, with the registry row this move loaded.
+      }, transactionOptions, loadedRegistryRowOf(publishCollection));
 
       // The entry was deleted out from under the publish: nothing was written or
       // recorded, so answer not-found rather than a success for absent content.
@@ -19622,7 +19635,9 @@ export class CollectionMutationService extends BaseService {
         // written and before it commits; a gate that finds what it judged has changed throws, and
         // the save rolls back.
         if (settleGate) await settleGate();
-      }, transactionOptions);
+        // Compared, under the hold, with the registry row this update loaded its fields from: a
+        // field it sets that a save removed while it waited is refused by name.
+      }, transactionOptions, loadedRegistryRowOf(collection, body));
       // The transaction committed (skipped if the retry ultimately threw), so
       // the event is durable; a later hook failure must not hide the delivery.
       eventRecorded = recorded;
@@ -21953,7 +21968,9 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: sharedContext,
         });
-      }, transactionOptions);
+        // Compared, under the hold, with the registry row this delete loaded: a collection
+        // deleted or made again under its slug while it waited is refused.
+      }, transactionOptions, loadedRegistryRowOf(collection));
       // Set only after the transaction resolves: `deletedRow` is true exactly
       // when the delete committed, so a commit failure never flags a durable
       // event that isn't there; a later hook failure must not hide it. `recorded`
@@ -22247,6 +22264,11 @@ export class CollectionMutationService extends BaseService {
           return accessDenied;
         }
       }
+      // Held for the write before it reads the collection or its table, against a Builder save
+      // deleting the collection's field values (`holdEntityForWrite`): the definition is then read
+      // as the save left it, and the write never holds a read of the table a save waits on while
+      // it waits for the save. Nothing more where the caller's transaction already holds it.
+      await this.holdForEntryWrite(tx, params.collectionName);
       // Get collection metadata to identify relation fields. Runs on the
       // caller's transaction connection so this per-entry read does not re-enter
       // the pool from inside the transaction (which can stall against a small pool).
@@ -22631,10 +22653,6 @@ export class CollectionMutationService extends BaseService {
       // nothing but the whole transaction can take the row back: a failure once
       // it is written is marked a write-integrity failure, so a batch aborts and
       // rolls back rather than carrying on and committing it.
-      // Held for the write before its row is written, on MySQL, against a Builder save deleting
-      // the collection's field values (`holdEntityForWrite`); nothing where the caller's
-      // transaction already holds it.
-      await this.holdForEntryWrite(tx, params.collectionName);
       const undoesAlone = takesSavepoints(tx);
       const { entry, createEffects } = await underSavepoint(tx, async () => {
         // Insert using transaction context
@@ -22957,6 +22975,19 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The registry row a batch write is made for (`loadedRegistryRowOf`), read before its
+   * transaction opens, with the fields its items' data set (`items`): compared, under the batch's
+   * hold, with the row held (`entryTransaction`'s `loaded`).
+   */
+  async loadedRegistryRowFor(
+    collectionName: string,
+    items: readonly Readonly<Record<string, unknown>>[] = []
+  ): Promise<LoadedRegistryRow | undefined> {
+    const row = await this.collectionService.getCollection(collectionName);
+    return loadedRegistryRowOf(row, Object.assign({}, ...items));
+  }
+
+  /**
    * Holds collection `collectionName` for an entry write in `tx` (`holdEntityForWrite`): before
    * the write's first row statement, once per transaction.
    */
@@ -23154,6 +23185,16 @@ export class CollectionMutationService extends BaseService {
     // written row is matched against each again before the write may stand.
     const filteredWrites: FilteredTransactionWrite[] = [];
     try {
+      // Held for the write before it reads the collection or its table, against a Builder save
+      // deleting the collection's field values (`holdEntityForWrite`): the definition is then read
+      // as the save left it, and the write never holds a read of the table a save waits on while
+      // it waits for the save. Before the row lock, so before the before-hooks too: they, the
+      // workflow's publish gate and the rule withdrawing an approval on an edit read the locked
+      // current row, and the hold comes before the entry's row in every write. The share side
+      // holds up no other entry write; while the hooks run it can only lengthen a deleting save's
+      // wait, which ends at the hold's 30 seconds. Nothing more where the caller's transaction
+      // already holds it.
+      await this.holdForEntryWrite(tx, params.collectionName);
       // Get collection metadata to identify relation fields. Runs on the
       // caller's transaction connection so this per-entry read does not re-enter
       // the pool from inside the transaction (which can stall against a small pool).
@@ -23210,15 +23251,6 @@ export class CollectionMutationService extends BaseService {
       // than per row, so the fetch is by id alone and the access service holds
       // the whole verdict.
       const fetchWhere = this.whereEq("id", entryId);
-
-      // Held for the write before its row is locked, on MySQL, against a Builder save deleting
-      // the collection's field values (`holdEntityForWrite`); nothing where the caller's
-      // transaction already holds it. Before the row lock, so before the before-hooks too: they,
-      // the workflow's publish gate and the rule withdrawing an approval on an edit read the
-      // locked current row, and the hold comes before the entry's row in every write. The share
-      // side holds up no other entry write; while the hooks run it can only lengthen a deleting
-      // save's wait, which ends at the hold's 30 seconds.
-      await this.holdForEntryWrite(tx, params.collectionName);
 
       // Fetch existing entry first (needed for owner checks and hooks). Lock the
       // row (`forUpdate`, a no-op on SQLite, which already serializes writers) so
@@ -24933,6 +24965,11 @@ export class CollectionMutationService extends BaseService {
     // database to migrate, whose remedy (send it again) would repeat it.
     let rowWritten = false;
     try {
+      // Held for the write before it reads the collection or its table, against a Builder save
+      // deleting the collection's field values (`holdEntityForWrite`): the definition is then read
+      // as the save left it, and the write never holds a read of the table a save waits on while
+      // it waits for the save. Nothing more where the caller's transaction already holds it.
+      await this.holdForEntryWrite(tx, params.collectionName);
       // Get collection metadata early. Runs on the caller's transaction
       // connection so this read does not re-enter the pool from inside the
       // transaction (which can stall against a small pool).
@@ -25090,10 +25127,6 @@ export class CollectionMutationService extends BaseService {
       // make the event describe values other than the row this delete removes.
       // The adapter no-ops the lock where row locking is unavailable (SQLite,
       // itself serialized).
-      // Held for the write before its row is locked, on MySQL, against a Builder save deleting
-      // the collection's field values (`holdEntityForWrite`); nothing where the caller's
-      // transaction already holds it.
-      await this.holdForEntryWrite(tx, params.collectionName);
       await tx.lockRow(tableName, entryId);
       const freshEntry = await tx.selectOne<Record<string, unknown>>(
         tableName,
