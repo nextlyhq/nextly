@@ -15,6 +15,7 @@ import { WORKFLOW_SETTINGS_READ } from "@admin/components/features/settings/work
 import {
   Activity,
   Key,
+  Languages,
   Mail,
   Settings,
   ShieldAlert,
@@ -115,6 +116,16 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         // Read by whoever may read settings or change them, as the server's
         // workflow settings routes are, so the link and the page agree.
         gate: { kind: "anyOf", permissions: WORKFLOW_SETTINGS_READ },
+      },
+      {
+        id: "languages",
+        label: "Languages",
+        icon: Languages,
+        href: ROUTES.SETTINGS_LANGUAGES,
+        // What the languages route asks to read them, so the link and the
+        // page agree. A one-language site has it too: it is where a second
+        // language is added.
+        gate: { kind: "permission", permission: READ_SETTINGS },
       },
     ],
   },
