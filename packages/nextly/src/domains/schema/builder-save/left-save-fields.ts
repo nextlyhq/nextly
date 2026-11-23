@@ -28,6 +28,7 @@ import { getService } from "../../../di/service-access";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { isProductionRuntime } from "../../../shared/builder-refusal";
+import { isMissingTable } from "../../field-groups/migration/session";
 import { toSnakeCase } from "../field-rules";
 import { readSchemaLockState } from "../pipeline/schema-lock";
 
@@ -130,12 +131,19 @@ async function heldFieldsOf(args: {
   if (isProductionRuntime()) return undefined;
   const dialect = args.adapter.getCapabilities().dialect;
   if (dialect !== "mysql") return undefined;
-  const row = await readSaveInProgressOf(
-    args.tx ?? args.adapter.getDrizzle(),
-    dialect,
-    args.kind,
-    args.slug
-  );
+  let row: Awaited<ReturnType<typeof readSaveInProgressOf>>;
+  try {
+    row = await readSaveInProgressOf(
+      args.tx ?? args.adapter.getDrizzle(),
+      dialect,
+      args.kind,
+      args.slug
+    );
+  } catch (error) {
+    // A database whose meta table is not made yet holds no record of any save.
+    if (isMissingTable(error, dialect)) return undefined;
+    throw error;
+  }
   // A save made outside development leaves its files for `nextly migrate` and changes no table.
   if (row === undefined || ("record" in row && row.record.applies === false)) {
     await restoreRunningTables(args);
