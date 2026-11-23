@@ -865,8 +865,13 @@ async function connect(
             { config: installing, configPath },
             context.logger,
             // The plugin being installed, whatever its record says until this
-            // transaction writes it: a reinstall declares it again.
-            { pluginsAsGiven: true }
+            // transaction writes it: a reinstall declares it again. The preset
+            // grants are set over every stored permission, so they read every
+            // opening the whole configuration declares, not only this plugin's.
+            {
+              pluginsAsGiven: true,
+              presetsDeclaredBy: { ...config, plugins: definitions },
+            }
           )
         );
       };

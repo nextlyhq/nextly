@@ -35,8 +35,12 @@ export interface TabStructuredData {
   /** What keeps the type's markup out, each in one sentence. */
   problems: {
     message: string;
-    /** Where it is fixed: the page's content, the mapping, the route or the settings. */
-    fix: "content" | "mapping" | "route" | "settings";
+    /**
+     * Where it is fixed: the page's content, the mapping, the route, the
+     * settings, or saving or publishing the page, for one of the entry's own
+     * dates.
+     */
+    fix: "content" | "mapping" | "route" | "settings" | "save";
     /** The page's field the detail is read from, and what it is called. */
     field?: { name: string; label: string };
   }[];

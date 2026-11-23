@@ -210,6 +210,22 @@ const NEW_TEMPLATE_DEFAULTS = {
   description: null,
 };
 
+/**
+ * A written draft's code, as its blocks compile through the same step a
+ * render and a conversion to code take, so what an editor shows is what
+ * converting would store. Nothing for a coded draft.
+ */
+function writtenSource(draft: TemplateFields): Pick<DraftPreview, "source"> {
+  if (draft.format !== "written" || !draft.blocks) return {};
+  const compiled = fromBlocks(draft);
+  return {
+    source: {
+      html: compiled.htmlContent,
+      text: compiled.plainTextContent ?? "",
+    },
+  };
+}
+
 function orDefault<K extends keyof typeof NEW_TEMPLATE_DEFAULTS>(
   data: CreateEmailTemplateInput,
   key: K
@@ -2603,6 +2619,7 @@ export class EmailTemplateService extends BaseService {
       from: draft.fromOverride
         ? previewFrom(draft.fromOverride, sampleData)
         : null,
+      ...writtenSource(draft),
     };
   }
 

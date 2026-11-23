@@ -682,6 +682,29 @@ function codeBrandOption(options: SeoPluginOptions): StructuredDataBrand {
   ) as StructuredDataBrand;
 }
 
+/** Every built-in preset role, by slug. */
+const PRESET_ROLES = ["admin", "editor", "author", "viewer"] as const;
+
+/** A collection as `contributes.collections` takes it. */
+type ContributedCollection = NonNullable<
+  PluginContributions["collections"]
+>[number];
+
+/**
+ * `collection`, open to every preset role, each by its own rule (an Author
+ * does not delete, a Viewer reads), as before collections started closed to
+ * them: a new site's editors keep its redirects. One that already says which
+ * presets it is open to keeps its own word.
+ */
+function openToPresetRoles(
+  collection: ContributedCollection
+): ContributedCollection {
+  return {
+    ...collection,
+    grants: collection.grants ?? { presets: PRESET_ROLES },
+  };
+}
+
 /**
  * How the Proxy answers an address made Gone: with the site's own page,
  * named as an address from the site's root, where the site names one.
@@ -880,6 +903,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     }),
     // The redirects whose From addresses the address record holds, the log
     // of addresses not found, and what the problem list's checks found.
+    // Each open to every preset role, by its own rule, as before collections
+    // started closed to them (`openToPresetRoles`).
     collections: [
       // The collection the address record was kept in before it moved to the
       // plugin's own tables. Still declared so the rows a site already has
@@ -898,7 +923,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // What each entry's or Single's route supplies in code for its head,
       // which the SEO tab, bulk edit and the problem list read.
       routeValuesCollection(),
-    ],
+    ].map(openToPresetRoles),
     // The plugin's own tables, for bookkeeping written in one statement:
     // the log of addresses not found.
     schema: seoSchema,

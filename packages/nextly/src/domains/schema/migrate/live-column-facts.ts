@@ -460,7 +460,8 @@ function keyWordsBefore(before: readonly unknown[]): boolean {
   ) {
     end -= 3;
   }
-  if (["ASC", "DESC"].includes(String(before[end - 1]))) end -= 1;
+  // A quoted name is a token object, never one of these words.
+  if (before[end - 1] === "ASC" || before[end - 1] === "DESC") end -= 1;
   return before[end - 1] === "KEY" && before[end - 2] === "PRIMARY";
 }
 

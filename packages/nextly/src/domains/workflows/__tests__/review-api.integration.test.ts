@@ -709,11 +709,43 @@ describe.each(getConfiguredTestDialects())(
             id: "carol",
           });
 
+          // Its stages by name and label, which a list filters by, and its steps by name, label
+          // and kind: a list takes the workflow's one step of a kind in bulk (Submit for review,
+          // Send back), and never an approval.
           expect(held.workflow).toEqual({
             slug: "editorial",
             label: "Editorial",
+            stages: editorial.stages.map(stage => ({
+              name: stage.name,
+              label: stage.label,
+            })),
+            steps: editorial.steps.map(step => ({
+              name: step.name,
+              label: step.label,
+              kind: step.kind,
+            })),
           });
           expect(free.workflow).toBeNull();
+
+          // A stage's label saved in Settings is the label the schema read names it by, as
+          // every other surface shows it, so a list's stage filter agrees with its Review column.
+          await writeWorkflowSettings(
+            stateDb(app()),
+            "editorial",
+            { stages: { legal: { label: "Lawyers" } } },
+            null,
+            null
+          );
+          const relabelled = await rest(
+            "GET",
+            ["collections", "schema", PAGES],
+            ALICE
+          );
+          expect(
+            (relabelled.workflow as { stages: Doc[] }).stages.find(
+              stage => stage.name === "legal"
+            )
+          ).toEqual({ name: "legal", label: "Lawyers" });
 
           // A visitor is refused the read, so the workflow is never named to one.
           const anonymous = await createDynamicHandlers().GET(
@@ -742,9 +774,19 @@ describe.each(getConfiguredTestDialects())(
             id: "dana",
           });
 
+          // The same summary a collection's schema read names: stages and steps included.
           expect(read.workflow).toEqual({
             slug: "editorial",
             label: "Editorial",
+            stages: editorial.stages.map(stage => ({
+              name: stage.name,
+              label: stage.label,
+            })),
+            steps: editorial.steps.map(step => ({
+              name: step.name,
+              label: step.label,
+              kind: step.kind,
+            })),
           });
           // The exported schema helper a site can mount names it the same way.
           const mounted = await getSchema(
@@ -760,6 +802,15 @@ describe.each(getConfiguredTestDialects())(
           expect(((await mounted.json()) as Doc).workflow).toEqual({
             slug: "editorial",
             label: "Editorial",
+            stages: editorial.stages.map(stage => ({
+              name: stage.name,
+              label: stage.label,
+            })),
+            steps: editorial.steps.map(step => ({
+              name: step.name,
+              label: step.label,
+              kind: step.kind,
+            })),
           });
 
           // A visitor is refused the read, so the workflow is never named to one.

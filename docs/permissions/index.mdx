@@ -24,6 +24,60 @@ Because grants are per-resource, a role can be narrow in a way that is actually 
 release manager who may schedule releases without holding a general read grant over
 everything.
 
+### The preset roles reach a collection only once it is opened to them
+
+Nextly comes with four preset roles, Admin, Editor, Author and Viewer, whose grants are
+rules rather than lists: Admin holds everything but changing roles, permissions and users;
+Editor full control of content and media; Author creates and edits content without
+publishing or deleting it; Viewer reads content and media, but not the staff accounts or the
+API keys. Super-admins hold every permission.
+
+A collection reaches a preset only once it is opened to that preset by name. Until then,
+whether it comes from your code, the Schema Builder or a plugin, only super-admins and the
+roles you grant it to by name reach it, so adding a collection never widens what an existing
+role can do. Open one with `grants.presets`; each preset named applies its own rule there:
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  fields: [text({ name: "title" })],
+  // Admin, Editor and Author write it; Viewer reads it.
+  grants: { presets: ["admin", "editor", "author", "viewer"] },
+});
+```
+
+`grants: { presets: [] }` keeps a collection closed to every preset and says so. To open or
+close a collection you don't define in code, a plugin's or one made in the Schema Builder,
+name it in `presetGrants` in your config, which wins over the collection's own `grants`:
+
+```ts
+import { defineConfig } from "nextly/config";
+
+export default defineConfig({
+  presetGrants: { pages: ["admin", "editor", "author", "viewer"] },
+});
+```
+
+A permission a plugin or your app declares can name the presets that may hold it with
+`presets`; `presets: []` keeps it from every preset (Admin otherwise takes every plugin
+permission), for a permission that opens private data. Singles and Nextly's own resources
+are unchanged. Both are `@experimental`.
+
+### Upgrading: existing collections keep their preset grants
+
+The first time `nextly migrate`, or a development start, runs a release where new collections
+start closed, it records which presets held grants on each existing collection, before it
+sets any grant, and keeps those presets on them. No editor loses a collection. A collection
+added after that starts closed. A new install records none.
+
+Each such run then warns of the collections kept open only by that record, and names, for
+information, those no preset reaches. Add `grants.presets` (or `presetGrants`) to each kept
+one to keep it as it is, or `presets: []` to close it, so your configuration says what the
+record does. One change has no record behind it: Viewer no longer reads users or API keys,
+from the first run of this release.
+
 ## Collection access
 
 Grants say what a role may do. When a collection declares an `access` rule for an
@@ -149,7 +203,8 @@ A collection's `read` rule may return a filter, written as a list's `where` is, 
 `true`. The caller then reads only the entries the filter matches. The filter narrows what
 the grant allows and never widens it: a signed-in user or an API key still needs
 `read-<collection>`, a caller with no session reads the matching entries in place of the
-public default, and the rule's filter is added to whatever the caller asked for.
+public default, a plugin-defined person, who holds no grants, reads the matching entries
+by the rule alone, and the rule's filter is added to whatever the caller asked for.
 
 This is not finished. In this release a list, its total, a count, and the group and
 timeseries reads made through the Direct API or a plugin service apply the filter, as do a
@@ -218,8 +273,9 @@ A collection's `update`, `delete`, `publish` and `unpublish` rules may return a 
 its `read` rule may, typed by the collection's fields in the same way. The write then
 changes an entry only if the filter matches it. An entry outside the filter is refused and
 left as it was: with a 403 where the caller may read the entry, and as a missing entry
-(404) where it may not. The filter applies to a signed-in user or an API key: a visitor,
-with neither, is refused a write whose rule answers a filter, whatever the filter matches.
+(404) where it may not. The filter applies to a signed-in user, an API key or a
+plugin-defined person: a visitor, with none of them, is refused a write whose rule answers a
+filter, whatever the filter matches.
 
 ```ts
 import { defineCollection, relationship, text } from "nextly/config";
@@ -446,6 +502,45 @@ A filter names fields of its own collection: it can't follow a relationship
 of your own. What else a filter may hold is in
 [A read rule that answers with a filter](#a-read-rule-that-answers-with-a-filter-experimental).
 
+## Collections closed to super-admin (experimental)
+
+A super-admin passes every collection rule. A collection holding data the site's
+administrators must not read through the admin, such as health or pay records, can be closed
+to super-admin: its entries are then refused to every super-admin person and to every
+full-access API key carrying its maker's super-admin authority, at every way in (the REST API
+and the admin, the Direct API as that person, related rows, counts and search), whatever other
+permissions they hold. Other roles keep the collection's own grants and rules, and trusted
+server code (`overrideAccess: true`) is not a caller, so your app's own code still reads it.
+
+Close one in code:
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const PayRecords = defineCollection({
+  slug: "pay-records",
+  fields: [text({ name: "summary" })],
+  closedToSuperAdmin: true,
+});
+```
+
+A collection whose code says nothing, one made in the Schema Builder for instance, is closed
+or opened again from the super-admin role's page under **Roles**, which lists each
+collection's mark. Changing one asks the super-admin to enter their password again before it
+is saved, and a session left open or a stolen session cookie cannot change it. A collection
+whose code sets the mark shows it there and cannot be changed there. The same change is
+`PATCH /admin/api/roles/screen/closed-to-super-admin` with `{ collection, closed, password }`,
+from a super-admin's session on the site's own origin.
+
+Every change is written to the audit log as `collection-super-admin-access-changed`, with who
+made it, when, the collection, and its value before and after (`"open"` or `"closed"`). A
+change made in code is recorded, with no person, by the first `nextly migrate` or development
+start that applies it. A change made on one server reaches the others within five seconds.
+
+The mark is a deterrent with a trail, not a wall against a determined super-admin: one can
+open the collection again, and the audit log shows it. Data that must never be reachable from
+the admin belongs out of its reach by other means.
+
 ## Related rows
 
 A populated relationship is read with the same check as reading the related collection
@@ -458,6 +553,9 @@ caller who could read that `users` row by name:
   read rule if it declares one.
 - **An API key** always needs `read-<collection>` in its own grants, and then the collection's
   rule if it has one. A key granted only `read-posts` does not see populated authors.
+- **A plugin-defined person** holds no grants, so the related collection's read rule alone
+  decides, and one with no read rule refuses them (see
+  [Signed-in people of your own kind](/docs/plugins/signed-in-people#let-a-person-read-and-write-your-collections)).
 - **`users` and media** have no rules of their own, so the grant decides: a signed-in user or
   an API key needs `read-users` to see a populated user and `read-media` to see an upload's
   media row. Visitors keep media, which public pages embed, but never see a populated user:

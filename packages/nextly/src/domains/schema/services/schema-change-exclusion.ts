@@ -38,6 +38,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { Logger } from "../../../shared/types";
+import type { SettledSave } from "../builder-save/settle-left-save";
 
 /**
  * Run a schema change holding the schema lock throughout, so no migration of any kind — the
@@ -71,7 +72,11 @@ export async function withSchemaChangeExcluded<T>(
      */
     migrationsDir?: string | undefined;
   },
-  work: () => Promise<T>
+  /**
+   * The change, told of each save left part-way that the settle before it judged: a delete asked
+   * again after that settle finished it (`SettledSave.removed`) is answered as done.
+   */
+  work: (settledBefore: readonly SettledSave[]) => Promise<T>
 ): Promise<T> {
   // Loaded on demand, as the migration machinery below is.
   const { withBuilderWriterScope } = await import(
@@ -87,7 +92,7 @@ export async function withSchemaChangeExcluded<T>(
   // A save that writes a migration settles first what an earlier save left part-way, holding the
   // schema lock and the project's migration files as the save does: its files and its definition
   // are the ones this save starts from.
-  const settleBefore = async (): Promise<string[]> => {
+  const settleBefore = async (): Promise<SettledSave[]> => {
     if (adapter === undefined || args.migrationsDir === undefined) return [];
     const { settleBeforeBuilderSave } = await import(
       "../builder-save/settle-left-save"
@@ -110,15 +115,15 @@ export async function withSchemaChangeExcluded<T>(
     withBuilderWriterScope(
       args.label,
       async () => {
-        const standing = await settleBefore();
-        const result = await withSaveRecords(work, args.logger);
+        const settled = await settleBefore();
+        const result = await withSaveRecords(() => work(settled), args.logger);
         // A save that finished one left part-way (the same save again) has brought the database
         // to it: settled now, that record clears rather than standing until the next start. Only
         // the records standing before the save: one the save itself left is the next start's.
         // The save has committed by now, so a settle that fails is logged, never its answer: a
         // save answered as failed would be saved again, writing its change twice.
         try {
-          await settleAfter(standing);
+          await settleAfter(settled.map(save => save.id));
         } catch (error) {
           args.logger.warn(
             `The save went through, but settling the Builder save left part-way before it failed (${error instanceof Error ? error.message : String(error)}). Its record stays, and the next development start settles it.`

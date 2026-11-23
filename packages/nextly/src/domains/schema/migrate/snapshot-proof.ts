@@ -1029,7 +1029,7 @@ function constraintAsDeclared(
   // A key named inside a column's definition opens with `REFERENCES`.
   if (
     dialect === "postgresql" &&
-    ["FOREIGN", "REFERENCES"].includes(String(declared[0]))
+    (declared[0] === "FOREIGN" || declared[0] === "REFERENCES")
   ) {
     return (
       schema.keyDeferrability(end.table, end.name) ===

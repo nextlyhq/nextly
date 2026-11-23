@@ -1,3 +1,4 @@
+import type { InvitationData } from "../flows/invitations";
 import type { SignedInAccount } from "../flows/sessions";
 import type { CookieKind, CookieWrite } from "../http/cookies";
 
@@ -61,6 +62,11 @@ interface ForVisitor {
   readonly visitor: AccountVisitor;
 }
 
+/** The account the site's own code acts on, by its id. */
+interface ForAccount {
+  readonly accountId: string;
+}
+
 /** A link's token from an email, spent by the function it is handed to. */
 interface WithToken {
   readonly token: string;
@@ -84,6 +90,35 @@ export type VerifyAddressInput = ForVisitor & {
  */
 export type ConfirmAddressChangeInput = ForVisitor &
   (WithToken | { readonly code: string });
+
+/**
+ * An invitation as `invite` answers it: its token, the link on the site's
+ * invitation page that carries it, and when it stops working. The same
+ * whether or not the address already has an account.
+ *
+ * @experimental
+ */
+export interface InvitationIssued {
+  readonly token: string;
+  readonly link: string;
+  readonly expiresAt: Date;
+}
+
+/**
+ * An accepted invitation: the session and known-browser cookies to set, the
+ * account made, and the data the site invited with, to tie the account to
+ * a record of its own.
+ *
+ * @experimental
+ */
+export type AcceptedInvitation = AccountOutcome & {
+  readonly account: {
+    readonly id: string;
+    readonly address: string;
+    readonly name: string;
+  };
+  readonly data: InvitationData | null;
+};
 
 /**
  * The plugin's typed server functions: every action a visitor takes on
@@ -156,6 +191,77 @@ export interface AccountsServer {
   ): Promise<AccountOutcome>;
   /** The signed-in account, or null. */
   currentAccount(input: ForVisitor): Promise<SignedInAccount | null>;
+
+  /**
+   * For the site's own code, never a visitor's request: invites an address,
+   * whether sign-up is open or closed. The link is for that address alone,
+   * good for the site's `invitationLinkDays`, spent once, and replaces any
+   * earlier invitation to it. Unless `sendEmail` is false, the plugin emails
+   * it, or, to an address that already has an account, a note to sign in
+   * instead. Either way it answers alike, so it shows nobody whether an
+   * address has an account. `data`, a flat record of plain values, comes
+   * back when the invitation is accepted. Counted against the address, and
+   * `visitor`'s client where one is given, as every emailing request is.
+   *
+   * @throws `ACCOUNTS_INVALID_INPUT` (`data.reason`), `ACCOUNTS_TOO_MANY_REQUESTS`
+   */
+  invite(input: {
+    readonly address: string;
+    readonly name: string;
+    readonly data?: InvitationData;
+    readonly sendEmail?: boolean;
+    readonly visitor?: AccountVisitor;
+  }): Promise<InvitationIssued>;
+  /**
+   * For the site's own code: withdraws the address's invitation, so its
+   * link is refused; `withdrawn` says whether there was one.
+   */
+  withdrawInvitation(input: {
+    readonly address: string;
+  }): Promise<{ readonly withdrawn: boolean }>;
+  /**
+   * Accepts an invitation by its link's token: makes the verified account
+   * for the invited address, with the password chosen, held to every rule a
+   * new password is, and signs it in. Of two uses at once, exactly one
+   * makes the account. With `address`, refused unless it is the invited one.
+   *
+   * @throws `ACCOUNTS_LINK_REFUSED` (`data.reason`: `invalid`, `expired`,
+   *   `spent`, `other-address`, `has-account`), `ACCOUNTS_INVALID_INPUT` for
+   *   a refused password
+   */
+  acceptInvitation(
+    input: ForVisitor &
+      WithToken & { readonly password: string; readonly address?: string }
+  ): Promise<AcceptedInvitation>;
+
+  /**
+   * For the site's own code, never a visitor's request: ends every session
+   * of the account, as staff's action of the same name does, so its next
+   * request is signed out. Links and codes already sent keep working.
+   * Recorded in core's audit log.
+   *
+   * @throws `ACCOUNTS_NOT_FOUND`
+   */
+  endAccountSessions(input: ForAccount): Promise<AccountOutcome>;
+  /**
+   * For the site's own code: deactivates the account, as staff's action of
+   * the same name does. Every session ends, every link and code is voided,
+   * and it signs in nowhere until reactivated. Recorded in core's audit
+   * log; other plugins hear of it.
+   *
+   * @throws `ACCOUNTS_NOT_FOUND`, and `ACCOUNTS_NOT_APPLICABLE` with
+   *   `data.reason` `"already-deactivated"`
+   */
+  deactivateAccount(input: ForAccount): Promise<AccountOutcome>;
+  /**
+   * For the site's own code: reactivates a deactivated account, as staff's
+   * action of the same name does. Its holder signs in again. Recorded in
+   * core's audit log; other plugins hear of it.
+   *
+   * @throws `ACCOUNTS_NOT_FOUND`, and `ACCOUNTS_NOT_APPLICABLE` with
+   *   `data.reason` `"already-active"`
+   */
+  reactivateAccount(input: ForAccount): Promise<AccountOutcome>;
 
   /**
    * The visitor a request carries: its network key and the plugin's

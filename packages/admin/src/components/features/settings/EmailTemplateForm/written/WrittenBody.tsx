@@ -40,7 +40,13 @@ import {
   $isRangeSelection,
   type LexicalEditor,
 } from "lexical";
-import { useRef, useState, type JSX, type MutableRefObject } from "react";
+import {
+  useContext,
+  useRef,
+  useState,
+  type JSX,
+  type MutableRefObject,
+} from "react";
 
 import { MediaPickerDialog } from "@admin/components/features/media-library/MediaPickerDialog";
 import {
@@ -50,6 +56,7 @@ import {
   Image as ImageIcon,
   MoreHorizontal,
   Plus,
+  X,
 } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
 import { copyableMediaUrl } from "@admin/lib/media-utils";
@@ -73,11 +80,18 @@ import {
   type BlockKind,
   type BlockPath,
 } from "./block-model";
-import { chipNamer, itemPaths, listPaths } from "./chip-names";
+import {
+  addressPaths,
+  chipNamer,
+  itemPaths,
+  listPaths,
+  variablePaths,
+} from "./chip-names";
 import { chipShowsBlank } from "./chip-values";
 import { ChipButton, ChipViewContext, type ChipView } from "./ChipLabel";
 import { RunEditor } from "./RunEditor";
 import { ChipNode, type Inline } from "./runs";
+import { ShowWhenDialog, WHEN_WORDS, type Condition } from "./ShowWhenDialog";
 
 /**
  * Puts a chip for `variable` where the person was last typing; false when
@@ -122,13 +136,11 @@ function chipView(edit: Edit, list?: string): ChipView {
   return {
     name: chipNamer(edit.variables, list),
     // Unknown test data (invalid sample JSON) marks nothing.
-    blank: chip =>
-      edit.sampleData !== null && chipShowsBlank(chip, edit.sampleData, list),
-    // Inside a list, its item's fields first: what each repeat links to.
-    paths: [
-      ...(list === undefined ? [] : itemPaths(edit.variables, list)),
-      ...edit.variables.map(variable => variable.name).filter(Boolean),
-    ],
+    blank: (chip, address) =>
+      edit.sampleData !== null &&
+      chipShowsBlank(chip, edit.sampleData, list, address),
+    paths: variablePaths(edit.variables, list),
+    addressPaths: addressPaths(edit.variables, list),
   };
 }
 
@@ -424,11 +436,13 @@ function BlockFields({
     case "list":
       return (
         <div className="grid gap-3">
-          <label className="flex flex-wrap items-center gap-2 text-sm">
+          <label className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
             For each item in
+            {/* As wide as its column, not its longest option: a long variable
+                name would otherwise widen the dialog or card past a phone. */}
             <select
               aria-label="List variable"
-              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              className="h-9 min-w-0 max-w-full truncate rounded-md border border-input bg-background px-2 text-sm"
               value={block.variable}
               disabled={edit.readOnly}
               onChange={event =>
@@ -459,6 +473,71 @@ function BlockFields({
   }
 }
 
+/** `block` with its condition set, or without one when `show` is undefined. */
+function withCondition(
+  block: WrittenBlock,
+  show: Condition | undefined
+): WrittenBlock {
+  const next = { ...block };
+  if (show) next.show = show;
+  else delete next.show;
+  return next;
+}
+
+/**
+ * A block's condition: its label, with a way to remove it, and the dialog
+ * that sets it, opened from the block's menu.
+ */
+function BlockCondition({
+  block,
+  path,
+  edit,
+  open,
+  onOpenChange,
+}: {
+  block: WrittenBlock;
+  path: BlockPath;
+  edit: Edit;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}): JSX.Element {
+  const view = useContext(ChipViewContext);
+  const set = (show: Condition | undefined) =>
+    edit.change(updateBlock(edit.current(), path, withCondition(block, show)));
+  const shown = block.show
+    ? `Shown only when ${view.name(block.show.variable)} ${WHEN_WORDS[block.show.when]}`
+    : null;
+  return (
+    <>
+      {shown ? (
+        // Within the card at any width: a long label wraps, even mid-word,
+        // and the remove button keeps its size beside it.
+        <p className="flex w-fit max-w-full items-start gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+          <span className="min-w-0 [overflow-wrap:anywhere]">{shown}</span>
+          {edit.readOnly ? null : (
+            <button
+              type="button"
+              aria-label="Remove the condition"
+              title="Remove the condition"
+              className="mt-px shrink-0 rounded-sm hover:text-foreground"
+              onClick={() => set(undefined)}
+            >
+              <X aria-hidden className="size-3" />
+            </button>
+          )}
+        </p>
+      ) : null}
+      <ShowWhenDialog
+        open={open}
+        onOpenChange={onOpenChange}
+        condition={block.show}
+        choices={view.paths.map(p => ({ path: p, name: view.name(p) }))}
+        onSave={set}
+      />
+    </>
+  );
+}
+
 /** One block as a card: its handle, its kind, its moves and its menu. */
 function BlockCard({
   id,
@@ -485,6 +564,7 @@ function BlockCard({
     transition,
     isDragging,
   } = useSortable({ id, disabled: edit.readOnly });
+  const [conditioning, setConditioning] = useState(false);
   const move = (by: -1 | 1) => edit.change(moveBlock(edit.current(), path, by));
   const remove = () => {
     const { doc, removed } = removeBlock(edit.current(), path);
@@ -509,15 +589,15 @@ function BlockCard({
         isDragging && "opacity-60"
       )}
     >
-      <div className="grid grid-cols-1 gap-2 @[40rem]:grid-cols-[1.375rem_1fr]">
+      <div className="grid grid-cols-1 gap-2 @[28rem]:grid-cols-[1.375rem_1fr]">
         {edit.readOnly ? (
-          <span className="hidden @[40rem]:block" />
+          <span className="hidden @[28rem]:block" />
         ) : (
           <button
             ref={setActivatorNodeRef}
             type="button"
             title="Drag to move"
-            className="hidden cursor-grab touch-none items-start justify-center pt-1 text-muted-foreground @[40rem]:flex"
+            className="hidden cursor-grab touch-none items-start justify-center pt-1 text-muted-foreground @[28rem]:flex"
             {...attributes}
             {...listeners}
             // Pointer and touch only: a keyboard moves a block with Move up and
@@ -576,6 +656,9 @@ function BlockCard({
                     >
                       Duplicate
                     </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setConditioning(true)}>
+                      Show only when…
+                    </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       className="text-destructive"
@@ -588,6 +671,13 @@ function BlockCard({
               </div>
             )}
           </div>
+          <BlockCondition
+            block={block}
+            path={path}
+            edit={edit}
+            open={conditioning}
+            onOpenChange={setConditioning}
+          />
           <BlockFields block={block} path={path} edit={edit} />
         </div>
       </div>

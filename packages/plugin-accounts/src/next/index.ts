@@ -53,6 +53,7 @@
  */
 export { currentAccount, requireAccount } from "./account";
 export {
+  acceptInvitationAction,
   cancelAddressChangeAction,
   changeAddressAction,
   changePasswordAction,

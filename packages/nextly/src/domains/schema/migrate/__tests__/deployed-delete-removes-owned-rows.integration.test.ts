@@ -433,6 +433,24 @@ async function ledgerOf(
 }
 
 /** The newest migration file: the delete's, once the Builder has written it. */
+/**
+ * Drops by hand the tables of `dpr_notes` a stopped MySQL run left, as an operator finishes the
+ * file: its translations table and its many-to-many junction first, since each holds a key to the
+ * collection's table, and the collection's table last.
+ */
+async function dropNotesTablesByHand(deployed: DrizzleAdapter): Promise<void> {
+  const left = (await deployed.listTables()).filter(
+    table => table === NOTES_TABLE || table.startsWith(`${NOTES_TABLE}_`)
+  );
+  const parentLast = [
+    ...left.filter(table => table !== NOTES_TABLE),
+    ...left.filter(table => table === NOTES_TABLE),
+  ];
+  for (const table of parentLast) {
+    await deployed.executeQuery(`DROP TABLE IF EXISTS \`${table}\``);
+  }
+}
+
 function deleteFile(): { name: string; drops: number } {
   const files = readdirSync(join(dir, "migrations"))
     .filter(name => name.endsWith(".sql"))
@@ -652,13 +670,7 @@ describe.each(getConfiguredTestDialects())(
           expect(refused.status, refused.stdout).not.toBe(0);
           expect(await notesLeft(deployed)).toEqual(notes);
           // The remaining drops finished by hand, and the file recorded applied.
-          const left = (await deployed.listTables()).filter(
-            table =>
-              table === NOTES_TABLE || table.startsWith(`${NOTES_TABLE}_`)
-          );
-          for (const table of left) {
-            await deployed.executeQuery(`DROP TABLE IF EXISTS \`${table}\``);
-          }
+          await dropNotesTablesByHand(deployed);
           loaded.config = PROJECT;
           const resolved = await command(context =>
             runMigrateResolve(
@@ -712,14 +724,7 @@ describe.each(getConfiguredTestDialects())(
         expect(refused.code, refused.said).not.toBeUndefined();
         expect(await notesLeft(deployed)).toEqual(notes);
         // The remaining drops finished by hand, and the file recorded applied.
-        for (const table of [`${NOTES_TABLE}_locales`, NOTES_TABLE]) {
-          await deployed.executeQuery(`DROP TABLE IF EXISTS \`${table}\``);
-        }
-        const tags = (await deployed.listTables()).filter(t =>
-          t.startsWith(`${NOTES_TABLE}_`)
-        );
-        for (const table of tags)
-          await deployed.executeQuery(`DROP TABLE IF EXISTS \`${table}\``);
+        await dropNotesTablesByHand(deployed);
         loaded.config = PROJECT;
         const resolved = await command(context =>
           runMigrateResolve(

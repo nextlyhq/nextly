@@ -70,6 +70,12 @@ vi.mock("./RolePermissionsSection", () => ({
   },
 }));
 
+// Its own data and dialog are tested beside it; here, only that super-admin
+// shows it in place of the permissions.
+vi.mock("./SuperAdminClosedCollections", () => ({
+  SuperAdminClosedCollections: () => <p>{SUPER_ADMIN_LINE_TEXT}</p>,
+}));
+
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({}),
 }));
@@ -77,8 +83,10 @@ vi.mock("@admin/hooks/useDocumentTitle", () => ({ useDocumentTitle: vi.fn() }));
 
 import { RoleForm } from "./RoleForm";
 
-const SUPER_ADMIN_LINE =
+const SUPER_ADMIN_LINE_TEXT =
   "Super-admins have every permission, including new collections and plugins. This role can't be edited.";
+
+const SUPER_ADMIN_LINE = SUPER_ADMIN_LINE_TEXT;
 const PUBLIC_LINE = "This is what visitors who aren't signed in can see.";
 
 beforeEach(() => {

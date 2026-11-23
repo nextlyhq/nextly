@@ -10,6 +10,9 @@
  *
  * Keys are changed in place only on PostgreSQL and MySQL, so those are the dialects this runs on.
  */
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
@@ -82,6 +85,30 @@ async function renamedTarget(dialect: TestDialect): Promise<void> {
     handle.adapter,
     silentLogger
   ).updateCollectionMetadata("authors", { slug: "writers" });
+  await declareInDefinitionFile();
+}
+
+/**
+ * The Schema Builder's definition file (`./ui-schema.json`) declaring the collections as the
+ * registry holds them. A Builder save judges a relationship's target against that file, and the
+ * collections here are seeded into the registry alone, as no Builder save wrote them: so the file
+ * is written as the Builder keeps it, each collection under the slug the rename left it with.
+ */
+async function declareInDefinitionFile(): Promise<void> {
+  const rows = await t().adapter.select<{ slug: string; fields: unknown }>(
+    "dynamic_collections",
+    { columns: ["slug", "fields"] }
+  );
+  const collections = rows.map(row => ({
+    slug: row.slug,
+    fields: (typeof row.fields === "string"
+      ? JSON.parse(row.fields)
+      : row.fields) as unknown[],
+  }));
+  writeFileSync(
+    join(t().basePath, "ui-schema.json"),
+    JSON.stringify({ version: 1, collections, singles: [], components: [] })
+  );
 }
 
 /** The stored fields and schema version of `posts`, as a Builder editor loads them. */

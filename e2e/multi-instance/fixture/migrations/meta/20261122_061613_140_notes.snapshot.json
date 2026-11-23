@@ -1,0 +1,190 @@
+{
+  "entities": {
+    "collections": {
+      "notes": {
+        "settings": {
+          "admin": {
+            "pagination": {
+              "defaultLimit": 10,
+              "limits": [10, 25, 50, 100]
+            }
+          },
+          "fields": [
+            {
+              "label": "Title",
+              "localized": false,
+              "name": "title",
+              "required": true,
+              "type": "text"
+            },
+            {
+              "name": "slug",
+              "required": true,
+              "type": "text",
+              "unique": true
+            },
+            {
+              "name": "value",
+              "required": true,
+              "type": "text"
+            }
+          ],
+          "labels": {
+            "plural": "Notes",
+            "singular": "Notes"
+          },
+          "slug": "notes",
+          "timestamps": true
+        },
+        "source": "code"
+      }
+    },
+    "fieldGroups": {},
+    "singles": {}
+  },
+  "migration": "20261122_061613_140_notes",
+  "migrationHash": "b0a1676001f22089887bd19224901a390d3dd66752c590fb31da56c1f5392609",
+  "parent": null,
+  "permissions": {
+    "app": {},
+    "collections": {
+      "notes": {
+        "create-notes": {
+          "action": "create",
+          "danger": false,
+          "description": "Permission to create notes",
+          "group": null,
+          "name": "Create Notes",
+          "resource": "notes"
+        },
+        "delete-notes": {
+          "action": "delete",
+          "danger": false,
+          "description": "Permission to delete notes",
+          "group": null,
+          "name": "Delete Notes",
+          "resource": "notes"
+        },
+        "publish-notes": {
+          "action": "publish",
+          "danger": false,
+          "description": "Permission to publish notes",
+          "group": null,
+          "name": "Publish Notes",
+          "resource": "notes"
+        },
+        "read-notes": {
+          "action": "read",
+          "danger": false,
+          "description": "Permission to read notes",
+          "group": null,
+          "name": "Read Notes",
+          "resource": "notes"
+        },
+        "unpublish-notes": {
+          "action": "unpublish",
+          "danger": false,
+          "description": "Permission to unpublish notes",
+          "group": null,
+          "name": "Unpublish Notes",
+          "resource": "notes"
+        },
+        "update-notes": {
+          "action": "update",
+          "danger": false,
+          "description": "Permission to update notes",
+          "group": null,
+          "name": "Update Notes",
+          "resource": "notes"
+        }
+      }
+    },
+    "plugins": {},
+    "singles": {}
+  },
+  "snapshot": {
+    "tables": [
+      {
+        "columns": [
+          {
+            "name": "_changed_at",
+            "nullable": true,
+            "type": "timestamp"
+          },
+          {
+            "name": "_changed_by_id",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "_changed_by_kind",
+            "nullable": true,
+            "type": "varchar"
+          },
+          {
+            "name": "_changed_by_principal_kind",
+            "nullable": true,
+            "type": "varchar"
+          },
+          {
+            "default": "1",
+            "name": "_revision",
+            "nullable": false,
+            "type": "int4"
+          },
+          {
+            "default": "now()",
+            "name": "created_at",
+            "nullable": true,
+            "type": "timestamp"
+          },
+          {
+            "name": "created_by",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "id",
+            "nullable": false,
+            "primaryKey": true,
+            "type": "text"
+          },
+          {
+            "name": "title",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "default": "now()",
+            "name": "updated_at",
+            "nullable": true,
+            "type": "timestamp"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": ["created_at"],
+            "name": "idx_dc_notes_created_at",
+            "unique": false
+          },
+          {
+            "columns": ["created_by"],
+            "name": "idx_dc_notes_created_by",
+            "unique": false
+          }
+        ],
+        "localized": true,
+        "localizedColumns": ["slug", "value"],
+        "name": "dc_notes",
+        "uniqueLocalizedColumns": [
+          {
+            "column": "slug",
+            "kind": "text"
+          }
+        ]
+      }
+    ]
+  },
+  "translatedFieldsRecorded": true,
+  "version": 1
+}
