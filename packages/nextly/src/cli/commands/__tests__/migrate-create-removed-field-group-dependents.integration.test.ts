@@ -220,7 +220,7 @@ describeEachDialect(
         dialect,
         "drop_both",
         { collections: [], fieldGroups: [] },
-        { acceptDataLoss: "dc_dep_articles,comp_dep_seo" }
+        { acceptDataLoss: "dc_dep_articles,fg_dep_seo" }
       );
 
       expect(run).toEqual({ exited: undefined, errors: [] });
@@ -369,7 +369,7 @@ describeEachDialect(
         dialect,
         "drop_both",
         { singles: [], fieldGroups: [] },
-        { acceptDataLoss: "single_dep_home,comp_dep_seo" }
+        { acceptDataLoss: "single_dep_home,fg_dep_seo" }
       );
 
       expect(run).toEqual({ exited: undefined, errors: [] });

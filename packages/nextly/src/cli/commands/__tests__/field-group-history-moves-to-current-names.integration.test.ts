@@ -27,6 +27,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database";
+import { writeLegacyFieldGroupMigration } from "../../../__tests__/helpers/legacy-field-group-history";
 import {
   defineCollection,
   defineConfig,
@@ -233,6 +234,17 @@ async function run(
   }
 }
 
+/** The project's first migration, on the legacy field-group names (`legacy-field-group-history`). */
+function legacyInit(config: ReturnType<typeof configOf>): Promise<void> {
+  return writeLegacyFieldGroupMigration({
+    config,
+    projectRoot: dir,
+    migrationsDir: join(dir, "migrations"),
+    dialect: process.env.DB_DIALECT as TestDialect,
+    name: "init",
+  });
+}
+
 /** `migrate:create`, non-interactively, with the given options. */
 function create(
   name: string | undefined,
@@ -316,7 +328,8 @@ describe.each(getConfiguredTestDialects())(
     async function legacyProject(): Promise<string> {
       const url = await openDatabase(dialect);
       loaded.config = configOf(FIRST);
-      expect((await create("init")).exit).toBeUndefined();
+      // An earlier release's history: a new project's now starts on the current names.
+      await legacyInit(configOf(FIRST));
       const applied = await migrate();
       expect(applied.exit, applied.said).toBeUndefined();
       const app = await start(dialect, url, FIRST);
@@ -405,7 +418,7 @@ describe.each(getConfiguredTestDialects())(
       vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", "1");
       writeBuilderGroup(["heading"]);
       loaded.config = withBuilder(FIRST);
-      expect((await create("init")).exit).toBeUndefined();
+      await legacyInit(withBuilder(FIRST));
       const first = await migrate();
       expect(first.exit, first.said).toBeUndefined();
       await migrateStorage(dialect, url);

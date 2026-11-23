@@ -152,8 +152,8 @@ for (const dialect of getConfiguredTestDialects()) {
       },
       {
         name: "a field group",
-        table: "comp_banner",
-        registry: "dynamic_components",
+        table: "fg_banner",
+        registry: "dynamic_field_groups",
         slug: "banner",
         create: () =>
           dispatchComponents(
@@ -176,17 +176,17 @@ for (const dialect of getConfiguredTestDialects()) {
               localized: true,
               renameResolutions,
               schemaVersion: await schemaVersionOf(
-                "dynamic_components",
+                "dynamic_field_groups",
                 "banner"
               ),
             }
           ),
         seed: async () => {
           await exec(
-            `INSERT INTO ${q("comp_banner")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(q).join(", ")}) VALUES ('banner-1', 'entry-1', 'dc_pages', 'banner', 7)`
+            `INSERT INTO ${q("fg_banner")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(q).join(", ")}) VALUES ('banner-1', 'entry-1', 'dc_pages', 'banner', 7)`
           );
           await exec(
-            `INSERT INTO ${q("comp_banner_locales")} (${["_parent", "_locale", "heading"].map(q).join(", ")}) VALUES ('banner-1', 'en', 'Hello'), ('banner-1', 'es', 'Hola')`
+            `INSERT INTO ${q("fg_banner_locales")} (${["_parent", "_locale", "heading"].map(q).join(", ")}) VALUES ('banner-1', 'en', 'Hello'), ('banner-1', 'es', 'Hola')`
           );
           return "banner-1";
         },

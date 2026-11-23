@@ -22,7 +22,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { forgetFieldGroupStorageNames } from "../../field-groups/storage/resolve-storage-names";
+import {
+  forgetFieldGroupStorageNames,
+  resolveRegistryNameFromCatalog,
+} from "../../field-groups/storage/resolve-storage-names";
 import { reconcileCore } from "../../schema/migrate/core-reconcile";
 import { restoreI18nArchive } from "../migration/restore-archive";
 import { teardownEntityI18n } from "../migration/teardown-entity-i18n";
@@ -158,11 +161,11 @@ describeEachDialect("the archive's entity kind", dialect => {
     );
     const id = "hero-1";
     await query(
-      `INSERT INTO ${q("comp_hero")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(q).join(", ")}) ` +
+      `INSERT INTO ${q("fg_hero")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(q).join(", ")}) ` +
         `VALUES ('${id}', 'entry-1', 'dc_pages', 'hero', 7)`
     );
     await query(
-      `INSERT INTO ${q("comp_hero_locales")} (${["_parent", "_locale", "heading"].map(q).join(", ")}) ` +
+      `INSERT INTO ${q("fg_hero_locales")} (${["_parent", "_locale", "heading"].map(q).join(", ")}) ` +
         `VALUES ('${id}', 'en', 'Group'), ('${id}', 'es', 'Grupo')`
     );
     return id;
@@ -183,7 +186,7 @@ describeEachDialect("the archive's entity kind", dialect => {
         fields,
         confirmed: true,
         localized: true,
-        schemaVersion: await schemaVersionOf("dynamic_components", "hero"),
+        schemaVersion: await schemaVersionOf("dynamic_field_groups", "hero"),
       }
     );
   }
@@ -367,11 +370,17 @@ describeEachDialect("the archive's entity kind", dialect => {
 
   /** What `nextly migrate` runs first, which adds the column to an older archive. */
   async function migrateCore(): Promise<void> {
+    const db = (
+      current.adapter as unknown as { getDrizzle(): unknown }
+    ).getDrizzle();
     await reconcileCore({
-      db: (
-        current.adapter as unknown as { getDrizzle(): unknown }
-      ).getDrizzle(),
+      db,
       dialect: current.adapter.dialect,
+      // The registry the database holds, as `nextly migrate` resolves it before its core reconcile.
+      fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+        dialect: current.adapter.dialect,
+        getDrizzle: <T>() => db as T,
+      }),
       logger: { info: () => {}, warn: () => {} },
     });
   }
@@ -422,7 +431,7 @@ describeEachDialect("the archive's entity kind", dialect => {
       { slug: "notice", label: "Notice", localized: true, fields: TRANSLATED }
     );
     await createdLongAgo("dynamic_collections", "hero");
-    await createdLongAgo("dynamic_components", "banner");
+    await createdLongAgo("dynamic_field_groups", "banner");
     await createdLongAgo("dynamic_singles", "notice");
     await archiveWithoutTheKind();
     await legacyRow("hero", collectionId, "Antes");
@@ -654,17 +663,13 @@ describeEachDialect("the archive's entity kind", dialect => {
     const collectionId = await seedCollection();
     await seedFieldGroup();
     await createdLongAgo("dynamic_collections", "hero");
-    await createdLongAgo("dynamic_components", "hero");
+    await createdLongAgo("dynamic_field_groups", "hero");
     await archiveWithoutTheKind();
     await legacyRow("hero", collectionId, "Antes");
     await legacyRow("hero", "hero-1", "Grupo");
     await migrateCore();
-    // What the storage migration leaves: the registry under its new name, and no old one.
-    await query(
-      dialect === "mysql"
-        ? "RENAME TABLE `dynamic_components` TO `dynamic_field_groups`"
-        : `ALTER TABLE "dynamic_components" RENAME TO "dynamic_field_groups"`
-    );
+    // A new site starts where the storage migration leaves an older one: the registry under its
+    // new name, and no old one.
     forgetFieldGroupStorageNames();
     expect(await current.adapter.tableExists("dynamic_components")).toBe(false);
 
@@ -680,7 +685,7 @@ describeEachDialect("the archive's entity kind", dialect => {
     const collectionId = await seedCollection();
     await seedFieldGroup();
     await createdLongAgo("dynamic_collections", "hero");
-    await createdLongAgo("dynamic_components", "hero");
+    await createdLongAgo("dynamic_field_groups", "hero");
     await archiveWithoutTheKind();
     await legacyRow("hero", collectionId, "Antes");
     await legacyRow("hero", "hero-1", "Grupo");
@@ -701,7 +706,7 @@ describeEachDialect("the archive's entity kind", dialect => {
       adapter: restoreAdapter(),
       collection: "hero",
       kind: "fieldGroup",
-      companionTableName: "comp_hero_locales",
+      companionTableName: "fg_hero_locales",
     });
 
     expect(restored.rowsRead).toBe(0);

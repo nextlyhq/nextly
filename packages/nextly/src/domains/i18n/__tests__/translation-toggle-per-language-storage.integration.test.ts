@@ -371,7 +371,7 @@ describe.each(getConfiguredTestDialects())(
       const [row] = await current!.adapter.executeQuery<{
         version: number | string | null;
       }>(
-        `SELECT ${q("schema_version")} AS version FROM ${q("dynamic_components")} WHERE ${q("slug")} = 'badge'`
+        `SELECT ${q("schema_version")} AS version FROM ${q("dynamic_field_groups")} WHERE ${q("slug")} = 'badge'`
       );
       return dispatchComponents(
         "applyComponentSchemaChanges",
@@ -401,15 +401,15 @@ describe.each(getConfiguredTestDialects())(
 
       const withSummary = [...FIELDS, { name: "summary", type: "text" }];
       await apply(withSummary);
-      expect(await columnsOf("comp_badge_locales")).toEqual(
+      expect(await columnsOf("fg_badge_locales")).toEqual(
         expect.arrayContaining(["heading", "summary"])
       );
-      expect(await columnsOf("comp_badge")).not.toContain("summary");
+      expect(await columnsOf("fg_badge")).not.toContain("summary");
 
       await apply(withSummary, true);
       await apply(withSummary, false);
-      expect(await columnsOf("comp_badge")).not.toContain("heading");
-      expect(await columnsOf("comp_badge_locales")).toEqual(
+      expect(await columnsOf("fg_badge")).not.toContain("heading");
+      expect(await columnsOf("fg_badge_locales")).toEqual(
         expect.arrayContaining(["heading", "summary"])
       );
     });

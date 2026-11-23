@@ -108,6 +108,13 @@ export interface EnsureFirstRunSetupArgs {
    * this module once.
    */
   extensionSchema?: ExtensionSchema | undefined;
+  /**
+   * The names a new database's field-group storage starts on. `current` (the
+   * default) for a database a development start or `db:sync` sets up;
+   * `legacy` for one a production start sets up before running the migrations
+   * at start, whose history this release writes on the legacy names.
+   */
+  newSiteFieldGroupNaming?: "legacy" | "current";
 }
 
 export type EnsureFirstRunSetupResult =
@@ -821,8 +828,18 @@ async function setUpNewDatabase(
   // depend on plugin config.
   const extensionSchema =
     args.extensionSchema ?? getActiveExtensionSchema(dialect);
+  // A new site starts its field groups on the current names
+  // (`field-group-new-site`), unless its schema comes from a migration history,
+  // which this release writes on the legacy names.
+  const fieldGroupNaming = args.newSiteFieldGroupNaming ?? "current";
+  const { withFieldGroupRegistryFor, recordNewSiteOnCurrentNames } =
+    await import("../domains/field-groups/services/field-group-new-site");
   const staticTables = {
-    ...deps.getDialectTables(dialect),
+    ...withFieldGroupRegistryFor(
+      dialect,
+      deps.getDialectTables(dialect),
+      fieldGroupNaming
+    ),
     ...(extensionSchema?.drizzle ?? {}),
   };
   const result = await deps.freshPushSchema(
@@ -889,6 +906,23 @@ async function setUpNewDatabase(
     staticTables.nextlyMeta,
     logger
   );
+
+  // Recorded beside the registry it describes. A failure leaves the storage on
+  // the current names with nothing saying so: the site still serves, and only
+  // `migrate:field-groups` would refuse it, so it is reported rather than
+  // failing a setup whose tables already exist.
+  if (fieldGroupNaming === "current" && staticTables.nextlyMeta !== undefined) {
+    try {
+      await recordNewSiteOnCurrentNames(
+        adapter as unknown as Parameters<typeof recordNewSiteOnCurrentNames>[0],
+        logger as unknown as Parameters<typeof recordNewSiteOnCurrentNames>[1]
+      );
+    } catch (err) {
+      logger.warn(
+        `[nextly] Could not record that this new site's field groups use the current storage names (${err instanceof Error ? err.message : String(err)}). \`nextly migrate:field-groups\` will refuse to run until it is recorded.`
+      );
+    }
+  }
 
   const durationMs = Date.now() - start;
   logger.info(

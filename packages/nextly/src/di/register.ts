@@ -1238,6 +1238,12 @@ async function registerServicesOnce(
         {
           createMissingCompanions: !structure.productionStart,
           completeness,
+          // A production start sets a new database up only to run the
+          // migrations at start, so it takes the names their history keeps field
+          // groups under; every other start begins a new site on the current names.
+          newSiteFieldGroupNaming: structure.productionStart
+            ? await historyNamingAtStart(resolvedBasePath, transformedConfig)
+            : "current",
         }
       );
 
@@ -3889,6 +3895,25 @@ export async function createSchemaRegistry(
 }
 
 /**
+ * The field-group names the project's migration history keeps groups under, which a production
+ * start sets a new database up on before its migrations run: legacy where the configuration names
+ * no migrations folder, the folder has no snapshot, or it cannot be read (the migrations at start
+ * report a folder they cannot read).
+ */
+async function historyNamingAtStart(
+  projectRoot: string,
+  config: { db?: { migrationsDir?: string } }
+): Promise<"legacy" | "current"> {
+  const { fieldGroupNamingOfHistory } = await import(
+    "../domains/schema/migrate/resolved-schema"
+  );
+  return fieldGroupNamingOfHistory({
+    projectRoot,
+    config: { db: { migrationsDir: config.db?.migrationsDir } },
+  }).catch(() => "legacy" as const);
+}
+
+/**
  * Completes the SchemaRegistry {@link createSchemaRegistry} set up with the
  * dynamic collections/singles/components, so that Drizzle CRUD queries work
  * for every table in every adapter context (CLI + API routes), running
@@ -3920,6 +3945,11 @@ export async function initializeSchemaRegistry(
      * its reads and writes say the table is not ready.
      */
     createMissingCompanions: boolean;
+    /**
+     * The names a new database's field-group storage starts on, where this
+     * start sets one up (`ensureFirstRunSetup`). Absent, the current names.
+     */
+    newSiteFieldGroupNaming?: "legacy" | "current";
   }
 ): Promise<SchemaRegistry | undefined> {
   if (registry === undefined) return undefined;
@@ -3955,6 +3985,9 @@ export async function initializeSchemaRegistry(
         logger: consoleLogger,
         // Several processes may start on the same new database at once.
         holdSchemaLock: firstStartSchemaLock(adapter, consoleLogger),
+        ...(options.newSiteFieldGroupNaming === undefined
+          ? {}
+          : { newSiteFieldGroupNaming: options.newSiteFieldGroupNaming }),
       });
       // A start that set a new database up changed what the start's shared
       // reads found: they are read again.

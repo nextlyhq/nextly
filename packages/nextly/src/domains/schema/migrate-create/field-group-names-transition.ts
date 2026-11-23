@@ -39,7 +39,8 @@ const ACROSS_NAMINGS =
 /**
  * The naming a run writes its file under: the newest snapshot's, so a history never changes
  * naming by accident. A project with no history yet takes the naming its caller resolved the
- * field groups under, else legacy.
+ * field groups under (`migrate:create` passes the current names for a new project, from
+ * `appMigrationInputs`), else legacy, which every caller that names its tables itself means.
  */
 export function historyFieldGroupNaming(
   latest: Pick<

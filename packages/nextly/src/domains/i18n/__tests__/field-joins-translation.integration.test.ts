@@ -295,7 +295,7 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     );
     const id = "banner-1";
     await query(
-      `INSERT INTO ${quote(dialect, "comp_banner")} (${["id", "_parent_id", "_parent_table", "_parent_field", "heading", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
+      `INSERT INTO ${quote(dialect, "fg_banner")} (${["id", "_parent_id", "_parent_table", "_parent_field", "heading", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
         `VALUES ('${id}', 'entry-1', 'dc_pages', 'banner', 'Hello', 7)`
     );
     return id;
@@ -386,12 +386,11 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       path: "a field group's schema is applied with the schema dialog",
       // Whether the save runs the migration file it writes, rather than its push.
       runsFile: true,
-      table: "comp_banner",
+      table: "fg_banner",
       seed: seedFieldGroup,
       // A field group has no reader of its own: its rows are read through the entries embedding
       // them, from the default language's companion row.
-      read: async (id: string) =>
-        (await companionHeadings("comp_banner", id)).en,
+      read: async (id: string) => (await companionHeadings("fg_banner", id)).en,
       change: async (fields: unknown[]) => {
         await dispatchComponents(
           "applyComponentSchemaChanges",
@@ -401,7 +400,7 @@ describeEachDialect("a shared field that becomes translated", dialect => {
             confirmed: true,
             localized: true,
             schemaVersion: await schemaVersionOf(
-              "dynamic_components",
+              "dynamic_field_groups",
               "banner"
             ),
           }
@@ -431,7 +430,7 @@ describeEachDialect("a shared field that becomes translated", dialect => {
   // field translated creates one. The default-language row each entry gets there carries the
   // entry's publishing state: created with the companion's `draft` default, published content
   // would stop being served.
-  it.each(PATHS.filter(p => p.table !== "comp_banner"))(
+  it.each(PATHS.filter(p => p.table !== "fg_banner"))(
     "keeps a published entry published when its first translated field is made translated, when $path",
     async ({ table, change }) => {
       const id =
@@ -959,7 +958,7 @@ describeEachDialect("a shared field that becomes translated", dialect => {
         fields: [{ name: "heading", type: "text" }],
       }
     );
-    await markColumn("comp_mkd_banner", "heading");
+    await markColumn("fg_mkd_banner", "heading");
 
     const refused = await dispatchComponents(
       "updateComponent",
@@ -974,8 +973,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expectDefinitionRefusal(
       (refused as { publicData?: unknown }).publicData ?? refused
     );
-    expect(await columnsOf("comp_mkd_banner")).toContain("heading");
-    expect(await columnsOf("comp_mkd_banner_locales")).not.toContain("heading");
+    expect(await columnsOf("fg_mkd_banner")).toContain("heading");
+    expect(await columnsOf("fg_mkd_banner_locales")).not.toContain("heading");
   });
 
   /** The default `table`'s `column` has, as the database's catalog reports it. */

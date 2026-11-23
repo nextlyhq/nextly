@@ -932,6 +932,9 @@ export async function runMigrateCreate(
         components,
         // The starting point the inputs were checked against, read once.
         previous: inputs.latest,
+        // The names the inputs resolved field groups under: the history's, or the current names
+        // for a new project, whose history starts on them.
+        fieldGroupNaming: inputs.fieldGroupNaming,
         metadataUpserts,
         previousMetadataUpserts,
         permissions,

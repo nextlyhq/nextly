@@ -89,7 +89,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { storeSchemaVersion } from "../../schema/schema-version";
 import {
@@ -488,7 +488,7 @@ describe.each(getConfiguredTestDialects())(
       // Advanced past the registry services, as another instance's save advances it.
       const elsewhere = (cached ?? 1) + 5;
       await t.adapter.update(
-        STORAGE_FORMAT.registryTable,
+        MIGRATION_TARGET.registryTable,
         { schema_version: elsewhere },
         { and: [{ column: "slug", op: "=", value: "card" }] }
       );
@@ -514,7 +514,7 @@ describe.each(getConfiguredTestDialects())(
       await groups.registerComponent({
         slug: "promo",
         label: "Promo",
-        tableName: "comp_promo",
+        tableName: "fg_promo",
         fields: [{ name: "note", type: "text" }],
         source: "ui",
         locked: false,
@@ -523,7 +523,7 @@ describe.each(getConfiguredTestDialects())(
       expect((await groups.getComponentBySlug("promo"))?.locked).toBe(false);
       // Locked past the registry services, as another instance's code sync locks it.
       await t.adapter.update(
-        STORAGE_FORMAT.registryTable,
+        MIGRATION_TARGET.registryTable,
         { locked: true },
         { and: [{ column: "slug", op: "=", value: "promo" }] }
       );
