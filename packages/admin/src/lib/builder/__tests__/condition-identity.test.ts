@@ -320,6 +320,16 @@ describe("a condition a type change leaves comparing in a way its source can't",
     expect(broken.get("f-teaser")?.reason).toBe("operator-unsupported");
   });
 
+  it("an older equality condition on a checkbox is not broken", () => {
+    const broken = brokenConditions([
+      field("teaser", {
+        admin: { condition: { field: "featured", equals: true } },
+      }),
+      field("featured", { type: "checkbox" }),
+    ]);
+    expect(broken.has("f-teaser")).toBe(false);
+  });
+
   it("a source whose type still offers the operator is not broken", () => {
     const broken = brokenConditions([
       field("teaser", {

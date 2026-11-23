@@ -8,7 +8,9 @@
  * a dropdown no longer has. Such a condition is broken: it stays on its field,
  * marked, and counts as an error the save refuses, until it names a field it
  * can read or is removed. Nothing is stored about it: it is judged from the
- * fields as they stand, so it holds after any change, undo or redo alike.
+ * fields as they stand, so it holds after any change, undo or redo alike. The
+ * one exception reads the last saved definition beside them: a saved dropdown
+ * whose type changes no longer has the options a condition compared it with.
  *
  * @module lib/builder/condition-identity
  */
@@ -19,12 +21,19 @@ import type {
   BuilderField,
   FieldCondition,
 } from "@admin/components/features/schema-builder/types";
-import { operatorTakesValue } from "@admin/components/field-ui/ConditionRow";
+import {
+  operatorTakesValue,
+  operatorsForType,
+} from "@admin/components/field-ui/ConditionRow";
 
 import { findFieldPlacement } from "./field-placement";
 
 /** Why a condition is broken. */
-export type ConditionBreak = "no-source" | "not-a-source" | "option-removed";
+export type ConditionBreak =
+  | "no-source"
+  | "not-a-source"
+  | "operator-unsupported"
+  | "option-removed";
 
 /** A broken condition: why, and the sentence that tells the person. */
 export interface BrokenCondition {
@@ -104,13 +113,41 @@ function called(field: BuilderField): string {
 }
 
 /**
+ * Comparisons the entry form evaluates the same on a value of any type: equality, which every type
+ * supports (an older `{ field, equals }` condition on a checkbox among them), and a value's presence.
+ */
+const ANY_TYPE_OPERATORS: ReadonlySet<string> = new Set([
+  "equals",
+  "notEquals",
+  "isEmpty",
+  "isNotEmpty",
+]);
+
+/**
+ * Whether a source of `type` can be compared by `operator`: one the condition row offers for that
+ * type, or one that reads a value of any type (`ANY_TYPE_OPERATORS`). A type a plugin contributes is
+ * not known here, so its operators are never judged: as with a source's type, a save it held up
+ * would be refused for a condition that works.
+ */
+function operatorFits(type: string, operator: string): boolean {
+  if (!BUILT_IN_TYPES.has(type) || ANY_TYPE_OPERATORS.has(operator)) {
+    return true;
+  }
+  return (operatorsForType(type) as readonly string[]).includes(operator);
+}
+
+/**
  * Why `field`'s condition is broken, given the fields on its level (as the
  * settings panel offers them), or null when it reads its source, or has none
- * yet: a condition not yet given a source is unfinished, not broken.
+ * yet: a condition not yet given a source is unfinished, not broken. `saved`
+ * holds the last saved definition's fields by id, where there is one: a source
+ * that was saved as a dropdown and is now another type no longer has the
+ * options a condition compared it with.
  */
 export function brokenConditionOf(
   field: BuilderField,
-  siblings: readonly BuilderField[]
+  siblings: readonly BuilderField[],
+  saved?: ReadonlyMap<string, BuilderField>
 ): BrokenCondition | null {
   const stored = field.admin?.condition;
   if (!stored?.field) return null;
@@ -129,7 +166,27 @@ export function brokenConditionOf(
       message: `${subject}'s condition reads ${called(source)}, which a condition cannot compare. Choose another field for it, or remove the condition.`,
     };
   }
+  if (!operatorFits(source.type, condition.operator)) {
+    return {
+      reason: "operator-unsupported",
+      message: `${subject}'s condition compares ${called(source)} in a way a ${source.type} field cannot. Choose another comparison, or remove the condition.`,
+    };
+  }
   const value = condition.value;
+  const wasChoice = saved?.get(source.id);
+  if (
+    wasChoice !== undefined &&
+    CHOICE_TYPES.has(wasChoice.type) &&
+    !CHOICE_TYPES.has(source.type) &&
+    operatorTakesValue(condition.operator) &&
+    typeof value === "string" &&
+    (wasChoice.options ?? []).some(option => option.value === value)
+  ) {
+    return {
+      reason: "option-removed",
+      message: `${subject}'s condition compares ${called(source)} with "${value}", one of the options it had as a dropdown, which it no longer has. Choose another value, or remove the condition.`,
+    };
+  }
   const optionGone =
     CHOICE_TYPES.has(source.type) &&
     operatorTakesValue(condition.operator) &&
@@ -148,17 +205,20 @@ export function brokenConditionOf(
  * Every broken condition in `fields`, by the id of the field it is on, at any
  * depth. Each is judged against the fields on its own level, the same list the
  * settings panel offers it as sources, so the panel and this check never
- * disagree about which fields a condition may read.
+ * disagree about which fields a condition may read. `saved` is the last saved
+ * definition's fields, where there is one (`brokenConditionOf`).
  */
 export function brokenConditions(
-  fields: readonly BuilderField[]
+  fields: readonly BuilderField[],
+  saved: readonly BuilderField[] = []
 ): Map<string, BrokenCondition> {
+  const savedById = fieldsById(saved);
   const broken = new Map<string, BrokenCondition>();
   const walk = (list: readonly BuilderField[]): void => {
     for (const each of list) {
       if (each.admin?.condition) {
         const siblings = findFieldPlacement(fields, each.id)?.siblings ?? [];
-        const found = brokenConditionOf(each, siblings);
+        const found = brokenConditionOf(each, siblings, savedById);
         if (found) broken.set(each.id, found);
       }
       if (each.fields) walk(each.fields);
@@ -166,6 +226,21 @@ export function brokenConditions(
   };
   walk(fields);
   return broken;
+}
+
+/** Every field in `fields`, at any depth, by its id. */
+export function fieldsById(
+  fields: readonly BuilderField[]
+): Map<string, BuilderField> {
+  const byId = new Map<string, BuilderField>();
+  const walk = (list: readonly BuilderField[]): void => {
+    for (const each of list) {
+      byId.set(each.id, each);
+      if (each.fields) walk(each.fields);
+    }
+  };
+  walk(fields);
+  return byId;
 }
 
 /**
