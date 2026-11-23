@@ -42,15 +42,15 @@ export function useTitlesInLanguage({
   collectionSlug: string;
   /** The language chosen. */
   locale: string;
-  /** The field the list's title column shows. */
-  titleField: string;
+  /** The field the list's title column shows; none leaves nothing to read. */
+  titleField: string | undefined;
   /** The rows on screen, by id. */
   ids: readonly string[];
   /** Whether a language other than the default is chosen. */
   enabled: boolean;
 }): TitlesInLanguage {
   // An empty `in` is refused by the server, and there is nothing to read anyway.
-  const asked = enabled && ids.length > 0;
+  const asked = enabled && ids.length > 0 && titleField !== undefined;
   const query = useQuery({
     // Under the collection's list keys, so whatever refreshes the list after a change refreshes
     // these titles too.
@@ -81,7 +81,7 @@ export function useTitlesInLanguage({
   });
   const titles = useMemo(
     () =>
-      asked && query.data
+      asked && query.data && titleField !== undefined
         ? new Map(
             query.data.items.map(item => [String(item.id), item[titleField]])
           )
