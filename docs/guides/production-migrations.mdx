@@ -98,6 +98,8 @@ migrate` notes the id of every document in the entity's table, and once the file
 applied it records one `deleted` event for each. A document deleted some other way meanwhile
 keeps the one event it already has. A table the file rebuilds in place (created under another
 name, filled, dropped, and the copy renamed back) is not deleted, and its documents get no event.
+`nextly migrate:down` does the same for a DOWN that drops a collection or Single: each document
+gets its event as soon as the DOWN commits.
 
 How sure that list is depends on the database:
 

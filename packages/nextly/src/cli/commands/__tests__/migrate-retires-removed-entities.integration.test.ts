@@ -9,8 +9,9 @@
  * once the file is recorded applied, in rows of at most `CHUNK` ids. A run stopped once the files
  * are recorded, or while it records the events, is finished by the next with nothing pending and
  * no event twice, as a real process killed there is; one stopped inside the file (PostgreSQL and
- * SQLite) removes nothing, and the next run applies the file whole. A table rebuilt in place and a
- * file run outside a transaction are covered too. And a drop of a collection another one's field
+ * SQLite) removes nothing, and the next run applies the file whole. A table rebuilt in place, a
+ * file run outside a transaction, a table renamed by an earlier file of the run, an id reused in a
+ * second retirement in one run, and a DOWN's drop under `migrate:down` are covered too. And a drop of a collection another one's field
  * still names is refused, with nothing removed, unless the run itself removes what uses it.
  */
 import { randomBytes, randomUUID } from "node:crypto";
@@ -167,14 +168,18 @@ describe.each(LOCK_DIALECTS)(
 
     /**
      * A hand-written migration file, after the ones before it, with no snapshot; run outside a
-     * transaction where `noTransaction` says.
+     * transaction where `noTransaction` says, its DOWN made of `down`.
      */
-    function file(up: string[], noTransaction = false): string {
+    function file(
+      up: string[],
+      noTransaction = false,
+      down: string[] = []
+    ): string {
       seq += 1;
       const name = `20261120_${String(seq).padStart(6, "0")}_${P}`;
       writeFileSync(
         join(migrationsDir, `${name}.sql`),
-        `${noTransaction ? "-- nextly:no-transaction\n" : ""}-- Migration: ${name}\n\n-- UP\n${up.map(s => `${s};`).join("\n")}\n\n-- DOWN\n`,
+        `${noTransaction ? "-- nextly:no-transaction\n" : ""}-- Migration: ${name}\n\n-- UP\n${up.map(s => `${s};`).join("\n")}\n\n-- DOWN\n${down.map(s => `${s};`).join("\n")}\n`,
         "utf8"
       );
       return `${name}.sql`;
@@ -429,6 +434,43 @@ describe.each(LOCK_DIALECTS)(
       expect(await captures()).toBe(0);
     }, 180_000);
 
+    it("ends each document once when an earlier file of the run renamed the table a later one drops", async () => {
+      file([`ALTER TABLE ${posts} RENAME TO ${posts}_old`]);
+      file([
+        `DROP TABLE ${posts}_tags`,
+        `DROP TABLE ${posts}_locales`,
+        `DROP TABLE ${posts}_old`,
+      ]);
+
+      const run = await migrate(
+        resolveDataLossConsent({ flag: `${posts},${posts}_old`, env: {} })
+      );
+
+      expect(run.applied).toBe(2);
+      expect(await deletionsOf("collection", "posts")).toEqual(EACH_ONCE);
+      expect(await captures()).toBe(0);
+    }, 180_000);
+
+    it("ends each life of a document once when one run retires an entity twice, its id reused", async () => {
+      file(POSTS_DROPPED);
+      file([
+        `CREATE TABLE ${posts} (id varchar(36) PRIMARY KEY, title varchar(64))`,
+        `INSERT INTO ${posts} (id, title) VALUES ('e1', 'again')`,
+      ]);
+      file([`DROP TABLE ${posts}`]);
+
+      const run = await migrate(
+        resolveDataLossConsent({ flag: posts, env: {} })
+      );
+
+      expect(run.applied).toBe(3);
+      expect(await deletionsOf("collection", "posts")).toEqual({
+        e1: 2,
+        e2: 1,
+      });
+      expect(await captures()).toBe(0);
+    }, 180_000);
+
     /** Whether the refusal lets `files` through, each with its statements. */
     function judge(files: { label: string; statements: string[] }[]) {
       return refuseDropsOfUsedEntities({
@@ -510,6 +552,19 @@ describe.each(LOCK_DIALECTS)(
      * `killAt` where one is named (`stop-points.ts`). Each run clears the lock a killed one left.
      */
     function migrateProcess(killAt?: string) {
+      return nextlyProcess(
+        [
+          "migrate",
+          `--accept-data-loss=${posts},${home}`,
+          "--non-interactive",
+          "--force-unlock",
+        ],
+        killAt
+      );
+    }
+
+    /** `nextly <args>` as a real process over this database, killing itself at `killAt` if named. */
+    function nextlyProcess(args: string[], killAt?: string) {
       const project = mkdtempSync(join(tmpdir(), "nextly-retire-project-"));
       writeFileSync(
         join(project, "nextly.config.ts"),
@@ -523,12 +578,7 @@ describe.each(LOCK_DIALECTS)(
           ? `file:${world.url}`
           : world.url;
       return runNextly(
-        [
-          "migrate",
-          `--accept-data-loss=${posts},${home}`,
-          "--non-interactive",
-          "--force-unlock",
-        ],
+        args,
         project,
         {
           DATABASE_URL: url,
@@ -601,6 +651,43 @@ describe.each(LOCK_DIALECTS)(
         );
         expect(await deletionsOf("single", "home"), seen).toEqual(EACH_ONCE);
         expect(await captures(), seen).toBe(0);
+      },
+      2 * PROCESS_TIMEOUT
+    );
+
+    it(
+      "ends each document of an entity a DOWN drops once migrate:down commits it",
+      async () => {
+        const extra = `${P}_extra`;
+        file(
+          [
+            `CREATE TABLE ${extra} (id varchar(36) PRIMARY KEY, title varchar(64))`,
+            `CREATE TABLE ${extra}_links (id varchar(36) PRIMARY KEY, source_id varchar(36), target_id varchar(36))`,
+            `INSERT INTO ${extra} (id, title) VALUES ('x1', 'a'), ('x2', 'b')`,
+          ],
+          false,
+          [`DROP TABLE ${extra}_links`, `DROP TABLE ${extra}`]
+        );
+        expect((await migrate()).applied).toBe(1);
+        await register("collection", "extra", extra, `${extra}_links`);
+
+        const down = await nextlyProcess([
+          "migrate:down",
+          "--step",
+          "1",
+          "--accept-data-loss",
+          "--non-interactive",
+          "--force-unlock",
+        ]);
+
+        const said = `${down.stdout}\n${down.stderr}`;
+        expect(down.status, said).toBe(0);
+        expect(await adapter.tableExists(extra), said).toBe(false);
+        expect(await deletionsOf("collection", "extra"), said).toEqual({
+          x1: 1,
+          x2: 1,
+        });
+        expect(await captures(), said).toBe(0);
       },
       2 * PROCESS_TIMEOUT
     );

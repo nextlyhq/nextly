@@ -79,6 +79,10 @@ import {
   qualifiedFilename,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
 import { recordPluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
+import {
+  deletionEventsOfRetiredDocuments,
+  type ReconcileLogger,
+} from "../../domains/schema/migrate/reconcile-metadata";
 import { refuseRequiredColumnsOverNulls } from "../../domains/schema/migrate/required-column-guard";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
@@ -1311,6 +1315,37 @@ interface ResolvedDownOptions extends MigrateDownCommandOptions {
  * no owner rows, as it does for `nextly migrate`'s own guard, and has no
  * owner rows for a schema version to be written onto.
  */
+/**
+ * Runs one down section: in one try, or with `busyTable` in tries whose report names the sections
+ * this run rolled back before it (`rolledBack`, to which it is added).
+ */
+async function runDownSection(
+  adapter: DrizzleAdapter,
+  busyTable: Omit<BusyTableRun, "appliedBefore"> | undefined,
+  rolledBack: string[],
+  section: {
+    statements: readonly string[];
+    unit: MigrationUnit;
+    after: (handle: unknown) => Promise<void>;
+  }
+): Promise<number> {
+  const { statements, unit, after } = section;
+  if (busyTable === undefined) {
+    return runMigrationStatements(adapter, statements, unit, handle =>
+      after(handle)
+    );
+  }
+  const ran = await runUnitInTries(
+    adapter,
+    statements,
+    unit,
+    handle => after(handle),
+    { ...busyTable, appliedBefore: () => [...rolledBack] }
+  );
+  rolledBack.push(unit.source);
+  return ran;
+}
+
 export async function downDatabaseDeps(args: {
   adapter: DrizzleAdapter;
   dialect: SupportedDialect;
@@ -1334,6 +1369,11 @@ export async function downDatabaseDeps(args: {
    * own, as before.
    */
   busyTable?: Omit<BusyTableRun, "appliedBefore">;
+  /**
+   * Given, the deletion events of the documents a DOWN's drop retires are recorded as soon as the
+   * DOWN commits, under the run's lock (`retired-documents.ts`), and said here.
+   */
+  logger?: ReconcileLogger;
 }): Promise<
   Pick<
     MigrateDownCoreDeps,
@@ -1424,21 +1464,18 @@ export async function downDatabaseDeps(args: {
       await refuseUniqueIndexesOverRepeats(db, dialect, statements, source);
     },
     execDown: async (statements, unit, after) => {
-      if (args.busyTable === undefined) {
-        return runMigrationStatements(adapter, statements, unit, handle =>
-          after(handle)
-        );
-      }
-      // A down section waits for a busy table in tries; a report names the sections this run
-      // rolled back before it.
-      const ran = await runUnitInTries(
-        adapter,
+      const ran = await runDownSection(adapter, args.busyTable, rolledBack, {
         statements,
         unit,
-        handle => after(handle),
-        { ...args.busyTable, appliedBefore: () => [...rolledBack] }
-      );
-      rolledBack.push(unit.source);
+        after,
+      });
+      // The documents of an entity the DOWN dropped end with their events, now it is rolled back.
+      if (args.logger !== undefined) {
+        await deletionEventsOfRetiredDocuments({
+          adapter,
+          logger: args.logger,
+        });
+      }
       return ran;
     },
     recordRolledBack: async (filename, handle) => {
@@ -1679,6 +1716,7 @@ export async function runMigrateDown(
         // An app's down sections and a plugin's modules wait for a busy table in tries, each
         // try's notice on standard error.
         busyTable: { bounds, notify: busyTableNotices(logger) },
+        logger,
       })),
       nodeEnv: process.env.NODE_ENV,
       logger,

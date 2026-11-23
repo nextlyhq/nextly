@@ -37,6 +37,7 @@ import { requiredColumnCheckpoint } from "./required-column-guard";
 import {
   captureRetiredDocuments,
   forgetCapturesOfStandingTables,
+  type RetirementContext,
 } from "./retired-documents";
 import { leadingWords } from "./split-sql";
 import {
@@ -381,10 +382,16 @@ export interface MigrationUnit {
   transaction: boolean;
   /**
    * Which way the unit runs: its UP, the default, or a DOWN undoing it. Read
-   * only by the advice a failure outside a transaction gives, because
-   * recording a unit applied is the recovery for an UP alone.
+   * by the advice a failure outside a transaction gives, because recording a
+   * unit applied is the recovery for an UP alone, and by the capture of the
+   * documents a DOWN's drop retires (`retired-documents.ts`).
    */
   direction?: "up" | "down";
+  /**
+   * What the run tells the capture of the documents the unit's drops retire: given by a run of
+   * `nextly migrate`, absent for a Builder save, whose delete records its own.
+   */
+  retirements?: RetirementContext;
 }
 
 /**

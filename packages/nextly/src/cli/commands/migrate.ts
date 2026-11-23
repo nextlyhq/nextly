@@ -201,6 +201,7 @@ import {
   refuseRequiredColumnsOverNulls,
 } from "../../domains/schema/migrate/required-column-guard";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
+import { followRenames } from "../../domains/schema/migrate/retired-documents";
 import {
   constructsAdded,
   refuseUnitTheServerCannotHold,
@@ -1937,13 +1938,22 @@ function buildSqlExecutor(
   unit: MigrationUnit,
   after: (db: unknown, statementsExecuted: number) => Promise<void>
 ) => Promise<number> {
+  // The tables the run's earlier units renamed, which the registry names as they were until
+  // Phase 3: a later unit's drop of one retires the entity it holds (`retired-documents.ts`).
+  const renamed = new Map<string, string>();
   return async (sqlText, unit, after) => {
     if (!unit.transaction) logger.warn(outsideTransactionNotice(unit.source));
     const statements = splitSqlStatements(sqlText, dialect, unit);
+    const run: MigrationUnit = {
+      ...unit,
+      retirements: { renamedBefore: new Map(renamed) },
+    };
     // With bounds, a unit waits for a busy table in tries (`runUnitInTries`); without, in one.
-    return busyTable === undefined
-      ? runMigrationStatements(dz, statements, unit, after)
-      : runUnitInTries(dz, statements, unit, after, busyTable);
+    const ran = await (busyTable === undefined
+      ? runMigrationStatements(dz, statements, run, after)
+      : runUnitInTries(dz, statements, run, after, busyTable));
+    followRenames(renamed, statements, dialect);
+    return ran;
   };
 }
 
@@ -3437,7 +3447,7 @@ function firstRunSteps(
     /**
      * The deletion events a retired entity's documents owe (`retired-documents.ts`), which Phase 3
      * records once its registry write commits: after the first run's commit, which stands in for
-     * it, they are recorded on their own.
+     * it, they are recorded on their own, and before the files, those of a DOWN.
      */
     retiredDocumentEvents: () => Promise<void>;
   }
@@ -3470,6 +3480,8 @@ function firstRunSteps(
   };
   return {
     beforeFiles: async () => {
+      // What a stopped `migrate:down` left to record is settled before any file applies again.
+      await commits.retiredDocumentEvents();
       if (plan.kind === "from-applied-snapshot") {
         await commits.commitFirstRun(standings);
       }
