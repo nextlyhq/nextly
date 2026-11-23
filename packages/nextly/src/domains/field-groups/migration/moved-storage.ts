@@ -41,7 +41,7 @@ function errorText(error: unknown): string {
 }
 
 /** Whether `error` is the database saying a table is missing. */
-export function isMissingTableError(error: unknown): boolean {
+function isMissingTableError(error: unknown): boolean {
   const message = errorText(error);
   return (
     message.includes("no such table") ||
@@ -51,7 +51,7 @@ export function isMissingTableError(error: unknown): boolean {
 }
 
 /** Whether `error` is the database saying a column is missing. */
-export function isMissingColumnError(error: unknown): boolean {
+function isMissingColumnError(error: unknown): boolean {
   const message = errorText(error);
   return (
     message.includes("no such column") ||
@@ -251,7 +251,7 @@ async function follow(args: {
 }
 
 /** The code a save refused while field-group storage moves under it carries. */
-export const FIELD_GROUP_STORAGE_MOVING = "FIELD_GROUP_STORAGE_MOVING";
+const FIELD_GROUP_STORAGE_MOVING = "FIELD_GROUP_STORAGE_MOVING";
 
 /**
  * The refusal for a save that met field-group storage moving under it. The process has already

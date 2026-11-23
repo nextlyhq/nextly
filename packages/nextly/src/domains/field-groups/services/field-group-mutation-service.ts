@@ -1277,13 +1277,7 @@ export class FieldGroupMutationService extends BaseService {
         { locale, req, write: params.write, assembledFromStorage }
       );
     } catch (error) {
-      await this.refuseIfStorageMoved([componentSlug], error);
-      // Rethrow already-mapped NextlyErrors (and ServiceError shims, which
-      // share the cross-realm brand) so factory-thrown errors aren't
-      // double-wrapped. Anything else is treated as a raw DB error. Normalise
-      // raw driver errors via toDbError(dialect) first so the kind is preserved.
-      if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+      throw await this.saveFailure([componentSlug], error);
     }
   }
 
@@ -1413,12 +1407,7 @@ export class FieldGroupMutationService extends BaseService {
         false
       );
     } catch (error) {
-      await this.refuseIfStorageMoved([componentSlug], error);
-      // See saveSingleComponent — preserve already-mapped NextlyErrors and
-      // map raw DB errors via fromDatabaseError. Normalise raw driver errors
-      // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
-      if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+      throw await this.saveFailure([componentSlug], error);
     }
   }
 
@@ -1534,12 +1523,7 @@ export class FieldGroupMutationService extends BaseService {
         count: instances.length,
       });
     } catch (error) {
-      await this.refuseIfStorageMoved([componentSlug], error);
-      // See saveSingleComponent — preserve already-mapped NextlyErrors and
-      // map raw DB errors via fromDatabaseError. Normalise raw driver errors
-      // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
-      if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+      throw await this.saveFailure([componentSlug], error);
     }
   }
 
@@ -1695,12 +1679,7 @@ export class FieldGroupMutationService extends BaseService {
         incomingIds
       );
     } catch (error) {
-      await this.refuseIfStorageMoved([componentSlug], error);
-      // See saveSingleComponent — preserve already-mapped NextlyErrors and
-      // map raw DB errors via fromDatabaseError. Normalise raw driver errors
-      // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
-      if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+      throw await this.saveFailure([componentSlug], error);
     }
   }
 
@@ -1867,12 +1846,7 @@ export class FieldGroupMutationService extends BaseService {
         count: instances.length,
       });
     } catch (error) {
-      await this.refuseIfStorageMoved(allowedSlugs, error);
-      // See saveSingleComponent — preserve already-mapped NextlyErrors and
-      // map raw DB errors via fromDatabaseError. Normalise raw driver errors
-      // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
-      if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+      throw await this.saveFailure(allowedSlugs, error);
     }
   }
 
@@ -2052,12 +2026,7 @@ export class FieldGroupMutationService extends BaseService {
         incomingIds
       );
     } catch (error) {
-      await this.refuseIfStorageMoved(allowedSlugs, error);
-      // See saveSingleComponent — preserve already-mapped NextlyErrors and
-      // map raw DB errors via fromDatabaseError. Normalise raw driver errors
-      // first so the kind is preserved instead of collapsing to INTERNAL_ERROR.
-      if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+      throw await this.saveFailure(allowedSlugs, error);
     }
   }
 
@@ -2145,28 +2114,32 @@ export class FieldGroupMutationService extends BaseService {
   }
 
   /**
-   * Throws the storage-moving refusal when `error` is a save meeting a field-group table the storage
-   * migration moved under this process (`followMovedFieldGroupTable`), the process now addressing
-   * the table under its current name, so the same save succeeds when retried. Nothing otherwise:
-   * the caller maps `error` as it always has.
+   * What a failed save of the field groups named by slugs is raised with. The storage-moving
+   * refusal when the save met a field-group table, column or registry the storage migration moved
+   * under this process (followMovedFieldGroupTable), the process now addressing it under its
+   * current name, so the same save succeeds when retried. Otherwise an already-mapped NextlyError
+   * (and ServiceError shims, which share the cross-realm brand) as it is, so a factory-thrown error
+   * is not wrapped twice, and anything else as a raw database error, normalised first (toDbError)
+   * so its kind survives.
    */
-  private async refuseIfStorageMoved(
+  private async saveFailure(
     slugs: readonly string[],
     error: unknown
-  ): Promise<void> {
-    // A NextlyError is an answer already decided, a refusal among them; only the database's own
-    // missing-table error is a table that may have moved.
+  ): Promise<NextlyError> {
     // A refusal already decided carries no database error and is left as it is; a database error
     // saying a table or column is missing, however it was wrapped, may be storage that moved.
-    if (!hasMovedStorageCause(error)) return;
-    for (const slug of slugs) {
-      const moved = await followMovedFieldGroupTable({
-        adapter: this.adapter,
-        rows: this.registryService,
-        tableName: resolveComponentTableName(slug),
-      });
-      if (moved !== undefined) throw storageMovingRefusal(moved);
+    if (hasMovedStorageCause(error)) {
+      for (const slug of slugs) {
+        const moved = await followMovedFieldGroupTable({
+          adapter: this.adapter,
+          rows: this.registryService,
+          tableName: resolveComponentTableName(slug),
+        });
+        if (moved !== undefined) return storageMovingRefusal(moved);
+      }
     }
+    if (NextlyError.is(error)) return error;
+    return NextlyError.fromDatabaseError(toDbError(this.dialect, error));
   }
 
   private async getExistingInstances(

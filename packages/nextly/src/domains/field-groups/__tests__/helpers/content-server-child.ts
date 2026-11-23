@@ -59,8 +59,14 @@ function describeError(error: unknown): string {
   const code = String(e.publicData?.errors?.[0]?.code ?? e.code ?? "UNKNOWN");
   const message = String(e.message ?? error).replace(/\s+/g, " ");
   if (REFUSALS.has(code)) return `REFUSED ${code} ${message}`;
-  // Anything else is unexpected: what it says beyond its public message, on the one line, so a
-  // failing suite shows where it came from.
+  return `ERROR ${code} ${message} | ${detailOf(error)}`;
+}
+
+/**
+ * An unexpected error's detail beyond its public message, on one line, so a failing suite shows
+ * where it came from: its log message, its reason, its cause and the first frames of its stack.
+ */
+function detailOf(error: unknown): string {
   const detail = error as {
     logMessage?: unknown;
     logContext?: { reason?: unknown };
@@ -72,10 +78,14 @@ function describeError(error: unknown): string {
     .slice(1, 6)
     .map(line => line.trim())
     .join(" < ");
-  return `ERROR ${code} ${message} | ${String(detail.logMessage ?? "")} | ${String(detail.logContext?.reason ?? "")} | ${String(detail.cause?.message ?? "")} | ${where}`.replace(
-    /\s+/g,
-    " "
-  );
+  return [
+    detail.logMessage,
+    detail.logContext?.reason,
+    detail.cause?.message,
+    where,
+  ]
+    .map(part => String(part ?? "").replace(/\s+/g, " "))
+    .join(" | ");
 }
 
 async function answer(command: string, args: string[]): Promise<string> {
