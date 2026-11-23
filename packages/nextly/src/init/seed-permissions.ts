@@ -247,8 +247,11 @@ interface PublicRoleDeps {
   adapter: DrizzleAdapter;
   logger: Logger;
   meta: MetaService;
-  /** The roles the app and its plugins declare, and the plugins' public grants. */
-  config: Pick<NextlyServiceConfig, "roles"> & {
+  /**
+   * The roles the app and its plugins declare, the plugins' public grants, and
+   * the collections, to know which hold private files.
+   */
+  config: Pick<NextlyServiceConfig, "roles" | "collections"> & {
     plugins?: PluginDefinition[];
   };
   /** Every collection's and Single's slug, as the registry holds them. */
@@ -710,6 +713,10 @@ function publicGrantSeeding(
         (await grants.listRolePermissions(roleId)).map(({ action, resource }) =>
           permissionSlug(action, resource)
         )
+      ),
+    holdsFiles: slug =>
+      (deps.config.collections ?? []).some(
+        collection => collection.slug === slug && collection.files !== undefined
       ),
     declared: () => collectPublicGrants(deps.config.plugins ?? []),
     addOnce: (roleId, wanted, pick) =>
