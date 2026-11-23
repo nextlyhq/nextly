@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A page builder component's and a saved section's `slug` is kept once for every language (`localized: false`): it is an identifier that code and other documents name, not a translated address as a page's slug is. Against the last release nothing moves: the slugs were kept on their collections' own tables there, and only unreleased per-language storage had moved them.
+The `slug` of a page builder component, a saved section and a header & footer set is kept once for every language (`localized: false`): it is an identifier that code and other documents name, not a translated address as a page's slug is. Against the last release nothing moves: the slugs were kept, and unique, on their collections' own tables there, and only unreleased per-language storage had moved them.
