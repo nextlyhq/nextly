@@ -629,6 +629,12 @@ describe("runChecks (F11 PR 4)", () => {
         "nextly migrate:resolve --applied '20260101_120000_001_seed' --skip-verify"
       );
       expect(message).toContain("delete the file");
+      // One dialect's SQL keeps its variant file: `migrate:create --blank` writes a file every
+      // dialect runs.
+      expect(message).toContain(
+        "For SQL you wrote yourself for this dialect, add the line `-- This is a blank migration file for custom SQL.` to its header"
+      );
+      expect(message).not.toContain("migrate:create --blank");
     });
 
     it("quotes the name in the command it advises, so a name with a space or a quote stays one argument", async () => {

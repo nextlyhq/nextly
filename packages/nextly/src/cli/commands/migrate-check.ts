@@ -64,7 +64,7 @@ import {
   describeDeletion,
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
-import { dialectVariantOf } from "../../domains/schema/migrate/dialect-variant";
+import { migrationNameOf } from "../../domains/schema/migrate/dialect-variant";
 import {
   fileDeletions,
   functionsDefinedBy,
@@ -363,8 +363,7 @@ function pairingOutcome(
  * variant.
  */
 function groupFileOf(sqlName: string): string {
-  const variant = dialectVariantOf(sqlName);
-  return variant === undefined ? sqlName : `${variant.baseName}.sql`;
+  return `${migrationNameOf(sqlName)}.sql`;
 }
 
 /**
@@ -468,11 +467,9 @@ export async function runChecks(args: {
   }
 
   // Check 3: missing migration per snapshot. A dialect's variant is a file of
-  // its group's migration (`groupFileOf`), so a group written only as variants
-  // has its migration.
-  const sqlBaseNames = new Set(
-    sqlFiles.map(f => groupFileOf(f).replace(/\.sql$/, ""))
-  );
+  // its group's migration (`migrationNameOf`), so a group written only as
+  // variants has its migration.
+  const sqlBaseNames = new Set(sqlFiles.map(migrationNameOf));
   for (const snapName of snapshotFiles) {
     const baseName = snapName.replace(/\.snapshot\.json$/, "");
     if (!sqlBaseNames.has(baseName)) {

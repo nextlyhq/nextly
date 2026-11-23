@@ -9,7 +9,10 @@ import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
 import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
 import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
-import { dialectVariantOf } from "../../../domains/schema/migrate/dialect-variant";
+import {
+  dialectVariantOf,
+  migrationNameOf,
+} from "../../../domains/schema/migrate/dialect-variant";
 import { shellQuote } from "../../../domains/schema/migrate/drift-error";
 import {
   BLANK_FILE_LINE,
@@ -1343,17 +1346,28 @@ export function migrationSnapshotMissing(
   metaDir: string
 ): CliError {
   // As `migrate:resolve` finds a file and migrate:check pairs it with a snapshot: a dialect's
-  // variant by the name its group shares. Quoted as one shell argument, since a hand-added
-  // file's name may hold a space or a quote.
-  const group =
-    dialectVariantOf(sqlName)?.baseName ?? sqlName.replace(/\.sql$/, "");
-  const resolveName = shellQuote(group);
+  // variant by the name its group shares.
+  const group = migrationNameOf(sqlName);
   return new CliError("MISSING_SNAPSHOT", {
     what: `\`${sqlName}\` has no paired snapshot file in ${metaDir}.`,
     why: `Nothing is at \`${group}.snapshot.json\`, which \`migrate:create\` writes beside every migration it generates, and the file does not say it is a blank migration, which has none; a migration generated before snapshots were written has none either.`,
-    // A file already applied keeps its name: under a new one the database would run it again.
-    next: `Restore the snapshot if it was deleted. For SQL you wrote yourself: if no database has applied the file, re-create it with \`nextly migrate:create --blank\` and copy the SQL across; if one has, add the line \`${BLANK_FILE_LINE}\` to its header instead, then accept the edit with \`nextly migrate:resolve --applied ${resolveName} --skip-verify\` on every database that has applied it. Otherwise delete the file.`,
+    next: snapshotMissingNext(sqlName, group),
   });
+}
+
+/**
+ * What to do about a file `migrationSnapshotMissing` names. A file already applied keeps its
+ * name: under a new one the database would run it again. A dialect's variant keeps its file
+ * too: `migrate:create --blank` writes a file every dialect runs, which one dialect's SQL is not.
+ */
+function snapshotMissingNext(sqlName: string, group: string): string {
+  // Quoted as one shell argument, since a hand-added file's name may hold a space or a quote.
+  const accept = `accept the edit with \`nextly migrate:resolve --applied ${shellQuote(group)} --skip-verify\` on every database that has applied it`;
+  const mark = `add the line \`${BLANK_FILE_LINE}\` to its header`;
+  if (dialectVariantOf(sqlName) !== undefined) {
+    return `Restore the snapshot if it was deleted. For SQL you wrote yourself for this dialect, ${mark}; if a database has applied the file, then ${accept}. Otherwise delete the file.`;
+  }
+  return `Restore the snapshot if it was deleted. For SQL you wrote yourself: if no database has applied the file, re-create it with \`nextly migrate:create --blank\` and copy the SQL across; if one has, ${mark} instead, then ${accept}. Otherwise delete the file.`;
 }
 
 /** A snapshot file that could not be read, in `SnapshotFileError`'s words. */
