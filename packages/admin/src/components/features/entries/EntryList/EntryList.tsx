@@ -590,17 +590,9 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     const field = titleField
       ? findTopLevelField(collectionForColumns.fields, titleField)
       : undefined;
-    return (
-      field !== undefined &&
-      isFieldLocalized(
-        {
-          type: field.type,
-          name: field.name,
-          localized: (field as { localized?: boolean }).localized,
-        },
-        collectionLocalized
-      )
-    );
+    // The field itself, as stored: the rule reads its `virtual` mark (at its root, or in its
+    // options) as well as `localized`, and a virtual title is stored in no language.
+    return field !== undefined && isFieldLocalized(field, collectionLocalized);
   }, [collectionForColumns.fields, titleField, collectionLocalized]);
   const offersTitleLanguage =
     multilingual && locales.length > 1 && titleTranslated;

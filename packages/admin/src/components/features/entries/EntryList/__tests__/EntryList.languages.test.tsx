@@ -41,7 +41,7 @@ const { useEntries, tableProps, table, site, access, title, find, LANGUAGES } =
     // `failed`: the answer's request failed, and no answer is in hand.
     access: { readTranslations: true, loading: false, failed: false },
     // Whether the title field is kept once for every language (`localized: false`).
-    title: { shared: false },
+    title: { shared: false, virtual: false },
     // The read of titles in a chosen language.
     find: vi.fn(),
     LANGUAGES: [
@@ -81,6 +81,7 @@ vi.mock("@admin/hooks/queries/useCollections", () => ({
           name: "title",
           label: "Title",
           ...(title.shared ? { localized: false } : {}),
+          ...(title.virtual ? { virtual: true } : {}),
         },
       ],
     },
@@ -196,6 +197,7 @@ beforeEach(() => {
   table.real = false;
   site.languages = 3;
   title.shared = false;
+  title.virtual = false;
   access.readTranslations = true;
   access.loading = false;
   access.failed = false;
@@ -265,6 +267,14 @@ describe("the title language", () => {
     expect(lastTable().titleLanguage).toBeUndefined();
     // The languages column and filter still are: the content is per language.
     expect(lastTable().collection?.localized).toBe(true);
+  });
+
+  it("is not offered where the title is virtual, stored in no language", () => {
+    // Text-like, in a collection whose content is per language, and still not translated: a
+    // virtual field is stored nowhere, in any language.
+    title.virtual = true;
+    render(<EntryList collectionSlug="posts" />);
+    expect(lastTable().titleLanguage).toBeUndefined();
   });
 });
 
