@@ -91,14 +91,14 @@ import {
   warnOfSnapshotlessFile,
 } from "../../domains/schema/migrate/companion-drift";
 import {
+  type ConvertsMark,
+  readConvertsMark,
+} from "../../domains/schema/migrate/converts-header";
+import {
   planCoreDeletions,
   planCoreReconcile,
   reconcileCore,
 } from "../../domains/schema/migrate/core-reconcile";
-import {
-  type ConvertsMark,
-  readConvertsMark,
-} from "../../domains/schema/migrate/converts-header";
 import {
   consentToCover,
   countDeletions,

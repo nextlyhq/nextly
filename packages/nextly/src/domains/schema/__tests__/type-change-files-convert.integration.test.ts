@@ -344,7 +344,16 @@ describe.each(getConfiguredTestDialects())(
     // A rollback of the marked change converts that database's values back as the earlier type
     // reads each, before its DOWN's statements: SQLite's cast would write a number back as 12.0.
     it("converts a deploy's own values back when migrate:down rolls the change back", async () => {
-      const created = await textBecomesNumber();
+      // A number that keeps fractions: a double column, which SQLite's cast writes back as 34.0.
+      const float = { name: "v", type: "number", options: { format: "float" } };
+      const first = await boot(dialect);
+      await createPosts([{ name: "v", type: "text" }]);
+      const created = await filesWritten();
+      await write(first, "kept", { v: "12" });
+      await save(first, [float]);
+      await first.destroy();
+      instance = undefined;
+
       const second = await boot(dialect);
       await migrateFolder(second, created);
       await write(second, "whole", { v: "34" });

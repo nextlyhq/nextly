@@ -50,16 +50,16 @@ import {
 } from "../../domains/schema/events/schema-events-repository";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
+  type ConvertsMark,
+  readConvertsMark,
+} from "../../domains/schema/migrate/converts-header";
+import {
   consentToCover,
   describeDeletion,
   resolveDataLossConsent,
   type DataLossConsent,
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
-import {
-  type ConvertsMark,
-  readConvertsMark,
-} from "../../domains/schema/migrate/converts-header";
 import {
   concurrentRunError,
   failedAttemptMayBePartial,

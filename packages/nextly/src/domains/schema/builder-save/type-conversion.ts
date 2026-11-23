@@ -607,7 +607,6 @@ async function convertColumn(
 ): Promise<void> {
   const { input, planned } = of;
   const table = sql.identifier(planned.table);
-  const column = sql.identifier(planned.column);
   const run = (statement: SQL) => runStatement(db, dialect, statement);
   const beside = sql.identifier(BESIDE);
   const type = sql.raw(planned.type);
