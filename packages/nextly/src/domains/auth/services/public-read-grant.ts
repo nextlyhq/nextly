@@ -94,6 +94,12 @@ interface PublicReadGrantSeeding {
   publicRoleId: () => Promise<string | null>;
   /** Every collection and Single, with its code-defined access. */
   targets: () => Promise<AccessTarget[]>;
+  /**
+   * Whether the collection `slug` holds private files (its `files` option).
+   * Public is granted nothing on one: who may open a file is decided per
+   * caller by its rules, never handed to everyone at boot. Absent, none does.
+   */
+  holdsFiles?: (slug: string) => boolean;
   /** Every permission's id, by its slug (`read-posts`). */
   permissionIds: () => Promise<Map<string, string>>;
   /** The permission slugs the role holds now. */
@@ -652,6 +658,7 @@ async function decide(
   {
     publicRoleId,
     targets,
+    holdsFiles = () => false,
     permissionIds,
     declared,
     withdraw,
@@ -701,12 +708,24 @@ async function decide(
       `[Nextly] The plugin "${owner}" declares that the Public role may ${action} "${collection}", which is not a collection it contributes, or not an action a plugin may grant (read or create). Nothing was granted for it.`
     );
   }
+  // Nothing on a collection of private files is granted to everyone, whether
+  // its read rule answers `true` or a plugin declares it: each is named, so
+  // the rule or the declaration can be put right.
+  const opensFiles = ({ resource }: { resource: string }): boolean => {
+    if (!holdsFiles(resource)) return true;
+    logger.error(
+      `[Nextly] The collection "${resource}" holds private files, and its read rule or a plugin would open it to everyone. The Public role is granted nothing on it: who may open a file is decided per caller by its access rules.`
+    );
+    return false;
+  };
   const wanted = [
     { action: "read", resource: "media" },
-    ...asked
-      .filter(({ read }) => read.kind === "answered" && read.value === true)
-      .map(({ target }) => ({ action: "read", resource: target.slug })),
-    ...pluginGrants,
+    ...[
+      ...asked
+        .filter(({ read }) => read.kind === "answered" && read.value === true)
+        .map(({ target }) => ({ action: "read", resource: target.slug })),
+      ...pluginGrants,
+    ].filter(opensFiles),
   ].flatMap(({ action, resource }) => {
     const id = ids.get(permissionSlug(action, resource));
     return id === undefined ? [] : [{ id, action, resource }];

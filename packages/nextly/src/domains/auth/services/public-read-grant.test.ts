@@ -678,3 +678,68 @@ describe("permissionIdsBySlug", () => {
     );
   });
 });
+
+describe("seedPublicReadGrants on a collection holding private files", () => {
+  /** A logger keeping what it is told as errors. */
+  function listening() {
+    const errors: string[] = [];
+    return {
+      errors,
+      logger: {
+        ...quiet,
+        error: (message: string) => errors.push(message),
+      } as unknown as Logger,
+    };
+  }
+
+  it("grants nothing on it, though its read rule answers true for a visitor", async () => {
+    const opened = site();
+    const { errors, logger } = listening();
+    await seedPublicReadGrants({
+      ...opened.seeding,
+      targets: async () => [
+        {
+          kind: "collection" as const,
+          slug: "posts",
+          access: { read: () => true },
+        },
+      ],
+      holdsFiles: slug => slug === "posts",
+      logger,
+    });
+    expect(opened.granted).toEqual(["media"]);
+    expect(errors.join("\n")).toContain(`"posts" holds private files`);
+
+    // Control: the same rule on a collection without files is granted.
+    const ordinary = site();
+    await seedPublicReadGrants({
+      ...ordinary.seeding,
+      targets: async () => [
+        {
+          kind: "collection" as const,
+          slug: "posts",
+          access: { read: () => true },
+        },
+      ],
+      holdsFiles: () => false,
+    });
+    expect(ordinary.granted).toEqual(["media", "posts"]);
+  });
+
+  it("grants nothing on it that a plugin declares", async () => {
+    const declaring = site();
+    const { errors, logger } = listening();
+    await seedPublicReadGrants({
+      ...declaring.seeding,
+      targets: async () => [],
+      declared: () => ({
+        grants: [{ action: "read", resource: "posts", owner: "a-plugin" }],
+        refused: [],
+      }),
+      holdsFiles: slug => slug === "posts",
+      logger,
+    });
+    expect(declaring.granted).toEqual(["media"]);
+    expect(errors.join("\n")).toContain(`"posts" holds private files`);
+  });
+});
