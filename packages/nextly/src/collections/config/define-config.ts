@@ -35,9 +35,12 @@
  * ```
  */
 
+import { unknownPresetSlugs } from "../../auth/preset-reach";
+import { PRESET_ROLE_SLUGS } from "../../auth/role-presets";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { validateLanguageAddressRule } from "../../domains/i18n/language-addresses";
 import { workflowAttachmentsOf } from "../../domains/workflows/attachments";
+import { NextlyError } from "../../errors/nextly-error";
 import type {
   DeclaredWidgetsRecord,
   WidgetsOfPlugins,
@@ -78,6 +81,38 @@ export { sanitizeConfig } from "../../shared/types/config";
 // ============================================================
 
 /**
+ * Refuses a `presetGrants` entry naming something that is not a preset role:
+ * a misspelt `"editors"` would leave the collection closed to the editors it
+ * was meant to open it to, and nothing would say so.
+ */
+function assertValidPresetGrants(
+  presetGrants: NextlyConfig["presetGrants"]
+): void {
+  const errors = Object.entries(presetGrants ?? {}).flatMap(
+    ([slug, presets]) => {
+      const unknown = Array.isArray(presets)
+        ? unknownPresetSlugs(presets)
+        : [String(presets)];
+      return unknown.length === 0
+        ? []
+        : [
+            {
+              path: `presetGrants.${slug}`,
+              code: "GRANTS_PRESETS_INVALID",
+              message: `presetGrants.${slug} names ${unknown.map(u => `"${u}"`).join(", ")}, which is not a preset role. The preset roles are ${PRESET_ROLE_SLUGS.join(", ")}.`,
+            },
+          ];
+    }
+  );
+  if (errors.length > 0) {
+    throw NextlyError.validation({
+      errors,
+      logContext: { presetGrants: errors.map(e => e.path) },
+    });
+  }
+}
+
+/**
  * Validate a raw Nextly configuration.
  *
  * Judges user-field constraints, localization and workflows, and throws on a
@@ -106,6 +141,8 @@ function validateNextlyConfig(config: NextlyConfig): void {
     );
     assertValidUserConfig(config.users, configUsersTypes);
   }
+
+  assertValidPresetGrants(config.presetGrants);
 
   if (config.languageAddresses !== undefined) {
     validateLanguageAddressRule(config.languageAddresses, config.localization);

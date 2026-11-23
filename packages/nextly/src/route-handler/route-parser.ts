@@ -350,6 +350,37 @@ function parseUserRoutes(
 }
 
 /**
+ * The roles screen's own routes under `/api/roles/screen`:
+ * - `GET /api/roles/screen` → what the roles screen shows for each collection
+ *   and Single;
+ * - `PATCH /api/roles/screen/closed-to-super-admin` → close a collection to
+ *   super-admin, or open it again (a super-admin, password entered again).
+ */
+function parseRolesScreenRoute(
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (!subresource && httpMethod === "GET") {
+    return {
+      service: "rolesScreen",
+      operation: "list",
+      method: "getRolesScreen",
+      routeParams,
+    };
+  }
+  if (subresource === "closed-to-super-admin" && httpMethod === "PATCH") {
+    return {
+      service: "rolesScreen",
+      operation: "update",
+      method: "setClosedToSuperAdmin",
+      routeParams,
+    };
+  }
+  return null;
+}
+
+/**
  * A user's external identities, nested under the user as the role
  * assignments are: the listing, and the unlink of one. Null for anything
  * else, which is the users routes' own answer for a path they do not name.
@@ -420,16 +451,11 @@ function parseRoleRoutes(
     };
   }
 
-  if (id === "screen" && !subresource && httpMethod === "GET") {
-    // GET /api/roles/screen → what the roles screen shows for each collection
-    // and Single. Ahead of the role-by-id branch, which would otherwise read
-    // "screen" as a role id.
-    return {
-      service: "rolesScreen",
-      operation: "list",
-      method: "getRolesScreen",
-      routeParams,
-    };
+  if (id === "screen") {
+    // Ahead of the role-by-id branch, which would otherwise read "screen" as
+    // a role id.
+    const screen = parseRolesScreenRoute(subresource, httpMethod, routeParams);
+    if (screen) return screen;
   }
 
   if (id && !subresource && httpMethod === "GET") {

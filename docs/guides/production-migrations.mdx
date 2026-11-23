@@ -590,6 +590,14 @@ before, and neither reads nor writes the record. A production start sets none.
 This covers `nextly migrate` from this release on. A release from before it reads no record, so
 its `nextly migrate` and its starts set the preset grants to its own presets.
 
+A collection reaches a preset role only once it is opened to it by name
+(see [Roles and Permissions](/docs/permissions#the-preset-roles-reach-a-collection-only-once-it-is-opened-to-them)).
+The first `nextly migrate` or development start of a release with that rule records, in the
+database and before it sets any grant, which presets held each existing collection, and keeps
+them there, so the upgrade takes no grant away. It writes that record once. Moving back to a
+release from before the rule is safe in the same way as above: it reads no record and sets
+the grants to its own presets, opening every collection to them again.
+
 ### What a production start writes
 
 A production start (`next start`, or any start with `NODE_ENV=production`) serves the database

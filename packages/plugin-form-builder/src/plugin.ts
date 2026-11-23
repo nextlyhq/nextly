@@ -268,6 +268,22 @@ export interface FormBuilderPluginResult {
   config: ResolvedFormBuilderConfig;
 }
 
+/** Every built-in preset role, by slug. */
+const PRESET_ROLES = ["admin", "editor", "author", "viewer"] as const;
+
+/**
+ * `collection`, open to every preset role, each by its own rule (an Author
+ * does not delete, a Viewer reads), as before collections started closed to
+ * them: a new site's editors manage its forms. A host's own `grants`, passed
+ * through the collection's overrides, keeps its word.
+ */
+function openToPresetRoles(collection: CollectionConfig): CollectionConfig {
+  return {
+    ...collection,
+    grants: collection.grants ?? { presets: PRESET_ROLES },
+  };
+}
+
 /**
  * Create a Form Builder plugin instance.
  *
@@ -300,12 +316,14 @@ export function formBuilder(
 ): FormBuilderPluginResult {
   const resolvedConfig = resolveConfig(options);
 
-  const formsCol = formsCollection(resolvedConfig);
-  const submissionsCol = submissionsCollection(resolvedConfig);
+  const formsCol = openToPresetRoles(formsCollection(resolvedConfig));
+  const submissionsCol = openToPresetRoles(
+    submissionsCollection(resolvedConfig)
+  );
   const submissionFields = submissionExtensionFields(resolvedConfig);
-  const sendsCol = submissionSendsCollection();
-  const uploadsCol = formUploadsCollection();
-  const resendsCol = submissionResendsCollection();
+  const sendsCol = openToPresetRoles(submissionSendsCollection());
+  const uploadsCol = openToPresetRoles(formUploadsCollection());
+  const resendsCol = openToPresetRoles(submissionResendsCollection());
 
   // The submissions slug the admin links a card's rows to: the declared one
   // until `init` reads the slug the site installed it under.

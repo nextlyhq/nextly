@@ -148,6 +148,9 @@ export const Posts = defineCollection({
   // narrowed by a filter: a caller who may publish posts changes every
   // post, anyone else only the posts whose `author` is them. Publishing
   // needs `publish-posts`, which only editors and admins hold.
+  // Opened to the built-in roles: a collection reaches Admin, Editor, Author
+  // and Viewer only once it names them, each by its own rule.
+  grants: { presets: ["admin", "editor", "author", "viewer"] },
   access: {
     read: anyone,
     create: hasPermission,
