@@ -396,11 +396,20 @@ async function applyBootMigrations(
     // settles nothing: it removes no file and rewrites no definition. `nextly migrate`, or a
     // development start, settles the save.
     recheckSaveRecords: async () => {
-      const { refuseWhileSaveInProgress } = await import(
-        "../domains/schema/builder-save/save-in-progress"
-      );
+      const [{ refuseWhileSaveInProgress }, { saveFilesPresent }] =
+        await Promise.all([
+          import("../domains/schema/builder-save/save-in-progress"),
+          import("../domains/schema/builder-save/settle-left-save"),
+        ]);
       await refuseWhileSaveInProgress(adapter as never, {
         notice: line => logger.warn(`[Nextly] ${line}`),
+        // Another machine's save made outside development whose files this folder holds refuses
+        // the start: run, they would apply a part of a change that save never finished.
+        filesHere: record =>
+          saveFilesPresent(
+            { adapter: adapter as never, migrationsDir: run.migrationsDir },
+            record
+          ),
       });
     },
     extensionSchema,

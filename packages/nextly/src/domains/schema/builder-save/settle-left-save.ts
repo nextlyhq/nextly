@@ -33,11 +33,15 @@ import { join } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { parseUiSchema } from "../../../schemas/_zod/ui-schema";
+import {
+  parseUiSchema,
+  type UiSchemaEntity,
+} from "../../../schemas/_zod/ui-schema";
 import type { AddressKind } from "../../../shared/address-rule";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
+import { checksumOf } from "../migrate/applied-checksums";
 import {
   recordAlreadyApplied,
   snapshotsEquivalent,
@@ -60,7 +64,12 @@ import { collectionOwnTables } from "../services/field-column-descriptor";
 import { uiToMinimal } from "../ui-schema/merge";
 
 import {
+  type BuilderSaveSetup,
+  checkSaveHistory,
+  type CollectionSaveDeps,
   companionDriftItems,
+  judgeLeftStop,
+  type LeftStop,
   saveKindOf,
   settleRemovedFileAttempts,
   writeAtomically,
@@ -73,7 +82,11 @@ import {
 } from "./save-in-progress";
 
 /** How a left save was settled. */
-export type SettledOutcome = "none" | "all" | "pending" | "left";
+/**
+ * How a settle left a save: none of it landed, all of it, its later files still to run, part of it
+ * written for in the stopped file's place (`settleLeftStop`), or left as it was.
+ */
+export type SettledOutcome = "none" | "all" | "pending" | "partial" | "left";
 
 /** One left save, and how it was settled. */
 export interface SettledSave {
@@ -130,6 +143,18 @@ export interface SettleDeps {
    */
   byFiles?: boolean;
   /**
+   * Leave a save stopped inside its file on MySQL as it stands, rather than judge it from the
+   * tables and write the file for what applied (`judgeLeftStop`): `nextly migrate`'s settle in
+   * production, where a deployed folder is not written under a running server. Its record stays,
+   * and the run refuses over it, naming the save.
+   */
+  stopsLeft?: boolean;
+  /**
+   * Keep a stopped file set aside, not removed, once the file for what of it applied is recorded
+   * (`judgeLeftStop`): `nextly migrate`'s settle, which removes no migration file.
+   */
+  keepsStoppedAside?: boolean;
+  /**
    * The registry row's write for an entity whose save landed whole: its fields and whether it is
    * translated, as the saved definition holds them. Answers whether the row now stands as the save
    * left it: brought up or already so, or removed for a delete. False where there is no row to
@@ -161,7 +186,9 @@ export async function settleLeftSaves(
   // A database that has no meta table yet (a project's first start) holds no record.
   if (!(await deps.adapter.tableExists("nextly_meta"))) return settled;
   const here = hostname();
-  for (const row of await readSavesInProgress(deps.adapter)) {
+  const rows = await readSavesInProgress(deps.adapter);
+  await checkHistoryBeforeSettling(deps, rows, here);
+  for (const row of rows) {
     const one = await settleRow(deps, row, here);
     if (one !== undefined) settled.push(one);
   }
@@ -176,6 +203,41 @@ export async function settleLeftSaves(
     );
   }
   return settled;
+}
+
+/**
+ * The migration history's checks, before the first write a settle makes (D30): an applied file
+ * edited, an applied migration missing from the folder, or an unresolved attempt refuses the settle
+ * with the check's own message, nothing written, so every record stays and the save is not settled
+ * on a history those checks cannot vouch for. Asked only where a record of this host is to be
+ * settled; an unresolved attempt at one of those records' own files is the stop the settle
+ * resolves, and is not refused (`checkSaveHistory`'s `settling`).
+ */
+async function checkHistoryBeforeSettling(
+  deps: SettleDeps,
+  rows: Awaited<ReturnType<typeof readSavesInProgress>>,
+  here: string
+): Promise<void> {
+  const settling = new Set<string>();
+  let any = false;
+  for (const row of rows) {
+    if (!("record" in row) || row.record.host !== here) continue;
+    if (deps.only !== undefined && !deps.only.has(row.record.id)) continue;
+    any = true;
+    const { files } = await filesOfSave(deps, row.record);
+    for (const file of [...(row.record.files ?? []), ...files]) {
+      settling.add(file);
+    }
+  }
+  if (!any) return;
+  await checkSaveHistory(
+    {
+      adapter: deps.adapter,
+      migrationsDir: deps.migrationsDir,
+      logger: { ...deps.logger, error: message => deps.logger.warn(message) },
+    },
+    { settling, command: "The settle of a Builder save left part-way" }
+  );
 }
 
 /**
@@ -369,18 +431,221 @@ async function settledOutcome(
   }
   const judged = await judge(deps, repo, record, files);
   if (judged === "left") {
-    // A MySQL save stopped inside a file: what landed is settled from the live tables by the
-    // step for a stopped save, which this one does not run yet. The record stays, refusing.
-    deps.logger.warn(
-      `A Builder save of the ${described(record)} stopped part-way through a migration file, with part of it applied. It is not settled here yet; its record stays.`
-    );
-    return "left";
+    return settleStopOrLeave(deps, repo, record, files, notes, kept);
   }
   if (judged === "none") return settleNone(deps, repo, record, files, notes);
   // "all" or "pending": the saved definition stands, which its files are written from.
   notes.push(...(await keepSavedDefinition(deps, record)));
   if (judged === "pending") return settlePending(deps, record);
   return settleAll(deps, repo, record, files, notes, kept);
+}
+
+/**
+ * A save the judgement leaves part-way: one stopped inside its file on MySQL is judged from the live
+ * tables, as a save that stops while its process lives is, and settled to it (`leftStopOf`);
+ * anything else stays, its record kept.
+ */
+async function settleStopOrLeave(
+  deps: SettleDeps,
+  repo: SchemaEventsRepository,
+  record: LeftSave,
+  files: readonly string[],
+  notes: string[],
+  kept: AllFacts
+): Promise<SettledOutcome> {
+  const stop = await leftStopOf(deps, repo, record, files);
+  if (stop !== undefined) {
+    return settleLeftStop(deps, repo, record, files, notes, kept, stop);
+  }
+  deps.logger.warn(
+    `A Builder save of the ${described(record)} stopped part-way through a migration file, with part of it applied, and what applied cannot be judged from its tables. It is not settled; its record stays.`
+  );
+  return "left";
+}
+
+/**
+ * The judgement of a save stopped inside its one migration file on MySQL, which keeps each schema
+ * statement it ran: undefined where it is not such a stop, or cannot be judged from its tables.
+ * Not judged: a save whose files carry statements of their own, or whose record does not say
+ * (`LeftSave.ownStatements`), since rows it changed stay whatever the tables' shape reads as, so it
+ * is never settled as none of it; a save a later step joined; one whose file is recorded already.
+ */
+async function leftStopOf(
+  deps: SettleDeps,
+  repo: SchemaEventsRepository,
+  record: LeftSave,
+  files: readonly string[]
+): Promise<LeftStop | undefined> {
+  const [file] = files;
+  if (file === undefined || !stopJudgedHere(deps, record, files)) {
+    return undefined;
+  }
+  const ledger = await ledgerOf(repo, files);
+  if (ledger.recorded.length > 0 || ledger.started.length === 0) {
+    return undefined;
+  }
+  const previous = definedEntity(
+    record.definitionBefore,
+    record.kind,
+    record.slug
+  );
+  const entity = definedEntity(
+    record.definitionAfter,
+    record.kind,
+    record.slug
+  );
+  if (previous === null || entity === null) return undefined;
+  const writer = await writerDepsOf(deps);
+  if (writer === undefined) return undefined;
+  return judgeLeftStop(writer, {
+    kind: record.kind,
+    slug: record.slug,
+    previous,
+    entity,
+    renamed: record.renamed,
+    file,
+    keepAside: deps.keepsStoppedAside === true,
+  });
+}
+
+/**
+ * Whether this settle judges a stop inside a file from the tables: on MySQL, where `stopsLeft` does
+ * not leave it, for a save of one step and one file whose record says its files carry no statements
+ * of their own.
+ */
+function stopJudgedHere(
+  deps: SettleDeps,
+  record: LeftSave,
+  files: readonly string[]
+): boolean {
+  return (
+    deps.stopsLeft !== true &&
+    deps.adapter.getCapabilities().dialect === "mysql" &&
+    record.ownStatements === false &&
+    record.stepFrom === undefined &&
+    files.length === 1
+  );
+}
+
+/**
+ * Settle a save stopped inside its file on MySQL as its judgement found it (`leftStopOf`), its
+ * stopped attempt cleared: none of it, its file and snapshot removed and the definition put back
+ * (`settleNone`); all of it, its file recorded applied and the registry row brought up
+ * (`settleAll`); or part of it, a file written for exactly what applied in the stopped one's place,
+ * recorded applied, with the definition and the registry row brought to that shape, the record
+ * cleared, and each change named applied or not. A definition edited since the stop is left as it
+ * is, and named.
+ */
+async function settleLeftStop(
+  deps: SettleDeps,
+  repo: SchemaEventsRepository,
+  record: LeftSave,
+  files: readonly string[],
+  notes: string[],
+  kept: AllFacts,
+  stop: LeftStop
+): Promise<SettledOutcome> {
+  notes.push(...stoppedChanges(stop.report));
+  if (stop.kind === "none") return settleNone(deps, repo, record, files, notes);
+  if (stop.kind === "all") {
+    for (const filename of files) {
+      await settleRemovedFileAttempts(deps.adapter, repo, filename);
+    }
+    notes.push(...(await keepSavedDefinition(deps, record)));
+    return settleAll(deps, repo, record, files, notes, kept);
+  }
+  const definition = await definitionAgainstRecord(deps, record);
+  const keepDefinition = definition !== "saved";
+  if (keepDefinition) {
+    notes.push(
+      `The definition ${record.definitionFile} was changed since the save stopped, so it is left as it is: it differs from what the database now holds, which the next \`migrate:create\` plans`
+    );
+  }
+  await stop.settle(record, {
+    keepDefinition,
+    writeRow: async applied => {
+      const written = await deps.writeRegistry({
+        kind: record.kind,
+        slug: record.slug,
+        saved: {
+          fields: applied.fields,
+          ...(applied.localized === undefined
+            ? {}
+            : { localized: applied.localized }),
+        },
+      });
+      // A stop inside an update's file always has a row: one missing undoes the settle.
+      if (!written) {
+        throw NextlyError.internal({
+          logContext: {
+            reason: "left-stop-without-registry-row",
+            slug: record.slug,
+          },
+        });
+      }
+    },
+  });
+  await clearSettledSave(deps.adapter, deps.projectRoot, record);
+  deps.logger.info(
+    `Settled a Builder save of the ${described(record)} that stopped part-way through its migration file: ${stoppedChanges(stop.report).join("; ")}.`
+  );
+  return "partial";
+}
+
+/** Each change a stopped save asked for, named applied or not. */
+function stoppedChanges(report: LeftStop["report"]): string[] {
+  const named = (c: LeftStop["report"][number]) =>
+    c.change === "rename"
+      ? `${c.from ?? c.field} renamed to ${c.field}`
+      : c.field;
+  const applied = report.filter(c => c.applied).map(named);
+  const not = report.filter(c => !c.applied).map(named);
+  return [
+    `applied: ${applied.length === 0 ? "nothing" : applied.join(", ")}`,
+    `not applied: ${not.length === 0 ? "nothing" : not.join(", ")}`,
+  ];
+}
+
+/**
+ * The writer's dependencies for a settle that writes a stopped save's file (`judgeLeftStop`): the
+ * app's Builder setup, over this settle's database, folder and project root. Undefined where the
+ * app registered no writer.
+ */
+async function writerDepsOf(
+  deps: SettleDeps
+): Promise<CollectionSaveDeps | undefined> {
+  // Loaded on demand: a settle that writes no file never needs the container.
+  const { container } = await import("../../../di/container");
+  if (!container.has("builderSaveSetup")) return undefined;
+  const setup = container.get<BuilderSaveSetup>("builderSaveSetup");
+  return {
+    ...setup,
+    adapter: deps.adapter,
+    projectRoot: deps.projectRoot,
+    migrationsDir: deps.migrationsDir,
+    logger: { ...deps.logger, error: message => deps.logger.warn(message) },
+    applies: true,
+  };
+}
+
+/** The entity of `kind` and `slug` a definition's text holds, or null where it holds none or cannot be read. */
+function definedEntity(
+  text: string | null | undefined,
+  kind: AddressKind,
+  slug: string
+): UiSchemaEntity | null {
+  if (text === null || text === undefined) return null;
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const parsed = parseUiSchema(json);
+  if (!parsed.success) return null;
+  const list: readonly UiSchemaEntity[] =
+    parsed.data[saveKindOf(kind).manifest];
+  return list.find(entity => entity.slug === slug) ?? null;
 }
 
 /**
@@ -635,7 +900,16 @@ async function settleAll(
 ): Promise<SettledOutcome> {
   for (const filename of files) {
     if (!(await repo.isFileApplied(filename))) {
-      await recordAlreadyApplied({ filename }, repo);
+      // With the checksum `nextly migrate` checks an applied file by, as the save's own record of
+      // it would carry: a file edited after it was settled is then refused as edited.
+      const content = await readFile(
+        join(deps.migrationsDir, filename),
+        "utf-8"
+      );
+      await recordAlreadyApplied(
+        { filename, sha256: checksumOf(content) },
+        repo
+      );
     }
   }
   // A file applied after the save's last one: the schema has moved past this save (another
@@ -923,7 +1197,7 @@ async function whereTablesStand(
  * file cannot name an entity the definition no longer holds).
  */
 async function filesOfSave(
-  deps: SettleDeps,
+  deps: Pick<SettleDeps, "adapter" | "migrationsDir">,
   record: LeftSave
 ): Promise<{ files: string[]; unclear: string[] }> {
   const named = new Set(record.files ?? []);
@@ -943,6 +1217,20 @@ async function filesOfSave(
   };
 }
 
+/**
+ * Whether a save's migration files are in `where`'s folder: one it named, or one written for its
+ * moment that is its own or cannot be told from it (`filesOfSave`). Asked of another host's save
+ * made outside development, which shares the folder where they are: run, its files would apply a
+ * part of a change it never finished.
+ */
+export async function saveFilesPresent(
+  where: Pick<SettleDeps, "adapter" | "migrationsDir">,
+  record: LeftSave
+): Promise<boolean> {
+  const { files, unclear } = await filesOfSave(where, record);
+  return files.length > 0 || unclear.length > 0;
+}
+
 /** The migration files in `dir`, in name order; none where it is absent. */
 async function sqlFilesIn(dir: string): Promise<string[]> {
   try {
@@ -960,7 +1248,7 @@ async function sqlFilesIn(dir: string): Promise<string[]> {
  * last ("unclear") cannot be told; any other file is not the save's ("other").
  */
 function laterFileOfSave(
-  deps: SettleDeps,
+  deps: Pick<SettleDeps, "adapter" | "migrationsDir">,
   record: LeftSave
 ): (name: string) => Promise<"save" | "unclear" | "other"> {
   const dialect = deps.adapter.getCapabilities().dialect;

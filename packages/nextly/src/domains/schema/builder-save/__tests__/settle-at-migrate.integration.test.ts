@@ -382,6 +382,89 @@ describe.each(getConfiguredTestDialects())(
       expect(await liveColumns(t)).not.toContain("alpha");
     }, 300_000);
 
+    // Another machine's save made outside development changed no table here, but where it shares
+    // this project's migration folder the files it left are here, part of a save it never finished:
+    // run, they would apply a part of a change. The run refuses, naming the save.
+    it("refuses before its first file over another machine's save made outside development whose files are in this folder", async () => {
+      const t = await boot();
+      const { written } = await leftSave(t);
+      await setRecord(t, { host: "another-machine" });
+
+      const run = await migrate();
+
+      expect(run.code, run.said).not.toBeUndefined();
+      expect(run.said).toContain("another-machine");
+      for (const file of written) {
+        expect(await isApplied(t, file), file).toBe(false);
+      }
+      expect(await liveColumns(t)).not.toContain("alpha");
+      expect(await recordRow(t), "the record stays").toBeDefined();
+    }, 300_000);
+
+    it("goes on, with a notice, over another machine's save made outside development whose files are not in this folder", async () => {
+      const t = await boot();
+      const { written, before } = await leftSave(t);
+      await setRecord(t, { host: "another-machine" });
+      // The save's files and its definition are on its own machine, not in this project.
+      writeFileSync(join(basePath, DEFINITION), before);
+      for (const file of written) {
+        rmSync(join(historyDir(), file), { force: true });
+        rmSync(
+          join(historyDir(), "meta", file.replace(/\.sql$/, ".snapshot.json")),
+          { force: true }
+        );
+      }
+
+      const run = await migrate();
+
+      expect(run.code, run.said).toBeUndefined();
+      expect(run.said).toContain("made outside development");
+      expect(
+        await recordRow(t),
+        "the record stays, its machine's"
+      ).toBeDefined();
+    }, 300_000);
+
+    it("refuses a production start over another machine's save made outside development whose files are in this folder", async () => {
+      const t = await boot();
+      const { written } = await leftSave(t);
+      await setRecord(t, { host: "another-machine" });
+      vi.stubEnv("NODE_ENV", "production");
+      // A production start reads the project from its own folder.
+      vi.spyOn(process, "cwd").mockReturnValue(basePath);
+      const logger = {
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        debug: () => undefined,
+      };
+
+      const started = await runProdMigrationsIfEnabled({
+        adapter: t.adapter as never,
+        config: {
+          db: {
+            runMigrationsOnBoot: true,
+            migrationsDir: historyDir(),
+            uiSchemaFile: DEFINITION,
+          },
+          collections: [],
+          singles: [],
+        },
+        served: sanitizeConfig(PROJECT) as never,
+        logger,
+        afterMigrations: async () => undefined,
+      }).then(
+        ran => `ran: ${String(ran)}`,
+        (error: unknown) =>
+          (error as { publicMessage?: string }).publicMessage ?? String(error)
+      );
+
+      expect(started).toContain("another-machine");
+      for (const file of written) {
+        expect(await isApplied(t, file), file).toBe(false);
+      }
+    }, 300_000);
+
     // A marker of a save against another database, with no row here (that database holds it), is
     // that database's to settle: a run against this one leaves it, so the commands with no
     // database still refuse there.
