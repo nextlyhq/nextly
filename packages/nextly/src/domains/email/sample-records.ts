@@ -7,7 +7,9 @@
  * decision every read takes, before the loader runs at all: a loader never
  * has to remember the check, and a caller refused never reaches it. A loader
  * is handed no filter, so a caller whose read a rule's filter limits to some
- * entries is refused rather than shown entries past it. What a
+ * entries is refused rather than shown entries past it, and so is every
+ * caller of a collection whose fields carry a read rule, which is judged per
+ * entry and per caller where the loader reads as the system. What a
  * loader answers is checked for shape, bounded, and handed back for the
  * preview; it is never stored.
  *
@@ -16,13 +18,18 @@
 
 import { z } from "zod";
 
+import { tryResolveCurrentFields } from "../../api/versions-access";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import {
   entityReadFor,
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
 import { canReadSystemResource } from "../../auth/resource-readable";
+import { container } from "../../di/container";
 import { NextlyError } from "../../errors";
+import type { FieldGroupDataService } from "../field-groups/services/field-group-data-service";
+import { fieldsCarryingReadRules } from "../versions/component-read-access";
+import { resolveComponentFieldMap } from "../versions/tag-component-types";
 
 /**
  * @experimental What a loader reads, which Nextly checks the caller may read
@@ -107,8 +114,9 @@ export function sampleRecordsOf(
 
 /**
  * Whether `caller` may read everything `reads` names, by the one access
- * decision. A collection read a rule's filter limits is not everything: the
- * loader would read past the filter, so it is refused.
+ * decision. A collection read a rule's filter limits is not everything, and
+ * neither is one whose fields carry read rules: the loader would read past
+ * them, so both are refused.
  */
 async function mayRead(
   reads: SampleRecordReads,
@@ -118,7 +126,28 @@ async function mayRead(
     return canReadSystemResource("users", caller.userId, caller.scope);
   }
   const read = await entityReadFor(reads.collection, caller.readCaller);
-  return read.allowed;
+  return read.allowed && (await noFieldReadRules(reads.collection));
+}
+
+/**
+ * Whether no field of the collection carries a read rule, on itself, beneath
+ * it or in a component it reaches. A schema that cannot be read answers no.
+ */
+async function noFieldReadRules(collection: string): Promise<boolean> {
+  const fields = await tryResolveCurrentFields("collection", collection);
+  if (fields === null) return false;
+  const groups = container.has("fieldGroupDataService")
+    ? container.get<FieldGroupDataService>("fieldGroupDataService")
+    : null;
+  const componentFields = groups
+    ? await resolveComponentFieldMap(fields, slug =>
+        groups.getComponentFields(slug)
+      )
+    : new Map();
+  return (
+    fieldsCarryingReadRules("collection", fields, componentFields, collection)
+      .length === 0
+  );
 }
 
 /**

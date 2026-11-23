@@ -39,6 +39,9 @@ const SHIPPED = "sample-order-shipped";
 /** Orders a rule lets each person read only some of. */
 const OWN_ORDERS = "sample_own_orders";
 const OWN_SHIPPED = "sample-own-order-shipped";
+/** Orders with a field only some may read. */
+const NOTED_ORDERS = "sample_noted_orders";
+const NOTED_SHIPPED = "sample-noted-order-shipped";
 
 type Headers = Record<string, string>;
 
@@ -107,6 +110,34 @@ const shop = definePlugin({
     ],
   },
 } as never);
+
+/** A template offering the orders whose note a field rule keeps from most. */
+const notedShippedTemplate = {
+  ...shippedTemplate,
+  slug: NOTED_SHIPPED,
+  name: "Noted order shipped",
+  sampleRecords: {
+    label: "A real noted order",
+    reads: { collection: NOTED_ORDERS },
+    list: async () => {
+      loaderCalls.push("noted-list");
+      return [{ id: "o-7", label: "Order A-7" }];
+    },
+    load: async (id: string) => {
+      loaderCalls.push(`noted-load:${id}`);
+      return { orderNumber: id, customer: "the note nobody may read" };
+    },
+  },
+} as unknown as PluginEmailTemplate;
+
+/** Orders whose note a field read rule keeps from everyone. */
+const notedOrders = defineCollection({
+  slug: NOTED_ORDERS,
+  fields: [
+    text({ name: "number" }),
+    text({ name: "note", access: { read: () => false } }),
+  ],
+});
 
 /** Orders each person reads only the ones a read rule's filter matches of. */
 const ownOrders = defineCollection({
@@ -196,6 +227,7 @@ for (const dialect of getConfiguredTestDialects()) {
     let usersOnly: Headers;
     let shippedId: string;
     let ownShippedId: string;
+    let notedShippedId: string;
     let welcomeId: string;
     let adaId: string;
 
@@ -203,7 +235,7 @@ for (const dialect of getConfiguredTestDialects()) {
       t = await createTestNextly({
         dialect,
         plugins: [shop],
-        collections: [ownOrders],
+        collections: [ownOrders, notedOrders],
       });
       try {
         const services = new ServiceContainer(t.adapter);
@@ -219,6 +251,7 @@ for (const dialect of getConfiguredTestDialects()) {
           "read-email-templates",
           `read-${ORDERS}`,
           `read-${OWN_ORDERS}`,
+          `read-${NOTED_ORDERS}`,
           "read-users",
         ]));
         ({ headers: templatesOnly } = await sessionFor(
@@ -246,7 +279,11 @@ for (const dialect of getConfiguredTestDialects()) {
           plugins: [
             {
               name: "sample-shop",
-              templates: [shippedTemplate, ownShippedTemplate],
+              templates: [
+                shippedTemplate,
+                ownShippedTemplate,
+                notedShippedTemplate,
+              ],
             },
           ],
         });
@@ -261,11 +298,15 @@ for (const dialect of getConfiguredTestDialects()) {
         const ownShipped = await t.nextly.emailTemplates.findBySlug({
           slug: OWN_SHIPPED,
         });
-        if (!shipped || !welcome || !ownShipped) {
+        const notedShipped = await t.nextly.emailTemplates.findBySlug({
+          slug: NOTED_SHIPPED,
+        });
+        if (!shipped || !welcome || !ownShipped || !notedShipped) {
           throw new Error("templates not seeded");
         }
         shippedId = String(shipped.id);
         ownShippedId = String(ownShipped.id);
+        notedShippedId = String(notedShipped.id);
         welcomeId = String(welcome.id);
       } catch (error) {
         await t?.destroy();
@@ -339,6 +380,19 @@ for (const dialect of getConfiguredTestDialects()) {
         `email-templates/${ownShippedId}/sample-records/o-9`,
       ]) {
         // Holds the read, which the rule's filter limits to some orders.
+        const refused = await get(path, reader);
+        expect(REFUSED, `${path}: ${refused.text}`).toContain(refused.status);
+      }
+      expect(loaderCalls).toEqual([]);
+    });
+
+    it("refuses a person reading a collection whose fields carry a read rule, before the loader runs: it would read past the rule", async () => {
+      loaderCalls.length = 0;
+      for (const path of [
+        `email-templates/${notedShippedId}/sample-records`,
+        `email-templates/${notedShippedId}/sample-records/o-7`,
+      ]) {
+        // Holds the collection's read, which a field's own rule narrows.
         const refused = await get(path, reader);
         expect(REFUSED, `${path}: ${refused.text}`).toContain(refused.status);
       }

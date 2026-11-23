@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useSampleRecords } from "@admin/hooks/queries/useEmailTemplates";
 import { isApiError } from "@admin/lib/api/parseApiError";
@@ -21,7 +21,9 @@ export type RealRecordsOffer =
 
 /**
  * A template's real records, and loading one into the test data. The record
- * is read for the preview and handed to `onLoaded`; nothing is saved.
+ * is read for the preview and handed to `onLoaded`; nothing is saved. A load
+ * that answers after the editor moved to another template is dropped, so one
+ * template's record never fills another's test data.
  */
 export function useRealRecords(
   templateId: string | undefined,
@@ -37,16 +39,28 @@ export function useRealRecords(
   const [chosen, setChosen] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // The template the editor shows now, which a load must still be for.
+  const current = useRef(templateId);
+  useEffect(() => {
+    current.current = templateId;
+    setChosen("");
+    setLoading(false);
+    setLoadError(null);
+  }, [templateId]);
 
   const choose = useCallback(
     (recordId: string) => {
       if (!templateId) return;
+      const stillCurrent = () => current.current === templateId;
       setChosen(recordId);
       setLoading(true);
       setLoadError(null);
       loadSampleRecord(templateId, recordId)
-        .then(values => onLoaded(values))
+        .then(values => {
+          if (stillCurrent()) onLoaded(values);
+        })
         .catch((error: unknown) => {
+          if (!stillCurrent()) return;
           setLoadError(
             isApiError(error) && error.status === 404
               ? "That record is no longer there."
@@ -55,7 +69,9 @@ export function useRealRecords(
                 : "The record couldn't be read."
           );
         })
-        .finally(() => setLoading(false));
+        .finally(() => {
+          if (stillCurrent()) setLoading(false);
+        });
     },
     [templateId, onLoaded]
   );
@@ -71,15 +87,19 @@ export function useRealRecords(
   };
 }
 
+/**
+ * What to offer from the latest answer. A refusal or a "none offered" is the
+ * server's say now, and wins over records an earlier answer left cached; any
+ * other failure keeps what was listed.
+ */
 function offerOf(
   data: SampleRecords | undefined,
   error: Error | null
 ): RealRecordsOffer {
-  if (data) return { kind: "offered", records: data };
-  if (!error) return { kind: "none" };
   if (isApiError(error) && error.status === 404) return { kind: "none" };
   if (isApiError(error) && error.status === 403) {
     return { kind: "not-readable" };
   }
-  return { kind: "failed" };
+  if (data) return { kind: "offered", records: data };
+  return error ? { kind: "failed" } : { kind: "none" };
 }

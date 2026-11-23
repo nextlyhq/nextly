@@ -164,9 +164,12 @@ for (const size of WIDTHS) {
 
     // The record's name fills the Name field, and the preview follows.
     const fields = page.getByTestId("data-fields");
-    await expect(fields.getByLabel("Name")).toHaveValue(chosen, {
-      timeout: 30_000,
-    });
+    await expect(fields.getByLabel("Name", { exact: true })).toHaveValue(
+      chosen,
+      {
+        timeout: 30_000,
+      }
+    );
 
     expect(await scrollsSideways(page), `at ${size.width}`).toBe(false);
     const shot = await page.screenshot({ fullPage: true });

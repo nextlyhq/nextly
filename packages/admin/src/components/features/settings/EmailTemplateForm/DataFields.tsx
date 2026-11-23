@@ -6,7 +6,9 @@
  * A list gets a row per item, which the author adds and removes; an object,
  * and each item of a list that declares its fields, gets a field per field.
  * What a field holds is the test data itself, so the preview and a test send
- * read exactly what is shown here.
+ * read exactly what is shown here; a value its type's control can't show (a
+ * loaded record's or an example's) is said to be so rather than shown as
+ * another value.
  */
 import { Button, Input, Label, Switch } from "@nextlyhq/ui";
 import { useId, type JSX } from "react";
@@ -37,7 +39,9 @@ export function DataFields({
   data: Record<string, unknown>;
   onChange: (name: string, value: unknown) => void;
 }): JSX.Element {
-  const declared = variables.filter(v => v.name && !v.name.includes("."));
+  const declared = firstOfEachName(
+    variables.filter(v => v.name && !v.name.includes("."))
+  );
   if (declared.length === 0) {
     return (
       <p className="rounded-md border border-border bg-muted p-3 text-xs text-muted-foreground">
@@ -78,6 +82,9 @@ function ValueField({
   value: unknown;
   onChange: (value: unknown) => void;
 }): JSX.Element {
+  if (!fitsType(spec.type, value)) {
+    return <MisfitField spec={spec} value={value} />;
+  }
   if (spec.type === "list") {
     return <ListField spec={spec} value={value} onChange={onChange} />;
   }
@@ -259,6 +266,99 @@ function ScalarField({
       {hint}
     </div>
   );
+}
+
+/**
+ * A value its type's control can't show, said to be so: shown in a field of
+ * its kind, it would read as another value while the preview receives this
+ * one. It is changed in JSON.
+ */
+function MisfitField({
+  spec,
+  value,
+}: {
+  spec: FieldSpec;
+  value: unknown;
+}): JSX.Element {
+  return (
+    <div className="space-y-1" data-testid={`misfit-${spec.name}`}>
+      <p className="text-xs font-medium">{labelOf(spec)}</p>
+      <p className="rounded-md border border-warning-border bg-warning-surface p-2 text-xs text-foreground">
+        Holds <code className="font-mono">{JSON.stringify(value)}</code>, which
+        isn&apos;t {articleOf(spec.type)}. Change it in JSON.
+      </p>
+    </div>
+  );
+}
+
+/** What a value of `type` is called, with its article. */
+function articleOf(type: EmailTemplateVariableType | undefined): string {
+  switch (type) {
+    case "number":
+      return "a number";
+    case "money":
+      return "an amount";
+    case "date":
+      return "a date";
+    case "boolean":
+      return "a yes or no";
+    case "list":
+      return "a list";
+    case "object":
+      return "an object";
+    default:
+      return "text";
+  }
+}
+
+/** A date as a date input holds one: `YYYY-MM-DD`. */
+const DATE_VALUE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Whether the control drawn for `type` shows `value` as it is. Nothing yet
+ * (undefined) fits every type: the field starts empty.
+ */
+function fitsType(
+  type: EmailTemplateVariableType | undefined,
+  value: unknown
+): boolean {
+  if (value === undefined) return true;
+  switch (type) {
+    case "boolean":
+      return typeof value === "boolean";
+    case "number":
+    case "money":
+      return (
+        value === "" || (typeof value === "number" && Number.isFinite(value))
+      );
+    case "date":
+      return (
+        typeof value === "string" && (value === "" || DATE_VALUE.test(value))
+      );
+    case "list":
+      return Array.isArray(value);
+    case "object":
+      return isRecord(value);
+    default:
+      return (
+        value === null ||
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean"
+      );
+  }
+}
+
+/** Each name's first declaration: a name declared twice is one value. */
+function firstOfEachName<T extends { name: string }>(
+  declarations: readonly T[]
+): T[] {
+  const seen = new Set<string>();
+  return declarations.filter(declaration => {
+    if (seen.has(declaration.name)) return false;
+    seen.add(declaration.name);
+    return true;
+  });
 }
 
 function inputTypeOf(type: EmailTemplateVariableType | undefined): string {
