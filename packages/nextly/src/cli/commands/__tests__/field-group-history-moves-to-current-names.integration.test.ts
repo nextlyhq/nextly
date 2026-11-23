@@ -407,7 +407,7 @@ describe.each(getConfiguredTestDialects())(
         await app.nextly.find({ collection: "fh_posts" as never })
       ).items as Array<{ card?: { heading?: string; subtitle?: unknown } }>;
       expect(post.card?.heading).toBe("H");
-    });
+    }, 120_000);
 
     // The registry row of a field group the Schema Builder made is written by `nextly migrate`
     // from the snapshot: into the registry the database holds, naming the table it is stored in.

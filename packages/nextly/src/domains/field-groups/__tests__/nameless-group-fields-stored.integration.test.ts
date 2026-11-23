@@ -556,7 +556,7 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(
           notices.some(
             notice =>
-              notice.startsWith("comp_fgnbadge ") &&
+              notice.startsWith("fg_fgnbadge ") &&
               notice.endsWith(`adds the column ${column}.`)
           ),
           `a notice naming ${column}`
