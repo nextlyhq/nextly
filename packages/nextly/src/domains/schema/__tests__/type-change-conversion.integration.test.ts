@@ -349,6 +349,33 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    // The translations column is cast as the entity's own column is, so a value the cast would not
+    // read alike never reaches it: a text a checkbox reads only once rewritten ("TRUE") is refused
+    // in each language before anything runs, every value as it was.
+    it("refuses a translated text becoming a checkbox over a value it reads only once rewritten, and changes nothing", async () => {
+      const t = await boot([{ name: "v", type: "text", localized: true }], {
+        localized: true,
+      });
+      const id = await write(t, "a", { v: "yes" }, "en");
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        data: { v: "TRUE", _overwrite: true },
+        locale: "es",
+      } as never);
+
+      const refused = await save(
+        t,
+        [{ name: "v", type: "checkbox", localized: true }],
+        { localized: true }
+      );
+
+      expect(refused).toMatchObject(
+        refusedAs("TYPE_CHANGE_BLOCKED", "rewritten into its form")
+      );
+      expect(await read(t, "v", "es")).toEqual({ a: "TRUE" });
+    });
+
     // A save that stops translating the whole collection moves each language's value out of the
     // translations table as it is stored, before the entity's own table takes the new type, which
     // PostgreSQL refuses part-way: refused with the two saves that make it, not as kept per language.
@@ -480,6 +507,66 @@ describe.each(getConfiguredTestDialects())(
         slug: "tcc_hero",
       } as never)) as { v?: unknown; item?: { v?: unknown } } | undefined;
       expect(read?.item?.v ?? read?.v).toBe(12);
+    });
+
+    // A Single's save in production is applied by its push, which changes no translations column's
+    // type: the file it writes carries the column's new type, but that file is not what runs. So a
+    // translated field's type change is refused there, with its reason, and nothing changes.
+    it("refuses a translated Single's type change in production, where its push runs rather than its file", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      project = await mkdtemp(join(tmpdir(), "type-change-conversion-single-"));
+      const t = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        basePath: project,
+        db: {
+          migrationsDir: "./database/history",
+          uiSchemaFile: "./schema/builder.json",
+        },
+      });
+      instance = t;
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "tcc_hero",
+          label: "Hero",
+          localized: true,
+          fields: [{ name: "v", type: "text", localized: true }],
+        }
+      );
+      for (const [locale, v] of [
+        ["en", "12"],
+        ["es", "34"],
+      ] as const) {
+        await t.nextly.updateSingle({
+          slug: "tcc_hero",
+          data: { v, _overwrite: true },
+          locale,
+        } as never);
+      }
+      vi.stubEnv("NODE_ENV", "production");
+
+      const refused = await dispatchSingles(
+        "updateSingleSchema",
+        { slug: "tcc_hero" },
+        { fields: [{ name: "v", type: "number", localized: true }] }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(JSON.stringify(refused)).toMatch(/kept per language/);
+      for (const [locale, v] of [
+        ["en", "12"],
+        ["es", "34"],
+      ] as const) {
+        const held = (await t.nextly.findSingle({
+          slug: "tcc_hero",
+          locale,
+        } as never)) as { v?: unknown; item?: { v?: unknown } } | undefined;
+        expect(held?.item?.v ?? held?.v).toBe(v);
+      }
     });
 
     // A Single answers a pair as a collection does: its own check before the save asks the same

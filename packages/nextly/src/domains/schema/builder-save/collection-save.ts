@@ -1478,8 +1478,12 @@ async function refuseSaveTypeChanges(
     // The save's file gives a translated field's translations column its new type where that
     // column changes on this database (`retypes`), so only a column it leaves behind is refused.
     // It is planned from the fields the folder's newest snapshot records: where that snapshot
-    // records none for the entity, the file cannot carry it, and the change stays refused.
-    ...((await newestSnapshotRecordsFields(deps, kind.kind, save.slug))
+    // records none for the entity, the file cannot carry it, and the change stays refused. Only a
+    // collection's save runs that file (in development) or leaves it for `nextly migrate`: a
+    // Single's or field group's save in production is applied by its push, which changes no
+    // translations column's type, so theirs stays refused whatever the file carries.
+    ...(kind.kind === "collection" &&
+    (await newestSnapshotRecordsFields(deps, kind.kind, save.slug))
       ? retypedBySave({
           previous,
           next,
