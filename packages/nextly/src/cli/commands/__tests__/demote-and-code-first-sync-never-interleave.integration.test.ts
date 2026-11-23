@@ -85,13 +85,13 @@ import {
 import {
   createTestNextly,
   getConfiguredTestDialects,
-  type TestDialect,
 } from "../../../plugins/test-nextly";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import { consoleLogger } from "../../../shared/types";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import { demoteCollection } from "../db-sync-demote";
+import { openCollectionRegistry } from "../db-sync-registry";
 import { runDbSync } from "../db-sync";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
@@ -135,12 +135,24 @@ interface Gate {
   open(): void;
 }
 
+/** Every gate a case made, opened when it ends, so a failed case leaves nothing waiting. */
+const gates: Gate[] = [];
+
 function gate(): Gate {
   let open!: () => void;
   const opened = new Promise<void>(resolve => {
     open = resolve;
   });
-  return { opened, open };
+  const made = { opened, open };
+  gates.push(made);
+  return made;
+}
+
+/** What a tracked run settled with, for a failure message. */
+function described(outcome: { value?: unknown; error?: unknown }): string {
+  if (outcome.error === undefined) return `value ${String(outcome.value)}`;
+  const error = outcome.error as { code?: unknown; logContext?: unknown };
+  return `error ${String(outcome.error)} ${String(error.code)} ${JSON.stringify(error.logContext)}`;
 }
 
 /** A promise that records when it settled, and what it settled with, without ever rejecting. */
@@ -270,12 +282,23 @@ for (const dialect of getConfiguredTestDialects()) {
       } as CommandContext;
     }
 
+    /**
+     * The registry on a connection of its own, opened as the promote and demote commands open
+     * theirs (`openCollectionRegistry`), with the resolver the registry's tables are read through.
+     */
+    async function openRegistry() {
+      const opened = await openCollectionRegistry(
+        createLogger({ quiet: true })
+      );
+      if (opened === undefined) throw new Error("the database is not there");
+      connections.push(opened.adapter);
+      return opened;
+    }
+
     /** The collection's registry record, read on a connection of the test's own. */
     async function record() {
-      return new CollectionRegistryService(
-        await connect(),
-        quiet as never
-      ).getCollectionBySlug(POSTS.slug);
+      const { registry } = await openRegistry();
+      return registry.getCollectionBySlug(POSTS.slug);
     }
 
     /**
@@ -283,13 +306,13 @@ for (const dialect of getConfiguredTestDialects()) {
      * holding the lock before its re-read, until released.
      */
     async function demote(pause?: { held: Gate; release: Gate }) {
-      const adapter = await connect();
+      const { registry, adapter } = await openRegistry();
       return demoteCollection({
         collection: POSTS as never,
         logger: createLogger({ quiet: true }),
         registry: pause
           ? new PausedBeforeReRead(adapter, pause.held, pause.release)
-          : new CollectionRegistryService(adapter, quiet as never),
+          : registry,
         adapter,
         confirm: async () => true,
         lockWaitMs: 120_000,
@@ -390,7 +413,14 @@ for (const dialect of getConfiguredTestDialects()) {
     ): Promise<{ road: { value?: unknown; error?: unknown } }> {
       const pause = { held: gate(), release: gate() };
       const demoting = tracked(demote(pause));
-      await pause.held.opened;
+      await Promise.race([
+        pause.held.opened,
+        demoting.outcome.then(outcome => {
+          throw new Error(
+            `the demote ended before it held the lock: ${described(outcome)}`
+          );
+        }),
+      ]);
 
       const racing = tracked(road());
       await until(() => reached() || racing.settled, WINDOW_MS);
@@ -425,7 +455,9 @@ for (const dialect of getConfiguredTestDialects()) {
       // A demote holding the lock is still waiting for it here, nothing written.
       expect(
         demoting.settled,
-        "the demote finished inside the road's read and write"
+        `the demote finished inside the road's read and write: ${
+          demoting.settled ? described(await demoting.outcome) : ""
+        }`
       ).toBe(false);
 
       release.open();
@@ -459,6 +491,7 @@ for (const dialect of getConfiguredTestDialects()) {
 
     afterEach(async () => {
       registryStep.onFirst = undefined;
+      for (const made of gates.splice(0)) made.open();
       vi.restoreAllMocks();
       await shutdownServices().catch(() => {});
       clearServices();
@@ -565,7 +598,11 @@ for (const dialect of getConfiguredTestDialects()) {
         // Every lock table the demote could hold, gone, as on a database an earlier version
         // last ran against; the field-group lock's table is not made on a new database.
         const adapter = await connect();
-        for (const table of [SCHEMA_LOCK_TABLE, EARLIER_MIGRATE_LOCK_TABLE]) {
+        for (const table of [
+          SCHEMA_LOCK_TABLE,
+          EARLIER_MIGRATE_LOCK_TABLE,
+          "nextly_field_group_lock",
+        ]) {
           if (await adapter.tableExists(table)) {
             await adapter.executeQuery(`DROP TABLE ${table}`);
           }
