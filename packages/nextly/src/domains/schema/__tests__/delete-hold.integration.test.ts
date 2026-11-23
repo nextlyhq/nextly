@@ -300,7 +300,7 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     const q = (n: string) => (dialect === "mysql" ? `\`${n}\`` : `"${n}"`);
 
-    async function boot(): Promise<TestNextly> {
+    async function boot(fields: unknown[] = NOTED): Promise<TestNextly> {
       vi.stubEnv("NODE_ENV", "development");
       const t = await createTestNextly({
         dialect,
@@ -317,7 +317,7 @@ describe.each(getConfiguredTestDialects())(
         {
           name: SLUG,
           label: "Note",
-          fields: NOTED,
+          fields,
         }
       );
       return t;
@@ -1418,6 +1418,64 @@ describe.each(getConfiguredTestDialects())(
         expect(await applying).not.toBe("applied");
         expect(await hasNoteColumn(t)).toBe(true);
         expect(await notesHeld(t)).toBe(4);
+      },
+      60_000
+    );
+
+    // MySQL commits each schema statement as it runs: a save stopped between two statements that
+    // delete is told it applied part way, its file kept, and the values the later statement would
+    // have dropped are still there.
+    it.runIf(dialect === "mysql")(
+      "keeps the values a later deleting statement would drop when the save stops between them",
+      async () => {
+        const t = await boot([...NOTED, { name: "memo", type: "text" }]);
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        // `memo` holds the same values as `note`.
+        await sql(t, `UPDATE ${q(TABLE)} SET ${q("memo")} = ${q("note")}`);
+        const filesBefore = historyFiles(t);
+        const outcome = await withStopPoints(
+          point => {
+            if (/: before statement 2$/.test(point)) {
+              throw new Error("stopped between the deleting statements");
+            }
+          },
+          () =>
+            dispatchCollections(
+              {} as ServiceContainer,
+              "applySchemaChanges",
+              { collectionName: SLUG },
+              {
+                fields: REMAINING,
+                confirmed: true,
+                schemaVersion: await schemaVersion(t),
+                resolutions: {
+                  note: { action: "confirm_drop" },
+                  memo: { action: "confirm_drop" },
+                },
+                confirmedDeletions: [
+                  { field: "note", count: 3 },
+                  { field: "memo", count: 3 },
+                ],
+              }
+            ).then(
+              () => "applied",
+              (error: unknown) => error
+            )
+        );
+        expect(JSON.stringify(outcome)).toContain(
+          "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
+        );
+        expect(historyFiles(t).length).toBeGreaterThan(filesBefore.length);
+        const [kept] = await sql<{ n: number | string }>(
+          t,
+          `SELECT COUNT(*) AS n FROM ${q(TABLE)} WHERE ${q("memo")} IS NOT NULL`
+        ).catch(() => [{ n: -1 }]);
+        const [left] = await sql<{ n: number | string }>(
+          t,
+          `SELECT COUNT(*) AS n FROM ${q(TABLE)} WHERE ${q("note")} IS NOT NULL`
+        ).catch(() => [{ n: -1 }]);
+        // One of the two went with the first statement; the other is still there, all three.
+        expect([Number(kept?.n), Number(left?.n)].sort()).toEqual([-1, 3]);
       },
       60_000
     );
