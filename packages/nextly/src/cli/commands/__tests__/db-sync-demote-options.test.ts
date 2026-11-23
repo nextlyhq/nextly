@@ -330,8 +330,10 @@ describe("a demoted collection's columns", () => {
   it("are named where the Schema Builder's column rules describe them differently, on the database's dialect", async () => {
     // A shared text field stating no width is VARCHAR(255) on a code-first MySQL table and TEXT on
     // a Schema Builder one. From the next sync the table is the Builder's, so the column widens.
+    // Translated, so its translatable fields are kept per language whatever the site's layout.
     const { shown } = await demoted(
       coded({
+        localized: true,
         fields: [
           { name: "code", type: "text", localized: false },
           { name: "body", type: "text" },
