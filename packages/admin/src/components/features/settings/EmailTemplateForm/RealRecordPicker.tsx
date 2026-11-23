@@ -29,7 +29,7 @@ export function RealRecordPicker({
     onLoaded
   );
 
-  if (offer.kind === "none") return null;
+  if (offer.kind === "asking" || offer.kind === "none") return null;
   if (offer.kind === "not-readable" || offer.kind === "failed") {
     return (
       <p

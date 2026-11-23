@@ -9,7 +9,9 @@ import {
 
 /** What the Data panel can offer of a template's real records. */
 export type RealRecordsOffer =
-  /** Nothing to show: a new template, still asking, or none offered. */
+  /** Still asking the server. */
+  | { kind: "asking" }
+  /** Nothing to show: a new template, or none offered. */
   | { kind: "none" }
   /** Offered, but this person may not read what they are read from. */
   | { kind: "not-readable" }
@@ -59,7 +61,9 @@ export function useRealRecords(
   );
 
   return {
-    offer: offerOf(records.data, records.error),
+    offer: records.isLoading
+      ? { kind: "asking" }
+      : offerOf(records.data, records.error),
     chosen,
     loading,
     loadError,

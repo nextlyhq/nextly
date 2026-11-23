@@ -72,13 +72,18 @@ describe("the real-record picker", () => {
 
   it("shows nothing where the owner offers no records", async () => {
     listSampleRecords.mockRejectedValue(refused(404, "NOT_FOUND"));
+    const { result } = renderHook(() => useRealRecords("t-1", () => {}), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.offer.kind).not.toBe("asking"));
+    expect(result.current.offer).toEqual({ kind: "none" });
+
     const { container } = render(
       <RealRecordPicker templateId="t-1" onLoaded={() => {}} />,
       { wrapper }
     );
-    await waitFor(() => expect(listSampleRecords).toHaveBeenCalled());
-    await waitFor(() => expect(container.textContent).toBe(""));
-    expect(screen.queryByTestId("real-record-picker")).toBeNull();
+    await waitFor(() => expect(listSampleRecords).toHaveBeenCalledTimes(2));
+    expect(container.textContent).toBe("");
   });
 
   it("says records are for people who can read them, to a person who can't", async () => {
