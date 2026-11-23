@@ -250,9 +250,33 @@ describe("getValidatedFields", () => {
     expect(toastError).toHaveBeenCalledWith("All fields must have a name");
   });
 
-  it("refuses a saved field taken to another storage level by naming the layout group it moved into", () => {
+  it("refuses a saved field taken out of repeating rows", () => {
+    // Saved inside repeating rows, now at the top level: each entry may hold
+    // several rows of it, which one field cannot keep.
+    const saved = [
+      field("rows", {
+        id: "field_rows",
+        type: "repeater",
+        fields: [field("body")],
+      }),
+    ];
+    const builder = makeBuilder([
+      field("body"),
+      field("rows", { id: "field_rows", type: "repeater", fields: [] }),
+    ]);
+    const { result } = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    );
+
+    expect(result.current.getValidatedFields(saved)).toBeNull();
+    expect(toastError).toHaveBeenCalledWith(
+      "body would move into or out of repeating rows, which is not available yet: a save would not keep the values. Undo that change first."
+    );
+  });
+
+  it("lets a saved field taken into a named group through, as a move the save keeps", () => {
     // Saved at the top level, moved into a nameless group (its level kept),
-    // and that group then given a name: the field now stands inside it.
+    // and that group then given a name: the save sends it as a move.
     const saved = [
       field("body"),
       field("", { id: "field_layout", type: "group", fields: [] }),
@@ -268,10 +292,7 @@ describe("getValidatedFields", () => {
       useBuilderFieldActions(builder.api, "collection")
     );
 
-    expect(result.current.getValidatedFields(saved)).toBeNull();
-    expect(toastError).toHaveBeenCalledWith(
-      "body would move into or out of a group or repeating rows, which is not available yet: a save would not keep the values. Undo that change first."
-    );
+    expect(result.current.getValidatedFields(saved)).not.toBeNull();
   });
 
   it("lets a saved field stay inside a nameless group, on its level", () => {
