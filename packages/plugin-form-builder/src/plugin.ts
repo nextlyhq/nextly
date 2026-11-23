@@ -1372,27 +1372,29 @@ export async function prepareSubmissionForWrite(
 
   // A patch need not repeat the relationship, so the stored row is what says
   // which form this payload has to match.
+  // A submission belongs to the form it was sent to: one created without it,
+  // or a patch emptying it, is refused here, since the column itself stays
+  // nullable (see the `form` field). Checked on the payload before the
+  // stored row's form is used, so a patch naming no form cannot fall back to
+  // it. A patch that leaves `form` out on a row an earlier release stored
+  // without one is let through, so that row can still be handled.
+  if (
+    parentFormId(submission) === null &&
+    (ctx.operation === "create" || "form" in submission)
+  ) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "form",
+          code: "REQUIRED",
+          message: "A submission needs the form it was sent to.",
+        },
+      ],
+    });
+  }
   const formId =
     parentFormId(submission) ?? (stored ? parentFormId(stored) : null);
-  if (!formId) {
-    // A submission belongs to the form it was sent to: one created without
-    // it, or a patch emptying it, is refused here, since the column itself
-    // stays nullable (see the `form` field). A patch that leaves `form` out
-    // on a row an earlier release stored without one is let through, so
-    // that row can still be handled.
-    if (ctx.operation === "create" || "form" in submission) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "form",
-            code: "REQUIRED",
-            message: "A submission needs the form it was sent to.",
-          },
-        ],
-      });
-    }
-    return ctx.data;
-  }
+  if (!formId) return ctx.data;
 
   if (ctx.operation !== "create" && !updateNeedsChecking(submission, stored)) {
     // A status change still moves the key: spam gives it back.

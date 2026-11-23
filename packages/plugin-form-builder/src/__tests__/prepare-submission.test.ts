@@ -730,17 +730,28 @@ describe("the write-seam hook on submissions", () => {
   });
 
   it("refuses a patch that empties a submission's form", async () => {
-    await expect(
-      prepareSubmissionForWrite(
-        {
-          data: { form: null, status: "read" },
-          originalData: { form: "form1", data: { name: "Ada" } },
-          operation: "update",
+    // The stored row names a form and holds valid answers, so the only thing
+    // wrong with the patch is the emptied form, and the stored form is not
+    // used in its place.
+    const refused = await prepareSubmissionForWrite(
+      {
+        data: { form: null, status: "read" },
+        originalData: {
+          form: "form1",
+          data: { name: "Ada", email: "ada@example.com" },
         },
-        formsSlug,
-        withForm
-      )
-    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        operation: "update",
+      },
+      formsSlug,
+      withForm
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: { errors: [{ path: "form", code: "REQUIRED" }] },
+    });
   });
 
   it("lets a patch through on a row an earlier release stored without a form", async () => {
