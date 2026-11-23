@@ -94,6 +94,14 @@ export type AccountsEmail =
       accountId: null;
       to: string;
       link: string;
+      /** The name the site invited the person by, to greet them with. */
+      name: string;
+      /** When the link stops working: the instant, in ISO 8601 UTC. */
+      expiresAt: string;
+      /** The same instant in the site's time zone, such as "30 November 2026, 5:00 PM". */
+      expiresAtText: string;
+      /** The IANA time zone `expiresAtText` is written in. */
+      timeZone: string;
     }
   | {
       /** The site invited an address that already has an account: sign in instead. */

@@ -51,6 +51,10 @@ const SAMPLES: {
     accountId: null,
     to: "dana@example.com",
     link: "L",
+    name: "Dana Reyes",
+    expiresAt: "2026-11-30T12:00:00.000Z",
+    expiresAtText: "30 November 2026, 5:00 PM",
+    timeZone: "Asia/Karachi",
   },
   "invitation-has-account": {
     ...base,
