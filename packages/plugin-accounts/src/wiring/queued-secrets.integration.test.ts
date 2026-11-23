@@ -335,6 +335,12 @@ describe.each(getConfiguredTestDialects())(
       const recorded = await deliveries(nextly);
       expect(recorded.failed).toHaveLength(5);
       expect(recorded.text).not.toContain(token);
+      // Each failure was logged with the provider's words, the link blanked.
+      expect(logged.filter(line => line.includes("could not take"))).toEqual(
+        Array.from({ length: 5 }, () =>
+          expect.stringContaining("could not take [secret]")
+        )
+      );
       expect(logged.filter(line => line.includes(token))).toEqual([]);
     });
   }
