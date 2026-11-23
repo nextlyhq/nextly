@@ -129,21 +129,8 @@ async function heldFieldsOf(args: {
   tx?: unknown;
 }): Promise<HeldFields | undefined> {
   if (isProductionRuntime()) return undefined;
-  const dialect = args.adapter.getCapabilities().dialect;
-  if (dialect !== "mysql") return undefined;
-  let row: Awaited<ReturnType<typeof readSaveInProgressOf>>;
-  try {
-    row = await readSaveInProgressOf(
-      args.tx ?? args.adapter.getDrizzle(),
-      dialect,
-      args.kind,
-      args.slug
-    );
-  } catch (error) {
-    // A database whose meta table is not made yet holds no record of any save.
-    if (isMissingTable(error, dialect)) return undefined;
-    throw error;
-  }
+  if (args.adapter.getCapabilities().dialect !== "mysql") return undefined;
+  const row = await standingRecordOf(args);
   // A save made outside development leaves its files for `nextly migrate` and changes no table.
   if (row === undefined || ("record" in row && row.record.applies === false)) {
     await restoreRunningTables(args);
@@ -152,24 +139,60 @@ async function heldFieldsOf(args: {
   const registry = await registryRowOf(args);
   if (registry === null) return undefined;
   // A record that cannot be read could be any save's: every field is held, failing closed.
+  const record = "record" in row ? row.record : undefined;
   const unserved =
-    "record" in row
-      ? await unservedOf(args, row.record, registry.fields)
-      : undefined;
-  if (unserved !== undefined && "record" in row) {
-    await shapeRunningTables(args, row.record.id, registry, unserved.missing);
+    record === undefined
+      ? undefined
+      : await unservedOf(args, record, registry.fields);
+  if (record !== undefined && unserved !== undefined) {
+    await shapeRunningTables(args, record.id, registry, unserved.missing);
   }
-  const fields =
-    unserved?.fields ??
-    registry.fields.flatMap(field =>
-      typeof field.name === "string" ? [field.name] : []
+  return heldOf(args, unserved?.fields ?? namesOf(registry.fields), unserved);
+}
+
+/**
+ * The record standing for the entity, read on the write's transaction where it has one: undefined
+ * where none stands, a database whose meta table is not made yet included.
+ */
+async function standingRecordOf(args: {
+  adapter: DrizzleAdapter;
+  kind: EntryKind;
+  slug: string;
+  tx?: unknown;
+}): Promise<Awaited<ReturnType<typeof readSaveInProgressOf>>> {
+  const dialect = args.adapter.getCapabilities().dialect;
+  try {
+    return await readSaveInProgressOf(
+      args.tx ?? args.adapter.getDrizzle(),
+      dialect,
+      args.kind,
+      args.slug
     );
+  } catch (error) {
+    if (isMissingTable(error, dialect)) return undefined;
+    throw error;
+  }
+}
+
+/** The answer over `fields`, as compared (`unserved`) or held whole; undefined where none is held. */
+function heldOf(
+  args: { kind: EntryKind; slug: string },
+  fields: readonly string[],
+  unserved: Unserved | undefined
+): HeldFields | undefined {
   if (fields.length === 0) return undefined;
   return {
     fields: new Set(fields),
     compared: unserved !== undefined,
     refusal: heldFieldsRefusal(args.kind, args.slug, fields),
   };
+}
+
+/** The names of `fields`, those with one. */
+function namesOf(fields: readonly FieldDefinition[]): string[] {
+  return fields.flatMap(field =>
+    typeof field.name === "string" ? [field.name] : []
+  );
 }
 
 /**
