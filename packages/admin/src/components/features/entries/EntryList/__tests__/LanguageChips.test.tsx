@@ -68,15 +68,15 @@ describe("LanguageChips", () => {
   });
 
   it.each([
-    ["English", "live", "Open in English (EN), live"],
+    ["English", "live", "Open in English, EN, live"],
     [
       "Spanish",
       "changes",
-      "Open in Spanish (ES), live, with unpublished changes",
+      "Open in Spanish, ES, live, with unpublished changes",
     ],
-    ["French", "outOfDate", "Open in French (FR), out of date, live"],
-    ["German", "draft", "Open in German (DE), draft"],
-    ["Arabic", "missing", "Open in Arabic (AR), missing"],
+    ["French", "outOfDate", "Open in French, FR, out of date, live"],
+    ["German", "draft", "Open in German, DE, draft"],
+    ["Arabic", "missing", "Open in Arabic, AR, missing"],
   ])("draws %s as the %s chip, named in words", (_language, state, name) => {
     render(<LanguageChips translations={EVERY_STATE} onOpenLocale={vi.fn()} />);
     const chip = screen.getByRole("button", { name });
@@ -101,6 +101,18 @@ describe("LanguageChips", () => {
     expect(chip).toHaveTextContent("ar");
   });
 
+  it("names each chip with the code it shows, as a word of its own", () => {
+    // A reader who says what they see ("ES") reaches the control by voice. Not in parentheses,
+    // which the name check behind WCAG 2.5.3 reads past.
+    render(<LanguageChips translations={EVERY_STATE} onOpenLocale={vi.fn()} />);
+    for (const chip of screen.getAllByRole("button")) {
+      const shown = (chip.textContent ?? "").trim().toUpperCase();
+      const name = chip.getAttribute("aria-label") ?? "";
+      expect(name.split(/[\s,]+/)).toContain(shown);
+      expect(name).not.toContain(`(${shown})`);
+    }
+  });
+
   it("follows the document's status for a language that carries none", () => {
     render(
       <LanguageChips
@@ -111,7 +123,7 @@ describe("LanguageChips", () => {
     );
     expect(
       chipState(
-        screen.getByRole("button", { name: "Open in Spanish (ES), draft" })
+        screen.getByRole("button", { name: "Open in Spanish, ES, draft" })
       )
     ).toBe("draft");
   });
@@ -130,7 +142,7 @@ describe("LanguageChips", () => {
   it("draws plain chips, named, where there is nowhere to open", () => {
     render(<LanguageChips translations={EVERY_STATE} />);
     expect(screen.queryAllByRole("button")).toHaveLength(0);
-    expect(screen.getByText("Arabic (AR), missing")).toBeInTheDocument();
+    expect(screen.getByText("Arabic, AR, missing")).toBeInTheDocument();
   });
 
   it("names the row's languages as a whole, the missing ones by name", () => {

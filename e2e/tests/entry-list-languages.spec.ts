@@ -123,23 +123,23 @@ test("shows each page's languages as chips, with the key", async ({ page }) => {
 
   const lantern = visibleRow(page, LANTERN_REVISED);
   await expect(
-    lantern.getByRole("button", { name: "Open in English (EN), live" })
+    lantern.getByRole("button", { name: "Open in English, EN, live" })
   ).toBeVisible();
   await expect(
     lantern.getByRole("button", {
-      name: "Open in Spanish (ES), out of date, live",
+      name: "Open in Spanish, ES, out of date, live",
     })
   ).toBeVisible();
   await expect(
-    lantern.getByRole("button", { name: "Open in Arabic (AR), missing" })
+    lantern.getByRole("button", { name: "Open in Arabic, AR, missing" })
   ).toBeVisible();
 
   const harbour = visibleRow(page, HARBOUR);
   await expect(
-    harbour.getByRole("button", { name: "Open in Spanish (ES), missing" })
+    harbour.getByRole("button", { name: "Open in Spanish, ES, missing" })
   ).toBeVisible();
   await expect(
-    harbour.getByRole("button", { name: "Open in Arabic (AR), live" })
+    harbour.getByRole("button", { name: "Open in Arabic, AR, live" })
   ).toBeVisible();
 
   const key = page.getByRole("list", { name: "Language key" });

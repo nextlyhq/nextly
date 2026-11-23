@@ -97,13 +97,13 @@ describe("EntryTable — language chips", () => {
     renderTable();
     expect(
       entriesTable().getByRole("button", {
-        name: "Open in Spanish (ES), out of date, live",
+        name: "Open in Spanish, ES, out of date, live",
       })
     ).toBeInTheDocument();
     // Arabic is missing on every row: one chip each.
     expect(
       entriesTable().getAllByRole("button", {
-        name: "Open in Arabic (AR), missing",
+        name: "Open in Arabic, AR, missing",
       })
     ).toHaveLength(3);
     expect(

@@ -142,8 +142,9 @@ export function LanguageChips({
           documentStatus
         );
         // The code the chip shows is part of its name, so a reader who says
-        // what they see ("ES") reaches the control by voice.
-        const name = `${locale.label} (${locale.code.toUpperCase()}), ${languageChipSpoken(facts)}`;
+        // what they see ("ES") reaches the control by voice. Set off by commas,
+        // not parentheses, which a name check reads past.
+        const name = `${locale.label}, ${locale.code.toUpperCase()}, ${languageChipSpoken(facts)}`;
         const face = (
           <LanguageChipFace state={facts.state} className="uppercase">
             {locale.code}
