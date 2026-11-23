@@ -243,6 +243,7 @@ describeEachDialect(
             preCleanupExecutor: noopPreCleanupExecutor,
             migrationJournal: noopMigrationJournal,
             notifier: noopNotifier,
+            adapter: undefined,
           },
           {
             // Simulates a concurrent writer connection inserting a removed
