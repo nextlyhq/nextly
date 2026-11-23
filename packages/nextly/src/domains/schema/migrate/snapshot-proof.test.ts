@@ -1718,6 +1718,109 @@ describe("what a hand-made database can hold under the names a file writes", () 
     }
   });
 
+  it("a key or exclusion that states what no snapshot records is not shown, on every road", () => {
+    const create = (element: string) =>
+      `CREATE TABLE "dc_posts" ("id" text PRIMARY KEY, "slug" text, ${element})`;
+    const unshown: Array<[string, SupportedDialect]> = [
+      [
+        create('CONSTRAINT "u" UNIQUE NULLS NOT DISTINCT ("slug")'),
+        "postgresql",
+      ],
+      [create('UNIQUE NULLS NOT DISTINCT ("slug")'), "postgresql"],
+      [
+        create('CONSTRAINT "x" EXCLUDE USING gist ("slug" WITH =)'),
+        "postgresql",
+      ],
+      [create('EXCLUDE USING gist ("slug" WITH =)'), "postgresql"],
+      [
+        create('CONSTRAINT "u" UNIQUE ("slug") USING INDEX TABLESPACE "fast"'),
+        "postgresql",
+      ],
+      [create('UNIQUE ("slug" DESC)'), "sqlite"],
+      [
+        'CREATE TABLE "dc_posts" ("id" text, "slug" text, PRIMARY KEY ("id" DESC))',
+        "sqlite",
+      ],
+      // The same forms added to a table, named or not: an unnamed EXCLUDE is not a column.
+      [
+        'ALTER TABLE "dc_posts" ADD EXCLUDE USING gist ("slug" WITH =)',
+        "postgresql",
+      ],
+      [
+        'ALTER TABLE "dc_posts" ADD CONSTRAINT "x" EXCLUDE USING gist ("slug" WITH =)',
+        "postgresql",
+      ],
+      [
+        'ALTER TABLE "dc_posts" ADD UNIQUE NULLS NOT DISTINCT ("slug")',
+        "postgresql",
+      ],
+      [
+        'ALTER TABLE "dc_posts" ADD CONSTRAINT "u" UNIQUE NULLS NOT DISTINCT ("slug")',
+        "postgresql",
+      ],
+    ];
+    expect(unshown.filter(([s, d]) => shown(s, d))).toEqual([]);
+    // A plain key stays shown on every road and dialect.
+    const plain: Array<[string, SupportedDialect]> = [
+      [create('CONSTRAINT "u" UNIQUE ("slug")'), "postgresql"],
+      [create('UNIQUE ("slug")'), "sqlite"],
+      [
+        'CREATE TABLE "dc_posts" ("id" text, "slug" text, PRIMARY KEY ("id", "slug"))',
+        "sqlite",
+      ],
+      ['ALTER TABLE "dc_posts" ADD UNIQUE ("slug")', "postgresql"],
+      ['ALTER TABLE "dc_posts" ADD PRIMARY KEY ("id")', "postgresql"],
+      [
+        'ALTER TABLE "dc_posts" ADD CONSTRAINT "u" UNIQUE ("slug")',
+        "postgresql",
+      ],
+    ];
+    expect(plain.filter(([s, d]) => !shown(s, d))).toEqual([]);
+  });
+
+  it("a MySQL index's own name is not read as an order word, on every road", () => {
+    const create = (element: string) =>
+      `CREATE TABLE \`dc_posts\` (\`id\` varchar(36) PRIMARY KEY, \`slug\` text, ${element})`;
+    const named = [
+      create("INDEX nulls (`slug`(191))"),
+      create("UNIQUE KEY nulls (`slug`(191))"),
+      create("KEY nulls USING BTREE (`slug`(191))"),
+      create("CONSTRAINT `u` UNIQUE nulls (`slug`(191))"),
+      "ALTER TABLE `dc_posts` ADD INDEX nulls (`slug`(191))",
+      "ALTER TABLE `dc_posts` ADD UNIQUE KEY nulls (`slug`(191))",
+      "ALTER TABLE `dc_posts` ADD CONSTRAINT `u` UNIQUE INDEX nulls (`slug`(191))",
+    ];
+    expect(named.filter(statement => !shown(statement, "mysql"))).toEqual([]);
+    // What follows the name is still read.
+    const stating = [
+      create("INDEX nulls (`slug` DESC)"),
+      "ALTER TABLE `dc_posts` ADD INDEX nulls USING HASH (`slug`)",
+      "ALTER TABLE `dc_posts` ADD CONSTRAINT `u` UNIQUE nulls (`slug` DESC)",
+    ];
+    expect(stating.filter(statement => shown(statement, "mysql"))).toEqual([]);
+  });
+
+  it("a key named inside a column reads past the table it references", async () => {
+    const add = (target: string, tail: string) =>
+      `ALTER TABLE "dc_posts" ADD COLUMN "author" text CONSTRAINT "dc_posts_author_fk" REFERENCES ${target}${tail}`;
+    const wrong: string[] = [];
+    for (const target of [
+      'generated ("id")',
+      'public.generated ("id")',
+      "generated",
+    ]) {
+      const statement = add(target, " DEFERRABLE INITIALLY DEFERRED");
+      for (const [live, status] of [
+        ["deferred", "shown"],
+        ["not", "not-done"],
+      ] as const) {
+        const got = await one(statement, "postgresql", { deferrability: live });
+        if (got !== status) wrong.push(`${target} against ${live}: ${got}`);
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
+
   it("a SQLite rebuild's sequence carry needs a counter that covers the table's rows", async () => {
     const REBUILD = [
       "INSERT INTO sqlite_sequence (name, seq) SELECT '__new_dc_posts', seq FROM sqlite_sequence WHERE name = 'dc_posts'",
