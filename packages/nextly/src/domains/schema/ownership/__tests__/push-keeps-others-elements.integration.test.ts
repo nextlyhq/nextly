@@ -7,7 +7,8 @@
  * An index a plugin's migration built is judged from the owner record even where the push's first
  * read of it gave nothing, as when the question whether the record exists went unanswered: the
  * check asks again, and refuses rather than count none. A field renamed, answered as a rename, is
- * no removal: its column keeps what stands on it.
+ * no removal: its column keeps what stands on it. A refused push records no owner row for what the
+ * configuration contributes, since it builds none of it.
  *
  * As it happens: the app declares a collection in code, a plugin's schema hook indexes one of its
  * columns, and the app then removes that field and the change is pushed, as a restart, an HMR
@@ -275,6 +276,43 @@ describeEachDialect(
         expect(message).toContain(part);
       }
       expect(await shapeOf(handle, dialect)).toEqual(before);
+    });
+
+    it("records no owner row when the push is refused", async () => {
+      handle = await createTestNextly({
+        dialect,
+        collections: [defineCollection({ slug: SLUG, fields: fields(true) })],
+        plugins: [noteIndexer],
+      });
+      await buildMigratedIndex(handle, dialect, "code");
+      const repository = new SchemaOwnersRepository(
+        (handle.adapter as unknown as DrizzleAdapter).getDrizzle(),
+        dialect
+      );
+      // The row the boot recorded for the plugin's declared index, removed so that this push
+      // records it as a contribution it has not recorded yet.
+      const declared = (await repository.read([TABLE])).filter(
+        row => row.ownerId === PLUGIN && row.elementName !== MIGRATED_INDEX
+      );
+      expect(declared.map(row => row.elementKind)).toEqual(["index"]);
+      for (const row of declared) {
+        await repository.deleteElement(
+          row.tableName,
+          "index",
+          row.elementName ?? ""
+        );
+      }
+      vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", `${TABLE}.code`);
+
+      const pushed = await push(fields(false));
+
+      expect(pushed.success, JSON.stringify(pushed)).toBe(false);
+      expect(pushed.success ? "" : pushed.error.message).toContain(
+        MIGRATED_INDEX
+      );
+      expect(
+        (await repository.read([TABLE])).map(row => row.elementName)
+      ).toEqual([MIGRATED_INDEX]);
     });
 
     it("renames a field a plugin's migration indexed, answered as a rename, keeping the index", async () => {

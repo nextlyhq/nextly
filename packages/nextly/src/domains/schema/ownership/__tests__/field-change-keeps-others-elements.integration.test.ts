@@ -6,8 +6,11 @@
  * plugin, the element, its kind and its table; the table, the element, the definition, the registry
  * and the migrations folder are left as they were. An element elsewhere on a table the change keeps
  * does not stop it, and keeps its values. A plugin's foreign key pointing at the removed column, or
- * at the removed join table, refuses it the same way, naming the key. A record of other owners'
- * elements that cannot be read refuses the change, never counting them as none.
+ * at the removed join table, refuses it the same way, naming the key, and so does a key no record
+ * names that points at a removed column, wherever it is: on a table in another schema or database,
+ * or on columns the change removes too. A plugin's key on its own column, like its column, is not
+ * taken for drift on any dialect. A record of other owners' elements that cannot be read refuses the
+ * change, never counting them as none.
  *
  * As a person meets it: the Schema Builder makes the collection and the field group, a plugin's
  * migrations build on their tables (a schema hook cannot: an entity the Builder made is not known
@@ -75,6 +78,8 @@ const POSTS_FIELDS: Field[] = [
 ];
 /** A field the plugin's foreign key can point at: unique, and a number, which MySQL can key. */
 const SERIAL_FIELD: Field = { name: "serial", type: "number", unique: true };
+/** A number field a key can stand on, pointing at SERIAL_FIELD. */
+const PARENT_FIELD: Field = { name: "parent_serial", type: "number" };
 const CARDS_FIELDS: Field[] = [
   { name: "code", type: "text" },
   { name: "note", type: "text" },
@@ -553,6 +558,115 @@ describe.each(getConfiguredTestDialects())(
       expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
       expect(await keyedColumnsOf(t, POSTS_TABLE)).toContain("link_ref");
     });
+
+    it("applies a save that removes another field where a plugin's foreign key stands on its own column, keeping the key", async () => {
+      const t = await boot(dialect);
+      await buildKey(t, {
+        name: "fco_fk_link",
+        column: "link_ref",
+        type: dialect === "mysql" ? "varchar(36)" : "text",
+        references: { table: LINKS_TABLE, column: "id" },
+      });
+
+      expect(
+        await savePosts(t, without(await stored(t), "note"), dropping("note"))
+      ).toBeUndefined();
+
+      expect(await columnsOf(t, POSTS_TABLE)).not.toContain("note");
+      expect(await columnsOf(t, POSTS_TABLE)).toContain("link_ref");
+      expect(await keyedColumnsOf(t, POSTS_TABLE)).toContain("link_ref");
+    });
+
+    // SQLite cannot add a key to a column a table already has, so such a key is made only with the
+    // column, never between two fields the Builder made; nor has it schemas or other databases.
+    it.skipIf(dialect === "sqlite")(
+      "refuses removing two fields a key no record names joins, changing nothing",
+      async () => {
+        const t = await boot(dialect);
+        expect(
+          await savePosts(t, [...(await stored(t)), SERIAL_FIELD, PARENT_FIELD])
+        ).toBeUndefined();
+        await t.adapter.executeQuery(
+          `ALTER TABLE ${q(POSTS_TABLE)} ADD CONSTRAINT ${q("fco_fk_self")} FOREIGN KEY (${q("parent_serial")}) REFERENCES ${q(POSTS_TABLE)} (${q("serial")})`
+        );
+        const before = await stateOf(t, POSTS_TABLE);
+
+        const refused = await savePosts(
+          t,
+          without(without(await stored(t), "serial"), "parent_serial"),
+          {
+            resolutions: {
+              serial: { action: "confirm_drop" },
+              parent_serial: { action: "confirm_drop" },
+            },
+          }
+        );
+
+        expect(NextlyError.is(refused), String(refused)).toBe(true);
+        const message = (refused as NextlyError).publicMessage;
+        for (const part of ["serial", "fk", "fco_fk_self", POSTS_TABLE]) {
+          expect(message).toContain(part);
+        }
+        expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
+      }
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "refuses removing a field a key on a table in another schema or database points at, changing nothing",
+      async () => {
+        const t = await boot(dialect);
+        expect(
+          await savePosts(t, [...(await stored(t)), SERIAL_FIELD])
+        ).toBeUndefined();
+        // PostgreSQL: a schema the search path does not reach. MySQL: another database.
+        const elsewhere =
+          dialect === "postgresql"
+            ? { name: "fco_elsewhere", drop: async () => {} }
+            : await createScratchDatabase("mysql", "fcx").then(scratch => ({
+                name: new URL(scratch.url).pathname.slice(1),
+                drop: scratch.drop,
+              }));
+        try {
+          if (dialect === "postgresql") {
+            await t.adapter.executeQuery(`CREATE SCHEMA ${q(elsewhere.name)}`);
+          }
+          const [here] = await t.adapter.executeQuery<{ db: string }>(
+            dialect === "mysql"
+              ? "SELECT DATABASE() AS db"
+              : "SELECT current_schema() AS db"
+          );
+          const refs = `${q(elsewhere.name)}.${q("fco_refs")}`;
+          await t.adapter.executeQuery(
+            `CREATE TABLE ${refs} (${q("id")} integer PRIMARY KEY, ${q("serial_ref")} ${dialect === "mysql" ? "int" : "integer"}, CONSTRAINT ${q("fco_fk_elsewhere")} FOREIGN KEY (${q("serial_ref")}) REFERENCES ${q(here?.db ?? "")}.${q(POSTS_TABLE)} (${q("serial")}))`
+          );
+          const before = await stateOf(t, POSTS_TABLE);
+
+          const refused = await savePosts(
+            t,
+            without(await stored(t), "serial"),
+            dropping("serial")
+          );
+
+          expect(NextlyError.is(refused), String(refused)).toBe(true);
+          const message = (refused as NextlyError).publicMessage;
+          for (const part of [
+            "serial",
+            "fk",
+            "fco_fk_elsewhere",
+            `${elsewhere.name}.fco_refs`,
+          ]) {
+            expect(message).toContain(part);
+          }
+          expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
+        } finally {
+          // The referencing table first: MySQL drops no table another database's key points at.
+          await t.adapter.executeQuery(
+            `DROP TABLE IF EXISTS ${q(elsewhere.name)}.${q("fco_refs")}`
+          );
+          await elsewhere.drop();
+        }
+      }
+    );
 
     it("applies a removal where the plugin's column and index are elsewhere on the table, keeping them and their values", async () => {
       const t = await boot(dialect);

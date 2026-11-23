@@ -415,6 +415,10 @@ export interface ReferencingKey {
   onDelete: "cascade" | "set null" | "set default" | "none";
   /** The referencing table's key columns, in key order. */
   columns: string[];
+  /** The key's constraint name. */
+  name: string;
+  /** The referenced table's columns the key points at, in key order. */
+  referencesColumns: string[];
 }
 
 /** PostgreSQL's `confdeltype` codes for the actions that touch the referencing rows. */
@@ -447,8 +451,8 @@ async function requirePgRelation(db: unknown, ref: string): Promise<void> {
 }
 
 /**
- * Every foreign key referencing `parent`, with the referencing table it lives on, its ON DELETE
- * action and its columns, read in one pass from the keys themselves.
+ * Every foreign key referencing `parent`, with the referencing table it lives on, its name, its ON
+ * DELETE action, its columns and the columns it points at, read in one pass from the keys themselves.
  *
  * Read by relation identity rather than by name: a referencing table is found again through the
  * ref this returns, so one in another schema (PostgreSQL) or database (MySQL) is never confused
@@ -466,19 +470,23 @@ export async function readReferencingKeys(
   if (dialect === "postgresql") {
     await requirePgRelation(db, parent.table);
     const result = (await (db as PgMysqlExecute).execute(
-      sql`SELECT c.oid::text AS key_id, c.conrelid::regclass::text AS child,
-                 c.confdeltype::text AS action, a.attname::text AS column_name
+      sql`SELECT c.oid::text AS key_id, c.conname::text AS key_name,
+                 c.conrelid::regclass::text AS child, c.confdeltype::text AS action,
+                 a.attname::text AS column_name, f.attname::text AS referenced_column
           FROM pg_constraint c
-          CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+          CROSS JOIN LATERAL unnest(c.conkey, c.confkey) WITH ORDINALITY AS k(attnum, fattnum, ord)
           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+          JOIN pg_attribute f ON f.attrelid = c.confrelid AND f.attnum = k.fattnum
           WHERE c.contype = 'f' AND c.confrelid = to_regclass(${parent.table})
           ORDER BY c.oid, k.ord`
     )) as {
       rows: {
         key_id: string;
+        key_name: string;
         child: string;
         action: string;
         column_name: string;
+        referenced_column: string;
       }[];
     };
     for (const row of result.rows) {
@@ -487,8 +495,11 @@ export async function readReferencingKeys(
         ref: { table: row.child },
         onDelete: PG_DELETE_ACTIONS[row.action] ?? "none",
         columns: [],
+        name: row.key_name,
+        referencesColumns: [],
       };
       key.columns.push(row.column_name);
+      key.referencesColumns.push(row.referenced_column);
       keys.set(row.key_id, key);
     }
     return [...keys.values()];
@@ -502,12 +513,13 @@ export async function readReferencingKeys(
     TABLE_SCHEMA: string;
     TABLE_NAME: string;
     COLUMN_NAME: string;
+    REFERENCED_COLUMN_NAME: string;
     DELETE_RULE: string;
     CURRENT_DB: string | null;
   }>(
     await (db as PgMysqlExecute).execute(
       sql`SELECT k.CONSTRAINT_SCHEMA, k.CONSTRAINT_NAME, k.TABLE_SCHEMA, k.TABLE_NAME,
-                 k.COLUMN_NAME, r.DELETE_RULE, DATABASE() AS CURRENT_DB
+                 k.COLUMN_NAME, k.REFERENCED_COLUMN_NAME, r.DELETE_RULE, DATABASE() AS CURRENT_DB
           FROM information_schema.KEY_COLUMN_USAGE k
           JOIN information_schema.REFERENTIAL_CONSTRAINTS r
             ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
@@ -530,8 +542,11 @@ export async function readReferencingKeys(
       ref: { schema: row.TABLE_SCHEMA, table: row.TABLE_NAME },
       onDelete: MYSQL_DELETE_ACTIONS[row.DELETE_RULE] ?? "none",
       columns: [],
+      name: row.CONSTRAINT_NAME,
+      referencesColumns: [],
     };
     key.columns.push(row.COLUMN_NAME);
+    key.referencesColumns.push(row.REFERENCED_COLUMN_NAME);
     keys.set(id, key);
   }
   return [...keys.values()];

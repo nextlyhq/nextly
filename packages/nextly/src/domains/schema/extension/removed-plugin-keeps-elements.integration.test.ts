@@ -12,7 +12,7 @@
  */
 import { randomBytes } from "node:crypto";
 
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
@@ -58,10 +58,11 @@ const removed = definePlugin({
 });
 
 /**
- * Stays configured. Its first version adds a column and an index on it; its
- * second keeps the column and stops declaring the index.
+ * Stays configured. Its first version adds a column and an index on it; a
+ * later one keeps the column and stops declaring the index, or stops declaring
+ * both and indexes the app's column instead, so it still declares schema.
  */
-const staying = (withIndex: boolean) =>
+const staying = (withIndex: boolean, withColumn = true) =>
   definePlugin({
     name: "kept-elements-staying",
     version: "0.0.0",
@@ -70,6 +71,14 @@ const staying = (withIndex: boolean) =>
       schema: {
         extend: [
           ({ schema }) => {
+            if (!withColumn) {
+              // An index on the app's own column, so it still declares schema and adds no column
+              // the push could read as `mark` renamed.
+              schema.extendTable(POSTS, {
+                indexes: [{ columns: ["headline"] }],
+              });
+              return;
+            }
             schema.extendTable(POSTS, {
               columns: { mark: col.shortText({ nullable: true }) },
               ...(withIndex ? { indexes: [{ columns: ["mark"] }] } : {}),
@@ -325,6 +334,29 @@ describeEachDialect("a plugin removed from the configuration", dialect => {
 });
 
 describeEachDialect("a plugin still configured", dialect => {
+  it("has the column it stops declaring removed with its index, and nothing else", async () => {
+    const adapter = await firstBoot(dialect);
+    // The consent a deploy gives to drop the column's values.
+    vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", `${POSTS}.mark`);
+    try {
+      const pushed = await restartAndPush(
+        adapter,
+        [removed, staying(false, false)],
+        true,
+        true
+      );
+      expect(pushed.success, JSON.stringify(pushed)).toBe(true);
+      expect(await columnsOf(adapter, dialect, POSTS)).not.toContain("mark");
+      const indexes = await indexesOf(adapter, dialect, POSTS);
+      expect(indexes.some(name => name.includes("mark"))).toBe(false);
+      expect(indexes.some(name => name.includes("stamp"))).toBe(true);
+      expect(await columnsOf(adapter, dialect, POSTS)).toContain("stamp");
+      expect(indexes.some(name => name.includes("headline"))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("has the index it stops declaring removed, and nothing else", async () => {
     const adapter = await firstBoot(dialect);
     expect(

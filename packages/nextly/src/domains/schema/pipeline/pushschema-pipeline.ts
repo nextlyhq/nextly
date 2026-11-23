@@ -1484,6 +1484,10 @@ export class PushSchemaPipeline {
         // of the prompt stage, so the plan's own refusals come first.
         await refuseUnconfirmedDropsBeside(args.unconfirmedDropsBeside);
 
+        // The owner rows this push planned (`pushElementOwners`) are written only now, past every
+        // refusal above and before the first statement, so a refused push leaves none behind.
+        await elementOwners?.write();
+
         // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
         //
         // What a drizzle-kit rebuild of a SQLite table would lose that the
