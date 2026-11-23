@@ -467,6 +467,9 @@ export interface GenerateArgs {
    * finish the earlier change; any other is written, its values copied into
    * a column that holds them. Without it, every joining field is judged as
    * joining for the first time, worded for code.
+   *
+   * The surface words the entity's refusals of fields leaving translation
+   * too, so a Schema Builder save names the Builder's steps for both.
    */
   joiningJudgement?: {
     slug: string;
@@ -1123,6 +1126,7 @@ export async function generateMigration(
     companionHistory,
     args.onWarning ?? (() => {}),
     desiredSnapshot,
+    args.joiningJudgement,
     args.languageOrder
   );
 
@@ -3077,6 +3081,8 @@ function planFieldsLeavingTranslation(
   history: TranslationRecords,
   warn: (message: string) => void,
   desiredSnapshot: NextlySchemaSnapshot,
+  /** The caller's judgement of one entity, whose surface its refusals are worded for. */
+  judgement: GenerateArgs["joiningJudgement"],
   languageOrder?: readonly string[]
 ): FieldLeavesEntry[] {
   const entries: FieldLeavesEntry[] = [];
@@ -3100,7 +3106,14 @@ function planFieldsLeavingTranslation(
     const desiredMain = desiredSnapshot.tables.find(
       t => t.name === c.tableName
     );
-    assertFieldsMayLeaveTranslation(entry, leaving, previousColumns, dialect);
+    assertFieldsMayLeaveTranslation(
+      entry,
+      leaving,
+      previousColumns,
+      dialect,
+      // A Schema Builder save's entity is worded for the Builder; any other, for code.
+      judgement?.slug === c.slug ? judgement.surface : "code"
+    );
     const held = heldSettingsOf(
       c.tableName,
       leaving.map(l => l.column.name),
@@ -3791,7 +3804,9 @@ function assertFieldsMayLeaveTranslation(
   { entity: c, kind }: TaggedConfigEntity,
   leaving: readonly LeavingField[],
   previousColumns: ReadonlyMap<string, LocalizedColumnSpec> | undefined,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /** Whose steps the refusal names: the Schema Builder's, or the config's and its CLI's. */
+  surface: TranslationSurface
 ): void {
   const refusals = refusalsForFieldsLeavingTranslation({
     leaving: new Set(leaving.map(l => l.field.name)),
@@ -3799,7 +3814,7 @@ function assertFieldsMayLeaveTranslation(
     ...(previousColumns ? { previousColumns } : {}),
     dialect,
     builtBy: columnOriginOf(c, kind),
-    surface: "code",
+    surface,
   });
   refuseMigration(c, refusals);
 }

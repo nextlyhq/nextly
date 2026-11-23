@@ -123,16 +123,23 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       ).toMatchObject(open);
     });
 
-    it("a translated long text becoming code keeps its translations column: open", () => {
-      expect(targetOf({ type: "textarea" }, "code", SINGLE)).toMatchObject({
-        blocked: null,
-        refusal: null,
-      });
+    it("a translated text becoming a long text, or a long text becoming code, keeps its translations column: open", () => {
+      for (const [from, to] of [
+        ["text", "textarea"],
+        ["textarea", "code"],
+      ]) {
+        expect(targetOf({ type: from }, to, SINGLE), to).toMatchObject({
+          blocked: null,
+          refusal: null,
+        });
+      }
     });
 
-    it("a Single's translated text becoming a long text retypes its translations column, which its save does not: unavailable", () => {
-      expect(targetOf({ type: "text" }, "textarea", SINGLE)).toEqual({
-        type: "textarea",
+    it("a Single's field kept per language becoming a number retypes its translations column, which its save does not: unavailable", () => {
+      expect(
+        targetOf({ type: "text", localized: true }, "number", SINGLE)
+      ).toEqual({
+        type: "number",
         blocked: "translations-column",
         refusal: {
           code: "TYPE_CHANGE_BLOCKED",

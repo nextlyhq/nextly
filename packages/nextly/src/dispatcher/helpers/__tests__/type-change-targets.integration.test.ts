@@ -185,12 +185,15 @@ const BY_TRANSLATION = new Set([
 
 /**
  * A saved field `v` and the type the picker is asked about. Chosen to reach each translation rule:
- * a translated text becoming a number leaves translation reshaped; a translated text becoming a long
- * text keeps its translations column only where the database makes one type of both; a shared field
- * becoming a text-like one joins translation; a long text becoming code changes nothing there.
+ * a translated text becoming a number leaves translation reshaped; one that says it is translated
+ * stays so, and its translations column takes the number's type, which only a collection's save
+ * file gives it; a checkbox's column is a number's on SQLite alone; a shared field becoming a
+ * text-like one joins translation; a text becoming a long text, or a long text becoming code,
+ * keeps its translations column.
  */
 const CASES: { field: Field; to: string }[] = [
   { field: { name: "v", type: "text" }, to: "number" },
+  { field: { name: "v", type: "text", localized: true }, to: "number" },
   { field: { name: "v", type: "text" }, to: "textarea" },
   { field: { name: "v", type: "textarea" }, to: "code" },
   { field: { name: "v", type: "number" }, to: "text" },
@@ -318,7 +321,13 @@ describe.each(getConfiguredTestDialects())(
     it.each([
       {
         of: collection,
-        expected: ["joins-translation", "leaves-translation"],
+        // A collection's save file retypes a translations column where it changes on this
+        // database, which a checkbox's does not on SQLite.
+        expected: [
+          "joins-translation",
+          "leaves-translation",
+          ...(dialect === "sqlite" ? ["translations-column"] : []),
+        ],
       },
       {
         of: single,
@@ -357,14 +366,19 @@ describe.each(getConfiguredTestDialects())(
           }
           expect(BY_TRANSLATION.has(target.blocked), label).toBe(true);
           seen.add(target.blocked);
+          // The same refusal, of the same field, in the same words.
           expect(outcome, `${label}: the save refuses it`).toMatchObject({
             code: "VALIDATION_ERROR",
             publicData: {
               errors: expect.arrayContaining([
                 expect.objectContaining({
+                  path: "fields.v",
                   code: target.refusal?.code,
                   message: expect.stringContaining(
-                    target.refusal?.reason ?? "no reason given"
+                    [
+                      target.refusal?.reason ?? "no reason given",
+                      ...(target.refusal?.steps ?? []),
+                    ].join(" ")
                   ),
                 }),
               ]),
