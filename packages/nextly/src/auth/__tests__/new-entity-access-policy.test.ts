@@ -41,16 +41,24 @@ beforeEach(() => {
 });
 
 describe("the roles a new collection's read grant reaches", () => {
-  it("names the role seeded at creation AND one a later boot grants", () => {
-    // 🔴 Two routes, and the second is the one this policy originally missed.
-    // `assignNewPermissionsToSuperAdmin` runs as the collection is created;
-    // `seedRolePresets` re-resolves each preset at every boot, and `admin`'s
-    // rule -- everything except escalation -- covers a content collection. An
-    // admin therefore reaches what they made, one restart later.
-    const eligible = rolesThatWouldReadNewCollection();
+  it("names the role seeded at creation, and no preset until one is opened", () => {
+    // `assignNewPermissionsToSuperAdmin` runs as the collection is created.
+    // `seedRolePresets` re-resolves each preset at every boot, but a new
+    // collection reaches a preset only once it is opened to it by name, so no
+    // preset picks one up on its own: an admin who is not a super-admin does
+    // not read what they made until it is opened to Admin.
+    expect(rolesThatWouldReadNewCollection()).toEqual([
+      NEW_ENTITY_PERMISSION_ROLE,
+    ]);
+  });
 
-    expect(eligible).toContain(NEW_ENTITY_PERMISSION_ROLE);
-    expect(eligible).toContain("admin");
+  it("names a preset once the collection is opened to it, by that preset's own rule", () => {
+    // Each preset opened to it reads it; opening it to a preset is not enough
+    // where the preset's own rule would not grant the read, and none does not.
+    expect(
+      presetsGrantingReadOf(NEW_COLLECTION_PROBE_SLUG, ["viewer", "author"])
+    ).toEqual(["author", "viewer"]);
+    expect(presetsGrantingReadOf(NEW_COLLECTION_PROBE_SLUG)).toEqual([]);
   });
 
   it("asks the presets about a name a collection could be created under", () => {
@@ -70,18 +78,19 @@ describe("the roles a new collection's read grant reaches", () => {
       expect(isCreatableCollectionSlug(slug)).toBe(true);
     }
 
+    const every = ["admin", "editor", "author", "viewer"];
     const answers = [...slugs, NEW_COLLECTION_PROBE_SLUG].map(slug =>
-      presetsGrantingReadOf(slug).join(",")
+      presetsGrantingReadOf(slug, every).join(",")
     );
     expect(new Set(answers).size).toBe(1);
   });
 });
 
 describe("a session caller", () => {
-  it("is eligible through the preset a later boot re-resolves", async () => {
+  it("is not eligible through a preset, which a new collection is not opened to", async () => {
     listRoleSlugsForUser.mockResolvedValue(["admin"]);
 
-    expect(await wouldReadOwnNewCollection(session())).toBe(true);
+    expect(await wouldReadOwnNewCollection(session())).toBe(false);
   });
 
   it("is eligible through the role seeded at creation", async () => {

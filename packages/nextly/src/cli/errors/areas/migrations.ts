@@ -6,9 +6,6 @@
  */
 
 import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-consent";
-import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
-import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
-import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
 import {
   dialectVariantOf,
   migrationNameOf,
@@ -18,6 +15,9 @@ import {
   BLANK_FILE_LINE,
   HISTORY_FORKED_REASON,
 } from "../../../domains/schema/migrate/history-line";
+import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
+import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
+import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
 import {
   WRITER_HOLD_HELD_REASON,
   WRITER_HOLD_LOST_REASON,
@@ -522,7 +522,7 @@ function malformedConsentParts(message: string): CliErrorParts {
  */
 function forkedHistoryParts(error: NextlyError): CliErrorParts {
   const lines = (error.logContext?.lines ?? []) as CliErrorParts[];
-  const part = (key: keyof CliErrorParts) =>
+  const part = (key: "what" | "why" | "next") =>
     [...new Set(lines.map(line => line[key]))].join("\n");
   return lines.length === 0
     ? {

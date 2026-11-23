@@ -527,6 +527,41 @@ function releaseReaders(caller: ReadCaller): DigestReader[] {
 }
 
 /**
+ * Core's workflow kind: the parts waiting for the reader's review, counted by the waiting list's own
+ * read (one page of one), so the card and the list it links to never disagree; its count is a floor
+ * where the list's is. A person's alone: an API key reads no dashboard, so it is shown nothing.
+ */
+function workflowReaders(caller: ReadCaller): DigestReader[] {
+  return [
+    {
+      id: "core/waiting-for-review",
+      kind: "review",
+      label: "Waiting for your review",
+      reason: "You may take the next step.",
+      severity: "warning" as const,
+      link: "content/waiting",
+      owner: "core",
+      visible: () => Promise.resolve(caller.authenticatedScope === undefined),
+      read: async () => {
+        // Loaded when asked: the workflows API reaches the services this module is read by.
+        const { waitingPage } = await import("../../api/workflows");
+        const { meta } = await waitingPage(
+          {
+            user: caller.user,
+            scope: undefined,
+            caller: { kind: "user", userId: caller.user.id },
+          },
+          { page: 1, limit: 1 }
+        );
+        return meta.totalCapped
+          ? { count: meta.total, atLeast: true }
+          : meta.total;
+      },
+    },
+  ];
+}
+
+/**
  * Every item waiting for `caller`, most urgent first: the one read of the
  * digest, which the source's list answer, the Needs attention card and the
  * dashboard header's attention part all make, so they cannot disagree about
@@ -543,6 +578,7 @@ export async function readAttentionDigest(
   const now = opts?.now ?? new Date();
   const readers = [
     ...releaseReaders(caller),
+    ...workflowReaders(caller),
     // System problems, shown to super-admins alone (`systemProblemReaders`).
     ...systemProblemReaders(caller),
     ...pluginItemReaders(caller, now),

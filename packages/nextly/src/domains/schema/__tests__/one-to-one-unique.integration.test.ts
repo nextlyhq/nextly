@@ -744,11 +744,13 @@ describeEachDialect(
           field.name === "person" ? { ...field, name: "owner" } : field
         );
 
+        // The update route renames a field only when the request says so.
         await builder(
           "updateCollection",
           { collectionName: PROFILES },
           {
             fields,
+            renames: [{ from: "person", to: "owner", choice: "rename" }],
           }
         );
 

@@ -1,0 +1,61 @@
+---
+title: Accounts
+description: Site accounts for a site's visitors, such as a shop's buyers or a client area's members, who sign up, sign in and look after their own account, and never reach the admin.
+---
+
+> **Experimental.**
+>
+> Everything `@nextlyhq/plugin-accounts` exports is `@experimental`. The stability
+> boundary is `@nextlyhq/plugin-sdk` (see [API stability](/docs/plugins/stability)); this
+> package's own exports are outside it and may change between alpha releases. Pin your
+> versions and read the release notes before upgrading.
+
+The accounts plugin gives a site accounts for its visitors: they sign up, verify their
+address, sign in and look after their own account. A site account is its own kind of
+[signed-in person](/docs/plugins/signed-in-people), never a staff user, so it can never
+reach the admin. Staff see and manage the accounts from the admin.
+
+## Installation
+
+```bash
+npm install @nextlyhq/plugin-accounts
+```
+
+Its peer dependency is `nextly`, pinned at the matching lockstep version: install the plugin
+and the core at the same version. `next` and `react` are optional peers, needed only for the
+`@nextlyhq/plugin-accounts/next` entry.
+
+## Basic setup
+
+```ts
+import { defineConfig } from "nextly";
+import { accounts } from "@nextlyhq/plugin-accounts";
+
+export default defineConfig({
+  plugins: [accounts({ origin: "https://example.com" })],
+});
+```
+
+`origin` is the site's own address, which every link in an email is built on. The plugin keeps
+its records in collections it adds: run `nextly migrate:create` and `nextly migrate` after
+installing it.
+
+## What it offers
+
+- **Typed server functions** for every action a visitor takes, from `accountsServer()`, and the
+  same functions for another plugin through `accountsServices(ctx)`.
+- **REST endpoints** for the same actions, behind the plugin's origin and CSRF checks.
+- **Next.js server actions** that work before JavaScript loads, and `requireAccount()` for
+  server components, from `@nextlyhq/plugin-accounts/next`.
+- **Closing sign-up** (`signUp: "closed"`) and **invitations** issued by the site's own code,
+  for sites where only the people it chooses have accounts.
+- **Ending access** from the site's own code: ending an account's sessions, and deactivating
+  and reactivating it, each recorded in the audit log.
+
+The accounts live in the plugin's own tables rather than a collection, so no built-in role is
+opened to them as one: staff reach them through the plugin's `read-accounts` and
+`manage-accounts` permissions. Of the [preset roles](/docs/plugins/permissions#the-preset-roles),
+only Admin holds them by default; Editor, Author and Viewer hold neither, since the accounts are
+people's private details. Grant either to any other role in the Roles screen.
+
+The package's README lists every option, function and error code.

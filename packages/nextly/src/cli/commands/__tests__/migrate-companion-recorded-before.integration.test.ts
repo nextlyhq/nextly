@@ -260,10 +260,12 @@ describeEachDialect(
         `ALTER TABLE ${q(COMPANION)} ADD COLUMN ${q("code")} INTEGER`
       );
       const leftover = await codeColumn();
-      await migrateCreate(configWith("text"), "code");
-      expect((await migrate(configWith("text"))).code).toBe(1);
 
-      // A number is an integer column, which the leftover is.
+      // A number is an integer column, which the leftover is. Declared as one
+      // from its first file: a file recording it as text followed by one
+      // making it a number is a translated field's type change, which
+      // `nextly migrate` refuses until its migration can convert the
+      // translations column on every database.
       await migrateCreate(configWith("number"), "code-as-number");
       const fixed = await migrate(configWith("number"));
 

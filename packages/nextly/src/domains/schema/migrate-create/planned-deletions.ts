@@ -20,6 +20,7 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { deletionKey, type Deletion } from "../migrate/data-loss-consent";
 import { entityOwners, type CoveredEntity } from "../migrate/entity-coverage";
 import { coverRunDeletions } from "../migrate/entity-shared-rows";
@@ -69,10 +70,57 @@ export interface DeletionPlan {
   }[];
 }
 
-/** What a run's files delete: the main file's, for its header, and every file's, for the consent. */
+/**
+ * What a run's files delete: the main file's, for its header, every file's, for the consent, and
+ * each file's own, in run order, for `refuseDeletionsBeforeReads`.
+ */
 export interface JudgedDeletions {
   main: Deletion[];
   all: Deletion[];
+  perFile: Deletion[][];
+}
+
+/** A table, or one of its columns, whose values a file of the run reads: `file` is its run index. */
+export interface ReadInRun {
+  file: number;
+  table: string;
+  column?: string;
+}
+
+/**
+ * Refuses, before anything is written, a run in which a file deletes a table or column that a
+ * later file of the same run reads, such as a translation file copying a column's values before
+ * it drops it. Applied in order, the earlier file would lose those values before they move, so
+ * the plan is wrong whatever the database holds; nothing is written.
+ */
+export function refuseDeletionsBeforeReads(
+  perFile: readonly (readonly Deletion[])[],
+  reads: readonly ReadInRun[]
+): void {
+  for (const read of reads) {
+    for (let file = 0; file < read.file; file++) {
+      const lost = (perFile[file] ?? []).find(
+        (
+          deletion
+        ): deletion is Extract<Deletion, { kind: "table" | "column" }> =>
+          (deletion.kind === "table" || deletion.kind === "column") &&
+          same(deletion.table, read.table) &&
+          (deletion.kind === "table" ||
+            read.column === undefined ||
+            same(deletion.column, read.column))
+      );
+      if (lost === undefined) continue;
+      const what =
+        lost.kind === "column" ? `${lost.table}.${lost.column}` : lost.table;
+      throw new NextlyError({
+        code: "INTERNAL_ERROR",
+        publicMessage:
+          `Nextly planned a migration that deletes ${what} before a later file of the same run reads its values, which would lose them. ` +
+          `Nothing was written. Please report this with the change you made.`,
+        logContext: { deleted: what, deletedBy: file, readBy: read.file },
+      });
+    }
+  }
 }
 
 /**
@@ -132,7 +180,7 @@ export function judgedDeletions(args: {
   const main = (perFile[args.main] ?? []).filter(
     deletion => deletion.kind !== "rows" || deletion.of === undefined
   );
-  return { main, all };
+  return { main, all, perFile };
 }
 
 /** The main file's UP as `nextly migrate` splits it: the statements as the file writes them. */

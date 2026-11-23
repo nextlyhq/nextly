@@ -70,26 +70,16 @@ export interface NewEntityAccessCaller {
  * Every role that would end up holding `read-<slug>` for a collection created
  * under that slug, by whichever route puts it there.
  *
- * 🔴 There are two routes and only one of them is the creation itself, which is
- * the assumption an earlier revision of this module got wrong.
- *
  * `assignNewPermissionsToSuperAdmin` runs AS the collection is created and
- * assigns its permissions to {@link NEW_ENTITY_PERMISSION_ROLE} alone.
+ * assigns its permissions to {@link NEW_ENTITY_PERMISSION_ROLE}.
  *
- * `seedPermissionsAndRolePresets` runs at every boot -- on BOTH boot paths, which
- * is what makes this route real rather than conditional -- and re-resolves each
- * preset's predicate against the permission list as it then stands, so a preset
- * whose rule covers the new collection picks its permissions up on the next
- * start. `admin` is such a preset -- its rule is "everything except escalation",
- * and a content collection is not an escalation resource -- so an admin who is
- * not a super admin does reach the collection they created, one restart later.
- *
- * That delay is why the checklist offers the step rather than hiding it: the
- * step is finishable for them, and a step withheld from someone who can take it
- * is the defect this policy exists to prevent. Asked of the preset predicates
- * rather than answered by a list naming `admin`, so a preset that stops
- * covering new collections stops appearing here without anyone remembering to
- * come back.
+ * `seedPermissionsAndRolePresets` runs at every boot and re-resolves each
+ * preset against the permission list as it then stands, but a collection
+ * reaches a preset only once it is opened to it by name (`auth/preset-reach`),
+ * and one created in the admin is opened to none. So the presets add nobody
+ * here: asked of their predicates with nothing opened, rather than answered by
+ * leaving them out, so a change to how a new collection is opened shows up
+ * here without anyone remembering to come back.
  */
 export function rolesThatWouldReadNewCollection(
   slug: string = NEW_COLLECTION_PROBE_SLUG

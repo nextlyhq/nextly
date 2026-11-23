@@ -31,6 +31,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { versionsTables } from "../../schemas/versions";
 
 import type { VersionsWhereCondition } from "./db-api";
+import { draftSlotParts, SHARED_DRAFT_SLOT } from "./part-drafts";
 import { WORKING_DRAFT_SHAPE } from "./versions-repository";
 
 type VersionsTable = ReturnType<typeof versionsTables>["nextlyVersions"];
@@ -110,5 +111,42 @@ export function pendingChangeCondition(args: {
             isNull(versions.locale),
             inArray(versions.locale, [...args.locales])
           )
+  )})`;
+}
+
+/**
+ * The condition that one part of an entry of one collection holds changes not
+ * yet published, as `pendingPartsOf` reads a document's working drafts: a
+ * language, where it has a working draft of its own; the shared part (`null`),
+ * where the shared draft holds changes, or, where drafts are not kept by part,
+ * any language's draft, which holds the whole document (`draftSlotParts`).
+ *
+ * @experimental
+ */
+export function pendingPartCondition(args: {
+  dialect: SupportedDialect;
+  collectionName: string;
+  entryId: SQLWrapper;
+  part: string | null;
+}): SQL {
+  const versions = versionsTables(args.dialect).nextlyVersions;
+  // The shared part's own slot is SHARED_DRAFT_SLOT (no language); a language's draft holds the
+  // shared part too unless drafts are kept by part, as `draftSlotParts` says of each slot.
+  const slot =
+    args.part !== null
+      ? eq(versions.locale, args.part)
+      : draftSlotParts("").shared
+        ? undefined
+        : SHARED_DRAFT_SLOT === null
+          ? isNull(versions.locale)
+          : eq(versions.locale, SHARED_DRAFT_SLOT);
+  return sql`EXISTS (SELECT 1 FROM ${versions} WHERE ${and(
+    eq(versions.scopeKind, "collection"),
+    eq(versions.scopeSlug, args.collectionName),
+    eq(versions.entryId, args.entryId),
+    ...WORKING_DRAFT_SHAPE.map(condition =>
+      shapeCondition(versions, condition)
+    ),
+    slot
   )})`;
 }

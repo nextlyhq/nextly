@@ -49,6 +49,14 @@ const screenEntitySchema = z.object({
   }),
   plugin: z.string().nullable(),
   declaredRules: z.array(z.string()),
+  // A collection's closed-to-super-admin mark and where it is set; absent
+  // for a Single, and from a server that does not send it.
+  closedToSuperAdmin: z
+    .object({
+      closed: z.boolean(),
+      setIn: z.enum(["code", "admin"]).nullable(),
+    })
+    .optional(),
 });
 
 const screenListSchema = z.object({ items: z.array(screenEntitySchema) });

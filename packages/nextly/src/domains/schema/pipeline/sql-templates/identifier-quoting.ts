@@ -21,9 +21,21 @@ export function identifierQuote(dialect: SupportedDialect): string {
   return dialect === "mysql" ? "`" : '"';
 }
 
+/**
+ * Whether `quoteIdent` can quote `name` on `dialect`: not where it holds the dialect's quote. A
+ * caller rendering a name it read from a database, which may hold one, asks first and says the
+ * name is one to handle by hand rather than be refused part-way through.
+ */
+export function canQuoteIdent(
+  name: string,
+  dialect: SupportedDialect
+): boolean {
+  return !name.includes(identifierQuote(dialect));
+}
+
 export function quoteIdent(name: string, dialect: SupportedDialect): string {
   const q = identifierQuote(dialect);
-  if (name.includes(q)) {
+  if (!canQuoteIdent(name, dialect)) {
     throw new Error(
       `Invalid identifier ${JSON.stringify(name)}: contains the dialect quote character (${q}). ` +
         "Managed tables and FieldConfig column names must not contain quote characters."

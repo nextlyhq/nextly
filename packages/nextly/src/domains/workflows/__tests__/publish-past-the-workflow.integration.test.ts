@@ -761,6 +761,41 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    describe("a bulk publish from the list", () => {
+      it("publishes each approved document, refuses each unapproved one by name, and never means publishing without review", async () => {
+        await boot(dialect);
+        // Una may publish without review, yet a bulk publish never says so: each document is
+        // judged by its own approval, as the list's Publish sends it.
+        await person(app(), "una", [
+          ["read", PAGES],
+          ["update", PAGES],
+          ["publish", PAGES],
+          ["publish-without-review", PAGES],
+        ]);
+        const approved = await draftOf(PAGES);
+        await approve(PAGES, approved, [null]);
+        const unapproved = await draftOf(PAGES);
+
+        const answer = await rest(
+          "POST",
+          ["collections", PAGES, "entries", "bulk-update"],
+          await sessionOf("una"),
+          {
+            ids: [approved, unapproved],
+            data: { status: "published", _overwrite: true },
+          }
+        );
+
+        const refused = ((answer.json.errors as Doc[] | undefined) ?? []).map(
+          row => row.id
+        );
+        expect(refused).toEqual([unapproved]);
+        expect(await storedStatus(PAGES, approved)).toBe("published");
+        expect(await storedStatus(PAGES, unapproved)).not.toBe("published");
+        expect(await visitorRead(PAGES, unapproved)).toBeNull();
+      });
+    });
+
     describe("publishing every language", () => {
       const everyLanguage = () =>
         DOORS.find(door => door.name === "REST publish of every language")!;

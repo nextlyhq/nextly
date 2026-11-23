@@ -25,6 +25,7 @@ import type { RoleFormProps } from "@admin/types/ui/form";
 import { RoleBasicInfo } from "./RoleBasicInfo";
 import { RoleInheritance } from "./RoleInheritance";
 import { RolePermissionsSection } from "./RolePermissionsSection";
+import { SuperAdminClosedCollections } from "./SuperAdminClosedCollections";
 
 /**
  * Form id used by external buttons (e.g. page-header actions)
@@ -172,6 +173,7 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
                 screenMode={screenMode}
                 copyRole={copyRole}
                 isLoading={isLoading}
+                pluginNames={pluginNames}
               >
                 <RolePermissionsSection
                   form={form}
@@ -224,20 +226,20 @@ function RolePermissionsArea({
   screenMode,
   copyRole,
   isLoading,
+  pluginNames,
   children,
 }: {
   screenMode: RoleScreenMode;
   copyRole: () => void;
   isLoading: boolean;
+  /** Each plugin's name as the admin shows it, by package name. */
+  pluginNames: ReadonlyMap<string, string>;
   children: ReactNode;
 }): JSX.Element {
   if (screenMode === "super-admin") {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Super-admins have every permission, including new collections and
-        plugins. This role can&apos;t be edited.
-      </p>
-    );
+    // What the role holds, and each collection's closed-to-super-admin
+    // mark, shown and changed here.
+    return <SuperAdminClosedCollections pluginNames={pluginNames} />;
   }
   return (
     <div className="-mx-6">
