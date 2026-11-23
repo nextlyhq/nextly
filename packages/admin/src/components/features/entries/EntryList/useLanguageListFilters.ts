@@ -27,6 +27,13 @@ export interface LanguageListFilters {
    * link did not ask for, and then take them away.
    */
   pending: boolean;
+  /**
+   * Whether that answer failed and none is in hand. The filter is then neither offered nor
+   * refused: a link choosing it is not read at all, as a link choosing a plugin's filter is not
+   * when the filters cannot be loaded, since the list without it is not the one the link asks
+   * for. A refusal in hand is an answer, and drops the filter.
+   */
+  unavailable: boolean;
 }
 
 export function useLanguageListFilters(
@@ -41,9 +48,12 @@ export function useLanguageListFilters(
     () => (offers ? languageListFilters(locales, defaultLocale) : []),
     [offers, locales, defaultLocale]
   );
+  // Only an answer in hand can refuse the filter: until then the reader's access is unknown.
+  const undecided =
+    enabled && collectionLocalized && !readsStates && !content.hasAnswer;
   return {
     filters,
-    pending:
-      enabled && collectionLocalized && !readsStates && content.isLoading,
+    pending: undecided && content.isLoading,
+    unavailable: undecided && !content.isLoading,
   };
 }

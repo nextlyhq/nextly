@@ -92,6 +92,7 @@ import {
   linkedStatusFor,
   type ChosenForCollection,
 } from "./EntryTableColumns";
+import { LANGUAGE_FILTER } from "./language-list-filters";
 import {
   chosenPluginFilters,
   listFiltersFor,
@@ -330,6 +331,13 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     choosesPluginFilter;
   const lostPluginFilters =
     !pluginFiltersPending && pluginFiltersUnavailable && choosesPluginFilter;
+  // A link choosing the language filter whose deciding answer failed: not read, as above, since
+  // the list without the filter is not the one the link asks for.
+  const lostLanguageFilter =
+    languageFilters.unavailable &&
+    pluginFilterParamValues(searchParams).some(value =>
+      value.startsWith(`${LANGUAGE_FILTER}:`)
+    );
   // The page returns to the first whenever the choice changes, however it
   // changed: a choice in the toolbar, or the back button restoring an older
   // one. Kept on the page alone, a narrower choice would ask for a page past
@@ -453,7 +461,11 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     error: entriesError,
   } = useEntries({
     collectionSlug,
-    enabled: !tableGone && !awaitsPluginFilters && !lostPluginFilters,
+    enabled:
+      !tableGone &&
+      !awaitsPluginFilters &&
+      !lostPluginFilters &&
+      !lostLanguageFilter,
     params: {
       page,
       limit,
@@ -1029,6 +1041,14 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
                     <AlertDescription>
                       This link chooses a plugin&apos;s filter, and the filters
                       couldn&apos;t be loaded, so the list isn&apos;t shown.
+                      Reload the page to try again.
+                    </AlertDescription>
+                  </Alert>
+                ) : lostLanguageFilter ? (
+                  <Alert variant="destructive">
+                    <AlertDescription>
+                      This link chooses a language filter, and your access to it
+                      couldn&apos;t be checked, so the list isn&apos;t shown.
                       Reload the page to try again.
                     </AlertDescription>
                   </Alert>

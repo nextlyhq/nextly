@@ -38,7 +38,8 @@ const { useEntries, tableProps, table, site, access, title, find, LANGUAGES } =
     // The site's languages: three, or one.
     site: { languages: 3 },
     // The reader's access as the capabilities answer gives it, and whether that answer is in.
-    access: { readTranslations: true, loading: false },
+    // `failed`: the answer's request failed, and no answer is in hand.
+    access: { readTranslations: true, loading: false, failed: false },
     // Whether the title field is kept once for every language (`localized: false`).
     title: { shared: false },
     // The read of titles in a chosen language.
@@ -115,8 +116,13 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", async importOriginal => {
         ...answer,
         canAccessCollection: (_slug: string, action: string) =>
           !access.loading &&
+          !access.failed &&
           (action === "readTranslations" ? access.readTranslations : true),
-        content: { ...answer.content, isLoading: access.loading },
+        content: {
+          ...answer.content,
+          isLoading: access.loading,
+          hasAnswer: !access.loading && !access.failed,
+        },
       };
     },
   };
@@ -192,6 +198,7 @@ beforeEach(() => {
   title.shared = false;
   access.readTranslations = true;
   access.loading = false;
+  access.failed = false;
   at("");
 });
 afterEach(() => at(""));
@@ -311,6 +318,39 @@ describe("a link choosing the language filter, while the reader's access is not 
     expect(lastRead().where).toEqual({
       _translated: { locale: "ar", state: "missing" },
     });
+  });
+
+  it("reads nothing, and says why, when that answer fails", () => {
+    // With no answer in hand the reader's access is unknown, not refused: reading now would show
+    // the rows the link asked to leave out.
+    access.failed = true;
+    at(`?pf=${LANGUAGE_FILTER}:missing.ar`);
+    render(<EntryList collectionSlug="posts" />);
+    expect(useEntries.mock.calls.every(([o]) => o.enabled === false)).toBe(
+      true
+    );
+    expect(
+      screen.getByText(
+        /language filter, and your access to it couldn.t be checked/
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("still reads a link choosing no language filter when that answer fails", () => {
+    access.failed = true;
+    at("");
+    render(<EntryList collectionSlug="posts" />);
+    expect(useEntries.mock.calls.at(-1)?.[0].enabled).toBe(true);
+  });
+
+  it("reads the list without the filter once the answer refuses it", () => {
+    // A refusal is an answer: the filter is not offered, and the link's choice of it is ignored,
+    // as any choice naming no offered filter is.
+    access.readTranslations = false;
+    at(`?pf=${LANGUAGE_FILTER}:missing.ar`);
+    render(<EntryList collectionSlug="posts" />);
+    expect(useEntries.mock.calls.at(-1)?.[0].enabled).toBe(true);
+    expect(lastRead().where).toBeUndefined();
   });
 });
 
