@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * The overlays a builder page mounts over its field list: the settings modal
- * and the field picker. The field settings panel is docked beside the list
- * rather than laid over it, so the layout draws it (`BuilderFieldSettings`).
+ * The overlays a builder page mounts over its field list: the settings modal,
+ * the field picker, and the picker opened to change a field's type. The field
+ * settings panel is docked beside the list rather than laid over it, so the
+ * layout draws it (`BuilderFieldSettings`).
  *
  * One of these is open at a time, or a field is being edited, so the page
  * holds a single `ActiveOverlay` value rather than booleans that could
@@ -12,11 +13,13 @@
 import type { JSX } from "react";
 
 import { useLeaveWithoutWarning } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
+import { updateFieldById } from "@admin/lib/builder/field-transformers";
 import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
 import type { PendingAddress } from "@admin/services/addressCheckApi";
 import type { StoredHookConfig } from "@admin/types/collection";
 
 import type { BuilderConfig } from "./builder-config";
+import { BuilderChangeType } from "./BuilderChangeType";
 import { BuilderFieldPicker } from "./BuilderFieldPicker";
 import {
   BuilderSettingsModal,
@@ -35,6 +38,8 @@ export type ActiveOverlay =
   | { kind: "none" }
   | { kind: "settings" }
   | { kind: "picker"; position: FieldInsertPosition }
+  /** `change-type`: the picker opened on a field to change its type (Change type…). */
+  | { kind: "change-type"; fieldId: string }
   /**
    * `renaming`: opened from a row's Rename…, so its rename is asked for at once. A number for each
    * request, so asking again on the field already open asks again.
@@ -126,6 +131,26 @@ export function BuilderOverlays({
           }}
           savedFields={savedFields}
           lifecycleEnabled={lifecycleEnabled}
+        />
+      )}
+
+      {/* Change type…: the field becomes the type picked, as one change undo takes back whole
+          (a field's settings edits join one another, never this), and its settings open on it.
+          Leaving without a pick goes back to its settings, unchanged. */}
+      {active.kind === "change-type" && (
+        <BuilderChangeType
+          config={config}
+          fields={builder.fields}
+          fieldId={active.fieldId}
+          entitySlug={settings.slug}
+          savedFields={savedFields}
+          onCancel={() =>
+            onActiveChange({ kind: "edit", fieldId: active.fieldId })
+          }
+          onChanged={next => {
+            builder.setFields(prev => updateFieldById(prev, next));
+            onActiveChange({ kind: "edit", fieldId: next.id });
+          }}
         />
       )}
     </>

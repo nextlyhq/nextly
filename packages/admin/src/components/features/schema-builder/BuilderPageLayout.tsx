@@ -26,6 +26,7 @@ import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { findFieldById } from "@admin/lib/builder";
 import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
+import { changeTypeOffered } from "@admin/lib/builder/change-type";
 import type { DuplicateNaming } from "@admin/lib/builder/duplicate-field";
 import { findFieldPlacement } from "@admin/lib/builder/field-placement";
 import { builderFieldErrors } from "@admin/lib/builder/field-validators";
@@ -37,6 +38,7 @@ import {
 import {
   flattenOutline,
   nodePlacement,
+  placementReadOnlyReason,
   type FieldGroupsLoad,
   type LoadedFieldGroup,
   type OutlineNode,
@@ -416,6 +418,7 @@ function EditedFieldSettings({
         close();
       }}
       onClose={close}
+      onChangeType={fieldId => onActiveChange({ kind: "change-type", fieldId })}
     />
   );
 }
@@ -439,11 +442,30 @@ function renameCallbacksOf(
     namedByHooks: ReadonlyMap<string, string>;
   },
   onActiveChange: (next: ActiveOverlay) => void
-): Pick<OutlineCallbacks, "rename" | "canRename"> {
+): Pick<
+  OutlineCallbacks,
+  "rename" | "canRename" | "changeType" | "canChangeType"
+> {
   return {
     rename: fieldId => {
       renameRequests += 1;
       onActiveChange({ kind: "edit", fieldId, renaming: renameRequests });
+    },
+    // Change type…, offered on a row as the settings panel offers it, so the two never disagree.
+    changeType: fieldId => onActiveChange({ kind: "change-type", fieldId }),
+    canChangeType: fieldId => {
+      const placement = findFieldPlacement(fields, fieldId);
+      return (
+        placement !== null &&
+        changeTypeOffered(
+          placement.field,
+          placementReadOnlyReason(
+            placement.field,
+            placement.ancestors,
+            locked
+          ) !== null
+        )
+      );
     },
     canRename: fieldId => {
       const placement = findFieldPlacement(fields, fieldId);
@@ -495,8 +517,11 @@ function FieldListRegion({
 > & {
   /** What the move rule needs beyond the fields, for every way of moving one. */
   moveContext: MoveContext;
-  /** Each row's Rename…: whether its field offers it, and asking for it. */
-  renameCallbacks: Pick<OutlineCallbacks, "rename" | "canRename">;
+  /** Each row's Rename… and Change type…: whether its field offers each, and asking for it. */
+  renameCallbacks: Pick<
+    OutlineCallbacks,
+    "rename" | "canRename" | "changeType" | "canChangeType"
+  >;
   outline: readonly OutlineNode[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
   fieldGroupsLoad: FieldGroupsLoad;

@@ -20,6 +20,7 @@ import {
   FieldPicker,
   type FieldGroupOption,
   type FieldPickerChoice,
+  type FieldPickerConfig,
 } from "@admin/components/field-ui";
 import { toast } from "@admin/components/ui";
 import { useFieldGroups } from "@admin/hooks/queries";
@@ -153,6 +154,74 @@ function useNewFieldGroupDialog(host: UnsavedEntity["ownedBy"]) {
   };
 }
 
+/**
+ * The field groups a Builder picker offers for the field-group type, and the dialog that makes a
+ * new one: the saved ones, and the unsaved ones this entity's save would create, never the entity
+ * itself. Shared by adding a field and by changing a field's type.
+ */
+export function useBuilderFieldGroupChoices(
+  config: BuilderConfig,
+  entitySlug: string | undefined
+): {
+  config: FieldPickerConfig["fieldGroups"];
+  dialog: ReturnType<typeof useNewFieldGroupDialog>["dialog"];
+} {
+  const { data: fieldGroupData, isLoading: fieldGroupsLoading } =
+    useFieldGroups({
+      pagination: { page: 0, pageSize: 100 },
+      sorting: [{ field: "label", direction: "asc" }],
+      filters: {},
+    });
+
+  // The entity this picker adds to, as a field group made here names its owner.
+  const host = useMemo(
+    () => (entitySlug ? { kind: config.kind, address: entitySlug } : undefined),
+    [config.kind, entitySlug]
+  );
+  const unsavedFieldGroups = useUnsavedEntitiesOf("field-group");
+
+  const fieldGroupOptions = useMemo(() => {
+    // A field group embedding itself would never finish rendering.
+    const notThisOne = (slug: string) =>
+      !(config.kind === "field-group" && slug === entitySlug);
+    const saved = (fieldGroupData?.items ?? []).filter(group =>
+      notThisOne(group.slug)
+    );
+    // An unsaved field group is offered where this host's save would create it: one made from
+    // its own picker, or one made from its own create page, which no host owns. One another
+    // host's picker made is that host's to create or drop at its save.
+    const unsaved = unsavedFieldGroups
+      .filter(
+        group =>
+          notThisOne(group.address) &&
+          (group.ownedBy === undefined ||
+            (group.ownedBy.kind === host?.kind &&
+              group.ownedBy.address === host.address))
+      )
+      .map(group => ({
+        label: group.settings.singularName,
+        slug: group.address,
+      }));
+    return [
+      ...fieldGroupOptionsOf(saved, "saved"),
+      ...fieldGroupOptionsOf(unsaved, "unsaved"),
+    ];
+  }, [fieldGroupData, unsavedFieldGroups, config.kind, entitySlug, host]);
+
+  const newGroup = useNewFieldGroupDialog(host);
+  return {
+    config: FIELD_GROUP_TYPE
+      ? {
+          type: FIELD_GROUP_TYPE,
+          options: fieldGroupOptions,
+          loading: fieldGroupsLoading,
+          onNew: newGroup.onNew,
+        }
+      : undefined,
+    dialog: newGroup.dialog,
+  };
+}
+
 type Props = {
   config: BuilderConfig;
   fields: BuilderField[];
@@ -204,12 +273,7 @@ export function BuilderFieldPicker({
   savedFields,
   lifecycleEnabled = false,
 }: Props): JSX.Element {
-  const { data: fieldGroupData, isLoading: fieldGroupsLoading } =
-    useFieldGroups({
-      pagination: { page: 0, pageSize: 100 },
-      sorting: [{ field: "label", direction: "asc" }],
-      filters: {},
-    });
+  const fieldGroups = useBuilderFieldGroupChoices(config, entitySlug);
 
   const parent = position.parentFieldId
     ? findFieldById(fields, position.parentFieldId)
@@ -218,43 +282,6 @@ export function BuilderFieldPicker({
     surface: nameSurfaceOf(config.kind),
     lifecycleEnabled,
   });
-
-  // The entity this picker adds to, as a field group made here names its owner.
-  const host = useMemo(
-    () => (entitySlug ? { kind: config.kind, address: entitySlug } : undefined),
-    [config.kind, entitySlug]
-  );
-  const unsavedFieldGroups = useUnsavedEntitiesOf("field-group");
-
-  const fieldGroupOptions = useMemo(() => {
-    // A field group embedding itself would never finish rendering.
-    const notThisOne = (slug: string) =>
-      !(config.kind === "field-group" && slug === entitySlug);
-    const saved = (fieldGroupData?.items ?? []).filter(group =>
-      notThisOne(group.slug)
-    );
-    // An unsaved field group is offered where this host's save would create it: one made from
-    // its own picker, or one made from its own create page, which no host owns. One another
-    // host's picker made is that host's to create or drop at its save.
-    const unsaved = unsavedFieldGroups
-      .filter(
-        group =>
-          notThisOne(group.address) &&
-          (group.ownedBy === undefined ||
-            (group.ownedBy.kind === host?.kind &&
-              group.ownedBy.address === host.address))
-      )
-      .map(group => ({
-        label: group.settings.singularName,
-        slug: group.address,
-      }));
-    return [
-      ...fieldGroupOptionsOf(saved, "saved"),
-      ...fieldGroupOptionsOf(unsaved, "unsaved"),
-    ];
-  }, [fieldGroupData, unsavedFieldGroups, config.kind, entitySlug, host]);
-
-  const newGroup = useNewFieldGroupDialog(host);
 
   const add = (choice: FieldPickerChoice, how: { addAnother: boolean }) => {
     const field: BuilderField = {
@@ -306,20 +333,13 @@ export function BuilderFieldPicker({
               ...place,
               producesColumn: fieldProducesColumn({ type }),
             }),
-          fieldGroups: FIELD_GROUP_TYPE
-            ? {
-                type: FIELD_GROUP_TYPE,
-                options: fieldGroupOptions,
-                loading: fieldGroupsLoading,
-                onNew: newGroup.onNew,
-              }
-            : undefined,
+          fieldGroups: fieldGroups.config,
         }}
         onCancel={onCancel}
         onAdd={add}
       />
       {/* Over the picker, which waits on the chooser until it is made or closed. */}
-      <NewEntityDialog {...newGroup.dialog} />
+      <NewEntityDialog {...fieldGroups.dialog} />
     </>
   );
 }

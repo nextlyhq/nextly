@@ -41,6 +41,7 @@ import {
 } from "@admin/components/field-ui/settings-panel";
 import { Trash2 } from "@admin/components/icons";
 import { toSnakeName } from "@admin/lib/builder";
+import { changeTypeOffered } from "@admin/lib/builder/change-type";
 import {
   builderNameProblem,
   nameSurfaceOf,
@@ -148,6 +149,8 @@ type Props = {
   lifecycleEnabled?: boolean;
   /** How Rename… stands for the field (`FieldRename`). */
   rename?: FieldRename;
+  /** Opens Change type… for the field; absent, the panel offers none. */
+  onChangeType?: (fieldId: string) => void;
 };
 
 /** The names of the named containers above a field, outermost first: the path the save finds it by. */
@@ -261,9 +264,13 @@ function panelStateOf(
   };
 }
 
-/** The panel's header actions: Rename… for a field it can rename, and Delete. */
+/**
+ * The panel's header actions: Change type… for a field whose type can change here, Rename… for a
+ * field it can rename, and Delete.
+ */
 function FieldActions({
   field,
+  onChangeType,
   renamable,
   startRenaming,
   checkName,
@@ -272,6 +279,8 @@ function FieldActions({
   onDelete,
 }: {
   field: BuilderField;
+  /** Absent where Change type… is not offered. */
+  onChangeType: (() => void) | undefined;
   renamable: boolean;
   startRenaming: boolean;
   checkName: (name: string) => string | null;
@@ -281,6 +290,17 @@ function FieldActions({
 }): JSX.Element {
   return (
     <>
+      {onChangeType && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-muted-foreground"
+          onClick={onChangeType}
+        >
+          Change type…
+        </Button>
+      )}
       {renamable && (
         <RenameFieldAction
           field={field}
@@ -361,6 +381,7 @@ export function BuilderFieldSettings({
   savedFields,
   lifecycleEnabled = false,
   rename,
+  onChangeType,
 }: Props): JSX.Element | null {
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const placement = findFieldPlacement(fields, fieldId) ?? fallbackPlacement;
@@ -413,6 +434,11 @@ export function BuilderFieldSettings({
       actions={
         <FieldActions
           field={field}
+          onChangeType={
+            onChangeType && changeTypeOffered(field, fieldReadOnly)
+              ? () => onChangeType(field.id)
+              : undefined
+          }
           renamable={state.renamable}
           startRenaming={rename?.asked === true}
           checkName={checkName}

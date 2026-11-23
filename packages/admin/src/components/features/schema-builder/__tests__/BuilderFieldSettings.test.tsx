@@ -66,6 +66,7 @@ function Builder({
   readOnly = false,
   onUpdate = () => {},
   onDelete = () => {},
+  onChangeType,
 }: {
   initial: BuilderField[];
   fieldId: string;
@@ -73,6 +74,7 @@ function Builder({
   readOnly?: boolean;
   onUpdate?: (next: BuilderField) => void;
   onDelete?: (id: string) => void;
+  onChangeType?: (id: string) => void;
 }) {
   const [fields, setFields] = useState(initial);
   return (
@@ -89,6 +91,7 @@ function Builder({
       }}
       onFieldDelete={onDelete}
       onClose={() => {}}
+      onChangeType={onChangeType}
     />
   );
 }
@@ -180,6 +183,47 @@ describe("BuilderFieldSettings", () => {
       })
     );
     expect(onDelete).toHaveBeenCalledWith("f-1");
+  });
+
+  it("offers Change type… for a field whose type can change here, opening it on the field", async () => {
+    const user = userEvent.setup();
+    const onChangeType = vi.fn();
+    render(
+      <Builder
+        initial={[excerpt]}
+        fieldId="f-1"
+        saved={["f-1"]}
+        onChangeType={onChangeType}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: "Change type…" }));
+    expect(onChangeType).toHaveBeenCalledWith("f-1");
+  });
+
+  it("offers no Change type… for a system field, a read-only one, or where the page gives none", () => {
+    const changeType = () =>
+      screen.queryByRole("button", { name: "Change type…" });
+    const { unmount } = render(
+      <Builder
+        initial={[systemTitle]}
+        fieldId="system_title"
+        onChangeType={vi.fn()}
+      />
+    );
+    expect(changeType()).toBeNull();
+    unmount();
+    const readOnly = render(
+      <Builder
+        initial={[excerpt]}
+        fieldId="f-1"
+        readOnly
+        onChangeType={vi.fn()}
+      />
+    );
+    expect(changeType()).toBeNull();
+    readOnly.unmount();
+    render(<Builder initial={[excerpt]} fieldId="f-1" />);
+    expect(changeType()).toBeNull();
   });
 
   it("offers no delete for a system field", () => {

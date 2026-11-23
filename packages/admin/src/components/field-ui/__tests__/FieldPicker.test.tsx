@@ -34,7 +34,9 @@ import type { PluginMetadata } from "@admin/types/branding";
 
 import {
   FieldPicker,
+  FieldTypeChangePicker,
   type FieldGroupOption,
+  type FieldPickerChange,
   type FieldPickerConfig,
   type FieldPickerProps,
 } from "../FieldPicker";
@@ -683,5 +685,106 @@ describe("the Schema Builder's field picker", () => {
       "a".repeat(64)
     );
     expect(screen.getByText(/Too long/)).toBeInTheDocument();
+  });
+});
+
+describe("FieldTypeChangePicker: changing a field's type", () => {
+  /** The row of one type, by the id the picker marks it with. */
+  const row = (type: string) =>
+    document.querySelector(
+      `[role="option"][data-type="${type}"]`
+    ) as HTMLElement;
+  function renderChange(over: Partial<FieldPickerChange> = {}) {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <FieldTypeChangePicker
+        open
+        title="Change the type of Price"
+        config={CONFIG}
+        onCancel={vi.fn()}
+        change={{
+          current: "number",
+          choiceOf: type =>
+            type === "date"
+              ? { available: false, reason: "No value it holds is a date." }
+              : type === "text"
+                ? { available: true, mark: "converts" }
+                : type === "checkbox"
+                  ? { available: true, mark: "may-lose" }
+                  : { available: true },
+          onChange,
+          ...over,
+        }}
+      />
+    );
+    return { user, onChange };
+  }
+
+  it("offers every type but the field's own, each with what the change does or why it cannot", () => {
+    renderChange();
+    expect(optionNames()).not.toContain("number");
+    expect(row("text")).toHaveTextContent("Converts the values");
+    expect(row("checkbox")).toHaveTextContent("May lose some values");
+    const date = row("date");
+    expect(date).toHaveAttribute("aria-disabled", "true");
+    expect(date).toHaveTextContent("Unavailable: No value it holds is a date.");
+  });
+
+  it("a type the field cannot become is not picked, by click or by Enter", async () => {
+    const { user, onChange } = renderChange();
+    await user.click(row("date"));
+    await user.type(search(), "date");
+    expect(activeType()).toBe("date");
+    await user.keyboard("{Enter}");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("picking a type hands it back at once, with no label asked", async () => {
+    const { user, onChange } = renderChange();
+    await user.click(row("checkbox"));
+    expect(onChange).toHaveBeenCalledWith({ type: "checkbox" });
+    expect(screen.queryByRole("textbox", { name: "Label" })).toBeNull();
+  });
+
+  it("while what each type does is being judged, or could not be, no type is picked", async () => {
+    const { user, onChange } = renderChange({ pending: { kind: "loading" } });
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Checking what each type does to the saved values…"
+    );
+    await user.click(row("checkbox"));
+    expect(onChange).not.toHaveBeenCalled();
+    cleanup();
+    renderChange({ pending: { kind: "failed", message: "Try again." } });
+    expect(screen.getByRole("status")).toHaveTextContent("Try again.");
+  });
+
+  it("the field-group type asks which field group, then hands back both", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <FieldTypeChangePicker
+        open
+        config={{
+          ...CONFIG,
+          fieldGroups: {
+            type: "component",
+            options: [{ slug: "hero", label: "Hero", text: "Hero" }],
+          },
+        }}
+        onCancel={vi.fn()}
+        change={{
+          current: "text",
+          choiceOf: () => ({ available: true }),
+          onChange,
+        }}
+      />
+    );
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    await user.click(await screen.findByRole("option", { name: "Hero" }));
+    expect(onChange).toHaveBeenCalledWith({
+      type: "component",
+      fieldGroup: "hero",
+    });
   });
 });

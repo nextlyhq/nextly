@@ -20,6 +20,7 @@ import type { JSX } from "react";
 
 import { ComponentFieldEditor } from "@admin/components/features/schema-builder/ComponentFieldEditor";
 import { GroupFieldEditor } from "@admin/components/features/schema-builder/GroupFieldEditor";
+import { optionsPickerOf } from "@admin/components/features/schema-builder/option-settings";
 import { RelationshipEditor } from "@admin/components/features/schema-builder/RelationshipEditor";
 import { RepeaterFieldEditor } from "@admin/components/features/schema-builder/RepeaterFieldEditor";
 import { SelectOptionsEditor } from "@admin/components/features/schema-builder/SelectOptionsEditor";
@@ -31,7 +32,11 @@ import { UploadEditor } from "@admin/components/features/schema-builder/UploadEd
 import type { FieldPrimitiveType } from "@admin/types/collection";
 
 import { BlocksSettings } from "./BlocksSettings";
-import type { FieldSettingsControlProps, FieldTypeSettings } from "./types";
+import type {
+  FieldSettingsControlProps,
+  FieldSettingsSurface,
+  FieldTypeSettings,
+} from "./types";
 
 /**
  * The three ways a setting is written: on the field itself, under its
@@ -88,7 +93,7 @@ function OptionsSettings(props: FieldSettingsControlProps): JSX.Element {
       onOptionsChange={patch("options")}
       hasMany={field.hasMany}
       onHasManyChange={patch("hasMany")}
-      fieldType={field.type === "radio" ? "radio" : "select"}
+      fieldType={optionsPickerOf(field.type)}
       isClearable={field.admin?.isClearable}
       onIsClearableChange={patchAdmin("isClearable")}
       placeholder={field.admin?.placeholder}
@@ -241,4 +246,23 @@ export function coreFieldTypeSettings(
   return Object.prototype.hasOwnProperty.call(CORE_FIELD_TYPE_SETTINGS, type)
     ? CORE_FIELD_TYPE_SETTINGS[type as keyof typeof CORE_FIELD_TYPE_SETTINGS]
     : undefined;
+}
+
+/**
+ * A built-in type's own settings on `surface`: the surface's own for the type where it names it,
+ * else the core table's (`coreFieldTypeSettings`); `undefined` for a type that is not built in. The
+ * settings panel finds a type's settings this way first (`useFieldTypeSettings`), and a type change
+ * asks it which settings the new type has.
+ */
+export function surfaceTypeSettings(
+  surface: Pick<FieldSettingsSurface, "typeSettings">,
+  type: string
+): FieldTypeSettings | undefined {
+  const table = surface.typeSettings;
+  // Only a type the surface names: one spelled like an inherited member (`toString`) is not.
+  const own =
+    table && Object.prototype.hasOwnProperty.call(table, type)
+      ? table[type]
+      : undefined;
+  return own ?? coreFieldTypeSettings(type);
 }

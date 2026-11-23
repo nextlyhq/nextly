@@ -22,6 +22,7 @@ import {
 } from "@admin/components/field-ui/FieldOptionsEditor";
 import { FormLabelWithTooltip } from "@admin/components/ui/form-label-with-tooltip";
 
+import { OPTIONS_PICKER_SETTINGS } from "./option-settings";
 import type { SelectOptionsEditorProps } from "./types";
 
 export function SelectOptionsEditor({
@@ -37,6 +38,8 @@ export function SelectOptionsEditor({
   layout,
   onLayoutChange,
 }: SelectOptionsEditorProps): JSX.Element {
+  // What this picker shows beside its options, from the table a type change keeps them by.
+  const shows = OPTIONS_PICKER_SETTINGS[fieldType];
   // `SelectOption` and the kit's `FieldOption` are the same id/label/value
   // shape, so the list passes through untouched. The `readonly` widening keeps
   // the kit's controlled contract explicit at the boundary.
@@ -52,7 +55,7 @@ export function SelectOptionsEditor({
       />
 
       {/* Multi-select applies to select fields only; radio is single-choice. */}
-      {fieldType === "select" && onHasManyChange && (
+      {shows.hasMany && onHasManyChange && (
         <div className="mt-3 flex items-center justify-between border-t border-border py-2 pt-3">
           <div className="space-y-0.5">
             <FormLabelWithTooltip
@@ -71,7 +74,7 @@ export function SelectOptionsEditor({
 
       {/* Clearable + placeholder are select-only presentation, stored on the
           field's admin options by the caller. */}
-      {fieldType === "select" && onIsClearableChange && (
+      {shows.clearable && onIsClearableChange && (
         <div className="mt-3 flex items-center justify-between border-t border-border py-2 pt-3">
           <div className="space-y-0.5">
             <FormLabelWithTooltip
@@ -87,7 +90,7 @@ export function SelectOptionsEditor({
           />
         </div>
       )}
-      {fieldType === "select" && onPlaceholderChange && (
+      {shows.placeholder && onPlaceholderChange && (
         <div className="mt-3 space-y-2">
           <FormLabelWithTooltip
             className="text-xs font-medium"
@@ -106,7 +109,7 @@ export function SelectOptionsEditor({
 
       {/* Layout is radio-only presentation, stored on the field's admin options
           by the caller. */}
-      {fieldType === "radio" && onLayoutChange && (
+      {shows.layout && onLayoutChange && (
         <div className="mt-3 space-y-2 border-t border-border pt-3">
           <FormLabelWithTooltip
             className="text-xs font-medium"
