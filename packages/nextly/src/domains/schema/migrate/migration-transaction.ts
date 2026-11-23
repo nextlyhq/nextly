@@ -36,8 +36,9 @@ import { commitsOnMysql } from "./mysql-implicit-commit";
 import { requiredColumnCheckpoint } from "./required-column-guard";
 import { leadingWords } from "./split-sql";
 import {
+  assertForeignKeysOff,
   refusingNewDanglingReferences,
-  sqliteForeignKeysOn,
+  sqliteSchemaTransaction,
   withSqliteForeignKeysOff,
   type SqliteForeignKeySession,
 } from "./sqlite-foreign-keys";
@@ -250,42 +251,29 @@ export async function executeTransaction<T>(
     );
   }
 
-  // The adapter outside the transaction for the pragma switch, which
-  // SQLite ignores inside one; the transaction's own connection for the
-  // reads that must see the unit's state.
-  const outside: SqliteForeignKeySession = {
-    read: statement => adapter.executeQuery(statement),
-    run: async statement => {
-      await adapter.executeQuery(statement);
+  // SQLite's contract for a change to a table's shape, shared with the dev push
+  // (`sqliteSchemaTransaction`); a busy answer inside it is this process
+  // waiting for its own lock (`refusingOwnWriteLockWait`).
+  return sqliteSchemaTransaction(
+    adapter,
+    ctx =>
+      work({
+        execute: async statement => {
+          await ctx.execute(statement);
+        },
+        db: ctx.getDrizzle(),
+        // SQLite has no setting a statement can change that reroutes a
+        // table name: ATTACH and DETACH are refused before anything runs.
+        restoreSession: () => Promise.resolve(),
+        // SQLite names no connection: its busy timeout bounds the one write lock.
+        session: () => Promise.resolve(undefined),
+      }),
+    {
+      subject: "this migration",
+      dangling: (count, pairs) =>
+        `This migration would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`,
     },
-  };
-  return withSqliteForeignKeysOff(outside, () =>
-    adapter.transaction(ctx =>
-      refusingOwnWriteLockWait(change, async () => {
-        const inside = {
-          read: <R>(statement: string) =>
-            ctx.queryStatement<R>(sql.raw(statement)),
-        };
-        await assertForeignKeysOff(inside);
-        return refusingNewDanglingReferences(
-          inside,
-          () =>
-            work({
-              execute: async statement => {
-                await ctx.execute(statement);
-              },
-              db: ctx.getDrizzle(),
-              // SQLite has no setting a statement can change that reroutes a
-              // table name: ATTACH and DETACH are refused before anything runs.
-              restoreSession: () => Promise.resolve(),
-              // SQLite names no connection: its busy timeout bounds the one write lock.
-              session: () => Promise.resolve(undefined),
-            }),
-          (count, pairs) =>
-            `This migration would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`
-        );
-      })
-    )
+    run => refusingOwnWriteLockWait(change, run)
   );
 }
 
@@ -346,23 +334,6 @@ export function ownWriteLockError(
     ].join("\n"),
     logContext: { reason: "own-write-lock" },
     ...(cause instanceof Error ? { cause } : {}),
-  });
-}
-
-/**
- * Refuses a unit before its first statement when foreign-key enforcement is
- * still on after the runner switched it off: another transaction was open on
- * SQLite's one connection, so the pragma did nothing.
- */
-async function assertForeignKeysOff(
-  session: Pick<SqliteForeignKeySession, "read">
-): Promise<void> {
-  if (!(await sqliteForeignKeysOn(session))) return;
-  throw new NextlyError({
-    code: "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION",
-    publicMessage:
-      "Foreign-key enforcement could not be switched off for this migration, because another transaction was open on the connection. Nothing was applied; re-run it once that transaction has finished.",
-    logContext: { reason: "enforcement-still-on" },
   });
 }
 
@@ -960,7 +931,7 @@ async function runUnitStatements(
       },
     };
     await withSqliteForeignKeysOff(session, async () => {
-      await assertForeignKeysOff(session);
+      await assertForeignKeysOff(session, "this migration");
       await refusingNewDanglingReferences(
         session,
         () => runEach(onPool, adapter.getDrizzle()),

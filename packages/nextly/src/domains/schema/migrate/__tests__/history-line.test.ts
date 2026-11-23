@@ -15,7 +15,9 @@ import {
   HISTORY_FORKED_REASON,
   blankLineHeader,
   blankLineIn,
+  blankWrittenFrom,
   forkedHistoryError,
+  isBlankMigration,
   mergedBy,
   nothingToRecordNotice,
   refuseForkedHistory,
@@ -255,6 +257,52 @@ describe("the merges a migration history does not record", () => {
     migration("0004_b", "0001_a", undefined, ["0003_seed"]);
 
     expect(await unrecordedMerges(dir)).toEqual([]);
+  });
+
+  // The one reading migrate:check judges a blank file by (`isBlankMigration`): the lines below
+  // the runner's UP line are statements and their comments, so a Parent line there places
+  // nothing, and migrate:check refuses the file until its author moves the line up.
+  it("reads a blank migration's place in its header only, never from a Parent line below UP", async () => {
+    migration("0001_a", null);
+    blank("0002_seed", "0001_a");
+    const below =
+      "-- Migration: backfill\n-- UP\n-- Parent: 0001_a\nSELECT 1;\n";
+    writeFileSync(join(dir, "0003_backfill.sql"), below);
+
+    expect(await unrecordedMerges(dir)).toEqual([]);
+    expect(await blankLineIn(dir)).toEqual({ parent: "0002_seed", merges: [] });
+    expect(blankWrittenFrom(below)).toEqual([]);
+    expect(isBlankMigration(below)).toBe(false);
+    // Above UP, the same line places the file, for every reader alike.
+    const above =
+      "-- Migration: backfill\n-- Parent: 0001_a\n--\n-- UP\nSELECT 1;\n";
+    expect(blankWrittenFrom(above)).toEqual(["0001_a"]);
+    expect(isBlankMigration(above)).toBe(true);
+  });
+
+  // A dialect's variant (`<base>.mysql.sql`) is the same migration as its base, as the runner
+  // groups them: read once per group, a blank migration's variant is no second branch, and one
+  // beside a snapshot is placed by that snapshot alone.
+  it("reads one file per migration: a dialect's variant is no branch of its own", async () => {
+    migration("0001_a", null);
+    blank("0002_seed", "0001_a");
+    writeFileSync(
+      join(dir, "0002_seed.mysql.sql"),
+      `-- Migration: 0002_seed\n${blankLineHeader({ parent: "0001_a", merges: [] })}--\n-- UP\n`
+    );
+    migration("0003_b", "0002_seed");
+    writeFileSync(
+      join(dir, "0003_b.mysql.sql"),
+      `-- Migration: 0003_b\n${blankLineHeader({ parent: "0001_a", merges: [] })}--\n-- UP\n`
+    );
+    // A blank migration written only as a variant stands in the line by its group's name.
+    writeFileSync(
+      join(dir, "0004_tune.sqlite.sql"),
+      `-- Migration: 0004_tune\n${blankLineHeader({ parent: "0003_b", merges: [] })}--\n-- UP\n`
+    );
+
+    expect(await unrecordedMerges(dir)).toEqual([]);
+    expect(await blankLineIn(dir)).toEqual({ parent: "0004_tune", merges: [] });
   });
 
   it("takes the branch of the folder's newest snapshot as the newest, whichever end sorts last", async () => {

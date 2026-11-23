@@ -138,6 +138,29 @@ export const DETAIL_GUESSES: Readonly<
   questions: ["faq", "faqs", "questions"],
 };
 
+/**
+ * Whether `field` is the row's own save stamp, which every save moves, an
+ * SEO-only one included: never the date a page's content changed, so the
+ * date a page last changed is never read from it. Matched in any spelling,
+ * as a detail's guesses are, but only at the entry's own level.
+ */
+export function isSaveStamp(field: string): boolean {
+  // A path into a group (`updated.at`) names the page's own value, never the row's stamp.
+  if (field.includes(".")) return false;
+  return field.toLowerCase().replace(/[^a-z0-9]/g, "") === "updatedat";
+}
+
+/**
+ * The details an entry's own dates can stand for: when its page was
+ * published, or its video uploaded, which the day it was created or first
+ * published says. Its last save never does (`isSaveStamp`), and no own date
+ * says when the page last changed or when an event starts.
+ */
+export const ENTRY_DATE_DETAILS: ReadonlySet<StructuredDataDetail> = new Set([
+  "datePublished",
+  "uploadDate",
+]);
+
 /** One structured data type a page can be described as. */
 export interface StructuredDataType {
   /** The type as a person picks it. */

@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ChipFallbackDialog } from "../ChipFallbackDialog";
 import { LinkDialog } from "../LinkDialog";
+import { ShowWhenDialog } from "../ShowWhenDialog";
 
 /** `dialog` inside a form standing for the workbench's, with its submits. */
 function insideWorkbench(dialog: ReactNode) {
@@ -69,6 +70,27 @@ describe("a written email's dialog inside the workbench's form", () => {
     );
     await user.click(within(dialog).getByRole("button", { name: "Save link" }));
     expect(onSave).toHaveBeenCalledWith({ url: "https://shop.example" });
+    expect(saveEmail).not.toHaveBeenCalled();
+  });
+
+  it("saves a condition without saving the email", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const saveEmail = insideWorkbench(
+      <ShowWhenDialog
+        open
+        onOpenChange={() => {}}
+        condition={undefined}
+        choices={[{ path: "vip", name: "VIP" }]}
+        onSave={onSave}
+      />
+    );
+    const dialog = screen.getByRole("dialog");
+    await user.selectOptions(within(dialog).getByLabelText("Variable"), "VIP");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save condition" })
+    );
+    expect(onSave).toHaveBeenCalledWith({ variable: "vip", when: "present" });
     expect(saveEmail).not.toHaveBeenCalled();
   });
 });

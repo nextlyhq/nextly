@@ -83,6 +83,10 @@ import {
 } from "../../i18n/migration/companion-unique-indexes";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import {
+  fieldsTranslatedThrough,
+  retypedCompanionColumns,
+} from "../../i18n/migration/plan-companion-type-change";
+import {
   mainTableFields,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
@@ -1468,11 +1472,28 @@ async function refuseSaveTypeChanges(
     ...componentRow,
   });
   if (changes.length === 0) return;
+  const translatedBefore = perLanguageBefore(save.previous, table, previous);
+  const translatedAfter = perLanguageAfter(save.entity, next);
   await refuseFieldTypeChanges(deps.adapter.getDrizzle(), dialect, {
     label: entityLabel(kind.kind, save.slug),
     table,
-    ...perLanguageBefore(save.previous, table, previous),
-    ...perLanguageAfter(save.entity, next),
+    ...translatedBefore,
+    ...translatedAfter,
+    // The save's file gives a translated field's translations column its new type where that
+    // column changes on this database (`retypes`), so only a column it leaves behind is refused.
+    // Only a collection's save runs that file (in development) or leaves it for `nextly migrate`:
+    // a Single's or field group's save in production is applied by its push, which changes no
+    // translations column's type, so theirs stays refused whatever the file carries.
+    ...(kind.kind === "collection"
+      ? await retypedBySaveFile(deps, {
+          slug: save.slug,
+          table,
+          next,
+          translatedAfter: translatedAfter.translatedAfter ?? new Set(),
+          dialect,
+          builtBy: kind.builtBy,
+        })
+      : {}),
     previous,
     next,
     renamed,
@@ -1482,6 +1503,46 @@ async function refuseSaveTypeChanges(
     builtBy: kind.builtBy,
     ...componentRow,
   });
+}
+
+/**
+ * The fields whose translations column a collection's save's own file gives the new type: those
+ * `migrate:create` plans its `retypes` file for, from the folder's newest snapshot, which the file
+ * is written after (`fieldsTranslatedThrough`, then `retypedCompanionColumns`), so the save counts
+ * on no column's new type the file does not carry. None where that snapshot records no fields for
+ * the collection, or does not keep its column in the translations table.
+ */
+async function retypedBySaveFile(
+  deps: CollectionSaveDeps,
+  args: {
+    slug: string;
+    table: string;
+    next: readonly FieldDefinition[];
+    translatedAfter: ReadonlySet<string>;
+    dialect: SupportedDialect;
+    builtBy: ColumnOrigin;
+  }
+): Promise<{ retypedTranslations: ReadonlySet<string> }> {
+  const latest = await loadLatestSnapshot(join(deps.migrationsDir, "meta"));
+  const fields = fieldsTranslatedThrough({
+    previousTable: latest?.data.snapshot.tables.find(
+      t => t.name === args.table
+    ),
+    recorded: latest?.data.entities?.collections[args.slug]?.settings.fields,
+    next: args.next,
+    translatedAfter: field => args.translatedAfter.has(field.name),
+    dialect: args.dialect,
+    builtBy: args.builtBy,
+  });
+  return {
+    retypedTranslations: new Set(
+      retypedCompanionColumns({
+        fields,
+        dialect: args.dialect,
+        builtBy: args.builtBy,
+      }).map(column => column.field)
+    ),
+  };
 }
 
 /**

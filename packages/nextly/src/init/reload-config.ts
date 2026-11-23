@@ -3370,6 +3370,8 @@ async function applyReloadHolding(
         // F10 PR 3: HMR applies print a terminal box + write the
         // NDJSON line. Same singleton across HMR cycles.
         notifier: getProductionNotifier(),
+        // The adapter `db` belongs to: a SQLite push runs in its transaction.
+        adapter: liveAdapter,
       });
       return pipeline.apply({
         desired: desiredArg,

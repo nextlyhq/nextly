@@ -4,14 +4,14 @@
  *
  * A failure before anything changed withdraws the save's files; one after it
  * keeps them, recorded applied nowhere, so the next `nextly migrate` names the
- * change the database already holds part of. Only PostgreSQL's push runs in
- * one transaction that a failure rolls back whole: MySQL commits each schema
- * statement as it runs, and SQLite's push keeps the statements that ran before
- * the one that failed, so on either a push that failed may have changed it.
- * Whether a failure changed nothing is known where the push's pipeline says
- * how many of its statements stay applied (`statementsKept`), where the push
- * stopped at its first question, which the pipeline asks before any statement
- * runs (`stoppedBeforeAnyStatement`), or where a busy table's stop says so.
+ * change the database already holds part of. PostgreSQL's and SQLite's push
+ * each run in one transaction that a failure rolls back whole; MySQL commits
+ * each schema statement as it runs, so there a push that failed may have
+ * changed it. Whether a failure changed nothing is known where the push's
+ * pipeline says how many of its statements stay applied (`statementsKept`),
+ * where the push stopped at its first question, which the pipeline asks before
+ * any statement runs (`stoppedBeforeAnyStatement`), or where a busy table's
+ * stop says so.
  *
  * @module domains/schema/builder-save/landing-push
  */
@@ -48,7 +48,7 @@ export interface PushWatch {
 /**
  * `push`, noting once one of its runs may have changed the database: a run
  * that succeeded, or whose pipeline completed its apply before the run failed
- * (`watch.completed`), and outside PostgreSQL every run that failed but one
+ * (`watch.completed`), and on MySQL every run that failed but one
  * known to have changed nothing. That is a busy table's stop that says nothing
  * ran (`leftNothing`), or a run refused at its first question (a rename
  * declined, a question unanswered), which the pipeline asks before it runs any
@@ -284,10 +284,11 @@ export function nextSteps(
 
 /**
  * Whether a push on `dialect` runs in one transaction that a failure rolls back
- * whole, leaving nothing of it: PostgreSQL's alone.
+ * whole, leaving nothing of it: PostgreSQL's and SQLite's. MySQL commits each
+ * schema statement as it runs.
  */
 function rollsBackWhole(dialect: Dialect): boolean {
-  return dialect === "postgresql";
+  return dialect === "postgresql" || dialect === "sqlite";
 }
 
 /**

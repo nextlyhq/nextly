@@ -620,6 +620,15 @@ export interface CancelQueuedEmailArgs extends DirectAPIConfig {
 }
 
 /**
+ * @experimental Arguments for retrying a queued email now, as a person. A
+ * call that checks access needs `manage-email-deliveries`.
+ */
+export interface RetryQueuedEmailArgs extends DirectAPIConfig {
+  /** The queued email's id, as `queue` answered it. */
+  id: string;
+}
+
+/**
  * @experimental Arguments for `nextly.email.queueWithTemplate()`: every
  * option `sendWithTemplate` takes. The template is rendered at each attempt.
  */

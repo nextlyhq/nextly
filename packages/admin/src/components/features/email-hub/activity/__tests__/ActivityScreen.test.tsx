@@ -2,7 +2,8 @@
 /**
  * The Activity screen when a read fails: a list that has loaded stays on
  * screen with a short note when a later refresh or Load more fails, and only
- * a list with nothing loaded is replaced by the error.
+ * a list with nothing loaded is replaced by the error. A queued email's
+ * Retry and Cancel go only to a reader who may manage email deliveries.
  *
  * @module components/features/email-hub/activity/__tests__/ActivityScreen.test
  */
@@ -21,6 +22,7 @@ vi.mock("@admin/hooks/queries/useEmailActivity", () => ({
   useEmailActivity: vi.fn(),
   useQueuedEmailOverdue: () => ({ data: undefined }),
   useActivityDetail: vi.fn(() => ({ data: undefined, isLoading: false })),
+  useQueuedEmailAction: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 // What the template read holds in its cache: TanStack Query keeps answering
 // it after the query is disabled, as when a reader's grant ends.
@@ -174,6 +176,26 @@ describe("Fix template", () => {
     held.add("read-email-templates");
     openFailedQueued();
     expect(screen.queryByRole("link", { name: "Fix template" })).toBeNull();
+    held.delete("read-email-templates");
+    cachedTemplates.data = undefined;
+  });
+
+  it("offers Retry and Cancel to a reader who may manage email deliveries", () => {
+    held.add("read-email-templates");
+    held.add("manage-email-deliveries");
+    openFailedQueued();
+    expect(screen.getByRole("button", { name: "Try again now" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel email" })).toBeTruthy();
+    held.delete("manage-email-deliveries");
+    held.delete("read-email-templates");
+    cachedTemplates.data = undefined;
+  });
+
+  it("offers neither to a reader who may only read email deliveries", () => {
+    held.add("read-email-templates");
+    openFailedQueued();
+    expect(screen.queryByRole("button", { name: "Try again now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel email" })).toBeNull();
     held.delete("read-email-templates");
     cachedTemplates.data = undefined;
   });

@@ -14,6 +14,7 @@ import {
   largeImagePreviewsOn,
   SITE_KINDS,
   type AiCrawlerChoice,
+  type MappableField,
   type SeoContentType,
   type SiteKind,
 } from "../settings/contract";
@@ -31,6 +32,8 @@ import {
 } from "../settings/verification";
 import {
   DETAIL_GUESSES,
+  ENTRY_DATE_DETAILS,
+  isSaveStamp,
   STRUCTURED_DATA_TYPES,
   type StructuredDataDetail,
   type StructuredDataTypeKey,
@@ -542,20 +545,54 @@ export function missingDetails(
   structuredType: StructuredDataTypeKey
 ): StructuredDataDetail[] {
   const mapping = mappingOf(draft, type.key, structuredType);
-  // The markup finds a detail by name among the entry's own fields only,
-  // never inside a group.
-  const named = new Set(
-    type.mappableFields
-      .filter(field => !field.name.includes("."))
-      .map(field => tokenKey(field.name))
-  );
   return STRUCTURED_DATA_TYPES[structuredType].needs.filter(detail => {
     const source = mapping[detail];
     if (source !== undefined) return !holdsField(type, source);
     return (
       FROM_THE_PAGE[detail] === undefined &&
-      !DETAIL_GUESSES[detail].some(guess => named.has(tokenKey(guess)))
+      foundField(type, detail) === undefined
     );
+  });
+}
+
+/**
+ * The field the page's markup reads `detail` from when none is chosen: the
+ * first of its guesses, in the order the markup tries them, that the type
+ * has. Only among the entry's own fields, never inside a group, as the
+ * markup looks. The last save is passed over for the date a page last
+ * changed, as the markup passes over it (`isSaveStamp`).
+ */
+export function foundField(
+  type: SeoContentType,
+  detail: StructuredDataDetail
+): MappableField | undefined {
+  for (const guess of DETAIL_GUESSES[detail]) {
+    const found = type.mappableFields.find(
+      field =>
+        !field.name.includes(".") && tokenKey(field.name) === tokenKey(guess)
+    );
+    if (found === undefined) continue;
+    if (detail === "dateModified" && isSaveStamp(found.name)) continue;
+    return found;
+  }
+  return undefined;
+}
+
+/**
+ * The fields a person may choose `detail` to be read from: the type's own,
+ * and, for a date an entry's own dates can stand for (`ENTRY_DATE_DETAILS`),
+ * those dates but the last save. The SEO group's fields are the page's own
+ * SEO, read through its levels, so they are never offered, though a
+ * mapping to one still reads.
+ */
+export function offeredFields(
+  type: SeoContentType,
+  detail: StructuredDataDetail
+): MappableField[] {
+  return type.mappableFields.filter(field => {
+    if (field.kind === "seo") return false;
+    if (field.kind !== "built-in") return true;
+    return ENTRY_DATE_DETAILS.has(detail) && !isSaveStamp(field.name);
   });
 }
 
