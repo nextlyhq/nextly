@@ -653,15 +653,21 @@ export function tablesDroppedBy(
   return droppedTables(cursor);
 }
 
-/** A foreign key a statement adds: the table it is on and the table it points at, lower-cased. */
+/**
+ * A foreign key a statement adds, lower-cased: the table it is on, the table it points at, its
+ * constraint's name where the statement gives one, and the columns it is made of.
+ */
 export interface AddedForeignKey {
   table: string;
   referencesTable: string;
+  name?: string;
+  columns: string[];
 }
 
 /**
- * The foreign keys a CREATE TABLE or an ALTER TABLE adds: each `REFERENCES <table>` it writes,
- * on the table it creates or alters. None for any other statement.
+ * The foreign keys a CREATE TABLE or an ALTER TABLE adds, one per clause writing
+ * `REFERENCES <table>`: a column's inline reference, or a `[CONSTRAINT <name>] FOREIGN KEY
+ * (<columns>)`. None for any other statement.
  */
 export function foreignKeysAddedBy(
   statement: string,
@@ -672,23 +678,48 @@ export function foreignKeysAddedBy(
   if (cursor.accept("CREATE", "TABLE")) {
     cursor.acceptCondition();
     table = cursor.name();
+    // The column and constraint list, read as clauses of its own.
+    if (!cursor.accept("(")) return [];
   } else if (cursor.accept("ALTER", "TABLE")) {
     cursor.acceptCondition();
     table = cursor.name();
   }
   if (table === undefined) return [];
-  const added: AddedForeignKey[] = [];
-  while (!cursor.done()) {
-    if (cursor.accept("REFERENCES")) {
-      const referencesTable = cursor.name();
-      if (referencesTable !== undefined) {
-        added.push({ table, referencesTable });
-      }
-    } else {
-      cursor.at += 1;
-    }
+  const on = table;
+  return cursor.clauses().flatMap(clause => {
+    const key = addedKeyIn(new StatementCursor(clause), on);
+    return key === undefined ? [] : [key];
+  });
+}
+
+/** The foreign key one clause adds on `table`, or undefined when it adds none. */
+function addedKeyIn(
+  clause: StatementCursor,
+  table: string
+): AddedForeignKey | undefined {
+  clause.accept("ADD");
+  const name = clause.accept("CONSTRAINT") ? clause.name() : undefined;
+  let columns: string[] = [];
+  if (clause.accept("FOREIGN", "KEY")) {
+    // MySQL's index name, written before the columns.
+    if (!clause.isWord("(")) clause.name();
+    if (clause.accept("(")) columns = clause.names() ?? [];
+  } else {
+    clause.accept("COLUMN");
+    clause.acceptCondition();
+    const column = clause.name();
+    if (column !== undefined) columns = [column];
   }
-  return added;
+  while (!clause.done()) {
+    if (clause.accept("REFERENCES")) {
+      const referencesTable = clause.name();
+      return referencesTable === undefined
+        ? undefined
+        : { table, referencesTable, name, columns };
+    }
+    clause.at += 1;
+  }
+  return undefined;
 }
 
 /**

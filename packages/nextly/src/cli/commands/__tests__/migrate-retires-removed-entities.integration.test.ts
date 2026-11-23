@@ -603,7 +603,7 @@ describe.each(LOCK_DIALECTS)(
       ).resolves.toBeUndefined();
     }, 180_000);
 
-    it("refuses a drop of a collection a foreign key the run itself adds points into", async () => {
+    it("refuses a drop of a collection a foreign key the run adds points into, unless a later file takes it away", async () => {
       const added =
         dialect === "sqlite"
           ? [
@@ -617,6 +617,20 @@ describe.each(LOCK_DIALECTS)(
       await expect(
         judge([{ label: "x.sql", statements: [...added, ...POSTS_DROPPED] }])
       ).rejects.toThrow(new RegExp(pages));
+
+      // A later file of the run takes the key away again: nothing points into `posts` after it.
+      const takenAway =
+        dialect === "sqlite"
+          ? `ALTER TABLE ${pages} DROP COLUMN post_id`
+          : dialect === "mysql"
+            ? `ALTER TABLE ${pages} DROP FOREIGN KEY ${P}_pages_new_post`
+            : `ALTER TABLE ${pages} DROP CONSTRAINT ${P}_pages_new_post`;
+      await expect(
+        judge([
+          { label: "a.sql", statements: added },
+          { label: "b.sql", statements: [takenAway, ...POSTS_DROPPED] },
+        ])
+      ).resolves.toBeUndefined();
     }, 180_000);
 
     it("retires only the table a quoted drop spells, not one differing only in case", async () => {

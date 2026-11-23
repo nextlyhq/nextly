@@ -51,7 +51,11 @@ import {
   tablesTheStatementsRetire,
 } from "./retired-documents";
 import { elementsDroppedBy } from "./statement-judgement";
-import { foreignKeysAddedBy, postgresDropSpellings } from "./statement-targets";
+import {
+  type AddedForeignKey,
+  foreignKeysAddedBy,
+  postgresDropSpellings,
+} from "./statement-targets";
 
 /** The run's files, as the ledger names them, with their statements. */
 interface RunFile {
@@ -173,9 +177,10 @@ function retiredTableMatcher(
 }
 
 /**
- * The foreign keys `statements` add into `tables`, as keys whose owner is not recorded, less those
- * on a table the statements leave gone: what the database holds into them once the run is done,
- * beside the keys already there.
+ * The foreign keys `statements` add into `tables` and leave standing, as keys whose owner is not
+ * recorded: read in order, so a key a later statement takes away (its table dropped, its
+ * constraint dropped by name, or one of its columns dropped) is not among them. What the database
+ * holds into them once the run is done, beside the keys already there (`keysLeftAfter`).
  */
 function keysAddedInto(
   tables: readonly string[],
@@ -183,15 +188,32 @@ function keysAddedInto(
   statements: readonly string[]
 ): LiveKeyInto[] {
   const into = new Set(tables.map(table => table.toLowerCase()));
-  const gone = tablesTheStatementsRetire(statements, dialect);
-  return statements
-    .flatMap(statement => foreignKeysAddedBy(statement, dialect))
-    .filter(
-      key =>
-        into.has(key.referencesTable.toLowerCase()) &&
-        !gone.has(key.table.toLowerCase())
-    )
-    .map(key => ({ ...key, owner: null }));
+  let standing: AddedForeignKey[] = [];
+  for (const statement of statements) {
+    const dropped = tablesTheStatementsDrop([statement], dialect);
+    const removed = elementsDroppedBy([statement], dialect);
+    standing = standing.filter(key => {
+      const table = key.table.toLowerCase();
+      if (dropped.has(table)) return false;
+      if (
+        key.name !== undefined &&
+        removed.has(table, "constraint", key.name)
+      ) {
+        return false;
+      }
+      return !key.columns.some(column => removed.has(table, "column", column));
+    });
+    standing.push(
+      ...foreignKeysAddedBy(statement, dialect).filter(key =>
+        into.has(key.referencesTable.toLowerCase())
+      )
+    );
+  }
+  return standing.map(key => ({
+    table: key.table,
+    referencesTable: key.referencesTable,
+    owner: null,
+  }));
 }
 
 /** The database's dependents, read as they will be once `statements` have run. */
