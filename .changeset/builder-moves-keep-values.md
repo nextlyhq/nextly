@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A saved field can be moved into and out of a named group in the Schema Builder, by drag, by key or with Move to…, and the save keeps every entry's value: the Builder sends each move with its preview and its save, and the review lists it as moved with its values kept, with what the move does not carry. A field moved and renamed or retyped in one save is refused before it is sent, and a move into or out of repeating rows is still refused.
+A saved field can be moved into and out of a named group in the Schema Builder, by drag, by key or with Move to…, and the save keeps every entry's value: the Builder sends each move with its preview and its save, and the review lists it as moved with its values kept, with what the move does not carry. A field moved and renamed or retyped in one save is refused before it is sent, and a move into or out of repeating rows is still refused. A move the save refuses is marked at its field, with the reason: on its row, in the error count beside Save, and at the top of its settings. A field kept per language (text-like fields are, by default) does not move into a group yet.
