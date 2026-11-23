@@ -119,6 +119,13 @@ describe.each(getConfiguredTestDialects())(
       return Number(row?.v ?? 1);
     }
 
+    /** A row of the review: a field, and the values the change deletes from it. */
+    type ReviewedRow = {
+      name: string;
+      rowCount?: number;
+      rowCountUnknown?: boolean;
+    };
+
     /** What the review shows for `tags` when the posts are given `fields`. */
     async function reviewed(
       fields: unknown[]
@@ -134,8 +141,8 @@ describe.each(getConfiguredTestDialects())(
       ) as Record<string, unknown>;
       const changes = ((json.data ?? json) as { changes?: unknown }).changes as
         | {
-            removed?: Array<{ name: string }>;
-            changed?: Array<{ name: string }>;
+            removed?: Array<ReviewedRow>;
+            changed?: Array<ReviewedRow>;
           }
         | undefined;
       return [...(changes?.removed ?? []), ...(changes?.changed ?? [])].find(

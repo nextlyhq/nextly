@@ -46,6 +46,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { ServiceContainer } from "../../../services";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import { consoleLogger } from "../../../shared/types";
@@ -1698,6 +1699,156 @@ describe.each(getConfiguredTestDialects())(
           120_000
         );
       }
+    }
+  }
+);
+
+// The same counts and holds on the storage layout every installation runs: translatable fields
+// kept per language. A Builder collection's text field is translatable, so the removed field's
+// values are in the collection's translations table, where the review counts them, the save
+// counts them again before it deletes them, and an entry write writes them.
+describe.each(getConfiguredTestDialects())(
+  "a save that removes a field deletes the count confirmed, on per-language storage (%s)",
+  dialect => {
+    const q = (n: string) => (dialect === "mysql" ? `\`${n}\`` : `"${n}"`);
+    const VALUES_TABLE = `${TABLE}${STORAGE_FORMAT.companionSuffix}`;
+
+    async function bootPerLanguage(): Promise<TestNextly> {
+      vi.stubEnv("NODE_ENV", "development");
+      const t = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        db: {
+          migrationsDir: "./database/history",
+          uiSchemaFile: "./schema/builder.json",
+        },
+      });
+      instance = t;
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: SLUG, label: "Note", fields: NOTED }
+      );
+      return t;
+    }
+
+    const query = <T>(t: TestNextly, text: string): Promise<T[]> =>
+      (
+        t.adapter as unknown as {
+          executeQuery<R>(statement: string): Promise<R[]>;
+        }
+      ).executeQuery<T>(text);
+
+    /** An entry with `note` set, written as a person writes it. */
+    const write = (t: TestNextly, note: string) =>
+      t.nextly.create({
+        collection: SLUG,
+        data: { label: "l", note },
+      } as never);
+
+    /** The `note` values the translations table holds, or `"gone"` once its column is. */
+    async function translatedNotes(t: TestNextly): Promise<number | "gone"> {
+      try {
+        const [row] = await query<{ n: number | string }>(
+          t,
+          `SELECT COUNT(*) AS n FROM ${q(VALUES_TABLE)} WHERE ${q("note")} IS NOT NULL`
+        );
+        return Number(row?.n);
+      } catch {
+        return "gone";
+      }
+    }
+
+    async function save(t: TestNextly, confirmed: number): Promise<unknown> {
+      const [row] = await query<{ v: number | string | null }>(
+        t,
+        `SELECT ${q("schema_version")} AS v FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${SLUG}'`
+      );
+      return dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: SLUG },
+        {
+          fields: REMAINING,
+          confirmed: true,
+          schemaVersion: Number(row?.v ?? 1),
+          resolutions: { note: { action: "confirm_drop" } },
+          confirmedDeletions: [{ field: "note", count: confirmed }],
+        }
+      ).then(
+        () => "applied",
+        (error: unknown) => error
+      );
+    }
+
+    it("counts the removed field's values in the translations table, and deletes them when the count is still the one confirmed", async () => {
+      const t = await bootPerLanguage();
+      for (const note of ["a", "b", "c"]) await write(t, note);
+      expect(await translatedNotes(t)).toBe(3);
+
+      expect(await save(t, 3)).toBe("applied");
+      expect(await translatedNotes(t)).toBe("gone");
+    }, 60_000);
+
+    it("deletes nothing and names the new count when a value was written to the translations table after the review", async () => {
+      const t = await bootPerLanguage();
+      for (const note of ["a", "b", "c"]) await write(t, note);
+      await write(t, "written after the review");
+
+      expect(await save(t, 3)).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.note",
+              code: "DELETION_COUNT_CHANGED",
+            }),
+          ],
+        },
+      });
+      expect(await translatedNotes(t)).toBe(4);
+    }, 60_000);
+
+    // An entry write sent after the save's count, setting the removed field: on either road it
+    // waits while the save holds the collection, through the registry write, and is then refused
+    // naming the field, never written into the translations table just before the save drops it.
+    for (const road of ["file", "push"] as const) {
+      it(`keeps an entry write sent after the count waiting until the save on the ${road} road is recorded, then refuses its value for the removed field`, async () => {
+        const t = await bootPerLanguage();
+        for (const note of ["a", "b", "c"]) await write(t, note);
+        pushRoad.forced = road === "push";
+        const { paused, release } = gated(afterCount);
+        const applying = save(t, 3);
+        const reached = await Promise.race([
+          paused.then(() => true),
+          applying.then(() => false),
+        ]);
+        expect(reached || (await applying)).toBe(true);
+
+        let settled = false;
+        const writing = write(t, "written after the count")
+          .then(
+            () => "created",
+            (error: unknown) => error
+          )
+          .finally(() => {
+            settled = true;
+          });
+        await new Promise(resolve => setTimeout(resolve, 1_000));
+        const heldBack = !settled;
+        slowRegistry.ms = 1_500;
+        release();
+        expect(heldBack).toBe(true);
+        expect(await applying).toBe("applied");
+        expect(await writing).toMatchObject({
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [expect.objectContaining({ path: "fields.note" })],
+          },
+        });
+        expect(await translatedNotes(t)).toBe("gone");
+      }, 60_000);
     }
   }
 );
