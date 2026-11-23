@@ -178,6 +178,11 @@ import type { SanitizedNextlyConfig } from "../shared/types/config";
 import type { SingleHooks } from "../singles/config/types";
 
 import {
+  movesHeldBack,
+  reloadedEntities,
+  withMovesHeldBack,
+} from "./code-first-moves";
+import {
   type TypeChangedEntity,
   typeChangesHeldBack,
 } from "./code-first-type-changes";
@@ -2972,6 +2977,17 @@ async function applyReloadHolding(
     undoOptimisticReloadWork();
     return;
   }
+  // A field that looks moved into or out of a group is held back too, whatever the consent: the
+  // push would delete its values or leave them where nothing reads them, and only migrate:create
+  // asks whether it is a move (`movesHeldBack`). Its reasons join any the entity's type change has.
+  heldBack = withMovesHeldBack(
+    heldBack,
+    movesHeldBack([
+      ...reloadedEntities("collection", desiredCollections),
+      ...reloadedEntities("single", desiredSingles),
+      ...reloadedEntities("fieldGroup", desiredComponents),
+    ])
+  );
   for (const { kind, slug, reasons } of heldBack) {
     logger?.warn(
       `[Nextly HMR] Code-first change for ${KIND_NOUN[kind]}'${slug}' was not applied: ${reasons.join(" ")}`

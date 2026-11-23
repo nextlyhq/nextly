@@ -63,6 +63,10 @@ import {
   type CompanionMigrationPlan,
 } from "../../i18n/migration/plan-companion-migration";
 import {
+  fieldsTranslatedThrough,
+  planCompanionTypeChange,
+} from "../../i18n/migration/plan-companion-type-change";
+import {
   type FieldLeavesFile,
   type FieldLeavesMigrationPlan,
   planFieldLeavesTranslationMigration,
@@ -150,6 +154,12 @@ import {
   type AppStreamSnapshots,
   type AppStreamTables,
 } from "./app-stream";
+import {
+  NO_CODE_MOVES,
+  planCodeMoves,
+  withoutMovedColumns,
+  type CodeMovesPlan,
+} from "./code-moves";
 import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
 import {
   describePermissionChange,
@@ -463,6 +473,14 @@ export interface GenerateArgs {
     surface: TranslationSurface;
     retries: JoinRetries;
   };
+  /**
+   * `migrate:create`: look for fields moved into or out of a group since the latest snapshot's
+   * record of each declaration, ask about each (`planCodeMoves`), and carry the accepted ones'
+   * values in the file. Without a terminal, `acceptAll` (`--accept-moves`) answers every one;
+   * otherwise each is declined. Absent (a Schema Builder save, which is told its moves and hands
+   * their statements in as `appendedStatements`), none are looked for.
+   */
+  codeMoves?: { acceptAll: boolean };
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -981,7 +999,8 @@ export async function generateMigration(
 
   // Taken once, here, so the table diff and every companion planner below
   // see the same fields (`withKeptScopeFieldsOf`).
-  const args = withKeptScopeFieldsOf(scoped, previous?.data.snapshot);
+  // Reassigned once below, where the moves made in code join the ones the caller gave.
+  let args = withKeptScopeFieldsOf(scoped, previous?.data.snapshot);
 
   // 2. Build desired snapshot from config. Localized collections omit their
   //    translatable columns here (they live in the companion `_locales` table).
@@ -1084,6 +1103,16 @@ export async function generateMigration(
   operations = stripRelocatedDrops(operations, companionPlans);
   refuseTurnOffBesideOtherChanges(operations, companionPlans);
 
+  // 3a'. Fields moved into or out of a group in code. The diff reads each as a delete and an add;
+  //      an accepted one is carried as the Schema Builder carries a move, its values copied to the
+  //      new place first, and from here on is a move as one the caller gave would be.
+  const codeMoves = await movesMadeInCode(args, {
+    entities,
+    previous: previous?.data.entities,
+    previousSnapshot,
+  });
+  args = withCodeMoves(args, codeMoves);
+
   // 3b. Fields that stop being translated while their entity stays translated. The diff above gives
   //     the main table their columns; these files move the values around that migration.
   const fieldLeavesPlans = planFieldsLeavingTranslation(
@@ -1131,11 +1160,25 @@ export async function generateMigration(
     args.defaultLocale ?? "en"
   );
 
-  const hasCompanions =
-    companionPlans.length > 0 ||
-    fieldLeavesPlans.length > 0 ||
-    fieldJoinsPlans.length > 0 ||
-    uniquePlans.length > 0;
+  // 3d'. Fields translated before the change and after it whose translations column takes another
+  //      type on this database: that column takes it in a file of its own, ahead of the main file,
+  //      so `nextly migrate` judges each language's value before either runs.
+  const retypesPlans = planTranslatedTypeChanges(
+    entities,
+    previousSnapshot,
+    previous?.data.entities,
+    args.dialect,
+    args.defaultLocale
+  );
+
+  // Whether any companion file is written beside the main one.
+  const hasCompanions = [
+    companionPlans,
+    fieldLeavesPlans,
+    fieldJoinsPlans,
+    uniquePlans,
+    retypesPlans,
+  ].some(plans => plans.length > 0);
 
   // 3e. Settings: what the declarations say beyond their columns. A change to
   //     one alone changes no table, so without this the run returned "no
@@ -1172,6 +1215,7 @@ export async function generateMigration(
         ...companionPlans,
         ...fieldLeavesPlans.map(({ plan }) => plan.shared),
         ...fieldJoinsPlans.map(({ plan }) => plan),
+        ...retypesPlans.map(({ plan }) => plan),
       ].map(({ spec }) => spec.mainTable),
     ],
     hasSettingsChanges: changesBeyondTables,
@@ -1197,9 +1241,10 @@ export async function generateMigration(
     const detector = new RegexRenameDetector();
     // A joining field's main column goes to the companion, not to another main column, so its
     // drop is no rename source.
+    // A moved column's values travel with its move, so it is no rename source or target either.
     const candidates = detector.detect(
       operationsToJudge(
-        operations,
+        withoutMovedColumns(operations, codeMoves),
         fieldJoinsPlans.flatMap(({ plan }) =>
           plan.spec.columns.map(column => ({
             tableName: plan.spec.mainTable,
@@ -1530,6 +1575,16 @@ export async function generateMigration(
     ...fieldJoinsPlans.map(({ plan, entity }) => ({
       spec: plan.spec,
       kind: "joins" as const,
+      entity,
+      upSql: plan.upSql,
+      downSql: plan.downSql,
+    })),
+    //    - A translated field taking another type: its RETYPES file runs before the main file, so
+    //      the change is judged in every language before either runs, after a dropped per-language
+    //      index's file, which the column it retypes no longer carries.
+    ...retypesPlans.map(({ plan, entity }) => ({
+      spec: plan.spec,
+      kind: "retypes" as const,
       entity,
       upSql: plan.upSql,
       downSql: plan.downSql,
@@ -2419,6 +2474,55 @@ function planTranslatedUniqueMigrations(
       previous,
     });
     return plan === null ? [] : [{ entity: kind, spec, plan }];
+  });
+}
+
+/** The key an entity's kind is recorded under in a snapshot's entity settings. */
+const SETTINGS_KEY: Record<I18nTransitionKind, keyof EntitySettingsRecord> = {
+  collection: "collections",
+  single: "singles",
+  fieldGroup: "fieldGroups",
+};
+
+/**
+ * The `retypes` file of each translated entity whose fields, translated before this change and
+ * after it under one name, have a translations column that takes another type on `dialect`. The
+ * fields before the change are the ones the previous snapshot records for the entity; one it
+ * records no fields for, or whose table it did not keep translated, has no file here.
+ */
+function planTranslatedTypeChanges(
+  entities: TaggedConfigEntity[],
+  previousSnapshot: NextlySchemaSnapshot,
+  previousEntities: EntitySettingsRecord | undefined,
+  dialect: SupportedDialect,
+  /** The site's default language, recorded in the file's header; English where none is declared. */
+  defaultLocale = "en"
+): {
+  entity: I18nTransitionKind;
+  plan: NonNullable<ReturnType<typeof planCompanionTypeChange>>;
+}[] {
+  if (previousEntities === undefined) return [];
+  return entities.flatMap(({ entity: c, kind }) => {
+    if (!storesPerLanguage(c)) return [];
+    const builtBy = columnOriginOf(c, kind);
+    const fields = fieldsTranslatedThrough({
+      previousTable: previousSnapshot.tables.find(t => t.name === c.tableName),
+      recorded: previousEntities[SETTINGS_KEY[kind]][c.slug]?.settings.fields,
+      next: c.fields,
+      translatedAfter: to => isFieldLocalized(to, true),
+      dialect,
+      builtBy,
+    });
+    const plan = planCompanionTypeChange({
+      slug: c.slug,
+      kind,
+      tableName: c.tableName,
+      dialect,
+      defaultLocale,
+      fields,
+      builtBy,
+    });
+    return plan === undefined ? [] : [{ entity: kind, plan }];
   });
 }
 
@@ -3474,6 +3578,75 @@ function requiredAgain(
     return sqliteTableRebuildStatements(prevMain, ops);
   }
   return generateStatements(ops, dialect, previousSnapshot.tables);
+}
+
+/**
+ * The moves made in code since the latest snapshot, asked about and planned (`planCodeMoves`), for
+ * a run that looks for them (`codeMoves`); none for any other.
+ */
+async function movesMadeInCode(
+  args: GenerateArgs,
+  run: {
+    entities: readonly TaggedConfigEntity[];
+    previous: EntitySettingsRecord | undefined;
+    previousSnapshot: NextlySchemaSnapshot;
+  }
+): Promise<CodeMovesPlan> {
+  const asked = args.codeMoves;
+  if (asked === undefined) return NO_CODE_MOVES;
+  return planCodeMoves({
+    entities: run.entities,
+    previous: run.previous,
+    previousTables: new Set(run.previousSnapshot.tables.map(t => t.name)),
+    dialect: args.dialect,
+    originOf: columnOriginOf,
+    // Loaded only when there is something to ask, as the rename question is.
+    decide: async candidates => {
+      const { promptMoves } = await import("./prompt-moves");
+      return promptMoves(candidates, {
+        nonInteractive: args.nonInteractive,
+        autoAccept: asked.acceptAll,
+      });
+    },
+    interactive: args.nonInteractive !== true,
+    warn: args.onWarning ?? (() => {}),
+  });
+}
+
+/** `args` with the moves made in code beside the ones its caller gave, where there are any. */
+function withCodeMoves(args: GenerateArgs, moves: CodeMovesPlan): GenerateArgs {
+  const { up, down } = moves.appended;
+  const statements =
+    up.first.length + up.last.length + down.first.length + down.last.length;
+  if (
+    statements === 0 &&
+    moves.valueMoves.length === 0 &&
+    moves.refilledColumns.length === 0
+  ) {
+    return args;
+  }
+  const given = args.appendedStatements;
+  // The caller's statements keep their place around the moves': first ones first, last ones last.
+  const joined = (
+    mine: AddedStatements,
+    theirs: AddedStatements | undefined
+  ) => ({
+    first: [...(theirs?.first ?? []), ...mine.first],
+    last: [...mine.last, ...(theirs?.last ?? [])],
+  });
+  return {
+    ...args,
+    appendedStatements: {
+      up: joined(up, given?.up),
+      down: joined(down, given?.down),
+    },
+    valueMoves: [...(args.valueMoves ?? []), ...moves.valueMoves],
+    refilledColumns: [
+      ...(args.refilledColumns ?? []),
+      ...moves.refilledColumns,
+    ],
+    valuesMovedIn: [...(args.valuesMovedIn ?? []), ...moves.valuesMovedIn],
+  };
 }
 
 /** The tables whose values the caller's appended statements move (`valuesMovedIn`). */

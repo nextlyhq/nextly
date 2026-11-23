@@ -241,23 +241,34 @@ export function useInsertOffers({
     [catalog, definitions]
   );
 
-  // Recomputed from the CURRENT document and selection on every render rather
-  // than remembered. A place is only valid against the document it was read
-  // from, and an undo or a remote edit can move it without the selection
-  // changing — a memo keyed on the selection alone would keep a position whose
-  // index no longer names the same place.
-  const placeOptions: InsertionOptions = {
-    slots: slotSource,
-    ...(inside === undefined ? {} : { inside }),
-    ...(after === undefined ? {} : { after }),
-    ...(at === undefined ? {} : { at }),
-  };
-  const placesFor = (role: EntryRole): InsertionCandidate[] =>
-    insertionCandidates(editor.document, editor.selectedId, {
-      ...placeOptions,
-      role,
-    });
-  const candidates = placesFor("content");
+  // Read from the CURRENT document and selection, and kept only while both are
+  // the ones they were read from. A place is only valid against the document
+  // it was read from, and an undo or a remote edit can move it without the
+  // selection changing, so the document itself is part of the key, never the
+  // selection alone. The panel draws several times as it opens and on each
+  // edit, and each kind's places walk the page, so a render that changed
+  // none of these reads them again for nothing.
+  const document = editor.document;
+  const selectedId = editor.selectedId;
+  const places = React.useMemo(() => {
+    const placeOptions: InsertionOptions = {
+      slots: slotSource,
+      ...(inside === undefined ? {} : { inside }),
+      ...(after === undefined ? {} : { after }),
+      ...(at === undefined ? {} : { at }),
+    };
+    const placesFor = (role: EntryRole): InsertionCandidate[] =>
+      insertionCandidates(document, selectedId, { ...placeOptions, role });
+    // The layout and band places only where the offers are judged: the
+    // closed search reads the content block's first place alone.
+    return {
+      content: placesFor("content"),
+      ...(enabled
+        ? { layout: placesFor("layout"), band: placesFor("band") }
+        : {}),
+    };
+  }, [document, selectedId, slotSource, inside, after, at, enabled]);
+  const candidates = places.content;
 
   // Remembered by what the verdicts depend on — the document, the places, the
   // catalog, the rule's sources and the locks — and not by the query, so a
@@ -268,12 +279,10 @@ export function useInsertOffers({
     ? { offers: NO_OFFERS, rest: candidates[0] }
     : cachedOffers(offerCache, {
         document: editor.document,
-        // The other kinds' places only while the offers are judged: the
-        // closed search reads the content block's first place alone.
         places: {
           content: candidates,
-          layout: placesFor("layout"),
-          band: placesFor("band"),
+          layout: places.layout ?? [],
+          band: places.band ?? [],
         },
         roles,
         catalog,

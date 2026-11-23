@@ -19,6 +19,7 @@ import { basename, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { settingsOf } from "../entity-settings";
 import { generateMigration, type MinimalConfigEntity } from "../generate";
 import {
   WRITER_LOCK_FILE,
@@ -305,6 +306,78 @@ describe("a migration's companion files", () => {
       .filter(path => path < result!.sqlPath);
     expect(before.length, "the control: a companion sorts before it").toBe(1);
     expect(between.placed[0]).toBe(before[0]);
+    // The migration was not in the folder yet as that file was moved there.
+    expect(thereBefore).toBeDefined();
+    expect(thereBefore).not.toContain(basename(result!.sqlPath));
+    expect(existsSync(result!.sqlPath)).toBe(true);
+  });
+
+  // A translated field taking another type has its translations column's change written as a
+  // companion file of its own, prepared aside with the migration's files and put in place before
+  // the migration, which it runs ahead of.
+  it("that retype a translations column are prepared aside and put in place before it", async () => {
+    // Each entity as `migrate:create` takes it from a configuration, with the settings its snapshot
+    // records: the fields the next run reads the translations column's old type from.
+    const declared = (type: string): MinimalConfigEntity => {
+      const fields = docs.fields.map(field =>
+        field.name === "body" ? { ...field, type } : field
+      );
+      return {
+        ...docs,
+        fields,
+        settings: {
+          source: "code",
+          settings: settingsOf(
+            { slug: "docs", localized: true, fields },
+            "code"
+          ),
+        },
+      };
+    };
+    await withMigrationWriterHold(
+      { migrationsDir, command: "migrate:create" },
+      () =>
+        generateMigration({
+          name: "create_docs",
+          dialect: "sqlite",
+          migrationsDir,
+          defaultLocale: "en",
+          collections: [declared("longText")],
+          singles: [],
+          components: [],
+          nonInteractive: true,
+          now: new Date("2026-07-09T12:00:00.000Z"),
+        })
+    );
+    let thereBefore: string[] | undefined;
+    between.placed = [];
+    between.beforeCompanion = () => {
+      thereBefore = migrationFiles();
+    };
+
+    const result = await withMigrationWriterHold(
+      { migrationsDir, command: "migrate:create" },
+      () =>
+        generateMigration({
+          name: "number_body",
+          dialect: "sqlite",
+          migrationsDir,
+          defaultLocale: "en",
+          collections: [declared("number")],
+          singles: [],
+          components: [],
+          nonInteractive: true,
+          now: new Date("2026-07-10T12:00:00.000Z"),
+        })
+    );
+
+    const retypes = result!.companionFiles
+      .map(f => f.path)
+      .filter(path => /_retypes_localization_docs\.sql$/.test(path));
+    expect(retypes, "the control: a retypes file is written").toHaveLength(1);
+    expect(retypes[0] < result!.sqlPath).toBe(true);
+    expect(between.placed[0]).toBe(retypes[0]);
+    expect(readFileSync(retypes[0], "utf-8")).toMatch(/"kind":"retypes"/);
     // The migration was not in the folder yet as that file was moved there.
     expect(thereBefore).toBeDefined();
     expect(thereBefore).not.toContain(basename(result!.sqlPath));

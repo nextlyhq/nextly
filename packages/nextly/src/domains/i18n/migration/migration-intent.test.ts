@@ -177,6 +177,38 @@ describe("localization migration intent", () => {
     ).toThrow();
   });
 
+  // A translations column's new type is a kind of its own, at the first version that declares it:
+  // a build before 8 refuses the file as one it does not support, rather than running it as an
+  // `adds` file or skipping the judgement its fields are recorded for.
+  it("records a retypes file's fields at version 8, and refuses one claimed under 7 or on another kind", () => {
+    const retyped = [{ field: "price", column: "price" }];
+    const line = formatLocalizationIntent({
+      kind: "retypes",
+      entity: "collection",
+      spec: spec({ columns: [{ name: "price", kind: "double" }], retyped }),
+    });
+    const payload = JSON.parse(
+      line.slice(LOCALIZATION_INTENT_HEADER.length).trim()
+    );
+
+    expect(payload.version).toBe(8);
+    const parsed = parseLocalizationIntent(fileWith(line), "m.sql");
+    expect(parsed?.kind).toBe("retypes");
+    expect(parsed?.spec.retyped).toEqual(retyped);
+    expect(() =>
+      parseLocalizationIntent(
+        fileWith(line.replace('"version":8', '"version":7')),
+        "m.sql"
+      )
+    ).toThrow();
+    expect(() =>
+      parseLocalizationIntent(
+        fileWith(line.replace('"kind":"retypes"', '"kind":"adds"')),
+        "m.sql"
+      )
+    ).toThrow();
+  });
+
   it("reads a version-2 kind, and refuses one claimed under version 1", () => {
     const v2 = formatLocalizationIntent({
       kind: "archive",

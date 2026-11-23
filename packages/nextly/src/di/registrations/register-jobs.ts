@@ -30,6 +30,8 @@ import {
 } from "../../domains/email/queued-send";
 import { scopedSender } from "../../domains/email/send-claims";
 import type { EmailService } from "../../domains/email/services/email-service";
+import { createDeleteObjectsJob } from "../../domains/files/delete-stored-file";
+import { createUploadSweepJob } from "../../domains/files/sweep-abandoned-uploads";
 import { createGrantsContentExpiryJob } from "../../domains/grants-content-expiry-job";
 import { JobRegistry } from "../../domains/jobs/job-registry";
 import { JobsRepository } from "../../domains/jobs/jobs-repository";
@@ -55,8 +57,10 @@ import { createWebhookDrainJob } from "../../domains/webhooks/webhook-drain-job"
 import { createWorkflowNoticeEmailJob } from "../../domains/workflows/workflow-notices";
 import { env } from "../../lib/env";
 import { collectJobs } from "../../plugins/jobs/collect-jobs";
+import type { CollectionsHandler } from "../../services/collections-handler";
 import type { Logger } from "../../services/shared";
 import { container } from "../container";
+import type { NextlyServiceConfig } from "../register";
 
 import { wiredReleasesRepository } from "./register-releases";
 import type { RegistrationContext } from "./types";
@@ -247,6 +251,19 @@ export function registerJobServices(ctx: RegistrationContext): void {
     registry.register(
       createDocumentLockSweepJob({
         service: container.get<DocumentLockService>("documentLockService"),
+      })
+    );
+
+    // A deleted private file's bytes storage refused at first, retried.
+    registry.register(createDeleteObjectsJob());
+
+    // Uploads of private files never confirmed: kept queued like the lock
+    // sweep, so every pass of the job runner rejects those past their wait.
+    registry.register(
+      createUploadSweepJob({
+        collections: () =>
+          container.get<NextlyServiceConfig>("config").collections ?? [],
+        entries: () => container.get<CollectionsHandler>("collectionsHandler"),
       })
     );
 
