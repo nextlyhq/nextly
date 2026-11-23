@@ -24,7 +24,13 @@ export function registerMigrateCreateCommand(program: Command): void {
     // same spelling, is what `canPrompt` reads for this command's prompts.
     .option(
       "--accept-renames",
-      "ADVANCED: auto-accept all rename candidates in non-interactive mode, a renamed field group's (its rows move to the new name) included",
+      "ADVANCED: auto-accept all rename candidates in non-interactive mode, a renamed field group's (its rows move to the new name) included; a field that looks moved and is declined as a move is never taken as a rename",
+      false
+    )
+    // Asked at a terminal like a rename; without one, declined unless this accepts every one.
+    .option(
+      "--accept-moves",
+      "With no terminal, carry every field that looks moved into or out of a group (same name and type) as a move, its values copied to the new place, instead of deleting it and adding it empty",
       false
     )
     .option(

@@ -21,6 +21,7 @@ const base = {
   table: "dc_posts",
   dialect: "sqlite" as const,
   localized: false,
+  kind: "collection" as "collection" | "single" | "fieldGroup",
 };
 
 describe("planEntityMoves", () => {
@@ -679,26 +680,59 @@ describe("planEntityMoves", () => {
     ).not.toThrow();
   });
 
-  it("asks a field group's table nothing of title or slug, which are its fields' to take there", () => {
-    // A field group's table keeps its own columns (`_parent_id`, `_order`...), none named so.
-    const outOnto = (builtBy: "fieldGroup" | "collection") => () =>
+  it("asks a field group's table nothing of title or slug, whichever generator made it", () => {
+    // A field group's table keeps its own columns (`_parent_id`, `_order`...), none named so,
+    // whether the Builder made it or the code-first pipeline did.
+    const outOnto =
+      (
+        kind: "fieldGroup" | "collection",
+        builtBy: "fieldGroup" | "codeFirst" | "collection"
+      ) =>
+      () =>
+        planEntityMoves({
+          ...base,
+          kind,
+          builtBy,
+          before: [group("meta", [text("title")])],
+          after: [text("title"), group("meta", [])],
+          moves: [{ from: ["meta", "title"], to: ["title"] }],
+        });
+    expect(outOnto("fieldGroup", "fieldGroup")).not.toThrow();
+    expect(outOnto("fieldGroup", "codeFirst")).not.toThrow();
+    // A collection's table keeps its own title while no field takes it, whoever made it.
+    for (const builtBy of ["collection", "codeFirst"] as const) {
+      expect(outOnto("collection", builtBy), builtBy).toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                message: expect.stringContaining(
+                  "Every entry already keeps its own title"
+                ),
+              }),
+            ],
+          },
+        })
+      );
+    }
+  });
+
+  it("asks a Single's table nothing of created_by, a column only a collection's table keeps", () => {
+    const outOnto = (kind: "single" | "collection") => () =>
       planEntityMoves({
         ...base,
-        builtBy,
-        before: [group("meta", [text("title")])],
-        after: [text("title"), group("meta", [])],
-        moves: [{ from: ["meta", "title"], to: ["title"] }],
+        kind,
+        before: [group("meta", [text("createdBy")])],
+        after: [text("createdBy"), group("meta", [])],
+        moves: [{ from: ["meta", "createdBy"], to: ["createdBy"] }],
       });
-    expect(outOnto("fieldGroup")).not.toThrow();
-    // A Single's or a collection's table keeps its own title while no field takes it.
+    expect(outOnto("single")).not.toThrow();
     expect(outOnto("collection")).toThrow(
       expect.objectContaining({
         publicData: {
           errors: [
             expect.objectContaining({
-              message: expect.stringContaining(
-                "Every entry already keeps its own title"
-              ),
+              message: expect.stringContaining("created_by"),
             }),
           ],
         },
