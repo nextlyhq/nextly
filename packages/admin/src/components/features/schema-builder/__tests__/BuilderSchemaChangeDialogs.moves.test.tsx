@@ -66,7 +66,7 @@ describe("the review of a save that moves a field", () => {
       />
     );
 
-    const dialog = screen.getByRole("dialog");
+    const dialog = screen.getByRole("alertdialog");
     expect(dialog).toHaveTextContent(
       "summary is moved to meta.summary. Its values are kept."
     );
