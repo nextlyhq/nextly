@@ -55,7 +55,7 @@ import { registerWebhooksPruneCommand } from "./commands/webhooks-prune.command"
 import { registerWorkflowStrandedCommands } from "./commands/workflow-stranded.command";
 import { createContext, type CommandContext } from "./context";
 import { CLI_MODES, setModeLineWriter } from "./environment";
-import { declareFirstLine, OWN_LINE, printFirstLine } from "./first-line";
+import { declareFirstLine, ownLine, printFirstLine } from "./first-line";
 import { addExitCodesHelp } from "./exit-codes";
 import { refuseHelpForUnknownCommands } from "./unknown-command-help";
 
@@ -366,7 +366,7 @@ function registerGenerateSchemaCommand(program: Command): void {
         const context = createContext(globalOpts);
         notImplemented("generate:schema", context);
       }),
-    OWN_LINE
+    ownLine(/^⚠ Command 'generate:schema' is not yet implemented\./)
   );
 }
 

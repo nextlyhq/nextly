@@ -5,7 +5,7 @@
 import type { Command } from "commander";
 
 import { withDryRun } from "../dry-run";
-import { declareFirstLine, OWN_LINE } from "../first-line";
+import { declareFirstLine, ownLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -27,7 +27,7 @@ export function registerTelemetryCommand(program: Command): void {
           async () => (await import("./telemetry")).telemetryStatusAction
         )
       ),
-    OWN_LINE
+    ownLine(/^Telemetry is (enabled|disabled)\b/)
   );
 
   declareFirstLine(
@@ -38,7 +38,7 @@ export function registerTelemetryCommand(program: Command): void {
         async () => (await import("./telemetry")).telemetryEnableAction
       )
     ),
-    OWN_LINE
+    ownLine(/^(Telemetry enabled\.|ℹ Would set telemetry to enabled\b)/)
   );
 
   declareFirstLine(
@@ -49,7 +49,7 @@ export function registerTelemetryCommand(program: Command): void {
         async () => (await import("./telemetry")).telemetryDisableAction
       )
     ),
-    OWN_LINE
+    ownLine(/^(Telemetry disabled\.|ℹ Would set telemetry to disabled\b)/)
   );
 
   declareFirstLine(
@@ -60,6 +60,8 @@ export function registerTelemetryCommand(program: Command): void {
     ).action(
       lazyAction(async () => (await import("./telemetry")).telemetryResetAction)
     ),
-    OWN_LINE
+    ownLine(
+      /^(Telemetry consent reset\.|ℹ Would set a new anonymous telemetry ID\b)/
+    )
   );
 }

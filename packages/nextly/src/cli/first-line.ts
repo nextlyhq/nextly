@@ -29,14 +29,19 @@ export type FirstLine =
   | { kind: "database" }
   /** A short line saying what the command is starting. */
   | { kind: "start"; line: string }
-  /** The command's own first line, which it prints at once. */
-  | { kind: "own" };
+  /**
+   * The command's own first line, which it prints at once; `pattern` is what
+   * that line says, so a warning printed while it loads is not taken for it.
+   */
+  | { kind: "own"; pattern: RegExp };
 
 /** A command that uses a database starts by naming it. */
 export const DATABASE_LINE: FirstLine = { kind: "database" };
 
-/** A command whose own code is light starts with its own first line. */
-export const OWN_LINE: FirstLine = { kind: "own" };
+/** A command whose own code is light starts with its own first line, one `pattern` matches. */
+export function ownLine(pattern: RegExp): FirstLine {
+  return { kind: "own", pattern };
+}
 
 /** A command that uses no database starts with `line`. */
 export function startLine(line: string): FirstLine {

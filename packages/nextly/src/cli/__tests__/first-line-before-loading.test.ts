@@ -163,6 +163,22 @@ describe("every command prints its first line before its code loads", () => {
     }
   );
 
+  it("takes only its own line from a command that prints one at once", () => {
+    const program = createProgram();
+    const path = ["telemetry", "status"];
+    // A warning printed while the command loads is not its answer.
+    expect(
+      wrongFirstLine(program, path, "(node:1) ExperimentalWarning: loading")
+    ).toBeDefined();
+    expect(
+      wrongFirstLine(
+        program,
+        path,
+        "Telemetry is disabled (stdout is not a TTY)."
+      )
+    ).toBeUndefined();
+  });
+
   it("prints nothing before the action under --quiet", async () => {
     const seen = await beforeTheAction(
       ["--quiet", "migrate:status"],

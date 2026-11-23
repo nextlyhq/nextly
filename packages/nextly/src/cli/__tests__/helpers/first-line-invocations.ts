@@ -175,7 +175,9 @@ export function wrongFirstLine(
       ? undefined
       : `expected "${first.line}", got: ${line}`;
   }
-  return undefined;
+  return first.pattern.test(line)
+    ? undefined
+    : `expected a line matching ${String(first.pattern)}, got: ${line}`;
 }
 
 /** Whether the command `path` names under `program` runs an action itself, holding no subcommands. */
