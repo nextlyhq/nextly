@@ -472,10 +472,10 @@ function LanguageActions({
   const trigger = useRef<HTMLButtonElement>(null);
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+      {/* Disabled on the trigger, which then neither opens nor takes a press. */}
+      <DropdownMenuTrigger asChild disabled={saving}>
         <Button
           ref={trigger}
-          disabled={saving}
           type="button"
           variant="ghost"
           size="icon"
