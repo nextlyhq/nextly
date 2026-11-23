@@ -13,6 +13,10 @@
 import type { JSX } from "react";
 
 import {
+  previewWithMoves,
+  type DraftMove,
+} from "@admin/lib/builder/draft-moves";
+import {
   previewWithDecidedRenames,
   renameAnswers,
   type DraftRename,
@@ -54,6 +58,8 @@ type Props = {
   creating?: boolean;
   /** The saved fields the draft renamed, which the save answers as renames itself. */
   draftRenames?: readonly DraftRename[];
+  /** The saved fields the draft moves into or out of a group, whose values the save keeps. */
+  draftMoves?: readonly DraftMove[];
   /** The entity's settings the save changes, each reviewed with it. */
   settingChanges?: readonly SettingChange[];
   /**
@@ -93,6 +99,7 @@ export function BuilderSchemaChangeDialogs({
   onConfirm,
   creating = false,
   draftRenames = [],
+  draftMoves = [],
   settingChanges = [],
   fieldGroupCreates = [],
 }: Props): JSX.Element | null {
@@ -110,7 +117,12 @@ export function BuilderSchemaChangeDialogs({
     draftRenames,
     previewed.renamed ?? []
   );
-  const preview = previewWithDecidedRenames(previewed, decided, sameColumn);
+  // And its moves, kept with their values: not a removed column, and changes to apply even where
+  // no column changes.
+  const preview = previewWithMoves(
+    previewWithDecidedRenames(previewed, decided, sameColumn),
+    draftMoves
+  );
   // Each rename the save keeps, by its columns, and one that keeps its column by its names.
   const keptRenames = [
     ...decided,
@@ -155,7 +167,11 @@ export function BuilderSchemaChangeDialogs({
     );
   }
 
-  if (isSafeChange(preview) && keptRenames.length === 0) {
+  if (
+    isSafeChange(preview) &&
+    keptRenames.length === 0 &&
+    draftMoves.length === 0
+  ) {
     return (
       <SafeChangeConfirmDialog
         key={previewId}
@@ -184,6 +200,8 @@ export function BuilderSchemaChangeDialogs({
       changes={preview.changes}
       renamed={preview.renamed}
       decidedRenames={keptRenames}
+      moves={draftMoves}
+      notices={preview.notices}
       warnings={preview.warnings}
       interactiveFields={preview.interactiveFields}
       leavingTranslation={preview.leavingTranslation}

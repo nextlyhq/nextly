@@ -299,6 +299,32 @@ describe("BuilderPageLayout", () => {
     expect(screen.getByRole("button", { name: "Redo" })).toBeDisabled();
   });
 
+  // A move the server refused is the field's error like any other: on its row, in the count beside
+  // Save, which opens the field, and at the top of the field's settings, with the server's message.
+  it("marks a field whose move the server refused as the field's error", async () => {
+    const user = userEvent.setup();
+    const refusedMoves = new Map([["u1", "Excerpt cannot move yet."]]);
+    const { onActiveChange, rerender, props } = renderLayout({ refusedMoves });
+
+    expect(
+      within(screen.getByTestId("field-row-excerpt")).getByText("Has an error")
+    ).toHaveAttribute("title", "Excerpt cannot move yet.");
+    await user.click(
+      screen.getByRole("button", { name: "1 error: show the next" })
+    );
+    expect(onActiveChange).toHaveBeenCalledWith({
+      kind: "edit",
+      fieldId: "u1",
+    });
+
+    rerender(
+      <BuilderPageLayout {...props} active={{ kind: "edit", fieldId: "u1" }} />
+    );
+    expect(
+      within(screen.getByRole("dialog")).getByRole("alert")
+    ).toHaveTextContent("Excerpt cannot move yet.");
+  });
+
   it("carries the lock through to the field list", () => {
     renderLayout({ locked: true });
     // Every editing affordance on a row is gone when the entity is code-first.

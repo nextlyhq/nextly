@@ -3460,6 +3460,7 @@ function parseDocumentLockRoutes(
  *
  *   POST /files/:slug/uploads               → startFileUpload
  *   POST /files/:slug/uploads/:id/complete  → completeFileUpload
+ *   GET  /files/:slug/:id/download          → downloadFile
  *
  * Exact paths only: anything longer or of another method is no route, so a
  * mistyped path 404s rather than being taken for a near one. The handler owns
@@ -3473,7 +3474,18 @@ function parseFileRoutes(
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
-  if (httpMethod !== "POST" || !slug || subresource !== "uploads") return null;
+  if (!slug || subresource === undefined) return null;
+  if (httpMethod === "GET") {
+    return uploadId === "download" && rest.length === 0
+      ? {
+          service: "files",
+          operation: "single",
+          method: "downloadFile",
+          routeParams: { ...routeParams, slug, fileId: subresource },
+        }
+      : null;
+  }
+  if (httpMethod !== "POST" || subresource !== "uploads") return null;
   if (uploadId === undefined && rest.length === 0) {
     return {
       service: "files",

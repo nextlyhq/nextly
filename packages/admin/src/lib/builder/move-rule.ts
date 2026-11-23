@@ -70,8 +70,9 @@ export interface MoveContext {
    */
   fieldGroupFieldHolding?: (rowId: string) => BuilderField | undefined;
   /**
-   * Whether a saved field may change level at all; `CONTAINER_CHANGES_KEEP_VALUES`
-   * when not given. The rule's other answers hold either way.
+   * Whether a saved field may change level wherever it goes, repeating rows included. Not given, it
+   * may move into and out of named groups (`SAVED_MOVES_REACH`), and not into or out of repeating
+   * rows. The rule's other answers hold either way.
    */
   containerChanges?: boolean;
   /**
@@ -85,15 +86,13 @@ export interface MoveContext {
 }
 
 /**
- * Whether a save keeps a field's values when the field changes container: not
- * yet, since the save drops the column of a field that leaves the main table
- * and starts the JSON value of one that enters a group empty. Until it does, a
- * saved field's move to another level (into or out of a group or repeating
- * rows) is refused, so no gesture offers a move that would lose values. Reorders
- * on one level, moves through layout containers and moves of fields never saved
- * go ahead.
+ * Where a save keeps a saved field's values when the field changes level: into and out of named
+ * groups, whose moves the save sends (`hints.moves`) and the migration it writes copies every value
+ * along. Not yet into or out of repeating rows, where each entry may hold several rows: a saved
+ * field's move there is refused, so no gesture offers a move that would lose values. Reorders on one
+ * level, moves through layout containers and moves of fields never saved go ahead.
  */
-const CONTAINER_CHANGES_KEEP_VALUES = false;
+const SAVED_MOVES_REACH = "named groups";
 
 /** Why a move is refused. */
 export type MoveRefusalReason =
@@ -314,9 +313,11 @@ function fieldGroupRefusal(
  */
 function containerChangeRefusal(
   field: BuilderField,
-  ctx: MoveContext
+  ctx: MoveContext,
+  /** Whether repeating rows hold the field where it stands, or the place it would arrive. */
+  crossesRows: boolean
 ): MoveVerdict | null {
-  const allowed = ctx.containerChanges ?? CONTAINER_CHANGES_KEEP_VALUES;
+  const allowed = ctx.containerChanges ?? !crossesRows;
   const savedContainerIdsOf = ctx.savedContainerIdsOf;
   const carriesNothingSaved =
     savedContainerIdsOf !== undefined &&
@@ -326,7 +327,24 @@ function containerChangeRefusal(
   if (allowed || carriesNothingSaved) return null;
   return refuse(
     "not-available-yet",
-    "Moving a field into or out of a group or repeating rows is not available yet."
+    `Moving a saved field into or out of repeating rows is not available yet. It can move into and out of ${SAVED_MOVES_REACH}.`
+  );
+}
+
+/**
+ * Whether a change of level from where the field at the end of `chain` stands to the level `into`
+ * (null for the top level) takes it into or out of repeating rows: any above it now, or any at or
+ * above where it would arrive.
+ */
+function crossesRepeatingRows(
+  fields: readonly BuilderField[],
+  chain: readonly BuilderField[],
+  into: BuilderField | null
+): boolean {
+  const intoChain = into ? (chainTo(fields, into.id) ?? []) : [];
+  return (
+    repeatersOn(chain.slice(0, -1)).length > 0 ||
+    repeatersOn(intoChain).length > 0
   );
 }
 
@@ -486,7 +504,11 @@ function arrivalRefusal(
   // A layout container carries its fields' names onto the level it arrives on, not its own.
   const carried = isLayoutContainer(field) ? namedFieldsIn([field]) : [field];
   return (
-    containerChangeRefusal(field, ctx) ??
+    containerChangeRefusal(
+      field,
+      ctx,
+      crossesRepeatingRows(fields, chain, into)
+    ) ??
     lockedInsideRefusal(field, chain, ctx) ??
     carriedClashRefusal(field, carried) ??
     carried.reduce<MoveVerdict | null>(
@@ -822,17 +844,18 @@ export function moveDestinations(
 }
 
 /**
- * The saved fields a draft has taken to another storage level, which a save would not yet keep the
- * values of (`CONTAINER_CHANGES_KEEP_VALUES`). Every way there counts, not only a move the rule
- * judged: a layout group given a name after a field moved into it, or a group's name taken away,
- * changes its fields' level as surely as a move does. Judged on the fields as they stand against
- * where each was last saved, by the same level rule a move uses; a field never saved is not one.
+ * The saved fields a draft has taken to another storage level into or out of repeating rows, which
+ * a save would not yet keep the values of (`SAVED_MOVES_REACH`). Every way there counts, not only a
+ * move the rule judged: a layout group given a name after a field moved into it, or a group's name
+ * taken away, changes its fields' level as surely as a move does. Judged on the fields as they stand
+ * against where each was last saved, by the same level rule a move uses; a field never saved is not
+ * one. A change of level between named groups and the top level is sent as a move, which keeps the
+ * values.
  */
 export function savedFieldsOffTheirLevel(
   saved: readonly BuilderField[],
   current: readonly BuilderField[]
 ): BuilderField[] {
-  if (CONTAINER_CHANGES_KEEP_VALUES) return [];
   const off: BuilderField[] = [];
   const walk = (
     list: readonly BuilderField[],
@@ -843,7 +866,10 @@ export function savedFieldsOffTheirLevel(
       if (savedChain) {
         const was = namingLevel(savedChain.slice(0, -1));
         const now = namingLevel(chain);
-        if ((was?.id ?? null) !== (now?.id ?? null)) off.push(field);
+        const rows =
+          repeatersOn(savedChain.slice(0, -1)).length > 0 ||
+          repeatersOn(chain).length > 0;
+        if ((was?.id ?? null) !== (now?.id ?? null) && rows) off.push(field);
       }
       if (field.fields) walk(field.fields, [...chain, field]);
     }
