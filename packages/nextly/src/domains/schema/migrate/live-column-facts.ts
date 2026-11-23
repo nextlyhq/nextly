@@ -409,13 +409,16 @@ async function sqliteCounterCovers(
   // One statement, compared inside SQLite: both values are 64-bit integers, which a JavaScript
   // number cannot tell apart above 2^53. No counter yet: SQLite makes it at the first insert, so
   // the table must hold no row. The highest key is read from the key column by name: `rowid`
-  // reads a column of that name where a table has one.
+  // reads a column of that name where a table has one. `sqlite_sequence.seq` has no declared
+  // type, so a counter written by hand as text stays text, which SQLite orders above every
+  // integer: only an integer counter is compared, and any other does not cover.
   const [answer] = await sqliteRows(
     db,
     sql`SELECT CASE
                  WHEN NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = ${table})
                    THEN MAX(${sql.identifier(key)}) IS NULL
-                 ELSE (SELECT seq FROM sqlite_sequence WHERE name = ${table})
+                 ELSE (SELECT typeof(seq) = 'integer' FROM sqlite_sequence WHERE name = ${table})
+                   AND (SELECT seq FROM sqlite_sequence WHERE name = ${table})
                         >= COALESCE(MAX(${sql.identifier(key)}), 0)
                END AS covers
         FROM ${sql.identifier(table)}`

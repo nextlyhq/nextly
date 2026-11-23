@@ -493,5 +493,36 @@ describe.each(LOCK_DIALECTS)(
         expect(await coversOf(conflict)).toBe(false);
       }
     );
+
+    it.runIf(dialect === "sqlite")(
+      "takes a counter stored as text for one that does not cover the rows",
+      async () => {
+        const texted = `${P}_texted`;
+        await adapter.executeQuery(
+          `CREATE TABLE ${texted} (id INTEGER PRIMARY KEY AUTOINCREMENT, label text)`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${texted} (label) VALUES ('a'), ('b'), ('c')`
+        );
+        const covers = async () =>
+          (
+            await readLiveSchema(adapter.getDrizzle(), dialect, [
+              `CREATE TABLE ${texted} (id integer)`,
+            ])
+          ).counterCovers(texted);
+        expect(await covers()).toBe(true);
+        // `sqlite_sequence.seq` has no declared type, so a counter written by hand as text stays
+        // text, and SQLite orders every text above every integer: '1' would read as covering 3.
+        await adapter.executeQuery(
+          `UPDATE sqlite_sequence SET seq = '1' WHERE name = '${texted}'`
+        );
+        expect(await covers()).toBe(false);
+        // One that would cover as a number is not taken either: SQLite never writes text there.
+        await adapter.executeQuery(
+          `UPDATE sqlite_sequence SET seq = '5' WHERE name = '${texted}'`
+        );
+        expect(await covers()).toBe(false);
+      }
+    );
   }
 );
