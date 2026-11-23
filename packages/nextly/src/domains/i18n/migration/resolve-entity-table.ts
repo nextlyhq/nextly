@@ -84,6 +84,23 @@ export function resolveEntityTables(
   return found;
 }
 
+/**
+ * `entity` with a field group's tables as the database stores them: the table its registry row
+ * names (`stored`, slug to table), which is `fg_<slug>` once the site's field groups moved to the
+ * current names, and which no configuration rule derives. A collection, a Single, or a field group
+ * the registry does not hold keeps the tables its configuration names.
+ */
+export function withStoredTable(
+  entity: ResolvedEntityTable,
+  slug: string,
+  stored: ReadonlyMap<string, string>
+): ResolvedEntityTable {
+  if (entity.kind !== "fieldGroup") return entity;
+  const tableName = stored.get(slug);
+  if (tableName === undefined) return entity;
+  return { ...entity, tableName, companionTableName: `${tableName}_locales` };
+}
+
 /** `--kind` as the command line spells each kind. */
 const KIND_OPTIONS: Record<string, I18nTransitionKind> = {
   collection: "collection",

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   chooseRestoreEntity,
   resolveEntityTables,
+  withStoredTable,
 } from "./resolve-entity-table";
 
 /** The one entity a slug names, for the cases below where it names one. */
@@ -165,5 +166,38 @@ describe("a slug more than one kind of entity uses", () => {
     ).toEqual({
       problem: '--kind must be collection, single or field-group, not "page".',
     });
+  });
+});
+
+// A site on the current field-group names stores a group as fg_<slug>, which no config rule
+// derives: the registry's row is what names the table a restore writes to.
+describe("withStoredTable", () => {
+  const stored = new Map([["hero", "fg_hero"]]);
+
+  it("takes a field group's tables from its stored row", () => {
+    const [group] = resolveEntityTables(
+      { fieldGroups: [{ slug: "hero" }] },
+      "hero"
+    );
+    expect(group && withStoredTable(group, "hero", stored)).toEqual({
+      tableName: "fg_hero",
+      companionTableName: "fg_hero_locales",
+      kind: "fieldGroup",
+    });
+  });
+
+  it("keeps a collection's tables, and a group's where the registry holds no row", () => {
+    const [collection] = resolveEntityTables(
+      { collections: [{ slug: "hero" }] },
+      "hero"
+    );
+    expect(collection && withStoredTable(collection, "hero", stored)).toEqual(
+      collection
+    );
+    const [group] = resolveEntityTables(
+      { fieldGroups: [{ slug: "card" }] },
+      "card"
+    );
+    expect(group && withStoredTable(group, "card", stored)).toEqual(group);
   });
 });
