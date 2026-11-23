@@ -24,7 +24,10 @@ import {
 } from "../domains/field-groups/storage/resolve-storage-names";
 import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import { tableExistsAtStart } from "../domains/schema/pipeline/diff/start-catalog-scope";
-import { isCodeOwned } from "../domains/schema/pipeline/registered-collections";
+import {
+  configTheCodeOwns,
+  isCodeOwned,
+} from "../domains/schema/pipeline/registered-collections";
 import { NextlyError } from "../errors/nextly-error";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
@@ -440,6 +443,20 @@ export interface LoadedBuilderEntity {
    * reload and `db:sync` make of the configuration leave such a collection's code entry out.
    */
   configPath?: string;
+}
+
+/**
+ * `config` as code still owns it (`configTheCodeOwns`), judged from the registry's collections as
+ * the configuration checks read them (`loadBuilderEntities`): a collection a demote handed to the
+ * Schema Builder is left out, so a pass reading the configuration's entities ignores its code entry
+ * as the schema syncs do. A registry that cannot be read yields no rows, which leaves every entry
+ * in.
+ */
+export async function configTheCodeOwnsIn<
+  C extends Parameters<typeof configTheCodeOwns>[0],
+>(adapter: DrizzleAdapter, config: C): Promise<C> {
+  const registered = await loadBuilderEntities(adapter);
+  return configTheCodeOwns(config, registered.collections);
 }
 
 export interface LoadedBuilderEntities {

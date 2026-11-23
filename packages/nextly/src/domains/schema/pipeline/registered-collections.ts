@@ -82,7 +82,7 @@ export function isHandedToBuilder(
  * table. A plugin's collection (`pluginSlugs`) is never left out: a plugin registers its own again
  * at every start, so no demote hands it over.
  */
-export function withoutHandedToBuilder<T extends { slug?: string | null }>(
+export function withoutHandedToBuilder<T>(
   configured: readonly T[],
   registered: readonly RegisteredCollectionRow[],
   pluginSlugs: Pick<ReadonlySet<string>, "has">
@@ -90,12 +90,23 @@ export function withoutHandedToBuilder<T extends { slug?: string | null }>(
   const handedOver = new Set(
     registered.filter(isHandedToBuilder).map(row => row.slug)
   );
-  return configured.filter(
-    entry =>
-      typeof entry.slug !== "string" ||
-      !handedOver.has(entry.slug) ||
-      pluginSlugs.has(entry.slug)
-  );
+  return configured.filter(entry => {
+    const slug = slugOf(entry);
+    return slug === undefined || !handedOver.has(slug) || pluginSlugs.has(slug);
+  });
+}
+
+/**
+ * A configured entry's slug, or undefined for one without a string slug. Read from an entry of any
+ * shape, since some configurations type their collections loosely (`readonly unknown[]`).
+ */
+function slugOf(entry: unknown): string | undefined {
+  return typeof entry === "object" &&
+    entry !== null &&
+    "slug" in entry &&
+    typeof entry.slug === "string"
+    ? entry.slug
+    : undefined;
 }
 
 /**
@@ -115,7 +126,7 @@ export function withoutHandedToBuilder<T extends { slug?: string | null }>(
  */
 export function configTheCodeOwns<
   C extends {
-    collections?: readonly { slug?: string | null }[];
+    collections?: readonly unknown[];
     plugins?: Parameters<typeof pluginCollectionSources>[0];
   },
 >(config: C, registered: readonly RegisteredCollectionRow[]): C {

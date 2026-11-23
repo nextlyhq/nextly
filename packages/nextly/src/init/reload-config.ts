@@ -2327,6 +2327,30 @@ async function applyReloadHolding(
   // reload changes anything: a collection, Single or field group added while `next dev` runs is a
   // new address like one added before a start. A refused reload keeps the previous configuration.
   // `AdapterLike` is a narrow view of the registered adapter, which is a `DrizzleAdapter` at runtime.
+  // The registry's collections, read once for the whole reload: whether a collection was handed to
+  // the Schema Builder is answered from these rows alone, by the checks below, the desired schema's
+  // filter and the merge, and the passes that read the configuration's entities themselves. Two
+  // reads could disagree, and a read that failed for one would leave a handed-over collection
+  // ignored by some of them and not others. A registry that cannot be resolved or read rejects it,
+  // which leaves every entry in and which the merge below reports as before.
+  const registeredCollections = Promise.resolve()
+    .then(() => resolve("collectionRegistryService"))
+    .then(resolved => {
+      const registry = resolved as CollectionRegistrySurface | undefined;
+      return typeof registry?.getAllCollections === "function"
+        ? registry.getAllCollections()
+        : [];
+    });
+  // The configuration as code still owns it: a collection a demote handed to the Schema Builder
+  // left out (`configTheCodeOwns`). For the checks of new addresses and sibling fields below, and
+  // for the passes that read the configuration's entities themselves (the translations tables
+  // and the fields leaving translation): a handed-over entry refuses nothing, and its `localized`
+  // setting provisions, restores or moves nothing the Builder's collection keeps.
+  const ownedConfig = configTheCodeOwns(
+    newConfig,
+    await registeredCollections.catch(() => [])
+  );
+
   const liveAdapter = adapter as unknown as DrizzleAdapter;
   let refusedAddresses: Awaited<ReturnType<typeof refusedConfiguredAddresses>>;
   // The reloaded configuration's new pairs of sibling fields, judged as a start judges them.
@@ -2336,11 +2360,9 @@ async function applyReloadHolding(
   try {
     const registered = await loadBuilderEntities(liveAdapter);
     // A collection a demote handed to the Schema Builder is judged by its record alone: its code
-    // entry, which this reload's apply ignores, refuses nothing (`configTheCodeOwns`).
+    // entry, which this reload's apply ignores, refuses nothing (`ownedConfig`).
     const reloaded = {
-      collections: (
-        configTheCodeOwns(newConfig, registered.collections).collections ?? []
-      ).filter(hasSlug),
+      collections: (ownedConfig.collections ?? []).filter(hasSlug),
       singles: (newConfig.singles ?? []).filter(hasSlug),
       fieldGroups: (newConfig.fieldGroups ?? []).filter(hasSlug),
     };
@@ -2479,17 +2501,6 @@ async function applyReloadHolding(
     localized?: boolean;
     indexes?: DesiredCollection["indexes"];
   }> = [];
-  // The registry's collections, read once: this filter and the merge below must see the same rows,
-  // or a read that failed only for the merge would leave a handed-over collection out of both.
-  // A registry that cannot be resolved or read rejects it, which the merge reports as before.
-  const registeredCollections = Promise.resolve()
-    .then(() => resolve("collectionRegistryService"))
-    .then(resolved => {
-      const registry = resolved as CollectionRegistrySurface | undefined;
-      return typeof registry?.getAllCollections === "function"
-        ? registry.getAllCollections()
-        : [];
-    });
   // A collection a demote handed to the Schema Builder, while its entry is still in the
   // configuration, is built from the Builder's registry row (merged in below), not from that entry.
   // A registry that cannot be read leaves every entry in: the merge below reports it and falls back
@@ -2498,14 +2509,6 @@ async function applyReloadHolding(
     newConfig.collections ?? [],
     await registeredCollections.catch(() => []),
     pluginCollectionSources(newConfig.plugins ?? [])
-  );
-  // The configuration as code still owns it, from the same rows, for the passes below that read
-  // its entities themselves: the translations tables and the fields leaving translation. A
-  // handed-over entry's `localized` setting then provisions, restores or moves nothing the Builder's
-  // collection keeps (`configTheCodeOwns`).
-  const ownedConfig = configTheCodeOwns(
-    newConfig,
-    await registeredCollections.catch(() => [])
   );
   for (const c of configuredCollections) {
     if (!c.slug) continue;

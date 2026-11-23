@@ -20,6 +20,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { configTheCodeOwnsIn } from "../../di/load-dynamic-tables";
 import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 // A type only: the module itself is loaded when a sync has fields leaving translation.
 import type * as LeavingMove from "../../domains/i18n/runtime/fields-leaving-on-reload";
@@ -31,7 +32,6 @@ import type { LoadConfigResult } from "../utils/config-loader";
 
 import type { ResolvedDevOptions } from "./db-sync";
 import {
-  configTheCodeOwnsIn,
   ensureLocalizedCompanions,
   publishExtensionSchema,
   syncCollections,
@@ -129,7 +129,7 @@ export async function fieldsLeavingForSync(
   // The configuration as code still owns it: a collection a demote handed to the Schema Builder
   // keeps its translated fields as the Builder's record has them, whatever its code entry says, so
   // nothing of it is judged as leaving translation. Read only where a move is judged.
-  const owned = mover ? await configTheCodeOwnsIn(adapter, config) : config;
+  const owned = mover ? await configTheCodeOwnsIn(live, config) : config;
   // A field group's table is the one its config names, as the companion passes take it.
   const leaving = mover
     ? await mover.fieldsLeavingUnder(

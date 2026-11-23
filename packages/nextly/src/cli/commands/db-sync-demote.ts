@@ -13,6 +13,7 @@ import {
   type CodeFirstCollectionSource,
 } from "../../domains/collections/services/collection-sync-service";
 import { assertNoMigrationInFlight } from "../../domains/field-groups/migration/sync-guard";
+import { mainTableFields } from "../../domains/i18n/per-language-storage";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { pluginCollectionSources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
 import { DEMOTED_FROM_CODE } from "../../domains/schema/pipeline/demoted-from-code";
@@ -264,9 +265,7 @@ export function droppedOnDemoteNote(
   const admin = collection.admin as { preview?: unknown } | undefined;
   if (admin?.preview !== undefined) dropped.push("its preview link");
   const changed =
-    dialect === undefined
-      ? []
-      : builderRulesChangeColumns(collection.fields ?? [], dialect);
+    dialect === undefined ? [] : builderRulesChangeColumns(collection, dialect);
   return [
     ...(dropped.length === 0
       ? []
@@ -274,7 +273,7 @@ export function droppedOnDemoteNote(
           "It sets options the Schema Builder cannot hold, which stop once its code entry is removed:",
           `${dropped.join(", ")}.`,
         ]),
-    ...(collection.indexes === undefined
+    ...(!Array.isArray(collection.indexes) || collection.indexes.length === 0
       ? []
       : [
           "Its compound indexes are dropped at the next schema sync (db:sync, or a reload under next dev): the Schema Builder cannot hold them.",
@@ -289,19 +288,25 @@ export function droppedOnDemoteNote(
 }
 
 /**
- * Each of `fields`' columns that the Schema Builder's column rules describe differently from the
- * code-first rules its table was built with, as `name (before to after)`. Once demoted, the schema
+ * Each of `collection`'s main-table columns that the Schema Builder's column rules describe
+ * differently from the code-first rules its table was built with, as `name (before to after)`. Once demoted, the schema
  * syncs describe the table by the Builder's rules (`builtByFor`), so they change these columns:
  * on MySQL, a text field stating no width is VARCHAR(255) from code and TEXT in the Builder.
  * Both sides come from the one field-to-column mapping (`getColumnDescriptor`), so this names
  * exactly what the sync's diff will see.
  */
 function builderRulesChangeColumns(
-  fields: readonly unknown[],
+  collection: DemotedCollection,
   dialect: SupportedDialect
 ): string[] {
+  // The main table's columns only: a field kept per language has its column in the collection's
+  // translations table instead (`mainTableFields`), which this note does not describe.
+  const fields = mainTableFields(
+    collection,
+    (collection.fields ?? []) as FieldDefinition[]
+  );
   const changed: string[] = [];
-  for (const field of fields as FieldDefinition[]) {
+  for (const field of fields) {
     const fromCode = getColumnDescriptor(field, dialect, "codeFirst");
     const inBuilder = getColumnDescriptor(field, dialect, "collection");
     if (fromCode === null || inBuilder === null) continue;

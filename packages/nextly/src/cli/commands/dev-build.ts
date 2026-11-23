@@ -11,7 +11,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { loadBuilderEntities } from "../../di/load-dynamic-tables";
+import { configTheCodeOwnsIn } from "../../di/load-dynamic-tables";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { dashboardPinsPresent } from "../../domains/dashboard/dashboard-pins";
@@ -43,7 +43,6 @@ import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-ses
 import type { Deletion } from "../../domains/schema/migrate/data-loss-consent";
 import { refuseFieldGroupSwitches } from "../../domains/schema/pipeline/companion-shape-switches";
 import { registryRows } from "../../domains/schema/pipeline/recorded-fields";
-import { configTheCodeOwns } from "../../domains/schema/pipeline/registered-collections";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import {
   deleteEntityRegistryRow,
@@ -1196,19 +1195,6 @@ async function deleteOrphanedComponents(
  * running it on every sync costs one probe per localized entity.
  */
 /**
- * `config` as code still owns it (`configTheCodeOwns`), judged from the registry's collections as
- * the configuration checks read them (`loadBuilderEntities`): a collection a demote handed to the
- * Schema Builder is left out, so a pass reading the configuration's entities ignores its code entry
- * as the schema syncs do. A registry that cannot be read leaves every entry in.
- */
-export async function configTheCodeOwnsIn<
-  C extends Parameters<typeof configTheCodeOwns>[0],
->(adapter: unknown, config: C): Promise<C> {
-  const registered = await loadBuilderEntities(adapter as DrizzleAdapter);
-  return configTheCodeOwns(config, registered.collections);
-}
-
-/**
  * Each configured field group's stored table, read from the registry, or undefined where the
  * configuration declares none or the registry cannot be read, in which case names are derived as
  * before (`field-group-stored-tables`).
@@ -1313,11 +1299,14 @@ export async function ensureLocalizedCompanions(
   // table is the one its registry row names: on a site whose field-group storage was migrated that
   // is `fg_<slug>`, which no slug rule derives, and a derived name would provision a translation
   // table beside a main table that is not there.
+  // The entities are the configuration's as code still owns it (`configTheCodeOwnsIn`): a
+  // collection a demote handed to the Schema Builder keeps the translations table the Builder's
+  // collection has, so its code entry's `localized` setting provisions or restores nothing.
   const [{ localizableConfigEntities }, fieldGroupTable, owned] =
     await Promise.all([
       import("../../domains/i18n/runtime/localizable-config-entities"),
       storedFieldGroupTableOf(adapter, config),
-      configTheCodeOwnsIn(adapter, config),
+      configTheCodeOwnsIn(adapter as unknown as DrizzleAdapter, config),
     ]);
   const groups = localizableConfigEntities(owned, fieldGroupTable);
 

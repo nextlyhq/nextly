@@ -319,20 +319,35 @@ describe("a demoted collection's code-only options", () => {
     const { shown } = await demoted(coded());
     expect(shown).not.toContain("Schema Builder cannot hold");
     expect(shown).not.toContain("compound indexes");
+    // Nor for one that declares an empty list of them.
+    expect((await demoted(coded({ indexes: [] }))).shown).not.toContain(
+      "compound indexes"
+    );
   });
 });
 
 describe("a demoted collection's columns", () => {
   it("are named where the Schema Builder's column rules describe them differently, on the database's dialect", async () => {
-    // A text field stating no width is VARCHAR(255) on a code-first MySQL table and TEXT on a
-    // Schema Builder one. From the next sync the table is the Builder's, so the column widens.
-    const { shown } = await demoted(coded(), null, "mysql");
+    // A shared text field stating no width is VARCHAR(255) on a code-first MySQL table and TEXT on
+    // a Schema Builder one. From the next sync the table is the Builder's, so the column widens.
+    const { shown } = await demoted(
+      coded({
+        fields: [
+          { name: "code", type: "text", localized: false },
+          { name: "body", type: "text" },
+        ],
+      }),
+      null,
+      "mysql"
+    );
     expect(shown).toContain(
       "From the next schema sync its table follows the Schema Builder's column rules"
     );
-    expect(shown).toMatch(/body \(varchar\(255\) to text\)/);
+    expect(shown).toMatch(/code \(varchar\(255\) to text\)/);
     // `slug` keeps its column: both builders bound it, since it is indexed.
     expect(shown).not.toMatch(/\bslug \(/);
+    // A translatable field's column is in the translations table, not the table the note names.
+    expect(shown).not.toMatch(/\bbody \(/);
   });
 
   it("are not mentioned where both rules describe every column the same way", async () => {

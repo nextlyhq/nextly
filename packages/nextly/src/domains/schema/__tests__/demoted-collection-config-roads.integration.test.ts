@@ -70,6 +70,7 @@ import {
 } from "../../../database/test-database-ddl";
 import { clearServices } from "../../../di/register";
 import { getService } from "../../../di/service-access";
+import { runPostInitTasks } from "../../../init/post-init-tasks";
 import {
   reloadNextlyConfig,
   type ReloadOutcome,
@@ -412,6 +413,55 @@ for (const dialect of getConfiguredTestDialects()) {
       ).rejects.toMatchObject({
         logContext: { reason: "sibling-fields" },
       });
+    });
+
+    it("names no translated unique field of the code entry at a development start", async () => {
+      // The start's warning of translated unique fields without their per-language index judges
+      // the configuration code still owns: the ignored entry's field `code` is not the Builder's,
+      // so it is not named. Before, the entry was judged in place of the Builder's record.
+      const postsWithCode = defineCollection({
+        slug: POSTS.slug,
+        fields: [
+          text({ name: "headline" }),
+          text({ name: "code", unique: true }),
+        ],
+      });
+      // The control: code's own collection whose field became unique after its tables were made.
+      // A start makes no index, so the field is named until a migration or a sync makes it.
+      const codes = (unique: boolean) =>
+        defineCollection({
+          slug: "dcr_codes",
+          fields: [text({ name: "code", unique })],
+        });
+      clearServices();
+      await createTestNextly({
+        adapter: database.adapter as never,
+        collections: [postsWithCode, codes(false)],
+      });
+      clearServices();
+      await createTestNextly({
+        adapter: database.adapter as never,
+        collections: [postsWithCode, codes(true)],
+      });
+      const warned: string[] = [];
+      vi.spyOn(getService("logger"), "warn").mockImplementation(
+        (message: unknown) => {
+          warned.push(String(message));
+        }
+      );
+      vi.stubEnv("NODE_ENV", "development");
+
+      await runPostInitTasks();
+
+      const unindexed = warned.filter(message =>
+        message.includes("translated and unique")
+      );
+      expect(unindexed.some(message => message.includes('"dcr_codes"'))).toBe(
+        true
+      );
+      expect(
+        unindexed.some(message => message.includes(`"${POSTS.slug}"`))
+      ).toBe(false);
     });
 
     it("records a collection a plugin adds under next dev as the plugin's", async () => {
