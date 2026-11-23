@@ -86,6 +86,50 @@ import { SiteSettings } from "./src/singles/site-settings";
 // "1" rather than checked for presence so an empty value reads as off.
 const brandingColorsEnabled = process.env.NEXTLY_E2E_BRANDING === "1";
 
+// Set by e2e/playwright.config.ts for the run of its own Settings › Languages
+// specs (`E2E_LANGUAGES_UNLOCKED_ONLY`): the site declares no languages, so
+// Settings keeps them.
+const languagesInSettings = process.env.NEXTLY_E2E_LANGUAGES === "settings";
+
+/**
+ * `node` with every `localized` flag in it cleared, its fields' included.
+ * Anything not a plain object or array (a hook, a component) is kept as it is.
+ */
+function withoutLocalizedFlags<T>(node: T): T {
+  if (Array.isArray(node)) {
+    return node.map(each => withoutLocalizedFlags(each)) as T;
+  }
+  if (
+    node === null ||
+    typeof node !== "object" ||
+    Object.getPrototypeOf(node) !== Object.prototype
+  ) {
+    return node;
+  }
+  const kept: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key !== "localized") kept[key] = withoutLocalizedFlags(value);
+  }
+  return kept as T;
+}
+
+/**
+ * `defineConfig`, given the config as written. When Settings keeps the
+ * languages, its collections, Singles and field groups are made untranslated
+ * first: a site that declares no languages may declare no translated content.
+ */
+const definePlaygroundConfig: typeof defineConfig = config =>
+  defineConfig(
+    languagesInSettings
+      ? {
+          ...config,
+          collections: withoutLocalizedFlags(config.collections),
+          singles: withoutLocalizedFlags(config.singles),
+          fieldGroups: withoutLocalizedFlags(config.fieldGroups),
+        }
+      : config
+  );
+
 /**
  * Plugins this playground registers only when asked, by name, in a
  * comma-separated `NEXTLY_PLAYGROUND_PLUGINS` (`seo`, `reading-lists`). Off by
@@ -253,7 +297,7 @@ export const pageBuilderPlugin = pageBuilder({
       }),
 });
 
-export default defineConfig({
+export default definePlaygroundConfig({
   admin: {
     branding: {
       logoUrlLight: "/Nextly_Icon_dark.svg",
@@ -287,17 +331,23 @@ export default defineConfig({
       ? { environment: { label: process.env.NEXTLY_ENV_LABEL } }
       : {}),
   },
-  localization: {
-    locales: [
-      { code: "en", label: "English" },
-      { code: "es", label: "Spanish", fallbackLocale: "en" },
-      // `rtl: true` renders this language's translatable fields right-to-left.
-      { code: "ar", label: "Arabic", rtl: true, fallbackLocale: "en" },
-    ],
-    defaultLocale: "en",
-    // Untranslated fields fall back to another locale's value on read (default true).
-    fallback: true,
-  },
+  // Declared here, the languages are locked: Settings › Languages only shows
+  // them. The browser tests of changing them in Settings start the playground
+  // with `NEXTLY_E2E_LANGUAGES=settings`, which declares none, so the site
+  // starts with one language and Settings holds the rest.
+  localization: languagesInSettings
+    ? undefined
+    : {
+        locales: [
+          { code: "en", label: "English" },
+          { code: "es", label: "Spanish", fallbackLocale: "en" },
+          // `rtl: true` renders this language's translatable fields right-to-left.
+          { code: "ar", label: "Arabic", rtl: true, fallbackLocale: "en" },
+        ],
+        defaultLocale: "en",
+        // Untranslated fields fall back to another locale's value on read (default true).
+        fallback: true,
+      },
   // Authors is the localized collection, registered so the i18n admin surfaces
   // (language row, copy-from, publish-all, list translation status) are
   // exercised in development rather than existing only in code.

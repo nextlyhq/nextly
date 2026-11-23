@@ -58,9 +58,13 @@ const scoreFields = (score: "text" | "number") => [
 ];
 
 /** The Builder's own DDL for one table, one statement at a time. */
-function builderStatements(dialect: SupportedDialect, table: string): string[] {
+function builderStatements(
+  dialect: SupportedDialect,
+  table: string,
+  fields: unknown[] = scoreFields("text")
+): string[] {
   return new DynamicCollectionSchemaService(undefined, dialect)
-    .generateMigrationSQL(table, scoreFields("text") as never)
+    .generateMigrationSQL(table, fields as never)
     .split("--> statement-breakpoint")
     .map(part =>
       part
@@ -97,7 +101,10 @@ function scoreToNumber(slug: string, table: string): DesiredSchema {
 function save(
   target: Target,
   desired: DesiredSchema,
-  { confirmRenames = false }: { confirmRenames?: boolean } = {}
+  {
+    confirmRenames = false,
+    source = "ui",
+  }: { confirmRenames?: boolean; source?: "ui" | "code" } = {}
 ) {
   return new PushSchemaPipeline({
     executor: new DrizzleStatementExecutor(target.dialect, target.db),
@@ -124,7 +131,7 @@ function save(
     desired,
     db: target.db,
     dialect: target.dialect,
-    source: "ui",
+    source,
     promptChannel: "browser",
     ...(target.databaseName !== undefined
       ? { databaseName: target.databaseName }
@@ -168,6 +175,10 @@ function cases(
     scores: () => Promise<Record<string, unknown>>;
     /** Rename a column of the table, as an earlier apply's committed rename leaves it. */
     rename: (from: string, to: string) => Promise<void>;
+    /** Run a statement, and read the rows of a query. */
+    run: (sql: string) => Promise<void>;
+    rows: (sql: string) => Promise<Record<string, unknown>[]>;
+    quote: (name: string) => string;
   }
 ) {
   it("refuses a change that would clear a value, naming the field and the row, and changes nothing", async () => {
@@ -211,6 +222,64 @@ function cases(
     expect(result.error?.message).toContain("p2");
     expect(await columnTypes(target, table)).toEqual(before);
     expect(await scores()).toEqual({ p1: "5", p2: "xyz" });
+  });
+
+  // A code-first group renamed while a field inside it changes type: the rename carries the old
+  // column's JSON to the new name, where the new type reads it, and no statement plans the inner
+  // change, so the code-first rule never sees it.
+  it("judges a code-first group renamed with a field inside it retyped, over the values its old column holds", async () => {
+    const { target, slug, table, run, rows, quote } = open();
+    const kitSlug = `${slug}_kit`;
+    const kit = `${table}_kit`;
+    const group = (name: string, price: string) => ({
+      name,
+      type: "group",
+      fields: [{ name: "price", type: price }],
+    });
+    const title = { name: "title", type: "text" };
+    await run(`DROP TABLE IF EXISTS ${quote(kit)}`);
+    try {
+      for (const statement of builderStatements(target.dialect, kit, [
+        title,
+        group("details", "text"),
+      ])) {
+        await run(statement);
+      }
+      await run(
+        `INSERT INTO ${quote(kit)} (id, title, slug, details) VALUES ('k1', 'T', 'k1', '{"price":"1"}')`
+      );
+
+      const result = await save(
+        target,
+        {
+          collections: {
+            [kitSlug]: {
+              slug: kitSlug,
+              tableName: kit,
+              fields: [title, group("specs", "number")] as never,
+              recordedFields: [title, group("details", "text")] as never,
+            },
+          },
+          singles: {},
+          components: {},
+        },
+        { confirmRenames: true, source: "code" }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error?.message).toContain(
+        `Collection '${kitSlug}': field 'specs.price' cannot change from text to number`
+      );
+      expect(result.error?.message).toContain("id k1");
+      const [row] = await rows(`SELECT details FROM ${quote(kit)}`);
+      expect(
+        typeof row?.details === "string"
+          ? (JSON.parse(row.details) as unknown)
+          : row?.details
+      ).toEqual({ price: "1" });
+    } finally {
+      await run(`DROP TABLE IF EXISTS ${quote(kit)}`);
+    }
   });
 
   it("refuses a change that would round a value, as blocked", async () => {
@@ -313,6 +382,13 @@ describe("a Schema Builder save's field type change (sqlite)", () => {
       sqlite.exec(`ALTER TABLE "${table}" RENAME COLUMN "${from}" TO "${to}"`);
       return Promise.resolve();
     },
+    run: sql => {
+      sqlite.exec(sql);
+      return Promise.resolve();
+    },
+    rows: sql =>
+      Promise.resolve(sqlite.prepare(sql).all() as Record<string, unknown>[]),
+    quote: name => `"${name}"`,
   }));
 });
 
@@ -404,6 +480,11 @@ for (const server of SERVERS) {
             `ALTER TABLE ${quote(table)} RENAME COLUMN ${quote(from)} TO ${quote(to)}`
           );
         },
+        run: async sql => {
+          await connection.query(sql);
+        },
+        rows: sql => connection.query(sql),
+        quote,
       }));
     }
   );
