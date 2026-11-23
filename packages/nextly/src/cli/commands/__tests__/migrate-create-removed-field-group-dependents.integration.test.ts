@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   defineCollection,
+  defineConfig,
   defineFieldGroup,
   defineSingle,
   fieldGroup,
@@ -46,6 +47,7 @@ import {
   plainSeoGroup,
   seoGroup,
 } from "../../../domains/field-groups/__tests__/helpers/used-field-group-fixtures";
+import { writeLegacyFieldGroupMigration } from "../../../__tests__/helpers/legacy-field-group-history";
 import { fieldGroupTableNameFor } from "../../../domains/field-groups/services/field-group-storage-names";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
@@ -382,14 +384,21 @@ describeEachDialect(
 
       /**
        * A history whose field groups are on the current names: its first migration on the legacy
-       * ones, then the move, then `config`, which adds what depends on SEO's moved table.
+       * ones, as an earlier release wrote every history, then the move, then `config`, which adds
+       * what depends on SEO's moved table.
        */
       async function movedHistoryWith(
         config: Record<string, unknown>,
         start: Record<string, unknown>
       ): Promise<void> {
+        await writeLegacyFieldGroupMigration({
+          config: defineConfig(start as Parameters<typeof defineConfig>[0]),
+          projectRoot: dir,
+          migrationsDir: join(dir, "src", "db", "migrations"),
+          dialect,
+          name: "initial",
+        });
         for (const [name, step, consent] of [
-          ["initial", start, {}],
           ["move", start, { fieldGroupNames: "current" }],
           ["depend", config, {}],
         ] as const) {
