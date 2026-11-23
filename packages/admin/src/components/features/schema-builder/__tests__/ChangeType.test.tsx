@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
-import type { TypeChangeTarget } from "@admin/services/schemaApi";
+import type { TypeChangeTarget } from "@admin/services/typeChangeTargetsApi";
 
 import { BuilderChangeType } from "../BuilderChangeType";
 import { BuilderOverlays, type ActiveOverlay } from "../BuilderOverlays";
@@ -29,8 +29,10 @@ vi.mock("@admin/hooks/queries", async importOriginal => ({
 /** The server's answer, and each path it was asked about. */
 let answer: () => Promise<TypeChangeTarget[]> = async () => [];
 const asked: Array<{ address: string; path: readonly string[] }> = [];
-vi.mock("@admin/services/schemaApi", async importOriginal => ({
-  ...(await importOriginal<typeof import("@admin/services/schemaApi")>()),
+vi.mock("@admin/services/typeChangeTargetsApi", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/services/typeChangeTargetsApi")
+  >()),
   typeChangeTargetsAt: (address: string, path: readonly string[]) => {
     asked.push({ address, path });
     return answer();

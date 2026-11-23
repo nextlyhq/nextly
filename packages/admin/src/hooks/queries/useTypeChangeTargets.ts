@@ -15,7 +15,7 @@ import type { BuilderKind } from "@admin/components/features/schema-builder/buil
 import {
   typeChangeTargetsAt,
   type TypeChangeTarget,
-} from "@admin/services/schemaApi";
+} from "@admin/services/typeChangeTargetsApi";
 
 /** Where each kind's schema routes are. */
 const SCHEMA_ADDRESS: Readonly<Record<BuilderKind, string>> = {

@@ -34,7 +34,7 @@ import {
 } from "@admin/lib/builder/field-placement";
 import { findFieldById } from "@admin/lib/builder/field-transformers";
 import { BUILDER_FIELD_TYPES } from "@admin/lib/builder/offered-field-types";
-import type { TypeChangeTarget } from "@admin/services/schemaApi";
+import type { TypeChangeTarget } from "@admin/services/typeChangeTargetsApi";
 
 import { pickerExcludedTypes, type BuilderConfig } from "./builder-config";
 import { useBuilderFieldGroupChoices } from "./BuilderFieldPicker";
