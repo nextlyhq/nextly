@@ -1122,11 +1122,19 @@ async function registerServicesOnce(
   );
   await refuseUnmigratedDatabaseInBuildPhase(adapter);
 
+  // The names a new database starts its field groups on, one value for the compile below and the
+  // setup: a production start sets one up only to run the migrations at start, so it takes the
+  // names their history keeps field groups under; every other start begins a new site on the
+  // current names. The compile uses it only where the database has no registry yet.
+  const newSiteFieldGroupNaming = structure.productionStart
+    ? await historyNamingAtStart(resolvedBasePath, transformedConfig)
+    : ("current" as const);
   const bootExtensionSchema = await prepareBootSchema(
     adapter,
     transformedConfig,
     transformedPlugins,
-    resolvedLogger
+    resolvedLogger,
+    newSiteFieldGroupNaming
   );
 
   // Before the migrations and the hold below, and touching no database: the
@@ -1239,12 +1247,8 @@ async function registerServicesOnce(
         {
           createMissingCompanions: !structure.productionStart,
           completeness,
-          // A production start sets a new database up only to run the
-          // migrations at start, so it takes the names their history keeps field
-          // groups under; every other start begins a new site on the current names.
-          newSiteFieldGroupNaming: structure.productionStart
-            ? await historyNamingAtStart(resolvedBasePath, transformedConfig)
-            : "current",
+          // The names the compile above read a new database's groups on.
+          newSiteFieldGroupNaming,
         }
       );
 
@@ -2031,7 +2035,9 @@ async function prepareBootSchema(
   adapter: DrizzleAdapter,
   transformedConfig: NextlyServiceConfig,
   transformedPlugins: PluginDefinition[],
-  logger: Logger
+  logger: Logger,
+  /** The names a database with no registry yet starts its field groups on, as its setup does. */
+  newSiteFieldGroupNaming: "legacy" | "current"
 ): Promise<ExtensionSchema | undefined> {
   // The dialect is read defensively because an adapter that cannot report one
   // is a boot that is going to fail regardless, and it must fail at the step
@@ -2077,7 +2083,11 @@ async function prepareBootSchema(
     plugins: transformedPlugins,
     config: transformedConfig,
   })
-    ? await declaredFieldGroupStorage(adapter, transformedConfig.fieldGroups)
+    ? await declaredFieldGroupStorage(
+        adapter,
+        transformedConfig.fieldGroups,
+        newSiteFieldGroupNaming
+      )
     : undefined;
   return compileAndPublishExtensionSchema({
     ...(fieldGroups === undefined

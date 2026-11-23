@@ -510,11 +510,23 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
               single => !unchangedSinceLastStart("single", single.slug)
             )
           );
-          const changedFieldGroups = driftCheckFieldGroups(
-            (config.fieldGroups ?? []).filter(
-              group => !unchangedSinceLastStart("fieldGroup", group.slug)
-            )
+          // A field group under the table its registry row names (`driftCheckFieldGroups`). Where
+          // the registry cannot be read, which table a group is in is not known, and its preview is
+          // left out rather than made of a guessed name.
+          const fieldGroupsToCheck = (config.fieldGroups ?? []).filter(
+            group => !unchangedSinceLastStart("fieldGroup", group.slug)
           );
+          const { readStoredFieldGroupTables } = await import(
+            "./domains/field-groups/services/field-group-stored-tables"
+          );
+          const storedFieldGroups =
+            fieldGroupsToCheck.length === 0
+              ? undefined
+              : await readStoredFieldGroupTables(adapter);
+          const changedFieldGroups =
+            storedFieldGroups?.usable === true
+              ? driftCheckFieldGroups(fieldGroupsToCheck, storedFieldGroups)
+              : [];
           const [{ previewDesiredSchema }, { operationTargetTable }] =
             await Promise.all([
               import("./domains/schema/pipeline/preview"),
