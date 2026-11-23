@@ -24,6 +24,7 @@ import { OwnershipNotices } from "./OwnershipNotices";
 import { regionsForRefusal } from "./refusal-routing";
 import {
   editedValues,
+  recordValues,
   suppliedNamesFor,
   type SampleEdits,
 } from "./sample-data";
@@ -473,6 +474,15 @@ export function EmailTemplateForm({
                 sampleError={derived.sampleError}
                 check={variableCheck}
                 onDeclare={owns ? declareVariable : undefined}
+                templateId={isEdit ? template?.id : undefined}
+                onRecord={values =>
+                  setSampleEdits(current => ({
+                    values: {
+                      ...editedValues(current),
+                      ...recordValues(values, variables ?? []),
+                    },
+                  }))
+                }
               />
             )
           }

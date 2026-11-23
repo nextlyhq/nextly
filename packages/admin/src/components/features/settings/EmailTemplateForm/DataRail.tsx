@@ -4,6 +4,7 @@ import { Badge, Button } from "@nextlyhq/ui";
 import { Suspense, lazy, useId, useState, type JSX } from "react";
 
 import { DataFields } from "./DataFields";
+import { RealRecordPicker } from "./RealRecordPicker";
 import type { SampleDeclaration } from "./sample-data";
 import { Segmented } from "./Segmented";
 import type { TemplateVariableCheck } from "./useTemplateVariables";
@@ -32,6 +33,8 @@ export function DataRail({
   sampleError,
   check,
   onDeclare,
+  templateId,
+  onRecord,
 }: {
   /** The test data as JSON: as typed, or the data written out. */
   sampleText: string;
@@ -45,6 +48,10 @@ export function DataRail({
   check: TemplateVariableCheck;
   /** Declare a variable the template uses; absent where declarations are locked. */
   onDeclare?: (name: string) => void;
+  /** The saved template, whose owner may offer real records; absent for a new one. */
+  templateId?: string;
+  /** Fill the test data from a real record's values. */
+  onRecord?: (values: Record<string, unknown>) => void;
 }): JSX.Element {
   const errorId = useId();
   const [view, setView] = useState<DataView>("fields");
@@ -78,6 +85,9 @@ export function DataRail({
         <p className="mb-2 text-xs text-muted-foreground">
           Fills the live preview and a test send. Not saved with the template.
         </p>
+        {templateId && onRecord ? (
+          <RealRecordPicker templateId={templateId} onLoaded={onRecord} />
+        ) : null}
         {view === "fields" ? (
           sampleError ? (
             <p className="rounded-md border border-destructive p-3 text-xs text-destructive">

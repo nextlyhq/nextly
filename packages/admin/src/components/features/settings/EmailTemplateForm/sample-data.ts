@@ -146,6 +146,22 @@ export function buildSampleData(
 }
 
 /**
+ * The values a real record gives the test data: those of the variables the
+ * template declares, where it declares any, so the fields show what the
+ * record filled; every value, where it declares none.
+ */
+export function recordValues(
+  values: Record<string, unknown>,
+  variables: ReadonlyArray<{ name: string }>
+): Record<string, unknown> {
+  const declared = new Set(variables.map(variable => variable.name));
+  if (declared.size === 0) return { ...values };
+  return Object.fromEntries(
+    Object.entries(values).filter(([name]) => declared.has(name))
+  );
+}
+
+/**
  * What the author changed in the test data: values set in the fields, kept
  * apart from the starting data so a variable declared later still starts with
  * its own value; or the JSON as typed, which is the whole data.
