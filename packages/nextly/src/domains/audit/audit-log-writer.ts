@@ -90,6 +90,14 @@ export type AuditEventKind =
   | "preview-links-revoked"
   | "role-assigned"
   | "role-revoked"
+  /**
+   * A collection was closed to super-admin, or opened to it again: from the
+   * admin, by the super-admin who re-entered their password, or from the
+   * configuration, recorded by the `nextly migrate` or development start
+   * that first applied it. Metadata: `collection`, `before` and `after`
+   * (`"closed"` or `"open"`), and `source` (`"admin"` or `"code"`).
+   */
+  | "collection-super-admin-access-changed"
   | "user-deleted";
 
 /**

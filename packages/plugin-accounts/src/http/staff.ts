@@ -33,6 +33,10 @@ export const MANAGE_ACCOUNTS = "manage-accounts";
 /**
  * The plugin's two permissions, which a site grants through its roles: no
  * staff member needs to be a super-admin to look after accounts.
+ *
+ * Of the preset roles, only Admin holds them on its own: the accounts are
+ * people's addresses and names, private data no other preset is handed. A
+ * site grants them to any other role by name.
  */
 export const STAFF_PERMISSIONS: PluginPermission[] = [
   {
@@ -41,6 +45,7 @@ export const STAFF_PERMISSIONS: PluginPermission[] = [
     label: "Read accounts",
     description:
       "See the site's accounts: their addresses, names and states, never a password",
+    presets: ["admin"],
   },
   {
     action: "manage",
@@ -50,6 +55,7 @@ export const STAFF_PERMISSIONS: PluginPermission[] = [
       "Deactivate, reactivate and delete accounts, end their sessions, and send them verification and reset emails",
     // Deleting an account cannot be undone.
     danger: true,
+    presets: ["admin"],
   },
 ];
 

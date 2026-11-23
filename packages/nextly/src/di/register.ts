@@ -32,6 +32,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 import type { AnyRelations } from "drizzle-orm";
 
+import {
+  declareClosedToSuperAdmin,
+  useStoredClosedMarks,
+} from "../auth/access/closed-to-super-admin";
 import { authUiProblems } from "../auth/handlers/auth-ui";
 import {
   buildAuthRouterDeps,
@@ -43,6 +47,7 @@ import {
   unkeyedStrategyWarnings,
 } from "../auth/handlers/proxy-posture";
 import { resetPasswordPolicy } from "../auth/password/policy";
+import type { PresetRoleSlug } from "../auth/role-presets";
 import { issueSetupTokenAtBoot } from "../auth/setup-token/setup-gate";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
@@ -107,6 +112,7 @@ import { limitsInMemoryWarning } from "../domains/limits/limits-in-memory-warnin
 import { selectLimitStore } from "../domains/limits/select-limit-store";
 import { stopDeleteWindowTimers } from "../domains/media/delete-window-timers";
 import type { MetaService } from "../domains/meta";
+import { readStoredClosedMarks } from "../domains/meta/closed-to-super-admin-marks";
 import type { NoticesService } from "../domains/notices/notices-service";
 import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import type { PreviewConfig } from "../domains/preview/route-config";
@@ -536,6 +542,12 @@ export interface NextlyServiceConfig {
 
   /** @experimental App-declared custom permissions, seeded like plugin permissions (D36). */
   permissions?: PluginPermission[];
+
+  /**
+   * @experimental The collections the app opens to the preset roles, by
+   * slug, read when the preset roles' grants are set.
+   */
+  presetGrants?: Readonly<Record<string, readonly PresetRoleSlug[]>>;
 
   /** @experimental App-declared role bundles, seeded like plugin roles (D67). */
   roles?: PluginRole[];
@@ -4307,6 +4319,13 @@ function registerCodeDefinedAccess(
 ): void {
   const rbacService = container.get<RBACAccessControlService>(
     "rbacAccessControlService"
+  );
+  // Which collections the configuration closes to super-admin, and how the
+  // marks set in the admin are read: registered with the rules, so every way
+  // in that asks the rules asks these too.
+  declareClosedToSuperAdmin(transformedConfig.collections ?? []);
+  useStoredClosedMarks(executor =>
+    readStoredClosedMarks(container.get<MetaService>("metaService"), executor)
   );
   // The targets a command asks the same rules through (`codeDefinedAccessTargets`).
   for (const target of codeDefinedAccessTargets(transformedConfig)) {
