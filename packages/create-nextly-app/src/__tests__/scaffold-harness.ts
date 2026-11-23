@@ -7,7 +7,14 @@
  * test file itself (vi.mock is per file); this module only reads what they
  * recorded.
  */
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -105,6 +112,22 @@ export async function installFakeManagers(dir: string): Promise<FakeRun> {
 
 export async function makeWorkdir(prefix: string): Promise<string> {
   return mkdtemp(path.join(tmpdir(), prefix));
+}
+
+/**
+ * Removes a folder `makeWorkdir` made. On Windows a file just written or a
+ * folder a child process just ran in can stay held for a moment after the
+ * process that used it exits (the virus scanner and the indexer open new files
+ * too), and removing the folder then fails with EBUSY or ENOTEMPTY. Node's
+ * `rm` retries exactly those errors, with a growing pause, when asked to.
+ */
+export async function removeWorkdir(dir: string): Promise<void> {
+  await rm(dir, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 100,
+  });
 }
 
 /**

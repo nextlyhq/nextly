@@ -40,6 +40,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { tableNotRegisteredError } from "@nextlyhq/adapter-drizzle/types";
 
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
+import { addressableFields } from "../../../shared/addressable-fields";
 import type { Logger } from "../../../shared/types";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
@@ -342,4 +343,31 @@ export async function resolveSingleForRequest(
   if (!singleMeta) return null;
   await ensureSingleRuntimeTable(adapter, singleMeta, logger, use);
   return singleMeta;
+}
+
+/**
+ * `singleMeta` with each field the running configuration declares (`declared`) that its registry
+ * row does not hold, after the row's own. A production start writes no registry row, and serves a
+ * field a newer build declares over a row an earlier build wrote; a save that reads its fields from
+ * the row alone refused that field, and validated none of its rules. A field the row holds keeps
+ * the row's definition. Undefined or empty `declared` (a Schema Builder Single) leaves the row as
+ * it is.
+ */
+export function withDeclaredFields(
+  singleMeta: DynamicSingleRecord,
+  declared: readonly unknown[] | undefined
+): DynamicSingleRecord {
+  if (declared === undefined || declared.length === 0) return singleMeta;
+  const held = new Set(
+    addressableFields(singleMeta.fields).map(field => field.name)
+  );
+  const added = declared.filter(field => {
+    const name = (field as { name?: unknown }).name;
+    return typeof name === "string" && !held.has(name);
+  });
+  if (added.length === 0) return singleMeta;
+  return {
+    ...singleMeta,
+    fields: [...singleMeta.fields, ...(added as DynamicSingleRecord["fields"])],
+  };
 }

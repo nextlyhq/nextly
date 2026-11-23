@@ -40,7 +40,6 @@
  *
  * @module domains/schema/migrate/rollback-to-record
  */
-import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -72,7 +71,6 @@ import type { SchemaEventRow } from "../events/schema-events-repository";
 import type { EntitySettingsRecord } from "../migrate-create/entity-settings";
 import {
   carriesRegistryMetadata,
-  parseSnapshotFile,
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
 import { appliedAppMigrations, writeRegistryRows } from "../schema-version";
@@ -88,6 +86,7 @@ import {
   snapshotMetadataOf,
   type AppMigrationStanding,
 } from "./first-run";
+import { readMigrationSnapshot } from "./migration-snapshot-file";
 import {
   declarationsOf,
   permissionsDeclaredBy,
@@ -456,42 +455,6 @@ async function restoreRows(args: {
     );
   }
   return { restored, removed };
-}
-
-/** `content` parsed as JSON, or undefined where it is not JSON. */
-function jsonOf(content: string): unknown {
-  try {
-    return JSON.parse(content) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
-/** A migration's snapshot, or null where it has none or it is not a migration snapshot. */
-export async function readMigrationSnapshot(
-  metaDir: string,
-  name: string
-): Promise<SnapshotFile | null> {
-  const file = `${name}.snapshot.json`;
-  let content: string;
-  try {
-    content = await readFile(resolve(metaDir, file), "utf-8");
-  } catch (error) {
-    if ((error as { code?: string }).code === "ENOENT") return null;
-    throw NextlyError.internal({ cause: error as Error });
-  }
-  // A template's own metadata file (collections and Singles, no migration
-  // hash) is no migration snapshot, as `nextly migrate` reads it.
-  const parsed = jsonOf(content);
-  if (
-    typeof parsed === "object" &&
-    parsed !== null &&
-    !("migrationHash" in parsed) &&
-    ("collections" in parsed || "singles" in parsed)
-  ) {
-    return null;
-  }
-  return parseSnapshotFile(content, file);
 }
 
 /** What a rollback does with the registry record, decided before it rolls anything back. */

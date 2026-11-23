@@ -524,6 +524,57 @@ describe("FieldGroupRegistryService", () => {
       });
     });
 
+    it("throws NOT_FOUND when the component does not exist", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(null);
+
+      await expect(ctx.service.deleteComponent("seo")).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    });
+
+    // On MySQL a delete stopped part-way keeps its drops; asked again, the settle before it finds
+    // them applied and removes the registry row, so the delete has nothing left to do.
+    it("answers as deleted a component whose delete the settle before it finished", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(null);
+      vi.mocked(withSchemaChangeExcluded).mockImplementationOnce(
+        (_args, work) =>
+          work([
+            {
+              id: "a-stopped-delete",
+              kind: "fieldGroup",
+              slug: "seo",
+              outcome: "all",
+              notes: [],
+              removed: true,
+            },
+          ])
+      );
+
+      await expect(ctx.service.deleteComponent("seo")).resolves.toBeUndefined();
+      expect(ctx.adapter.delete).not.toHaveBeenCalled();
+    });
+
+    it("throws NOT_FOUND when the settle before it finished another component's delete", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(null);
+      vi.mocked(withSchemaChangeExcluded).mockImplementationOnce(
+        (_args, work) =>
+          work([
+            {
+              id: "a-stopped-delete",
+              kind: "fieldGroup",
+              slug: "other",
+              outcome: "all",
+              notes: [],
+              removed: true,
+            },
+          ])
+      );
+
+      await expect(ctx.service.deleteComponent("seo")).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    });
+
     it("deletes unlocked component and drops its data table, in one transaction under the schema lock", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
       // Every registry read for what places it returns no rows.

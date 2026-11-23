@@ -429,13 +429,15 @@ async function sqliteCounterCovers(
 function declaresAutoincrement(createSql: unknown): boolean {
   if (typeof createSql !== "string") return false;
   const words = cursorOf(createSql, "sqlite").rest();
-  return words.some(
-    (word, at) =>
-      word === "AUTOINCREMENT" &&
-      [words[at - 1], words[at - 2]].includes("KEY") &&
-      (words[at - 1] === "KEY" ||
-        ["ASC", "DESC"].includes(String(words[at - 1])))
-  );
+  return words.some((word, at) => {
+    if (word !== "AUTOINCREMENT") return false;
+    // A quoted name is a token object, never one of these words.
+    const before = words[at - 1];
+    return (
+      before === "KEY" ||
+      ((before === "ASC" || before === "DESC") && words[at - 2] === "KEY")
+    );
+  });
 }
 
 /** SQLite's indexes and counters of the tables, one table at a time. */

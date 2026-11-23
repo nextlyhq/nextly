@@ -104,17 +104,25 @@ export function storedOrNewTableName(
  * reported as no rows.
  */
 export async function readStoredFieldGroupTables(
-  adapter: RegistryReadAdapter
+  adapter: RegistryReadAdapter,
+  /**
+   * The registry's rows as a production start already read them (`di/start-reads`), where the
+   * caller has that reading: the same rows, without a second statement.
+   */
+  readRows?: (registryTable: string) => Promise<Record<string, unknown>[]>
 ): Promise<StoredFieldGroupTables> {
   const tables = new Map<string, string>();
   try {
     const registryTable = await resolveFieldGroupRegistryName(adapter);
-    const rows = await adapter.queryStatement<{
-      slug?: unknown;
-      table_name?: unknown;
-    }>(
-      sql`SELECT ${sql.identifier("slug")}, ${sql.identifier("table_name")} FROM ${sql.identifier(registryTable)}`
-    );
+    const rows: { slug?: unknown; table_name?: unknown }[] =
+      readRows !== undefined
+        ? await readRows(registryTable)
+        : await adapter.queryStatement<{
+            slug?: unknown;
+            table_name?: unknown;
+          }>(
+            sql`SELECT ${sql.identifier("slug")}, ${sql.identifier("table_name")} FROM ${sql.identifier(registryTable)}`
+          );
     for (const row of rows) {
       if (typeof row.slug === "string" && typeof row.table_name === "string") {
         tables.set(row.slug, row.table_name);

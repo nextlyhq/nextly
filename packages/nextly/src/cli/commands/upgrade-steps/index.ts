@@ -17,8 +17,23 @@
 
 import type { UpgradeStep } from "../upgrade-step";
 
-import { storedPasswordsStep } from "./stored-passwords";
-import { versionPasswordsStep } from "./version-passwords";
+/** Hashing the passwords an earlier release stored as given. */
+const storedPasswordsStep: UpgradeStep = {
+  title: "hash passwords stored before this release",
+  pending: async context =>
+    (await import("./stored-passwords")).storedPasswordsWork.pending(context),
+  run: async context =>
+    (await import("./stored-passwords")).storedPasswordsWork.run(context),
+};
+
+/** Removing the passwords an earlier release kept in version history. */
+const versionPasswordsStep: UpgradeStep = {
+  title: "remove passwords kept in version history",
+  pending: async context =>
+    (await import("./version-passwords")).versionPasswordsWork.pending(context),
+  run: async context =>
+    (await import("./version-passwords")).versionPasswordsWork.run(context),
+};
 
 /** Converting roles that hold a retired `manage-` permission. */
 const retiredManageStep: UpgradeStep = {
@@ -41,7 +56,6 @@ export const zonedDatesStep: UpgradeStep = {
   run: async context =>
     (await import("./zoned-dates")).convertZonedDates(context),
 };
-
 
 /** Bringing each configured language code's rows into its standard form. */
 const localisationCodesStep: UpgradeStep = {

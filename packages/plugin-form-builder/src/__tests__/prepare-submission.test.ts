@@ -711,12 +711,79 @@ describe("the write-seam hook on submissions", () => {
     ).rejects.toThrow();
   });
 
-  it("leaves a row that names no form to the collection's own rule", async () => {
-    // `form` is required on the collection, so it is refused a step later.
-    // Rejecting here would answer a question this hook was not asked.
+  it("refuses a submission created without a form, naming the field", async () => {
+    // The `form` column stays nullable for installations that hold a row
+    // without one, so this seam is the rule that every new submission names
+    // its form.
+    const refused = await prepareSubmissionForWrite(
+      { data: { data: { name: "Ada" }, status: "new" }, operation: "create" },
+      formsSlug,
+      withForm
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: { errors: [{ path: "form", code: "REQUIRED" }] },
+    });
+  });
+
+  it("refuses a submission created with an empty form id", async () => {
+    // An empty string names no form, and the collection no longer refuses it
+    // itself, so a visitor's create could otherwise skip every check here.
+    const refused = await prepareSubmissionForWrite(
+      {
+        data: {
+          form: "",
+          data: { name: "Ada", email: "ada@example.com" },
+          status: "new",
+        },
+        operation: "create",
+      },
+      formsSlug,
+      withForm
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: { errors: [{ path: "form", code: "REQUIRED" }] },
+    });
+  });
+
+  it("refuses a patch that empties a submission's form", async () => {
+    // The stored row names a form and holds valid answers, so the only thing
+    // wrong with the patch is the emptied form, and the stored form is not
+    // used in its place.
+    const refused = await prepareSubmissionForWrite(
+      {
+        data: { form: null, status: "read" },
+        originalData: {
+          form: "form1",
+          data: { name: "Ada", email: "ada@example.com" },
+        },
+        operation: "update",
+      },
+      formsSlug,
+      withForm
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: { errors: [{ path: "form", code: "REQUIRED" }] },
+    });
+  });
+
+  it("lets a patch through on a row an earlier release stored without a form", async () => {
+    // Refusing it would leave such a row impossible to mark read or spam.
     const ctx = {
-      data: { data: { name: "Ada" }, status: "new" },
-      operation: "create",
+      data: { status: "read" },
+      originalData: { data: { name: "Ada" } },
+      operation: "update",
     };
     const out = await prepareSubmissionForWrite(ctx, formsSlug, withForm);
     expect(out).toBe(ctx.data);

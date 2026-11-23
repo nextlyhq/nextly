@@ -32,6 +32,7 @@ import {
   type UserActor,
   type VisitorActor,
 } from "./actor";
+import { superAdminRefusedOn } from "./closed-to-super-admin-refusal";
 import {
   askRule,
   askRules,
@@ -334,6 +335,20 @@ async function gateVerdict(
       q,
       await decide(actorForPrincipal(q.principal), q.action, target)
     );
+  }
+  // A collection closed to super-admin refuses a super-admin person or a key
+  // with super-admin authority before any of the shortcuts below, which each
+  // let super-admin authority through, and whatever route vouched for them.
+  if (
+    kind === "collection" &&
+    q.user &&
+    (await superAdminRefusedOn(q.slug, {
+      userId: q.user.id,
+      scope: q.scope?.actorType === "apiKey" ? q.scope : undefined,
+      executor: q.executor,
+    }))
+  ) {
+    return INSUFFICIENT;
   }
   return staffOrVisitorVerdict(kind, q, target);
 }

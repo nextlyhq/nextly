@@ -96,7 +96,7 @@ export async function registerDynamicEntitySchema(
     const { ensureCompanionTable } = await import(
       "../../i18n/runtime/companion-io"
     );
-    await ensureCompanionTable(adapter, {
+    const created = await ensureCompanionTable(adapter, {
       builtBy: builtByFor(args.kind, args.builderOwned),
       slug: tableName,
       tableName,
@@ -104,6 +104,20 @@ export async function registerDynamicEntitySchema(
       dialect,
       status: companionStatus,
     });
+    // A table made here gets its per-language unique indexes, as `nextly
+    // migrate` makes them: the table alone would accept a unique translated
+    // value twice.
+    if (created) {
+      const { reconcileCompanionUniquesAtStart } = await import(
+        "../../i18n/runtime/companion-unique-reconcile"
+      );
+      await reconcileCompanionUniquesAtStart(adapter, {
+        builtBy: builtByFor(args.kind, args.builderOwned),
+        slug: tableName,
+        tableName,
+        fields,
+      });
+    }
   }
 
   const { buildCompanionRuntimeTable } = await import(

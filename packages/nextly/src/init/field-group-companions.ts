@@ -34,15 +34,28 @@ export async function ensureFieldGroupCompanion(
   const { ensureCompanionTable } = await import(
     "../domains/i18n/runtime/companion-io"
   );
-  await ensureCompanionTable(adapter, {
-    // A field group's own creator sizes a text column from a key of its own, and a
-    // code-first row in this registry was not built by it at all.
-    builtBy: builtByFor("fieldGroup", args.builderOwned),
+  // A field group's own creator sizes a text column from a key of its own, and a
+  // code-first row in this registry was not built by it at all.
+  const builtBy = builtByFor("fieldGroup", args.builderOwned);
+  const created = await ensureCompanionTable(adapter, {
+    builtBy,
     slug: args.tableName,
     tableName: args.tableName,
     fields: args.fields as { name: string; type: string }[],
     dialect: args.dialect,
     status: false,
+  });
+  // A table made here gets its per-language unique indexes, as `nextly
+  // migrate` makes them.
+  if (!created) return;
+  const { reconcileCompanionUniquesAtStart } = await import(
+    "../domains/i18n/runtime/companion-unique-reconcile"
+  );
+  await reconcileCompanionUniquesAtStart(adapter, {
+    builtBy,
+    slug: args.tableName,
+    tableName: args.tableName,
+    fields: args.fields as { name: string; type: string }[],
   });
 }
 

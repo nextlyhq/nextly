@@ -35,7 +35,7 @@
  * would slip past a search for the dotted form.
  */
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -45,9 +45,13 @@ import {
 } from "@nextlyhq/module-specifiers/parse-source";
 import type { Node } from "oxc-parser";
 import { describe, expect, it } from "vitest";
-import { collectModules } from "./source-modules";
+import { collectModules, modulePath } from "./source-modules";
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
+
+/** A file's path beneath `src`, with "/" as the lists here write it. */
+const fromSrc = (file: string): string =>
+  modulePath(SRC_DIR, file, relative, sep);
 
 /**
  * The one module allowed to convert between the frame and the host, matched by
@@ -106,7 +110,7 @@ function isTest(file: string): boolean {
 
 /** Whether a file IS the named module, by its path beneath `src`. */
 function isModule(file: string, relativePath: string): boolean {
-  return relative(SRC_DIR, file) === relativePath;
+  return fromSrc(file) === relativePath;
 }
 
 /**
@@ -193,7 +197,7 @@ describe("rectangles are read across the frame in one place", () => {
       .filter(file => !isTest(file))
       .flatMap(file => {
         const reads = crossFrameReads(readFileSync(file, "utf8"), file);
-        return reads.map(read => `${relative(SRC_DIR, file)} reads ${read}`);
+        return reads.map(read => `${fromSrc(file)} reads ${read}`);
       });
 
     expect(offenders).toEqual([]);
