@@ -22196,18 +22196,14 @@ export class CollectionMutationService extends BaseService {
   // keeping two copies of them.
   // fallow-ignore-next-line complexity
   /**
-   * The refusals a write in a caller's transaction meets before anything of it runs, each read on
-   * that transaction, which every write in it then rolls back with: the collection removed from
-   * code, and a field `body` sets that a Builder save left part-way holds.
+   * Refuses a write in a caller's transaction that sets a field a Builder save left part-way holds,
+   * read on that transaction, before anything of the write runs (`refuseWriteOverLeftSave`).
    */
-  private async refuseWriteInTransaction(
+  private async refuseLeftSaveWriteInTransaction(
     tx: TransactionContext,
     collectionName: string,
     body: Record<string, unknown>
   ): Promise<void> {
-    await refuseWriteIfRemovedFromCode("collection", collectionName, {
-      executor: tx.getDrizzle(),
-    });
     await refuseWriteOverLeftSave({
       adapter: this.adapter,
       kind: "collection",
@@ -22223,8 +22219,16 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     options: CreateEntryWriteOptions
   ): Promise<CollectionServiceResult<unknown>> {
-    // Refused first, before anything of the write runs (`refuseWriteInTransaction`).
-    await this.refuseWriteInTransaction(tx, params.collectionName, body);
+    // Refused first when the collection is removed from code. Read on the
+    // caller's transaction, which every write in it then rolls back with.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
+    await this.refuseLeftSaveWriteInTransaction(
+      tx,
+      params.collectionName,
+      body
+    );
     // What the create claims about where its translated values came from,
     // read before the key is dropped with the version.
     const provenance = this.provenanceOf(
@@ -23139,8 +23143,15 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     options: UpdateEntryWriteOptions
   ): Promise<CollectionServiceResult<unknown>> {
-    // Refused first, before anything of the write runs (`refuseWriteInTransaction`).
-    await this.refuseWriteInTransaction(tx, params.collectionName, body);
+    // Refused first when the collection is removed from code; see createEntryWrite.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
+    await this.refuseLeftSaveWriteInTransaction(
+      tx,
+      params.collectionName,
+      body
+    );
     // How this item is judged, decided before the version and `_overwrite`
     // are dropped, as on updateEntry: an item that gives a version is judged
     // on its own, so a stale one is refused and the rest of a batch applied.
