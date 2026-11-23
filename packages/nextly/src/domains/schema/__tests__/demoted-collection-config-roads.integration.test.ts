@@ -18,6 +18,18 @@
  * standing in for a Schema Builder save: what is under test is which definition the road applies
  * afterwards.
  *
+ * The passes that read the configuration's entities themselves ignore the entry too:
+ * - the translations-table pass (a reload, and `db:sync`, whose pass `nextly migrate` and a
+ *   production start run as well) makes no translations table for the entry's `localized`
+ *   (before, it made one beside the Builder's collection);
+ * - a start judges the configuration's pairs of fields against the registry without it (before, a
+ *   pair added to the entry stopped the start).
+ *
+ * And around it: a reload records a plugin's collection as the plugin's, as a start does (before,
+ * as the app's own, so a plugin's declaration over a handed-over address was skipped); a demote
+ * registers a collection with the registry's own hash of its fields (before, the Builder's first
+ * save of the same fields read as a schema change).
+ *
  * Each case owns its database: a throwaway database on PostgreSQL and MySQL, a temporary file on
  * SQLite.
  */
@@ -113,21 +125,29 @@ const NOTES_TRANSLATED = defineCollection({
   fields: [text({ name: "body", localized: true })],
 });
 
-/** Its entry, edited since the demote to add two fields that become one column. */
-const POSTS_CLASHING = defineCollection({
+/**
+ * Its entry, edited since the demote to add two fields that become one column, written as a plain
+ * object. A `define*` entry with such a pair is refused by the configuration's own rules
+ * (`configurationProblems`) on every road, whoever owns the collection; a plain object is only
+ * warned about at a start, which then judges the pair against the registry.
+ */
+const POSTS_CLASHING = {
   slug: "dcr_posts",
   fields: [
-    text({ name: "headline" }),
-    text({ name: "fooBar" }),
-    text({ name: "foo_bar" }),
+    { name: "headline", type: "text" },
+    { name: "fooBar", type: "text" },
+    { name: "foo_bar", type: "text" },
   ],
-});
+};
 
 /** The same pair on a collection code still owns: the control. */
-const NOTES_CLASHING = defineCollection({
+const NOTES_CLASHING = {
   slug: "dcr_notes",
-  fields: [text({ name: "fooBar" }), text({ name: "foo_bar" })],
-});
+  fields: [
+    { name: "fooBar", type: "text" },
+    { name: "foo_bar", type: "text" },
+  ],
+};
 
 /** A collection a plugin contributes. */
 const EVENTS = defineCollection({
@@ -372,30 +392,26 @@ for (const dialect of getConfiguredTestDialects()) {
       );
     });
 
-    it("refuses nothing for a pair of fields added to the code entry that become one column", async () => {
-      // The entry is ignored, so the pair is never made: judged, it refused the whole reload.
-      expect(
-        await reloadConfig(defineConfig({ collections: [POSTS_CLASHING] }))
-      ).toBe("finished");
-      expect(await recordFields(database.adapter)).toEqual(["headline"]);
-
-      // The same pair on code's own collection is still refused.
-      expect(
-        await reloadConfig(
-          defineConfig({ collections: [POSTS, NOTES_CLASHING] })
-        )
-      ).toBe("refused");
-    });
-
     it("starts with a pair of fields added to the code entry that become one column", async () => {
-      // A start judges the configuration as a reload does: the ignored entry refuses nothing.
+      // A start judges the configuration's pairs against the registry: the ignored entry's pair is
+      // never made, so it stops nothing. The same pair on code's own collection still stops it.
       clearServices();
       await expect(
         createTestNextly({
           adapter: database.adapter as never,
-          collections: [POSTS_CLASHING],
+          collections: [POSTS_CLASHING as never],
         })
       ).resolves.toBeDefined();
+
+      clearServices();
+      await expect(
+        createTestNextly({
+          adapter: database.adapter as never,
+          collections: [POSTS as never, NOTES_CLASHING as never],
+        })
+      ).rejects.toMatchObject({
+        logContext: { reason: "sibling-fields" },
+      });
     });
 
     it("records a collection a plugin adds under next dev as the plugin's", async () => {
@@ -545,11 +561,5 @@ describe("a demoted collection still declared in code — db:sync (sqlite)", () 
 
     expect(await hasTable(adapterOf(), "dc_dcr_notes_locales")).toBe(true);
     expect(await hasTable(adapterOf(), `${TABLE}_locales`)).toBe(false);
-  });
-
-  it("refuses nothing for a pair of fields added to the code entry that become one column", async () => {
-    // The entry is ignored, so the pair is never made: judged, it stopped the sync.
-    expect(await dbSync(POSTS_CLASHING)).toBeUndefined();
-    expect(await recordFields(adapterOf())).not.toContain("fooBar");
   });
 });
