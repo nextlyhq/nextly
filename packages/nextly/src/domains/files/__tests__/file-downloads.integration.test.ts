@@ -26,6 +26,7 @@ import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
+import { openNamedQueryFrame } from "../../../auth/named-query-scope";
 import { defineCollection, text } from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
@@ -463,6 +464,31 @@ describe.each(getConfiguredTestDialects())(
       expect(await addedRow(files.ready.id, seen)).toMatchObject({
         actorKind: "core",
       });
+
+      // An API key's call, named as the key and not as its maker's session.
+      seen = await seenRows(files.ready.id);
+      await api.files.download({
+        collection: STREAMED,
+        id: files.ready.id,
+        user: { id: ids.reader },
+        apiKeyId: "key-of-a-script",
+      });
+      expect(await addedRow(files.ready.id, seen)).toMatchObject({
+        actorKind: "apiKey",
+        actorUserId: ids.reader,
+        metadata: { apiKeyId: "key-of-a-script" },
+      });
+
+      // Never inside a named query, which reads only through its own reader.
+      await expect(
+        openNamedQueryFrame("posts-by-author").run(() =>
+          api.files.download({
+            collection: STREAMED,
+            id: files.ready.id,
+            overrideAccess: true,
+          })
+        )
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   }
 );

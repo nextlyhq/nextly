@@ -38,6 +38,11 @@ export interface FileDownloadArgs {
   user?: UserContext;
   /** For an API key's call, the key's own scope, so it is judged by it. */
   actor?: AuthenticatedScope;
+  /**
+   * For an API key's call, the key's id, so the audit row names the key (as
+   * an API key, with `user` as its maker) rather than its maker's session.
+   */
+  apiKeyId?: string;
   /** A signed-in person it is opened for, from `nextly.principals`. */
   principal?: Principal;
   /** Open it for no caller. Must be said; there is no unchecked default. */
@@ -70,7 +75,11 @@ function readerOf(args: FileDownloadArgs): FileReader {
       principal: { kind: args.principal.kind, id: args.principal.id },
     };
   }
-  if (args.user !== undefined) return { type: "staff", userId: args.user.id };
+  if (args.user !== undefined) {
+    return args.apiKeyId === undefined
+      ? { type: "staff", userId: args.user.id }
+      : { type: "staff", userId: args.user.id, apiKeyId: args.apiKeyId };
+  }
   if (args.overrideAccess === true) return { type: "system" };
   throw NextlyError.invalidInput({
     message:

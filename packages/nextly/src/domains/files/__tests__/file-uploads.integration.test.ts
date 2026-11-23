@@ -346,6 +346,41 @@ describe.each(getConfiguredTestDialects())(
       expect(storage.objects.get(kept)?.bytes.equals(bytes)).toBe(true);
     });
 
+    it("never lets two overlapping confirms of different bytes overwrite each other", async () => {
+      const first = pdf("first bytes");
+      const second = pdf("other bytes");
+      expect(second.length).toBe(first.length);
+      const { id, upload } = started(
+        await start(await staff("uploader"), claimFor(first))
+      );
+      storage.browserPut(upload, first);
+      const before = new Set(storage.objects.keys());
+
+      // The first confirm reads the first bytes; the link is used again; the
+      // second confirm reads the other bytes; both then go on together.
+      storage.holdReadsUntil(2);
+      const firstConfirm = complete(await staff("uploader"), id);
+      while (storage.readsWaiting < 1) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      storage.browserPut(upload, second);
+      const secondConfirm = complete(await staff("uploader"), id);
+      await Promise.all([firstConfirm, secondConfirm]);
+
+      // Each confirmed copy under a key of its own, holding its own bytes.
+      const added = [...storage.objects.keys()].filter(key => !before.has(key));
+      expect(added).toHaveLength(2);
+      const held = added.map(key => storage.objects.get(key)!.bytes);
+      expect(held.some(bytes => bytes.equals(first))).toBe(true);
+      expect(held.some(bytes => bytes.equals(second))).toBe(true);
+      // And the entry names one of them with that copy's own hash.
+      const ready = (await entry(id))!;
+      const kept = storage.objects.get(String(ready.storageKey))!.bytes;
+      expect(ready.sha256).toBe(
+        createHash("sha256").update(kept).digest("hex")
+      );
+    });
+
     it("keeps confirmed bytes where the upload link cannot write", async () => {
       const bytes = pdf("kept as checked");
       const { id, upload } = started(

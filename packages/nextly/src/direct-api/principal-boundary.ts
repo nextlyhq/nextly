@@ -135,8 +135,13 @@ function guardNamespace(
         PERSON_NAMESPACE_OPERATIONS.has(path)
       ) {
         const method = value as (...args: unknown[]) => unknown;
-        return (...args: unknown[]) =>
-          runWithAccessMemo(() => method.apply(target, args));
+        return (...args: unknown[]) => {
+          // A named query reads only through the reader it is handed, so
+          // this method is refused inside one as every other is.
+          const insideQuery = refusedInsideNamedQuery(path);
+          if (insideQuery !== undefined) return Promise.reject(insideQuery);
+          return runWithAccessMemo(() => method.apply(target, args));
+        };
       }
       if (typeof value === "function") {
         return refusingPrincipal(

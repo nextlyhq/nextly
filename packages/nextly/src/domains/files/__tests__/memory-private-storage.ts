@@ -34,6 +34,11 @@ export class MemoryPrivateStorage {
   private readBarrier: { size: number; waiting: Array<() => void> } | null =
     null;
 
+  /** How many reads are waiting at the barrier now. */
+  get readsWaiting(): number {
+    return this.readBarrier?.waiting.length ?? 0;
+  }
+
   /** Make the next `size` reads wait for each other. */
   holdReadsUntil(size: number): void {
     this.readBarrier = { size, waiting: [] };
@@ -80,8 +85,10 @@ export class MemoryPrivateStorage {
         : null;
     },
     read: async (key, options) => {
-      await this.passReadBarrier();
+      // What is stored when the read is asked, as a storage answers it, even
+      // if the read then waits for others.
       const found = this.objects.get(key);
+      await this.passReadBarrier();
       if (!found) return null;
       if (
         options?.maxBytes !== undefined &&

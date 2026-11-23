@@ -323,15 +323,22 @@ function uploadNotFound(slug: string, reason: string): never {
 }
 
 /**
- * The key a confirmed file is kept under, derived from its upload's key: in
- * the collection's folder, so the store owns it, and never the upload key, so
- * the upload link cannot write it. Derived rather than drawn at random, so
- * two confirms of one upload that overlap write the same object with the same
- * checked bytes, and neither leaves a copy nothing points at.
+ * The key a confirmed file is kept under, derived from its upload's key and
+ * the checked bytes' own hash: in the collection's folder, so the store owns
+ * it, and never the upload key, so the upload link cannot write it. Derived
+ * rather than drawn at random, so two confirms of one upload that overlap
+ * with the same bytes write one object and leave no copy nothing points at;
+ * and keyed by the bytes too, so confirms that read different bytes (the
+ * link was used again between their reads) never overwrite each other. The
+ * entry's key and hash are written together, so they always name one copy.
  */
-function confirmedKeyFor(files: PrivateFileStore, uploadKey: string): string {
+function confirmedKeyFor(
+  files: PrivateFileStore,
+  uploadKey: string,
+  sha256: string
+): string {
   const hex = createHash("sha256")
-    .update(`${uploadKey}\nconfirmed`)
+    .update(`${uploadKey}\n${sha256}`)
     .digest("hex");
   const id = [
     hex.slice(0, 8),
@@ -510,11 +517,12 @@ export async function completeUpload(
   // link cannot write: the link stays usable until it expires, and a second
   // PUT through it must never replace a file already confirmed. The entry is
   // pointed at the new key before the upload's own object is removed.
-  const finalKey = confirmedKeyFor(files, key);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const finalKey = confirmedKeyFor(files, key, sha256);
   await files.put(finalKey, bytes, { mimeType: String(entry.mimeType) });
   await writeFileFields(slug, entry.id, {
     fileStatus: "ready",
-    sha256: createHash("sha256").update(bytes).digest("hex"),
+    sha256,
     storageKey: finalKey,
   });
   await files.delete(key);
