@@ -332,3 +332,30 @@ describe("a condition a type change leaves comparing in a way its source can't",
     expect(broken.has("f-teaser")).toBe(false);
   });
 });
+
+describe("a saved dropdown source whose type changes", () => {
+  // The last saved definition: Status a dropdown, Teaser shown while it equals "archived".
+  const saved = [
+    gated("teaser", "status", "archived"),
+    status(["draft", "archived"]),
+  ];
+
+  it("changed to text, breaks a condition naming one of its former options", () => {
+    const now = [
+      gated("teaser", "status", "archived"),
+      field("status", { type: "text" }),
+    ];
+    expect(brokenConditions(now, saved).get("f-teaser")?.reason).toBe(
+      "option-removed"
+    );
+  });
+
+  it("not yet saved, is judged from the fields as they stand", () => {
+    const now = [
+      gated("teaser", "status", "archived"),
+      field("status", { type: "text" }),
+    ];
+    // Nothing saved under that name: a text source compared with a value reads it.
+    expect(brokenConditions(now, []).has("f-teaser")).toBe(false);
+  });
+});
