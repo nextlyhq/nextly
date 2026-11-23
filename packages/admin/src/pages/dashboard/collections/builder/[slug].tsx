@@ -58,6 +58,7 @@ import {
 import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { collectionCreatePayload } from "@admin/lib/builder/create-request";
+import { draftMovesOf } from "@admin/lib/builder/draft-moves";
 import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
@@ -432,9 +433,12 @@ export default function CollectionBuilderEditPage({
 
   // i18n: preview and apply carry the same toggle, so the resolutions the user
   // is asked for match the DDL that actually runs.
-  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
+  const schemaSave = useSchemaSave({
     slug,
     missingSlugMessage: "Collection slug is missing",
+    // Wired as each kind's Builder page wires the one save hook, to its own service: the options
+    // read alike by design, as the pages do.
+    // fallow-ignore-next-line code-duplication
     label: displayLabel(settings, entitySlug),
     confirmation,
     // Judged against the fields as last saved, so a draft that changes a
@@ -442,11 +446,19 @@ export default function CollectionBuilderEditPage({
     getValidatedFields: () => getValidatedFields(pending.saved),
     // Its renames of saved fields are the save's to answer, as renames.
     pendingChanges: pending.changes,
-    preview: fields =>
+    preview: (fields, hints) =>
       unsaved
         ? Promise.resolve(createPreview(fields))
-        : schemaApi.preview(entitySlug, fields, localized, drafts),
-    apply: (fields, version, resolutions, renames, acknowledged, confirmed) =>
+        : schemaApi.preview(entitySlug, fields, localized, drafts, hints),
+    apply: (
+      fields,
+      version,
+      resolutions,
+      renames,
+      acknowledged,
+      hints,
+      confirmed
+    ) =>
       unsaved
         ? createUnsaved(fields)
         : schemaApi.apply(
@@ -458,7 +470,8 @@ export default function CollectionBuilderEditPage({
             localized,
             drafts,
             acknowledged,
-            confirmed
+            confirmed,
+            hints
           ),
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
@@ -531,7 +544,7 @@ export default function CollectionBuilderEditPage({
         groupsFirst.release();
       }}
       savedFieldIds={savedFieldIds}
-      onSave={handleSave}
+      onSave={schemaSave.handleSave}
       settings={settings}
       // As the save judges names: Draft/Published on as stored, or as the pending settings turn it
       // on, since its columns stand until the save that turns it off lands.
@@ -554,15 +567,18 @@ export default function CollectionBuilderEditPage({
       // Save waits while an unsaved entity's new address is checked.
       saveHeld={saveHeld}
       savingLabel="Saving collection changes…"
+      // A move the server refused is marked at its field.
+      refusedMoves={schemaSave.refusedMoves}
     >
       <BuilderSchemaChangeDialogs
         draftRenames={draftRenamesOf(pending.changes)}
+        draftMoves={draftMovesOf(pending.changes).moves}
         confirmation={confirmation}
         kind={COLLECTION_BUILDER_CONFIG.kind}
         entityName={slug}
-        onConfirm={confirmApply}
+        onConfirm={schemaSave.confirmApply}
         creating={unsaved !== undefined}
-        settingChanges={reviewedSettingChanges}
+        settingChanges={schemaSave.reviewedSettingChanges}
         fieldGroupCreates={groupsFirst.creates}
       />
     </BuilderPageLayout>
