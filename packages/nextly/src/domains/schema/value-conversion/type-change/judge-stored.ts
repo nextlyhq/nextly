@@ -24,6 +24,7 @@ import type { FieldTypeOnDialect } from "./field-type";
 import {
   classOf,
   judgeValue,
+  type OldValue,
   type ValueVerdict,
   type OutcomeReason,
   pairBlocked,
@@ -92,7 +93,16 @@ const REPORTED_AS: Record<
 export async function collectTypeChange(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect,
-  values: AsyncIterable<Pick<StoredValue, "key" | "text" | "exactReal">>,
+  values: AsyncIterable<
+    Pick<StoredValue, "key" | "text" | "exactReal"> & {
+      /**
+       * The value already read as the old field reads it, where it is held inside a JSON value (a
+       * named group's or a repeater's field, `nestedValues`): judged as it is, with no column cast
+       * applied, since a type change converts nothing held inside JSON.
+       */
+      old?: OldValue;
+    }
+  >,
   accepts?: (readsAs: string) => Promise<boolean>,
   options: CollectOptions = {}
 ): Promise<StoredTypeChangeJudgement> {
@@ -114,18 +124,15 @@ export async function collectTypeChange(
   const tally = new TypeChangeTally(options, read);
   for await (const value of values) {
     const stored = value.exactReal ?? value.text;
-    tally.add(
-      value.key,
-      await withFieldRule(
-        asConverted(
-          judgeValue(from, to, decodeStored(from, value)),
-          stored,
-          read
-        ),
-        accepts
-      ),
-      stored
-    );
+    const verdict =
+      value.old === undefined
+        ? asConverted(
+            judgeValue(from, to, decodeStored(from, value)),
+            stored,
+            read
+          )
+        : judgeValue(from, to, value.old);
+    tally.add(value.key, await withFieldRule(verdict, accepts), stored);
   }
   return tally.result();
 }

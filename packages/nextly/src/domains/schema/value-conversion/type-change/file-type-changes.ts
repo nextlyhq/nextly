@@ -400,6 +400,9 @@ function entityTypeChange(args: {
     dialect,
     ...at,
     ...(builtByBefore !== at.builtBy ? { builtByBefore } : {}),
+    // A field inside a named group or a repeater too: the file changes no column for it, so its
+    // values are judged where the file runs, as the save that wrote it judged them.
+    nested: true,
   });
   const unread = unreadRenameFields({
     statements: source.statements,
