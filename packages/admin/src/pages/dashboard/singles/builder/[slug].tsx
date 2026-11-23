@@ -52,6 +52,7 @@ import {
 import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { singleCreatePayload } from "@admin/lib/builder/create-request";
+import { draftMovesOf } from "@admin/lib/builder/draft-moves";
 import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
 import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
@@ -389,9 +390,12 @@ export default function SingleBuilderEditPage({
     [settings, entitySlug]
   );
 
-  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
+  const schemaSave = useSchemaSave({
     slug,
     missingSlugMessage: "Single slug is missing",
+    // Wired as each kind's Builder page wires the one save hook, to its own service: the options
+    // read alike by design, as the pages do.
+    // fallow-ignore-next-line code-duplication
     label: displayLabel(settings, entitySlug),
     confirmation,
     // Judged against the fields as last saved, so a draft that changes a
@@ -399,11 +403,17 @@ export default function SingleBuilderEditPage({
     getValidatedFields: () => getValidatedFields(pending.saved),
     // Its renames of saved fields are the save's to answer, as renames.
     pendingChanges: pending.changes,
-    preview: fields =>
+    preview: (fields, hints) =>
       unsaved
         ? Promise.resolve(createPreview(fields))
-        : singleApi.previewSchemaChanges(entitySlug, fields, localized, drafts),
-    apply: (fields, version, resolutions, renames, acknowledged) =>
+        : singleApi.previewSchemaChanges(
+            entitySlug,
+            fields,
+            localized,
+            drafts,
+            hints
+          ),
+    apply: (fields, version, resolutions, renames, acknowledged, hints) =>
       unsaved
         ? createUnsaved(fields)
         : singleApi.applySchemaChanges(
@@ -414,7 +424,8 @@ export default function SingleBuilderEditPage({
             renames,
             localized,
             drafts,
-            acknowledged
+            acknowledged,
+            hints
           ),
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
@@ -488,7 +499,7 @@ export default function SingleBuilderEditPage({
         groupsFirst.release();
       }}
       savedFieldIds={savedFieldIds}
-      onSave={handleSave}
+      onSave={schemaSave.handleSave}
       settings={settings}
       // As the save judges names: Draft/Published on as stored, or as the pending settings turn it
       // on, since its columns stand until the save that turns it off lands.
@@ -510,15 +521,18 @@ export default function SingleBuilderEditPage({
       // Save waits while an unsaved entity's new address is checked.
       saveHeld={saveHeld}
       savingLabel="Saving Single changes…"
+      // A move the server refused is marked at its field.
+      refusedMoves={schemaSave.refusedMoves}
     >
       <BuilderSchemaChangeDialogs
         draftRenames={draftRenamesOf(pending.changes)}
+        draftMoves={draftMovesOf(pending.changes).moves}
         confirmation={confirmation}
         kind={SINGLE_BUILDER_CONFIG.kind}
         entityName={slug}
-        onConfirm={confirmApply}
+        onConfirm={schemaSave.confirmApply}
         creating={unsaved !== undefined}
-        settingChanges={reviewedSettingChanges}
+        settingChanges={schemaSave.reviewedSettingChanges}
         fieldGroupCreates={groupsFirst.creates}
       />
     </BuilderPageLayout>
