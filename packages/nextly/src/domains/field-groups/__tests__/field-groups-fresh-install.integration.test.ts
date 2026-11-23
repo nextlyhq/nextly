@@ -35,6 +35,11 @@ import {
 import { getConfiguredTestDialects } from "../../../plugins/test-nextly";
 
 import {
+  MARKER_COLUMN,
+  markerPluginOn,
+} from "./helpers/used-field-group-fixtures";
+
+import {
   columnsOf,
   hasTable,
   legacyObjects,
@@ -146,5 +151,22 @@ describe.each(getConfiguredTestDialects())("a new site (%s)", dialect => {
 
     expect(await hasTable(site.adapter, "dynamic_field_groups")).toBe(true);
     expect(await legacyObjects(site.adapter, dialect)).toEqual([]);
+  });
+
+  // Compiled before the first start creates the registry, a plugin's contribution to a group's
+  // table is read on the names the new site starts on, not on legacy names an absent registry
+  // would suggest.
+  it("compiles a plugin's contribution to a group's table on the names it starts on", async () => {
+    site = await openStorageGenerationSite({
+      dialect,
+      loaded,
+      localization: LOCALIZATION,
+      plugins: [markerPluginOn("fg_fgfi_card")],
+    });
+    await site.developmentStart(DECLARED);
+
+    expect(await columnsOf(site.adapter, dialect, "fg_fgfi_card")).toContain(
+      MARKER_COLUMN
+    );
   });
 });
