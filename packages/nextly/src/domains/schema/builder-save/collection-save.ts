@@ -214,10 +214,12 @@ import {
 
 import { asBuilderSaveDrift } from "./builder-save-drift";
 import {
+  bothHolds,
   type ConfirmedDeletion,
   type DeletionHold,
   deletionHoldOf,
   isDeletionCountRefusal,
+  writesHeldWhileMoving,
 } from "./deletion-counts";
 import { nextSteps, partlyAppliedChange } from "./landing-push";
 import {
@@ -579,7 +581,7 @@ async function writeCollectionSaveOnce(
           written.table,
           bounds,
           options.inLastTransaction,
-          deletionHoldOfSave(deps, save, written.table)
+          holdOfSave(deps, save, written.table)
         );
       } else if (options.appliedAfter !== undefined) {
         // The counts the person confirmed, compared just before the change is made here, as before
@@ -4514,7 +4516,7 @@ function comparedThenApplied<T>(
   return countedThroughApply(
     deps.adapter,
     save.slug,
-    deletionHoldOfSave(deps, save, table),
+    holdOfSave(deps, save, table),
     apply,
     deps.logger
   );
@@ -4674,17 +4676,20 @@ function holdRefusalOf(error: unknown): unknown {
 }
 
 /**
- * The count of what `save` deletes, checked in the file that deletes it: built from the fields
- * before and after it and the counts the person confirmed (`deletionHoldOf`); undefined where the
- * save carries none.
+ * What `save` holds while its file runs: the count of what it deletes, checked in the file that
+ * deletes it, built from the fields before and after it and the counts the person confirmed
+ * (`deletionHoldOf`); and, where it moves fields between their places, writes to its table held
+ * off from before the move's first statement until the file has committed
+ * (`writesHeldWhileMoving`). Undefined where the save carries neither.
  */
-function deletionHoldOfSave(
+function holdOfSave(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   table: string
 ): SaveDeletionHold | undefined {
-  const hold = deletionHoldOf({
-    dialect: deps.adapter.getCapabilities().dialect,
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const counted = deletionHoldOf({
+    dialect,
     tableName: table,
     localized: save.previous?.localized === true,
     previous: (save.previous?.fields ?? []) as unknown as FieldDefinition[],
@@ -4692,6 +4697,11 @@ function deletionHoldOfSave(
     renamed: save.renamedFields,
     confirmed: save.confirmedDeletions,
   });
+  const moving =
+    (save.moves ?? []).length > 0
+      ? writesHeldWhileMoving({ dialect, tables: [table] })
+      : undefined;
+  const hold = bothHolds(counted, moving);
   return hold === undefined ? undefined : { ...hold, slug: save.slug };
 }
 

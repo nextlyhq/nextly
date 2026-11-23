@@ -312,17 +312,7 @@ export function deletionHoldOf(args: {
   const checkOf =
     (fields: FieldDefinition[], held: readonly string[]) =>
     async (db: unknown): Promise<void> => {
-      if (dialect === "postgresql") {
-        // Other sessions' writes to the tables wait from here until the save's transaction ends;
-        // their reads go on. A held table ends the try under the try's own lock timeout.
-        for (const table of held) {
-          await (db as Executes).execute(
-            sql.raw(
-              `LOCK TABLE ${quoteIdent(table, dialect)} IN SHARE ROW EXCLUSIVE MODE`
-            )
-          );
-        }
-      }
+      await holdAgainstWrites(db, dialect, held);
       await compareOf(fields)(db);
     };
   // The removed fields stored in `changed`, every one where absent.
@@ -372,4 +362,80 @@ export function isDeletionCountRefusal(error: unknown): boolean {
     (error.logContext as { reason?: unknown } | undefined)?.reason ===
       "deletion-count-changed"
   );
+}
+
+/**
+ * Holds `tables` against other sessions' writes until the transaction `db` runs in ends, where the
+ * database can (PostgreSQL: their reads go on, and a held table ends the try under its own lock
+ * timeout). SQLite's transaction already holds its one write lock; MySQL's schema statements commit
+ * on their own, so a save there holds the collection instead (`triedHoldOf` in the collection save).
+ */
+async function holdAgainstWrites(
+  db: unknown,
+  dialect: SupportedDialect,
+  tables: readonly string[]
+): Promise<void> {
+  if (dialect !== "postgresql") return;
+  for (const table of tables) {
+    await (db as Executes).execute(
+      sql.raw(
+        `LOCK TABLE ${quoteIdent(table, dialect)} IN SHARE ROW EXCLUSIVE MODE`
+      )
+    );
+  }
+}
+
+/**
+ * A save's hold while it moves fields between their places in `tables`: writes to those tables wait
+ * from before the move's first statement until its file's transaction ends, so a write setting a
+ * moved field never lands in its old place after the copy and goes with it. It counts nothing.
+ */
+export function writesHeldWhileMoving(args: {
+  dialect: SupportedDialect;
+  tables: readonly string[];
+}): DeletionHold {
+  const hold = (held: readonly string[]) => (db: unknown) =>
+    holdAgainstWrites(db, args.dialect, held);
+  const nothing = () => Promise.resolve();
+  return {
+    tables: args.tables,
+    check: hold(args.tables),
+    compare: nothing,
+    standingIn: () => nothing,
+    checkIn(changed) {
+      const inThem = new Set(changed.map(table => table.toLowerCase()));
+      const held = args.tables.filter(table => inThem.has(table.toLowerCase()));
+      return held.length === 0 ? undefined : hold(held);
+    },
+  };
+}
+
+/** Both holds as one, each part run in turn; either alone where the other is absent. */
+export function bothHolds(
+  first: DeletionHold | undefined,
+  second: DeletionHold | undefined
+): DeletionHold | undefined {
+  if (first === undefined) return second;
+  if (second === undefined) return first;
+  const inTurn =
+    (
+      a: ((db: unknown) => Promise<void>) | undefined,
+      b: ((db: unknown) => Promise<void>) | undefined
+    ) =>
+    async (db: unknown): Promise<void> => {
+      await a?.(db);
+      await b?.(db);
+    };
+  return {
+    tables: [...new Set([...first.tables, ...second.tables])],
+    check: inTurn(first.check, second.check),
+    compare: inTurn(first.compare, second.compare),
+    standingIn: changed =>
+      inTurn(first.standingIn(changed), second.standingIn(changed)),
+    checkIn(changed) {
+      const a = first.checkIn(changed);
+      const b = second.checkIn(changed);
+      return a === undefined && b === undefined ? undefined : inTurn(a, b);
+    },
+  };
 }
