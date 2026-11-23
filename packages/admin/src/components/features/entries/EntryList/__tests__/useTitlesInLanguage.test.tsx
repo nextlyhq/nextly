@@ -5,7 +5,7 @@
  * nothing is read while the default language is shown.
  */
 import { QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -83,9 +83,30 @@ describe("useTitlesInLanguage", () => {
       wrapper,
     });
     await waitFor(() => expect(result.current.failed).toBe(true));
-    expect(result.current.titles).toBeUndefined();
+    expect(result.current.titles?.size).toBe(0);
     // Asked once: a refusal is the answer for this reader and language.
     expect(find).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no titles once a later read fails, though an earlier one answered", async () => {
+    // The query keeps the earlier answer through a failed read again: its titles may be ones
+    // this reader may no longer read in that language, so none is offered.
+    const client = createTestQueryClient();
+    find.mockResolvedValueOnce({
+      items: [{ id: "p1", title: "Hola" }],
+      meta: {},
+    });
+    const { result } = renderHook(() => useTitlesInLanguage(ARGS), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    });
+    await waitFor(() => expect(result.current.titles?.get("p1")).toBe("Hola"));
+
+    find.mockRejectedValueOnce(new Error("You can't see posts in Spanish."));
+    await act(() => client.refetchQueries());
+    await waitFor(() => expect(result.current.failed).toBe(true));
+    expect(result.current.titles?.size).toBe(0);
   });
 
   it("reads nothing while the default language is shown, or with no rows on screen", () => {

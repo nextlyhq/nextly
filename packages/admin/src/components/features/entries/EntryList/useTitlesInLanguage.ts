@@ -25,7 +25,7 @@ import { entryApi, entryKeys, type FindParams } from "@admin/services/entryApi";
 export interface TitlesInLanguage {
   /**
    * Each returned row's title in the language, by id. A row the read did not return is absent.
-   * Undefined while no language is chosen or the read has not answered.
+   * Undefined while no language is chosen or the read has not answered; empty once it failed.
    */
   titles: ReadonlyMap<string, unknown> | undefined;
   /** Whether the read in that language was refused or failed. */
@@ -79,14 +79,17 @@ export function useTitlesInLanguage({
     // nothing.
     retry: false,
   });
-  const titles = useMemo(
-    () =>
-      asked && query.data && titleField !== undefined
-        ? new Map(
-            query.data.items.map(item => [String(item.id), item[titleField]])
-          )
-        : undefined,
-    [asked, query.data, titleField]
-  );
-  return { titles, failed: asked && query.isError };
+  const failed = asked && query.isError;
+  const titles = useMemo(() => {
+    if (!asked || titleField === undefined) return undefined;
+    // A read that failed again offers nothing, even where an earlier one answered: the query
+    // keeps that earlier answer, and its titles may be ones the reader may no longer read.
+    if (failed) return new Map<string, unknown>();
+    return query.data
+      ? new Map(
+          query.data.items.map(item => [String(item.id), item[titleField]])
+        )
+      : undefined;
+  }, [asked, failed, query.data, titleField]);
+  return { titles, failed };
 }
