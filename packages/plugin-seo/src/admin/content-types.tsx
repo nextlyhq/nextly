@@ -34,10 +34,10 @@ import type {
   SeoContentType,
   SwitchedOffType,
 } from "../settings/contract";
-import { SITE_NAME_TOKEN, TITLE_TOKEN, tokenKey } from "../settings/patterns";
+import { SITE_NAME_TOKEN, TITLE_TOKEN } from "../settings/patterns";
 import {
-  DETAIL_GUESSES,
   DETAIL_LABELS,
+  isSaveStamp,
   STRUCTURED_DATA_TYPE_KEYS,
   STRUCTURED_DATA_TYPES,
   isStructuredDataTypeKey,
@@ -53,11 +53,13 @@ import { AdminLink } from "./section";
 import {
   FROM_THE_PAGE,
   faqSectionOf,
+  foundField,
   holdsField,
   isHidden,
   isSeoOn,
   mappingOf,
   missingDetails,
+  offeredFields,
   patternOf,
   patternProblem,
   previewOf,
@@ -235,26 +237,6 @@ function PatternEditor({
   );
 }
 
-/**
- * The field the page's markup reads `detail` from when none is chosen: the
- * first of its guesses, in the order the markup tries them, the type has.
- */
-function guessedField(
-  type: SeoContentType,
-  detail: StructuredDataDetail
-): MappableField | undefined {
-  for (const guess of DETAIL_GUESSES[detail]) {
-    // Among the entry's own fields only, as the markup looks: a field in a
-    // group is read only when chosen.
-    const found = type.mappableFields.find(
-      field =>
-        !field.name.includes(".") && tokenKey(field.name) === tokenKey(guess)
-    );
-    if (found !== undefined) return found;
-  }
-  return undefined;
-}
-
 /** Each field's label in a choice, with its name where two share a label. */
 function optionLabels(fields: readonly MappableField[]): Map<string, string> {
   const uses = new Map<string, number>();
@@ -280,10 +262,25 @@ function detailHelp(
   needed: string
 ): string {
   if (typeof source === "object") return "set in the site's code";
+  // The markup never dates a change by the last save, which an SEO-only
+  // save moves: it reads when the page's content last changed instead.
+  if (
+    detail === "dateModified" &&
+    source !== undefined &&
+    isSaveStamp(source)
+  ) {
+    return "from when each page's content last changed";
+  }
   if (source !== undefined && !holdsField(type, source)) {
     return "That field is gone: choose another";
   }
-  if (shown !== undefined) return `from each entry's ${shown.label}`;
+  if (shown !== undefined) {
+    // An entry's own date is named as a date: "from each entry's created
+    // date", not by the bare label the picker shows.
+    return shown.kind === "built-in"
+      ? `from each entry's ${shown.label.toLowerCase()} date`
+      : `from each entry's ${shown.label}`;
+  }
   const fromPage = FROM_THE_PAGE[detail];
   return fromPage === undefined
     ? needed
@@ -303,6 +300,11 @@ interface DetailChoice {
   gone?: string;
   /** A path into one of the type's fields that no option names. */
   path?: string;
+  /**
+   * A field the type lists that the screen does not offer for this detail,
+   * chosen in the site's code: shown as the choice, and offered nowhere.
+   */
+  kept?: MappableField;
 }
 
 /** The choice for a detail read from `source`, or found by its name. */
@@ -311,7 +313,7 @@ function detailChoice(
   detail: StructuredDataDetail,
   source: DetailSource | undefined
 ): DetailChoice {
-  const guess = guessedField(type, detail);
+  const guess = foundField(type, detail);
   const base = guess === undefined ? {} : { guess };
   if (typeof source === "object") {
     return { ...base, value: FIXED, fixed: source.value };
@@ -319,9 +321,11 @@ function detailChoice(
   if (source === undefined) return { ...base, value: FOUND };
   if (!holdsField(type, source))
     return { ...base, value: source, gone: source };
-  return type.mappableFields.some(field => field.name === source)
+  const listed = type.mappableFields.find(field => field.name === source);
+  if (listed === undefined) return { ...base, value: source, path: source };
+  return offeredFields(type, detail).includes(listed)
     ? { ...base, value: source }
-    : { ...base, value: source, path: source };
+    : { ...base, value: source, kept: listed };
 }
 
 /** The options of a detail's choice. */
@@ -334,7 +338,8 @@ function DetailOptions({
   detail: StructuredDataDetail;
   choice: DetailChoice;
 }): JSX.Element {
-  const labels = optionLabels(type.mappableFields);
+  const offered = offeredFields(type, detail);
+  const labels = optionLabels(offered);
   return (
     <>
       {/* No field chosen: the markup finds one by its name, shown as that
@@ -354,7 +359,10 @@ function DetailOptions({
       {choice.path === undefined ? null : (
         <SelectItem value={choice.path}>{choice.path}</SelectItem>
       )}
-      {type.mappableFields
+      {choice.kept === undefined ? null : (
+        <SelectItem value={choice.kept.name}>{choice.kept.label}</SelectItem>
+      )}
+      {offered
         // The field found by its name is the first option while unchosen.
         .filter(
           each => each.name !== choice.guess?.name || choice.value === each.name

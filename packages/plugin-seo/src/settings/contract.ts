@@ -89,6 +89,14 @@ export interface PatternField {
 export interface MappableField {
   name: string;
   label: string;
+  /**
+   * Where the field comes from, where it is not one the type declares:
+   * `built-in` for a date every entry holds by itself (when it was created,
+   * last saved or first published), and `seo` for a field of the plugin's own
+   * SEO group. Each is a field the page reads, so a mapping to one reads
+   * something; the screen offers only those that suit the detail.
+   */
+  kind?: "built-in" | "seo";
 }
 
 /** A page of a type a pattern is previewed with: its title and fields. */
