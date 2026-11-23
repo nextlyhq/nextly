@@ -7,11 +7,26 @@
  * @module cli/errors/areas/general
  */
 
+import {
+  perLanguageMoveNext,
+  perLanguageMovesFrom,
+  perLanguageMoveWhy,
+} from "../../../domains/i18n/per-language-move-guidance";
 import { immediateMessage } from "../../../errors/describe-error";
 import { NextlyError } from "../../../errors/nextly-error";
-import { CliError } from "../cli-error";
+import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
 import { messageWithCause, sentences } from "../messages";
+
+/** An input refusal in the refusing check's own words: its first sentence, then the rest. */
+function refusedInput(error: NextlyError): CliErrorParts {
+  const [what, ...rest] = sentences(error.publicMessage);
+  return {
+    what: what ?? error.publicMessage,
+    why: rest.join(" ") || "The check that refused it gave no more detail.",
+    next: "Correct what the message names, then run the command again; `--verbose` shows where it was refused.",
+  };
+}
 
 export const GENERAL_CODES = defineCodes({
   INPUT_REFUSED: {
@@ -19,19 +34,29 @@ export const GENERAL_CODES = defineCodes({
       "A command refused something it was given or read as not valid, for the reason its message names.",
     from: [
       {
+        // `migrate:create` refusing to move text-like fields to their per-language tables while
+        // the config declares no language: the fields named as a move, not a loss, with the two
+        // safe ways forward, in the words `nextly migrate` uses for the same move.
+        code: "INVALID_INPUT",
+        reason: "per-language-seed-language-undeclared",
+        describe: error => {
+          const moves = perLanguageMovesFrom(error.logContext?.moves);
+          if (moves.length === 0) return refusedInput(error);
+          return {
+            what: "This migration would move existing content into per-language tables, and the config declares no `localization` block to say which language that content is in.",
+            why: perLanguageMoveWhy(moves),
+            next: perLanguageMoveNext(
+              moves,
+              "run `nextly migrate:create` again."
+            ),
+          };
+        },
+      },
+      {
         // What is left of INVALID_INPUT once every code reading a reason or a shape has had it:
         // still a refusal of the input, never a fault in Nextly.
         code: "INVALID_INPUT",
-        describe: error => {
-          const [what, ...rest] = sentences(error.publicMessage);
-          return {
-            what: what ?? error.publicMessage,
-            why:
-              rest.join(" ") ||
-              "The check that refused it gave no more detail.",
-            next: "Correct what the message names, then run the command again; `--verbose` shows where it was refused.",
-          };
-        },
+        describe: refusedInput,
       },
     ],
   },

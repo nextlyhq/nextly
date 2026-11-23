@@ -670,10 +670,20 @@ describe("runChecks (F11 PR 4)", () => {
 
       const message = String(printed.mock.calls[0]?.[0]);
       expect(message).toContain("(MISSING_SNAPSHOT)");
+      // The path looked at is the group's snapshot, the one a variant pairs with.
+      expect(message).toContain(
+        "Nothing is at `20260101_120000_001_seed.snapshot.json`"
+      );
       expect(message).toContain(
         "nextly migrate:resolve --applied '20260101_120000_001_seed' --skip-verify"
       );
       expect(message).toContain("delete the file");
+      // One dialect's SQL keeps its variant file: `migrate:create --blank` writes a file every
+      // dialect runs.
+      expect(message).toContain(
+        "For SQL you wrote yourself for this dialect, add the line `-- This is a blank migration file for custom SQL.` to its header"
+      );
+      expect(message).not.toContain("migrate:create --blank");
     });
 
     it("quotes the name in the command it advises, so a name with a space or a quote stays one argument", async () => {
@@ -731,6 +741,62 @@ describe("runChecks (F11 PR 4)", () => {
           "`20260102_120000_001_add_posts.sql` has no paired snapshot"
         )
       );
+    });
+  });
+
+  // A dialect's variant (`<base>.mysql.sql`) runs in place of `<base>.sql` on that dialect and
+  // is the same migration: its snapshot is its group's, `meta/<base>.snapshot.json`, as the
+  // runner and every reader of `meta/` pair them. No `<base>.mysql.snapshot.json` is written.
+  describe("a dialect's variant, paired with its group's snapshot", () => {
+    it("passes a variant beside its group's snapshot, which holds the base file to its hash", async () => {
+      const base = "20260101_120000_001_initial";
+      await writeFile(join(migrationsDir, `${base}.sql`), "-- base", "utf-8");
+      await writeFile(
+        join(migrationsDir, `${base}.mysql.sql`),
+        "-- written for MySQL",
+        "utf-8"
+      );
+      await writeSnapshot(
+        join(migrationsDir, "meta"),
+        base,
+        POSTS_DESIRED,
+        "-- base"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: POSTS_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(printed).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it("passes a migration written only as a variant, whose snapshot is its group's", async () => {
+      const base = "20260101_120000_001_initial";
+      await writeFile(
+        join(migrationsDir, `${base}.sqlite.sql`),
+        "-- written for SQLite",
+        "utf-8"
+      );
+      await writeSnapshot(
+        join(migrationsDir, "meta"),
+        base,
+        POSTS_DESIRED,
+        "-- base"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: POSTS_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(printed).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
     });
   });
 
