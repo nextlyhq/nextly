@@ -51,6 +51,7 @@ import {
   tablesTheStatementsRetire,
 } from "./retired-documents";
 import { elementsDroppedBy } from "./statement-judgement";
+import { foreignKeysAddedBy, postgresDropSpellings } from "./statement-targets";
 
 /** The run's files, as the ledger names them, with their statements. */
 interface RunFile {
@@ -81,11 +82,12 @@ export async function refuseDropsOfUsedEntities(
   // A table the files rebuild in place keeps its entity, and what uses it.
   const dropped = tablesTheStatementsRetire(statements, args.dialect);
   if (dropped.size === 0) return;
+  const retires = retiredTableMatcher(dropped, statements, args.dialect);
   const retiring = (await readCoveredEntities(args.db, args.dialect)).filter(
     entity =>
       entity.excluded !== true &&
       entity.kind !== "fieldGroup" &&
-      dropped.has(entity.table.toLowerCase())
+      retires(entity.table)
   );
   if (retiring.length === 0) return;
   await assertNothingDependsOn(
@@ -127,13 +129,12 @@ async function refuseKeysIntoRetiredCollections(
     args.adapter,
     args.extensionSchema
   );
-  const live =
-    (await database.liveKeysInto?.(
-      collections.flatMap(entity => entity.tables)
-    )) ?? [];
-  const left = (
-    await keysLeftAfter(live, args.db, args.dialect, statements)
-  ).filter(key => !own.has(key.table.toLowerCase()));
+  const tables = collections.flatMap(entity => entity.tables);
+  const live = (await database.liveKeysInto?.(tables)) ?? [];
+  const left = [
+    ...(await keysLeftAfter(live, args.db, args.dialect, statements)),
+    ...keysAddedInto(tables, args.dialect, statements),
+  ].filter(key => !own.has(key.table.toLowerCase()));
   if (left.length === 0) return;
   throw NextlyError.conflict({
     reason: "state",
@@ -141,6 +142,56 @@ async function refuseKeysIntoRetiredCollections(
       .map(key => `${key.table} → ${key.referencesTable}`)
       .join(", ")}. Drop those keys in a migration before the drop.`,
   });
+}
+
+/**
+ * Whether a registered table is among those `statements` retire (`dropped`, lower-cased). On
+ * PostgreSQL, which keeps a quoted name's case, a table registered in mixed case is retired only by
+ * a drop spelling it so, and a lower-case one not by a drop of a mixed-case name that merely folds
+ * to it; elsewhere names compare without regard to case.
+ */
+function retiredTableMatcher(
+  dropped: ReadonlySet<string>,
+  statements: readonly string[],
+  dialect: SupportedDialect
+): (table: string) => boolean {
+  if (dialect !== "postgresql") {
+    return table => dropped.has(table.toLowerCase());
+  }
+  const spelled = postgresDropSpellings(statements);
+  const foldedOnly = new Set(
+    [...spelled]
+      .filter(
+        name => name !== name.toLowerCase() && !spelled.has(name.toLowerCase())
+      )
+      .map(name => name.toLowerCase())
+  );
+  return table =>
+    table !== table.toLowerCase()
+      ? spelled.has(table)
+      : dropped.has(table) && !foldedOnly.has(table);
+}
+
+/**
+ * The foreign keys `statements` add into `tables`, as keys whose owner is not recorded, less those
+ * on a table the statements leave gone: what the database holds into them once the run is done,
+ * beside the keys already there.
+ */
+function keysAddedInto(
+  tables: readonly string[],
+  dialect: SupportedDialect,
+  statements: readonly string[]
+): LiveKeyInto[] {
+  const into = new Set(tables.map(table => table.toLowerCase()));
+  const gone = tablesTheStatementsRetire(statements, dialect);
+  return statements
+    .flatMap(statement => foreignKeysAddedBy(statement, dialect))
+    .filter(
+      key =>
+        into.has(key.referencesTable.toLowerCase()) &&
+        !gone.has(key.table.toLowerCase())
+    )
+    .map(key => ({ ...key, owner: null }));
 }
 
 /** The database's dependents, read as they will be once `statements` have run. */
@@ -156,13 +207,15 @@ function sourcesAfterRun(
     ...database,
     fieldOwners: async () =>
       fieldOwnersAfter(await database.fieldOwners(), args),
-    liveKeysInto: async tables =>
-      keysLeftAfter(
+    liveKeysInto: async tables => [
+      ...(await keysLeftAfter(
         (await database.liveKeysInto?.(tables)) ?? [],
         args.db,
         args.dialect,
         statements
-      ),
+      )),
+      ...keysAddedInto(tables, args.dialect, statements),
+    ],
   };
 }
 

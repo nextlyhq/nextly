@@ -653,6 +653,78 @@ export function tablesDroppedBy(
   return droppedTables(cursor);
 }
 
+/** A foreign key a statement adds: the table it is on and the table it points at, lower-cased. */
+export interface AddedForeignKey {
+  table: string;
+  referencesTable: string;
+}
+
+/**
+ * The foreign keys a CREATE TABLE or an ALTER TABLE adds: each `REFERENCES <table>` it writes,
+ * on the table it creates or alters. None for any other statement.
+ */
+export function foreignKeysAddedBy(
+  statement: string,
+  dialect: SupportedDialect
+): AddedForeignKey[] {
+  const cursor = cursorOf(statement, dialect);
+  let table: string | undefined;
+  if (cursor.accept("CREATE", "TABLE")) {
+    cursor.acceptCondition();
+    table = cursor.name();
+  } else if (cursor.accept("ALTER", "TABLE")) {
+    cursor.acceptCondition();
+    table = cursor.name();
+  }
+  if (table === undefined) return [];
+  const added: AddedForeignKey[] = [];
+  while (!cursor.done()) {
+    if (cursor.accept("REFERENCES")) {
+      const referencesTable = cursor.name();
+      if (referencesTable !== undefined) {
+        added.push({ table, referencesTable });
+      }
+    } else {
+      cursor.at += 1;
+    }
+  }
+  return added;
+}
+
+/**
+ * The tables PostgreSQL's DROP TABLE statements name, spelled as PostgreSQL stores them: an
+ * unquoted name folded to lower case, a quoted one as written, a qualified one by its last part.
+ */
+export function postgresDropSpellings(
+  statements: readonly string[]
+): Set<string> {
+  const spellings = new Set<string>();
+  for (const statement of statements) {
+    const cursor = cursorOf(statement, "postgresql");
+    if (!cursor.accept("DROP", "TABLE")) continue;
+    cursor.acceptCondition();
+    let current: string | undefined;
+    for (
+      let token = cursor.peek();
+      token !== undefined;
+      token = cursor.peek()
+    ) {
+      cursor.at += 1;
+      if (token === "CASCADE" || token === "RESTRICT") break;
+      if (token === ",") {
+        if (current !== undefined) spellings.add(current);
+        current = undefined;
+      } else if (typeof token === "string") {
+        if (token !== ".") current = token.toLowerCase();
+      } else if (token.kind === "name") {
+        current = token.written ?? token.name;
+      }
+    }
+    if (current !== undefined) spellings.add(current);
+  }
+  return spellings;
+}
+
 /** A registry row a statement writes: the registry table and the row's slug. */
 export interface RegistryRowWrite {
   table: string;

@@ -373,6 +373,12 @@ export interface MigrateDownCoreDeps {
    * then `after` with the handle they ran on, inside that transaction when
    * there is one (`runMigrationStatements`); returns how many ran.
    */
+  /**
+   * Under the lock, before the plan and any DOWN: records the deletion events earlier runs left to
+   * record (`retired-documents.ts`), so a capture an UP took is settled while its file is still
+   * applied, before a DOWN rolls the file back and makes its table again.
+   */
+  settleRetirements?: () => Promise<void>;
   execDown: (
     statements: readonly string[],
     unit: MigrationUnit,
@@ -1140,6 +1146,7 @@ export async function migrateDownCore(
       // stopped attempt, which would run statements that already ran.
       const unresolved = await refusalOfHistory(deps, true);
       if (unresolved !== undefined) throw unresolved;
+      await deps.settleRetirements?.();
       // Planned again under the lock, from the database as it stands now; see `planAndGuard`.
       const held = { ...deps, ...(await deps.readOwners?.()) };
       const { planned: current, bookkeeping } = await planAndGuard(
@@ -1315,6 +1322,16 @@ interface ResolvedDownOptions extends MigrateDownCommandOptions {
  * no owner rows, as it does for `nextly migrate`'s own guard, and has no
  * owner rows for a schema version to be written onto.
  */
+/** The step recording what earlier runs left to record (`settleRetirements`); none without a logger. */
+function settlerOf(
+  adapter: DrizzleAdapter,
+  logger: ReconcileLogger | undefined
+): (() => Promise<void>) | undefined {
+  return logger === undefined
+    ? undefined
+    : () => deletionEventsOfRetiredDocuments({ adapter, logger });
+}
+
 /**
  * Runs one down section: in one try, or with `busyTable` in tries whose report names the sections
  * this run rolled back before it (`rolledBack`, to which it is added).
@@ -1391,6 +1408,7 @@ export async function downDatabaseDeps(args: {
     | "readEventTriggers"
     | "listFileApplies"
     | "execDown"
+    | "settleRetirements"
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
     | "recordSchemaVersion"
@@ -1463,6 +1481,7 @@ export async function downDatabaseDeps(args: {
       await refuseRequiredColumnsOverNulls(db, dialect, statements, source);
       await refuseUniqueIndexesOverRepeats(db, dialect, statements, source);
     },
+    settleRetirements: settlerOf(adapter, args.logger),
     execDown: async (statements, unit, after) => {
       const ran = await runDownSection(adapter, args.busyTable, rolledBack, {
         statements,

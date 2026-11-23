@@ -563,8 +563,12 @@ describe.each(LOCK_DIALECTS)(
       await register("collection", "mixed", mixed, `${P}_mixed_links`);
       file([`DROP TABLE "${mixed}"`]);
 
+      // The consent names the table by both spellings, as `nextly migrate` asks for it.
       const run = await migrate(
-        resolveDataLossConsent({ flag: mixed, env: {} })
+        resolveDataLossConsent({
+          flag: `${mixed},${mixed.toLowerCase()}`,
+          env: {},
+        })
       );
 
       expect(run.applied).toBe(1);
@@ -597,6 +601,44 @@ describe.each(LOCK_DIALECTS)(
           ])
         )
       ).resolves.toBeUndefined();
+    }, 180_000);
+
+    it("refuses a drop of a collection a foreign key the run itself adds points into", async () => {
+      const added =
+        dialect === "sqlite"
+          ? [
+              `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36) REFERENCES ${posts} (id)`,
+            ]
+          : [
+              `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36)`,
+              `ALTER TABLE ${pages} ADD CONSTRAINT ${P}_pages_new_post FOREIGN KEY (post_id) REFERENCES ${posts} (id)`,
+            ];
+
+      await expect(
+        judge([{ label: "x.sql", statements: [...added, ...POSTS_DROPPED] }])
+      ).rejects.toThrow(new RegExp(pages));
+    }, 180_000);
+
+    it("retires only the table a quoted drop spells, not one differing only in case", async () => {
+      // Only PostgreSQL keeps a quoted name's case apart.
+      if (dialect !== "postgresql") return;
+      const upper = `${P}_Case`;
+      const lower = `${P}_case`;
+      await adapter.executeQuery(
+        `CREATE TABLE "${upper}" (id varchar(36) PRIMARY KEY)`
+      );
+      await adapter.executeQuery(
+        `CREATE TABLE ${lower} (id varchar(36) PRIMARY KEY)`
+      );
+      await register("collection", "upper", upper, `${upper}_links`);
+      // `lower` stays, and names `upper`.
+      await register("collection", "lower", lower, `${lower}_links`, [
+        { name: "up", type: "relationship", options: { target: "upper" } },
+      ]);
+
+      await expect(
+        judge([{ label: "x.sql", statements: [`DROP TABLE "${upper}"`] }])
+      ).rejects.toThrow(/upper/);
     }, 180_000);
 
     /**
@@ -783,6 +825,45 @@ describe.each(LOCK_DIALECTS)(
           x1: 1,
           x2: 1,
         });
+        expect(await captures(), said).toBe(0);
+      },
+      2 * PROCESS_TIMEOUT
+    );
+
+    it(
+      "records an UP's events before migrate:down rolls its file back and makes the table again",
+      async () => {
+        file(POSTS_DROPPED, false, [
+          `CREATE TABLE ${posts} (id varchar(36) PRIMARY KEY, title varchar(64))`,
+        ]);
+        // The UP applied and recorded, its events not yet.
+        const stopped = await migrate(
+          resolveDataLossConsent({ flag: posts, env: {} }),
+          point => {
+            if (point === "files recorded") throw new Error("stopped");
+          }
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        expect(stopped).toBeDefined();
+        expect(await captures()).toBeGreaterThan(0);
+
+        const down = await nextlyProcess([
+          "migrate:down",
+          "--step",
+          "1",
+          "--accept-data-loss",
+          "--non-interactive",
+          "--force-unlock",
+        ]);
+
+        const said = `${down.stdout}\n${down.stderr}`;
+        expect(down.status, said).toBe(0);
+        expect(await adapter.tableExists(posts), said).toBe(true);
+        expect(await deletionsOf("collection", "posts"), said).toEqual(
+          EACH_ONCE
+        );
         expect(await captures(), said).toBe(0);
       },
       2 * PROCESS_TIMEOUT
