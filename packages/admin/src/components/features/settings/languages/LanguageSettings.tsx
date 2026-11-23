@@ -94,7 +94,9 @@ export function LanguageSettings({
     }
   };
   const openDialog = (dialog: OpenDialog, opener: HTMLElement | null) => {
-    changeLanguages.reset();
+    // A change still being saved keeps its state: cleared, its pending would
+    // read as nothing being saved, and a second change could start beside it.
+    if (!changeLanguages.isPending) changeLanguages.reset();
     setOpen({ ...dialog, opener });
   };
   const dialogSave: LanguageDialogSave = {
@@ -158,6 +160,7 @@ export function LanguageSettings({
           {mayChange && (
             <Button
               ref={addButton}
+              disabled={changeLanguages.isPending}
               type="button"
               size="sm"
               onClick={event =>
@@ -419,7 +422,7 @@ interface LanguageActionsProps {
   language: LanguageView;
   first: boolean;
   last: boolean;
-  /** A change is being saved: no move is offered until it is. */
+  /** A change is being saved: the menu is not offered until it is. */
   saving: boolean;
   /** Each given the menu's button, which the dialog gives focus back to. */
   onEdit: (opener: HTMLElement | null) => void;
@@ -448,6 +451,7 @@ function LanguageActions({
       <DropdownMenuTrigger asChild>
         <Button
           ref={trigger}
+          disabled={saving}
           type="button"
           variant="ghost"
           size="icon"
@@ -461,12 +465,12 @@ function LanguageActions({
           Edit…
         </DropdownMenuItem>
         {!first && (
-          <DropdownMenuItem disabled={saving} onSelect={() => onMove(-1)}>
+          <DropdownMenuItem onSelect={() => onMove(-1)}>
             Move up
           </DropdownMenuItem>
         )}
         {!last && (
-          <DropdownMenuItem disabled={saving} onSelect={() => onMove(1)}>
+          <DropdownMenuItem onSelect={() => onMove(1)}>
             Move down
           </DropdownMenuItem>
         )}

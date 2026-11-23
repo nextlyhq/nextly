@@ -532,38 +532,36 @@ describe("Settings › Languages", () => {
     expect(names()).toEqual(["Spanish", "English", "Arabic"]);
   });
 
-  it("offers no second move while one is being saved", async () => {
+  it("offers no change while one is being saved, and keeps it saving when a dialog opens after", async () => {
     await open();
     const saving = deferred<LanguageList>();
     api.changeLanguages.mockReturnValueOnce(saving.promise);
     await choose("English", "Move down");
     await waitFor(() => expect(api.changeLanguages).toHaveBeenCalledTimes(1));
 
-    // The menu again while the first move is saved: its moves are not offered.
+    // While the move is saved, nothing that starts a change is offered.
+    expect(screen.getByRole("button", { name: "Add language" })).toBeDisabled();
+    for (const name of ["English", "Spanish", "Arabic"]) {
+      expect(
+        screen.getByRole("button", { name: `Actions for ${name}` })
+      ).toBeDisabled();
+    }
     const user = userEvent.setup();
     await user.click(
       screen.getByRole("button", { name: "Actions for Spanish" })
     );
-    const down = await screen.findByRole("menuitem", { name: "Move down" });
-    expect(down).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByRole("menuitem", { name: "Move up" })).toHaveAttribute(
-      "aria-disabled",
-      "true"
-    );
-    await user.click(down);
-    expect(api.changeLanguages).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu")).toBeNull();
 
-    // Saved: moves are offered again.
+    // Saved: offered again. A dialog opened and closed sends nothing more.
     saving.resolve(THREE);
-    await user.keyboard("{Escape}");
-    await user.click(
-      screen.getByRole("button", { name: "Actions for Spanish" })
-    );
     await waitFor(() =>
-      expect(
-        screen.getByRole("menuitem", { name: "Move down" })
-      ).not.toHaveAttribute("aria-disabled")
+      expect(screen.getByRole("button", { name: "Add language" })).toBeEnabled()
     );
+    await choose("Spanish", "Edit…");
+    await screen.findByRole("dialog", { name: "Edit Spanish" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(api.changeLanguages).toHaveBeenCalledTimes(1);
   });
 
   it("moves a language by sending every language in the new order", async () => {
