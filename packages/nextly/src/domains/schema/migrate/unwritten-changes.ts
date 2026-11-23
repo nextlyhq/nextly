@@ -27,11 +27,8 @@
  *
  * @module domains/schema/migrate/unwritten-changes
  */
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-
 import { CliError } from "../../../cli/errors";
 import {
-  movedColumnNote,
   perLanguageDriftNext,
   perLanguageMoveWhy,
   type PerLanguageMove,
@@ -41,33 +38,24 @@ import {
   type AppMigrationInputsArgs,
 } from "../migrate-create/app-migration-inputs";
 import {
-  appStreamSnapshots,
-  type AppStreamTables,
-} from "../migrate-create/app-stream";
-import {
   declaredPermissionsOf,
-  describePermissionChange,
   permissionChanges,
   type OwnerPermissions,
   type PermissionChange,
   type PermissionRecord,
 } from "../migrate-create/declared-permissions";
 import {
-  describeSettingsChange,
   settingsChangesFor,
   type EntitySettingsChange,
 } from "../migrate-create/entity-settings";
+import type { MinimalConfigEntity } from "../migrate-create/generate";
+import type { SnapshotFile } from "../migrate-create/snapshot-io";
 import {
-  buildDesiredSnapshotFromConfig,
-  type MinimalConfigEntity,
-} from "../migrate-create/generate";
-import { perLanguageMovesIn } from "../migrate-create/per-language-moves";
-import {
-  EMPTY_SNAPSHOT,
-  type SnapshotFile,
-} from "../migrate-create/snapshot-io";
-import { describeOp } from "../pipeline/diff/describe-operation";
-import { diffSnapshots } from "../pipeline/diff/diff";
+  type BesideFile,
+  pendingChangeLines,
+  type PendingChanges,
+} from "../pending/pending-changes";
+import { pendingChanges } from "../pending/plan-pending";
 import type { Operation } from "../pipeline/diff/types";
 
 /** The declared entities, as `migrate:create` generates from them. */
@@ -106,6 +94,8 @@ export interface RecordedInDatabase {
 export interface UnwrittenChanges {
   /** Each table change, in the diff's order. */
   tables: readonly Operation[];
+  /** Each file `migrate:create` would write beside the main migration, a translations one. */
+  beside: readonly BesideFile[];
   settings: readonly EntitySettingsChange[];
   /** Only an app's or a plugin's permissions added or removed. */
   permissions: readonly Extract<PermissionChange, { kind: "owner" }>[];
@@ -122,6 +112,7 @@ export interface UnwrittenChanges {
 export function nothingUnwritten(changes: UnwrittenChanges): boolean {
   return (
     changes.tables.length === 0 &&
+    changes.beside.length === 0 &&
     changes.settings.length === 0 &&
     changes.permissions.length === 0
   );
@@ -129,38 +120,28 @@ export function nothingUnwritten(changes: UnwrittenChanges): boolean {
 
 /**
  * The declared schema compared with the newest snapshot (`latest`, null where
- * the folder has none). Pure: every input is read by the caller.
+ * the folder has none): the table changes as `migrate:create` plans them
+ * (`pending`, from `pendingChanges`), and the settings and permissions, which
+ * an older snapshot's silence never names. Pure: every input is read by the
+ * caller.
  */
 export function compareWithNewestSnapshot(args: {
+  /** The table changes `migrate:create` would write, and which drops are moves. */
+  pending: Pick<PendingChanges, "tables" | "beside" | "perLanguageMoves">;
   entities: DeclaredEntities;
-  appStream: AppStreamTables;
   permissions: PermissionRecord;
   latest: { data: SnapshotFile } | null;
-  dialect: SupportedDialect;
   /** What the database records, read only where the newest snapshot predates a record. */
   recorded?: RecordedInDatabase;
 }): UnwrittenChanges {
   const { entities, latest } = args;
-  const existing = latest?.data.snapshot ?? EMPTY_SNAPSHOT;
-  const stream = appStreamSnapshots({
-    previous: existing,
-    previousContributions: latest?.data.contributions ?? {},
-    desired: buildDesiredSnapshotFromConfig(
-      [...entities.collections],
-      [...entities.singles],
-      [...entities.components],
-      args.dialect,
-      existing
-    ),
-    tables: args.appStream,
-  });
-  const tables = diffSnapshots(stream.previous, stream.desired);
   return {
-    tables,
+    tables: args.pending.tables,
+    beside: args.pending.beside,
     settings: settingsDifferences(entities, latest, args.recorded),
     permissions: permissionDifferences(args.permissions, latest, args.recorded),
     noSnapshot: latest === null,
-    perLanguageMoves: perLanguageMovesIn(tables, entities, args.dialect),
+    perLanguageMoves: args.pending.perLanguageMoves,
   };
 }
 
@@ -271,37 +252,9 @@ export function livePermissionsByOwner(
   return { app, plugins };
 }
 
-/**
- * A table change as a line: `+` added, `-` removed, `~` changed. A column drop that is a field
- * moving to its per-language table says where it moves, so it does not read as data loss.
- */
-function tableLine(
-  op: Operation,
-  moves: readonly PerLanguageMove[] = []
-): string {
-  const sign = op.type.startsWith("add_")
-    ? "+"
-    : op.type.startsWith("drop_")
-      ? "-"
-      : "~";
-  const note =
-    op.type === "drop_column"
-      ? movedColumnNote(moves, op.tableName, op.columnName)
-      : "";
-  return `${sign} ${describeOp(op)}${note}`;
-}
-
-/** Every difference as a line, tables first, then settings, then permissions. */
+/** Every difference as a line, in the words every report of them uses (`pendingChangeLines`). */
 export function unwrittenChangeLines(changes: UnwrittenChanges): string[] {
-  return [
-    ...changes.tables.map(op => tableLine(op, changes.perLanguageMoves)),
-    ...changes.settings.map(
-      change => `~ settings ${describeSettingsChange(change)}`
-    ),
-    ...changes.permissions.map(
-      change => `~ permissions ${describePermissionChange(change)}`
-    ),
-  ];
+  return pendingChangeLines(changes);
 }
 
 const CREATE_MIGRATION =
@@ -333,7 +286,9 @@ export function unwrittenChangesError(
     ...lines,
   ].join("\n");
   const settingsOnly =
-    changes.tables.length === 0 && changes.permissions.length === 0;
+    changes.tables.length === 0 &&
+    changes.beside.length === 0 &&
+    changes.permissions.length === 0;
   const moves = changes.perLanguageMoves ?? [];
   if (moves.length > 0) {
     return new CliError("SCHEMA_DRIFT", {
@@ -423,15 +378,25 @@ export async function unwrittenChangesOf(
     (latest.template !== true &&
       (latest.data.entities === undefined ||
         latest.data.permissions === undefined));
-  const changes = compareWithNewestSnapshot({
-    entities,
-    appStream: inputs.appStream,
-    permissions: declaredPermissionsOf(args.config, {
-      collections: inputs.collections,
-      singles: inputs.singles,
-    }),
-    latest,
+  const permissions = declaredPermissionsOf(args.config, {
+    collections: inputs.collections,
+    singles: inputs.singles,
+  });
+  // The table changes as `migrate:create` plans them from these inputs, so this refusal names
+  // what that run would write, and nothing it would not.
+  const pending = await pendingChanges({
+    inputs,
     dialect: args.dialect,
+    migrationsDir: args.migrationsDir,
+    permissions,
+    defaultLocale: args.config.localization?.defaultLocale,
+    languageOrder: args.config.localization?.locales.map(locale => locale.code),
+  });
+  const changes = compareWithNewestSnapshot({
+    pending,
+    entities,
+    permissions,
+    latest,
     ...(predatesRecord && args.recorded !== undefined
       ? {
           recorded: await args.recorded(

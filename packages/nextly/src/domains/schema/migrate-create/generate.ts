@@ -101,6 +101,7 @@ import type { Deletion } from "../migrate/data-loss-consent";
 import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
 import { mergedBy } from "../migrate/history-line";
 import { compareMigrationBaseNames } from "../migrate/migration-order";
+import { nothingToWrite, pendingChangesOf } from "../pending/pending-changes";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -516,6 +517,13 @@ export interface GenerateArgs {
    * nothing. The result names the files the real run would write.
    */
   dryRun?: boolean;
+  /**
+   * Plan the run to report what it would write, without the refusals that stop writing its file
+   * (an unrecorded translation, translation turned off beside other changes, a moved value's
+   * undeclared language): the changes they concern are still planned and named, and
+   * `migrate:create` refuses them when it writes.
+   */
+  reportOnly?: boolean;
   /**
    * Decides whether the deletions the plan makes (`plannedDeletions`) may be written, called once
    * the plan is final and before any file is written, a dry run's included. `migrate:create` lists
@@ -1062,7 +1070,9 @@ export async function planRun(requested: GenerateArgs) {
     ...args.singles.map(e => tagged(e, "single")),
     ...args.components.map(e => tagged(e, "fieldGroup")),
   ];
-  refuseUnrecordedTranslations(args, { snapshotSays, signOfTranslation });
+  if (args.reportOnly !== true) {
+    refuseUnrecordedTranslations(args, { snapshotSays, signOfTranslation });
+  }
   // What the snapshot this run writes says of each translated table's companion: read from the
   // database for `--record-snapshot`, carried forward otherwise (`writtenTranslations`).
   const written = await writtenTranslations(args, {
@@ -1100,7 +1110,9 @@ export async function planRun(requested: GenerateArgs) {
   //     from the main table — but the companion migration already relocates them
   //     (create + seed + drop). Strip those drops so we don't drop twice.
   operations = stripRelocatedDrops(operations, companionPlans);
-  refuseTurnOffBesideOtherChanges(operations, companionPlans);
+  if (args.reportOnly !== true) {
+    refuseTurnOffBesideOtherChanges(operations, companionPlans);
+  }
 
   // 3a'. Fields moved into or out of a group in code. The diff reads each as a delete and an add;
   //      an accepted one is carried as the Schema Builder carries a move, its values copied to the
@@ -1141,14 +1153,16 @@ export async function planRun(requested: GenerateArgs) {
   // them in Settings instead, which a migration file cannot depend on, since the database the
   // developer reaches is not the one the file runs against. So such a file is refused until the
   // config names its default.
-  refuseUndeclaredSeedLanguage(
-    args.defaultLocale,
-    {
-      seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
-      moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
-    },
-    () => perLanguageMovesIn(diffed, args, args.dialect)
-  );
+  if (args.reportOnly !== true) {
+    refuseUndeclaredSeedLanguage(
+      args.defaultLocale,
+      {
+        seeds: companionPlans.some(entry => entry.plan.kind === "enable"),
+        moves: fieldLeavesPlans.length + fieldJoinsPlans.length > 0,
+      },
+      () => perLanguageMovesIn(diffed, args, args.dialect)
+    );
+  }
 
   // 3d. Translated fields that become or stop being unique within each language. Their companion
   //     indexes are dropped before the main file and created after every other file.
@@ -1207,6 +1221,7 @@ export async function planRun(requested: GenerateArgs) {
     args,
     metaDir,
     now,
+    diffed,
     previous,
     stream,
     previousSnapshot,
@@ -1226,6 +1241,7 @@ export async function planRun(requested: GenerateArgs) {
     permissionRecord,
     changedPermissions,
     changesBeyondTables,
+    movesValues: movesValues(args),
   };
 }
 
@@ -1293,9 +1309,8 @@ export async function generateMigration(
     },
   });
   if (recorded !== undefined) return recorded;
-  if (operations.length === 0 && !hasCompanions && !changesBeyondTables) {
-    return null;
-  }
+  // Nothing to write: the same answer every report of the changes not yet in a migration reads.
+  if (nothingToWrite(pendingChangesOf(planned))) return null;
 
   // 4-6. Rename detection + prompt + apply — only meaningful when the main table
   //      itself changed. A localization-only run has no main-table ops to rename.

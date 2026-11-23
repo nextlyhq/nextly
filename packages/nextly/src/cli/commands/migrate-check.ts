@@ -623,6 +623,7 @@ export async function runChecks(args: {
       ? undefined
       : unwrittenChangesError({
           tables: [],
+          beside: [],
           settings: [],
           permissions: permissionDifferences(
             args.permissions,

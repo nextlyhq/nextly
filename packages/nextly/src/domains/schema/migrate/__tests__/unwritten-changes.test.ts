@@ -4,7 +4,11 @@
  * difference is named, in both directions, and a snapshot written before
  * settings or permissions were recorded is never a difference by its silence.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import {
   _resetPerLanguageStorage,
@@ -20,6 +24,7 @@ import {
 } from "../../migrate-create/generate";
 import { NO_APP_STREAM_TABLES } from "../../migrate-create/app-stream";
 import type { SnapshotFile } from "../../migrate-create/snapshot-io";
+import { pendingChanges } from "../../pending/plan-pending";
 import {
   compareWithNewestSnapshot,
   livePermissionsByOwner,
@@ -56,8 +61,9 @@ function entitiesOf(collections: MinimalConfigEntity[]): DeclaredEntities {
 function snapshotOf(
   entities: DeclaredEntities,
   extra: Partial<SnapshotFile> = {}
-): { data: SnapshotFile } {
+): { filename: string; data: SnapshotFile } {
   return {
+    filename: "20261101_000000_posts.snapshot.json",
     data: {
       version: 1,
       migrationHash: "",
@@ -78,17 +84,45 @@ function snapshotOf(
   };
 }
 
+/** A migrations folder of the file's own: the plan reads what it holds, which is nothing. */
+const MIGRATIONS = mkdtempSync(join(tmpdir(), "unwritten-changes-"));
+afterAll(() => rmSync(MIGRATIONS, { recursive: true, force: true }));
+
+/** No table change: for the cases about settings and permissions alone. */
+const NO_TABLES = { tables: [], beside: [], perLanguageMoves: [] };
+
+type CompareArgs = Parameters<typeof compareWithNewestSnapshot>[0];
+
+/** The comparison over the table changes `migrate:create` plans for `args.entities` (`pendingChanges`). */
+async function compareOver(
+  args: Omit<CompareArgs, "pending" | "latest"> & {
+    latest: ReturnType<typeof snapshotOf> | null;
+  }
+) {
+  const pending = await pendingChanges({
+    inputs: {
+      collections: [...args.entities.collections],
+      singles: [...args.entities.singles],
+      components: [...args.entities.components],
+      appStream: NO_APP_STREAM_TABLES,
+      latest: args.latest,
+    },
+    dialect: DIALECT,
+    migrationsDir: MIGRATIONS,
+    permissions: args.permissions,
+  });
+  return compareWithNewestSnapshot({ ...args, pending });
+}
+
 function compare(
   before: DeclaredEntities,
   after: DeclaredEntities,
-  extra: Partial<Parameters<typeof compareWithNewestSnapshot>[0]> = {}
+  extra: Partial<Omit<CompareArgs, "pending" | "latest">> = {}
 ) {
-  return compareWithNewestSnapshot({
+  return compareOver({
     entities: after,
-    appStream: NO_APP_STREAM_TABLES,
     permissions: NO_PERMISSIONS,
     latest: snapshotOf(before),
-    dialect: DIALECT,
     ...extra,
   });
 }
@@ -96,18 +130,18 @@ function compare(
 const TITLE = { name: "title", type: "text" };
 
 describe("compareWithNewestSnapshot", () => {
-  it("names nothing when the declared schema is the snapshot's", () => {
+  it("names nothing when the declared schema is the snapshot's", async () => {
     const posts = entitiesOf(collection([TITLE]));
-    expect(nothingUnwritten(compare(posts, posts))).toBe(true);
+    expect(nothingUnwritten(await compare(posts, posts))).toBe(true);
   });
 
-  it("names a field's size changed", () => {
+  it("names a field's size changed", async () => {
     const short = (maxLength: number) => ({
       ...TITLE,
       options: { variant: "short" },
       validation: { maxLength },
     });
-    const changes = compare(
+    const changes = await compare(
       entitiesOf(collection([short(80)])),
       entitiesOf(collection([short(120)]))
     );
@@ -120,15 +154,15 @@ describe("compareWithNewestSnapshot", () => {
     ["uniqueness", { ...TITLE, unique: true }, "add_index"],
     ["required", { ...TITLE, required: true }, "change_column_nullable"],
     ["type", { name: "title", type: "number" }, "change_column_type"],
-  ])("names a field's %s changed", (_what, field, opType) => {
-    const changes = compare(
+  ])("names a field's %s changed", async (_what, field, opType) => {
+    const changes = await compare(
       entitiesOf(collection([TITLE])),
       entitiesOf(collection([field]))
     );
     expect(changes.tables.map(op => op.type)).toContain(opType);
   });
 
-  it("names a column's default changed", () => {
+  it("names a column's default changed", async () => {
     // A field's own default is applied by the application, never stored as a column default; a
     // column's stored default (a system column's) is storage, and its change is named.
     const posts = entitiesOf(collection([TITLE], { status: true }));
@@ -136,46 +170,44 @@ describe("compareWithNewestSnapshot", () => {
     const table = latest.data.snapshot.tables.find(t => t.name === "dc_posts")!;
     const status = table.columns.find(c => c.name === "status")!;
     status.default = "'published'";
-    const changes = compareWithNewestSnapshot({
+    const changes = await compareOver({
       entities: posts,
-      appStream: NO_APP_STREAM_TABLES,
       permissions: NO_PERMISSIONS,
       latest,
-      dialect: DIALECT,
     });
     expect(changes.tables.map(op => op.type)).toContain(
       "change_column_default"
     );
   });
 
-  it("names an index added", () => {
-    const changes = compare(
+  it("names an index added", async () => {
+    const changes = await compare(
       entitiesOf(collection([TITLE])),
       entitiesOf(collection([TITLE], { indexes: [{ fields: ["title"] }] }))
     );
     expect(changes.tables.map(op => op.type)).toContain("add_index");
   });
 
-  it("names a relation that changes its storage", () => {
+  it("names a relation that changes its storage", async () => {
     const author = {
       name: "author",
       type: "relationship",
       relationTo: "users",
     };
-    const changes = compare(
+    const changes = await compare(
       entitiesOf(collection([TITLE, author])),
       entitiesOf(collection([TITLE, { ...author, hasMany: true }]))
     );
     expect(changes.tables.length).toBeGreaterThan(0);
   });
 
-  it("names a field and a collection removed, as removed", () => {
-    const changes = compare(
+  it("names a field and a collection removed, as removed", async () => {
+    const changes = await compare(
       entitiesOf(collection([TITLE, { name: "body", type: "text" }])),
       entitiesOf([])
     );
     expect(unwrittenChangeLines(changes)).toContain("- drop_table dc_posts");
-    const field = compare(
+    const field = await compare(
       entitiesOf(collection([TITLE, { name: "body", type: "text" }])),
       entitiesOf(collection([TITLE]))
     );
@@ -184,44 +216,42 @@ describe("compareWithNewestSnapshot", () => {
     );
   });
 
-  it("names every declared table as added over an empty folder", () => {
-    const changes = compareWithNewestSnapshot({
+  it("names every declared table as added over an empty folder", async () => {
+    const changes = await compareOver({
       entities: entitiesOf(collection([TITLE])),
-      appStream: NO_APP_STREAM_TABLES,
       permissions: NO_PERMISSIONS,
       latest: null,
-      dialect: DIALECT,
     });
     expect(changes.noSnapshot).toBe(true);
     expect(unwrittenChangeLines(changes)).toContain("+ add_table dc_posts");
   });
 
-  it("names a setting changed, and a description cleared", () => {
+  it("names a setting changed, and a description cleared", async () => {
     const before = entitiesOf(
       collection([TITLE], { description: "All posts" })
     );
-    const changes = compare(before, entitiesOf(collection([TITLE])));
+    const changes = await compare(before, entitiesOf(collection([TITLE])));
     expect(changes.tables).toEqual([]);
     expect(unwrittenChangeLines(changes)).toEqual([
       "~ settings posts: description (cleared)",
     ]);
   });
 
-  it("names no change for an empty settings object beside an absent one, as a Builder create leaves them", () => {
+  it("names no change for an empty settings object beside an absent one, as a Builder create leaves them", async () => {
     // The Builder writes `admin: {}` into its definition; the snapshot its save records has none.
     const recordedWithout = entitiesOf(collection([TITLE]));
     const declaredEmpty = entitiesOf(collection([TITLE], { admin: {} }));
-    expect(nothingUnwritten(compare(recordedWithout, declaredEmpty))).toBe(
-      true
-    );
-    expect(nothingUnwritten(compare(declaredEmpty, recordedWithout))).toBe(
-      true
-    );
+    expect(
+      nothingUnwritten(await compare(recordedWithout, declaredEmpty))
+    ).toBe(true);
+    expect(
+      nothingUnwritten(await compare(declaredEmpty, recordedWithout))
+    ).toBe(true);
     // An empty object that means something is a change: `versions: {}` turns versioning on with
     // its defaults, where an omitted `versions` leaves it off.
     expect(
       unwrittenChangesError(
-        compare(
+        await compare(
           recordedWithout,
           entitiesOf(collection([TITLE], { versions: {} }))
         )
@@ -229,7 +259,7 @@ describe("compareWithNewestSnapshot", () => {
     ).toBe("SETTINGS_CHANGE_WITHOUT_MIGRATION");
     expect(
       nothingUnwritten(
-        compare(
+        await compare(
           entitiesOf(collection([TITLE], { versions: {} })),
           recordedWithout
         )
@@ -238,7 +268,7 @@ describe("compareWithNewestSnapshot", () => {
     // Holding a setting, it is a change.
     expect(
       unwrittenChangeLines(
-        compare(
+        await compare(
           recordedWithout,
           entitiesOf(collection([TITLE], { admin: { group: "Content" } }))
         )
@@ -246,24 +276,22 @@ describe("compareWithNewestSnapshot", () => {
     ).toEqual(["~ settings posts: admin.group"]);
   });
 
-  it("never names a snapshot's missing settings, and compares with the registry where it has recorded them", () => {
+  it("never names a snapshot's missing settings, and compares with the registry where it has recorded them", async () => {
     const before = entitiesOf(collection([TITLE]));
     const after = entitiesOf(collection([TITLE], { description: "New" }));
     const older = snapshotOf(before, { entities: undefined });
     const silent = compareWithNewestSnapshot({
+      pending: NO_TABLES,
       entities: after,
-      appStream: NO_APP_STREAM_TABLES,
       permissions: NO_PERMISSIONS,
       latest: older,
-      dialect: DIALECT,
     });
     expect(nothingUnwritten(silent)).toBe(true);
     const recorded = compareWithNewestSnapshot({
+      pending: NO_TABLES,
       entities: after,
-      appStream: NO_APP_STREAM_TABLES,
       permissions: NO_PERMISSIONS,
       latest: older,
-      dialect: DIALECT,
       recorded: {
         settingsDiffer: [
           { kind: "collection", slug: "posts", changes: ["description"] },
@@ -284,9 +312,9 @@ describe("compareWithNewestSnapshot", () => {
     danger: false,
   };
 
-  it("names a plugin's permission added and removed", () => {
+  it("names a plugin's permission added and removed", async () => {
     const posts = entitiesOf(collection([TITLE]));
-    const added = compare(posts, posts, {
+    const added = await compare(posts, posts, {
       permissions: {
         ...NO_PERMISSIONS,
         plugins: { "@acme/forms": { "export-submissions": exportPermission } },
@@ -296,8 +324,8 @@ describe("compareWithNewestSnapshot", () => {
       "~ permissions @acme/forms: + export-submissions",
     ]);
     const removed = compareWithNewestSnapshot({
+      pending: NO_TABLES,
       entities: posts,
-      appStream: NO_APP_STREAM_TABLES,
       permissions: NO_PERMISSIONS,
       latest: snapshotOf(posts, {
         permissions: {
@@ -307,14 +335,13 @@ describe("compareWithNewestSnapshot", () => {
           },
         },
       }),
-      dialect: DIALECT,
     });
     expect(unwrittenChangeLines(removed)).toEqual([
       "~ permissions @acme/forms: - export-submissions",
     ]);
   });
 
-  it("never names a snapshot's missing permissions, and compares with the live ones where the database has them", () => {
+  it("never names a snapshot's missing permissions, and compares with the live ones where the database has them", async () => {
     const posts = entitiesOf(collection([TITLE]));
     const declared = {
       ...NO_PERMISSIONS,
@@ -324,11 +351,10 @@ describe("compareWithNewestSnapshot", () => {
     expect(
       nothingUnwritten(
         compareWithNewestSnapshot({
+          pending: NO_TABLES,
           entities: posts,
-          appStream: NO_APP_STREAM_TABLES,
           permissions: declared,
           latest: older,
-          dialect: DIALECT,
         })
       )
     ).toBe(true);
@@ -347,11 +373,10 @@ describe("compareWithNewestSnapshot", () => {
       "app"
     );
     const changes = compareWithNewestSnapshot({
+      pending: NO_TABLES,
       entities: posts,
-      appStream: NO_APP_STREAM_TABLES,
       permissions: declared,
       latest: older,
-      dialect: DIALECT,
       recorded: { permissions: live },
     });
     expect(unwrittenChangeLines(changes)).toEqual([
@@ -359,17 +384,16 @@ describe("compareWithNewestSnapshot", () => {
     ]);
   });
 
-  it("over kept slugs alone, names a declared permission added since and never one removed", () => {
+  it("over kept slugs alone, names a declared permission added since and never one removed", async () => {
     const posts = entitiesOf(collection([TITLE]));
     const older = snapshotOf(posts, { permissions: undefined });
     const declares = (plugins: PermissionRecord["plugins"]) =>
       unwrittenChangeLines(
         compareWithNewestSnapshot({
+          pending: NO_TABLES,
           entities: posts,
-          appStream: NO_APP_STREAM_TABLES,
           permissions: { ...NO_PERMISSIONS, plugins },
           latest: older,
-          dialect: DIALECT,
           // A record written before owners were kept: the slugs, whoever's.
           recorded: { permissionSlugs: ["read-posts", "import-submissions"] },
         })
@@ -390,12 +414,12 @@ describe("compareWithNewestSnapshot", () => {
 });
 
 describe("unwrittenChangesError", () => {
-  it("is SCHEMA_DRIFT naming every difference and migrate:create", () => {
+  it("is SCHEMA_DRIFT naming every difference and migrate:create", async () => {
     const fields = Array.from({ length: 12 }, (_, i) => ({
       name: `f${i}`,
       type: "text",
     }));
-    const changes = compare(
+    const changes = await compare(
       entitiesOf(collection([TITLE])),
       entitiesOf(collection([TITLE, ...fields]))
     );
@@ -407,8 +431,8 @@ describe("unwrittenChangesError", () => {
     expect(error?.next).not.toContain("migrate:baseline");
   });
 
-  it("is SETTINGS_CHANGE_WITHOUT_MIGRATION for settings alone", () => {
-    const changes = compare(
+  it("is SETTINGS_CHANGE_WITHOUT_MIGRATION for settings alone", async () => {
+    const changes = await compare(
       entitiesOf(collection([TITLE], { description: "All posts" })),
       entitiesOf(collection([TITLE]))
     );
@@ -417,16 +441,19 @@ describe("unwrittenChangesError", () => {
     );
   });
 
-  it("names migrate:baseline when asked to", () => {
-    const changes = compare(entitiesOf([]), entitiesOf(collection([TITLE])));
+  it("names migrate:baseline when asked to", async () => {
+    const changes = await compare(
+      entitiesOf([]),
+      entitiesOf(collection([TITLE]))
+    );
     expect(
       unwrittenChangesError(changes, { baselineFirst: true })?.next
     ).toContain("nextly migrate:baseline");
   });
 
-  it("is undefined when nothing differs", () => {
+  it("is undefined when nothing differs", async () => {
     const posts = entitiesOf(collection([TITLE]));
-    expect(unwrittenChangesError(compare(posts, posts))).toBeUndefined();
+    expect(unwrittenChangesError(await compare(posts, posts))).toBeUndefined();
   });
 
   describe("over a snapshot written before text was kept per language", () => {
@@ -440,24 +467,22 @@ describe("unwrittenChangesError", () => {
       return latest;
     }
 
-    it("names the title's drop as a move, explains it, and still asks a migration for the other change", () => {
+    it("names the title's drop as a move, explains it, and still asks a migration for the other change", async () => {
       const before = entitiesOf(collection([TITLE]));
       const after = entitiesOf(
         collection([TITLE, { name: "views", type: "number" }])
       );
       const error = unwrittenChangesError(
-        compareWithNewestSnapshot({
+        await compareOver({
           entities: after,
-          appStream: NO_APP_STREAM_TABLES,
           permissions: NO_PERMISSIONS,
           latest: earlierSnapshot(before),
-          dialect: DIALECT,
         })
       );
       expect(error?.code).toBe("SCHEMA_DRIFT");
-      expect(error?.why).toContain(
-        "- drop_column dc_posts.title (moves to dc_posts_locales)"
-      );
+      // The title's drop is the translations file's, which `migrate:create` writes beside the main one.
+      expect(error?.why).toContain("~ translations table dc_posts");
+      expect(error?.why).not.toContain("drop_column dc_posts.title");
       expect(error?.why).toContain("dc_posts: title -> dc_posts_locales");
       expect(error?.why).toContain("Nothing is lost");
       expect(error?.next).toContain("localized: false");
@@ -469,19 +494,17 @@ describe("unwrittenChangesError", () => {
       );
     });
 
-    it("names a field removed from the config as a drop, with no move explained", () => {
+    it("names a field removed from the config as a drop, with no move explained", async () => {
       const before = entitiesOf(
         collection([TITLE, { name: "views", type: "number" }])
       );
       // The same earlier snapshot, but `title` marked to stay on the main table: only `views` goes.
       const kept = entitiesOf(collection([{ ...TITLE, localized: false }]));
       const error = unwrittenChangesError(
-        compareWithNewestSnapshot({
+        await compareOver({
           entities: kept,
-          appStream: NO_APP_STREAM_TABLES,
           permissions: NO_PERMISSIONS,
           latest: earlierSnapshot(before),
-          dialect: DIALECT,
         })
       );
       expect(error?.why).toContain("- drop_column dc_posts.views");
