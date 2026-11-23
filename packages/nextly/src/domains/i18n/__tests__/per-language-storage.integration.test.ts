@@ -850,7 +850,10 @@ describe.each(getConfiguredTestDialects())(
           createAdapter({ type: "sqlite", url } as Parameters<
             typeof createAdapter
           >[0]);
+        // Per-language storage, as the case above boots it: the implicit language is that
+        // layout's, and a boot that names no layout runs on its file's earlier one.
         const site = {
+          perLanguageStorage: true,
           collections: [
             defineCollection({
               slug: "articles",
