@@ -110,6 +110,42 @@ describe("the moves a draft makes", () => {
     expect(movesOf(current)).toEqual([]);
   });
 
+  // A layout group stores nothing of its own: its fields are columns of the level holding it. Given
+  // a name, it becomes a group whose value holds them, so each is moved though its holder is the
+  // same; the server then judges the move rather than reading a column dropped.
+  it("names each field of a layout group given a name as moved into it", () => {
+    const layout = (name: string) =>
+      text("box", { type: "group", name, fields: [text("street")] });
+    const moves = draftMovesOf(
+      pendingChanges(
+        [text("title"), layout("")],
+        [text("title"), layout("address")]
+      )
+    ).moves.map(m => ({ from: m.from, to: m.to }));
+    expect(moves).toEqual([{ from: ["street"], to: ["address", "street"] }]);
+    // And the other way, a group's name taken away.
+    expect(
+      draftMovesOf(pendingChanges([layout("address")], [layout("")])).moves.map(
+        m => ({ from: m.from, to: m.to })
+      )
+    ).toEqual([{ from: ["address", "street"], to: ["street"] }]);
+  });
+
+  // A named group renamed keeps its fields: their values go with the group's own column.
+  it("makes no move of the fields of a named group renamed", () => {
+    const current = [
+      text("title"),
+      text("summary"),
+      group("address", [text("street"), text("city")]),
+      text("billing", {
+        type: "group",
+        name: "payment",
+        fields: [text("iban")],
+      }),
+    ];
+    expect(movesOf(current)).toEqual([]);
+  });
+
   it("holds back a field moved and renamed in the same draft", () => {
     const current = [
       text("title"),

@@ -313,16 +313,40 @@ function pathOf(id: string, placements: Map<string, Placement>): string[] {
   return path;
 }
 
+/** The ids of the named holders above a field, outermost first: the groups its values are in. */
+function namedHoldersOf(
+  id: string,
+  placements: Map<string, Placement>
+): string[] {
+  const holders: string[] = [];
+  for (
+    let at: string | null = placements.get(id)?.parentId ?? null;
+    at !== null;
+    at = placements.get(at)?.parentId ?? null
+  ) {
+    if ((placements.get(at)?.field.name ?? "") !== "") holders.unshift(at);
+  }
+  return holders;
+}
+
 /**
- * A field's paths as saved and in the draft, where they differ: a move into or out of a named
- * group. A move into or out of a layout group keeps the path, and so the stored values, as they
- * were.
+ * A field's paths as saved and in the draft, where the named groups holding it are others: a move
+ * into or out of a named group, or a layout group above it given a name or losing one, which
+ * changes where its values are stored though its holder is the same. A move into or out of a
+ * layout group keeps the path, and a named group renamed keeps its fields' values in its own
+ * column, so neither is one.
  */
 function movedPathsOf(
   id: string,
   before: Map<string, Placement>,
   after: Map<string, Placement>
 ): { movedFrom: string[]; movedTo: string[] } | undefined {
+  if (
+    namedHoldersOf(id, before).join("\u0000") ===
+    namedHoldersOf(id, after).join("\u0000")
+  ) {
+    return undefined;
+  }
   const movedFrom = pathOf(id, before);
   const movedTo = pathOf(id, after);
   return movedFrom.join("\u0000") === movedTo.join("\u0000")
@@ -333,7 +357,7 @@ function movedPathsOf(
 /**
  * What changed in a field that was saved and is still here. `followed` is the field as saved with
  * the draft's renames carried through its condition, which its settings are compared with. A move
- * to another holder carries its paths (`movedPaths`).
+ * to another storage level carries its paths (`movedPaths`).
  */
 function changesOfKept(
   field: BuilderField,
@@ -389,13 +413,16 @@ export function pendingChanges(
     if (was !== undefined) {
       const holderChanged =
         before.get(field.id)?.parentId !== after.get(field.id)?.parentId;
+      const movedPaths = movedPathsOf(field.id, before, after);
       changes.push(
         ...changesOfKept(
           field,
           was,
-          holderChanged || movedInPlace.has(field.id),
+          holderChanged ||
+            movedInPlace.has(field.id) ||
+            movedPaths !== undefined,
           followed.get(field.id) ?? was,
-          holderChanged ? movedPathsOf(field.id, before, after) : undefined
+          movedPaths
         )
       );
     } else if (!underAny(field.id, after, added)) {
