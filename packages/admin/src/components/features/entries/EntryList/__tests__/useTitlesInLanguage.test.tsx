@@ -4,7 +4,7 @@
  * what that read returned is offered as a title in that language; a refused read says so; and
  * nothing is read while the default language is shown.
  */
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -79,8 +79,14 @@ describe("useTitlesInLanguage", () => {
 
   it("says the read failed when the server refuses it, and offers no titles", async () => {
     find.mockRejectedValue(new Error("You can't see posts in Spanish."));
+    // A client that retries by default, as an application's may: the read itself must not.
+    const retrying = new QueryClient({
+      defaultOptions: { queries: { retry: 1, retryDelay: 0, gcTime: 0 } },
+    });
     const { result } = renderHook(() => useTitlesInLanguage(ARGS), {
-      wrapper,
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={retrying}>{children}</QueryClientProvider>
+      ),
     });
     await waitFor(() => expect(result.current.failed).toBe(true));
     expect(result.current.titles?.size).toBe(0);
