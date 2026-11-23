@@ -264,6 +264,10 @@ describe("snapshot-io", () => {
               {
                 name: "fg_banner",
                 columns: [
+                  { name: "_parent_id", type: "text", nullable: false },
+                  { name: "_parent_table", type: "text", nullable: false },
+                  { name: "_parent_field", type: "text", nullable: false },
+                  { name: "_order", type: "integer", nullable: false },
                   { name: "_field_group_type", type: "text", nullable: true },
                 ],
               },
@@ -278,6 +282,26 @@ describe("snapshot-io", () => {
         migration: "20261101_120000_000_add_banner",
         tables: ["fg_banner"],
       });
+    });
+
+    // Only a field group's table says which names the history is on: a collection's own column
+    // that happens to be spelled `_field_group_type` says nothing about them.
+    it("reads an unmarked snapshot as legacy when only a non-field-group table has that column", () => {
+      expect(
+        snapshotFieldGroupNaming({
+          snapshot: {
+            tables: [
+              {
+                name: "dc_posts",
+                columns: [
+                  { name: "id", type: "text", nullable: false },
+                  { name: "_field_group_type", type: "text", nullable: true },
+                ],
+              },
+            ],
+          } as never,
+        })
+      ).toBe("legacy");
     });
 
     // Every declared permission, by owner, travels in the snapshot so it alone says what they were;
