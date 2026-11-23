@@ -427,16 +427,40 @@ async function sqliteCounterCovers(
 }
 
 /**
- * Whether a table's stored `CREATE TABLE` declares its key `PRIMARY KEY [ASC | DESC]
- * [ON CONFLICT <resolution>] AUTOINCREMENT`, read as words: the word in a string, a quoted name
- * or an expression declares nothing.
+ * Whether a table's stored `CREATE TABLE` declares its key AUTOINCREMENT, on the column
+ * (`PRIMARY KEY [ASC | DESC] [ON CONFLICT <resolution>] AUTOINCREMENT`) or as the table's own
+ * key (`PRIMARY KEY (id [ASC | DESC] AUTOINCREMENT)`), read as words: the word in a string, a
+ * quoted name or an expression declares nothing.
  */
 function declaresAutoincrement(createSql: unknown): boolean {
   if (typeof createSql !== "string") return false;
   const words = cursorOf(createSql, "sqlite").rest();
-  return words.some(
-    (word, at) => word === "AUTOINCREMENT" && keyWordsBefore(words.slice(0, at))
+  return words.some((word, at) => {
+    if (word !== "AUTOINCREMENT") return false;
+    const before = words.slice(0, at);
+    return keyWordsBefore(before) || tableKeyWordsBefore(before);
+  });
+}
+
+/**
+ * Whether the words before an `AUTOINCREMENT` end in a table's own key over one column:
+ * `PRIMARY KEY (`, the column's name, and an `ASC` or `DESC` read past.
+ */
+function tableKeyWordsBefore(before: readonly unknown[]): boolean {
+  const end = withoutDirection(before, before.length);
+  return (
+    before[end - 2] === "(" &&
+    before[end - 3] === "KEY" &&
+    before[end - 4] === "PRIMARY"
   );
+}
+
+/** Where the words end once a last `ASC` or `DESC` before `end` is read past. */
+function withoutDirection(before: readonly unknown[], end: number): number {
+  // A quoted name is a token object, never one of these words.
+  return before[end - 1] === "ASC" || before[end - 1] === "DESC"
+    ? end - 1
+    : end;
 }
 
 /** The conflict resolutions SQLite's `ON CONFLICT` clause names. */
@@ -463,8 +487,7 @@ function keyWordsBefore(before: readonly unknown[]): boolean {
   ) {
     end -= 3;
   }
-  // A quoted name is a token object, never one of these words.
-  if (before[end - 1] === "ASC" || before[end - 1] === "DESC") end -= 1;
+  end = withoutDirection(before, end);
   return before[end - 1] === "KEY" && before[end - 2] === "PRIMARY";
 }
 
