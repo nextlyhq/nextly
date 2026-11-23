@@ -12,7 +12,10 @@ import { describe, expect, it } from "vitest";
 
 import { S3StorageAdapter } from "./adapter";
 
-function adapter(signedUrlExpiresIn?: number): S3StorageAdapter {
+function adapter(
+  signedUrlExpiresIn?: number,
+  cacheControl?: string
+): S3StorageAdapter {
   return new S3StorageAdapter({
     bucket: "test-bucket",
     region: "us-east-1",
@@ -20,6 +23,7 @@ function adapter(signedUrlExpiresIn?: number): S3StorageAdapter {
     accessKeyId: "AKIDEXAMPLE",
     secretAccessKey: "stand-in-secret-for-signing-only",
     ...(signedUrlExpiresIn !== undefined ? { signedUrlExpiresIn } : {}),
+    ...(cacheControl !== undefined ? { cacheControl } : {}),
   });
 }
 
@@ -60,5 +64,49 @@ describe("S3 pre-signed upload", () => {
     expect(new URL(shorter.uploadUrl).searchParams.get("X-Amz-Expires")).toBe(
       "60"
     );
+  });
+
+  /*
+   * S3 stores an object's Cache-Control only from the upload request's own
+   * header, and a header the SDK does not sign is not carried by the URL. So
+   * the configured value reaches the object only if it is signed AND handed to
+   * the client to send.
+   */
+  it.each([
+    ["the default", undefined, "public, max-age=31536000"],
+    ["a configured value", "private, max-age=0", "private, max-age=0"],
+  ])(
+    "signs %s Cache-Control and hands it to the client to send",
+    async (_label, configured, expected) => {
+      const data = await adapter(undefined, configured).getPresignedUploadUrl(
+        "media/photo.jpg",
+        "image/jpeg",
+        undefined,
+        { contentLength: 2048 }
+      );
+      expect(signedHeaders(data.uploadUrl)).toContain("cache-control");
+      expect(data.headers).toEqual({
+        "Content-Type": "image/jpeg",
+        "Cache-Control": expected,
+      });
+    }
+  );
+
+  it("hands the client every signed header it must send itself", async () => {
+    const data = await adapter().getPresignedUploadUrl(
+      "media/photo.jpg",
+      "image/jpeg",
+      undefined,
+      { contentLength: 2048 }
+    );
+    // The browser adds these two from the URL and the body.
+    const setByBrowser = new Set(["host", "content-length"]);
+    const sent = Object.keys(data.headers ?? {}).map(name =>
+      name.toLowerCase()
+    );
+    const mustSend = signedHeaders(data.uploadUrl).filter(
+      name => !setByBrowser.has(name)
+    );
+    expect(sent.sort()).toEqual(mustSend.sort());
   });
 });

@@ -59,6 +59,8 @@ export function bootSteps(
   options: {
     tablePrefix?: string;
     collections?: NonNullable<CreateTestNextlyOptions["collections"]>;
+    /** Seed the Public role, for a case a visitor reads in. */
+    seedPublic?: boolean;
   } = {}
 ): Promise<TestNextly> {
   const table = (slug: string) =>
@@ -69,6 +71,7 @@ export function bootSteps(
     dialect,
     // Only when given, so every other case boots exactly as before.
     ...(plugins === undefined ? {} : { plugins }),
+    ...(options.seedPublic === true ? { seedPublic: true } : {}),
     localization: { locales: ["en", "es", "ar"], defaultLocale: "en" },
     collections: [
       defineCollection({

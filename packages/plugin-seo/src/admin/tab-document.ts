@@ -39,6 +39,20 @@ export function withValueAt(
   return { ...document, [head]: inner(document[head]) };
 }
 
+/**
+ * The document the tab's levels are judged for: the saved entry with what
+ * the person typed over it, a field emptied included. The form holds only
+ * the type's declared fields, so the dates every saved entry holds by
+ * itself, which a structured data detail may be read from, come from the
+ * saved entry, as they do on the page. An entry not saved yet has none.
+ */
+export function judgedDocument(
+  typed: Readonly<Record<string, unknown>>,
+  saved: Readonly<Record<string, unknown>> | undefined
+): Record<string, unknown> {
+  return { ...saved, ...typed };
+}
+
 /** The id of the document the page read, where it read one. */
 function readId(entry: Readonly<Record<string, unknown>> | undefined) {
   const id = entry?.id;

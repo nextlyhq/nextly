@@ -67,6 +67,21 @@ export interface StoredOlderSpelling {
 }
 
 /**
+ * The older spelling each of `codes` may be stored under, lower-cased, mapped to the code: the
+ * underscore form of each code that has a part after its language. Empty where no code has one, and
+ * then no row can be stored under an older spelling of a configured language.
+ */
+export function olderSpellingsOf(
+  codes: readonly string[]
+): Map<string, string> {
+  return new Map(
+    codes
+      .filter(code => code.includes("-"))
+      .map(code => [code.replace(/-/g, "_").toLowerCase(), code] as const)
+  );
+}
+
+/**
  * The older spellings of `codes` that rows in `translationTables` are still stored under, found
  * from the rows rather than the configuration: a configuration already corrected to the standard
  * code no longer names them. Only an underscore is ever converted (`standardLanguageCode`), so an
@@ -79,12 +94,7 @@ export async function storedOlderSpellings(
   translationTables: readonly string[],
   codes: readonly string[]
 ): Promise<StoredOlderSpelling[]> {
-  // The underscore form of each configured code that has a part after its language.
-  const byLowered = new Map(
-    codes
-      .filter(code => code.includes("-"))
-      .map(code => [code.replace(/-/g, "_").toLowerCase(), code] as const)
-  );
+  const byLowered = olderSpellingsOf(codes);
   if (byLowered.size === 0) return [];
   // `_` is LIKE's single-character wildcard, so it is matched through an escape character.
   const underscored = sql`${sql.identifier("_locale")} LIKE ${"%!_%"} ESCAPE '!'`;

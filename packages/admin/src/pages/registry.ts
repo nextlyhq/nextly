@@ -110,6 +110,9 @@ const CollectionsOverviewPage = lazyRoute(
 const ContentOverviewPage = lazyRoute(
   () => import("./dashboard/content/index")
 );
+const ContentWaitingPage = lazyRoute(
+  () => import("./dashboard/content/waiting")
+);
 const EmailSettingsRedirect = lazyRoute(
   () => import("./dashboard/redirects/EmailSettingsRedirect")
 );
@@ -451,6 +454,14 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.CONTENT]: {
     component: ContentOverviewPage,
     screenName: "Content",
+    type: "private",
+    section: "collections",
+  },
+  // What waits for the reader's review, across collections and Singles: the Content panel's
+  // first link where anything can wait for them.
+  [ROUTES.CONTENT_WAITING]: {
+    component: ContentWaitingPage,
+    screenName: "Waiting for my review",
     type: "private",
     section: "collections",
   },

@@ -330,6 +330,14 @@ describe("how widely each row's variable is used", () => {
       },
     };
     render(<Hosted usage={usage} />);
+    // The row's count comes in two reads, each variable's and then the two
+    // together, so the host's read is waited for first and the row's name
+    // after it. Each wait then holds one read, as the tests above do; one wait
+    // for both would poll the panel's buttons, a slow query, while the reads
+    // it waits on are held up behind it.
+    await waitFor(() => {
+      expect(asked).toContainEqual(["font-size.body", "line-height.body"]);
+    });
     // 2 documents between them and the shared style, not 1 + 2 + 1.
     expect(
       await screen.findByRole("button", { name: /^Body.*\. Used in 3 places$/ })

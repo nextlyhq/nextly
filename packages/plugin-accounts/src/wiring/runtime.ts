@@ -6,7 +6,7 @@ import type { AccountPrincipals, FlowDeps } from "../flows/deps";
 import type { AccountsEmail } from "../flows/mail";
 import type { PasswordPacer } from "../flows/pacer";
 import { sweepUnverifiedAccounts } from "../flows/sweep-unverified";
-import { ACCOUNT_PRINCIPAL } from "../http/routes";
+import { ACCOUNT_PRINCIPAL } from "../http/principal";
 import type { AccountsSettings } from "../settings";
 import { sweepKnownBrowsers } from "../storage/known-browsers";
 import { sweepPendingChanges } from "../storage/pending-changes";
@@ -47,6 +47,7 @@ export function flowDepsFor(
     },
     events: { emit: (name, payload) => ctx.events.emit(name, payload) },
     principals: accountPrincipals(ctx),
+    ...(ctx.audit === undefined ? {} : { audit: ctx.audit }),
     pacer,
     logger: { warn: (message, context) => ctx.logger.warn(message, context) },
     now: () => new Date(),
@@ -90,12 +91,15 @@ export async function sendQueuedEmail(
 ): Promise<void> {
   if (await emailSentBy(ctx.db, attempt.jobId)) return;
   // Names the account the email is to, so core erases the delivery
-  // record with the account when it is reported deleted.
+  // record with the account when it is reported deleted; an invitation to
+  // an address with no account names nobody.
   const sent = await ctx.services.email.sendWithTemplate(
     templateSlug(email.kind),
     email.to,
     emailVariables(email),
-    { person: { kind: ACCOUNT_PRINCIPAL, id: email.accountId } }
+    email.accountId === null
+      ? undefined
+      : { person: { kind: ACCOUNT_PRINCIPAL, id: email.accountId } }
   );
   if (!sent.success) throw new Error(`The ${email.kind} email did not send.`);
   await recordEmailSent(ctx.db, ctx.dialect, attempt.jobId, attempt.now);

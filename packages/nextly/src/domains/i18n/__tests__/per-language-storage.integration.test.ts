@@ -757,8 +757,9 @@ describe.each(getConfiguredTestDialects())(
           expect((refused as Error).message).toMatch(
             /the collection "articles" \(headline\)/
           );
+          // Named by the slug its registry row records, as the configuration's is.
           expect((refused as Error).message).toMatch(
-            /the collection "dc_posts" \(heading\)/
+            /the collection "posts" \(heading\)/
           );
         } finally {
           _resetEnvCache();
@@ -849,7 +850,10 @@ describe.each(getConfiguredTestDialects())(
           createAdapter({ type: "sqlite", url } as Parameters<
             typeof createAdapter
           >[0]);
+        // Per-language storage, as the case above boots it: the implicit language is that
+        // layout's, and a boot that names no layout runs on its file's earlier one.
         const site = {
+          perLanguageStorage: true,
           collections: [
             defineCollection({
               slug: "articles",

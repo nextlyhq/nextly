@@ -208,7 +208,7 @@ created.item.id;
 
 ### update
 
-Update by ID, or update the first match of a `where` clause. Either `id` or `where` is required.
+Update by ID, or update the one entry a `where` clause matches. Either `id` or `where` is required. A `where` that matches more than one entry is refused with `VALIDATION_ERROR`, and nothing is written; one that matches none throws `NOT_FOUND`.
 
 ```typescript
 // By ID, with the version your read returned

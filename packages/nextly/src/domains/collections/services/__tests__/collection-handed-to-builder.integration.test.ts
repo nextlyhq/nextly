@@ -35,7 +35,14 @@ describe.each(getConfiguredTestDialects())(
     let registry: CollectionRegistryService;
     const warnings: string[] = [];
 
-    const coded = (slug: string, fields = [text({ name: "title" })]) =>
+    // Typed as a collection's fields, not inferred from the default, so a
+    // call may give fields of other names.
+    const coded = (
+      slug: string,
+      fields: Parameters<typeof defineCollection>[0]["fields"] = [
+        text({ name: "title" }),
+      ]
+    ) =>
       toCodeFirstCollectionConfig(
         defineCollection({ slug, fields })
       ) as Parameters<

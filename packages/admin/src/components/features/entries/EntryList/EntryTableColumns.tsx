@@ -17,11 +17,13 @@ import type { FieldConfig, DataFieldConfig } from "nextly/config";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { fieldLabel } from "@admin/lib/field-label";
+import type { WorkflowStepKind } from "@admin/types/workflows";
 
 import { entryTitleField } from "../entry-title";
 
 import { EntryTableCell } from "./EntryTableCell";
 import { LanguageDots } from "./LanguageDots";
+import { ReviewCell, rowReviewParts } from "./ReviewCell";
 
 // ============================================================================
 // Types
@@ -52,6 +54,18 @@ export interface CollectionForColumns {
    * when this is true.
    */
   status?: boolean;
+  /**
+   * The workflow that holds the collection's publishing, where one is attached: the list offers
+   * its bulk moves (Submit for review, Assign…, Send back…) only then.
+   */
+  workflow?: {
+    slug: string;
+    label: string;
+    /** Its stages in order, by name and label: the list's stage filter offers them. */
+    stages?: readonly { name: string; label: string }[];
+    /** Its steps, by kind: the bulk moves are found among them (`bulkMoveSteps`). */
+    steps?: readonly { name: string; label: string; kind: WorkflowStepKind }[];
+  } | null;
   /**
    * Whether the table shows each row's translation state: a collection with multilingual content
    * (i18n), listed for a user who may read every language's state. When true, the table renders
@@ -235,6 +249,11 @@ export function getAvailableColumns(
     builtInColumns.push("translations");
   }
 
+  // Where each row stands in its workflow, only for a collection a workflow holds.
+  if (collection.workflow) {
+    builtInColumns.push("review");
+  }
+
   if (useAsTitle && !builtInColumns.includes(useAsTitle)) {
     builtInColumns.push(useAsTitle);
   }
@@ -294,6 +313,11 @@ export function getDefaultVisibleColumns(
   // 5. Translation-completeness column for localized collections.
   if (collection.localized) {
     orderedDataColumns.push("translations");
+  }
+
+  // The Review column, for a collection a workflow holds.
+  if (collection.workflow) {
+    orderedDataColumns.push("review");
   }
 
   // 6. Remaining data columns
@@ -522,6 +546,17 @@ export function buildEntryColumns(
                 : {})}
             />
           ),
+        });
+        continue;
+      }
+      // Where each part of the row stands in the collection's workflow, as the list read placed it.
+      if (columnName === "review") {
+        cols.push({
+          name: "review",
+          header: "Review",
+          sortable: false,
+          hidden,
+          cell: ({ row }) => <ReviewCell parts={rowReviewParts(row)} />,
         });
         continue;
       }

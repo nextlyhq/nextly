@@ -18,7 +18,15 @@ import {
   ROLE_PRESETS,
   resolvePreset,
   type PresetPermission,
+  type PresetReach,
 } from "./role-presets";
+
+/**
+ * A reach that lets every permission reach every preset, so each preset's
+ * own rule is what these cases judge. Which collections a preset reaches at
+ * all is `auth/preset-reach`'s, tested beside it.
+ */
+const EVERY_PRESET: PresetReach = { presetsFor: () => undefined };
 
 const preset = (slug: string) => {
   const found = ROLE_PRESETS.find(p => p.slug === slug);
@@ -81,24 +89,45 @@ describe("every preset", () => {
 
   it("resolves to something on a real permission list", () => {
     for (const p of ROLE_PRESETS) {
-      expect(resolvePreset(p, PERMISSIONS).length).toBeGreaterThan(0);
+      expect(
+        resolvePreset(p, PERMISSIONS, EVERY_PRESET).length
+      ).toBeGreaterThan(0);
     }
   });
 
   // The point of a predicate. A preset written today has to cover a
-  // collection added a year from now without anyone editing this file.
-  it("covers a collection it has never heard of", () => {
+  // collection added a year from now without anyone editing this file, once
+  // that collection is opened to it.
+  it("covers a collection it has never heard of, where the reach lets it", () => {
     const later = [...PERMISSIONS, perm("read", "invented-later")];
 
     for (const slug of ["admin", "editor", "author", "viewer"]) {
-      const granted = slugs(resolvePreset(preset(slug), later));
+      const granted = slugs(resolvePreset(preset(slug), later, EVERY_PRESET));
       expect(granted).toContain("read-invented-later");
     }
+  });
+
+  it("holds nothing the reach keeps from it, whatever its own rule says", () => {
+    const closed: PresetReach = {
+      presetsFor: p =>
+        p.resource === "posts" ? new Set(["viewer"]) : undefined,
+    };
+    for (const slug of ["admin", "editor", "author"]) {
+      const granted = slugs(resolvePreset(preset(slug), PERMISSIONS, closed));
+      expect(granted.filter(g => g.endsWith("-posts"))).toEqual([]);
+    }
+    expect(
+      slugs(resolvePreset(preset("viewer"), PERMISSIONS, closed)).filter(g =>
+        g.endsWith("-posts")
+      )
+    ).toEqual(["read-posts"]);
   });
 });
 
 describe("admin", () => {
-  const granted = slugs(resolvePreset(preset("admin"), PERMISSIONS));
+  const granted = slugs(
+    resolvePreset(preset("admin"), PERMISSIONS, EVERY_PRESET)
+  );
 
   it("does not grant the power to hand out access", () => {
     expect(granted).not.toContain("update-roles");
@@ -121,7 +150,9 @@ describe("admin", () => {
 });
 
 describe("editor", () => {
-  const granted = slugs(resolvePreset(preset("editor"), PERMISSIONS));
+  const granted = slugs(
+    resolvePreset(preset("editor"), PERMISSIONS, EVERY_PRESET)
+  );
 
   it("gets full control of content", () => {
     expect(granted).toEqual(
@@ -147,7 +178,9 @@ describe("editor", () => {
 });
 
 describe("author", () => {
-  const granted = slugs(resolvePreset(preset("author"), PERMISSIONS));
+  const granted = slugs(
+    resolvePreset(preset("author"), PERMISSIONS, EVERY_PRESET)
+  );
 
   it("can write content", () => {
     expect(granted).toEqual(
@@ -173,12 +206,23 @@ describe("author", () => {
 });
 
 describe("viewer", () => {
-  const granted = slugs(resolvePreset(preset("viewer"), PERMISSIONS));
+  const granted = slugs(
+    resolvePreset(preset("viewer"), PERMISSIONS, EVERY_PRESET)
+  );
 
-  it("reads everything that can be read", () => {
+  it("reads everything that can be read but the staff accounts and API keys", () => {
     expect(granted).toEqual(
       expect.arrayContaining(["read-posts", "read-pages", "read-settings"])
     );
+  });
+
+  // Who can sign in, and what each key may do, is not content: a person
+  // given Viewer to read the site's content is not given that.
+  it("reads neither the users nor the API keys", () => {
+    const withKeys = [...PERMISSIONS, perm("read", "api-keys")];
+    const of = slugs(resolvePreset(preset("viewer"), withKeys, EVERY_PRESET));
+    expect(of).not.toContain("read-users");
+    expect(of).not.toContain("read-api-keys");
   });
 
   it("changes nothing", () => {
@@ -190,7 +234,7 @@ describe("viewer", () => {
 
 describe("the presets against each other", () => {
   const of = (slug: string) =>
-    new Set(slugs(resolvePreset(preset(slug), PERMISSIONS)));
+    new Set(slugs(resolvePreset(preset(slug), PERMISSIONS, EVERY_PRESET)));
 
   // Not a rule the code enforces, but the names promise it, and a viewer who
   // could do something an author could not would make the ladder a lie.
@@ -271,7 +315,7 @@ describe("the permissions a workflow seeds", () => {
     "are held by no %s preset, while it keeps the collection's own",
     slug => {
       const granted = slugs(
-        resolvePreset(preset(slug), withWorkflows, isWorkflow)
+        resolvePreset(preset(slug), withWorkflows, EVERY_PRESET, isWorkflow)
       );
       for (const seeded of slugs(SEEDED)) {
         expect(granted).not.toContain(seeded);

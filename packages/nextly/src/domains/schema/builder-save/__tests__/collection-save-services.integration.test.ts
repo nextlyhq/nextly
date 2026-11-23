@@ -591,6 +591,18 @@ describe.each(getConfiguredTestDialects())(
         await adapter.executeQuery(
           "UPDATE dynamic_collections SET slug = 'writers' WHERE slug = 'people'"
         );
+        // And in the Builder's definition file, which a save judges a relationship's target
+        // against: a rename leaves the collection declared under its new slug there too.
+        const definitionPath = join(t.basePath, "schema", "builder.json");
+        const definition = JSON.parse(
+          readFileSync(definitionPath, "utf-8")
+        ) as {
+          collections: { slug: string }[];
+        };
+        for (const entry of definition.collections) {
+          if (entry.slug === "people") entry.slug = "writers";
+        }
+        writeFileSync(definitionPath, JSON.stringify(definition, null, 2));
 
         await service.createCollection(
           {
@@ -735,9 +747,11 @@ describe.each(getConfiguredTestDialects())(
 
       await service.updateCollection(
         "articles",
-        { fields: [{ name: "content", type: "text" }] } as Parameters<
-          CollectionService["updateCollection"]
-        >[1],
+        {
+          fields: [{ name: "content", type: "text" }],
+          // A plugin says the field leaving and the one arriving are a rename.
+          renames: [{ from: "body", to: "content", choice: "rename" }],
+        } as Parameters<CollectionService["updateCollection"]>[1],
         {}
       );
 
@@ -858,7 +872,8 @@ describe.each(getConfiguredTestDialects())(
 describe.each(getConfiguredTestDialects())(
   "a field-group field renamed through updateCollection (%s)",
   dialect => {
-    it("moves the group's rows to the new name in the update's file, so a deploy keeps them", async () => {
+    /** An `articles` collection holding the field group `hero`. */
+    async function articles() {
       const t = await createTestNextly({
         dialect,
         db: {
@@ -883,25 +898,69 @@ describe.each(getConfiguredTestDialects())(
         } as Parameters<CollectionService["createCollection"]>[0],
         {}
       );
+      return { t, service };
+    }
 
-      await service.updateCollection(
-        "articles",
-        {
-          fields: [
-            { name: "banner", type: "component", component: "svc_meta" },
-          ],
-        } as Parameters<CollectionService["updateCollection"]>[1],
-        {}
-      );
+    /** `hero` replaced by `banner` of the same group, answered as `renames` says. */
+    const toBanner = (renames?: unknown[]) =>
+      ({
+        fields: [{ name: "banner", type: "component", component: "svc_meta" }],
+        ...(renames ? { renames } : {}),
+      }) as Parameters<CollectionService["updateCollection"]>[1];
 
+    /** The newest update file written for `articles`. */
+    function latestUpdate(t: { basePath: string }): string {
       const folder = join(t.basePath, "database", "history");
       const update = readdirSync(folder)
         .filter(f => f.endsWith("_articles_update.sql"))
         .sort()
         .pop();
-      expect(readFileSync(join(folder, update!), "utf-8")).toMatch(
+      return readFileSync(join(folder, update!), "utf-8");
+    }
+
+    it("moves the group's rows to the new name in the update's file, so a deploy keeps them", async () => {
+      const { t, service } = await articles();
+
+      await service.updateCollection(
+        "articles",
+        toBanner([{ from: "hero", to: "banner", choice: "rename" }]),
+        {}
+      );
+
+      expect(latestUpdate(t)).toMatch(
         /UPDATE[^;]*_parent_field[^;]*'banner'[^;]*'hero'/
       );
+    });
+
+    it("refuses a field group replaced by another of its kind with no answer, never guessing it is a rename", async () => {
+      const { service } = await articles();
+
+      const refused = await service
+        .updateCollection("articles", toBanner(), {})
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({ code: "FIELD_RENAME_UNANSWERED" }),
+          ],
+        },
+      });
+    });
+
+    it("moves no rows to the new name when the request says it is not a rename", async () => {
+      const { t, service } = await articles();
+
+      await service.updateCollection(
+        "articles",
+        toBanner([{ from: "hero", to: "banner", choice: "drop_and_add" }]),
+        {}
+      );
+
+      expect(latestUpdate(t)).not.toMatch(/_parent_field[^;]*'banner'/);
     });
   }
 );

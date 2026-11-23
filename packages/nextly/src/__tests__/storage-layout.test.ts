@@ -5,9 +5,10 @@
  * anything the child inherits, is what moves it. The control starts one with the preload.
  */
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -24,11 +25,11 @@ const TSX = pathToFileURL(
     "dist/loader.mjs"
   )
 ).href;
-const STEPS = pathToFileURL(
-  new URL("../cli/commands/upgrade-steps/index.ts", import.meta.url).pathname
-).href;
-const STORAGE = pathToFileURL(
-  new URL("../domains/i18n/per-language-storage.ts", import.meta.url).pathname
+const STEPS = new URL("../cli/commands/upgrade-steps/index.ts", import.meta.url)
+  .href;
+const STORAGE = new URL(
+  "../domains/i18n/per-language-storage.ts",
+  import.meta.url
 ).href;
 
 /** What a child started with `preload` prints of `script`, run as a module. */
@@ -65,6 +66,15 @@ describe("a CLI child a test starts", () => {
 
   // The control: this file runs on the earlier layout, so its children are handed the preload,
   // which is what puts them on it.
+  // A URL made from the module's own URL, never from its `pathname`: on Windows that reads
+  // `/D:/…`, which a path-to-URL conversion takes for a path on the current drive (`D:\D:\…`), and
+  // every child handed it stops before the CLI starts.
+  it("is handed a preload that names a file on disk", () => {
+    const [flag, preload] = childLayoutArgs();
+    expect(flag).toBe("--import");
+    expect(existsSync(fileURLToPath(preload!))).toBe(true);
+  });
+
   it("is put on the earlier layout by the preload alone", () => {
     expect(childLayoutArgs()).toHaveLength(2);
     expect(childPerLanguage(childLayoutArgs())).toBe("false");

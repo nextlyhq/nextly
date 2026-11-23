@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { DEMOTED_FROM_CODE } from "../../domains/collections/services/collection-registry-service";
 import {
   toCodeFirstCollectionConfig,
   type CodeFirstCollectionSource,

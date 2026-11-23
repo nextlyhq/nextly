@@ -175,9 +175,15 @@ import {
 } from "./format-file";
 import { withIndexesLiftedForTextWidenings } from "./indexed-text-widening";
 import {
+  leftoverUniqueStatements,
+  type LiveUniqueIndexes,
+} from "./leftover-unique-indexes";
+import {
   fileStatements,
   judgedDeletions,
   mainFileStatements,
+  refuseDeletionsBeforeReads,
+  type ReadInRun,
   type RemovedEntity,
 } from "./planned-deletions";
 import type { RenameDecision } from "./prompt-renames";
@@ -471,6 +477,13 @@ export interface GenerateArgs {
     | ((tableName: string) => Promise<readonly string[]>)
     | undefined;
   /**
+   * The unique indexes the database the file is written against holds, by column. Read only for a
+   * column whose field stops being unique, so the file also drops an older unique index still
+   * holding it under a name Nextly did not make (`leftoverUniqueDrops`), and the run names it
+   * through `onWarning`. Absent, the file drops only Nextly's own index.
+   */
+  liveUniqueIndexes?: LiveUniqueIndexes;
+  /**
    * Override the timestamp for tests. Production callers omit and get
    * `new Date()`.
    */
@@ -743,8 +756,13 @@ function settledColumns(
   return { operations: kept, tighten, columns };
 }
 
-/** `tables` with each settled column nullable, as the file leaves it before tightening. */
-function withSettledColumnsNullable(
+/**
+ * `tables` with each of `columns` (`columnKey`) nullable, as the file leaves them before they are
+ * made required: a column whose rows the person settled, and one a move fills from a group. On
+ * SQLite a table rebuilt before that copies its rows into this shape, so a column still to be
+ * filled declared NOT NULL there would refuse every row.
+ */
+function withColumnsNullable(
   tables: readonly TableSpec[],
   columns: ReadonlySet<string>
 ): TableSpec[] {
@@ -757,6 +775,81 @@ function withSettledColumnsNullable(
         : column
     ),
   }));
+}
+
+/**
+ * `tables` with each main-table column an ENABLE file of this run moves still declared, as the
+ * previous snapshot records it. The ENABLE file runs after the main file and copies those values
+ * into the translations table before it drops them, so the main file leaves them where they are:
+ * `stripRelocatedDrops` takes out their drops, and this keeps them in the shape a table the main
+ * file rebuilds (SQLite) copies its rows into. Without it, a rebuild built from the desired
+ * table, which no longer holds them, would drop the values before the ENABLE file reads them.
+ */
+function withRelocatedColumnsKept(
+  tables: readonly TableSpec[],
+  companionPlans: readonly CompanionPlanEntry[],
+  previous: NextlySchemaSnapshot
+): TableSpec[] {
+  const kept = new Map<string, string[]>();
+  for (const { plan } of companionPlans) {
+    if (plan.kind !== "enable") continue;
+    const onMain =
+      plan.spec.columnsOnMain ?? plan.spec.columns.map(column => column.name);
+    kept.set(plan.spec.mainTable, [
+      ...(kept.get(plan.spec.mainTable) ?? []),
+      ...onMain,
+    ]);
+  }
+  if (kept.size === 0) return [...tables];
+  return tables.map(table => {
+    const names = kept.get(table.name);
+    const before = previous.tables.find(t => t.name === table.name);
+    if (names === undefined || before === undefined) return table;
+    const declared = new Set(table.columns.map(column => column.name));
+    const restored = before.columns.filter(
+      column => names.includes(column.name) && !declared.has(column.name)
+    );
+    return restored.length === 0
+      ? table
+      : { ...table, columns: [...table.columns, ...restored] };
+  });
+}
+
+/**
+ * The tables and columns a translation file reads values from, at run index `file`: a move into
+ * the translations table (`enable`, `joins`) reads the main table's columns, and a move out of it
+ * (`disable`, `archive`, `shared`) reads the translations table. The other kinds read no values.
+ */
+function readsOfCompanionFile(
+  spec: CompanionMigrationSpec,
+  kind: WriteCompanionMigrationOpts["kind"],
+  file: number
+): ReadInRun[] {
+  switch (kind) {
+    case "enable":
+    case "joins":
+      return (spec.columnsOnMain ?? spec.columns.map(c => c.name)).map(
+        column => ({ file, table: spec.mainTable, column })
+      );
+    case "disable":
+      return [{ file, table: spec.companionTable }];
+    case "archive":
+    case "shared":
+      return spec.columns.map(column => ({
+        file,
+        table: spec.companionTable,
+        column: column.name,
+      }));
+    default:
+      return [];
+  }
+}
+
+/** The `columnKey` of each column in `refilled`, a move's or a joining field's. */
+function columnKeysOf(
+  refilled: readonly { table: string; column: string }[] | undefined
+): Set<string> {
+  return new Set((refilled ?? []).map(r => columnKey(r.table, r.column)));
 }
 
 /**
@@ -1175,21 +1268,52 @@ export async function generateMigration(
     args.resolutions ?? [],
     desiredSnapshot.tables
   );
+  // 7'. A field that stops being unique on an older table that also holds its column unique under
+  //     a name Nextly did not make: that index is dropped too, by name and only where it stands, so
+  //     every database the file runs on ends with the column no longer unique. Named to the run,
+  //     since it may be one the user made. Dropped after the operations, Nextly's own drop and a
+  //     rename among them, and before any rows are filled: a fill writes one value into every row
+  //     it settles, which an index still holding the column unique refuses. Nothing goes back on the
+  //     way down: Nextly's own index makes the column unique again.
+  const leftoverDrops = await leftoverUniqueStatements({
+    operations,
+    desired: desiredSnapshot.tables,
+    dialect: args.dialect,
+    read: args.liveUniqueIndexes,
+    onWarning: args.onWarning,
+  });
+  // A column a move fills from its group is filled by the statements appended after these, so a
+  // table either list rebuilds holds it nullable until then, as its own add does.
+  const refilled = columnKeysOf(args.refilledColumns);
+  // A table rebuilt here keeps the columns a later ENABLE file of this run moves, so their values
+  // are still there when it copies them (`withRelocatedColumnsKept`).
+  const rebuiltTo = withRelocatedColumnsKept(
+    desiredSnapshot.tables,
+    companionPlans,
+    previousSnapshot
+  );
   const sqlStatements = [
     ...generateStatements(
       settled.operations,
       args.dialect,
       // A table rebuilt here is rebuilt to the shape this file leaves it in: the settings held back.
       tablesWithSettingsHeldBack(
-        withSettledColumnsNullable(desiredSnapshot.tables, settled.columns),
+        withColumnsNullable(
+          rebuiltTo,
+          new Set([...settled.columns, ...refilled])
+        ),
         heldSettings
       )
     ),
+    ...leftoverDrops,
     ...(args.resolutions ?? []).map(r => resolutionStatement(r, args.dialect)),
     ...generateStatements(
       settled.tighten,
       args.dialect,
-      tablesWithSettingsHeldBack(desiredSnapshot.tables, heldSettings)
+      tablesWithSettingsHeldBack(
+        withColumnsNullable(rebuiltTo, refilled),
+        heldSettings
+      )
     ),
   ];
 
@@ -1197,18 +1321,21 @@ export async function generateMigration(
   // Inverting the resolved ops — not re-diffing — keeps a forward rename as a
   // reverse rename rather than a data-losing drop+add. Object-removing ops
   // recover their original spec from previousSnapshot.
+  const refilledDown = refilledOnTheWayDown(fieldJoinsPlans, args.valueMoves);
   const inverseOps = withCyclicForeignKeysSplit(
     restoredNullable(
       buildInverseOperations(operations, previousSnapshot),
-      refilledOnTheWayDown(fieldJoinsPlans, args.valueMoves)
+      refilledDown
     ),
     args.dialect,
     desiredSnapshot.tables
   );
+  // A table the DOWN rebuilds holds each column it refills nullable until its values are back, as
+  // the column's own add does; each is made required again once they are in.
   const downSqlStatements = generateStatements(
     inverseOps,
     args.dialect,
-    previousSnapshot.tables
+    withColumnsNullable(previousSnapshot.tables, columnKeysOf(refilledDown))
   );
   // 7a'. A translated table this file drops takes its translations table with it, dropped first
   //      so nothing references the main table when it goes; the DOWN makes it again, empty, once
@@ -1532,6 +1659,18 @@ export async function generateMigration(
       ],
     },
   });
+  // 8b. No file may delete what a later file of the run reads: each translation file's move reads
+  //     its values where they stand, so an earlier file dropping them would lose them.
+  refuseDeletionsBeforeReads(
+    judged.perFile,
+    companionFiles.flatMap(({ spec, opts }, index) =>
+      readsOfCompanionFile(
+        spec,
+        opts.kind,
+        index < beforeMain.length ? index : index + 1
+      )
+    )
+  );
   if (judged.all.length > 0) await args.judgeDeletions?.(judged.all);
 
   const sqlContent = formatMigrationFile({

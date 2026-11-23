@@ -36,6 +36,7 @@ import {
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import { seedLiveAuthor } from "../../releases/__tests__/helpers/live-author";
+import { partsFromStorage } from "../versions-repository";
 import {
   VersionCaptureService,
   type CaptureInput,
@@ -410,15 +411,19 @@ describe.each(
       );
       // Two captures over the first version, kept to two: the write that lost
       // the race inserts third and must see the winner's version to remove
-      // the first. They record the language the create's version did: one
-      // whose values are kept per language is labelled with it, and retention
-      // keeps each language's latest, so an unlabelled capture beside it would
-      // leave the first standing as its own language's latest.
+      // the first. They record the language and the parts the create's
+      // version did: retention keeps each part's latest publish, by the parts
+      // a version records (by its language for one recorded before versions
+      // named their parts), and the two kinds never stand in for each other,
+      // so a capture recording other parts would leave the first standing as
+      // its own part's latest.
       const [first] = (
-        await t.adapter.select<{ entryId: string; locale: string | null }>(
-          "nextly_versions",
-          {}
-        )
+        await t.adapter.select<{
+          entryId: string;
+          locale: string | null;
+          changedLocales: unknown;
+          sharedChanged: unknown;
+        }>("nextly_versions", {})
       ).filter(row => row.entryId === id);
       await captureConcurrently(t, {
         ref: notesRef(id),
@@ -427,6 +432,10 @@ describe.each(
         lifecycle: true,
         maxPerDoc: 2,
         locale: first?.locale ?? null,
+        changedParts: partsFromStorage(
+          first?.changedLocales,
+          first?.sharedChanged
+        ),
       });
       expect(await versionNumbersOf(t, id)).toEqual([2, 3]);
     }, 120_000);

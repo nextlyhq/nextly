@@ -96,6 +96,7 @@ import type { EmailService } from "../../../services/email/email-service";
 // imports every core service.
 import { serviceContainerFor } from "../../../services/service-container-for";
 import type { Logger } from "../../../services/shared";
+import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
@@ -106,7 +107,6 @@ import {
   buildAcceptInviteLink,
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
-import { affectedRowCount } from "../../auth/services/auth-service";
 import { refuseLinkingPublicRole } from "../../auth/services/public-role";
 import {
   refuseGrantingSuperAdmin,

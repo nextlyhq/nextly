@@ -25,7 +25,10 @@ import {
 import type { RegisteredCollectionRow } from "../../schema/pipeline/registered-collections";
 import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoting";
 import { isFieldLocalized } from "../classify-fields";
-import { zonedDateColumns } from "../migration/companion-column-holds";
+import {
+  mayHaveEarlierCompanionColumn,
+  zonedDateColumns,
+} from "../migration/companion-column-holds";
 import type { CompanionFieldLike } from "../migration/reconcile-companion";
 
 /** A registry reader that reports nothing of its own: this pass names what it finds itself. */
@@ -114,9 +117,13 @@ export async function findZonedDateColumns(
   adapter: DrizzleAdapter
 ): Promise<ZonedDateColumn[]> {
   if (adapter.getCapabilities().dialect !== "postgresql") return [];
-  // Only an entity with a translatable field has a translations column to find.
-  const entities = (await translatedEntities(adapter)).filter(
-    entity => entity.fields.length > 0
+  // Only an entity with a translatable field an earlier release may have given a zoned column
+  // (a date's) has one to find: every installation keeps its text per language, so judging the
+  // others would read the shape of every translations table at each production start.
+  const entities = (await translatedEntities(adapter)).filter(entity =>
+    entity.fields.some(field =>
+      mayHaveEarlierCompanionColumn(field, "postgresql", entity.builtBy)
+    )
   );
   if (entities.length === 0) return [];
   const { introspectLiveColumns } = await import(

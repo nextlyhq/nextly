@@ -570,9 +570,8 @@ describe.each(getConfiguredTestDialects())(
 
     /**
      * Stands in for the process dying as it writes the adding plugin's owner
-     * rows, after its module ran and, on SQLite, was recorded applied: that
-     * write and every later ledger write of the run fail, as a dead process
-     * writes nothing more.
+     * rows, after its module ran: that write and every later ledger write of
+     * the run fail, as a dead process writes nothing more.
      */
     function stopAtTheAdderOwnerRows(): void {
       let stopped = false;
@@ -624,27 +623,21 @@ describe.each(getConfiguredTestDialects())(
       await endStoppedProcess();
 
       // The state the stop left: its module ran, and nothing it made is
-      // claimed. SQLite recorded the module applied before the owner rows;
-      // the servers write the two together, so the stop took the applied row
-      // with it and left the attempt unfinished.
-      const recorded = dialect === "sqlite" ? "applied" : "in_progress";
-      expect(await adderModuleStatus()).toEqual([recorded]);
+      // claimed. Every database writes the applied row and the owner rows
+      // together, so the stop took the applied row with it and left the
+      // attempt unfinished.
+      expect(await adderModuleStatus()).toEqual(["in_progress"]);
       expect(await claimsOf(ADDER)).toEqual([]);
 
       await install(ADDER);
 
-      if (dialect === "sqlite") {
-        // Not run a second time: still one attempt, applied.
-        expect(await adderModuleStatus()).toEqual(["applied"]);
-      } else {
-        // Not run a second time: its statements stand, so it is recorded
-        // applied with none of them run, beside the attempt that stopped.
-        const rows = await adderModuleRows();
-        expect(await adderModuleStatus()).toEqual(["applied", "in_progress"]);
-        expect(
-          rows.find(row => row.status === "applied")?.statementsExecuted
-        ).toBe(0);
-      }
+      // Not run a second time: its statements stand, so it is recorded
+      // applied with none of them run, beside the attempt that stopped.
+      const rows = await adderModuleRows();
+      expect(await adderModuleStatus()).toEqual(["applied", "in_progress"]);
+      expect(
+        rows.find(row => row.status === "applied")?.statementsExecuted
+      ).toBe(0);
       expect(await claimsOf(ADDER)).toEqual(
         [
           "table ad__marks v1",
