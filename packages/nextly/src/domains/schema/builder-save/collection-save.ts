@@ -169,6 +169,7 @@ import {
   readIndexColumns,
   readIndexUniqueness,
   readUniqueIndexesByColumn,
+  readUpdateTriggers,
   uniqueIndexNames,
 } from "../pipeline/live-table-facts";
 import { assertDeleteWithinThreshold } from "../pipeline/pre-cleanup/executor";
@@ -201,6 +202,7 @@ import {
   perLanguageAfter,
   perLanguageBefore,
   throwTypeChangeRefusals,
+  type JudgedFieldTypeChange,
 } from "../value-conversion/type-change/field-type-changes";
 
 import { asBuilderSaveDrift } from "./builder-save-drift";
@@ -1480,10 +1482,57 @@ async function refuseSaveTypeChanges(
   if (judgement === undefined) return undefined;
   throwTypeChangeRefusals(judgement.label, judgement.refusals);
   refuseChangedClearCounts(judgement.judged, save.confirmedClears);
-  return typeConversionOf({
-    dialect: deps.adapter.getCapabilities().dialect,
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const conversion = typeConversionOf({
+    dialect,
     judged: judgement.judged,
     ...judgement.at,
+  });
+  if (conversion !== undefined) {
+    await refuseConversionOverTriggers(
+      deps.adapter.getDrizzle(),
+      dialect,
+      judgement.label,
+      judgement.judged.filter(change => change.converted === true)
+    );
+  }
+  return conversion;
+}
+
+/**
+ * Refuse a conversion of a table that has update triggers, naming them, before any value is
+ * written: the conversion writes the table's rows one batch at a time, and each update fires the
+ * triggers, which would run whatever they do once per row, unseen by the person who asked for a
+ * type change. Each converted field is named with the triggers on the table its values are in.
+ */
+async function refuseConversionOverTriggers(
+  db: unknown,
+  dialect: SupportedDialect,
+  label: string,
+  converted: readonly JudgedFieldTypeChange[]
+): Promise<void> {
+  const triggersOf = new Map<string, string[]>();
+  const errors: { path: string; code: string; message: string }[] = [];
+  for (const change of converted) {
+    let fired = triggersOf.get(change.table);
+    if (fired === undefined) {
+      fired = await readUpdateTriggers(db, dialect, change.table);
+      triggersOf.set(change.table, fired);
+    }
+    if (fired.length === 0) continue;
+    errors.push({
+      path: `fields.${change.to.name}`,
+      code: "TYPE_CHANGE_BLOCKED",
+      message: `${label}: field '${change.to.name}' cannot change from ${change.from.type} to ${change.to.type}: the change writes each of its values again, and ${change.table} has ${fired.length === 1 ? "a trigger that fires" : "triggers that fire"} on every row it writes (${fired.join(", ")}). Drop or disable ${fired.length === 1 ? "it" : "them"} first, then save again.`,
+    });
+  }
+  if (errors.length === 0) return;
+  throw NextlyError.validation({
+    errors,
+    logContext: {
+      reason: "type-change-over-update-triggers",
+      triggers: Object.fromEntries(triggersOf),
+    },
   });
 }
 

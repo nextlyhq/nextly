@@ -621,17 +621,29 @@ function refusalOf(
   const blocked = judgement.class === "blocked";
   const lossy =
     judgement.class === "lossy" && !acknowledged.has(change.to.name);
+  // A cleared value is no value, which a required field's column refuses: the clear is refused
+  // even confirmed, rather than written part way into a NOT NULL that stops it.
+  const clearsRequired =
+    judgement.class === "lossy" &&
+    acknowledged.has(change.to.name) &&
+    change.to.required === true;
   const translated = change.changesTranslationsColumn === true;
   const leaving = change.leavesWithEntity === true;
-  if (!blocked && !lossy && !translated && !leaving) return null;
+  if (!blocked && !lossy && !clearsRequired && !translated && !leaving) {
+    return null;
+  }
   const why = refusalReasons({
     translated,
     leaving,
     lossy,
+    clearsRequired,
     rewritten: judgement.reasons.some(r => r.kind === "needs-rewrite"),
     converted: change.converted === true,
   });
-  const values = blocked || lossy ? ` (${describeClassed(judgement)})` : "";
+  const values =
+    blocked || lossy || clearsRequired
+      ? ` (${describeClassed(judgement)})`
+      : "";
   return {
     path: change.to.name,
     code:
@@ -656,6 +668,7 @@ function refusalReasons(of: {
   translated: boolean;
   leaving: boolean;
   lossy: boolean;
+  clearsRequired: boolean;
   rewritten: boolean;
   converted: boolean;
 }): string[] {
@@ -670,7 +683,11 @@ function refusalReasons(of: {
       "Its entity stops being translated in the same save, which moves each language's value out of the translations table as it is stored: turn off translation and save first, then change the field's type."
     );
   }
-  if (of.lossy && of.converted) {
+  if (of.clearsRequired) {
+    why.push(
+      "It is required, so a cleared value would leave its row with none: make it optional first, or change the values that cannot convert, then save again."
+    );
+  } else if (of.lossy && of.converted) {
     why.push(
       "Confirm clearing the values that cannot convert, with the count the review shows, and the save clears them, here and on every database its migration deploys to."
     );

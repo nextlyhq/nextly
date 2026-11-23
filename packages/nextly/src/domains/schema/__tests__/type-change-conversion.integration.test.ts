@@ -642,22 +642,25 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v")).toEqual({ kept: "12", lost: "abc" });
     });
 
-    // Each value is written by an UPDATE of its row, which a table's update trigger would fire on,
-    // doing whatever it does once per row. PostgreSQL's `ALTER … USING` writes no row and fires none.
-    it("refuses a conversion of a table with an update trigger where rows are written one by one, naming it, and changes nothing", async () => {
+    // Each value is written by an UPDATE of its row, which a table's update trigger fires on once per
+    // row, doing whatever it does: refused before any value is written, naming the trigger.
+    it("refuses a conversion of a table with an update trigger, naming it, and changes nothing", async () => {
       const t = await boot([{ name: "v", type: "chips" }]);
       await write(t, "one", { v: ["a"] });
       const table = `dc_${SLUG}`;
       if (dialect === "postgresql") {
-        expect(await save(t, [{ name: "v", type: "text" }])).toBeUndefined();
-        expect(await read(t, "v")).toEqual({ one: "a" });
-        return;
+        await exec(
+          t,
+          `CREATE FUNCTION tcc_touch_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql`
+        );
       }
       await exec(
         t,
         dialect === "mysql"
           ? `CREATE TRIGGER ${q("tcc_touch")} AFTER UPDATE ON ${q(table)} FOR EACH ROW SET @tcc_touched = 1`
-          : `CREATE TRIGGER ${q("tcc_touch")} AFTER UPDATE ON ${q(table)} BEGIN SELECT 1; END`
+          : dialect === "postgresql"
+            ? `CREATE TRIGGER ${q("tcc_touch")} AFTER UPDATE ON ${q(table)} FOR EACH ROW EXECUTE FUNCTION tcc_touch_fn()`
+            : `CREATE TRIGGER ${q("tcc_touch")} AFTER UPDATE ON ${q(table)} BEGIN SELECT 1; END`
       );
 
       expect(await save(t, [{ name: "v", type: "text" }])).toMatchObject(
