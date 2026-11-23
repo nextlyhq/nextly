@@ -19,6 +19,7 @@ import type { FieldConfig } from "../../fields/types";
 import {
   fileSystemFields,
   filesProblems,
+  resolveFilesPolicy,
   type CollectionFilesConfig,
 } from "../collection-files";
 import { defineCollection, type CollectionConfig } from "../define-collection";
@@ -36,6 +37,7 @@ const FILE_FIELDS = [
   "size",
   "sha256",
   "storageKey",
+  "uploadKey",
   "fileStatus",
   "rejectReason",
   "uploadedByKind",
@@ -82,7 +84,7 @@ describe("defineCollection with files", () => {
     ).toEqual(["title", "slug", "note"]);
   });
 
-  it("lets no caller write a file's fields, and withholds only the storage key from reads", () => {
+  it("lets no caller write a file's fields, and withholds only the two storage keys from reads", () => {
     const contracts = defineCollection({
       slug: "contracts",
       files: FILES,
@@ -93,7 +95,7 @@ describe("defineCollection with files", () => {
       expect(access?.create, name).toBe(false);
       expect(access?.update, name).toBe(false);
       expect(access?.read, name).toBe(
-        name === "storageKey" ? false : undefined
+        name === "storageKey" || name === "uploadKey" ? false : undefined
       );
     }
     // The author's own field keeps its own access.
@@ -139,11 +141,38 @@ describe("defineCollection with files", () => {
 });
 
 describe("the files option is judged", () => {
+  it("fills in the policy's defaults, and keeps what is set", () => {
+    expect(resolveFilesPolicy(FILES)).toEqual({
+      accept: FILES.accept,
+      maxSize: FILES.maxSize,
+      delivery: "stream",
+      pendingTimeout: 3600,
+      principals: [],
+    });
+    expect(
+      resolveFilesPolicy({
+        ...FILES,
+        delivery: "redirect",
+        pendingTimeout: 600,
+        principals: ["accounts:account"],
+      })
+    ).toMatchObject({
+      delivery: "redirect",
+      pendingTimeout: 600,
+      principals: ["accounts:account"],
+    });
+  });
+
   it("accepts a well-formed option, and one with every setting", () => {
     expect(filesErrors({ files: FILES })).toEqual([]);
     expect(
       filesErrors({
-        files: { ...FILES, delivery: "redirect", pendingTimeout: 600 },
+        files: {
+          ...FILES,
+          delivery: "redirect",
+          pendingTimeout: 600,
+          principals: ["accounts:account", "nextlyhq-plugin-accounts:account"],
+        },
       })
     ).toEqual([]);
     expect(
@@ -190,6 +219,16 @@ describe("the files option is judged", () => {
       "too short a wait for a confirm",
       { ...FILES, pendingTimeout: 30 },
       "files.pendingTimeout",
+    ],
+    [
+      "kinds of person not in a list",
+      { ...FILES, principals: "accounts:account" },
+      "files.principals",
+    ],
+    [
+      "a kind of person not written <plugin>:<name>",
+      { ...FILES, principals: ["account"] },
+      "files.principals[0]",
     ],
   ])("refuses %s", (_label, files, path) => {
     expect(filesErrors({ files })).toEqual([path]);

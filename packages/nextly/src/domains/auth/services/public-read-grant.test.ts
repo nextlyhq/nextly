@@ -522,9 +522,24 @@ describe("the once-only notice of the reads visitors lost", () => {
       meta,
       publicRoleMade: async () => false,
       seededBefore: async () => true,
+      presetGrantsRecorded: async () => false,
     });
 
     expect(meta.rows.get(PUBLIC_READ_NOTICE_META_KEY)).toBe('"due"');
+  });
+
+  it("is not due where the preset roles came with a release record and no Public role", async () => {
+    // What `nextly migrate` of 0.0.2-alpha.75 leaves on a database never
+    // started: its visitors were judged by the Public role all along.
+    const meta = memoryMeta();
+    await recordPublicReadNotice({
+      meta,
+      publicRoleMade: async () => false,
+      seededBefore: async () => true,
+      presetGrantsRecorded: async () => true,
+    });
+
+    expect(meta.rows.get(PUBLIC_READ_NOTICE_META_KEY)).toBe('"not-due"');
   });
 
   it("is not due on a new install, or where the Public role is made already", async () => {
@@ -533,12 +548,14 @@ describe("the once-only notice of the reads visitors lost", () => {
       meta: fresh,
       publicRoleMade: async () => false,
       seededBefore: async () => false,
+      presetGrantsRecorded: async () => false,
     });
     const made = memoryMeta();
     await recordPublicReadNotice({
       meta: made,
       publicRoleMade: async () => true,
       seededBefore: async () => true,
+      presetGrantsRecorded: async () => false,
     });
 
     expect(fresh.rows.get(PUBLIC_READ_NOTICE_META_KEY)).toBe('"not-due"');
@@ -551,6 +568,7 @@ describe("the once-only notice of the reads visitors lost", () => {
       meta,
       publicRoleMade: async () => false,
       seededBefore: async () => true,
+      presetGrantsRecorded: async () => false,
     });
 
     expect(meta.rows.get(PUBLIC_READ_NOTICE_META_KEY)).toBe('"not-due"');

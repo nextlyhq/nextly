@@ -74,6 +74,7 @@ import {
   renewLock,
 } from "./api/document-lock";
 import { buildErrorResponse } from "./api/error-response";
+import { handleFileRoute } from "./api/file-routes";
 import {
   getGeneralSettings,
   updateGeneralSettings,
@@ -433,6 +434,7 @@ async function handleApiKeyRequest(
  */
 const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
+  "files",
   "webhooks",
   "releases",
   "workflows",
@@ -1795,6 +1797,12 @@ async function serveServiceRequest(
   // which the read has no body for.
   if (service === "documentLock") {
     return handleDocumentLockRequest(req, method);
+  }
+
+  // A collection's private files: the handler recognises staff and the
+  // signed-in people the collection names, and boots the app itself.
+  if (service === "files") {
+    return handleFileRoute(req, method, routeParams ?? {});
   }
 
   // ==================== TRANSLATIONS DIRECT DISPATCH ====================
