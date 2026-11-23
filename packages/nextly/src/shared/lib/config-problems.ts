@@ -378,9 +378,12 @@ export function configurationProblems(
  * address rule judges (`shared/address-rule`), which the Builder's save and the migrate commands
  * ask only of a new or changed address, as they know which are; one that already exists keeps
  * working. A slug that is missing or not a string is still reported: the Builder never writes one.
+ * A field named by a SQL keyword (`select`, `order`) too: the Builder's own field-name rule
+ * (`fieldNameProblem`) has no keyword rule, as a column's name is always quoted.
  */
 const BUILDER_ALLOWS: ReadonlySet<string> = new Set([
   "FIELDS_EMPTY",
+  "FIELD_NAME_SQL_KEYWORD",
   "SLUG_INVALID_FORMAT",
   "SLUG_TOO_LONG",
   "SLUG_RESERVED",
@@ -416,6 +419,47 @@ function fieldsWithTargetsAsBuilderReads(
       ? { ...read, fields: fieldsWithTargetsAsBuilderReads(read.fields) }
       : read;
   });
+}
+
+/**
+ * Whether `problem` is the missing name of a group that only lays its fields out: the one field
+ * the definition format lets go without a name (`ui-schema.ts`), whose fields are stored where it
+ * sits. The code rules ask every field for a name; a nameless field of any other type is reported.
+ */
+function isLayoutGroupName(
+  lists: Readonly<Record<string, readonly unknown[]>>,
+  problem: ConfigProblem
+): boolean {
+  if (
+    problem.code !== "FIELD_NAME_REQUIRED" ||
+    !problem.path.endsWith(".name")
+  ) {
+    return false;
+  }
+  const field = entryAt(lists, problem.path.slice(0, -".name".length));
+  return (
+    typeof field === "object" &&
+    field !== null &&
+    (field as { type?: unknown }).type === "group" &&
+    (field as { name?: unknown }).name === undefined
+  );
+}
+
+/** What `path` (`collections[0].fields[2]`) names inside `root`, or undefined. */
+function entryAt(root: unknown, path: string): unknown {
+  let at = root;
+  for (const [, key, index] of path.matchAll(
+    /\.?([A-Za-z_$][\w$]*)(?:\[(\d+)\])?/g
+  )) {
+    at =
+      typeof at === "object" && at !== null
+        ? (at as Record<string, unknown>)[key]
+        : undefined;
+    if (index !== undefined) {
+      at = Array.isArray(at) ? at[Number(index)] : undefined;
+    }
+  }
+  return at;
 }
 
 /** The Builder's definitions, as the definition file holds them. */
@@ -466,7 +510,10 @@ export function builderDefinitionProblems(
     { acrossEntities: false }
   )
     .filter(
-      problem => !BUILDER_ALLOWS.has(problem.code) && !shadowed(problem.path)
+      problem =>
+        !BUILDER_ALLOWS.has(problem.code) &&
+        !shadowed(problem.path) &&
+        !isLayoutGroupName(lists, problem)
     )
     .map(problem => ({
       ...problem,

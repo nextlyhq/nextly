@@ -161,7 +161,16 @@ async function refuseLostBuilderDefinitions(
   config: SanitizedNextlyConfig,
   builderEntities: BuilderEntities
 ): Promise<void> {
-  if (isUnread(builderEntities)) return;
+  // A file that could not be read may hold the target: it is the problem named, at the file.
+  if (isUnread(builderEntities)) {
+    throw NextlyError.validation({
+      errors: unreadDefinitionProblems(
+        builderEntities,
+        config.db.uiSchemaFile ?? "ui-schema.json"
+      ),
+      logContext: { reason: "config-invalid" },
+    });
+  }
   let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
     latest = await loadLatestSnapshot(
@@ -196,6 +205,30 @@ const UNKNOWN_TARGET_CODES: ReadonlySet<string> = new Set([
 /** Whether `error` refuses a target nothing declares, which may be an entity the file lost. */
 function namesAnUnknownTarget(error: unknown): boolean {
   return NextlyError.is(error) && UNKNOWN_TARGET_CODES.has(error.code);
+}
+
+/**
+ * The Builder's problems a load reports, by `builderPolicyOf`: every one where it refuses them,
+ * none where it warns, each then logged so a running site goes on. A file that could not be read
+ * is that one problem: its entries were not read to be judged.
+ */
+function builderProblemsFor(
+  entities: BuilderEntities,
+  code: Parameters<typeof builderDefinitionProblems>[1],
+  uiSchemaFile: string | undefined,
+  options: LoadConfigOptions
+): ReturnType<typeof builderDefinitionProblems> {
+  const definitionFile = uiSchemaFile ?? "ui-schema.json";
+  const found = isUnread(entities)
+    ? unreadDefinitionProblems(entities, definitionFile)
+    : builderDefinitionProblems(entities, code, definitionFile);
+  if (builderPolicyOf(options) === "refuse") return found;
+  for (const problem of found) {
+    consoleLogger.warn(
+      `[Nextly] Problem in the Builder's definitions at ${problem.path}: ${problem.message}`
+    );
+  }
+  return [];
 }
 
 /** The problem an unreadable definition file is, at the file, in the shared report's shape. */
@@ -704,6 +737,20 @@ async function loadConfigInternal(
     // running their `validate` and `validateOptions`.
     clearFieldTypes();
     const appConfig = defineConfig({});
+    // The Builder's definitions beside the default configuration are judged as they are beside a
+    // configuration file, once the registry holds no plugin's field type.
+    const builderProblems = builderProblemsFor(
+      await readBuilderEntities(cwd, appConfig.db?.uiSchemaFile),
+      appConfig,
+      appConfig.db?.uiSchemaFile,
+      options
+    );
+    if (builderProblems.length > 0) {
+      throw NextlyError.validation({
+        errors: builderProblems,
+        logContext: { configPath: undefined, reason: "config-invalid" },
+      });
+    }
     return {
       config: appConfig,
       appConfig,
@@ -1014,20 +1061,14 @@ async function loadConfigInternal(
       cwd,
       config.db?.uiSchemaFile
     );
-    const definitionFile = config.db?.uiSchemaFile ?? "ui-schema.json";
-    // A file that could not be read is that one problem: its entries were not read to be judged.
-    const builderProblems = isUnread(builderEntitiesRead)
-      ? unreadDefinitionProblems(builderEntitiesRead, definitionFile)
-      : builderDefinitionProblems(builderEntitiesRead, config, definitionFile);
-    if (builderPolicyOf(options) === "refuse") {
-      problems.push(...builderProblems);
-    } else {
-      for (const problem of builderProblems) {
-        consoleLogger.warn(
-          `[Nextly] Problem in the Builder's definitions at ${problem.path}: ${problem.message}`
-        );
-      }
-    }
+    problems.push(
+      ...builderProblemsFor(
+        builderEntitiesRead,
+        config,
+        config.db?.uiSchemaFile,
+        options
+      )
+    );
     if (problems.length > 0) {
       throw NextlyError.validation({
         errors: problems,

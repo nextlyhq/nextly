@@ -479,3 +479,60 @@ describe("a Builder relationship stored in the earlier spelling, its target in o
     expect(problems).toEqual([]);
   });
 });
+
+describe("a Builder group with no name, laying its fields out", () => {
+  // The definition format lets only a group go without a name; its fields are stored where it
+  // sits. A field of any other type with no name is still reported.
+  it("has no problem, while a nameless text field beside it is reported", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [
+          {
+            slug: "posts",
+            fields: [
+              {
+                type: "group",
+                fields: [{ name: "headline", type: "text" }],
+              },
+              { type: "text" },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(problems.map(problem => [problem.code, problem.path])).toEqual([
+      ["FIELD_NAME_REQUIRED", "ui-schema.json collections[0].fields[1].name"],
+    ]);
+  });
+});
+
+describe("a Builder field named by a SQL keyword", () => {
+  // The Builder's own name rule lets a field be called `select` or `order`, so its definitions
+  // are not refused for it.
+  it("has no problem", () => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [
+          {
+            slug: "posts",
+            fields: [
+              { name: "select", type: "text" },
+              { name: "order", type: "number" },
+            ],
+          },
+        ],
+        singles: [],
+        components: [],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(problems).toEqual([]);
+  });
+});
