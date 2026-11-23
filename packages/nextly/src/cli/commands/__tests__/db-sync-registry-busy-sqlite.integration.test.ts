@@ -11,8 +11,10 @@
  * The database runs without WAL (the adapter's `wal: false`), where a connection that holds the
  * database exclusively (`BEGIN EXCLUSIVE`, or a writer committing) keeps every other connection
  * from reading as well as writing. The holder is a second connection to the same file, as another
- * process is. The bounds come from the environment (1 second a try, 4 in all), as a command reads
- * them.
+ * process is. The bounds come from the environment (1 second a try, 8 in all), as a command reads
+ * them. Without WAL the lock also reads the holder's row after each busy try, which waits as well,
+ * so fewer tries fit in the total than on a WAL database; what tells a run that waited from one
+ * that stopped at once is that it tried more than once.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,6 +33,9 @@ import {
 } from "vitest";
 
 import { loadDialectTables } from "../../../database/dialect-tables";
+import { busyTableBounds } from "../../../domains/schema/busy-table/bounds";
+import { causeChain } from "../../../domains/schema/busy-table/ended-waiting";
+import { plannedTryStarts } from "../../../domains/schema/busy-table/schedule";
 import { withSchemaLock } from "../../../domains/schema/pipeline/schema-lock";
 import { NextlyError } from "../../../errors/nextly-error";
 import { createLogger } from "../../utils/logger";
@@ -56,7 +61,7 @@ describe("a promote's or demote's registry write on a busy SQLite database", () 
 
   beforeAll(async () => {
     vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
-    vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "4");
+    vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "8");
     dir = mkdtempSync(join(tmpdir(), "nextly-registry-busy-"));
     adapter = await connect();
     holder = await connect();
@@ -105,10 +110,21 @@ describe("a promote's or demote's registry write on a busy SQLite database", () 
     expect(NextlyError.is(error), String(error)).toBe(true);
     const refusal = error as NextlyError;
     expect(refusal.code).toBe("NEXTLY_TABLE_BUSY");
+    // Tries within the bounds, as a command that waits for a held lock makes them: not one try and
+    // a stop (as a request that refuses at once makes), and not SQLite's own answer at the first
+    // access.
     expect(refusal.logContext).toMatchObject({
       reason: "table busy",
       stop: { ended: { table: "nextly_schema_lock" } },
     });
-    expect(refusal.publicMessage).not.toMatch(/SQLITE_BUSY/i);
+    const { tries } = (refusal.logContext as { stop: { tries: number } }).stop;
+    expect(tries).toBeGreaterThan(1);
+    expect(tries).toBeLessThanOrEqual(
+      plannedTryStarts(busyTableBounds({ env: process.env })).length
+    );
+    // SQLite's busy answer is the stop's cause, not the error the command ends with.
+    expect(causeChain(refusal).some(link => link.code === "SQLITE_BUSY")).toBe(
+      true
+    );
   }, 60_000);
 });

@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-`nextly db:sync --demote` and `--promote` on a SQLite database another connection holds wait for it again, as every other schema command does: they retry within `NEXTLY_LOCK_TIMEOUT` / `NEXTLY_LOCK_TIMEOUT_TOTAL` and then stop with `NEXTLY_TABLE_BUSY`, rather than ending at once with SQLite's own "database is locked". Their first access to the database is the schema lock's again.
+On SQLite, the registry write of `nextly db:sync --demote` and `--promote` waits for a database another connection holds, as every other schema command's write does: it takes the schema lock first, retries within `NEXTLY_LOCK_TIMEOUT` / `NEXTLY_LOCK_TIMEOUT_TOTAL`, and then stops with `NEXTLY_TABLE_BUSY`, rather than ending at once with SQLite's own "database is locked" while it checked for the lock's table. On PostgreSQL and MySQL nothing changes: where the lock's table is there, they still create nothing.
