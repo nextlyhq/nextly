@@ -60,6 +60,31 @@ describe("companion readiness", () => {
     expect(adapter.queries).toHaveLength(1);
   });
 
+  it("never makes a read on a transaction wait for a probe on the pool", async () => {
+    // On a pool of one, the pool's probe waits for the connection a transaction holds; a read in
+    // that transaction joining it would wait forever. It asks the catalogue on its own connection.
+    let inTransaction = false;
+    let poolProbeSent: () => void = () => {};
+    const sent = new Promise<void>(resolve => {
+      poolProbeSent = resolve;
+    });
+    const adapter = {
+      dialect: "postgresql" as const,
+      // The pool's probe, sent and never answered.
+      executeQuery: () => {
+        poolProbeSent();
+        return new Promise<never>(() => {});
+      },
+      tableExists: () => Promise.resolve(true),
+      transactionOpenInFlow: () => inTransaction,
+      getDrizzle: <T>() => ({}) as T,
+    };
+    void isCompanionReady(adapter, "dc_tags_locales");
+    await sent;
+    inTransaction = true;
+    expect(await isCompanionReady(adapter, "dc_tags_locales")).toBe(true);
+  });
+
   it("keeps asking while the companion is absent", async () => {
     // Deliberately not remembered. `db:sync` and `migrate` run in a different process, so a
     // remembered "not ready" would outlive the migration that made it wrong — turning a window
@@ -154,7 +179,7 @@ describe("resolveCompanionsReady", () => {
     };
   }
 
-  it("answers every companion from one listing, with no probe of its own", async () => {
+  it("answers every listed companion from one listing", async () => {
     const adapter = listingAdapter(["dc_posts_locales", "dc_tags_locales"]);
 
     await resolveCompanionsReady(adapter, [
@@ -164,7 +189,10 @@ describe("resolveCompanionsReady", () => {
     ]);
 
     expect(adapter.listings).toHaveLength(1);
-    expect(adapter.queries).toEqual([]);
+    // Only the one the listing does not name is probed on its own.
+    expect(adapter.queries).toEqual([
+      'SELECT 1 FROM "dc_pages_locales" LIMIT 0',
+    ]);
     // What a write in a transaction reads: the listed companions are ready, the missing one is
     // still unknown, so it fails closed rather than writing to a table that is not there.
     expect(cachedCompanionReadiness(adapter, "dc_posts_locales")).toBe("ready");
@@ -172,6 +200,25 @@ describe("resolveCompanionsReady", () => {
     expect(
       cachedCompanionReadiness(adapter, "dc_pages_locales")
     ).toBeUndefined();
+  });
+
+  it("probes on its own a companion the listing does not name", async () => {
+    // The listing names the current schema's tables; a probe finds one anywhere on PostgreSQL's
+    // search path, so a companion kept in another schema there is still found ready.
+    const adapter = {
+      ...countingAdapter(["dc_posts_locales", "dc_tags_locales"]),
+      listTables: () => Promise.resolve(["dc_posts_locales"]),
+    };
+
+    await resolveCompanionsReady(adapter, [
+      "dc_posts_locales",
+      "dc_tags_locales",
+    ]);
+
+    expect(adapter.queries).toEqual([
+      'SELECT 1 FROM "dc_tags_locales" LIMIT 0',
+    ]);
+    expect(cachedCompanionReadiness(adapter, "dc_tags_locales")).toBe("ready");
   });
 
   it("asks nothing when every verdict is fresh", async () => {

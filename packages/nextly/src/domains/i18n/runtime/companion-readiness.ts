@@ -52,7 +52,10 @@
  * @module domains/i18n/runtime/companion-readiness
  */
 
-import { connectionOf } from "../../../shared/lib/read-transaction-scope";
+import {
+  asksOnTransaction,
+  connectionOf,
+} from "../../../shared/lib/read-transaction-scope";
 import {
   isMissingTable,
   type MigrationDialect,
@@ -199,9 +202,15 @@ export async function isCompanionReady(
 ): Promise<boolean> {
   const tables = readyTables(adapter);
   if (isFresh(tables.get(companionTableName))) return true;
-  // One probe per table at a time: reads arriving together (a document and the relations it
-  // populates, two requests of one screen) wait for the probe already on its way rather than each
-  // sending its own for the same answer.
+  // A read on a transaction's connection probes on that connection, through the catalogue
+  // (`companionTableExists`), and never waits for a probe on the pool: on a pool of one, that probe
+  // waits for the very connection the transaction holds.
+  if (asksOnTransaction(adapter)) {
+    return probeCompanion(adapter, companionTableName, tables);
+  }
+  // Otherwise one probe per table at a time: reads arriving together (a document and the
+  // relations it populates, two requests of one screen) wait for the probe already on its way
+  // rather than each sending its own for the same answer.
   const probes = probesInFlight(adapter);
   const inFlight = probes.get(companionTableName);
   if (inFlight !== undefined) return inFlight;
@@ -253,7 +262,9 @@ function hasListTables(
  * {@link isCompanionReady} for many companions at once, remembering each `ready` verdict.
  *
  * Where the adapter lists its tables, one catalogue read answers them all: every companion it
- * names is `ready`, and one it does not name is left unresolved, as a failed probe leaves it.
+ * names is `ready`. The listing names the current schema's tables alone, while a probe finds a
+ * table anywhere on PostgreSQL's search path, so a companion it does not name is probed on its
+ * own, as before: a database that keeps every companion beside its main table pays one read.
  * One probe per companion made a start's statements grow with the number of translated entities,
  * which is every collection and Single once every installation keeps its translatable fields per
  * language. An adapter that cannot list its tables is probed one companion at a time, as before.
@@ -271,24 +282,33 @@ export async function resolveCompanionsReady(
   );
   if (unknown.length === 0) return;
   if (!hasListTables(adapter)) {
-    // A probe that fails does not stop the others; the first failure is thrown once all ran.
-    let failure: { error: unknown } | undefined;
-    for (const name of unknown) {
-      try {
-        await isCompanionReady(adapter, name);
-      } catch (error) {
-        failure ??= { error };
-      }
-    }
-    if (failure !== undefined) throw failure.error;
+    await probeEach(adapter, unknown);
     return;
   }
   const present = new Set(await adapter.listTables());
   const verifiedAt = Date.now();
-  for (const name of unknown) {
+  const unlisted = unknown.filter(name => {
     if (present.has(name)) tables.set(name, verifiedAt);
-    else tables.delete(name);
+    return !present.has(name);
+  });
+  await probeEach(adapter, unlisted);
+}
+
+/** {@link isCompanionReady} for each of `names`, every one even after a failure. */
+async function probeEach(
+  adapter: CompanionIntrospectAdapter,
+  names: readonly string[]
+): Promise<void> {
+  // A probe that fails does not stop the others; the first failure is thrown once all ran.
+  let failure: { error: unknown } | undefined;
+  for (const name of names) {
+    try {
+      await isCompanionReady(adapter, name);
+    } catch (error) {
+      failure ??= { error };
+    }
   }
+  if (failure !== undefined) throw failure.error;
 }
 
 /**
