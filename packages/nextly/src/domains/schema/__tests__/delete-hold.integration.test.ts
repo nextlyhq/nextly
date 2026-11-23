@@ -19,12 +19,27 @@
  * - a review that lists only the top-level fields shows no count for a field removed from a group
  *   with no name, and a save that compares the row's fields then refuses every such removal.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
+import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database";
+import { childLayoutArgs } from "../../../__tests__/storage-layout";
+import { buildClaims } from "../../../auth/jwt/claims";
+import { signAccessToken } from "../../../auth/jwt/sign";
+import { createAdapter } from "../../../database/factory";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import {
   createTestNextly,
@@ -32,6 +47,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
+import { _resetEnvCache } from "../../../shared/lib/env";
 import { consoleLogger } from "../../../shared/types";
 import { holdEntityForWrite } from "../../collections/services/entry-write-hold";
 import {
@@ -1433,6 +1449,7 @@ describe.each(getConfiguredTestDialects())(
         // `memo` holds the same values as `note`.
         await sql(t, `UPDATE ${q(TABLE)} SET ${q("memo")} = ${q("note")}`);
         const filesBefore = historyFiles(t);
+        const version = await schemaVersion(t);
         const outcome = await withStopPoints(
           point => {
             if (/: before statement 2$/.test(point)) {
@@ -1447,7 +1464,7 @@ describe.each(getConfiguredTestDialects())(
               {
                 fields: REMAINING,
                 confirmed: true,
-                schemaVersion: await schemaVersion(t),
+                schemaVersion: version,
                 resolutions: {
                   note: { action: "confirm_drop" },
                   memo: { action: "confirm_drop" },
@@ -1479,5 +1496,208 @@ describe.each(getConfiguredTestDialects())(
       },
       60_000
     );
+
+    /**
+     * The app on a database another process can open (a file on SQLite, a scratch database
+     * elsewhere), with its collection, three notes, and an editor signed in for the REST API.
+     */
+    async function bootShared(): Promise<{
+      t: TestNextly;
+      url: string;
+      cookie: string;
+      drop: () => Promise<void>;
+    }> {
+      vi.stubEnv("NODE_ENV", "development");
+      let url: string;
+      let drop: () => Promise<void>;
+      if (dialect === "sqlite") {
+        const dir = mkdtempSync(join(tmpdir(), "nextly-delete-hold-race-"));
+        url = `file:${join(dir, "site.db")}`;
+        drop = async () => rmSync(dir, { recursive: true, force: true });
+      } else {
+        const scratch = await createScratchDatabase(dialect, "nextly_dh_race");
+        url = scratch.url;
+        drop = scratch.drop;
+      }
+      vi.stubEnv("DB_DIALECT", dialect);
+      vi.stubEnv("DATABASE_URL", url);
+      _resetEnvCache();
+      const t = await createTestNextly({
+        adapter: (await createAdapter({ type: dialect, url } as Parameters<
+          typeof createAdapter
+        >[0])) as never,
+        db: {
+          migrationsDir: "./database/history",
+          uiSchemaFile: "./schema/builder.json",
+        },
+      });
+      instance = t;
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: SLUG, label: "Note", fields: NOTED }
+      );
+      for (const note of ["a", "b", "c"]) await insert(t, note);
+      const editor = "dh-race-editor";
+      await superAdminUser(t, editor);
+      const cookie = `nextly_session=${await signAccessToken(
+        buildClaims({
+          userId: editor,
+          email: `${editor}@example.test`,
+          name: editor,
+          image: null,
+          roleIds: [],
+          sessionEpoch: 0,
+        }),
+        process.env.NEXTLY_SECRET ?? ""
+      )}`;
+      return { t, url, cookie, drop };
+    }
+
+    /**
+     * Another copy of the site, as its own process, ready to write one entry setting `note`
+     * through `way` once told to (`go`), and what the write ended with (`outcome`).
+     */
+    async function otherCopy(
+      shared: { t: TestNextly; url: string; cookie: string },
+      way: "direct" | "rest"
+    ): Promise<{
+      go: () => void;
+      outcome: Promise<Record<string, unknown>>;
+      settled: () => boolean;
+    }> {
+      const child = spawn(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          ...childLayoutArgs(),
+          join(__dirname, "helpers", "entry-writer-copy.ts"),
+          dialect,
+          shared.url,
+          shared.t.basePath,
+          SLUG,
+          way,
+          JSON.stringify({ label: "from the other copy", note: "raced" }),
+        ],
+        {
+          cwd: join(__dirname, "..", "..", "..", ".."),
+          env: {
+            ...process.env,
+            NODE_ENV: "development",
+            DB_DIALECT: dialect,
+            DATABASE_URL: shared.url,
+            NEXTLY_TEST_COOKIE: shared.cookie,
+          },
+          stdio: ["pipe", "pipe", "pipe"],
+        }
+      );
+      const lines: string[] = [];
+      let wake: () => void = () => undefined;
+      // The copy's own lines, apart from what its app logs.
+      let pending = "";
+      child.stdout.on("data", (chunk: Buffer) => {
+        const text = pending + chunk.toString();
+        const parts = text.split("\n");
+        pending = parts.pop() ?? "";
+        for (const line of parts) {
+          if (line.startsWith("@writer ")) lines.push(line.slice(8));
+        }
+        wake();
+      });
+      let stderr = "";
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      const lineAfter = (index: number): Promise<string> =>
+        new Promise((resolve, reject) => {
+          const look = () => {
+            if (lines.length > index) resolve(String(lines[index]));
+          };
+          wake = look;
+          child.once("exit", () => {
+            look();
+            reject(new Error(`the other copy ended early: ${stderr}`));
+          });
+          look();
+        });
+      expect(await lineAfter(0)).toBe("ready");
+      let done = false;
+      const outcome = lineAfter(1).then(line => {
+        done = true;
+        return JSON.parse(line) as Record<string, unknown>;
+      });
+      return {
+        go: () => {
+          child.stdin.write("go\n");
+        },
+        outcome,
+        settled: () => done,
+      };
+    }
+
+    // An entry write from another copy of the site, as its own process, through either door, sent
+    // while the save holds the collection after its count: it waits for the save, held across
+    // processes, and is then refused naming the field it set, never written into the field just
+    // before the save drops it. On SQLite a save the push applies holds the collection in its own
+    // process alone, a stated limit, so only its file road is raced from another process.
+    for (const way of ["direct", "rest"] as const) {
+      for (const road of ["file", "push"] as const) {
+        it.skipIf(road === "push" && dialect === "sqlite")(
+          `holds a write from another copy through the ${way === "direct" ? "Direct API" : "REST API"} until the save on the ${road} road is recorded, then refuses its value for the removed field`,
+          async () => {
+            const shared = await bootShared();
+            try {
+              const writer = await otherCopy(shared, way);
+              pushRoad.forced = road === "push";
+              const { paused, release } = gated(afterCount);
+              const applying = apply(shared.t, 3, REMAINING, {
+                note: { action: "confirm_drop" },
+              }).then(
+                () => "applied",
+                (error: unknown) => error
+              );
+              const reached = await Promise.race([
+                paused.then(() => true),
+                applying.then(() => false),
+              ]);
+              expect(reached || (await applying)).toBe(true);
+
+              writer.go();
+              await new Promise(resolve => setTimeout(resolve, 1_500));
+              const heldBack = !writer.settled();
+              release();
+              expect(heldBack).toBe(true);
+              expect(await applying).toBe("applied");
+              const outcome = await writer.outcome;
+              // Never written: refused, and no row added beside the three.
+              expect(outcome.ok, JSON.stringify(outcome)).toBeUndefined();
+              const [rows] = await sql<{ n: number | string }>(
+                shared.t,
+                `SELECT COUNT(*) AS n FROM ${q(TABLE)}`
+              );
+              expect(Number(rows?.n)).toBe(3);
+              expect(await hasNoteColumn(shared.t)).toBe(false);
+              // Refused naming the field it set. A REST write from another process on SQLite can
+              // reach the database once the save is over, and is refused there instead, still
+              // with nothing written.
+              if (!(dialect === "sqlite" && way === "rest")) {
+                expect(outcome, JSON.stringify(outcome)).toMatchObject({
+                  code: "VALIDATION_ERROR",
+                  errors: [expect.objectContaining({ path: "fields.note" })],
+                });
+              }
+            } finally {
+              await instance?.destroy();
+              instance = undefined;
+              await shared.drop();
+              _resetEnvCache();
+            }
+          },
+          120_000
+        );
+      }
+    }
   }
 );

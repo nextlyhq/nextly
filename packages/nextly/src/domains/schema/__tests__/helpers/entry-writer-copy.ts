@@ -1,0 +1,87 @@
+/**
+ * Another server copy of a site, as its own process, that writes one entry while the test's copy
+ * saves the collection: started on the database the URL names, it prints `ready`, waits for a line
+ * on its input, writes the entry through the Direct API (`direct`) or the REST API as a signed-in
+ * editor (`rest`, the session cookie in `NEXTLY_TEST_COOKIE`), and prints what the write ended
+ * with as one line of JSON: `{ "ok": true }`, or the refusal's `code` and issues. Its own lines
+ * start with `@writer `, apart from what the app logs.
+ *
+ * Run by `delete-hold.integration.test.ts` through `tsx`, so the copy runs this source, not a
+ * build. Arguments: the dialect, the database URL, the app's folder (the copies are one app), the
+ * collection's slug, the way to write, and the entry's data as JSON.
+ */
+import { createAdapter } from "../../../../database/factory";
+import { createTestNextly } from "../../../../plugins/test-nextly";
+import { createDynamicHandlers } from "../../../../routeHandler";
+
+const [dialect, url, basePath, slug, way, data] = process.argv.slice(2);
+if (!dialect || !url || !basePath || !slug || !way || !data) {
+  throw new Error(
+    "usage: <dialect> <url> <app folder> <slug> <direct|rest> <data>"
+  );
+}
+
+const adapter = await createAdapter({ type: dialect, url } as Parameters<
+  typeof createAdapter
+>[0]);
+const copy = await createTestNextly({ adapter: adapter as never, basePath });
+// Its own lines carry a mark, apart from what the app logs to the same output.
+const say = (line: string) => process.stdout.write(`@writer ${line}\n`);
+say("ready");
+// Sent once the test's save holds the collection.
+await new Promise<void>(resolve => {
+  process.stdin.once("data", () => resolve());
+});
+
+type Outcome =
+  | { ok: true }
+  | { code?: unknown; message?: unknown; errors?: unknown };
+let outcome: Outcome;
+try {
+  if (way === "direct") {
+    await copy.nextly.create({
+      collection: slug,
+      data: JSON.parse(data) as Record<string, unknown>,
+    } as never);
+    outcome = { ok: true };
+  } else {
+    const response = await createDynamicHandlers().POST(
+      new Request(`http://localhost/admin/api/collections/${slug}/entries`, {
+        method: "POST",
+        headers: {
+          origin: "http://localhost",
+          cookie: process.env.NEXTLY_TEST_COOKIE ?? "",
+          "content-type": "application/json",
+        },
+        body: data,
+      }),
+      {
+        params: Promise.resolve({ params: ["collections", slug, "entries"] }),
+      }
+    );
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: {
+        code?: unknown;
+        message?: unknown;
+        data?: { errors?: unknown };
+      };
+    };
+    outcome =
+      response.status < 300
+        ? { ok: true }
+        : {
+            code: body.error?.code,
+            message: body.error?.message,
+            errors: body.error?.data?.errors,
+          };
+  }
+} catch (error) {
+  const refused = error as {
+    code?: unknown;
+    publicData?: { errors?: unknown };
+  };
+  outcome = { code: refused.code, errors: refused.publicData?.errors };
+}
+say(JSON.stringify(outcome));
+await copy.destroy();
+process.exit(0);
