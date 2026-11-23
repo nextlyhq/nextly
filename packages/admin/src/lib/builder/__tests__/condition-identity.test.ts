@@ -305,3 +305,30 @@ describe("a condition following a rename", () => {
     expect(followRename(fields, "f-missing", "summary")).toBe(fields);
   });
 });
+
+describe("a condition a type change leaves comparing in a way its source can't", () => {
+  it("a number source changed to text breaks a greater-than condition", () => {
+    const broken = brokenConditions([
+      field("teaser", {
+        admin: {
+          condition: { field: "views", operator: "greaterThan", value: 10 },
+        },
+      }),
+      // Was a number; now text, which has no "greater than".
+      field("views", { type: "text" }),
+    ]);
+    expect(broken.get("f-teaser")?.reason).toBe("operator-unsupported");
+  });
+
+  it("a source whose type still offers the operator is not broken", () => {
+    const broken = brokenConditions([
+      field("teaser", {
+        admin: {
+          condition: { field: "views", operator: "greaterThan", value: 10 },
+        },
+      }),
+      field("views", { type: "number" }),
+    ]);
+    expect(broken.has("f-teaser")).toBe(false);
+  });
+});
