@@ -5,8 +5,9 @@
  * A private file differs from a media file in what its storage may do, so it
  * has its own small surface rather than flags on `upload`:
  *
- * - **The key is core's.** `files/<collection>/<uuid>` (or the collection's
- *   configured prefix), never the uploaded file's name, which can carry a
+ * - **The key is core's.** `files/<collection>/<uuid>` (or
+ *   `<prefix>/<collection>/<uuid>` under the collection's configured
+ *   prefix), never the uploaded file's name, which can carry a
  *   person's name. Every call checks the key is one this store made for its
  *   own collection, so one collection's files cannot be reached through
  *   another's.
@@ -86,15 +87,18 @@ export function keepsFilesPrivate(
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
- * The folder a collection's private files go under, ending in one slash: the
- * configured prefix when there is one, else `files/<collection>/`. Trimmed by
- * a loop rather than a pattern, so a long run of slashes costs nothing.
+ * The folder a collection's private files go under, ending in one slash:
+ * `<prefix>/<collection>/`, the prefix being the configured one or `files`.
+ * The collection is always in it, so no two collections' folders are ever the
+ * same, whatever prefixes they are configured with, and one's store can never
+ * take another's key as its own. The prefix is trimmed of trailing slashes by
+ * a loop rather than a pattern, so a long run of them costs nothing.
  */
 function privatePrefix(collection: string, configured?: string): string {
   let end = configured?.length ?? 0;
   while (end > 0 && configured?.[end - 1] === "/") end--;
   const folder = configured?.slice(0, end) ?? "";
-  return folder === "" ? `files/${collection}/` : `${folder}/`;
+  return `${folder === "" ? "files" : folder}/${collection}/`;
 }
 
 /**

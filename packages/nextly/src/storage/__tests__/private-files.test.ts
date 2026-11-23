@@ -299,12 +299,38 @@ describe("a private collection's file store", () => {
   });
 
   it("makes keys under the configured prefix, however its slashes are written", () => {
-    expect(store("private/contracts//").files.newKey()).toMatch(
+    expect(store("private//").files.newKey()).toMatch(
       new RegExp(`^private/contracts/${UUID}$`)
     );
     expect(store("vault").files.newKey()).toMatch(
-      new RegExp(`^vault/${UUID}$`)
+      new RegExp(`^vault/contracts/${UUID}$`)
     );
+  });
+
+  it("keeps two collections apart however their prefixes are written", async () => {
+    const adapter = privateCapable();
+    const storage = new MediaStorage({
+      plugins: [
+        plugin(adapter, {
+          contracts: { prefix: "vault/" },
+          payroll: { prefix: "vault" },
+        }),
+      ],
+      privateCollections: ["contracts", "payroll"],
+    });
+    const contracts = storage.getPrivateFiles("contracts");
+    const payroll = storage.getPrivateFiles("payroll");
+    const key = contracts.newKey();
+    expect(contracts.owns(key)).toBe(true);
+    expect(payroll.owns(key)).toBe(false);
+    expect(payroll.owns(payroll.newKey())).toBe(true);
+    expect(
+      NextlyError.isCode(
+        await thrown(() => payroll.read(key)),
+        "INTERNAL_ERROR"
+      )
+    ).toBe(true);
+    expect(adapter.read).not.toHaveBeenCalled();
   });
 
   it("stores bytes through the private call, at the key it made", async () => {
