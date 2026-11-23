@@ -585,6 +585,63 @@ describe("PushSchemaPipeline — a SQLite push and another flow's transaction", 
     expect(applied.success).toBe(false);
     expect(applied.error?.code).toBe("CONFIRMATION_DECLINED");
   }, 60_000);
+
+  // The foreign-key setting is restored after the apply's transaction commits. A restore that
+  // fails then leaves the change in place: the apply reports it as landed, every statement kept,
+  // so the save keeps its files, rather than as a change taken back.
+  it("reports a change whose restore failed after its commit as landed", async () => {
+    const db = adapter.getDrizzle();
+    const real = adapter.executeQuery.bind(adapter);
+    let switches = 0;
+    adapter.executeQuery = ((
+      ...args: Parameters<DrizzleAdapter["executeQuery"]>
+    ) => {
+      if (/^PRAGMA foreign_keys\s*=/i.test(args[0])) {
+        switches += 1;
+        // The second switch is the restore, after the transaction committed.
+        if (switches === 2) {
+          return Promise.reject(new Error("the restore failed"));
+        }
+      }
+      return real(...args);
+    }) as DrizzleAdapter["executeQuery"];
+
+    const applied = await new PushSchemaPipeline({
+      executor: new DrizzleStatementExecutor("sqlite", db),
+      renameDetector: noopRenameDetector,
+      classifier: noopClassifier,
+      promptDispatcher: noopPromptDispatcher,
+      preRenameExecutor: noopPreRenameExecutor,
+      preCleanupExecutor: noopPreCleanupExecutor,
+      migrationJournal: noopMigrationJournal,
+      notifier: noopNotifier,
+      adapter,
+    }).apply({
+      desired: desiredWith([
+        { name: "heading", type: "text" },
+        { name: "alpha", type: "text" },
+        { name: "beta", type: "text" },
+      ]),
+      db,
+      dialect: "sqlite",
+      source: "code",
+      promptChannel: "terminal",
+    });
+    adapter.executeQuery = real;
+    await real("PRAGMA foreign_keys = ON");
+
+    expect(switches, "the restore was never asked for").toBe(2);
+    expect(applied.success).toBe(false);
+    // Every statement the try ran stands.
+    expect(applied.statementsKept).toBe(2);
+    expect(applied.error?.message).toMatch(
+      /was applied, but foreign-key enforcement/
+    );
+    const columns = (
+      await real<{ name: string }>(`PRAGMA table_info("${TABLE}")`)
+    ).map(column => column.name);
+    expect(columns).toEqual(expect.arrayContaining(["alpha", "beta"]));
+  }, 60_000);
 });
 
 // A push under the schema lock whose transaction runs longer than the lock's lease: the lock's

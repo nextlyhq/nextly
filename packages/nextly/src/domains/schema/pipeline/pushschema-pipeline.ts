@@ -62,6 +62,7 @@ import { prepareTryWatchdog } from "../busy-table/watchdog";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
 import {
   refusingNewDanglingReferences,
+  restoreFailedAfterCommit,
   type SqliteForeignKeySession,
   sqliteSchemaTransaction,
   withinSqliteTransaction,
@@ -439,6 +440,22 @@ function withoutSqliteDropsLeftToRebuild(
 ): Operation[] {
   const rebuilt = sqliteConstraintRebuilds(ops, dialect);
   return rebuilt.size === 0 ? ops : withoutDropsLeftToRebuild(ops, rebuilt);
+}
+
+/**
+ * What a whole SQLite try leaves applied, with `finishedEarlier` from the tries before it: none of
+ * its own statements, which its transaction took back, unless it committed and only the restore of
+ * the foreign-key setting after it failed (`restoreFailedAfterCommit`). Then all `finishedThisTry`
+ * of them stand, and the save keeps its files.
+ */
+function keptBySqliteTry(
+  failure: unknown,
+  finishedEarlier: number,
+  finishedThisTry: number
+): number {
+  return restoreFailedAfterCommit(failure)
+    ? finishedEarlier + finishedThisTry
+    : finishedEarlier;
 }
 
 /**
@@ -1029,7 +1046,7 @@ export class PushSchemaPipeline {
       if (oneByOne) {
         keptSoFar = failure =>
           sqliteTryWhole
-            ? finishedEarlier
+            ? keptBySqliteTry(failure, finishedEarlier, finishedThisTry.length)
             : inFlight && !refusedByDatabase(failure)
               ? undefined
               : finishedEarlier +

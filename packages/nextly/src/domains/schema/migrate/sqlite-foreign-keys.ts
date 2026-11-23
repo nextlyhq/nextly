@@ -21,6 +21,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { consoleLogger } from "../../../shared/types";
 
 /** The two ways a caller's connection runs SQL. */
 export interface SqliteForeignKeySession {
@@ -73,7 +74,9 @@ export async function withSqliteForeignKeysOff<T>(
  * 4. `work`, then `PRAGMA foreign_key_check`: a row it returns is a reference the change left
  *    dangling, and the change is rolled back and refused with `dangling`'s sentence.
  * 5. COMMIT, then the setting read in step 1 is restored, whether the change committed, was
- *    refused or failed.
+ *    refused or failed. A restore that fails once the transaction has committed is thrown as a
+ *    failure the change outlived (`restoreFailedAfterCommit`): the change stands, and only the
+ *    setting could not be put back, which a reconnection does.
  *
  * `inside` wraps everything the transaction runs, where a caller reads its failures its own way.
  */
@@ -96,8 +99,9 @@ export function sqliteSchemaTransaction<T>(
       await adapter.executeQuery(statement);
     },
   };
-  return withSqliteForeignKeysOff(outside, () =>
-    adapter.transaction(ctx =>
+  let committed = false;
+  return withSqliteForeignKeysOff(outside, async () => {
+    const result = await adapter.transaction(ctx =>
       inside(async () => {
         const within = {
           read: <R>(statement: string) =>
@@ -110,8 +114,51 @@ export function sqliteSchemaTransaction<T>(
           sentences.dangling
         );
       })
-    )
+    );
+    committed = true;
+    return result;
+  }).catch((error: unknown) => {
+    if (!committed) throw error;
+    throw restoreFailureAfterCommit(sentences.subject, error);
+  });
+}
+
+/** The failures `sqliteSchemaTransaction` raised for a restore after its transaction committed. */
+const failedRestoresAfterCommit = new WeakSet<object>();
+
+/**
+ * Whether `error` is a restore of the foreign-key setting that failed after its schema change's
+ * transaction committed: the change stands, so a caller reports it as landed, not taken back.
+ */
+export function restoreFailedAfterCommit(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    failedRestoresAfterCommit.has(error)
   );
+}
+
+/**
+ * The failure of a restore after `subject`'s transaction committed, logged at once: until the
+ * connection is opened again (as a restart does), enforcement may stay off for whatever runs next.
+ */
+function restoreFailureAfterCommit(
+  subject: string,
+  cause: unknown
+): NextlyError {
+  const failure = new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: `${subject.charAt(0).toUpperCase()}${subject.slice(1)} was applied, but foreign-key enforcement could not be switched back on after it. Restart the server before making further changes, so the database connection is opened again with enforcement on.`,
+    logMessage: `The foreign-key setting could not be restored after ${subject} committed.`,
+    logContext: { reason: "foreign-keys-not-restored-after-commit" },
+    ...(cause instanceof Error ? { cause } : {}),
+  });
+  failedRestoresAfterCommit.add(failure);
+  consoleLogger.error(failure.publicMessage, {
+    reason: "foreign-keys-not-restored-after-commit",
+    cause: cause instanceof Error ? cause.message : String(cause),
+  });
+  return failure;
 }
 
 /**
