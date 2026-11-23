@@ -170,8 +170,9 @@ With no terminal (CI, `--non-interactive`), every move is declined unless you pa
 `--accept-moves`, which accepts them all; `migrate:create` warns about each one it declines,
 naming the field. A field renamed as it moves, or whose type changes with it, is not offered as a
 move, and neither is one whose name left or arrived in more than one place: make those changes in
-separate migrations. A snapshot written before snapshots recorded fields cannot show a move;
-`migrate:create` names each entity it could not check.
+separate migrations. A snapshot written before snapshots recorded fields cannot show a move:
+`migrate:create` names each entity whose table it holds without its fields, whatever else changed,
+and the snapshot that run writes records them, so the next run can show their moves.
 
 A working draft keeps the field at its old place, so publishing it after the move would drop the
 pending change. For a collection or a Single, the migration stops before it changes anything

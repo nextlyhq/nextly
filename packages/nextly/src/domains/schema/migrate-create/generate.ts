@@ -1098,7 +1098,6 @@ export async function generateMigration(
     entities,
     previous: previous?.data.entities,
     previousSnapshot,
-    operations,
   });
   args = withCodeMoves(args, codeMoves);
 
@@ -3488,7 +3487,6 @@ async function movesMadeInCode(
     entities: readonly TaggedConfigEntity[];
     previous: EntitySettingsRecord | undefined;
     previousSnapshot: NextlySchemaSnapshot;
-    operations: readonly Operation[];
   }
 ): Promise<CodeMovesPlan> {
   const asked = args.codeMoves;
@@ -3497,7 +3495,6 @@ async function movesMadeInCode(
     entities: run.entities,
     previous: run.previous,
     previousTables: new Set(run.previousSnapshot.tables.map(t => t.name)),
-    operations: run.operations,
     dialect: args.dialect,
     originOf: columnOriginOf,
     // Loaded only when there is something to ask, as the rename question is.

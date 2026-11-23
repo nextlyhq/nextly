@@ -18,8 +18,14 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
+import { VERSIONS_TABLE } from "../../../schemas/versions/types";
+import type { VersionsWhereCondition } from "../../versions/db-api";
+import { WORKING_DRAFT_SHAPE } from "../../versions/versions-repository";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
-import type { ColumnKind } from "../services/field-column-descriptor";
+import {
+  toSnakeCase,
+  type ColumnKind,
+} from "../services/field-column-descriptor";
 import { boundedIdentifier } from "../services/index-name";
 
 import type { StoragePlace } from "./check-move";
@@ -507,8 +513,47 @@ export function missingValuesStop(
   );
 }
 
-/** The table every entry's versions and working drafts are kept in. */
-const VERSIONS_TABLE = "nextly_versions";
+/**
+ * One condition on the versions table as SQL. The table's columns are the snake case of the names
+ * the versions repository queries them by, on every dialect (held by the drafts stop's tests). An
+ * operator or a value this cannot write is refused, so no file is written with a condition left
+ * out.
+ */
+function versionsConditionSql(
+  condition: VersionsWhereCondition,
+  dialect: SupportedDialect
+): string {
+  const column = quoteIdent(toSnakeCase(condition.column), dialect);
+  if (condition.op === "IS NULL" || condition.op === "IS NOT NULL") {
+    return `${column} ${condition.op}`;
+  }
+  const literal = conditionLiteral(condition.value, dialect);
+  const operator = { "=": "=", "!=": "<>" }[condition.op as "=" | "!="];
+  if (operator === undefined || literal === undefined) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "working-draft-condition-unwritable",
+        column: condition.column,
+        op: condition.op,
+      },
+    });
+  }
+  return `${column} ${operator} ${literal}`;
+}
+
+/** A condition's value as an SQL literal: a boolean as the dialect keeps one, a plain string, a finite number. */
+function conditionLiteral(
+  value: VersionsWhereCondition["value"],
+  dialect: SupportedDialect
+): string | undefined {
+  if (typeof value === "boolean") {
+    if (dialect === "postgresql") return String(value);
+    return value ? "1" : "0";
+  }
+  if (typeof value === "string") return `'${safeLiteral(value)}'`;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return undefined;
+}
 
 /**
  * Statements that stop a run, before the file changes anything, where a working draft of
@@ -525,24 +570,21 @@ export function workingDraftsStop(
   subject: { kind: "collection" | "single"; slug: string },
   from: readonly string[]
 ): string[] {
-  const q = (name: string) => quoteIdent(name, dialect);
-  const literal = (text: string) => `'${safeLiteral(text)}'`;
   const name = from.map(safeKey).join("_");
-  // A working draft as the versions repository finds one (`WORKING_DRAFT_SHAPE`): saved by hand,
-  // never numbered, still a draft.
-  const no = dialect === "postgresql" ? "false" : "0";
+  // The subject's working drafts, as the versions repository finds one (`WORKING_DRAFT_SHAPE`),
+  // so the file and the application agree on which rows are working drafts.
   const working = [
-    `${q("scope_kind")} = ${literal(subject.kind)}`,
-    `${q("scope_slug")} = ${literal(subject.slug)}`,
-    `${q("is_autosave")} = ${no}`,
-    `${q("version_no")} IS NULL`,
-    `${q("status")} = 'draft'`,
-  ].join(" AND ");
-  return stopWhereNot(dialect, q(VERSIONS_TABLE), {
+    { column: "scopeKind", op: "=", value: subject.kind },
+    { column: "scopeSlug", op: "=", value: subject.slug },
+    ...WORKING_DRAFT_SHAPE,
+  ] satisfies readonly VersionsWhereCondition[];
+  return stopWhereNot(dialect, quoteIdent(VERSIONS_TABLE, dialect), {
     guard: `nextly_drafted_${name}`,
     reason: `publish_or_discard_drafts_of_${name}`,
     kept: `NOT (${holdsValueAt("snapshot", from, dialect)})`,
-    where: working,
+    where: working
+      .map(condition => versionsConditionSql(condition, dialect))
+      .join(" AND "),
   });
 }
 
@@ -751,10 +793,12 @@ export function emptiedContainers(
  * The statement moving the media library's record of where an item is used along with a moved
  * field: each use recorded at `from` (the field's names joined by dots, as the record keeps a
  * path) or under it is recorded at `to` instead, for the entries of `subject`. Left at the old
- * path, a use would no longer be found in the document it names, so the library would stop
- * reporting it and could list the item as unused. A use already recorded at the new path for the
+ * path, a use would still name its item, so the item would go on reading as used (every reader of
+ * whether an item is used keys on its id, never the path): only "Used in" would name the old path,
+ * until the entry is saved again, which records its uses afresh from the content, or
+ * `nextly media reindex-usage` rebuilds the record. A use already recorded at the new path for the
  * same entry, item and language (a row left by a field once there) keeps that row, and the one at
- * the old path stays where nothing reads it, so the unique key is never broken.
+ * the old path stays until such a save or rebuild, so the unique key is never broken.
  */
 export function mediaUsePathStatement(
   dialect: SupportedDialect,

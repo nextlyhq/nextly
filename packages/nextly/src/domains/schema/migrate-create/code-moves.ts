@@ -54,16 +54,29 @@ function recordedFields(
   return Array.isArray(fields) ? (fields as FieldDefinition[]) : undefined;
 }
 
-/** Whether `operations` add or delete a column of `table`: the change a move would read as. */
-function changesColumnsOf(
-  operations: readonly Operation[],
-  table: string
-): boolean {
-  return operations.some(
-    op =>
-      (op.type === "add_column" || op.type === "drop_column") &&
-      op.tableName === table
-  );
+/**
+ * The admin settings of the config's declaration that name top-level fields, as the planner
+ * refuses a move under them (`refuseNamedByAdmin`), the Schema Builder's save included.
+ */
+function adminReferencesOf(entity: MinimalConfigEntity): {
+  useAsTitle?: string;
+  defaultColumns?: string[];
+} {
+  const admin = entity.settings?.settings.admin;
+  if (admin === null || typeof admin !== "object" || Array.isArray(admin)) {
+    return {};
+  }
+  const { useAsTitle, defaultColumns } = admin as Record<string, unknown>;
+  return {
+    ...(typeof useAsTitle === "string" ? { useAsTitle } : {}),
+    ...(Array.isArray(defaultColumns)
+      ? {
+          defaultColumns: defaultColumns.filter(
+            (name): name is string => typeof name === "string"
+          ),
+        }
+      : {}),
+  };
 }
 
 /** What a run's moves are planned from, and how it asks and warns. */
@@ -74,7 +87,6 @@ interface CodeMovesRun {
   }[];
   previous: EntitySettingsRecord | undefined;
   previousTables: ReadonlySet<string>;
-  operations: readonly Operation[];
   dialect: SupportedDialect;
   originOf: (
     entity: MinimalConfigEntity,
@@ -94,25 +106,17 @@ interface AcceptedMoves {
 
 /**
  * The moves of `entity` the run accepts, asked about one by one, each declined one named as the
- * delete and add it stays. An entity the latest snapshot records no fields for, though its table
- * stood then, cannot show its moves, and is named as such where its columns change.
+ * delete and add it stays; `unrecorded` for an entity whose table stood at the latest snapshot,
+ * which records no fields for it, so its moves cannot be shown.
  */
 async function acceptedMovesOf(
   run: CodeMovesRun,
   kind: SettingsEntityKind,
   entity: MinimalConfigEntity
-): Promise<AcceptedMoves | undefined> {
+): Promise<AcceptedMoves | "unrecorded" | undefined> {
   const before = recordedFields(run.previous, kind, entity.slug);
   if (before === undefined) {
-    if (
-      run.previousTables.has(entity.tableName) &&
-      changesColumnsOf(run.operations, entity.tableName)
-    ) {
-      run.warn(
-        `Moves can't be detected for "${entity.slug}": the latest snapshot does not record its fields, so a field moved into or out of a group is written as a delete at its old place and an empty field at its new one. Check the migration before you run it.`
-      );
-    }
-    return undefined;
+    return run.previousTables.has(entity.tableName) ? "unrecorded" : undefined;
   }
   const after = entity.fields as unknown as FieldDefinition[];
   const candidates = moveCandidates(before, after).map(
@@ -169,9 +173,11 @@ export async function planCodeMoves(run: CodeMovesRun): Promise<CodeMovesPlan> {
   // The drafts stops of every entity lead the file, before any entity's values move.
   const stops: string[] = [];
   const planned: { moves: EntityMoves; table: string }[] = [];
+  const unrecorded: string[] = [];
   for (const { kind, entity } of run.entities) {
     const accepted = await acceptedMovesOf(run, kind, entity);
-    if (accepted === undefined) continue;
+    if (accepted === "unrecorded") unrecorded.push(entity.slug);
+    if (accepted === undefined || accepted === "unrecorded") continue;
     stops.push(...draftsStopsOf(run, kind, entity.slug, accepted.moves));
     planned.push({
       table: entity.tableName,
@@ -185,10 +191,21 @@ export async function planCodeMoves(run: CodeMovesRun): Promise<CodeMovesPlan> {
           renames: [],
           table: entity.tableName,
           builtBy: run.originOf(entity, kind),
+          // The settings the config's declaration keeps, which may name a field it moves.
+          admin: adminReferencesOf(entity),
         },
         run.dialect
       ),
     });
+  }
+  // Named whatever the diff shows: a field moved between two groups changes their JSON alone, no
+  // column, and the record a later snapshot keeps lets the next run show its moves.
+  if (unrecorded.length > 0) {
+    const names = unrecorded.map(slug => `"${slug}"`).join(", ");
+    const their = unrecorded.length === 1 ? "its" : "their";
+    run.warn(
+      `Moves can't be detected for ${names}: the latest snapshot does not record ${their} fields, so a field moved into, out of or between groups is written as a delete at its old place and an empty field at its new one, whose values are not carried. Check the migration before you run it.`
+    );
   }
   const facts = planned.map(({ moves, table }) => movesFileFacts(moves, table));
   const all = planned.map(({ moves }) => moves);
