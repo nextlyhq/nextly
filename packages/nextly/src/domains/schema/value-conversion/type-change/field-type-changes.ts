@@ -365,7 +365,7 @@ export async function judgeFieldTypeChanges(
       table,
       column,
       result,
-      ...(perLanguage ? translationsTableFlags(change, args) : {}),
+      ...(perLanguage ? translationsTableFlags(change, args, rewritten) : {}),
       ...(rewritten ? { converted: true as const } : {}),
       ...(rewritten && unique && change.to.unique !== true
         ? { uniqueBefore: true as const }
@@ -387,7 +387,9 @@ function translationsTableFlags(
     builtBy: ColumnOrigin;
     translatedAfter?: ReadonlySet<string>;
     retyped?: ReadonlySet<string>;
-  }
+  },
+  /** The road converts this change value by value (`rewritesPair`). */
+  rewritten: boolean
 ): Pick<
   JudgedFieldTypeChange,
   "changesTranslationsColumn" | "leavesWithEntity"
@@ -395,9 +397,13 @@ function translationsTableFlags(
   if (args.translatedAfter === undefined) return {};
   if (args.translatedAfter.has(change.to.name)) {
     // A column the save's or file's own statements give the new type is no column left behind:
-    // its values are judged in each language, as the entity's own column's are.
+    // its values are judged in each language, as the entity's own column's are. Nor is one the
+    // road converts value by value: the conversion gives the column its new type itself, typed for
+    // the database it runs on, here and on each database the marked file deploys to
+    // (`typeConversionOf`), whatever type the file's own statements leave it.
     return translationsColumnChanges(change.from, change.to, args.builtBy) &&
-      args.retyped?.has(change.to.name) !== true
+      args.retyped?.has(change.to.name) !== true &&
+      !rewritten
       ? { changesTranslationsColumn: true }
       : {};
   }

@@ -296,11 +296,12 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
-    // The save counts on a translations column's new type only where its own file carries it, which
-    // `migrate:create` plans from the folder's newest snapshot: one that records the fields but not
-    // which columns the translations table keeps (a snapshot written before those were kept) gives
-    // the file no `retypes` step, so the change is refused as before, every value as it was.
-    it("refuses a translated change where the newest snapshot keeps no record of the translations columns", async () => {
+    // `migrate:create` plans a translations column's new type from the folder's newest snapshot: one
+    // that records the fields but not which columns the translations table keeps (a snapshot written
+    // before those were kept) gives the file no `retypes` step. A change the save converts value by
+    // value gives the column its new type itself, here and on every database its marked file
+    // deploys to, so it no longer waits on that step.
+    it("converts a translated change where the newest snapshot keeps no record of the translations columns", async () => {
       const t = await boot([{ name: "v", type: "text", localized: true }], {
         localized: true,
       });
@@ -331,10 +332,10 @@ describe.each(getConfiguredTestDialects())(
         await save(t, [{ name: "v", type: "number", localized: true }], {
           localized: true,
         })
-      ).toMatchObject(refusedAs("TYPE_CHANGE_BLOCKED", "kept per language"));
+      ).toBeUndefined();
 
-      expect(await read(t, "v", "en")).toEqual({ a: "12" });
-      expect(await read(t, "v", "es")).toEqual({ a: "34" });
+      expect(await read(t, "v", "en")).toEqual({ a: 12 });
+      expect(await read(t, "v", "es")).toEqual({ a: 34 });
     });
 
     // Holding no value is no exception: the translations table's column takes the new type, so a
