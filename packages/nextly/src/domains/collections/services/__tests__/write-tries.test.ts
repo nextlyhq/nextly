@@ -166,6 +166,25 @@ describe("the tries of an entry write", () => {
     expect(process.env.NODE_ENV).toBe(before);
   });
 
+  it("waits one time over all its tries, counted from its first hold", async () => {
+    vi.useFakeTimers();
+    try {
+      const tries = new WriteTries();
+      // A slow hook, before the write seeks its hold: no part of its wait.
+      vi.advanceTimersByTime(40_000);
+      expect(tries.waitLeft(30_000)).toBe(30_000);
+      // The first try waited for a save, and the second seeks its hold.
+      vi.advanceTimersByTime(21_000);
+      expect(tries.waitLeft(30_000)).toBe(9_000);
+      vi.advanceTimersByTime(60_000);
+      expect(tries.waitLeft(30_000)).toBe(0);
+      // Another write has a wait of its own.
+      expect(new WriteTries().waitLeft(30_000)).toBe(30_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("hands on the thing itself where a step's answer is not data", async () => {
     const tries = new WriteTries();
     const contexts: Record<string, unknown>[] = [];

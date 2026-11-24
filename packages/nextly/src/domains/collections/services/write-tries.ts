@@ -30,6 +30,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isProductionRuntime } from "../../../shared/builder-refusal";
 import { detachData } from "../../../shared/lib/detach";
 
+import type { HeldTries } from "./entry-write-hold";
+
 /** How many times a write is made, the first included. */
 export const WRITE_TRIES = 3;
 
@@ -48,7 +50,9 @@ export function savesHoldEntriesHere(): boolean {
   return !isProductionRuntime();
 }
 
-export class WriteTries {
+export class WriteTries implements HeldTries {
+  /** When the write has waited as long as it may for its hold, once its first hold is sought. */
+  private waitsUntil: number | undefined;
   /** How many tries have been started. */
   private made = 0;
   /** Whether the try under way was refused as made from a definition that changed. */
@@ -102,6 +106,15 @@ export class WriteTries {
   compared(changed: boolean): void {
     this.changed = changed;
     this.holds = !changed;
+  }
+
+  /**
+   * What is left of `whole`, the time the write may wait for its hold over all its tries: counted
+   * from its first hold, so being made again never has it wait longer than one wait.
+   */
+  waitLeft(whole: number): number {
+    this.waitsUntil ??= Date.now() + whole;
+    return Math.max(0, this.waitsUntil - Date.now());
   }
 
   /**

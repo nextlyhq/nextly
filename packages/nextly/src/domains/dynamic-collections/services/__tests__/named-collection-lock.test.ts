@@ -128,6 +128,35 @@ describe("a collection's named lock", () => {
     );
   });
 
+  // A write made again waits only for what its earlier tries left of its one wait, in whole seconds
+  // and never less than it has; with none left it takes a free name and waits for no other.
+  it.each([
+    { waitMs: undefined, seconds: 30 },
+    { waitMs: 12_400, seconds: 13 },
+    { waitMs: 0, seconds: 0 },
+  ])(
+    "waits $seconds seconds for each name where it is given $waitMs milliseconds",
+    async ({ waitMs, seconds }) => {
+      const { tx, statements, registry } = mysqlHold();
+
+      await registry.holdCollectionsIn(
+        tx,
+        ["posts"],
+        "share",
+        waitMs === undefined ? undefined : { waitMs }
+      );
+
+      const taken = statements.filter(query => query.sql.includes("GET_LOCK"));
+      expect(taken).toHaveLength(1);
+      // Each name is followed by its wait, in the one statement that takes both.
+      expect(
+        taken[0].params.flatMap((param, index) =>
+          isLockName(param) ? [taken[0].params[index + 1]] : []
+        )
+      ).toEqual([seconds, seconds]);
+    }
+  );
+
   it("refuses as COLLECTION_BEING_CHANGED when a name is not got in time, releasing the ones it got", async () => {
     // The first of the two names got, the second not.
     const { tx, statements, registry } = mysqlHold({ taken: 1 });

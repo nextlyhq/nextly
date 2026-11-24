@@ -37,6 +37,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
+  ENTITY_HOLD_WAIT_MS,
   type EntityRef,
   entityHoldKey,
   refuseUnlessSharedOnPostgres,
@@ -80,8 +81,16 @@ export interface LoadedRegistryRow {
   readonly insertsOnly?: true;
   /** Whether the collection's Draft/Published lifecycle was on in the row loaded. */
   readonly lifecycle: boolean;
-  /** Told, under the hold, whether the definition has changed since (`WriteTries.compared`). */
-  readonly compared?: (changed: boolean) => void;
+  /** The tries the write is made in, which its hold tells and asks. */
+  readonly tries?: HeldTries;
+}
+
+/** What a write's hold tells its tries, and asks of them (`WriteTries`). */
+export interface HeldTries {
+  /** Told, under the hold, whether the definition has changed since the write loaded it. */
+  compared(changed: boolean): void;
+  /** What is left of `whole`, the time the write may wait for its hold over all its tries. */
+  waitLeft(whole: number): number;
 }
 
 /** How a write is made from the row it loads (`loadedRegistryRowOf`). */
@@ -90,8 +99,8 @@ export interface LoadedRegistryRowOptions {
   insertsOnly?: boolean;
   /** The fields `data` holds only as their own defaults, put there by the write itself. */
   untouchedDefaults?: ReadonlySet<string>;
-  /** Told whether the definition has changed (`LoadedRegistryRow.compared`). */
-  compared?: (changed: boolean) => void;
+  /** The tries the write is made in. */
+  tries?: HeldTries;
 }
 
 /** An entry's data, or a batch's items, each an entry's data. */
@@ -133,8 +142,13 @@ export function loadedRegistryRowOf(
     namesFields: written,
     lifecycle: isOn(status),
     ...(options?.insertsOnly === true ? { insertsOnly: true as const } : {}),
-    ...(options?.compared === undefined ? {} : { compared: options.compared }),
+    ...(options?.tries === undefined ? {} : { tries: options.tries }),
   };
+}
+
+/** How long a write made from `loaded` may wait for its hold: one time over all its tries. */
+export function holdWaitOf(loaded: LoadedRegistryRow | undefined): number {
+  return loaded?.tries?.waitLeft(ENTITY_HOLD_WAIT_MS) ?? ENTITY_HOLD_WAIT_MS;
 }
 
 /**
@@ -224,10 +238,11 @@ export async function holdEntityForWrite(
   const held = heldIn.get(tx);
   if (held?.has(key)) return true;
   const dialect = adapter.getCapabilities().dialect;
-  if (!(await sharedForWrite(tx, entity, adapter, dialect, options))) {
+  const waits = { ...options, waitMs: holdWaitOf(loaded) };
+  if (!(await sharedForWrite(tx, entity, adapter, dialect, waits))) {
     return false;
   }
-  const row = await heldRegistryRow(tx, entity, holder, dialect);
+  const row = await heldRegistryRow(tx, entity, holder, dialect, waits.waitMs);
   if (loaded !== undefined) {
     await refuseChanged(tx, entity, loaded, dialect, heldRowOf(row));
   }
@@ -242,14 +257,14 @@ async function sharedForWrite(
   entity: EntityRef,
   adapter: HoldingAdapter,
   dialect: SupportedDialect,
-  options: { sharedInProcess?: boolean; whenHeld?: WhenHeld } | undefined
+  options: { sharedInProcess?: boolean; whenHeld?: WhenHeld; waitMs: number }
 ): Promise<boolean> {
   if (dialect === "postgresql") {
     const rows: RowsOn = query => tx.queryStatement(query);
-    return sharedOnPostgres(rows, entity, options?.whenHeld);
+    return sharedOnPostgres(rows, entity, options);
   }
   // MySQL's share is its registry row's own read (`heldRegistryRow`).
-  if (dialect === "sqlite" && options?.sharedInProcess !== true) {
+  if (dialect === "sqlite" && options.sharedInProcess !== true) {
     refuseWhileHeldInProcess(adapter, entity);
   }
   return true;
@@ -259,11 +274,11 @@ async function sharedForWrite(
 async function sharedOnPostgres(
   rows: RowsOn,
   entity: EntityRef,
-  whenHeld: WhenHeld | undefined
+  { whenHeld, waitMs }: { whenHeld?: WhenHeld; waitMs: number }
 ): Promise<boolean> {
   if (whenHeld === "leave") return tryShareEntityOnPostgres(rows, entity);
   if (whenHeld === "refuse") await refuseUnlessSharedOnPostgres(rows, entity);
-  else await shareEntityOnPostgres(rows, entity);
+  else await shareEntityOnPostgres(rows, entity, waitMs);
   return true;
 }
 
@@ -277,10 +292,11 @@ function heldRegistryRow(
   tx: TransactionContext,
   entity: EntityRef,
   holder: CollectionHolder,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  waitMs: number
 ): Promise<HeldRegistryRow | null | undefined> {
   return dialect === "mysql"
-    ? heldRegistryRowOnMysql(tx, entity, holder)
+    ? heldRegistryRowOnMysql(tx, entity, holder, waitMs)
     : tx.selectOne<HeldRegistryRow>("dynamic_collections", {
         columns: ["id", "schema_version"],
         where: { and: [{ column: "slug", op: "=", value: entity.slug }] },
@@ -316,12 +332,14 @@ function heldRowOf(row: HeldRegistryRow | null | undefined): HeldRow {
 async function heldRegistryRowOnMysql(
   tx: TransactionContext,
   entity: EntityRef,
-  holder: CollectionHolder
+  holder: CollectionHolder,
+  waitMs: number
 ): Promise<{ id: unknown; schemaVersion: unknown } | undefined> {
   const { existing, ids, versions } = await holder.holdCollectionsIn(
     tx,
     [entity.slug],
-    "share"
+    "share",
+    { waitMs }
   );
   if (!existing.includes(entity.slug)) return undefined;
   return {
@@ -351,7 +369,7 @@ async function refuseChanged(
     });
     refuseMadeFromEarlier(entity, loaded, heldDefinitionOf(row), dialect);
   }
-  loaded.compared?.(false);
+  loaded.tries?.compared(false);
 }
 
 /**
@@ -409,7 +427,7 @@ function refuseUnlessSameRow(
  * A create reads no entry first and writes only the columns its data names, so it goes on where
  * none of those changed. A lifecycle that came or went changes what every write writes or reads.
  *
- * A write refused as made for a definition that changed is told so (`compared`): one that can be
+ * A write refused as made for a definition that changed has its tries told: one that can be
  * made again, from what its hooks left, is (`WriteTries`). A field it sets is named instead, since
  * no try could write it.
  */
@@ -429,7 +447,7 @@ function refuseMadeFromEarlier(
       loaded.insertsOnly === true ? loaded.namesFields : loaded.fields;
     if (madeFromWhatHolds(reads, loaded, held.fields, dialect)) return;
   }
-  loaded.compared?.(true);
+  loaded.tries?.compared(true);
   throw changedWhileHeld(entity.slug);
 }
 

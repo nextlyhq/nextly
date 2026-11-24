@@ -32,7 +32,7 @@ export function entityHoldKey(entity: EntityRef): string {
  * How long a write or a save waits for the other side of an entity's hold before it is refused
  * with nothing changed, as long as MySQL's named locks wait (`takeNamedCollectionLocks`).
  */
-const ENTITY_HOLD_WAIT_MS = 30_000;
+export const ENTITY_HOLD_WAIT_MS = 30_000;
 
 /** The refusal of a hold not had in time, or held by a save where waiting is not possible. */
 function entityBeingChanged(entity: EntityRef, reason: string): NextlyError {

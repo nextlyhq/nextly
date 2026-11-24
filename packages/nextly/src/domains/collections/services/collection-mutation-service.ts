@@ -563,6 +563,7 @@ import {
 import {
   fieldsMoved,
   holdEntityForWrite,
+  holdWaitOf,
   type LoadedRegistryRow,
   loadedRegistryRowOf,
   type LoadedRegistryRowOptions,
@@ -6714,7 +6715,7 @@ export class CollectionMutationService extends BaseService {
           }),
         undefined,
         loadedRegistryRowOf(collection, undefined, {
-          compared: changed => tries.compared(changed),
+          tries,
         })
       );
       if (!took) {
@@ -7041,7 +7042,7 @@ export class CollectionMutationService extends BaseService {
         loadedRegistryRowOf(
           collection,
           { [field.name]: true },
-          { compared: changed => tries.compared(changed) }
+          { tries }
         )
       );
       committed = true;
@@ -10057,7 +10058,7 @@ export class CollectionMutationService extends BaseService {
       }, transactionOptions, loadedRegistryRowOf(collection, writtenNames, {
         insertsOnly: true,
         untouchedDefaults,
-        compared: changed => tries.compared(changed),
+        tries,
       }));
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
@@ -12812,7 +12813,7 @@ export class CollectionMutationService extends BaseService {
         if (gateVerdict !== undefined) await gateVerdict.settle();
         // Compared, under the hold, with the registry row this move loaded.
       }, transactionOptions, loadedRegistryRowOf(publishCollection, undefined, {
-        compared: changed => tries.compared(changed),
+        tries,
       }));
 
       // The entry was deleted out from under the publish: nothing was written or
@@ -19864,7 +19865,7 @@ export class CollectionMutationService extends BaseService {
         // field it sets, its hooks' included, that a save removed while it waited is refused by
         // name, and an update made for a definition that changed otherwise is made again.
       }, transactionOptions, loadedRegistryRowOf(collection, writtenNames, {
-        compared: changed => tries.compared(changed),
+        tries,
       }));
       // The transaction committed (skipped if the retry ultimately threw), so
       // the event is durable; a later hook failure must not hide the delivery.
@@ -22215,7 +22216,7 @@ export class CollectionMutationService extends BaseService {
         // Compared, under the hold, with the registry row this delete loaded: a collection
         // deleted or made again under its slug while it waited is refused.
       }, transactionOptions, loadedRegistryRowOf(collection, undefined, {
-        compared: changed => tries.compared(changed),
+        tries,
       }));
       // Set only after the transaction resolves: `deletedRow` is true exactly
       // when the delete committed, so a commit failure never flags a durable
@@ -23209,11 +23210,13 @@ export class CollectionMutationService extends BaseService {
     // flow already opened, the turn is held, and the hold refuses rather than waits.
     const sharesFirst =
       this.dialect === "sqlite" && !this.adapter.transactionOpenInFlow();
+    const waitMs = holdWaitOf(loaded);
     const release = sharesFirst
-      ? await shareEntityInProcess(this.adapter, {
-          kind: "collection",
-          slug: collectionName,
-        })
+      ? await shareEntityInProcess(
+          this.adapter,
+          { kind: "collection", slug: collectionName },
+          waitMs
+        )
       : undefined;
     // On PostgreSQL a write whose transaction is its own gives it up where a save holds the
     // collection, and waits with none open: kept through the wait, it would hold a connection of
@@ -23244,7 +23247,7 @@ export class CollectionMutationService extends BaseService {
           }
         }, options);
         return made.outcome;
-      });
+      }, waitMs);
     } finally {
       release?.();
     }

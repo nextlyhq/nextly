@@ -741,12 +741,14 @@ export class DynamicCollectionRegistryService extends BaseService {
    * waited for a delete therefore reads the row after the delete removed it.
    * The lock belongs to the connection, so `release` must run before the
    * transaction hands the connection back, and a hold for `"share"` releases
-   * its own before it returns.
+   * its own before it returns. `waitMs` is how long it waits for a named lock
+   * there, the hold's own wait where it is left out.
    */
   async holdCollectionsIn(
     tx: TransactionContext,
     slugs: readonly string[],
-    strength: "share" | "update"
+    strength: "share" | "update",
+    options: { waitMs?: number } = {}
   ): Promise<{
     existing: string[];
     ids: ReadonlyMap<string, string>;
@@ -768,7 +770,8 @@ export class DynamicCollectionRegistryService extends BaseService {
         ? await takeNamedCollectionLocks(
             this.adapter,
             query => tx.queryStatement(query),
-            slugs
+            slugs,
+            options.waitMs
           )
         : { release: none };
     // Keyed by the table's property names, as a row read through the adapter is.
@@ -967,10 +970,10 @@ function databaseNameOf(
  * first it does not get: it answers how many it holds, the first that many of `names`. MySQL's
  * `IF` evaluates only the branch it returns, so no name after a refused one is asked for.
  */
-function takeInOrder(names: readonly string[]): SQL {
+function takeInOrder(names: readonly string[], waitSeconds: number): SQL {
   let taken: SQL = sql`${names.length}`;
   for (let index = names.length - 1; index >= 0; index--) {
-    taken = sql`IF(GET_LOCK(${names[index]}, ${NAMED_LOCK_WAIT_SECONDS}) = 1, ${taken}, ${index})`;
+    taken = sql`IF(GET_LOCK(${names[index]}, ${waitSeconds}) = 1, ${taken}, ${index})`;
   }
   return taken;
 }
@@ -988,7 +991,9 @@ function takeInOrder(names: readonly string[]): SQL {
 async function takeNamedCollectionLocks(
   adapter: object,
   rowsOn: RowsOn,
-  slugs: readonly string[]
+  slugs: readonly string[],
+  /** How long each name is waited for, in whole seconds of the server's, none for 0. */
+  waitMs = NAMED_LOCK_WAIT_SECONDS * 1000
 ): Promise<{ release: () => Promise<void> }> {
   const names = namedCollectionLockNames(
     await databaseNameOf(adapter, rowsOn),
@@ -1010,7 +1015,7 @@ async function takeNamedCollectionLocks(
   let got: number;
   try {
     const [row] = await rowsOn<{ taken: unknown }>(
-      sql`SELECT ${takeInOrder(names)} AS ${sql.identifier("taken")}`
+      sql`SELECT ${takeInOrder(names, Math.ceil(waitMs / 1000))} AS ${sql.identifier("taken")}`
     );
     got = Number(row?.taken);
   } catch (error) {

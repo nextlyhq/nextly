@@ -1789,7 +1789,7 @@ export class CollectionBulkService extends BaseService {
             entries,
             {
               insertsOnly: true,
-              compared: changed => tries.compared(changed),
+              tries,
             }
           )
         );
@@ -2098,7 +2098,7 @@ export class CollectionBulkService extends BaseService {
           await this.mutationService.loadedRegistryRowFor(
             params.collectionName,
             entries.map(entry => entry.data),
-            { compared: changed => tries.compared(changed) }
+            { tries }
           )
         );
       });
@@ -2436,7 +2436,7 @@ export class CollectionBulkService extends BaseService {
           // Compared, under the hold, with the registry row the batch was made for, and opened
           // again where it changed: no item, and no hook of one, has run before the hold.
         }, undefined, await this.mutationService.loadedRegistryRowFor(params.collectionName, [], {
-          compared: changed => tries.compared(changed),
+          tries,
         }));
       });
       committed = true;
