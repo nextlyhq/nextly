@@ -1242,6 +1242,32 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // A NOT NULL column that takes a row with no value is replaced on SQLite even where it keeps its
+    // type, by a column with no default of its own: refused before any value is written. Asked
+    // directly, as a save refuses the hand-set default as drift first.
+    it.runIf(dialect === "sqlite")(
+      "refuses to empty a row of a required column carrying a default, naming it, and changes nothing",
+      async () => {
+        const t = await boot([{ name: "v", type: "text", required: true }]);
+        await write(t, "kept", { v: "a@b.co" });
+        await write(t, "lost", { v: "no address" });
+        await remade(t, `dc_${SLUG}`, create =>
+          create.replace(/("v"\s+text\s+NOT NULL)/i, "$1 DEFAULT 'none'")
+        );
+        const { db, conversion } = await judgedThenConversion(t, "confirmed", {
+          from: "text",
+          to: "email",
+        });
+        expect(conversion.columns).toMatchObject([{ keepsType: true }]);
+
+        await expect(conversion.run(db)).rejects.toMatchObject(
+          refusedSaying("has a default ('none')")
+        );
+
+        expect(await stored(t)).toEqual({ kept: "a@b.co", lost: "no address" });
+      }
+    );
+
     // A change that keeps the column's type (an email becoming a text, both `text` on PostgreSQL)
     // has no statement of its file to state the column again: the conversion writes its values in
     // place, so the default the column carries stays. Asked directly, as a save refuses the
