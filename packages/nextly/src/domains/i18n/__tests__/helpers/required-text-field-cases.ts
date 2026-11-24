@@ -95,9 +95,12 @@ const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const quote = (dialect: TestDialect, name: string) =>
   dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
+/** The moment `LONG_AGO` names, in milliseconds. */
+const LONG_AGO_MS = Date.UTC(2000, 0, 1);
+
 /** A stamp long before any test runs, as each dialect's `_updated_at` column takes it. */
 const LONG_AGO: Record<TestDialect, string> = {
-  sqlite: "1",
+  sqlite: String(LONG_AGO_MS / 1000),
   postgresql: "'2000-01-01T00:00:00Z'",
   mysql: "'2000-01-01 00:00:00.000'",
 };
@@ -130,9 +133,12 @@ export function requiredTextFieldCases(
       });
 
       afterEach(async () => {
-        await current.destroy();
-        vi.unstubAllEnvs();
-        await rm(basePath, { recursive: true, force: true });
+        try {
+          await current.destroy();
+        } finally {
+          vi.unstubAllEnvs();
+          await rm(basePath, { recursive: true, force: true });
+        }
       });
 
       const handler = () =>
@@ -337,10 +343,12 @@ export function requiredTextFieldCases(
       });
 
       /** The review's line for `answer`, over the entries without a value. */
-      const noticeOf = (change: Change, answer: Answer) =>
-        answer.kind === "fill"
-          ? `This save fills ${change.without} rows with '${answer.value}' in ${change.field}.`
-          : `This save also deletes ${change.without} rows here, and the rows that don't fit on every database the migration reaches.`;
+      const noticeOf = (change: Change, answer: Answer) => {
+        const rows = `${change.without} ${change.without === 1 ? "row" : "rows"}`;
+        return answer.kind === "fill"
+          ? `This save fills ${rows} with '${answer.value}' in ${change.field}.`
+          : `This save also deletes ${rows} here, and the rows that don't fit on every database the migration reaches.`;
+      };
 
       /** The dialog's review and apply of `change`, answered with `answer`. */
       async function throughDialog(
@@ -552,44 +560,82 @@ export function requiredTextFieldCases(
           : (row?.type ?? "VARCHAR(36)");
       }
 
-      /** Every language's row of the collection's entries: its entry, language and note. */
+      /**
+       * Every language's row of the collection's entries: its entry, its language and its value in
+       * `column`, the note's by default.
+       */
       async function languageRows(
-        slug: string
-      ): Promise<{ parent: string; locale: string; note: unknown }[]> {
+        slug: string,
+        column = "note"
+      ): Promise<{ parent: string; locale: string; value: unknown }[]> {
         const q = (name: string) => quote(dialect, name);
         const rows = await query<Record<string, unknown>>(
-          `SELECT ${q("_parent")} AS parent, ${q("_locale")} AS locale, ${q("note")} AS note FROM ${q(`dc_${slug}_locales`)}`
+          `SELECT ${q("_parent")} AS parent, ${q("_locale")} AS locale, ${q(column)} AS value FROM ${q(`dc_${slug}_locales`)}`
         );
         return rows
           .map(row => ({
             parent: String(row.parent),
             locale: String(row.locale),
-            note: row.note ?? null,
+            value: row.value ?? null,
           }))
           .sort((a, b) =>
             `${a.parent}:${a.locale}`.localeCompare(`${b.parent}:${b.locale}`)
           );
       }
 
-      /** Each language row's stamp, by `entry:language`, as the database returns it. */
+      /**
+       * Each language row's stamp, by `entry:language`, as the moment it names in milliseconds
+       * (the runtime stores epoch seconds on SQLite, and a UTC moment elsewhere).
+       */
       async function stampsOf(
         slug: string
-      ): Promise<Record<string, string | null>> {
+      ): Promise<Record<string, number | null>> {
         const q = (name: string) => quote(dialect, name);
+        const column = q("_updated_at");
+        const milliseconds =
+          dialect === "postgresql"
+            ? `EXTRACT(EPOCH FROM ${column}) * 1000`
+            : dialect === "mysql"
+              ? `TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', ${column}) / 1000`
+              : `${column} * 1000`;
         const rows = await query<Record<string, unknown>>(
-          `SELECT ${q("_parent")} AS parent, ${q("_locale")} AS locale, ${q("_updated_at")} AS stamp FROM ${q(`dc_${slug}_locales`)}`
+          `SELECT ${q("_parent")} AS parent, ${q("_locale")} AS locale, ${milliseconds} AS stamp FROM ${q(`dc_${slug}_locales`)}`
         );
         return Object.fromEntries(
           rows.map(row => [
             `${String(row.parent)}:${String(row.locale)}`,
             row.stamp === null || row.stamp === undefined
               ? null
-              : row.stamp instanceof Date
-                ? row.stamp.toISOString()
-                : String(row.stamp),
+              : Number(row.stamp),
           ])
         );
       }
+
+      /**
+       * That a change lost nothing: every entry is there, and where the values are kept per
+       * language, every language's row with its value, as `before` read them under `column`.
+       */
+      async function expectNothingLost(
+        slug: string,
+        ids: { kept: string; empty: string; bare: string },
+        before:
+          | { parent: string; locale: string; value: unknown }[]
+          | undefined,
+        column = "note"
+      ): Promise<void> {
+        expect(await idsOf(`dc_${slug}`)).toEqual(
+          [ids.kept, ids.empty, ids.bare].sort()
+        );
+        if (before !== undefined) {
+          expect(await languageRows(slug, column)).toEqual(before);
+        }
+      }
+
+      /** An error's messages, its causes' included, so a cause that names the key is read. */
+      const messagesOf = (error: unknown): string =>
+        error instanceof Error
+          ? `${error.message}\n${messagesOf(error.cause)}`
+          : "";
 
       /** `change` through `road`, not judged: its review is not read, and a refusal is thrown. */
       async function attempt(
@@ -681,12 +727,14 @@ export function requiredTextFieldCases(
               ],
             };
 
+            const before = keptPerLanguage(translated)
+              ? await languageRows(slug)
+              : undefined;
+
             if (road === "push") {
               // The push asks nothing of a field the change leaves optional, so it settles nothing.
               await throughPush(slug, translated, answer, optional);
-              expect(await idsOf(`dc_${slug}`)).toEqual(
-                [ids.kept, ids.empty, ids.bare].sort()
-              );
+              await expectNothingLost(slug, ids, before);
               return;
             }
             // The apply itself, not only its review, refuses it.
@@ -712,10 +760,7 @@ export function requiredTextFieldCases(
               code: "VALIDATION_ERROR",
             });
 
-            // Nothing was deleted.
-            expect(await idsOf(`dc_${slug}`)).toEqual(
-              [ids.kept, ids.empty, ids.bare].sort()
-            );
+            await expectNothingLost(slug, ids, before);
           });
 
           it(`fills a required field added to ${kind} collection in every entry's default language (${road})`, async () => {
@@ -790,6 +835,54 @@ export function requiredTextFieldCases(
             });
           }
 
+          // A date kept per language is stored in its column's own form, the moment the answer
+          // names, whichever road writes it.
+          if (keptPerLanguage(translated)) {
+            it(`stores the date ${kind} collection's answer fills as its column stores one (${road})`, async () => {
+              const answer: Answer = {
+                kind: "fill",
+                value: "2026-01-15T00:00:00.000Z",
+              };
+              const slug = `${slugOf(answer)}_date`;
+              const fields = (required: boolean) => [
+                { name: "heading", type: "text" },
+                {
+                  name: "published",
+                  type: "date",
+                  localized: true,
+                  ...(required ? { required: true } : {}),
+                },
+              ];
+              const created = await handler().createCollection({
+                name: slug,
+                label: "Note",
+                localized: translated,
+                fields: fields(false),
+              });
+              expect(created.success, JSON.stringify(created)).toBe(true);
+              const entry = await handler()
+                .getEntryService()
+                .createEntry(
+                  { collectionName: slug, overrideAccess: true, locale: "en" },
+                  { heading: "Undated" }
+                );
+              expect(entry.success, JSON.stringify(entry)).toBe(true);
+              const id = String((entry.data as { id: unknown }).id);
+
+              await through(road, slug, translated, answer, {
+                fields: fields(true),
+                field: "published",
+                event: "add_not_null_with_nulls",
+                without: 1,
+              });
+
+              const read = await readIn(slug, id, "en");
+              const moment = new Date(String(read.published));
+              expect(Number.isNaN(moment.getTime())).toBe(false);
+              expect(moment.toISOString().slice(0, 10)).toBe("2026-01-15");
+            });
+          }
+
           // A field kept per language has no NOT NULL to hold an entry without its value, so these
           // cases are its own; a column of the main table made required already holds none.
           if (keptPerLanguage(translated)) {
@@ -806,16 +899,21 @@ export function requiredTextFieldCases(
                 {}
               );
               expect(required.ok, await required.clone().text()).toBe(true);
+              const before = await languageRows(slug);
 
               if (road === "push") {
-                // The push asks nothing of a field the change only renames, so it settles nothing.
+                // The push renames the field, and asks nothing of it: no answer to a field the
+                // change only renames is settled, and every language's value is under its new name.
                 await throughPush(
                   slug,
                   translated,
                   answer,
                   NOTE_RENAMED_REQUIRED
                 );
-              } else {
+                await expectNothingLost(slug, ids, before, "remark");
+                return;
+              }
+              {
                 const refused =
                   road === "dialog"
                     ? appliedThroughDialog(
@@ -846,10 +944,7 @@ export function requiredTextFieldCases(
                 });
               }
 
-              // Nothing was deleted.
-              expect(await idsOf(`dc_${slug}`)).toEqual(
-                [ids.kept, ids.empty, ids.bare].sort()
-              );
+              await expectNothingLost(slug, ids, before);
             });
 
             it(`keeps every language's row of ${kind} collection's entries whose delete the database refuses (${road})`, async () => {
@@ -864,12 +959,27 @@ export function requiredTextFieldCases(
               try {
                 const before = await languageRows(slug);
 
-                await attempt(road, slug, translated, answer).catch(
-                  () => undefined
+                // The refusal is the holder's key, not another reason the save did not delete: the
+                // database names it, or on SQLite's file road the reference the delete would leave.
+                const refusal = await attempt(
+                  road,
+                  slug,
+                  translated,
+                  answer
+                ).then(
+                  () => undefined,
+                  (error: unknown) => error
+                );
+                expect(refusal).toMatchObject({
+                  code: "NEXTLY_MIGRATION_APPLY_FAILED",
+                });
+                expect(messagesOf(refusal)).toMatch(
+                  /foreign key|referencing rows that do not exist/i
                 );
 
                 // Every entry still there keeps every language's row.
                 const left = new Set(await idsOf(`dc_${slug}`));
+                expect(left.has(ids.empty)).toBe(true);
                 expect(
                   (await languageRows(slug)).filter(row => left.has(row.parent))
                 ).toEqual(before.filter(row => left.has(row.parent)));
@@ -891,11 +1001,14 @@ export function requiredTextFieldCases(
               await through(road, slug, translated, answer);
 
               const after = await stampsOf(slug);
-              // The rows the fill wrote carry a stamp of their own: the one it filled and the one
-              // it added.
+              // Each row the fill wrote, the one it filled and the one it added, is there with a
+              // moment later than the one seeded, and one of this moment.
               for (const id of [ids.empty, ids.bare]) {
-                expect(after[`${id}:en`]).not.toBeNull();
-                expect(after[`${id}:en`]).not.toBe(before[`${id}:en`]);
+                const stamp = after[`${id}:en`];
+                expect(stamp).toBeDefined();
+                expect(stamp).not.toBeNull();
+                expect(stamp!).toBeGreaterThan(LONG_AGO_MS);
+                expect(Math.abs(stamp! - Date.now())).toBeLessThan(600_000);
               }
               // Every other row keeps its stamp.
               expect(after[`${ids.kept}:en`]).toBe(before[`${ids.kept}:en`]);

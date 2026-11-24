@@ -107,14 +107,12 @@ export function perLanguageColumn(
 }
 
 /**
- * A Single's row fill as a statement writes it: a date as the moment it names, which the
- * statement stores in the dialect's form (`storedDateValue`), and any other value as it is. Both
- * the save's file and the push write the fill through this, so they store the same value.
+ * A fill for a field of `type` as a statement writes it: a date as the moment it names, which the
+ * statement stores in the dialect's form (`storedDateValue`), and any other value as it is. A
+ * field kept per language is filled through this on both roads, the person's answer and a Single's
+ * row fill alike, so the save's file and the push store the same value.
  */
-export function rowFillValue(
-  type: string | undefined,
-  value: unknown
-): unknown {
+export function fillValueOf(type: string | undefined, value: unknown): unknown {
   return type === "date" ? (statedMoment(value) ?? value) : value;
 }
 
@@ -178,7 +176,7 @@ function perLanguageSettleStatements(
       const answer =
         (madeRequired(args.oldFields, args.newFields, name, renames)
           ? answerFor(args, name)
-          : undefined) ?? rowFillFor(args.rowFills, field);
+          : undefined) ?? fillFor(args.rowFills, name);
       if (answer === undefined) return [];
       return [settlement(args.tableName, field, answer, locale)];
     }
@@ -232,24 +230,13 @@ function settlement(
   return {
     ...settled,
     kind: "fill",
-    value: answer.value,
+    value: fillValueOf(field.type, answer.value),
     ...(json ? { json: true } : {}),
   };
 }
 
 /** An answer for a field's entries: fill them, or delete them. */
 type Answer = { kind: "fill"; value: unknown } | { kind: "delete" };
-
-/** A Single's row fill for `field` among `rowFills`, as the fill the file writes for it. */
-function rowFillFor(
-  rowFills: PushAnswers["rowFills"],
-  field: FieldDefinition
-): Answer | undefined {
-  const fill = fillFor(rowFills, field.name);
-  return fill?.kind === "fill"
-    ? { kind: "fill", value: rowFillValue(field.type, fill.value) }
-    : fill;
-}
 
 /** A fill for field `name` among `fills`, as the answer it is. */
 function fillFor(

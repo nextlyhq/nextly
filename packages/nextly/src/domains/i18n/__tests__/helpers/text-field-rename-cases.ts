@@ -87,8 +87,11 @@ export function textFieldRenameCases(
       });
 
       afterEach(async () => {
-        await current.destroy();
-        vi.unstubAllEnvs();
+        try {
+          await current.destroy();
+        } finally {
+          vi.unstubAllEnvs();
+        }
       });
 
       const handler = () =>

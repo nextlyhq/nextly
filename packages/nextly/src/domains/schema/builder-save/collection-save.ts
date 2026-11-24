@@ -228,7 +228,7 @@ import {
   keptPerLanguage,
   madeRequired,
   perLanguageColumn,
-  rowFillValue,
+  fillValueOf,
   sourceColumn,
 } from "./per-language-answers";
 import {
@@ -2028,9 +2028,9 @@ function fileResolutions(
     ...(save.rowFills ?? []).map(fill => ({
       column: fill.column,
       kind: "fill" as const,
-      // A date is written as the moment it names (`rowFillValue`), as the PATCH road's fill
+      // A date is written as the moment it names (`fillValueOf`), as the PATCH road's fill
       // stores it; never the text it was stated in.
-      value: rowFillValue(answeredField(save, fill.column)?.type, fill.value),
+      value: fillValueOf(answeredField(save, fill.column)?.type, fill.value),
     })),
   ];
   if (answers.length === 0) return {};
@@ -2039,6 +2039,10 @@ function fileResolutions(
       const perLanguage = perLanguageColumnOf(deps, save, table, r.column);
       return {
         ...r,
+        // The person's answer for a date kept per language too, as the push stores it.
+        ...(perLanguage !== undefined && r.kind === "fill"
+          ? { value: fillValueOf(answeredField(save, r.column)?.type, r.value) }
+          : {}),
         tableName: table,
         columnName: toSnakeCase(r.column),
         ...(r.kind === "fill" && storesJson(save, r.column)
