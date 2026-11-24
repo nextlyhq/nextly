@@ -16,18 +16,24 @@ import { sql, type SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type { AddressKind } from "../../../shared/address-rule";
 
 /**
  * What a hold is on: a collection, a Single, or a field group, named by its kind and slug. The kind
  * is part of the hold's name, so a Single and a collection that share a slug are held apart.
  */
 export interface EntityRef {
-  readonly kind: "collection" | "single" | "fieldGroup";
+  readonly kind: AddressKind;
   readonly slug: string;
+  /**
+   * The registry table that holds the entity's row, where it is not the kind's own: a field group's,
+   * which a database may hold under either of two names. Part of what is held, not of its name.
+   */
+  readonly registryTable?: string;
 }
 
 /** What an entity is called in a refusal a person reads. */
-export const ENTITY_NOUN: Readonly<Record<EntityRef["kind"], string>> = {
+export const ENTITY_NOUN: Readonly<Record<AddressKind, string>> = {
   collection: "collection",
   single: "Single",
   fieldGroup: "field group",

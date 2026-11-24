@@ -962,6 +962,11 @@ const REGISTRY_TABLE: Readonly<Record<EntityRef["kind"], string>> = {
   fieldGroup: STORAGE_FORMAT.registryTable,
 };
 
+/** The registry table `entity`'s row is in: the one it names, or its kind's. */
+function registryTableOf(entity: EntityRef): string {
+  return entity.registryTable ?? REGISTRY_TABLE[entity.kind];
+}
+
 /**
  * The database each adapter's connections are in (`DATABASE()`), read once: every connection of
  * one adapter's pool is opened on the database its configuration names, so one read answers for
@@ -1136,7 +1141,7 @@ async function holdEntityWith(
   try {
     if (own) await rowsOn(sql`START TRANSACTION`);
     await rowsOn(
-      sql`SELECT ${sql.identifier("id")} FROM ${sql.identifier(REGISTRY_TABLE[entity.kind])} WHERE ${sql.identifier("slug")} = ${entity.slug} FOR UPDATE`
+      sql`SELECT ${sql.identifier("id")} FROM ${sql.identifier(registryTableOf(entity))} WHERE ${sql.identifier("slug")} = ${entity.slug} FOR UPDATE`
     );
     if (own) await rowsOn(sql`COMMIT`);
   } catch (error) {
@@ -1188,7 +1193,7 @@ export async function shareEntityOnMysql(
   );
   try {
     const [row] = await rowsOn<{ id: unknown; schema_version: unknown }>(
-      sql`SELECT ${sql.identifier("id")}, ${sql.identifier("schema_version")} FROM ${sql.identifier(REGISTRY_TABLE[entity.kind])} WHERE ${sql.identifier("slug")} = ${entity.slug} FOR SHARE`
+      sql`SELECT ${sql.identifier("id")}, ${sql.identifier("schema_version")} FROM ${sql.identifier(registryTableOf(entity))} WHERE ${sql.identifier("slug")} = ${entity.slug} FOR SHARE`
     );
     return row;
   } finally {

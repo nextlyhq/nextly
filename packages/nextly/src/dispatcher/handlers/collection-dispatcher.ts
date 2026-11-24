@@ -471,7 +471,7 @@ async function pipelinePushCounted<T>(args: {
   });
   return countedThroughApply(
     args.adapter,
-    args.slug,
+    { kind: "collection", slug: args.slug },
     hold,
     args.push,
     consoleLogger,

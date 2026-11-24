@@ -30,6 +30,7 @@ import {
   holdEntityInProcess,
   holdEntityOnPostgresSession,
 } from "../../dynamic-collections/services/entity-hold";
+import { resolveFieldGroupRegistryName } from "../../field-groups/storage/resolve-storage-names";
 import {
   openPostgresBesidePool,
   poolCanSpareOne,
@@ -77,6 +78,25 @@ export function saveHoldScope(logger: {
   };
 }
 
+/**
+ * `entity` with the registry table its row is in on this database, for a field group: the table
+ * a database holds its field groups in has one of two names (`resolveFieldGroupRegistryName`).
+ * Resolved before a hold is taken, so a hold taken inside a transaction asks nothing of the pool.
+ * Any other entity's registry is its kind's own.
+ */
+export async function withRegistryTable(
+  adapter: DrizzleAdapter,
+  entity: EntityRef
+): Promise<EntityRef> {
+  if (entity.kind !== "fieldGroup" || entity.registryTable !== undefined) {
+    return entity;
+  }
+  return {
+    ...entity,
+    registryTable: await resolveFieldGroupRegistryName(adapter),
+  };
+}
+
 /** `entity`'s hold for a save through `adapter`, and what lets it go. */
 async function takeSaveHold(
   adapter: DrizzleAdapter,
@@ -93,7 +113,11 @@ async function takeSaveHold(
   try {
     ({ release } =
       dialect === "mysql"
-        ? await holdEntityOnSession(adapter, session, entity)
+        ? await holdEntityOnSession(
+            adapter,
+            session,
+            await withRegistryTable(adapter, entity)
+          )
         : await holdEntityOnPostgresSession(session, entity));
   } catch (error) {
     await close().catch(() => undefined);
