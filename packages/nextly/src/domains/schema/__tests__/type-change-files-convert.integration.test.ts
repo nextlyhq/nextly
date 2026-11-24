@@ -351,6 +351,40 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    /** A default given to `v` by hand, on a database whose schema is its own. */
+    async function withDefault(t: TestNextly): Promise<void> {
+      const exec = (statement: string) =>
+        (
+          t.adapter as unknown as { executeQuery<R>(s: string): Promise<R[]> }
+        ).executeQuery<{ type: string; sql: string | null }>(statement);
+      if (dialect !== "sqlite") {
+        await exec(
+          `ALTER TABLE dc_tcf_posts ALTER COLUMN v SET DEFAULT 'none'`
+        );
+        return;
+      }
+      // SQLite changes no column's default: the table is made again from its own statement.
+      const made = await exec(
+        `SELECT type, sql FROM sqlite_master WHERE tbl_name = 'dc_tcf_posts' ORDER BY type DESC`
+      );
+      const [create = "", ...indexes] = made.flatMap(
+        object => object.sql ?? []
+      );
+      const edited = create.replace(/("v"\s+text)/i, "$1 DEFAULT 'none'");
+      expect(edited).not.toBe(create);
+      await exec(`ALTER TABLE dc_tcf_posts RENAME TO dc_tcf_posts_was`);
+      for (const index of indexes) {
+        const name = /INDEX\s+(?:IF NOT EXISTS\s+)?["`]?([\w]+)/i.exec(
+          index
+        )?.[1];
+        await exec(`DROP INDEX "${name ?? ""}"`);
+      }
+      await exec(edited);
+      await exec(`INSERT INTO dc_tcf_posts SELECT * FROM dc_tcf_posts_was`);
+      await exec(`DROP TABLE dc_tcf_posts_was`);
+      for (const index of indexes) await exec(index);
+    }
+
     /** A first database's text field becoming a number, its file written; its folder kept. */
     async function textBecomesNumber(): Promise<number> {
       const first = await boot(dialect);
@@ -597,6 +631,25 @@ describe.each(getConfiguredTestDialects())(
           migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"))
         ).rejects.toMatchObject(refusedSaying("can't be deployed yet"));
         expect(await read(second)).toEqual({ other: ["b"] });
+      }
+    );
+
+    // What the column carries that its new type would lose is judged on the database the file deploys
+    // to, before the change's first statement, and in a dry run.
+    converts(
+      "refuses to deploy a conversion of a column carrying a default, naming it, and changes nothing",
+      async () => {
+        const created = await textBecomesNumber();
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await write(second, "whole", { v: "034" });
+        await withDefault(second);
+
+        expect(await dryRun(second)).toContain("has a default ('none'");
+        await expect(
+          migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"))
+        ).rejects.toMatchObject(refusedSaying("has a default ('none'"));
+        expect(await read(second)).toEqual({ whole: "034" });
       }
     );
 

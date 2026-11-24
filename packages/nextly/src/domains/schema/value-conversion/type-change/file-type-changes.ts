@@ -27,6 +27,7 @@ import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import {
   type ClearConsent,
   consentedRefusals,
+  conversionRefusalsAsItStands,
   type TypeConversion,
   typeConversionOf,
 } from "../../builder-save/type-conversion";
@@ -788,21 +789,47 @@ export async function judgeFileTypeChanges(
       input.rewrites === undefined
         ? judged.refusals
         : consentedRefusals(input.label, judged.judged, consent).refusals;
-    for (const refusal of entityRefusals) {
+    const converted = await conversionOf(db, source.dialect, input, {
+      judged: judged.judged,
+      consent,
+    });
+    for (const refusal of [...entityRefusals, ...converted.refusals]) {
       refusals.push({ ...refusal, entity: { kind, slug } });
     }
-    const conversion =
-      input.rewrites === undefined
-        ? undefined
-        : typeConversionOf({
-            dialect: source.dialect,
-            input,
-            judged: judged.judged,
-            consent,
-          });
-    if (conversion !== undefined) conversions.push(conversion);
+    if (converted.conversion !== undefined) {
+      conversions.push(converted.conversion);
+    }
   }
   return { refusals, conversions };
+}
+
+/**
+ * The conversion of a marked entity's judged changes, where any converts, and its refusals beyond
+ * their values (`conversionRefusalsAsItStands`), asked before the change's first file.
+ */
+async function conversionOf(
+  db: unknown,
+  dialect: SupportedDialect,
+  input: EntityTypeChangeInput,
+  of: { judged: readonly JudgedFieldTypeChange[]; consent: ClearConsent }
+): Promise<{
+  conversion?: TypeConversion;
+  refusals: TypeChangeRefusal[];
+}> {
+  // A file with no mark converts nothing: the database's cast changes its columns.
+  if (input.rewrites === undefined) return { refusals: [] };
+  const conversion = typeConversionOf({ dialect, input, ...of });
+  if (conversion === undefined) return { refusals: [] };
+  return {
+    conversion,
+    refusals: await conversionRefusalsAsItStands(
+      db,
+      dialect,
+      input.label,
+      conversion,
+      of.judged
+    ),
+  };
 }
 
 /**

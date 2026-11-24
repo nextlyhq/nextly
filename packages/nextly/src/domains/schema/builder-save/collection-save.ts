@@ -249,8 +249,8 @@ import {
   type TypeChangeCounts,
 } from "./type-change-counts";
 import {
+  conversionRefusalsAsItStands,
   isConversionRefusal,
-  refuseConversionAsItStands,
   type TypeConversion,
   typeConversionOf,
 } from "./type-conversion";
@@ -1540,12 +1540,15 @@ async function refuseSaveTypeChanges(
     consent: { kind: "review", confirmed: save.confirmedTypeChanges },
   });
   if (conversion === undefined) return undefined;
-  await refuseConversionAsItStands(
-    deps.adapter.getDrizzle(),
-    dialect,
+  throwTypeChangeRefusals(
     judgement.label,
-    conversion,
-    judgement.judged
+    await conversionRefusalsAsItStands(
+      deps.adapter.getDrizzle(),
+      dialect,
+      judgement.label,
+      conversion,
+      judgement.judged
+    )
   );
   return { ...conversion, slug: save.slug };
 }

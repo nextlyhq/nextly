@@ -809,20 +809,14 @@ describe.each(getConfiguredTestDialects())(
     );
 
     /**
-     * The collection's table, still empty, with the CHECK a field's validation put on a table an
-     * earlier version made, which no migration file tracks or drops.
+     * On SQLite, `table`, holding the rows it held, made again from its own statement as `edit`
+     * leaves it, its indexes after it: SQLite adds nothing to a table's statement otherwise.
      */
-    async function addValidationCheck(
+    async function remade(
       t: TestNextly,
-      check: string
+      table: string,
+      edit: (create: string) => string
     ): Promise<void> {
-      const table = `dc_${SLUG}`;
-      const constraint = `CONSTRAINT ${q(`chk_${table}_validation`)} CHECK (${check})`;
-      if (dialect !== "sqlite") {
-        await exec(t, `ALTER TABLE ${q(table)} ADD ${constraint}`);
-        return;
-      }
-      // SQLite adds no constraint to a table it holds: made again with it, its indexes after it.
       const made = await (
         t.adapter as unknown as {
           executeQuery<R>(statement: string): Promise<R[]>;
@@ -830,10 +824,44 @@ describe.each(getConfiguredTestDialects())(
       ).executeQuery<{ type: string; sql: string | null }>(
         `SELECT type, sql FROM sqlite_master WHERE tbl_name = '${table}' ORDER BY type DESC`
       );
-      const [create, ...indexes] = made.flatMap(object => object.sql ?? []);
-      await exec(t, `DROP TABLE ${q(table)}`);
-      await exec(t, (create ?? "").replace(/\)\s*$/, `, ${constraint})`));
+      const [create = "", ...indexes] = made.flatMap(
+        object => object.sql ?? []
+      );
+      // An edit that changes nothing would leave the fixture without what it is for.
+      expect(edit(create)).not.toBe(create);
+      await exec(t, `ALTER TABLE ${q(table)} RENAME TO ${q(`${table}_was`)}`);
+      for (const index of indexes) {
+        const name = /INDEX\s+(?:IF NOT EXISTS\s+)?["`]?([\w]+)/i.exec(
+          index
+        )?.[1];
+        await exec(t, `DROP INDEX ${q(name ?? "")}`);
+      }
+      await exec(t, edit(create));
+      await exec(
+        t,
+        `INSERT INTO ${q(table)} SELECT * FROM ${q(`${table}_was`)}`
+      );
+      await exec(t, `DROP TABLE ${q(`${table}_was`)}`);
       for (const index of indexes) await exec(t, index);
+    }
+
+    /**
+     * The collection's table with the CHECK a field's validation put on a table an earlier version
+     * made, which no migration file tracks or drops.
+     */
+    async function addValidationCheck(
+      t: TestNextly,
+      check: string
+    ): Promise<void> {
+      const table = `dc_${SLUG}`;
+      const constraint = `CONSTRAINT ${q(`chk_${table}_validation`)} CHECK (${check})`;
+      if (dialect === "sqlite") {
+        await remade(t, table, create =>
+          create.replace(/\)\s*$/, `, ${constraint})`)
+        );
+        return;
+      }
+      await exec(t, `ALTER TABLE ${q(table)} ADD ${constraint}`);
     }
 
     // A CHECK written for the old type's values judges the new type's as they are written: MySQL
@@ -987,24 +1015,127 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
-    // A default the column carries of the old type need not cast to the new one: it goes before the
-    // column changes type, as a field's column declares none. A save refuses such a column as drift
-    // before anything runs, so the conversion is asked directly; on MySQL a text column holds no
-    // default, and SQLite's keeps its own through the rebuild that types it.
-    it.runIf(dialect === "postgresql")(
-      "converts a column carrying a default of the old type that cannot cast to the new one",
+    // The column of the new type is made with no default of its own, so one the column carries would
+    // go without a word: refused where the conversion runs, naming it, as where its file deploys. A
+    // save refuses such a column as drift before it, so the conversion is asked directly.
+    it.skipIf(!rewritesValuesOn(dialect))(
+      "refuses to convert a column carrying a default, naming it, and changes nothing",
       async () => {
         const t = await boot([{ name: "v", type: "text" }]);
-        await write(t, "a", { v: "12" });
-        await exec(
-          t,
-          `ALTER TABLE ${q(`dc_${SLUG}`)} ALTER COLUMN ${q("v")} SET DEFAULT 'none'`
-        );
+        await write(t, "a", { v: "012" });
+        if (dialect === "sqlite") {
+          await remade(t, `dc_${SLUG}`, create =>
+            create.replace(/("v"\s+text)/i, "$1 DEFAULT 'none'")
+          );
+        } else {
+          await exec(
+            t,
+            `ALTER TABLE ${q(`dc_${SLUG}`)} ALTER COLUMN ${q("v")} SET DEFAULT 'none'`
+          );
+        }
         const { db, conversion } = await judgedThenConversion(t, "confirmed");
 
-        await conversion.run(db);
+        await expect(conversion.run(db)).rejects.toMatchObject(
+          refusedSaying("has a default ('none'")
+        );
 
-        expect(Number((await stored(t)).a)).toBe(12);
+        expect(await stored(t)).toEqual({ a: "012" });
+      }
+    );
+
+    // A collation the column was given is lost with its type: PostgreSQL's `ALTER … TYPE` states
+    // none, so a Unique setting would compare by another rule than it did.
+    it.runIf(dialect === "postgresql")(
+      "refuses to convert a column of another collation than its type's, naming it, and changes nothing",
+      async () => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        await exec(
+          t,
+          `ALTER TABLE ${q(`dc_${SLUG}`)} ALTER COLUMN ${q("v")} TYPE text COLLATE "C"`
+        );
+        await write(t, "a", { v: "012" });
+
+        expect(await save(t, [{ name: "v", type: "number" }])).toMatchObject(
+          refusedSaying("compares by the collation C")
+        );
+
+        expect(await read(t, "v")).toEqual({ a: "012" });
+      }
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "refuses a unique text under a nondeterministic collation becoming JSON, and changes nothing",
+      async () => {
+        const t = await boot([{ name: "v", type: "text", unique: true }]);
+        await exec(
+          t,
+          `CREATE COLLATION tcc_folded (provider = icu, locale = 'und-u-ks-level2', deterministic = false)`
+        );
+        await exec(
+          t,
+          `ALTER TABLE ${q(`dc_${SLUG}`)} ALTER COLUMN ${q("v")} TYPE text COLLATE tcc_folded`
+        );
+        await write(t, "a", { v: "Word" });
+
+        expect(
+          await save(t, [{ name: "v", type: "json", unique: true }])
+        ).toMatchObject(refusedSaying("its Unique setting compares by it"));
+
+        expect(await read(t, "v")).toEqual({ a: "Word" });
+      }
+    );
+
+    // SQLite keeps JSON as its text, so a unique index there would compare each value's writing;
+    // PostgreSQL compares what a value parses to, so there the change goes ahead.
+    it.skipIf(!rewritesValuesOn(dialect))(
+      "refuses a unique text becoming a unique JSON on SQLite, and keeps it unique on PostgreSQL",
+      async () => {
+        const t = await boot([{ name: "v", type: "text", unique: true }]);
+        await write(t, "a", { v: "word" });
+
+        const outcome = await save(t, [
+          { name: "v", type: "json", unique: true },
+        ]);
+
+        if (dialect === "sqlite") {
+          expect(outcome).toMatchObject(
+            refusedSaying("let two equal values through")
+          );
+          expect(await read(t, "v")).toEqual({ a: "word" });
+          return;
+        }
+        expect(outcome).toBeUndefined();
+        expect(await read(t, "v")).toEqual({ a: "word" });
+        await write(t, "b", { v: { a: 1, b: 2 } });
+        await expect(write(t, "c", { v: { b: 2, a: 1 } })).rejects.toThrow();
+      }
+    );
+
+    // On SQLite a translations column is replaced by the one beside it, of the new type, which has
+    // neither the default nor the collation the column was given.
+    it.runIf(dialect === "sqlite").each([
+      ["a collation", "COLLATE NOCASE", "states a collation of its own"],
+      ["a default", "DEFAULT 'none'", "has a default ('none'"],
+    ])(
+      "refuses a translated change of a column carrying %s, naming it, and changes nothing",
+      async (_, clause, says) => {
+        const t = await boot([{ name: "v", type: "text", localized: true }], {
+          localized: true,
+        });
+        await write(t, "a", { v: "012" }, "en");
+        await remade(t, `dc_${SLUG}_locales`, create =>
+          create.replace(/("v"\s+text)/i, `$1 ${clause}`)
+        );
+
+        expect(
+          JSON.stringify(
+            await save(t, [{ name: "v", type: "number", localized: true }], {
+              localized: true,
+            })
+          )
+        ).toContain(says);
+
+        expect(await read(t, "v", "en")).toEqual({ a: "012" });
       }
     );
 

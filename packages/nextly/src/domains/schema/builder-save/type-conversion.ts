@@ -35,11 +35,8 @@ import { sql, type SQL } from "drizzle-orm";
 import { NextlyError } from "../../../errors/nextly-error";
 import { ddlType } from "../../i18n/migration/ddl-types";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
-import { mysqlSeesEveryTriggerQuery } from "../busy-table/run-unit";
 import { runStatement } from "../pipeline/_internal/run-statement";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
-import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
-import { readUpdateTriggers } from "../pipeline/live-table-facts";
 import { kindChanges } from "../repair-columns/conversion/carry";
 import type {
   ColumnDescriptor,
@@ -52,11 +49,13 @@ import {
   judgeEntityTypeChanges,
   type JudgedFieldTypeChange,
   throwTypeChangeRefusals,
+  type TypeChangeRefusal,
   typeChangeRefusals,
 } from "../value-conversion/type-change/field-type-changes";
 import type { Reading } from "../value-conversion/type-change/judge-stored";
 import type { RowKey } from "../value-conversion/types";
 
+import { BESIDE, conversionRefusals } from "./conversion-refusals";
 import {
   clearedFieldsOf,
   refuseChangedCounts,
@@ -67,9 +66,6 @@ import {
 
 /** How many rows one statement writes, so a large table is written in a few statements. */
 const ROWS_PER_STATEMENT = 200;
-
-/** The column a conversion writes beside the one it converts, of the new type. */
-const BESIDE = "__nextly_converted";
 
 /**
  * How the road takes consent to clear the values that cannot convert:
@@ -247,39 +243,26 @@ export function isConversionRefusal(error: unknown): boolean {
 }
 
 /**
- * The refusals of `conversion`'s columns that need no judging of their values, asked before
- * anything of a save is written so the save refuses then, as it is again where the conversion
- * runs (`judgedAgain`): a column left by a conversion that stopped part-way, update triggers, a
- * CHECK constraint naming the column, and on SQLite a translations column a view, trigger or
- * condition depends on.
- *
- * @throws {NextlyError} a validation error naming each refusal
+ * The refusals of `conversion`'s columns that need no judging of their values (`conversionRefusals`),
+ * asked where the judgement before it is made: before anything of a save is written, and before the
+ * first file of a change `nextly migrate` deploys or `migrate:down` rolls back. The conversion asks
+ * them again where it runs (`judgedAgain`), with the SQLite columns only known there to be swapped.
  */
-export async function refuseConversionAsItStands(
+export function conversionRefusalsAsItStands(
   db: unknown,
   dialect: SupportedDialect,
   label: string,
   conversion: TypeConversion,
   judged: readonly JudgedFieldTypeChange[]
-): Promise<void> {
-  await refuseLeftColumns(db, dialect, label, conversion.columns);
-  await refuseOverUpdateTriggers(
-    db,
-    dialect,
-    label,
-    judged.filter(change => change.converted === true)
-  );
-  await refuseOverChecks(db, dialect, label, conversion.columns, judged);
-  if (dialect === "sqlite") {
+): Promise<TypeChangeRefusal[]> {
+  return conversionRefusals(db, dialect, label, {
+    columns: conversion.columns,
+    judged: judged.filter(change => change.converted === true),
     // The translations columns the conversion swaps; a REAL column it swaps is known where it runs.
-    await refuseSqliteSwapDependents(
-      db,
-      label,
-      conversion.columns.filter(
-        column => column.takesPlaceOnSqlite && !column.keepsType
-      )
-    );
-  }
+    swapped: conversion.columns.filter(
+      column => column.takesPlaceOnSqlite && !column.keepsType
+    ),
+  });
 }
 
 /**
@@ -364,12 +347,8 @@ interface PlannedColumn extends ConvertedColumn {
 /**
  * The columns of `only` judged again through `db`, before any statement: each refusal the
  * judgement gives, with the clearing consented to as the road takes it (`ClearConsent`); counts of
- * kept, changed and lost values other than those a review confirmed; a column left by a conversion that
- * stopped part-way; a table whose rows fire update triggers, which the conversion's row-by-row
- * writes would set off (PostgreSQL's in-place change fires none, but its values are written into
- * the column beside it first); a CHECK constraint naming the column, written for its old type; and
- * on SQLite a translations column whose swap a view, a trigger or an index on an expression or with
- * a condition would stop part-way.
+ * kept, changed and lost values other than those a review confirmed; and what the tables carry
+ * that the conversion would break or lose (`conversionRefusals`).
  *
  * @throws {NextlyError} a validation error naming each refusal, with nothing written
  */
@@ -399,9 +378,6 @@ async function judgedAgain(
       only.map(column => ({ field: column.field, ...column.counts }))
     );
   }
-  await refuseLeftColumns(db, dialect, input.label, only);
-  await refuseOverUpdateTriggers(db, dialect, input.label, judged);
-  await refuseOverChecks(db, dialect, input.label, only, judged);
   const planned: PlannedColumn[] = [];
   for (const change of judged) {
     const column = only.find(
@@ -417,13 +393,14 @@ async function judgedAgain(
       swaps: dialect === "sqlite" && swapsOnSqlite(column, facts),
     });
   }
-  if (dialect === "sqlite") {
-    await refuseSqliteSwapDependents(
-      db,
-      input.label,
-      planned.filter(column => column.swaps)
-    );
-  }
+  throwTypeChangeRefusals(
+    input.label,
+    await conversionRefusals(db, dialect, input.label, {
+      columns: planned,
+      judged,
+      swapped: planned.filter(column => column.swaps),
+    })
+  );
   return planned;
 }
 
@@ -452,260 +429,6 @@ function realAffinity(type: string): boolean {
 function textAffinity(type: string): boolean {
   const upper = type.toUpperCase();
   return !upper.includes("INT") && /CHAR|CLOB|TEXT/.test(upper);
-}
-
-/**
- * Refuse a conversion of a table that still has the column a conversion writes into (`BESIDE`):
- * one left by a conversion that stopped part-way, which may hold the only copy of a column's
- * values. Nothing is written over it; the person finishes or undoes that conversion first.
- */
-async function refuseLeftColumns(
-  db: unknown,
-  dialect: SupportedDialect,
-  label: string,
-  only: readonly ConvertedColumn[]
-): Promise<void> {
-  const left: string[] = [];
-  for (const table of new Set(only.map(c => c.table))) {
-    for (const name of await columnNamesOf(db, dialect, table)) {
-      if (name.startsWith(BESIDE)) left.push(`${table}.${name}`);
-    }
-  }
-  if (left.length === 0) return;
-  throw NextlyError.validation({
-    errors: left.map(column => ({
-      path: `columns.${column}`,
-      code: "TYPE_CHANGE_BLOCKED",
-      message: `${label}: ${column} was left by a type change that stopped part-way, and may hold the only copy of a column's values, so nothing was changed. Put those values back where they belong and drop the column, then try again.`,
-    })),
-    logContext: { reason: "type-change-left-columns", left },
-  });
-}
-
-/**
- * Refuse a conversion of a table that has update triggers, naming them, before any value is
- * written: the conversion writes the table's rows one batch at a time, and each update fires the
- * table's triggers, which would run the site's own code once for each value converted. On MySQL,
- * which lists a table's triggers only to an account holding `TRIGGER` on it while a row change
- * still fires them, an account that cannot see every trigger of the database is refused too: an
- * empty list there says nothing (`refuseUnseenTriggers`).
- */
-async function refuseOverUpdateTriggers(
-  db: unknown,
-  dialect: SupportedDialect,
-  label: string,
-  converted: readonly JudgedFieldTypeChange[]
-): Promise<void> {
-  if (converted.length === 0) return;
-  await refuseUnseenTriggers(db, dialect, label, converted);
-  const triggersOf = new Map<string, string[]>();
-  const errors: { path: string; code: string; message: string }[] = [];
-  for (const change of converted) {
-    let fired = triggersOf.get(change.table);
-    if (fired === undefined) {
-      fired = await readUpdateTriggers(db, dialect, change.table);
-      triggersOf.set(change.table, fired);
-    }
-    if (fired.length === 0) continue;
-    errors.push({
-      path: `fields.${change.to.name}`,
-      code: "TYPE_CHANGE_BLOCKED",
-      message: `${label}: field '${change.to.name}' cannot change from ${change.from.type} to ${change.to.type}: the change writes each of its values again, and ${change.table} has ${fired.length === 1 ? "a trigger that fires" : "triggers that fire"} on every row it writes (${fired.join(", ")}). Drop or disable ${fired.length === 1 ? "it" : "them"} first, then save again.`,
-    });
-  }
-  if (errors.length === 0) return;
-  throw NextlyError.validation({
-    errors,
-    logContext: {
-      reason: "type-change-over-update-triggers",
-      triggers: Object.fromEntries(triggersOf),
-    },
-  });
-}
-
-/**
- * Refuse, on MySQL, a conversion run by an account that cannot see every trigger of the database
- * (`mysqlSeesEveryTriggerQuery`, as `triggerTables` asks it): a table's update trigger it does
- * not see would fire on every row the conversion writes. Each converted field is named.
- */
-async function refuseUnseenTriggers(
-  db: unknown,
-  dialect: SupportedDialect,
-  label: string,
-  converted: readonly JudgedFieldTypeChange[]
-): Promise<void> {
-  if (dialect !== "mysql") return;
-  const seen = await querySqlRows<{ seen: unknown }>(
-    db,
-    dialect,
-    mysqlSeesEveryTriggerQuery()
-  );
-  if (seen.length > 0) return;
-  throw NextlyError.validation({
-    errors: converted.map(change => ({
-      path: `fields.${change.to.name}`,
-      code: "TYPE_CHANGE_BLOCKED",
-      message: `${label}: field '${change.to.name}' cannot change from ${change.from.type} to ${change.to.type}: the change writes each of its values again, and this database account cannot see whether ${change.table} has triggers that would fire on every row it writes, as MySQL lists a table's triggers only to an account holding TRIGGER on it. Grant the account TRIGGER on the database, or make the change as one that holds it.`,
-    })),
-    logContext: { reason: "type-change-over-unseen-triggers" },
-  });
-}
-
-/**
- * Refuse a conversion of a column a named CHECK constraint of its table names, such as the one a
- * field's validation put on a table an earlier version made (`chk_<table>_validation`), where the
- * change gives the column another kind of value or writes any of its values in another form: it was
- * written for the old type's values, and no statement of the change drops it. PostgreSQL would
- * refuse to give the column a type its comparison does not take, SQLite the rebuild that would
- * drop it, and MySQL a reading it does not allow, once the column was emptied for it and with
- * nothing to roll back. Where the kind stays and every value is kept as it is, the check reads each
- * as before, as a column repair judges it (`kindChanges`).
- */
-async function refuseOverChecks(
-  db: unknown,
-  dialect: SupportedDialect,
-  label: string,
-  columns: readonly ConvertedColumn[],
-  judged: readonly JudgedFieldTypeChange[]
-): Promise<void> {
-  const readAnew = columns.filter(
-    column => column.changesKind || rewritesAnyValue(column, judged)
-  );
-  const live = await introspectLiveSnapshot(db, dialect, [
-    ...new Set(readAnew.map(column => column.table)),
-  ]);
-  const errors = readAnew.flatMap(column => {
-    const naming = (
-      live.tables.find(table => table.name === column.table)?.checks ?? []
-    )
-      .filter(check => namesColumn(check.sql, column.column))
-      .map(check => check.name);
-    if (naming.length === 0) return [];
-    const many = naming.length > 1;
-    return [
-      {
-        path: `fields.${column.field}`,
-        code: "TYPE_CHANGE_BLOCKED",
-        message: `${label}: field '${column.field}' cannot change type while the CHECK ${many ? "constraints" : "constraint"} ${naming.join(", ")} on ${column.table} ${many ? "read" : "reads"} its values as the old type holds them. Drop ${many ? "them" : "it"} first, then save again.`,
-      },
-    ];
-  });
-  if (errors.length === 0) return;
-  throw NextlyError.validation({
-    errors,
-    logContext: { reason: "type-change-over-checks" },
-  });
-}
-
-/** Whether the judgement writes any value of `column` in another form than it holds. */
-function rewritesAnyValue(
-  column: ConvertedColumn,
-  judged: readonly JudgedFieldTypeChange[]
-): boolean {
-  return judged.some(
-    change =>
-      change.table === column.table &&
-      change.column === column.column &&
-      change.result.counts.changed > 0
-  );
-}
-
-/** Whether a CHECK's expression names `column`, its text literals aside. */
-function namesColumn(expression: string, column: string): boolean {
-  const named = new RegExp(`(?<![\\w$])${escapeRegExp(column)}(?![\\w$])`, "i");
-  return named.test(expression.replace(/'(?:[^']|'')*'/g, "''"));
-}
-
-/**
- * Refuse, on SQLite, a column the conversion swaps for the column beside it (`swapsOnSqlite`)
- * where the swap's `DROP COLUMN` would stop part-way: a view or a trigger whose text names the
- * table, an index on the table over an expression or with a condition, or a UNIQUE constraint on
- * the column, which SQLite keeps whole or refuses to drop a column under. Each is named.
- */
-async function refuseSqliteSwapDependents(
-  db: unknown,
-  label: string,
-  swapped: readonly ConvertedColumn[]
-): Promise<void> {
-  const errors: { path: string; code: string; message: string }[] = [];
-  for (const column of swapped) {
-    const dependents = await sqliteSwapDependents(
-      db,
-      column.table,
-      column.column
-    );
-    if (dependents.length === 0) continue;
-    errors.push({
-      path: `fields.${column.field}`,
-      code: "TYPE_CHANGE_BLOCKED",
-      message: `${label}: field '${column.field}' cannot change type in ${column.table}, whose column the change replaces with one of the new type, while ${dependents.join(", ")} ${dependents.length === 1 ? "depends" : "depend"} on the table. Drop ${dependents.length === 1 ? "it" : "them"} first, then save again.`,
-    });
-  }
-  if (errors.length === 0) return;
-  throw NextlyError.validation({
-    errors,
-    logContext: { reason: "type-change-swap-dependents" },
-  });
-}
-
-/**
- * What on SQLite depends on `table` beyond the plain indexes a column swap makes again: each view
- * and trigger whose text names it, each of its indexes over an expression or with a condition, and
- * a UNIQUE constraint on `column`, whose index SQLite made itself and drops with no column.
- */
-async function sqliteSwapDependents(
-  db: unknown,
-  table: string,
-  column: string
-): Promise<string[]> {
-  const named = new RegExp(`\\b${escapeRegExp(table)}\\b`, "i");
-  const objects = await querySqlRows<{
-    type: string;
-    name: string;
-    sql: string | null;
-  }>(
-    db,
-    "sqlite",
-    sql`SELECT type, name, sql FROM sqlite_master WHERE type IN ('view', 'trigger')`
-  );
-  const dependents = objects
-    .filter(object => object.sql !== null && named.test(object.sql))
-    .map(object => `${object.type} ${object.name}`);
-  const indexes = await querySqlRows<{ name: string; sql: string | null }>(
-    db,
-    "sqlite",
-    sql`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND lower(tbl_name) = ${table.toLowerCase()}`
-  );
-  for (const index of indexes) {
-    if (index.sql === null) {
-      // An index SQLite made itself: a UNIQUE or PRIMARY KEY constraint, which no column swap
-      // can drop.
-      const covered = await querySqlRows<{ name: string | null }>(
-        db,
-        "sqlite",
-        sql`SELECT name FROM pragma_index_info(${index.name})`
-      );
-      if (covered.some(c => c.name?.toLowerCase() === column.toLowerCase())) {
-        dependents.push(`the UNIQUE constraint ${index.name}`);
-      }
-      continue;
-    }
-    // An expression's place in an index is column -2 (`pragma_index_xinfo`).
-    const expressions = await querySqlRows<{ cid: number }>(
-      db,
-      "sqlite",
-      sql`SELECT cid FROM pragma_index_xinfo(${index.name}) WHERE cid = -2`
-    );
-    if (expressions.length > 0 || /\bWHERE\b/i.test(index.sql)) {
-      dependents.push(`index ${index.name}`);
-    }
-  }
-  return dependents;
-}
-
-/** `text` with every character a regular expression gives a meaning escaped. */
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** A column's own definition, read before the conversion changes it. */
@@ -811,36 +534,6 @@ async function sqliteColumnFacts(
     sql`SELECT type, "notnull" FROM pragma_table_info(${table}) WHERE lower(name) = ${column.toLowerCase()}`
   );
   return { type: row?.type ?? "", notNull: row?.notnull === 1 };
-}
-
-/** The names of `table`'s columns. */
-async function columnNamesOf(
-  db: unknown,
-  dialect: SupportedDialect,
-  table: string
-): Promise<string[]> {
-  const rows =
-    dialect === "postgresql"
-      ? await querySqlRows<{ name: string }>(
-          db,
-          dialect,
-          sql`SELECT attname AS name FROM pg_attribute
-              WHERE attrelid = to_regclass(quote_ident(${table})) AND attnum > 0
-                AND NOT attisdropped`
-        )
-      : dialect === "mysql"
-        ? await querySqlRows<{ name: string }>(
-            db,
-            dialect,
-            sql`SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS
-                WHERE TABLE_SCHEMA = DATABASE() AND lower(TABLE_NAME) = ${table.toLowerCase()}`
-          )
-        : await querySqlRows<{ name: string }>(
-            db,
-            dialect,
-            sql`SELECT name FROM pragma_table_info(${table})`
-          );
-  return rows.map(row => row.name);
 }
 
 /**
