@@ -298,12 +298,19 @@ async function conversionsOfSite(
 ): Promise<CodeConversion[]> {
   const configured = (await configuredLanguages(context)).codes;
   const conversions = conversionsOf(configured);
+  const { dialect } = context.adapter as unknown as DrizzleAdapter;
   for (const stored of await storedOlderSpellings(
     context.adapter as unknown as DrizzleAdapter,
     tables,
     configured.map(code => standardLanguageCode(code) ?? code)
   )) {
-    if (!conversions.some(({ from }) => from === stored.from)) {
+    // Matched as the database compares codes (`sameStoredCode`): on MySQL a configured `pt_BR`
+    // already converts rows stored `PT_br`, so the scan's spelling is no second conversion.
+    if (
+      !conversions.some(({ from }) =>
+        sameStoredCode(dialect, from, stored.from)
+      )
+    ) {
       conversions.push(stored);
     }
   }

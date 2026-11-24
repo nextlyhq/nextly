@@ -777,6 +777,26 @@ describeEachDialect(
       }
     );
 
+    // The same on MySQL for a configuration still written the earlier way (`pt_BR`) whose rows
+    // hold the other case (`PT_br`): the configured conversion already covers those rows there.
+    // Broken, the scan's `PT_br` is added as a second conversion of the same stored code, and the
+    // run is refused as two spellings of one language kept for the same thing.
+    it.runIf(dialect === "mysql")(
+      "takes the other case of a configured older code as that code on MySQL",
+      async () => {
+        await legacyArticle();
+        await storeUnderCode(database!, "pt_BR", "PT_br");
+        expect(await storedLanguages()).toContain("PT_br");
+
+        expect(
+          await refusalBeforeSchemaChanges(database!.adapter, UNDERSCORED)
+        ).toBeUndefined();
+        await migrateData(database!.adapter as never, UNDERSCORED);
+
+        expect(await storedLanguages()).toEqual(["en", "pt-BR"]);
+      }
+    );
+
     // A site that manages its languages in Settings keeps them in `nextly_languages`, each with the
     // codes it falls back to. The upgrade converts that registry with the content, so the site's
     // next start names the language as its rows are stored.
