@@ -155,6 +155,24 @@ async function heldFieldsOf(args: {
 }): Promise<HeldFields | undefined> {
   if (isProductionRuntime()) return undefined;
   if (args.adapter.getCapabilities().dialect !== "mysql") return undefined;
+  // A check made inside a transaction it was not handed (a rule's own read, say) joins it, so
+  // nothing it reads takes another connection while that one is held. Only what it found is
+  // handed out: the refusal is thrown by the caller, past the join.
+  if (args.tx === undefined && args.adapter.inTransaction()) {
+    return args.adapter.transaction(tx =>
+      heldIn({ ...args, tx: tx.getDrizzle() })
+    );
+  }
+  return heldIn(args);
+}
+
+/** What `heldFieldsOf` answers on MySQL outside production, read on `tx` where there is one. */
+async function heldIn(args: {
+  adapter: DrizzleAdapter;
+  kind: EntryKind;
+  slug: string;
+  tx?: unknown;
+}): Promise<HeldFields | undefined> {
   const standing = await applyingRecordsOf(args);
   if (standing === undefined) {
     await restoreRunningTables(args);

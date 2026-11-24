@@ -41,7 +41,9 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
+import { consoleLogger } from "../../../../shared/types";
 import { MIGRATION_LOCK_TABLE } from "../../../field-groups/migration/session";
+import { MetaService } from "../../../meta/services/meta-service";
 import { splitSqlStatements } from "../../migrate/split-sql";
 import { parseSqlSections } from "../../migrate/sql-sections";
 import { withStopPoints } from "../../migrate/stop-points";
@@ -52,6 +54,7 @@ import {
   MYSQL_MIGRATE_LOCK_NAME,
   SCHEMA_LOCK_TABLE,
 } from "../../pipeline/schema-lock";
+import { refuseReadOverLeftSave } from "../left-save-fields";
 import { settleLeftSaves } from "../settle-left-save";
 import { settleRegistryWriter } from "../settle-registry";
 
@@ -147,7 +150,13 @@ const saidBy = async (answer: unknown): Promise<string> =>
 
 /** What one of the other process's operations came to (`helpers/left-save-writer.ts`). */
 type Outcome = {
-  kind: "write" | "read" | "update" | "single-write" | "single-read";
+  kind:
+    | "write"
+    | "read"
+    | "update"
+    | "single-write"
+    | "single-read"
+    | "registry-moved";
   via: "rest" | "api";
   data?: Record<string, unknown>;
   /** The entry an update changes. */
@@ -238,7 +247,8 @@ describe.each(
      * `drafts`, Draft/Published and keeping each live entry's edits as a draft until published,
      * as a collection demoted from code does; with `status`, the Draft/Published switch alone;
      * with `headingDefault`, `heading` given that default; with `card`, a field `card` holding
-     * the field group `card`.
+     * the field group `card`; with `translatable`, `heading` translatable and left empty, so its
+     * column is the translations table's where values are kept per language.
      */
     async function boot(
       options: {
@@ -246,6 +256,7 @@ describe.each(
         status?: boolean;
         headingDefault?: string;
         card?: boolean;
+        translatable?: boolean;
       } = {}
     ): Promise<TestNextly> {
       if (dialect === "sqlite") {
@@ -295,7 +306,9 @@ describe.each(
           label: slug,
           fields: [
             options.headingDefault === undefined
-              ? field("heading")
+              ? options.translatable === true
+                ? text("heading")
+                : field("heading")
               : { ...field("heading"), defaultValue: options.headingDefault },
             field("note"),
             ...(options.card === true
@@ -318,7 +331,12 @@ describe.each(
       }
       await current.nextly.create({
         collection: slug,
-        data: { title: "First", slug: "first", heading: "h", note: "n" },
+        data: {
+          title: "First",
+          slug: "first",
+          note: "n",
+          ...(options.translatable === true ? {} : { heading: "h" }),
+        },
       } as never);
       return current;
     }
@@ -947,6 +965,180 @@ describe.each(
           await t.adapter.executeQuery(`SELECT id FROM single_${hero}`),
           "no document inserted"
         ).toEqual([]);
+      },
+      600_000
+    );
+
+    // A check inside a transaction it was not handed joins it: the refusal comes back as itself,
+    // and the transaction it joined goes on, what it wrote kept.
+    it.runIf(dialect === "mysql")(
+      "refuses a read inside an open transaction with its own code, the transaction going on",
+      async () => {
+        const t = await boot();
+        // A record that cannot be read holds every field, compared with nothing.
+        await new MetaService(t.adapter, consoleLogger).set(
+          `builder-save-in-progress:collection:${slug}`,
+          { unreadable: true }
+        );
+
+        await t.adapter.transaction(async tx => {
+          await expect(
+            refuseReadOverLeftSave({
+              adapter: t.adapter,
+              kind: "collection",
+              slug,
+            })
+          ).rejects.toMatchObject({ code: "BUILDER_SAVE_FIELD_UNSETTLED" });
+          await tx.update(
+            table,
+            { note: "written after the refusal" },
+            { and: [{ column: "slug", op: "=", value: "first" }] }
+          );
+        });
+
+        const [row] = (await t.adapter.executeQuery(
+          `SELECT note FROM ${table} WHERE slug = 'first'`
+        )) as unknown as Array<{ note: unknown }>;
+        expect(row?.note).toBe("written after the refusal");
+      },
+      600_000
+    );
+
+    // A registry write anywhere moves the stored schema version, and the next request loads every
+    // entity's tables again from the registry rows: what the guard left out of this process's
+    // tables is left out again, so no read names the column the save moved.
+    it.runIf(dialect === "mysql")(
+      "answers reads and lets other writes through after the definitions are loaded again while the save stands",
+      async () => {
+        const t = await boot();
+        await killRename(t, afterStatement(renames("heading")));
+        expect(await liveColumns(t), `killed at ${killedAt}`).toContain(
+          "headline"
+        );
+        const other = (n: number) => ({
+          title: `M${n}`,
+          slug: `m${n}`,
+          note: "only the note",
+        });
+
+        const outcomes = await fromAnotherProcess([
+          { kind: "read", via: "api" },
+          { kind: "write", via: "api", data: other(1) },
+          { kind: "registry-moved", via: "api" },
+          { kind: "read", via: "api" },
+          { kind: "read", via: "rest" },
+          { kind: "write", via: "api", data: other(2) },
+          { kind: "write", via: "rest", data: other(3) },
+        ]);
+
+        for (const outcome of outcomes) {
+          expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+        }
+      },
+      600_000
+    );
+
+    // A translatable field's column is the translations table's. A save dropping it, killed once
+    // that column is gone, holds the field the same way: refused by name, other writes let through,
+    // and no read naming the column.
+    it.runIf(dialect === "mysql" && perLanguage)(
+      "holds a translatable field a committed drop took from the translations table, in a collection",
+      async () => {
+        const t = await boot({ translatable: true });
+        const schemaVersion = await versionOf(t);
+        await killSave(t, afterStatement(dropsColumn("heading")), () =>
+          dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: slug },
+            { fields: [field("note")], confirmed: true, schemaVersion }
+          )
+        );
+        expect(await liveColumns(t), `killed at ${killedAt}`).not.toContain(
+          "heading"
+        );
+
+        const [sets, other, rest, api] = await fromAnotherProcess([
+          {
+            kind: "write",
+            via: "api",
+            data: { title: "T1", slug: "t1", heading: "x" },
+          },
+          {
+            kind: "write",
+            via: "api",
+            data: { title: "T2", slug: "t2", note: "only the note" },
+          },
+          { kind: "read", via: "rest" },
+          { kind: "read", via: "api" },
+        ]);
+
+        expect(sets!.code, JSON.stringify(sets)).toBe(
+          "BUILDER_SAVE_FIELD_UNSETTLED"
+        );
+        expect(other!.ok, JSON.stringify(other)).toBe(true);
+        for (const read of [rest!, api!]) {
+          expect(read.ok, JSON.stringify(read)).toBe(true);
+          expect(
+            read.items?.some(item => item.note === "n"),
+            JSON.stringify(read)
+          ).toBe(true);
+        }
+      },
+      600_000
+    );
+
+    it.runIf(dialect === "mysql" && perLanguage)(
+      "holds a translatable field a committed drop took from the translations table, in a Single",
+      async () => {
+        const t = await boot();
+        await dispatchSingles(
+          "createSingle",
+          {},
+          { slug: hero, label: hero, fields: [text("heading"), field("note")] }
+        );
+        await t.nextly.updateSingle({
+          slug: hero,
+          data: { note: "n", _overwrite: true },
+        } as never);
+        const schemaVersion = await versionOf(t, "dynamic_singles", hero);
+        await killSave(t, afterStatement(dropsColumn("heading")), () =>
+          dispatchSingles(
+            "applySingleSchemaChanges",
+            { slug: hero },
+            { fields: [field("note")], confirmed: true, schemaVersion }
+          )
+        );
+        expect(
+          await liveColumns(t, `single_${hero}`),
+          `killed at ${killedAt}`
+        ).not.toContain("heading");
+
+        const [sets, other, rest, api] = await fromAnotherProcess([
+          {
+            kind: "single-write",
+            via: "api",
+            slug: hero,
+            data: { heading: "x", _overwrite: true },
+          },
+          {
+            kind: "single-write",
+            via: "api",
+            slug: hero,
+            data: { note: "other", _overwrite: true },
+          },
+          { kind: "single-read", via: "rest", slug: hero },
+          { kind: "single-read", via: "api", slug: hero },
+        ]);
+
+        expect(sets!.code, JSON.stringify(sets)).toBe(
+          "BUILDER_SAVE_FIELD_UNSETTLED"
+        );
+        expect(other!.ok, JSON.stringify(other)).toBe(true);
+        for (const read of [rest!, api!]) {
+          expect(read.ok, JSON.stringify(read)).toBe(true);
+          expect(read.item?.note, JSON.stringify(read)).toBe("other");
+        }
       },
       600_000
     );

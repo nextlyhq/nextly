@@ -25,6 +25,8 @@ const stubs = vi.hoisted(() => ({
   lock: [] as string[],
   record: "",
   compared: 0,
+  inFlow: false,
+  joined: 0,
 }));
 
 vi.mock("../../pipeline/schema-lock", async original => ({
@@ -75,6 +77,15 @@ vi.mock("../../../../dispatcher/helpers/di", () => ({
 
 const adapter = {
   getCapabilities: () => ({ dialect: "mysql" }),
+  inTransaction: () => stubs.inFlow,
+  // The calling flow's open transaction, joined: the handle the checks in it read on. What its
+  // work throws comes back as a database error, as an adapter reclassifies it.
+  transaction: async (work: (tx: unknown) => Promise<unknown>) => {
+    stubs.joined += 1;
+    return work({ getDrizzle: () => tx }).catch(() => {
+      throw new Error("reclassified");
+    });
+  },
   getDrizzle: () => ({}),
 } as unknown as DrizzleAdapter;
 const posts = { adapter, kind: "collection" as const, slug: "posts" };
@@ -95,6 +106,8 @@ beforeEach(() => {
   stubs.record = `record-${made}`;
   stubs.lock = [];
   stubs.compared = 0;
+  stubs.inFlow = false;
+  stubs.joined = 0;
   vi.mocked(registerEntityRuntimeTables).mockClear();
 });
 
@@ -140,6 +153,18 @@ describe("the left-save guard's comparison and the schema lock", () => {
   it("inside a transaction, holds every field where nothing was compared before it opened", async () => {
     await expect(write({ note: "x" }, true)).rejects.toMatchObject(refused);
     expect(stubs.compared, "nothing compared inside it").toBe(0);
+  });
+
+  it("joins a transaction its flow holds open and was not handed, comparing nothing on another connection", async () => {
+    stubs.inFlow = true;
+    // Nothing was compared before it opened, so every field is held, as for one handed over.
+    await expect(write({ note: "x" })).rejects.toMatchObject(refused);
+    expect(stubs.joined).toBe(1);
+    expect(stubs.compared, "nothing compared inside it").toBe(0);
+
+    // Handed over, it is read on directly.
+    await expect(write({ note: "x" }, true)).rejects.toMatchObject(refused);
+    expect(stubs.joined).toBe(1);
   });
 
   it("inside a transaction, holds nothing where the lock was busy when last asked, and what was found where it was free", async () => {

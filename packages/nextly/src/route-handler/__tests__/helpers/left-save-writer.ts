@@ -9,14 +9,22 @@
  * and the operations as JSON: `{ kind: "write" | "read" | "update" | "single-write" |
  * "single-read"; via: "rest" | "api"; data?; id?; slug?; depth? }`, an update naming the entry it
  * changes, `slug` another collection or a Single to send it to, and a read's `depth` how far it
- * populates relationships.
+ * populates relationships. `registry-moved` moves the stored schema version, as a registry write
+ * anywhere does, so the next request loads every definition again from the registry rows.
  */
 import { createAdapter } from "../../../database/factory";
+import { writeRegistryRows } from "../../../domains/schema/schema-version";
 import { createTestNextly } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
 
 type Operation = {
-  kind: "write" | "read" | "update" | "single-write" | "single-read";
+  kind:
+    | "write"
+    | "read"
+    | "update"
+    | "single-write"
+    | "single-read"
+    | "registry-moved";
   via: "rest" | "api";
   data?: Record<string, unknown>;
   /** The entry an update changes. */
@@ -186,6 +194,9 @@ async function apiOf(operation: Operation, target: string): Promise<Outcome> {
       return { ...operation, ok: true };
     case "write":
       await copy.nextly.create({ collection: target, data } as never);
+      return { ...operation, ok: true };
+    case "registry-moved":
+      await writeRegistryRows(copy.adapter, () => Promise.resolve());
       return { ...operation, ok: true };
     case "single-write":
       await copy.nextly.updateSingle({ slug: target, data } as never);

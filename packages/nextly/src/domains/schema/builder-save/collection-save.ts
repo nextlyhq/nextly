@@ -860,12 +860,20 @@ async function settleStoppedSave(
   return stop.report;
 }
 
-/** The stopped save judged (`judgedStop`), or undefined where it cannot be, a failure to read logged. */
+/**
+ * The stopped save judged (`judgedStop`), or undefined where it cannot be, a failure to read logged.
+ * Not judged where the entity keeps translatable values per language: a save that stops while its
+ * process lives is left as it is there, its files kept.
+ */
 async function judgedOrNone(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   written: StoppedWrite
 ): Promise<JudgedStop | undefined> {
+  const keptPerLanguage = [save.previous, save.entity].some(
+    entity => entity !== null && storesPerLanguage(entity)
+  );
+  if (keptPerLanguage) return undefined;
   try {
     return await judgedStop(deps, save, written.files, written.table);
   } catch (error) {

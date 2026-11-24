@@ -54,6 +54,7 @@ function countingAdapter(dialect: "mysql" | "postgresql" | "sqlite"): {
   const inTx = countingDb();
   const adapter = {
     getCapabilities: () => ({ dialect }),
+    inTransaction: () => false,
     getDrizzle: () => {
       asked += 1;
       return own.db;
