@@ -31,7 +31,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   type FieldGroupNaming,
-  underNaming,
+  recordedFieldGroupTable,
 } from "../../field-groups/services/field-group-storage-names";
 import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import { isFieldLocalized } from "../../i18n/classify-fields";
@@ -146,10 +146,7 @@ import {
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import { identifierCaseRules } from "../utils/resolve-catalog-name";
-import {
-  resolveCollectionTableName,
-  resolveComponentTableName,
-} from "../utils/resolve-table-name";
+import { resolveCollectionTableName } from "../utils/resolve-table-name";
 
 import {
   appStreamSnapshots,
@@ -1716,7 +1713,8 @@ export async function generateMigration(
       resolutions: args.resolutions,
       removedEntities: removedEntitiesOf(
         args,
-        previous === null ? undefined : previous.data.entities
+        previous === null ? undefined : previous.data.entities,
+        new Set(previous?.data.snapshot.tables.map(table => table.name))
       ),
       entities: coveredEntitiesOf(
         args,
@@ -4547,7 +4545,8 @@ export function removedEntityTables(input: {
  */
 function removedEntitiesOf(
   args: GenerateArgs,
-  recorded: EntitySettingsRecord | undefined
+  recorded: EntitySettingsRecord | undefined,
+  recordedTables: ReadonlySet<string>
 ): RemovedEntity[] {
   if (recorded === undefined) return [];
   const gone = (
@@ -4568,7 +4567,7 @@ function removedEntitiesOf(
     ...gone(recorded.fieldGroups, args.components).map(slug => ({
       kind: "field group" as const,
       slug,
-      table: resolveComponentTableName(slug),
+      table: recordedFieldGroupTable(slug, table => recordedTables.has(table)),
     })),
   ];
 }
@@ -4665,12 +4664,10 @@ export function coveredEntitiesOf(
         // A table an earlier release let the field group name keeps that name through the
         // storage migration.
         if (dbName !== undefined) return dbName;
-        const legacy = resolveComponentTableName(slug);
-        const current = underNaming("current", legacy);
-        return recordedTables?.has(legacy) !== true &&
-          recordedTables?.has(current) === true
-          ? current
-          : legacy;
+        return recordedFieldGroupTable(
+          slug,
+          table => recordedTables?.has(table) === true
+        );
       }
     ),
   ];
