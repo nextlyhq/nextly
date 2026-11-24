@@ -13,7 +13,7 @@
  * @module components/features/entries/publish-parts/useOutOfDateNotice
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { LanguageLabel } from "../publishAllOutcomes";
 
@@ -25,6 +25,11 @@ import {
 } from "./out-of-date";
 
 export interface UseOutOfDateNoticeOptions {
+  /**
+   * Which document, in which language, is on screen. The notice is about what was published
+   * there, so leaving it forgets the notice, and a read still on its way says nothing after.
+   */
+  scope: string;
   /** The site's languages, in order, where the document is translated; otherwise none. */
   languages: readonly string[];
   labelOf: LanguageLabel;
@@ -51,14 +56,28 @@ export interface OutOfDateNoticeState {
 }
 
 export function useOutOfDateNotice({
+  scope,
   languages,
   labelOf,
   editorPath,
   readOverview,
 }: UseOutOfDateNoticeOptions): OutOfDateNoticeState {
   const [notice, setNotice] = useState<OutOfDateNoticeContent | null>(null);
+  // The scope the last render was for. Updated during render, as React adjusts state from a
+  // changed input, so no render shows one language's notice over another.
+  const [shownFor, setShownFor] = useState(scope);
+  if (shownFor !== scope) {
+    setShownFor(scope);
+    setNotice(null);
+  }
   // Which publish is being answered, so a slower read for an earlier one never overwrites it.
   const latest = useRef(0);
+  useEffect(
+    () => () => {
+      latest.current += 1;
+    },
+    [scope]
+  );
   const afterPublish = useCallback<OutOfDateNoticeState["afterPublish"]>(
     async ({ before, published, source }) => {
       const asked = ++latest.current;

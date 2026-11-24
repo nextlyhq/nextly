@@ -5,10 +5,11 @@
  *
  * The plausible broken versions: a sentence only beside chosen parts (the dialog as it was);
  * offering a language with nothing to publish, or one the server would refuse as it stands;
- * offering the shared fields when they hold nothing; leaving the shared fields unchosen on a first
- * publish that takes them; wording a part from a guess rather than from the description; the
- * "every language" line when the shared fields do not go live, or on a one-language site; and a
- * request that asks for a part the rows show as not offered.
+ * offering the shared fields when they hold nothing; not offering them where they are the whole
+ * document, or where they are not live; leaving them unchosen on a first publish that takes them;
+ * wording a part from a guess rather than from the description; the "every language" line when
+ * the shared fields do not go live, or on a one-language site; and a request that asks for a part
+ * the rows show as not offered.
  */
 import { describe, expect, it } from "vitest";
 
@@ -17,7 +18,7 @@ import type {
   PublishPartsResult,
 } from "@admin/services/publishParts";
 
-import { choiceFromRows, publishChoices } from "../publish-choices";
+import { offeredChoice, publishChoices } from "../publish-choices";
 import { SHARED_PATH } from "../publish-parts-choice";
 
 const LANGUAGES = ["en", "es", "fr", "ar"];
@@ -235,6 +236,87 @@ describe("what the choice lists", () => {
   });
 });
 
+describe("the shared fields' row", () => {
+  it("is the whole of a document that is not translated: offered, chosen as chosen, in the server's words", () => {
+    const row = (shared: boolean, chosenAnswer?: PublishPartsResult) =>
+      publishChoices({
+        languages: [],
+        labelOf,
+        currentLocale: undefined,
+        choice: { locales: [], shared },
+        chosenAnswer,
+        everyLanguageAnswer: undefined,
+        sharedPending: false,
+        outOfDate: [],
+      });
+    expect(row(true, answer([], { changes: true, added: false }))).toEqual({
+      rows: [
+        {
+          part: SHARED_PATH,
+          label: "Shared fields",
+          current: false,
+          chosen: true,
+          offered: true,
+          says: "Their unpublished changes go live.",
+        },
+      ],
+      facts: [],
+    });
+    expect(row(false).rows).toEqual([
+      expect.objectContaining({
+        chosen: false,
+        offered: true,
+        says: undefined,
+      }),
+    ]);
+  });
+
+  it("is offered where they are not live and hold no changes, and no chosen language takes them", () => {
+    const row = (locales: string[]) =>
+      publishChoices({
+        languages: LANGUAGES,
+        labelOf,
+        currentLocale: "en",
+        choice: { locales, shared: true },
+        chosenAnswer: undefined,
+        everyLanguageAnswer: answer([{ locale: "en", outcome: "goes-live" }], {
+          changes: true,
+          added: false,
+        }),
+        sharedPending: false,
+        outOfDate: [],
+      }).rows.at(-1);
+    expect(row([])).toMatchObject({
+      chosen: true,
+      offered: true,
+      says: "Go live for readers of every language.",
+    });
+    expect(row(["en"])).toMatchObject({
+      chosen: true,
+      offered: false,
+      says: "Go live too: a first publish always takes them, for readers of every language.",
+    });
+  });
+
+  it("is offered, saying nothing, while the server has not said whether they hold anything", () => {
+    const { rows } = publishChoices({
+      languages: LANGUAGES,
+      labelOf,
+      currentLocale: "en",
+      choice: { locales: ["en"], shared: false },
+      chosenAnswer: undefined,
+      everyLanguageAnswer: undefined,
+      sharedPending: false,
+      outOfDate: [],
+    });
+    expect(rows.at(-1)).toMatchObject({
+      chosen: false,
+      offered: true,
+      says: undefined,
+    });
+  });
+});
+
 describe("the lines after the parts", () => {
   it("says the shared fields change every language, and which translations go out of date", () => {
     const { facts } = publishChoices({
@@ -282,63 +364,74 @@ describe("the lines after the parts", () => {
   });
 });
 
-describe("the request the rows make", () => {
-  it("asks only for the parts chosen and offered, and never for the shared fields a first publish takes", () => {
+describe("the request the choice makes", () => {
+  const known = {
+    languages: LANGUAGES,
+    everyLanguageAnswer: answer([
+      { locale: "en", outcome: "goes-live-with-pending-change" },
+      { locale: "es", outcome: "stays-published" },
+      { locale: "fr", outcome: "out-of-date", fields: ["tagline"] },
+      { locale: "ar", outcome: "shows-fallback", fallback: "en" },
+    ]),
+    sharedPending: true,
+  };
+
+  it("asks only for the parts chosen and offered", () => {
     expect(
-      choiceFromRows([
-        {
-          part: "en",
-          label: "English",
-          current: true,
-          chosen: true,
-          offered: true,
-          says: undefined,
-        },
-        {
-          part: "es",
-          label: "Spanish",
-          current: false,
-          chosen: false,
-          offered: true,
-          says: undefined,
-        },
-        {
-          part: "ar",
-          label: "Arabic",
-          current: false,
-          chosen: true,
-          offered: false,
-          says: undefined,
-        },
-        {
-          part: SHARED_PATH,
-          label: "Shared fields",
-          current: false,
-          chosen: true,
-          offered: false,
-          says: undefined,
-        },
-      ])
-    ).toEqual({ locales: ["en"], shared: false });
-    expect(
-      choiceFromRows([
-        {
-          part: "en",
-          label: "English",
-          current: true,
-          chosen: true,
-          offered: true,
-          says: undefined,
-        },
-        {
-          part: SHARED_PATH,
-          label: "Shared fields",
-          current: false,
-          chosen: true,
-          offered: true,
-          says: undefined,
-        },
-      ])
+      offeredChoice({ locales: ["en", "es", "fr", "ar"], shared: true }, known)
     ).toEqual({ locales: ["en"], shared: true });
+    expect(offeredChoice({ locales: [], shared: false }, known)).toEqual({
+      locales: [],
+      shared: false,
+    });
+  });
+
+  it("leaves out shared fields with nothing to publish", () => {
+    expect(
+      offeredChoice(
+        { locales: ["en"], shared: true },
+        { ...known, sharedPending: false }
+      )
+    ).toEqual({ locales: ["en"], shared: false });
+  });
+
+  it("never asks for the shared fields a first publish takes", () => {
+    const notLive = {
+      ...known,
+      everyLanguageAnswer: answer([{ locale: "en", outcome: "goes-live" }], {
+        changes: true,
+        added: false,
+      }),
+    };
+    expect(offeredChoice({ locales: ["en"], shared: true }, notLive)).toEqual({
+      locales: ["en"],
+      shared: false,
+    });
+    // With no language to take them, they are a choice of their own.
+    expect(offeredChoice({ locales: [], shared: true }, notLive)).toEqual({
+      locales: [],
+      shared: true,
+    });
+  });
+
+  it("is the choice as made while the server has not described every language, and on a document that is not translated", () => {
+    const choice = { locales: ["en", "ar"], shared: true };
+    expect(
+      offeredChoice(choice, {
+        ...known,
+        everyLanguageAnswer: undefined,
+        sharedPending: false,
+      })
+    ).toEqual(choice);
+    expect(
+      offeredChoice(
+        { locales: [], shared: true },
+        {
+          languages: [],
+          everyLanguageAnswer: undefined,
+          sharedPending: false,
+        }
+      )
+    ).toEqual({ locales: [], shared: true });
   });
 });

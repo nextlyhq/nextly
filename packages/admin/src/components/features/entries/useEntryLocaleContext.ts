@@ -47,7 +47,6 @@ export interface EntryLocaleContextInput {
   onEnterTranslationMode: ((source: string) => void) | undefined;
   /** How THIS editor reads another language — the seam that differs. */
   fetchSourceValues: EntryLocaleContextValue["fetchSourceValues"];
-  publishAllLanguages: EntryLocaleContextValue["publishAllLanguages"];
   /** Entry-only addressing; a single supplies neither. */
   collectionSlug?: string | undefined;
   entryId?: string | undefined;
@@ -69,7 +68,6 @@ export function useEntryLocaleContext(
     onSeedHandled,
     onEnterTranslationMode,
     fetchSourceValues,
-    publishAllLanguages,
     collectionSlug,
     entryId,
   } = input;
@@ -107,7 +105,6 @@ export function useEntryLocaleContext(
       // singles alike — a single has no collection slug or entry id and could
       // otherwise never offer the action at all.
       fetchSourceValues,
-      publishAllLanguages,
     }),
     [
       locale,
@@ -122,7 +119,6 @@ export function useEntryLocaleContext(
       onSeedHandled,
       onEnterTranslationMode,
       fetchSourceValues,
-      publishAllLanguages,
       collectionSlug,
       entryId,
     ]

@@ -9,7 +9,7 @@
  * - whether a language can be chosen, and what it says while it is not chosen, from the server's
  *   description of publishing every language;
  * - what a chosen language does, from the description of the request as chosen;
- * - whether the shared fields go live with a first publish, from that same description.
+ * - whether the shared fields go live with a first publish, from both.
  *
  * @experimental Until publishing per language is complete.
  *
@@ -26,11 +26,12 @@ import { fieldList, type LanguageLabel } from "../publishAllOutcomes";
 import { outOfDateForecast, type OutOfDateCount } from "./out-of-date";
 import {
   partsOutcomeSentence,
+  sharedSentence,
   SHARED_PATH,
   type PartsChoice,
 } from "./publish-parts-choice";
 
-/** One part the person may publish: a language, or the shared fields. */
+/** One part as the choice lists it: a language, or the shared fields. */
 export interface PublishChoiceRow {
   /** The language's code, or {@link SHARED_PATH} for the shared fields. */
   part: string;
@@ -49,7 +50,7 @@ export interface PublishChoiceRow {
 }
 
 /** The parts, in the site's order with the shared fields last, and the lines that follow them. */
-export interface PublishChoices {
+interface PublishChoices {
   rows: PublishChoiceRow[];
   /** What the publish means beyond its parts, each a line. */
   facts: string[];
@@ -103,14 +104,95 @@ function outcomeIn(
   return answer?.languages.find(language => language.locale === locale);
 }
 
-/** The shared fields' row. */
-function sharedRow(args: {
-  choice: PartsChoice;
-  chosenAnswer: PublishPartsResult | undefined;
+/** What says which parts are offered: the site's languages and what is known of each part. */
+interface PartsKnown {
+  /** The site's languages, in order, where the document is translated; otherwise none. */
+  languages: readonly string[];
+  /** The server's description of publishing every language, once it has said. */
+  everyLanguageAnswer: PublishPartsResult | undefined;
+  /** Whether the shared fields hold changes nobody has published. */
   sharedPending: boolean;
-}): PublishChoiceRow {
+}
+
+/**
+ * Whether the shared fields hold anything to publish: changes of their own, or a published state
+ * to put live. While the server has not said, they are offered, and the server judges the request.
+ */
+function sharedHoldsSomething(known: PartsKnown): boolean {
+  return (
+    known.sharedPending ||
+    known.everyLanguageAnswer === undefined ||
+    known.everyLanguageAnswer.shared.changes
+  );
+}
+
+/**
+ * Whether publishing `locales` takes the shared fields with it: they are not live, and no language
+ * goes live without them.
+ */
+function takesShared(locales: readonly string[], known: PartsKnown): boolean {
+  return (
+    locales.length > 0 && known.everyLanguageAnswer?.shared.changes === true
+  );
+}
+
+/**
+ * The part of `choice` that is offered: what is described and sent. A language with nothing to
+ * publish, or one the server refuses as it stands, is left out, and so are shared fields with
+ * nothing to publish. Those a first publish takes are not asked for: the server adds them itself,
+ * and says so. A document that is not translated is its shared fields, so the choice stands.
+ */
+export function offeredChoice(
+  choice: PartsChoice,
+  known: PartsKnown
+): PartsChoice {
+  if (known.languages.length === 0) return choice;
+  const locales = choice.locales.filter(locale =>
+    languageOffered(outcomeIn(known.everyLanguageAnswer, locale))
+  );
+  return {
+    locales,
+    shared:
+      choice.shared &&
+      sharedHoldsSomething(known) &&
+      !takesShared(locales, known),
+  };
+}
+
+/** What publishing the shared fields changes, or why they are not offered. */
+function sharedSays(known: PartsKnown): string | undefined {
+  if (known.sharedPending) {
+    return "Their unpublished changes go live for readers of every language.";
+  }
+  if (known.everyLanguageAnswer === undefined) return undefined;
+  return known.everyLanguageAnswer.shared.changes
+    ? "Go live for readers of every language."
+    : "No unpublished changes.";
+}
+
+/** The shared fields' row, for the part of the choice that is offered. */
+function sharedRow(
+  offered: PartsChoice,
+  chosenAnswer: PublishPartsResult | undefined,
+  known: PartsKnown
+): PublishChoiceRow {
   const base = { part: SHARED_PATH, label: "Shared fields", current: false };
-  if (args.chosenAnswer?.shared.added === true) {
+  // Not translated: the shared fields are the whole document.
+  if (known.languages.length === 0) {
+    return {
+      ...base,
+      chosen: offered.shared,
+      offered: true,
+      says:
+        chosenAnswer === undefined
+          ? undefined
+          : sharedSentence("publish", chosenAnswer.shared),
+    };
+  }
+  if (
+    chosenAnswer?.shared.added === true ||
+    takesShared(offered.locales, known)
+  ) {
     return {
       ...base,
       chosen: true,
@@ -118,44 +200,32 @@ function sharedRow(args: {
       says: "Go live too: a first publish always takes them, for readers of every language.",
     };
   }
-  if (!args.sharedPending) {
-    return {
-      ...base,
-      chosen: false,
-      offered: false,
-      says: "No unpublished changes.",
-    };
-  }
   return {
     ...base,
-    chosen: args.choice.shared,
-    offered: true,
-    says: "Their unpublished changes go live for readers of every language.",
+    chosen: offered.shared,
+    offered: sharedHoldsSomething(known),
+    says: sharedSays(known),
   };
 }
 
 /** What the choice of what goes live lists, for `choice`. */
-export function publishChoices(args: {
-  /** The site's languages, in order, where the document is translated; otherwise none. */
-  languages: readonly string[];
-  labelOf: LanguageLabel;
-  /** The language on screen. */
-  currentLocale: string;
-  choice: PartsChoice;
-  /** The server's description of the request as chosen, once it has said. */
-  chosenAnswer: PublishPartsResult | undefined;
-  /** The server's description of publishing every language, once it has said. */
-  everyLanguageAnswer: PublishPartsResult | undefined;
-  /** Whether the shared fields hold changes nobody has published. */
-  sharedPending: boolean;
-  /** The translations publishing the chosen languages would leave out of date. */
-  outOfDate: readonly OutOfDateCount[];
-}): PublishChoices {
+export function publishChoices(
+  args: PartsKnown & {
+    labelOf: LanguageLabel;
+    /** The language on screen. */
+    currentLocale: string | undefined;
+    choice: PartsChoice;
+    /** The server's description of the request as chosen, once it has said. */
+    chosenAnswer: PublishPartsResult | undefined;
+    /** The translations publishing the chosen languages would leave out of date. */
+    outOfDate: readonly OutOfDateCount[];
+  }
+): PublishChoices {
+  const request = offeredChoice(args.choice, args);
   const languageRows = args.languages.map((locale): PublishChoiceRow => {
     const label = args.labelOf(locale);
     const listed = outcomeIn(args.everyLanguageAnswer, locale);
-    const offered = languageOffered(listed);
-    const chosen = offered && args.choice.locales.includes(locale);
+    const chosen = request.locales.includes(locale);
     // A chosen language in the server's words for the request as chosen; any other in its
     // words for publishing every language.
     const outcome =
@@ -165,37 +235,20 @@ export function publishChoices(args: {
       label,
       current: locale === args.currentLocale,
       chosen,
-      offered,
+      offered: languageOffered(listed),
       says:
         outcome === undefined
           ? undefined
           : languageSays(outcome, label, args.labelOf),
     };
   });
-  const shared = sharedRow(args);
+  const shared = sharedRow(request, args.chosenAnswer, args);
+  const forecast = outOfDateForecast(args.outOfDate, args.labelOf);
   const facts = [
     ...(shared.chosen && args.languages.length > 1
       ? [SHARED_CHANGE_EVERY_LANGUAGE]
       : []),
-    ...[outOfDateForecast(args.outOfDate, args.labelOf)].filter(
-      (line): line is string => line !== null
-    ),
+    ...(forecast === null ? [] : [forecast]),
   ];
   return { rows: [...languageRows, shared], facts };
-}
-
-/**
- * The request the rows make: the languages chosen and offered, and the shared fields where they
- * are chosen and offered. The shared fields a first publish takes are not asked for: the server
- * adds them itself, and says so.
- */
-export function choiceFromRows(rows: readonly PublishChoiceRow[]): PartsChoice {
-  return {
-    locales: rows
-      .filter(row => row.part !== SHARED_PATH && row.offered && row.chosen)
-      .map(row => row.part),
-    shared: rows.some(
-      row => row.part === SHARED_PATH && row.offered && row.chosen
-    ),
-  };
 }

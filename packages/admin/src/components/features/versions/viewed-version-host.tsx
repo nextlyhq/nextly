@@ -128,9 +128,9 @@ export function mayRecordRecovery(
  * Presentation comes from the VERSION: a snapshot captured in Arabic is read
  * right-to-left even while the editor is in English, because that is how it
  * was written. Every seam that ACTS on the live editor is withheld: locale
- * switching, translation mode, the inline source hint, copy-from-language and
- * publish-every-language, because reading a version must not be able to write
- * to the document that is temporarily not on screen.
+ * switching, translation mode, the inline source hint and copy-from-language,
+ * because reading a version must not be able to write to the document that is
+ * temporarily not on screen.
  */
 function snapshotLocaleContext(
   outer: EntryLocaleContextValue,
@@ -149,7 +149,6 @@ function snapshotLocaleContext(
     onSeedHandled: undefined,
     onEnterTranslationMode: undefined,
     fetchSourceValues: undefined,
-    publishAllLanguages: undefined,
   };
 }
 

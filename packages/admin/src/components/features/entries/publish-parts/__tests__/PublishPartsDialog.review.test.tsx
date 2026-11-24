@@ -48,12 +48,17 @@ const LANGUAGES = ["en", "es"];
 const labelOf = (code: string) =>
   ({ en: "English", es: "Spanish" })[code] ?? code;
 
+/** What Spanish's row says, once the server has described it. */
+const FIRST_TIME_IN_SPANISH =
+  "Goes live for the first time: readers of Spanish see it.";
+
+/** The server's answer for a post whose shared fields are live. */
 function describing(choice: PublishPartsChoice): PublishPartsResult {
   const locales = choice.locales === "all" ? LANGUAGES : choice.locales;
   return {
     id: "post-1",
     languages: locales.map(locale => ({ locale, outcome: "goes-live" })),
-    shared: { changes: choice.shared === true, added: false },
+    shared: { changes: false, added: false },
   };
 }
 
@@ -185,11 +190,13 @@ describe("Ready to publish?", () => {
   it("lists a part not approved, offers its next step, and holds Publish", async () => {
     const user = userEvent.setup();
     open(review([part({}), APPROVED_SHARED]));
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
 
     const ready = screen.getByRole("region", { name: "Ready to publish?" });
     expect(ready).toHaveTextContent("Spanish: not approved (Drafting)");
-    expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Publish selected" })
+    ).toBeDisabled();
 
     await user.click(
       within(ready).getByRole("button", { name: "Submit for review" })
@@ -224,7 +231,7 @@ describe("Ready to publish?", () => {
         APPROVED_SHARED,
       ])
     );
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
     const ready = screen.getByRole("region", { name: "Ready to publish?" });
     await user.click(
       within(ready).getByRole("button", { name: "Submit for review" })
@@ -252,7 +259,7 @@ describe("Ready to publish?", () => {
 
   it("says who can unblock a part the person cannot move", async () => {
     open(review([IN_REVIEW_ES, APPROVED_SHARED]));
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
     const ready = screen.getByRole("region", { name: "Ready to publish?" });
     expect(ready).toHaveTextContent("Spanish: not approved (In review)");
     expect(ready).toHaveTextContent("Waiting for Editors");
@@ -271,7 +278,9 @@ describe("Ready to publish?", () => {
     await waitFor(() =>
       expect(ready).toHaveTextContent("title: This field is required.")
     );
-    expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Publish selected" })
+    ).toBeDisabled();
   });
 
   it("says nothing, and lets Publish go, once every chosen part is approved", async () => {
@@ -281,23 +290,27 @@ describe("Ready to publish?", () => {
         APPROVED_SHARED,
       ])
     );
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
     expect(
       screen.queryByRole("region", { name: "Ready to publish?" })
     ).toBeNull();
-    expect(screen.getByRole("button", { name: "Publish" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Publish selected" })
+    ).toBeEnabled();
   });
 
   it("draws the dialog as before where no workflow is attached", async () => {
     open();
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
     expect(
       screen.queryByRole("region", { name: "Ready to publish?" })
     ).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Publish without review…" })
     ).toBeNull();
-    expect(screen.getByRole("button", { name: "Publish" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Publish selected" })
+    ).toBeEnabled();
   });
 });
 
@@ -305,7 +318,7 @@ describe("Publish without review", () => {
   it("offers a holder publishing without review, with a required, trimmed reason", async () => {
     const user = userEvent.setup();
     open(review([IN_REVIEW_ES], true));
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
 
     await user.click(
       screen.getByRole("button", { name: "Publish without review…" })
@@ -339,7 +352,7 @@ describe("Publish without review", () => {
       steps: [],
     });
     open(review([IN_REVIEW_ES, english], true));
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
     await user.click(
       screen.getByRole("button", { name: "Publish without review…" })
     );
@@ -361,7 +374,7 @@ describe("Publish without review", () => {
 
   it("does not offer it to a person who does not hold it", async () => {
     open(review([IN_REVIEW_ES], false));
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
     expect(
       screen.queryByRole("button", { name: "Publish without review…" })
     ).toBeNull();
@@ -380,7 +393,7 @@ describe("Publish without review", () => {
         true
       )
     );
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
     expect(
       screen.queryByRole("button", { name: "Publish without review…" })
     ).toBeNull();
@@ -402,7 +415,7 @@ describe("Publish without review", () => {
           : Promise.reject(refused)
     );
     open(review([IN_REVIEW_ES], true));
-    await screen.findByText("Goes live for the first time.");
+    await screen.findByText(FIRST_TIME_IN_SPANISH);
     await user.click(
       screen.getByRole("button", { name: "Publish without review…" })
     );

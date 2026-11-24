@@ -27,8 +27,7 @@ import type { DocumentViewMount } from "@admin/components/features/entries/Entry
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
 import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
-import { usePublishPartsAction } from "@admin/components/features/entries/publish-parts/usePublishPartsAction";
-import { languageLabelOf } from "@admin/components/features/entries/publishAllOutcomes";
+import { useDocumentPublishing } from "@admin/components/features/entries/publish-parts/useDocumentPublishing";
 import {
   isRemovedFromCode,
   removedEntityHasNoTable,
@@ -223,26 +222,22 @@ export default function SingleEditPage({
         : undefined,
   });
 
-  // "Choose what to publish…", on the Publish split: each language of a translated Single, and
-  // separately its shared fields; a Single that is not translated offers its shared fields, which
-  // are the whole document.
   // How to read the copy the editor shows, filled by the editor once it is drawn, so a publish
   // of chosen parts is refused when the Single changed since the editor opened it.
   const shownCopy = useRef<(() => ShownCopy) | null>(null);
-  const publishParts = usePublishPartsAction({
+  // What Publish runs, and "Choose what to publish…" on its menu: each language of a translated
+  // Single, and separately its shared fields; a Single that is not translated offers its shared
+  // fields, which are the whole document.
+  const publishing = useDocumentPublishing({
     target: slug && document ? { kind: "single", slug } : undefined,
+    document,
     shown: () => shownCopy.current?.(),
     lifecycleEnabled: schema?.status,
-    languages:
-      localizationEnabled && schema?.localized === true
-        ? locales.map(each => each.code)
-        : [],
-    labelOf: languageLabelOf(locales),
+    translated: localizationEnabled && schema?.localized === true,
+    locales,
     currentLocale: locale,
     defaultLocale,
-    sharedPending:
-      (document as { _sharedChangesPending?: unknown } | undefined)
-        ?._sharedChangesPending === true,
+    editorPath: slug ? buildRoute(ROUTES.SINGLE_EDIT, { slug }) : "",
   });
 
   // Update mutation — routes the save to the active language's companion row.
@@ -416,9 +411,10 @@ export default function SingleEditPage({
           measure while the entry editor beside it took the whole panel. */}
         <MeasuredPageFrame contentCarriesMeasure>
           {schedule.dialog}
-          {publishParts.dialog}
+          {publishing.dialog}
           <SingleForm
             shownCopy={shownCopy}
+            smartPublish={publishing.smartPublish}
             revealOutline={<SingleEditPageSkeleton />}
             revealWaiting={partsStartup.pending}
             /* Under the editor's header, for the reason the entry editor
@@ -446,12 +442,13 @@ export default function SingleEditPage({
                   }
                   onDefaultLocale={!isNonDefaultLocale}
                 />
+                {publishing.notice}
               </>
             }
             // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
             // expects FieldConfig[] (discriminated). The runtime payload is the
             // same; widening here until the schema layer unifies on FieldConfig.
-            schema={schema as unknown as SingleSchema}
+            schema={schema}
             document={document}
             /* A Single is a release member exactly as a collection entry is — the
              engine models both and the release detail page links to both — so
@@ -462,15 +459,15 @@ export default function SingleEditPage({
               removedFromCode
                 ? []
                 : [
-                    ...(publishParts.contributed === null
+                    ...(publishing.contributed === null
                       ? []
-                      : [publishParts.contributed]),
+                      : [publishing.contributed]),
                     ...(schedule.contributed === null
                       ? []
                       : [schedule.contributed]),
-                    ...(publishParts.withoutReview === null
+                    ...(publishing.withoutReview === null
                       ? []
-                      : [publishParts.withoutReview]),
+                      : [publishing.withoutReview]),
                     ...(pin === null ? [] : [pin]),
                   ]
             }

@@ -177,9 +177,9 @@ describe("revsFor", () => {
   });
 });
 
-// A publish of every language sends the version a read of every language
-// gave, or, from a caller refused that read, says it is made over whatever
-// each language holds: an update that says neither is refused.
+// A publish of chosen parts sends the version a read of every language gave,
+// or, from a caller refused that read, says it is made over whatever each
+// language holds: an update that says neither is refused.
 describe("everyLanguageBody", () => {
   it("sends the version read, the overwrite choice, or nothing", () => {
     expect(everyLanguageBody("7.en:2,es:3")).toEqual({ _rev: "7.en:2,es:3" });

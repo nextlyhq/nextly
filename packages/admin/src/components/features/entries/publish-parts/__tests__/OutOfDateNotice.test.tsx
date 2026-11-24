@@ -61,10 +61,13 @@ const AFTER_TITLE_EDIT: TranslationOverview = {
 /** The editor around the notice: a Publish that publishes English, then says what it left. */
 function Editor({
   readOverview,
+  scope = "7:en",
 }: {
   readOverview: () => Promise<TranslationOverview | undefined>;
+  scope?: string;
 }): JSX.Element {
   const { notice, afterPublish, dismiss } = useOutOfDateNotice({
+    scope,
     languages: LANGUAGES,
     labelOf,
     editorPath: EDITOR,
@@ -141,6 +144,33 @@ describe("the notice after publishing an edit to a translated source field", () 
     finishFirst(AFTER_TITLE_EDIT);
 
     await waitFor(() => expect(readOverview).toHaveBeenCalledTimes(2));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("is forgotten when the editor moves to another language, and stays so on the way back", async () => {
+    const readOverview = () => Promise.resolve(AFTER_TITLE_EDIT);
+    const { rerender } = render(<Editor readOverview={readOverview} />);
+    await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+    await screen.findByRole("status");
+
+    rerender(<Editor readOverview={readOverview} scope="7:es" />);
+    expect(screen.queryByRole("status")).toBeNull();
+    rerender(<Editor readOverview={readOverview} scope="7:en" />);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("says nothing when the read answers after the editor moved", async () => {
+    let finish: (overview: TranslationOverview) => void = () => {};
+    const readOverview = () =>
+      new Promise<TranslationOverview | undefined>(resolve => {
+        finish = resolve;
+      });
+    const { rerender } = render(<Editor readOverview={readOverview} />);
+    await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+
+    rerender(<Editor readOverview={readOverview} scope="7:es" />);
+    finish(AFTER_TITLE_EDIT);
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(screen.queryByRole("status")).toBeNull();
   });

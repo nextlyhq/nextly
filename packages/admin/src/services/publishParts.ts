@@ -13,10 +13,23 @@ import {
   type EveryLanguageVersion,
 } from "@admin/lib/document-version";
 
-import type { PublishAllLanguageOutcome } from "./publishAllPreview";
-
 /** Which way the parts move. */
 export type PublishPartsDirection = "publish" | "unpublish";
+
+/** What a publish does, or would do, to one chosen language. */
+export type PublishLanguageOutcome =
+  | { locale: string; outcome: "goes-live-with-pending-change" }
+  | { locale: string; outcome: "stays-published" }
+  | { locale: string; outcome: "goes-live" }
+  | { locale: string; outcome: "shows-fallback"; fallback: string | null }
+  | {
+      locale: string;
+      outcome: "out-of-date";
+      /** The shared fields it is behind on that the caller may read. */
+      fields: string[];
+      /** How many more it is behind on that the caller may not read. */
+      hiddenCount?: number;
+    };
 
 /** What an unpublish does, or would do, to one chosen language. */
 export type UnpublishLanguageOutcome = {
@@ -26,7 +39,7 @@ export type UnpublishLanguageOutcome = {
 
 /** What a publish or an unpublish does, or would do, to one chosen language. */
 export type PartsLanguageOutcome =
-  | PublishAllLanguageOutcome
+  | PublishLanguageOutcome
   | UnpublishLanguageOutcome;
 
 /** What a request did, or would do, to each part it chose. */
