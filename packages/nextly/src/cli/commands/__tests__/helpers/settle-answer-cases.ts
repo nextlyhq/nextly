@@ -8,8 +8,9 @@
  *   does not read it as drift;
  * - a database of its own, which holds the collection and entries, ends with every entry filled or
  *   the entries without the value gone, and a second run does nothing;
- * - the delete needs the data-loss consent on that database: refused without it, nothing of it
- *   changed, and applied with it;
+ * - the delete needs the data-loss consent on that database: refused without it, by the file and the
+ *   tables it takes rows from and nothing else of the file, with nothing of it changed, and applied
+ *   with it;
  * - on MySQL, where the file's statements commit one at a time, a run stopped between its ALTER and
  *   its fill goes on where it stopped.
  *
@@ -19,7 +20,14 @@
  * written by a site that runs on it. The cases for a layout run in a suite of that layout: the
  * commands' configuration, mocked there, is the caller's to hold (`loaded`).
  */
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -254,6 +262,25 @@ export function settleAnswerCases(args: {
         readdirSync(join(folder, "database", "history"))
           .filter(file => file.endsWith(".sql"))
           .sort();
+
+      /** What file `name` of `folder` runs: its statements, without the ones that undo them. */
+      const runs = (folder: string, name: string) =>
+        readFileSync(join(folder, "database", "history", name), "utf8").split(
+          "-- DOWN"
+        )[0]!;
+
+      /** The deletions a refusal lists, each under the file it is listed for. */
+      function listedDeletions(said: string): Record<string, string[]> {
+        const listed: Record<string, string[]> = {};
+        let file = "";
+        for (const line of said.split("\n")) {
+          const heading = /^\s+(\S+\.sql):$/.exec(line);
+          if (heading) file = heading[1]!;
+          const item = /^\s+- (.+)$/.exec(line);
+          if (item) (listed[file] ??= []).push(item[1]!);
+        }
+        return listed;
+      }
 
       /** A dialog's apply in development on the running site: it must go through. */
       async function save(
@@ -528,20 +555,51 @@ export function settleAnswerCases(args: {
 
           it(`refuses ${kind} collection's file that deletes without the data-loss consent, changing nothing (${answered.name})`, async () => {
             const { before, after } = await built(translated, answered);
+            // The one file of the save that deletes is the translations table's: it renames the
+            // column there, and then deletes from both tables.
+            const deleting = files(after).filter(
+              name =>
+                !files(before).includes(name) &&
+                runs(after, name).includes("DELETE FROM")
+            );
+            expect(deleting).toHaveLength(1);
+            const file = deleting[0]!;
+            const up = runs(after, file);
+            expect(up).toMatch(
+              /dc_posts_locales[^;]*RENAME COLUMN .note. TO .remark./
+            );
+            expect(up.indexOf("DELETE FROM")).toBeGreaterThan(
+              up.indexOf("RENAME COLUMN")
+            );
+            expect(up).toContain(`DELETE FROM ${q(MAIN)} `);
+            expect(up).toContain(`DELETE FROM ${q(COMPANION)} `);
+
             const target = await seeded(before, translated);
             const ids = [target.kept, target.empty, target.bare].sort();
 
             reach(target.url);
             const rowsBefore = await languageRowsOf(target.adapter, "note");
+            const pending = await pendingIn(target.adapter, after);
             const refused = await migrate(after);
 
+            // Refused for want of the consent, and for the rows alone: the file's rename is not
+            // among what needs it.
             expect(refused.code, refused.said).not.toBeUndefined();
-            // The deletion is named by the tables it takes rows from.
-            expect(refused.said).toMatch(/dc_posts/);
+            expect(refused.said).toMatch(/DATA_LOSS_CONSENT_REQUIRED/);
+            expect(refused.said).toMatch(/Nothing was changed/);
+            expect(listedDeletions(refused.said)).toEqual({
+              [file]: [
+                `rows of ${MAIN}`,
+                `rows of ${COMPANION}, belonging to ${MAIN}`,
+              ],
+            });
+            // Nothing changed: the entries, every language's row under the column's old name, and
+            // the files still to run.
             expect(await entriesOf(target.adapter)).toEqual(ids);
             expect(await languageRowsOf(target.adapter, "note")).toEqual(
               rowsBefore
             );
+            expect(await pendingIn(target.adapter, after)).toEqual(pending);
 
             // With it, the same file applies.
             const applied = await migrate(after, { acceptDataLoss: true });
