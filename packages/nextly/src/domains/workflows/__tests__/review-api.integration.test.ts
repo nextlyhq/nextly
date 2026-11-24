@@ -202,10 +202,28 @@ type Doc = Record<string, unknown>;
 
 let current: TestNextly | undefined;
 
+/** Puts back the server's time zone a case changed with `runIn`. */
+let restoreTz: (() => void) | undefined;
+
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  restoreTz?.();
+  restoreTz = undefined;
 });
+
+/**
+ * Runs the rest of the case as if the server ran in `zone`: Node reads `TZ` again when it is
+ * assigned, so every `Date` made afterwards, and every driver decoding one, uses the new zone.
+ */
+function runIn(zone: string): void {
+  const previous = process.env.TZ;
+  process.env.TZ = zone;
+  restoreTz = () => {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  };
+}
 
 const app = (): TestNextly => {
   if (!current) throw new Error("not booted");
@@ -2512,6 +2530,50 @@ describe.each(getConfiguredTestDialects())(
         expect(new Set(walked).size, "no part comes twice").toBe(walked.length);
         expect(walked).toEqual(keysOf(whole));
         expect(walked).toHaveLength(5);
+      });
+
+      it("walks unmoved parts created in the server zone's daylight-saving gap, each once, at the time they were created", async () => {
+        // On a server in Berlin, 02:30 on 29 March 2026 is a wall clock that never happens there
+        // (the clocks go from 02:00 to 03:00). A Brief created at 02:30 UTC and another at 03:10
+        // UTC are walked one at a time: the first page's cursor holds 02:30, so the second Brief
+        // (after it, though before 03:30) is still reached, and each lists when it was created.
+        // Read as a Berlin time, 02:30 would become 03:30, and the walk would skip it.
+        runIn("Europe/Berlin");
+        current = await bootSteps(dialect, undefined, {
+          collections: [briefs],
+        });
+        await person(app(), "pia", [
+          ["read", BRIEFS],
+          ["publish", BRIEFS],
+        ]);
+        const PIA: Who = { kind: "person", id: "pia" };
+        const inGap = new Date("2026-03-29T02:30:00.000Z");
+        const after = new Date("2026-03-29T03:10:00.000Z");
+        const first = await entry(app(), BRIEFS);
+        const second = await entry(app(), BRIEFS);
+        await createdAtOf(app(), BRIEFS, [first], inGap);
+        await createdAtOf(app(), BRIEFS, [second], after);
+        const seen = (page: { items: Doc[] }) =>
+          page.items.map(item => ({
+            entryId: (item.document as Doc).entryId,
+            enteredAt: new Date(String(item.enteredAt)).toISOString(),
+          }));
+
+        let page = await door.waiting(PIA, { limit: 1, page: 1 });
+        const walked = seen(page);
+        for (let pages = 1; page.meta.nextBefore !== undefined; pages += 1) {
+          expect(pages, "the walk ends").toBeLessThan(5);
+          page = await door.waiting(PIA, {
+            limit: 1,
+            before: String(page.meta.nextBefore),
+          });
+          walked.push(...seen(page));
+        }
+
+        expect(walked).toEqual([
+          { entryId: first, enteredAt: inGap.toISOString() },
+          { entryId: second, enteredAt: after.toISOString() },
+        ]);
       });
 
       it("names a part's last move: its latest step, by whom, from where to where, with the comment", async () => {
