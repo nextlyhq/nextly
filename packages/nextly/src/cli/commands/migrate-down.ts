@@ -1557,6 +1557,7 @@ export async function downDatabaseDeps(args: {
         dialect,
         converts: p.converts.columns,
         convertsNamedAt: "target",
+        outsideTransaction: p.transaction ? [] : [`${name}.sql`],
         consent,
       });
     },

@@ -42,6 +42,7 @@ import {
   NO_CONSENT,
 } from "../../migrate/data-loss-consent";
 import { DEFAULT_TABLE_NAME_RESOLVERS } from "../../migrate/resolved-schema";
+import { NO_TRANSACTION_MARKER } from "../../migrate/split-sql";
 import { renamesIn, tablesChangedIn } from "../../migrate/statement-targets";
 import type {
   EntitySettingsRecord,
@@ -115,6 +116,11 @@ export interface FileTypeChangeSource {
    * values that cannot convert where it covers that column. None, by default.
    */
   consent?: DataLossConsent;
+  /**
+   * The change's files that run outside a transaction (`-- nextly:no-transaction`): none of it is
+   * converted there (`outsideTransactionRefusals`). None, by default.
+   */
+  outsideTransaction?: readonly string[];
 }
 
 /** One refusal of a file's type changes, with the entity it is of. */
@@ -793,7 +799,11 @@ export async function judgeFileTypeChanges(
       judged: judged.judged,
       consent,
     });
-    for (const refusal of [...entityRefusals, ...converted.refusals]) {
+    for (const refusal of [
+      ...entityRefusals,
+      ...converted.refusals,
+      ...outsideTransactionRefusals(source, input.label, converted.conversion),
+    ]) {
       refusals.push({ ...refusal, entity: { kind, slug } });
     }
     if (converted.conversion !== undefined) {
@@ -830,6 +840,28 @@ async function conversionOf(
       of.judged
     ),
   };
+}
+
+/**
+ * The refusal of each column a change would convert while a file of it runs outside a transaction.
+ * Each statement commits as it runs there, so nothing holds a value written between the copy of the
+ * values and that copy taking the column's place, and a conversion that stops leaves its copy behind.
+ * No save and no `migrate:create` writes such a file: only an edit marks one. Asked of the whole
+ * change, as the first of its files that changes a table is the one that converts it.
+ */
+function outsideTransactionRefusals(
+  source: FileTypeChangeSource,
+  label: string,
+  conversion: TypeConversion | undefined
+): TypeChangeRefusal[] {
+  const files = source.outsideTransaction ?? [];
+  if (conversion === undefined || files.length === 0) return [];
+  const many = files.length > 1;
+  return conversion.columns.map(column => ({
+    path: column.field,
+    code: "TYPE_CHANGE_BLOCKED" as const,
+    message: `${label}: field '${column.field}' cannot change type while ${files.join(", ")} ${many ? "run" : "runs"} outside a transaction, marked by ${many ? "their" : "its"} first line \`${NO_TRANSACTION_MARKER}\`: a value written while the others are converted would be lost, and a conversion that stops would stay half made. Remove that line, then try again.`,
+  }));
 }
 
 /**

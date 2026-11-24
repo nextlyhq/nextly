@@ -5243,6 +5243,9 @@ async function changeFilesFrom(
         retyped: retypedByFiles(written),
         // The columns any file of the change marks as converting its values.
         converts: written.flatMap(file => file.converts()?.columns ?? []),
+        outsideTransaction: written.flatMap(file =>
+          file.transaction ? [] : [`${file.name}.sql`]
+        ),
         ...(consent === undefined ? {} : { consent }),
       }),
     };

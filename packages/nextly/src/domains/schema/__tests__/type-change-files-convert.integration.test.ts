@@ -953,7 +953,10 @@ describe.each(getConfiguredTestDialects())(
         await migrateFolder(second, created);
         await write(second, "a", { v: "012" });
 
-        expect(await dryRun(second)).toContain("outside a transaction");
+        // The dry run's own notice names the line too, so only its refusal tells the two apart.
+        expect(await dryRun(second)).toMatch(
+          /a real run would refuse it: [^\n]*runs outside a transaction/
+        );
         await expect(
           migrateFolder(
             second,
@@ -967,7 +970,11 @@ describe.each(getConfiguredTestDialects())(
         await editMarkedFile(text =>
           text.replace(`${NO_TRANSACTION_MARKER}\n`, "")
         );
-        await migrateFolder(second);
+        await migrateFolder(
+          second,
+          undefined,
+          resolveDataLossConsent({ flag: true, env: {} })
+        );
         expect(await read(second)).toEqual({ a: 12 });
       }
     );
