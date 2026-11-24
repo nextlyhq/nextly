@@ -21,6 +21,7 @@ import { DIALECTS } from "../../shared/lib/stated-dialect";
 import { reportDryRun } from "../dry-run";
 import { announceMode } from "../environment";
 import { connectionFailure, databaseEnvError } from "../errors/areas/database";
+import { endAtProbe } from "../startup-probe";
 
 import type { Logger } from "./logger";
 
@@ -320,12 +321,15 @@ async function createForTarget(
   // `public` while the application it is migrating runs in `cms` splits the
   // lock and the ledger and leaves the tables where nothing reads them.
   const schema = options.schema ?? activePostgresSchema();
+  const failed = (error: unknown) =>
+    openFailure(error, { dialect, schema, readOnly });
+  let adapter: Awaited<ReturnType<typeof createAdapter>>;
   try {
     // The target is handed to the factory rather than set in `process.env` for the open: an open
     // can outlive the command that started it (`migrate:create` stops waiting for the database it
     // counts in while a PostgreSQL connect is still retrying), and one that put the earlier
     // variables back when it settled put them back over whatever the process had set since.
-    const adapter = await createAdapter({
+    adapter = await createAdapter({
       type: dialect,
       url: databaseUrl,
       ...(schema === DEFAULT_POSTGRES_SCHEMA ? {} : { schema }),
@@ -339,33 +343,44 @@ async function createForTarget(
     // Loaded here, as the factory is, so the CLI's light entry points do not import the tables.
     const { installRegistryResolver } = await import("./registry-resolver");
     installRegistryResolver(adapter);
-    // Before the command creates or migrates anything: with the setting moved
-    // on an existing site, `migrate` and `db:sync` would build a second, empty
-    // installation in the newly named schema.
-    if (dialect === "postgresql") {
-      try {
-        await assertInstallationInConfiguredSchema(
-          adapter.getDrizzle(),
-          schema
-        );
-      } catch (error) {
-        await adapter.disconnect().catch(() => {});
-        throw error;
-      }
-    }
-    return adapter;
   } catch (error) {
-    if (
-      readOnly &&
-      (error as { code?: unknown }).code === INVALID_SCHEMA_NAME
-    ) {
-      return {
-        missing: `The database does not exist: PostgreSQL has no schema "${schema}".`,
-      };
-    }
-    // Read here, once, so every command that opens a database ends with the same code for it.
-    throw connectionFailure(dialect, error);
+    return failed(error);
   }
+  // Past the tables' code, which every command that connects loads, and before the command's own queries. Outside
+  // the handling above and below, which reports what it catches as a failed connection.
+  await endAtProbe("connected", () => adapter.disconnect());
+  // Before the command creates or migrates anything: with the setting moved
+  // on an existing site, `migrate` and `db:sync` would build a second, empty
+  // installation in the newly named schema.
+  if (dialect === "postgresql") {
+    try {
+      await assertInstallationInConfiguredSchema(adapter.getDrizzle(), schema);
+    } catch (error) {
+      await adapter.disconnect().catch(() => {});
+      return failed(error);
+    }
+  }
+  return adapter;
+}
+
+/**
+ * What an open that failed ends with: a read-only one whose PostgreSQL schema is not there answers
+ * `missing`, and any other is thrown as the one error every command that opens a database ends
+ * with.
+ */
+function openFailure(
+  error: unknown,
+  target: { dialect: SupportedDialect; schema: string; readOnly: boolean }
+): MissingDatabase {
+  if (
+    target.readOnly &&
+    (error as { code?: unknown }).code === INVALID_SCHEMA_NAME
+  ) {
+    return {
+      missing: `The database does not exist: PostgreSQL has no schema "${target.schema}".`,
+    };
+  }
+  throw connectionFailure(target.dialect, error);
 }
 
 /**

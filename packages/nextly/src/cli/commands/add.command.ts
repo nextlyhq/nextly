@@ -37,7 +37,7 @@ export function defineAddCommand(command: Command): Command {
         false
       )
       .action(lazyAction(async () => (await import("./add")).addAction)),
-    startLine("Reading the plugin to add...")
+    startLine("Reading the plugin to add...", "may connect")
   );
 }
 

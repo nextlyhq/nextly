@@ -24,10 +24,38 @@
  * start line), so a stray warning or Commander's refusal of the arguments
  * does not pass as a fast answer.
  *
+ * Then every command that runs an action is timed until its own code has
+ * loaded (`codeLoadInvocations`). Run with the start-up probe set
+ * (`STARTUP_PROBE_ENV` in `cli/startup-probe.ts`), a command writes one line
+ * once its action's module is imported and ends there, doing none of its
+ * work. Each is run 5 times in the same project, and once more with a loader
+ * hook that counts the modules it resolved. This pass reports and enforces no
+ * budget yet, but a run must end with the line and the probe's own exit code
+ * (`STARTUP_PROBE_EXIT`), or with exit 0 and no line; any other end fails the
+ * check, as does a counting run that does not end with the line or writes no
+ * count. A command that exits 0 without the line runs an action written inline
+ * rather than through `lazyAction`: it is named as such and held to the
+ * answer-only budget, so code that action imports for itself cannot load
+ * untimed.
+ *
+ * Last, every command that declares it may reach a database is timed until it
+ * has connected (`connectInvocations`), by the probe's second point. Code a command imports
+ * after its own module, on the way to its database, is in this time and not in
+ * the one before, so moving an import past the first point does not read as a
+ * saving. Each command runs in a copy of the project of its own, on that
+ * copy's SQLite file, which it is handed by an absolute URL: a run that stops
+ * short of the connection goes on with its work, and must find no other
+ * command's leftovers and no database but the copy. The pass reports, and
+ * enforces no budget: a command that ends without connecting (it asked for
+ * consent, or refused) is named as not reached, as are the commands it does
+ * not run. A run that hangs, or connects without ending there, fails the check,
+ * and so does a pass in which no command connects.
+ *
  * Run after the build: `node scripts/check-cli-startup.mjs`.
  */
 import { spawn, spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -37,6 +65,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 
 import { tsImport } from "tsx/esm/api";
 
@@ -61,6 +90,33 @@ const FIRST_LINE_BUDGET_MS = 1000;
 const RUNS = 10;
 // One run that takes this long has hung: an answer is a few hundred ms.
 const RUN_TIMEOUT_MS = 10_000;
+// A command's own code, timed to the line it writes once that code has loaded.
+const CODE_LOAD_RUNS = 5;
+// One load that takes this long has hung: the heaviest takes a few seconds.
+const CODE_LOAD_TIMEOUT_MS = 60_000;
+// The one dialect the connect pass runs on, whose database is a file of its own.
+const CONNECT_DIALECT = "sqlite";
+// The file of the project's database, within it.
+const PROJECT_DATABASE = "startup.db";
+// The line the module-counting hook writes as a run ends.
+const MODULES_LINE = "nextly: modules resolved ";
+// Loaded with `--import` into the counting run only, so the timed runs carry
+// no hook: every module the run resolved from a file, written as it exits.
+// Written straight to the file descriptor, since nothing written through a
+// stream after `exit` is waited for.
+const MODULE_COUNT_HOOK = `data:text/javascript,${encodeURIComponent(
+  [
+    'import { writeSync } from "node:fs";',
+    'import { registerHooks } from "node:module";',
+    "const seen = new Set();",
+    "registerHooks({ resolve(specifier, context, next) {",
+    "  const resolved = next(specifier, context);",
+    '  if (!resolved.url.startsWith("node:")) seen.add(resolved.url);',
+    "  return resolved;",
+    "} });",
+    `process.on("exit", () => writeSync(2, ${JSON.stringify(MODULES_LINE)} + seen.size + "\\n"));`,
+  ].join("\n")
+)}`;
 
 /**
  * The program and the helpers that list its answer-only invocations and judge
@@ -76,6 +132,17 @@ async function loadSource() {
     wrongAnswer: source.wrongAnswer,
     // Throws naming a command the table leaves out: the check fails on it.
     commands: source.firstLineInvocations(createProgram()),
+    // Every command that runs an action, and the variants timed beside them.
+    codeLoads: source.codeLoadInvocations(createProgram()),
+    // Every command that uses a database, and the names of those that do not.
+    connects: source.connectInvocations(createProgram()),
+    // The variable that stops a run at a named point, and the line it writes at each.
+    probe: {
+      env: source.STARTUP_PROBE_ENV,
+      lines: source.STARTUP_PROBE_LINES,
+      // The code a run the probe stopped exits with, which no command uses otherwise.
+      exit: source.STARTUP_PROBE_EXIT,
+    },
     firstLineHelpers: {
       firstNonBlankLine: source.firstNonBlankLine,
       // The line each command declared, as the program's own test judges it.
@@ -178,7 +245,7 @@ function makeProject(scratch, env) {
   );
   writeFileSync(
     join(project, ".env"),
-    "DB_DIALECT=sqlite\nDATABASE_URL=file:./startup.db\n"
+    `DB_DIALECT=sqlite\nDATABASE_URL=file:./${PROJECT_DATABASE}\n`
   );
   writeFileSync(
     join(project, "package.json"),
@@ -293,20 +360,264 @@ function answerOnlyFailures(invocations, wrongAnswer) {
 }
 
 /** Every command, each timed to its first line in a project in step: the failures. */
-async function firstLineFailures(commands, helpers) {
+async function firstLineFailures(commands, helpers, { project, env }) {
   console.log(
     `\ncommands: ${commands.length}, ${RUNS} runs each to the first line, budget ${FIRST_LINE_BUDGET_MS} ms (median)`
   );
+  const failures = [];
+  for (const args of commands) {
+    const failure = await measureFirstLine(args, project, env, helpers);
+    if (failure !== undefined) failures.push(failure);
+  }
+  return failures;
+}
+
+/** One run of `args` under the start-up probe's `point`, with its wall time in milliseconds. */
+function probed(args, { project, env }, probe, point, nodeArgs = []) {
+  const started = process.hrtime.bigint();
+  const run = spawnSync(process.execPath, [...nodeArgs, BIN, ...args], {
+    cwd: project,
+    encoding: "utf8",
+    env: { ...env, [probe.env]: point },
+    timeout: CODE_LOAD_TIMEOUT_MS,
+  });
+  const ms = Number(process.hrtime.bigint() - started) / 1e6;
+  return { ms, run };
+}
+
+/** The last lines a run wrote that are not blank, on one line, its colour codes removed. */
+function lastSaid(run) {
+  return stripVTControlCharacters(run.stderr || run.stdout)
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line !== "")
+    .slice(-3)
+    .join(" / ");
+}
+
+/** Whether a probed run wrote the line of `point`. */
+function wroteLine(run, probe, point) {
+  return run.stderr.split("\n").some(line => line === probe.lines[point]);
+}
+
+/**
+ * How a probed run ended: `loaded` once it wrote the probe's line and exited
+ * with the probe's code, `none` when it exited 0 without the line (its action
+ * is written inline), or why it failed.
+ */
+function probedOutcome(run, probe) {
+  const failed = unfinished(run);
+  if (failed) return { failure: failed };
+  const loaded = wroteLine(run, probe, "loaded");
+  if (loaded && run.status === probe.exit) return { kind: "loaded" };
+  if (!loaded && run.status === 0) return { kind: "none" };
+  return {
+    failure: `ended (exit ${String(run.status)}) without loading: ${lastSaid(run)}`,
+  };
+}
+
+/**
+ * The modules a run of `args` resolved from files before its code had loaded,
+ * or why the counting run does not say: it must end as the timed runs did,
+ * since the hook writes its count however a run ends.
+ */
+function modulesResolved(args, where, probe) {
+  const { run } = probed(args, where, probe, "loaded", [
+    "--import",
+    MODULE_COUNT_HOOK,
+  ]);
+  const outcome = probedOutcome(run, probe);
+  if (outcome.failure)
+    return { failure: `the counting run ${outcome.failure}` };
+  if (outcome.kind !== "loaded") {
+    return { failure: "the counting run ended before its code loaded" };
+  }
+  const line = run.stderr
+    .split("\n")
+    .find(text => text.startsWith(MODULES_LINE));
+  return line === undefined
+    ? { failure: "the counting run wrote no module count" }
+    : { count: Number(line.slice(MODULES_LINE.length)) };
+}
+
+/**
+ * `args` run `CODE_LOAD_RUNS` times under the probe: its times and how every
+ * run ended (`loaded` or `none`, the same each time), or why one failed.
+ */
+function probedRuns(args, where, probe) {
+  const times = [];
+  const kinds = new Set();
+  for (let index = 0; index < CODE_LOAD_RUNS; index += 1) {
+    const { ms, run } = probed(args, where, probe, "loaded");
+    const outcome = probedOutcome(run, probe);
+    if (outcome.failure) return { failure: outcome.failure };
+    kinds.add(outcome.kind);
+    times.push(ms);
+  }
+  if (kinds.size > 1) return { failure: "loaded its code in some runs only" };
+  return { times, kind: [...kinds][0] };
+}
+
+/**
+ * An action written inline, which exits without the probe's line: held to the
+ * answer-only budget, since nothing times what it imports for itself.
+ */
+function inlineActionFailure(name, ms) {
+  const over = ms > BUDGET_MS;
+  console.log(
+    `${over ? "FAIL" : "ok  "} ${ms.toFixed(0).padStart(5)} ms                ${name}  (inline action, loads no code of its own)`
+  );
+  return over
+    ? `${name}: an inline action ran ${ms.toFixed(0)} ms (median), over ${BUDGET_MS} ms; load its code through lazyAction`
+    : undefined;
+}
+
+/**
+ * `args` timed `CODE_LOAD_RUNS` times to its code loaded, and its modules
+ * counted: the reason it failed, or `undefined`. The times are reported, not
+ * judged, except an inline action's.
+ */
+function measureCodeLoad(args, where, probe) {
+  const name = `nextly ${args.join(" ")}`;
+  const runs = probedRuns(args, where, probe);
+  if (runs.failure) return `${name}: ${runs.failure}`;
+  const ms = median(runs.times);
+  if (runs.kind === "none") return inlineActionFailure(name, ms);
+  const modules = modulesResolved(args, where, probe);
+  console.log(
+    `     ${ms.toFixed(0).padStart(5)} ms  ${String(modules.count ?? "?").padStart(5)} modules  ${name}`
+  );
+  return modules.failure ? `${name}: ${modules.failure}` : undefined;
+}
+
+/** Every command that runs an action, each timed to its code loaded: the failures. */
+function codeLoadFailures(runs, where, probe) {
+  console.log(
+    `\ncode loads: ${runs.length}, ${CODE_LOAD_RUNS} runs each to the line written once a command's code has loaded (median); reported, no budget yet`
+  );
+  return runs
+    .map(args => measureCodeLoad(args, where, probe))
+    .filter(failure => failure !== undefined);
+}
+
+/**
+ * A copy of the project as it was made, for one command of the connect pass, and the
+ * environment that hands the command the copy's own database: its dialect and
+ * an absolute URL, which win over the project's `.env` and over anything the
+ * shell names.
+ */
+function connectWhere({ pristine, env }, index) {
+  const copy = `${pristine}-${String(index)}`;
+  cpSync(pristine, copy, { recursive: true });
+  const database = join(copy, PROJECT_DATABASE);
+  return {
+    project: copy,
+    database,
+    env: {
+      ...env,
+      DB_DIALECT: CONNECT_DIALECT,
+      DATABASE_URL: `file:${database}`,
+    },
+  };
+}
+
+/**
+ * Throws where the database `where` hands a command is not the copy's own
+ * SQLite file. Asked before each run, so whatever sets the environment up, no
+ * run of this pass opens a server's database: a PostgreSQL connection made
+ * with a configured schema creates that schema.
+ */
+function assertThrowawayDatabase({ env, database }) {
+  if (
+    env.DB_DIALECT !== CONNECT_DIALECT ||
+    env.DATABASE_URL !== `file:${database}` ||
+    !existsSync(database)
+  ) {
+    throw new Error(
+      `The connect pass runs only on a throwaway SQLite file, not on ${String(env.DB_DIALECT)}.`
+    );
+  }
+}
+
+/**
+ * How a run ended under the probe's connected point: `connected`, `short` when
+ * it ended by itself before it connected, with what it said, or why it failed.
+ */
+function connectOutcome(run, probe) {
+  const failed = unfinished(run);
+  if (failed) return { failure: failed };
+  const connected = wroteLine(run, probe, "connected");
+  if (connected && !/^Database: SQLite /m.test(run.stderr)) {
+    return { failure: "connected to a database it did not name as SQLite" };
+  }
+  if (connected && run.status === probe.exit) return { kind: "connected" };
+  if (connected || run.status === probe.exit) {
+    return {
+      failure: `${connected ? "connected" : "did not connect"}, yet ended with exit ${String(run.status)}`,
+    };
+  }
+  return {
+    kind: "short",
+    reason: `exit ${String(run.status)}: ${lastSaid(run)}`,
+  };
+}
+
+/**
+ * `args` timed `CODE_LOAD_RUNS` times to its connection, in `where`: whether
+ * it connected, or the reason it failed. A run that ends before it connects
+ * is reported once, since the runs after it would only end the same way.
+ */
+function measureConnect(args, where, probe) {
+  const name = `nextly ${args.join(" ")}`;
+  const times = [];
+  for (let index = 0; index < CODE_LOAD_RUNS; index += 1) {
+    assertThrowawayDatabase(where);
+    const { ms, run } = probed(args, where, probe, "connected");
+    const outcome = connectOutcome(run, probe);
+    if (outcome.failure) return { failure: `${name}: ${outcome.failure}` };
+    if (outcome.kind === "short") {
+      if (times.length > 0)
+        return { failure: `${name}: connected in some runs only` };
+      console.log(`     not reached  ${name}  (${outcome.reason})`);
+      return { connected: false };
+    }
+    times.push(ms);
+  }
+  console.log(`     ${median(times).toFixed(0).padStart(5)} ms     ${name}`);
+  return { connected: true };
+}
+
+/** Every command that uses a database, each timed to its connection: the failures. */
+function connectFailures({ timed, untimed }, where, probe) {
+  console.log(
+    `\nconnections: ${timed.length}, ${CODE_LOAD_RUNS} runs each to the line written once a command has connected (median); reported, no budget yet`
+  );
+  const results = timed.map((args, index) =>
+    measureConnect(args, connectWhere(where, index), probe)
+  );
+  const failures = results.flatMap(({ failure }) => failure ?? []);
+  // A probe nothing reaches would otherwise read as commands that all ended early.
+  if (!results.some(({ connected }) => connected)) {
+    failures.push("no command connected, so the pass timed nothing");
+  }
+  for (const name of untimed) {
+    console.log(
+      `     not run      nextly ${name}  (declares that it reaches no database)`
+    );
+  }
+  return failures;
+}
+
+/** `work` given a throwaway SQLite project in step and the environment its commands run with. */
+async function withProject(work) {
   const scratch = mkdtempSync(join(tmpdir(), "nextly-first-line-"));
   try {
     const env = commandEnvironment(scratch);
     const project = makeProject(scratch, env);
-    const failures = [];
-    for (const args of commands) {
-      const failure = await measureFirstLine(args, project, env, helpers);
-      if (failure !== undefined) failures.push(failure);
-    }
-    return failures;
+    // Kept as made: the runs of the other passes, stopped partway, leave marks.
+    const pristine = `${project}-as-made`;
+    cpSync(project, pristine, { recursive: true });
+    return await work({ project, pristine, env });
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -317,11 +628,22 @@ async function main() {
     console.error(`No built CLI at ${BIN}: build nextly first.`);
     process.exit(1);
   }
-  const { invocations, wrongAnswer, commands, firstLineHelpers } =
-    await loadSource();
+  const {
+    invocations,
+    wrongAnswer,
+    commands,
+    codeLoads,
+    connects,
+    probe,
+    firstLineHelpers,
+  } = await loadSource();
   const failures = [
     ...answerOnlyFailures(invocations, wrongAnswer),
-    ...(await firstLineFailures(commands, firstLineHelpers)),
+    ...(await withProject(async where => [
+      ...(await firstLineFailures(commands, firstLineHelpers, where)),
+      ...codeLoadFailures(codeLoads, where, probe),
+      ...connectFailures(connects, where, probe),
+    ])),
   ];
   if (failures.length > 0) {
     console.error(`\n${failures.length} start-up check(s) failed:`);
@@ -329,7 +651,7 @@ async function main() {
     process.exit(1);
   }
   console.log(
-    "\nEvery answer-only invocation and every command's first line is within its budget."
+    "\nEvery answer-only invocation and every command's first line is within its budget, every command's code load was timed, and so was every connection reached."
   );
 }
 

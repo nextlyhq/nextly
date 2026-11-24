@@ -73,7 +73,11 @@ export function useVersionActions(
       ? { restore: restore.request }
       : {}),
     restoreDisabled: !versionOnScreen(viewing),
-    compareHref: compareHrefOf(viewing),
+    // Where nothing comes before the version, the comparison page could
+    // only say there is nothing to compare, so Compare is not offered.
+    ...(viewing.comparedWith.kind === "first"
+      ? {}
+      : { compareHref: compareHrefOf(viewing) }),
   };
 }
 

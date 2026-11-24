@@ -12,7 +12,7 @@ import { stripVTControlCharacters } from "node:util";
 
 import type { Command } from "commander";
 
-import { declaredFirstLine } from "../../first-line";
+import { declaredFirstLine, mayConnect } from "../../first-line";
 
 import { commandAt, commandPaths } from "./answer-only-invocations";
 
@@ -148,7 +148,7 @@ export function commandPathOf(
  * one it declared, or `undefined` when it is: the `Database: …` line, its
  * start line, or, for a command that prints its own at once, any line but
  * Commander's refusal (the arguments never reached it). A parent that only
- * holds subcommands answers with its help.
+ * holds subcommands (`hasAction`) answers with its help.
  */
 export function wrongFirstLine(
   program: Command,
@@ -158,7 +158,7 @@ export function wrongFirstLine(
   if (line === undefined) return "printed nothing";
   if (line.startsWith("error:")) return `refused before it ran: ${line}`;
   const command = commandAt(program, path);
-  if (command.commands.length > 0) {
+  if (!hasAction(command)) {
     return line.startsWith("Usage:")
       ? undefined
       : `expected its help, got: ${line}`;
@@ -180,12 +180,63 @@ export function wrongFirstLine(
     : `expected a line matching ${String(first.pattern)}, got: ${line}`;
 }
 
-/** Whether the command `path` names under `program` runs an action itself, holding no subcommands. */
-export function runsAnAction(
+/**
+ * The runs the start-up timing stops once their command's code has loaded:
+ * every command with an action of its own (`hasAction`), with the arguments
+ * it is timed to its first line with. A parent that only holds subcommands
+ * answers with its help and loads nothing, so it is not among them. A variant of a command's
+ * arguments would time the same thing: the run stops as the action's module
+ * loads, before the action reads them.
+ */
+export function codeLoadInvocations(program: Command): string[][] {
+  return firstLineInvocations(program).filter(args =>
+    hasAction(commandAt(program, commandPathOf(program, args)))
+  );
+}
+
+/**
+ * The runs the start-up timing stops once their command has connected, and
+ * the names of the commands it does not run: see `connectRunsOf`.
+ */
+export function connectInvocations(program: Command): {
+  timed: string[][];
+  untimed: string[];
+} {
+  return connectRunsOf(program, codeLoadInvocations(program));
+}
+
+/**
+ * Of `runs`, those whose command may connect to a database, by the first line
+ * it declares: the `Database: …` line, or a start line said to come before a
+ * connection. `untimed` names the rest. They are not run: a command that
+ * connects to nothing would run on to the end of its work.
+ */
+export function connectRunsOf(
   program: Command,
-  path: readonly string[]
-): boolean {
-  return commandAt(program, path).commands.length === 0;
+  runs: readonly string[][]
+): { timed: string[][]; untimed: string[] } {
+  const timed: string[][] = [];
+  const untimed: string[] = [];
+  for (const args of runs) {
+    const path = commandPathOf(program, args);
+    const first = declaredFirstLine(commandAt(program, path));
+    if (first !== undefined && mayConnect(first)) timed.push(args);
+    else untimed.push(path.join(" "));
+  }
+  return { timed, untimed };
+}
+
+/**
+ * Whether `command` has an action of its own: a leaf's, or a parent's that
+ * Commander runs instead of answering with its help. Read from the handler
+ * Commander keeps (`_actionHandler`, set by `.action()`, the one its own run
+ * dispatches on), since it offers no public way to ask; the test of this
+ * helper builds a parent with an action, so a rename reads as none and fails
+ * there.
+ */
+export function hasAction(command: Command): boolean {
+  const handler: unknown = Reflect.get(command, "_actionHandler");
+  return typeof handler === "function";
 }
 
 /** The first line of `output` that is not blank, its colour codes removed. */

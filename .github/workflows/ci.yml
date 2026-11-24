@@ -3205,7 +3205,11 @@ jobs:
   # `--help` answer within 500 ms: the median of 10 runs of the built bin,
   # started with node directly on this runner (scripts/check-cli-startup.mjs).
   # The commands come from the program's own list, so a new command's help is
-  # timed by being defined. Linux only: the budget is stated for this runner.
+  # timed by being defined. Then every command is timed to its first line, and
+  # to the moment its own code has loaded (5 runs each, reported with the
+  # modules it resolved; no budget is held to yet). Last, every command that
+  # uses a database is timed to its connection (reported the same way). Linux
+  # only: the budgets are stated for this runner.
   cli-startup:
     name: CLI start-up timing
     needs: [changes]
@@ -3236,7 +3240,7 @@ jobs:
       - name: Build nextly
         run: pnpm turbo build --filter=nextly...
 
-      - name: Answer-only invocations within 500 ms
+      - name: "Start-up budgets: answers, first lines, code loads"
         run: node scripts/check-cli-startup.mjs
 
   # Keeps one issue open while a job above that does not block a merge is red

@@ -28,9 +28,18 @@ import type { MigrationGroup } from "../../../cli/utils/migration-discovery";
 import { NextlyError } from "../../../errors/nextly-error";
 import { recordedSnapshotNames } from "../migrate-create/snapshot-io";
 
+import { BLANK_FILE_LINE } from "./history-line-names";
 import { groupMigrationFiles } from "./migration-groups";
 import { compareMigrationBaseNames } from "./migration-order";
 import { isUpMarker } from "./sql-sections";
+
+// In a module that imports nothing, so the CLI's error table reads them without this module's
+// imports; re-exported here, where the history's readers find them.
+export { BLANK_FILE_LINE };
+export {
+  HISTORY_FORKED_REASON,
+  MIGRATION_PLACE_STATED_TWICE_REASON,
+} from "./history-line-names";
 
 /** Migrations written without each other, with no migration recording them together. */
 export interface UnrecordedMerge {
@@ -58,16 +67,6 @@ export interface UnrecordedMerge {
   /** Whether a blank migration, written by hand, is among them. */
   blank: boolean;
 }
-
-/** The `logContext.reason` of a refusal over a forked history. */
-export const HISTORY_FORKED_REASON = "migration history forked";
-
-/**
- * The `logContext.reason` of a refusal over a migration whose files (its base file and a
- * dialect's variant) state different places in the line (`placeStatedTwiceError`).
- */
-export const MIGRATION_PLACE_STATED_TWICE_REASON =
-  "migration place stated twice";
 
 /** A migration of the folder, as its snapshot places it in the line. */
 interface Placed {
@@ -319,13 +318,6 @@ export async function blankMigrationsWrittenFrom(
   }
   return writtenFrom;
 }
-
-/**
- * The line `migrate:create --blank` has written in every blank migration's header, before a
- * blank file stated its place and since.
- */
-export const BLANK_FILE_LINE =
-  "-- This is a blank migration file for custom SQL.";
 
 /**
  * Whether `content` is a blank migration's: a file for SQL its author writes, which

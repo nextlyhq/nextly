@@ -23,12 +23,19 @@ import type { Command } from "commander";
 
 import { announceMode, announceStart } from "./environment";
 
+/**
+ * Whether a command that starts with its own line may reach a database: one
+ * that may names it when it connects. Asked of every such command, so a new
+ * one cannot leave it unsaid and go untimed to its connection.
+ */
+export type StartLineDatabase = "may connect" | "no database";
+
 /** The line a command starts with. */
 export type FirstLine =
   /** The `Database: …` line naming the database the run uses. */
   | { kind: "database" }
-  /** A short line saying what the command is starting. */
-  | { kind: "start"; line: string }
+  /** A short line saying what the command is starting, and whether it may connect after it. */
+  | { kind: "start"; line: string; database: StartLineDatabase }
   /**
    * The command's own first line, which it prints at once; `pattern` is what
    * that line says, so a warning printed while it loads is not taken for it.
@@ -43,9 +50,20 @@ export function ownLine(pattern: RegExp): FirstLine {
   return { kind: "own", pattern };
 }
 
-/** A command that uses no database starts with `line`. */
-export function startLine(line: string): FirstLine {
-  return { kind: "start", line };
+/** A command that does not start by naming a database starts with `line`. */
+export function startLine(
+  line: string,
+  database: StartLineDatabase
+): FirstLine {
+  return { kind: "start", line, database };
+}
+
+/** Whether a command that starts with `first` may connect to a database. */
+export function mayConnect(first: FirstLine): boolean {
+  return (
+    first.kind === "database" ||
+    (first.kind === "start" && first.database === "may connect")
+  );
 }
 
 const DECLARED = new WeakMap<Command, FirstLine>();
