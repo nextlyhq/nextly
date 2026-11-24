@@ -144,6 +144,103 @@ describe("the route's answer for a field found by its path", () => {
     expect(targetOf()).toBe("keeps");
   });
 
+  // The save asks the new field's own rules of each stored value (`fieldAccepts`): one the draft adds
+  // or tightens may refuse what the saved field holds, whatever the types keep.
+  describe("for a field whose rules the draft changed", () => {
+    /** A long text becoming a text, which keeps every value, under these rules before and after. */
+    const marked = (
+      before: Record<string, unknown>,
+      after: Record<string, unknown>,
+      type = "text"
+    ) =>
+      typeChangeTargets({
+        field: {
+          name: "f",
+          type: "textarea",
+          ...before,
+        } as unknown as FieldDefinition,
+        candidates: [{ type, field: after }],
+        dialect: "postgresql",
+        builtBy: "collection",
+      })[0]?.outcome;
+    const rules = (validation: Record<string, unknown>) => ({ validation });
+
+    it.each(["minLength", "min", "minRows", "minChips"])(
+      "%s added or raised may lose values; the same, lowered or removed keeps them",
+      rule => {
+        expect(marked({}, rules({ [rule]: 5 }))).toBe("may-lose");
+        expect(marked(rules({ [rule]: 3 }), rules({ [rule]: 5 }))).toBe(
+          "may-lose"
+        );
+        expect(marked(rules({ [rule]: 5 }), rules({ [rule]: 5 }))).toBe(
+          "keeps"
+        );
+        expect(marked(rules({ [rule]: 5 }), rules({ [rule]: 3 }))).toBe(
+          "keeps"
+        );
+        expect(marked(rules({ [rule]: 5 }), {})).toBe("keeps");
+      }
+    );
+
+    it.each(["maxLength", "max", "maxRows", "maxChips"])(
+      "%s added or lowered may lose values; the same, raised or removed keeps them",
+      rule => {
+        expect(marked({}, rules({ [rule]: 40 }))).toBe("may-lose");
+        expect(marked(rules({ [rule]: 80 }), rules({ [rule]: 40 }))).toBe(
+          "may-lose"
+        );
+        expect(marked(rules({ [rule]: 40 }), rules({ [rule]: 40 }))).toBe(
+          "keeps"
+        );
+        expect(marked(rules({ [rule]: 40 }), rules({ [rule]: 80 }))).toBe(
+          "keeps"
+        );
+        expect(marked(rules({ [rule]: 40 }), {})).toBe("keeps");
+      }
+    );
+
+    it("a pattern added or changed may lose values; the same, emptied or removed keeps them", () => {
+      const letters = rules({ pattern: "^[a-z]+$" });
+      expect(marked({}, letters)).toBe("may-lose");
+      expect(marked(rules({ pattern: "^[a-z0-9]+$" }), letters)).toBe(
+        "may-lose"
+      );
+      expect(marked(letters, letters)).toBe("keeps");
+      expect(marked(letters, rules({ pattern: "" }))).toBe("keeps");
+      expect(marked(letters, {})).toBe("keeps");
+    });
+
+    it("a least length of none, Required, or a message refuses no value", () => {
+      expect(marked({}, rules({ minLength: 0 }))).toBe("keeps");
+      expect(marked({}, { required: true, ...rules({ required: true }) })).toBe(
+        "keeps"
+      );
+      expect(marked({}, rules({ message: "Too long" }))).toBe("keeps");
+    });
+
+    // A smallest number of none is not zero: a negative one is refused by it.
+    it("a least number of zero may lose values", () => {
+      expect(marked({}, rules({ min: 0 }))).toBe("may-lose");
+    });
+
+    it("a saved rule spelled on the field itself is the same rule", () => {
+      expect(marked({ maxLength: 40 }, rules({ maxLength: 40 }))).toBe("keeps");
+      expect(marked({ pattern: "^a" }, rules({ pattern: "^a" }))).toBe("keeps");
+    });
+
+    it("a change that keeps the saved field's rules, or that is blocked, is marked by its types", () => {
+      const bounded = { name: "f", type: "textarea", maxLength: 40 };
+      const bare = typeChangeTargets({
+        field: bounded as unknown as FieldDefinition,
+        candidates: [{ type: "text" }],
+        dialect: "postgresql",
+        builtBy: "collection",
+      });
+      expect(bare[0]?.outcome).toBe("keeps");
+      expect(marked({}, rules({ maxLength: 40 }), "group")).toBeNull();
+    });
+  });
+
   it("refuses an answer for a field whose saved type is no longer the one the page knows", () => {
     container.registerSingleton("adapter", () => ({
       getCapabilities: () => ({ dialect: "sqlite" }),
