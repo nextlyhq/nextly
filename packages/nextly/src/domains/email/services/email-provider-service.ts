@@ -35,10 +35,10 @@ import type {
 } from "../../../schemas/email-providers/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import { encrypt, decrypt } from "../../../utils/encryption";
 // Pull adapter type into a normal `import type` declaration so the return
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
-import { affectedRowCount } from "../../auth/services/auth-service";
 import { findConfigurationLoss } from "../configuration-loss";
 import {
   isRecognisedMessageId,

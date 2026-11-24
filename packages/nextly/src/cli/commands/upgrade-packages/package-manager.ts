@@ -87,7 +87,10 @@ function upToRepository(dir: string): string[] {
 export function detectPackageManager(projectDir: string): DetectedManager {
   const folders = upToRepository(projectDir);
   const decided = folders.find(dir => managerIn(dir) !== undefined);
-  const manager = (decided && managerIn(decided)) ?? "npm";
+  // Compared with `undefined` rather than read for truth: `decided && …` types as
+  // possibly `""`, which is no manager.
+  const manager =
+    (decided === undefined ? undefined : managerIn(decided)) ?? "npm";
   const holder = folders.find(dir => lockfileOf(manager, dir) !== undefined);
   return {
     manager,

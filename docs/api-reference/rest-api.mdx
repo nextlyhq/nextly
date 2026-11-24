@@ -180,6 +180,7 @@ When an error carries `error.data.retryAfterSeconds` the runtime also sets `Retr
 | `403`  | `ACTION_NOT_AVAILABLE`                        | A plugin's action asked of an entry its rule does not hold for, or outside its collections.                                                                                                                                                                                         |
 | `404`  | `NOT_FOUND`                                   | Resource does not exist.                                                                                                                                                                                                                                                            |
 | `409`  | `STALE_VERSION`                               | The document changed since the `_rev` you sent. See [Versions and conflicts](#versions-and-conflicts).                                                                                                                                                                              |
+| `409`  | `COLLECTION_BEING_CHANGED`                    | Another change to the same collection (a collection delete, or a Schema Builder save that deletes a field's values) held it past 30 seconds, so the request waited and was refused; nothing was written. Safe to try again in a moment.                                             |
 | `409`  | `CONFLICT`, `DUPLICATE`                       | A state that refuses the request, a duplicate email, etc.                                                                                                                                                                                                                           |
 | `409`  | `WORKFLOW_NO_SUBMIT_STEP`                     | A submit for review naming no step, for a part whose stage no submit step leaves (`data.part`, `data.stage`).                                                                                                                                                                       |
 | `409`  | `NEXTLY_MIGRATION_HISTORY_REFUSED`            | A Schema Builder save refused by the migration history checks `nextly migrate` runs first; nothing was written. The message names what to settle.                                                                                                                                   |
@@ -190,6 +191,7 @@ When an error carries `error.data.retryAfterSeconds` the runtime also sets `Retr
 | `422`  | `INVALID_INPUT`                               | Semantic validation failed.                                                                                                                                                                                                                                                         |
 | `429`  | `RATE_LIMITED`                                | Per-IP or per-key rate limit. `Retry-After` is set.                                                                                                                                                                                                                                 |
 | `500`  | `INTERNAL_ERROR`, `DATABASE_ERROR`            | Server-side failure.                                                                                                                                                                                                                                                                |
+| `500`  | `NEXTLY_MIGRATION_PARTIALLY_APPLIED`          | A Schema Builder save that stopped after part of it applied (MySQL runs a save's files one by one). The message says what stayed and what to do next; `data` may name each change (`changes`) or the refusal that stopped it (`refused`: `code`, and `errors` for a changed count). |
 | `503`  | `SERVICE_UNAVAILABLE`                         | Health probe / dependency outage.                                                                                                                                                                                                                                                   |
 | `503`  | `DATABASE_BUSY`                               | The request waited `pool.connectionTimeoutMs` for a database connection and none was free, or a SQLite file stayed locked past `busyTimeout`. The statement or transaction that waited did not run; anything the request committed before it stays committed. `Retry-After` is set. |
 
@@ -462,7 +464,7 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `POST`          | `/admin/api/workflows/steps/bulk`                      | **Experimental.** Take one step on several documents, each refusal named.                                                                                                                            | Cookie / API key                                                |
 | `POST`          | `/admin/api/workflows/assignments`                     | **Experimental.** Assign parts, all or nothing.                                                                                                                                                      | Cookie / API key                                                |
 | `POST`          | `/admin/api/workflows/assignments/bulk`                | **Experimental.** Assign parts on several documents, each refusal named.                                                                                                                             | Cookie / API key                                                |
-| `GET`           | `/admin/api/workflows/waiting?page=…&limit=…`          | **Experimental.** What waits for the caller, a page at a time.                                                                                                                                       | Cookie / API key                                                |
+| `GET`           | `/admin/api/workflows/waiting?page=…&limit=…&before=…` | **Experimental.** What waits for the caller, a page at a time.                                                                                                                                       | Cookie / API key                                                |
 | `GET`           | `/admin/api/workflows`                                 | **Experimental.** The registered workflows and what each is attached to.                                                                                                                             | `read-settings` or `update-settings`                            |
 | `GET`           | `/admin/api/workflows/{slug}/settings`                 | **Experimental.** A workflow's settings.                                                                                                                                                             | `read-settings` or `update-settings`                            |
 | `PATCH`         | `/admin/api/workflows/{slug}/settings`                 | **Experimental.** Change a workflow's settings; changing `grants` also needs `update-roles`.                                                                                                         | `update-settings`                                               |
@@ -693,6 +695,24 @@ curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries" \
   -H "Content-Type: application/json" \
   -d '{"where":{"status":{"equals":"draft"}},"data":{"status":"archived","_overwrite":true}}'
 ```
+
+### Schema changes that replace a field
+
+A schema change sent to `PATCH /admin/api/collections/{slug}` or `PATCH /admin/api/singles/{slug}/schema` that removes one field and adds another of the same type is never taken for a rename by guesswork. The request says which it is, in `renames`, by field name:
+
+```json
+{
+  "fields": [{ "name": "headline", "type": "text" }],
+  "renames": [{ "from": "heading", "to": "headline", "choice": "rename" }]
+}
+```
+
+- `"rename"` keeps the field's values under its new name.
+- `"drop_and_add"` drops the old field and its values and adds the new one empty.
+
+A change that makes such a pair without answering it is refused before anything is written, with `FIELD_RENAME_UNANSWERED`, naming both fields. A rename is one field at a time: a `"rename"` answer for two fields replaced at once is refused with `FIELD_RENAME_NOT_OFFERED`, a change answering `"rename"` for two pairs with `FIELD_RENAME_ONE_AT_A_TIME`, and a shared field can't be renamed into a translated one in the same change, translation turned on in it included (`FIELD_RENAME_JOINS_TRANSLATION`). `"drop_and_add"` is refused for two fields stored in one place, one column or one many-to-many junction table both name (`FIELD_RENAME_SAME_COLUMN`).
+
+A field group's rows are kept when its field is removed, or dropped with `"drop_and_add"`: they remain until the field group or the entity is deleted.
 
 ### Singles
 
@@ -1036,7 +1056,12 @@ A document whose collection or Single has no workflow attached answers `200` wit
 
 #### What waits for you
 
-`GET /admin/api/workflows/waiting?page=1&limit=20` lists the parts that wait for the caller, as a [list envelope](#list), oldest entry into their stage first. Each item names its document, part and stage (with `stageLabel` and `stageColour`, as the review state shows them), and its `assignee`. A part waits for the caller in a stage whose primary step they may take (its permission, and who may take it: an approval is never a key's, nor that of the person who brought the part into a stage that refuses self-approval), when it is:
+`GET /admin/api/workflows/waiting?page=1&limit=20` lists the parts that wait for the caller, as a [list envelope](#list), oldest entry into their stage first. Each item names its document, part and stage (with `stageLabel` and `stageColour`, as the review state shows them), its `assignee`, and:
+
+- **`title`:** the document's title as the caller reads it. A title a rule withholds from the caller reads `"Untitled"`, never the title itself.
+- **`waitingFor`:** whom the part waits for, named as the document's review state names it: a person (`{ kind: "user", id, name }`) or the roles that may take the step (`{ kind: "roles", roles: [{ id, name }] }`).
+
+A page's titles and names are each read once for the page, however many items it holds. A part waits for the caller in a stage whose primary step they may take (its permission, and who may take it: an approval is never a key's, nor that of the person who brought the part into a stage that refuses self-approval), when it is:
 
 - assigned to them, or to a role they hold;
 - assigned to someone who can't take that step on this part, because they lost it or brought the part into a stage that refuses self-approval: such work waits for everyone who can;
@@ -1044,7 +1069,11 @@ A document whose collection or Single has no workflow attached answers `200` wit
 
 **API keys see work assigned to their roles, not to their owner personally.** A key, full-access or scoped to a role, stands for its roles alone.
 
-Only parts the caller may read are listed and counted: a hidden part never takes a place on a page, and `total` never counts one. A request reads parts oldest first, 1,000 at a time, until it has enough to fill its page and know whether there's a next one, and never more than 20,000 in one request. When it stops before reading everything, `total` counts what it found and `meta.totalCapped` is `true`. That total is a floor, so show it as "N+". `hasNext` is then `true`, and a later page reads further.
+Only parts the caller may read are listed and counted: a hidden part never takes a place on a page, and `total` never counts one. A request reads parts oldest first, 1,000 at a time, until it has enough to fill its page and know whether there's a next one, and never more than 20,000 in one request. When it stops before reading everything, `total` counts what it found and `meta.totalCapped` is `true`. That total is a floor, so show it as "N+". `hasNext` is then `true`.
+
+Every page that has a next one also carries `meta.nextBefore`: an opaque position: pass `nextBefore` back as `before` to get the next page; this list runs oldest first. Don't parse it or build one: pass back what `nextBefore` gave. Text that isn't a well-formed position is refused with `VALIDATION_ERROR`, and so is `before` beside a `page` past the first. Each request reads on from its cursor, within the same 20,000, so a walk by `before` reaches work behind any number of parts the caller can't see, and a part that joins the list while you walk comes once, at the end. A page read by `before` describes itself alone: `total` is its own item count and `page` is `1`. `page` and `limit` work as before; the cursor is an addition.
+
+`GET /admin/api/workflows/waiting/scope` says whether anything can ever wait for the caller's review: `{ "reviews": true, "stages": 2 }`. `stages` counts the stages whose next step the caller may take, in collections and Singles they may read, judged as the waiting list judges them, with no document read. `reviews` is `true` when there is at least one. It answers for the signed-in caller alone (an API key by its own scope), and refuses a caller who isn't signed in with a 401. The admin shows "Waiting for my review" on it.
 
 #### Settings
 
@@ -1186,6 +1215,24 @@ Two reserved conditions keep a collection's entries by where they stand in publi
 - Each condition is accepted only at the top level of a filter, beside other conditions there: `{ "_pendingChange": true, "status": { "equals": "draft" } }`. Inside `and` or `or` it is refused with `FILTER_MISPLACED_KEY`.
 - Any other value is refused with `FILTER_INVALID_OPERAND`: `false`, an empty object, an extra key, or a time without a zone.
 - `_inRelease` needs the right to read content releases as well as the collection. A caller without it is refused exactly as if the condition did not exist (`FILTER_UNKNOWN_FIELD`), so the filter says nothing about what releases hold. A bulk update or delete selected by `_inRelease` is refused the same way, before any entry is written.
+
+#### Entries in review (experimental)
+
+On a collection a workflow holds, four more reserved conditions keep entries by where their parts stand in review. Like the ones above, each is accepted only at the top level of a filter, and a collection no workflow holds keeps no entry for any of them (no refusal).
+
+| Condition                     | Keeps                                                                                                                                                     | Query string example             |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `_stage: "<stage>"`           | Entries with a part in that stage, each part's stage read as a step reads it (a part with no review state stands where its content puts it).               | `where[_stage]=legal`            |
+| `_assignedToMe: true`         | Entries with a part assigned to the reader or to one of their roles. An API key stands for its own roles alone.                                            | `where[_assignedToMe]=true`      |
+| `_waitingForMe: true`         | Entries with a part waiting for the reader's review, by the waiting list's own read (`GET /workflows/waiting`). An API key is judged by its own scope.     | `where[_waitingForMe]=true`      |
+| `_changedSinceApproved: true` | Entries with a part saved again since its last approval (the version the "Since approved" comparison reads; a publish closes the cycle).                  | `where[_changedSinceApproved]=true` |
+
+- Only the parts the read may see count: the shared part, and the languages the read is judged for.
+- `_waitingForMe` reads at most 1,000 waiting parts for one list. Where more wait, the list keeps the documents of those it read and its `meta.totalCapped` is `true`: the total is a floor.
+
+#### Each row's review state (experimental)
+
+`?reviewState=true` (the Direct API's `reviewState: true`) gives each row of a collection a workflow holds its review state under `_review`: `{ parts: [...] }`, each part with its `stage`, `stageLabel`, `stageColour`, `publishable`, `enteredAt`, `assignee`, `dueAt`, `waitingFor`, and the `revision` and `version` a step names as `seen`. Each part is placed as `GET /workflows/review-state` places it, read for the whole page at once, among the parts the read may see. A visitor's rows, and the rows of a collection no workflow holds, carry no `_review` key.
 
 ### sort
 

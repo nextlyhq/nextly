@@ -210,6 +210,7 @@ function makePipeline(
       preCleanupExecutor: noopPreCleanupExecutor,
       migrationJournal,
       notifier: noopNotifier,
+      adapter: undefined,
     },
     {
       _kitOverride: { pushSchema: pushSchemaImpl },

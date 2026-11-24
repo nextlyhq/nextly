@@ -142,7 +142,7 @@ describe("an action a host did not wire", () => {
 });
 
 describe("an action that cannot be used", () => {
-  it("is disabled and says why, from either kind of reason", () => {
+  it("says why, from either kind of reason", () => {
     /*
      * Two sources, deliberately kept apart: the MODEL knows about permission
      * and document state, the BINDING knows about this instant — mid-submit,
@@ -168,9 +168,10 @@ describe("an action that cannot be used", () => {
       />
     );
 
+    // The model's hold: the leading action stays focusable, described by why.
     const publish = screen.getByRole("button", { name: /^publish$/i });
-    expect(publish).toBeDisabled();
-    expect(publish.getAttribute("title")).toMatch(/permission/i);
+    expect(publish).toBeEnabled();
+    expect(publish).toHaveAccessibleDescription(/permission/i);
 
     const save = screen.getByRole("button", { name: /^save$/i });
     expect(save).toBeDisabled();
@@ -203,6 +204,65 @@ describe("an action that cannot be used", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /^publish$/i }));
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("keeps a held leading action enabled and visibly held, opening its reason when pressed", async () => {
+    // A disabled control can be neither focused nor pressed, so its reason
+    // would reach nobody on a keyboard or a touch screen.
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(
+      <DocumentActionBar
+        actions={[
+          {
+            id: "publish",
+            label: "Publish",
+            placement: "primary",
+            disabledReason: "Needs approval: In review, waiting for Editors",
+          },
+        ]}
+        bindings={{ publish: { onSelect } }}
+      />
+    );
+    const publish = screen.getByRole("button", { name: /^publish$/i });
+    expect(publish).toBeEnabled();
+    expect(publish).not.toHaveAttribute("aria-disabled");
+    expect(publish).toHaveAttribute("data-held");
+    expect(publish.querySelector("svg")).not.toBeNull();
+    expect(publish).toHaveAccessibleDescription(
+      "Needs approval: In review, waiting for Editors"
+    );
+    publish.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "Needs approval: In review, waiting for Editors"
+    );
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("draws a leading action refused for this instant disabled, with why", () => {
+    // Nothing to save, a submit in flight: not a hold to explain, and the
+    // press would do nothing a moment later either.
+    render(
+      <DocumentActionBar
+        actions={[{ id: "save", label: "Save", placement: "primary" }]}
+        bindings={{
+          save: { onSelect: vi.fn(), disabledReason: "Nothing to save." },
+        }}
+      />
+    );
+    const save = screen.getByRole("button", { name: /^save$/i });
+    expect(save).toBeDisabled();
+    expect(save).not.toHaveAttribute("data-held");
+    expect(save.getAttribute("title")).toBe("Nothing to save.");
+  });
+
+  it("draws a usable leading action without the held look", () => {
+    // The control for the case above.
+    render(<DocumentActionBar actions={ACTIONS} bindings={allBound()} />);
+    const publish = screen.getByRole("button", { name: /^publish changes$/i });
+    expect(publish).not.toHaveAttribute("data-held");
+    expect(publish.querySelector("svg")).toBeNull();
   });
 });
 

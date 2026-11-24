@@ -149,6 +149,7 @@ Nextly has a plugin SDK, in alpha: pin exact versions. The Visual Page Builder i
 | **@nextlyhq/plugin-form-builder** | Visual form builder and submission capture                                                                            |
 | **@nextlyhq/plugin-sdk**          | Build your own plugins: schema, services, routes, admin UI                                                            |
 | **@nextlyhq/plugin-mcp**          | Experimental, off by default: a read-only MCP endpoint with one tool that tells an agent what its credential may read |
+| **@nextlyhq/plugin-accounts**     | Experimental: site accounts for visitors who sign up, sign in and keep their own account, never staff                 |
 
 > Nextly is in alpha, and some plugin surfaces are still settling. The [stability ladder](https://nextlyhq.com/docs/plugins/stability) says which parts are stable today and which are experimental.
 

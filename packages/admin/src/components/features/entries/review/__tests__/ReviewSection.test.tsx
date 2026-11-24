@@ -1,6 +1,8 @@
 /**
- * The side panel's Review section: each part's stage, who it is assigned to
- * (with a way to assign it), when it is due, and its last move.
+ * The side panel's Review section: each part's stage, who it waits for, who
+ * it is assigned to (with one Assign… picker), when it is due, and its last
+ * move. The steps themselves are the header's main button, so the section
+ * draws none for the parts the header acts on.
  */
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +30,11 @@ vi.mock("@admin/hooks/useHasPermission", () => ({
 }));
 vi.mock("@admin/hooks/useCurrentUserId", () => ({
   useCurrentUserId: () => "me",
+}));
+const { usersSpy } = vi.hoisted(() => ({ usersSpy: vi.fn() }));
+vi.mock("@admin/services/userApi", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/services/userApi")>()),
+  fetchUsers: usersSpy,
 }));
 vi.mock("@admin/hooks/useAdminDateFormatter", () => ({
   useAdminDateFormatter: () => ({
@@ -96,7 +103,29 @@ beforeEach(() => {
   // Assigning follows the step the server says the person may take.
   held.slugs = new Set();
   assignSpy.mockResolvedValue({ message: "Assigned.", item: {} });
+  usersSpy.mockResolvedValue({ items: [], meta: {} });
 });
+
+/** The section's facts, as label and value pairs. */
+function facts(section: HTMLElement): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const term of within(section).queryAllByRole("term")) {
+    out[term.textContent ?? ""] =
+      term.nextElementSibling?.textContent?.trim() ?? "";
+  }
+  return out;
+}
+
+/** Opens the one Assign… picker and returns its rows' names. */
+async function openPicker(section: HTMLElement): Promise<string[]> {
+  await userEvent.click(
+    within(section).getByRole("button", { name: "Assign…" })
+  );
+  const menu = await screen.findByRole("menu");
+  return within(menu)
+    .getAllByRole("menuitem")
+    .map(item => item.textContent ?? "");
+}
 
 describe("ReviewSection", () => {
   it("draws nothing where no workflow is attached", async () => {
@@ -110,8 +139,11 @@ describe("ReviewSection", () => {
     fetchSpy.mockResolvedValue(answer(part()));
     render(<ReviewSection document={post} />);
     const section = await screen.findByRole("region", { name: "Review" });
-    expect(section).toHaveTextContent("In review");
-    expect(section).toHaveTextContent("Not assigned, waiting for Editors");
+    expect(facts(section)).toEqual({
+      Stage: "In review",
+      "Waiting for": "Editors",
+      Assigned: "Nobody",
+    });
     expect(section).toHaveTextContent("Alice moved it to In review");
     expect(section).toHaveTextContent("“Ready for a look”");
   });
@@ -146,17 +178,18 @@ describe("ReviewSection", () => {
     );
     render(<ReviewSection document={post} />);
     const section = await screen.findByRole("region", { name: "Review" });
-    expect(section).toHaveTextContent("Assigned to Rita");
-    expect(section).toHaveTextContent("Due on 2026-11-20");
+    expect(facts(section)).toMatchObject({
+      Assigned: "Rita",
+      Due: "on 2026-11-20",
+    });
   });
 
   it("assigns the part to the person, sent with the revision they saw", async () => {
     fetchSpy.mockResolvedValue(answer(part()));
     render(<ReviewSection document={post} />);
     const section = await screen.findByRole("region", { name: "Review" });
-    await userEvent.click(
-      within(section).getByRole("button", { name: "Assign to me" })
-    );
+    await openPicker(section);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Me" }));
     await waitFor(() =>
       expect(assignSpy).toHaveBeenCalledWith([
         {
@@ -173,8 +206,9 @@ describe("ReviewSection", () => {
     fetchSpy.mockResolvedValue(answer(part()));
     render(<ReviewSection document={post} />);
     const section = await screen.findByRole("region", { name: "Review" });
+    await openPicker(section);
     await userEvent.click(
-      within(section).getByRole("button", { name: "Assign to Editors" })
+      screen.getByRole("menuitem", { name: "Editors (the whole role)" })
     );
     await waitFor(() =>
       expect(assignSpy).toHaveBeenCalledWith([
@@ -194,12 +228,8 @@ describe("ReviewSection", () => {
     );
     render(<ReviewSection document={post} />);
     const section = await screen.findByRole("region", { name: "Review" });
-    expect(
-      within(section).queryByRole("button", { name: "Assign to me" })
-    ).not.toBeInTheDocument();
-    await userEvent.click(
-      within(section).getByRole("button", { name: "Unassign" })
-    );
+    expect(await openPicker(section)).toEqual(["Unassign"]);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Unassign" }));
     await waitFor(() =>
       expect(assignSpy).toHaveBeenCalledWith([
         expect.objectContaining({ assignee: null }),
@@ -229,6 +259,89 @@ describe("ReviewSection", () => {
     render(<ReviewSection document={post} />);
     const section = await screen.findByRole("region", { name: "Review" });
     expect(within(section).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("offers one Assign… picker of people and roles, in place of a button per role", async () => {
+    held.slugs = new Set(["read-users"]);
+    usersSpy.mockResolvedValue({
+      items: [
+        {
+          id: "sam",
+          name: "Sam Okafor",
+          email: "sam@x",
+          roles: [{ id: "r-ed" }],
+        },
+        {
+          id: "ana",
+          name: "Ana Ruiz",
+          email: "ana@x",
+          roles: [{ id: "r-wr" }],
+        },
+      ],
+      meta: {},
+    });
+    fetchSpy.mockResolvedValue(
+      answer(
+        part({
+          waitingFor: {
+            kind: "roles",
+            roles: [
+              { id: "r-ed", name: "Editors" },
+              { id: "r-lg", name: "Legal" },
+            ],
+          },
+        })
+      )
+    );
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    // One control, however many roles the part waits for.
+    expect(within(section).getAllByRole("button")).toHaveLength(1);
+    // People offered are those holding a role the part waits for: Ana holds
+    // none of them, so the server would refuse her.
+    await waitFor(async () => {
+      expect(await openPicker(section)).toEqual([
+        "Me",
+        "Editors (the whole role)",
+        "Legal (the whole role)",
+        "Sam Okafor",
+      ]);
+    });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Sam Okafor" }));
+    await waitFor(() =>
+      expect(assignSpy).toHaveBeenCalledWith([
+        expect.objectContaining({ assignee: { kind: "user", id: "sam" } }),
+      ])
+    );
+  });
+
+  it("lists no people for a person who may not list them", async () => {
+    fetchSpy.mockResolvedValue(answer(part()));
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    expect(await openPicker(section)).toEqual([
+      "Me",
+      "Editors (the whole role)",
+    ]);
+    expect(usersSpy).not.toHaveBeenCalled();
+  });
+
+  it("draws no step for the parts the header's main button moves", async () => {
+    // The language on screen and the shared fields wait in one stage, so the
+    // header's Approve moves both: the panel repeating it would offer the
+    // same act twice.
+    fetchSpy.mockResolvedValue(
+      answer(part({ part: "de" }), part({ part: null }))
+    );
+    render(<ReviewSection document={post} locale="de" />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    expect(
+      within(section).queryByRole("button", { name: "Approve" })
+    ).toBeNull();
+    // The control: the parts are drawn, with their picker.
+    expect(
+      within(section).getAllByRole("button", { name: "Assign…" })
+    ).toHaveLength(2);
   });
 
   it("shows the language on screen and the shared fields of a translated document", async () => {

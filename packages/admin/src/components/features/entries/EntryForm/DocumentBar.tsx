@@ -7,10 +7,12 @@
  *
  * At the left, what the document IS: its status in the language being edited,
  * its save state, and the language code when that language is not the default.
- * At the right, what can be DONE, in one order: a feature's toolbar controls,
- * the ways into the document's other views ("Open in builder"), History,
- * Preview, the document's own verbs (Save draft, the primary action, More),
- * and the panel toggle at the far end.
+ * At the right, what can be DONE, in one row and one order: a feature's
+ * toolbar controls, History, the languages control, the one main button
+ * (whose menu holds saving, scheduling, the preview and the ways into the
+ * document's other views, such as "Open in builder"), the one secondary step
+ * where the reviewer may ask for changes, More, and the panel toggle at the
+ * far end.
  *
  * The title is not here. It is the first thing in the editor's column, under
  * the bar and its banners, so no action ever takes its width; and the way back
@@ -37,7 +39,6 @@ import {
   History,
   PanelRight,
   PanelRightClose,
-  PanelsTopLeft,
 } from "@admin/components/icons";
 import { barFolds } from "@admin/components/layout/header/bar-fold";
 import {
@@ -45,7 +46,6 @@ import {
   useInTopBar,
   useTopBarWidth,
 } from "@admin/components/layout/header/TopBarPlaces";
-import { Link } from "@admin/components/ui/link";
 import { useCan } from "@admin/hooks/useCan";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { navigateTo } from "@admin/lib/navigation";
@@ -76,11 +76,7 @@ import { DOCUMENT_PANEL_TOGGLE_ATTRIBUTE } from "./DocumentSidePanel";
 import { DocumentStatusLive } from "./DocumentStatusLive";
 import { DocumentStatusPill } from "./DocumentStatusPill";
 import { STATE_COMPACT_ATTRIBUTE } from "./narrow-bar";
-import {
-  PreviewActions,
-  previewChoices,
-  type PreviewActionsProps,
-} from "./PreviewActions";
+import { previewChoices, type PreviewActionsProps } from "./PreviewActions";
 import { SaveStateIndicator } from "./SaveStateIndicator";
 import { useBarShowsPill } from "./title-in-view";
 import { TOOLBAR_CONTAINER, ToolbarLabel } from "./toolbar-density";
@@ -139,9 +135,9 @@ export interface DocumentBarProps {
    */
   documentStatus?: { status: string; hasWorkingDraft: boolean } | undefined;
 
-  /* Preview. Two independent actions rendered by one control — see
-     `PreviewActions`, which decides its own shape from which of them are
-     available and renders nothing when neither is. */
+  /* Preview. Independent actions drawn as rows of the main button's menu —
+     see `previewChoices`, which lists those that are available and none when
+     neither is. */
 
   /** Whether a preview URL can be built for this entry. */
   isPreviewAvailable?: boolean;
@@ -209,6 +205,13 @@ export interface DocumentBarProps {
    * caller builds it from `entryFormToolbarSlot`.
    */
   toolbarSlot?: React.ReactNode;
+  /**
+   * The document's languages control, drawn right after History. Drawn only
+   * where the site has two languages or more: a one-language site shows no
+   * language control at all. Kept as an opaque node so the bar owns where it
+   * sits and the languages feature owns what it is.
+   */
+  languagesControl?: React.ReactNode;
   /**
    * Current schema fields, used to render a stored version in the history
    * panel. Absent means the caller cannot show history, so the control hides.
@@ -413,9 +416,12 @@ function useFoldedIntoMenu(panelMode: DocumentPanelMode | undefined): boolean {
 }
 
 /**
- * The bar's actions after a feature's controls: History, then either the live
- * document's verbs or, while a past version is on screen, that version's own,
- * then the panel toggle, and the anchor the share popover hangs from.
+ * The bar's actions after a feature's controls, in one row: History, the
+ * languages control, then either the live document's one main button (its
+ * menu holding saving, scheduling, the preview and the document's other
+ * views), its one secondary step and More, or, while a past version is on
+ * screen, that version's own actions; then the panel toggle, and the anchor
+ * the share popover hangs from.
  */
 function DocumentBarActions({
   historyOffered,
@@ -449,10 +455,17 @@ function DocumentBarActions({
   const viewsToOpenIn = useBarViewsToOpenIn(props);
   return (
     <>
-      <OpenInViewButtons ways={viewsToOpenIn} folded={folded} />
-      {historyOffered && !folded ? (
-        <HistoryButton open={historyOpen} onOpen={onOpenHistory} />
+      {/* A button at every width, pressed while history is open: on a narrow
+          bar it keeps only its icon rather than folding into a menu, so the
+          person always sees which state the document is in. */}
+      {historyOffered ? (
+        <HistoryButton
+          open={historyOpen}
+          onOpen={onOpenHistory}
+          iconOnly={folded}
+        />
       ) : null}
+      <LanguagesPlace control={props.languagesControl} />
       {versionActions ? (
         <VersionOnScreenActions
           versionActions={versionActions}
@@ -461,17 +474,10 @@ function DocumentBarActions({
         />
       ) : (
         <DocumentVerbs
-          previewProps={previewProps}
           documentActions={documentActions}
           pending={pending}
-          folded={folded}
-          narrowItems={narrowItemsFor({
-            folded,
-            viewsToOpenIn,
-            openHistory: historyOffered ? onOpenHistory : undefined,
-            previewProps,
-            panel,
-          })}
+          mainMenuItems={mainMenuItemsFor({ viewsToOpenIn, previewProps })}
+          narrowItems={narrowItemsFor({ folded, panel })}
         />
       )}
       {panel && !folded ? (
@@ -580,72 +586,47 @@ function useBarViewsToOpenIn(props: DocumentBarProps): WayIn[] {
 }
 
 /**
- * The ways into the document's views as buttons, on a bar wide enough for
- * them; a folded bar lists them in the document's menu instead.
+ * The bar's own rows on the main button's menu, at every width: the preview's
+ * choices (the pane, a new tab, a share link), then the ways into the
+ * document's other views ("Open in builder"). They are destinations beside
+ * the main act, so they sit with it rather than as buttons of their own.
  */
-function OpenInViewButtons({
-  ways,
-  folded,
-}: {
-  ways: readonly WayIn[];
-  folded: boolean;
-}) {
-  if (folded) return null;
-  return ways.map(way => <OpenInViewButton key={way.address} way={way} />);
-}
-
-/**
- * A way into one of the document's views, beside History: a link, so a
- * middle or modified click opens it in a new tab as a list row's does.
- */
-function OpenInViewButton({ way }: { way: WayIn }) {
-  return (
-    <Button asChild variant="outline" size="sm" className="gap-1.5">
-      {/* Named for a pointer once its words have stepped aside for the icon. */}
-      <Link href={way.address} title={way.label}>
-        <PanelsTopLeft className="h-4 w-4" aria-hidden="true" />
-        {/* Gives way at the same bar width as History's word. */}
-        <ToolbarLabel priority="secondary">{way.label}</ToolbarLabel>
-      </Link>
-    </Button>
-  );
-}
-
-/**
- * The bar's own controls as menu rows, for an editor too narrow to keep them
- * beside the document's verbs (`folded`; none otherwise): the ways into the
- * document's views, History when it is offered, then the preview's choices,
- * then the panel toggle.
- */
-function narrowItemsFor({
-  folded,
+function mainMenuItemsFor({
   viewsToOpenIn,
-  openHistory,
   previewProps,
-  panel,
 }: {
-  folded: boolean;
   viewsToOpenIn: readonly WayIn[];
-  openHistory: (() => void) | undefined;
   previewProps: PreviewActionsProps;
-  panel: { collapsed: boolean; toggle: () => void } | undefined;
 }): NarrowMenuItem[] {
-  if (!folded) return [];
   return [
-    ...viewsToOpenIn.map((way, index) => ({
-      id: `open-in-view-${index}`,
-      label: way.label,
-      onSelect: () => navigateTo(way.address),
-    })),
-    ...(openHistory
-      ? [{ id: "history", label: "History", onSelect: openHistory }]
-      : []),
     ...previewChoices(previewProps).map(choice => ({
       id: `preview-${choice.id}`,
       label: choice.label,
       onSelect: choice.run,
       disabled: choice.disabled,
     })),
+    ...viewsToOpenIn.map((way, index) => ({
+      id: `open-in-view-${index}`,
+      label: way.label,
+      href: way.address,
+      onSelect: () => navigateTo(way.address),
+    })),
+  ];
+}
+
+/**
+ * The panel toggle as a row of More, for an editor too narrow to keep it
+ * beside the document's verbs (`folded`; none otherwise).
+ */
+function narrowItemsFor({
+  folded,
+  panel,
+}: {
+  folded: boolean;
+  panel: { collapsed: boolean; toggle: () => void } | undefined;
+}): NarrowMenuItem[] {
+  if (!folded) return [];
+  return [
     ...(panel
       ? [
           {
@@ -667,9 +648,12 @@ function panelToggleLabel(collapsed: boolean): string {
 function HistoryButton({
   open,
   onOpen,
+  iconOnly,
 }: {
   open: boolean;
   onOpen: () => void;
+  /** Whether the bar is too narrow for its word, which it then only speaks. */
+  iconOnly: boolean;
 }) {
   return (
     <Button
@@ -685,12 +669,28 @@ function HistoryButton({
       title="History"
     >
       <History className="h-4 w-4" aria-hidden="true" />
-      {/* A supporting action like the preview, so its word gives way at the
-          same bar width: with history open beside the editor the bar is
-          narrow, and the version's own actions need the room. */}
-      <ToolbarLabel priority="secondary">History</ToolbarLabel>
+      {/* A supporting action, so its word gives way on a narrow bar: with
+          history open beside the editor the bar is narrow, and the version's
+          own actions need the room. */}
+      {iconOnly ? (
+        <span className="sr-only">History</span>
+      ) : (
+        <ToolbarLabel priority="secondary">History</ToolbarLabel>
+      )}
     </Button>
   );
+}
+
+/**
+ * Where the document's languages control sits: right after History, and only
+ * on a site with two languages or more.
+ */
+function LanguagesPlace({ control }: { control: React.ReactNode }) {
+  const { locales } = useLocalization();
+  if (control === undefined || control === null || locales.length < 2) {
+    return null;
+  }
+  return <>{control}</>;
 }
 
 type HostedActions = ReturnType<typeof useHostedDocumentActions>;
@@ -750,39 +750,33 @@ function VersionOnScreenActions({
 }
 
 /**
- * The live document's verbs: the preview control, then Save draft, the one
- * primary action and More, each drawn where the model said it belongs.
+ * The live document's verbs: the one secondary step where there is one, the
+ * main button with its menu, and More, each drawn where the model said it
+ * belongs. The preview's choices and the ways into the document's views are
+ * rows of the main button's menu: checking how something reads is part of
+ * deciding to publish it. They follow the submit buttons' `disabled`:
+ * minting a link and opening a preview both act on what is already saved, so
+ * a submit in flight is a race with them.
  */
 function DocumentVerbs({
-  previewProps,
   documentActions,
   pending,
-  folded,
+  mainMenuItems,
   narrowItems,
 }: {
-  previewProps: PreviewActionsProps;
   documentActions: HostedActions;
   pending: boolean;
-  /** Whether the preview is a menu row instead, on a phone. */
-  folded: boolean;
+  mainMenuItems: NarrowMenuItem[];
   narrowItems: NarrowMenuItem[];
 }) {
   return (
-    <>
-      {/* ONE control for the preview: the pane, a new tab and a share link
-        are destinations for one intent. Directly before the document's verbs,
-        since checking how something reads is part of deciding to publish it.
-        `disabled` follows the submit buttons: minting a link and opening a
-        preview both act on what is already saved, so a submit in flight is a
-        race with them. */}
-      {folded ? null : <PreviewActions size="sm" {...previewProps} />}
-      <DocumentActionBar
-        actions={documentActions.actions}
-        bindings={documentActions.bindings}
-        pending={pending}
-        narrowItems={narrowItems}
-      />
-    </>
+    <DocumentActionBar
+      actions={documentActions.actions}
+      bindings={documentActions.bindings}
+      pending={pending}
+      mainMenuItems={mainMenuItems}
+      narrowItems={narrowItems}
+    />
   );
 }
 

@@ -27,7 +27,7 @@ import {
   TRANSLATION_PROVENANCE_TABLE,
   translationProvenanceTables,
 } from "../../../schemas/translation-provenance";
-import { affectedRowCount } from "../../auth/services/auth-service";
+import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 
 import { labelLegacyArchiveRows } from "./label-legacy-archive-rows";
 import type { I18nTransitionKind } from "./transition-state";

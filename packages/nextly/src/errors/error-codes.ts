@@ -64,6 +64,11 @@ export const NEXTLY_ERROR_STATUS = {
   // allocation already answer and which a retry keys on: this one must never
   // be retried, since the same version stays out of date.
   STALE_VERSION: 409,
+  // A write or a schema change that waited the hold's 30 seconds for another change of the same
+  // collection (a collection delete, a Builder save deleting a field's values) and was refused
+  // before anything changed. Its own code beside CONFLICT so a caller, a release run among them,
+  // can tell the refusal is safe to try again once the other change ends.
+  COLLECTION_BEING_CHANGED: 409,
   // An update that must say which version of a document it was made from, or
   // that it overwrites whatever is stored, and said neither: 428, Precondition
   // Required. Its own code beside STALE_VERSION: nothing is out of date, the
@@ -306,6 +311,18 @@ export const NEXTLY_ERROR_STATUS = {
   // implicit English alone, and its translations in other languages would read as gone. 500 for the
   // same reason: the remedy is the server's configuration.
   NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED: 500,
+  // `nextly upgrade` found two configured language codes that become one code once in their
+  // standard form (`pt_BR` beside `pt-BR`): it changes nothing until the developer keeps one. 500
+  // for the same reason: the remedy is the site's configuration.
+  NEXTLY_LANGUAGE_CODES_COLLIDE: 500,
+  // The configuration writes a language code the earlier way (`pt_BR`) and the database still
+  // stores rows under it: the start refuses until `nextly upgrade` has moved them to the standard
+  // code they are read as. 500: the remedy is a command the developer runs.
+  NEXTLY_LANGUAGE_CODES_NOT_UPGRADED: 500,
+  // `nextly upgrade` found a translated entity whose values are both on its main table and in its
+  // translations table, with no record saying the copy across finished: which copy is current
+  // cannot be told, so it changes nothing until `nextly migrate --repair-localization` has run.
+  NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED: 500,
   // `db.postgres.schema` names a schema holding no installation while another
   // schema of the database holds one: the setting moved on an existing site.
   // 500 for the same reason as the mismatch above: a boot-time refusal of the

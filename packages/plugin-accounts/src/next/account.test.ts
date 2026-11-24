@@ -124,6 +124,7 @@ describe("a page a link from an email lands on", () => {
         "/members/reset",
         "/account/address",
         "/account/address/cancel",
+        "/account/invitation",
       ].map(source => ({
         source,
         headers: [{ key: "Referrer-Policy", value: "no-referrer" }],

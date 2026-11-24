@@ -34,6 +34,7 @@ import {
   type Actor,
   type VisitorActor,
 } from "./actor";
+import { superAdminRefusedOn } from "./closed-to-super-admin-refusal";
 import { declaresRule, type AccessTarget } from "./decide";
 import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
@@ -216,6 +217,11 @@ export async function relatedRowReads(
     return rbac
       ? visitorReads(target, undefined)
       : visitorReads(undeclared, caller.visitorWithoutService);
+  }
+  // A collection closed to super-admin is withheld from a super-admin, or a
+  // key with super-admin authority, before the shortcuts that pass them.
+  if (await superAdminRefusedOn(slug, { userId: caller.user.id, scope })) {
+    return readOf(false);
   }
   if (scope) return keyReads(target, scope, caller.user, rbac);
   return userReads(target, caller.user.id, rbac);

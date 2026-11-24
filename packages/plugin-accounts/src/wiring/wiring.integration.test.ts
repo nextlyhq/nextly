@@ -30,7 +30,12 @@ import { recordEmailSent } from "../storage/sent-emails";
 import { startSession } from "../storage/sessions";
 import { TEST_ORIGIN } from "../test-support/boot";
 
-import { SEND_EMAIL_JOB, sendEmailJob, SWEEP_JOB } from "./jobs";
+import {
+  SEND_EMAIL_JOB,
+  SEND_EMAIL_JOB_BEFORE_REFS,
+  sendEmailJob,
+  SWEEP_JOB,
+} from "./jobs";
 import { accountPrincipals, sendQueuedEmail, sweepAll } from "./runtime";
 import { accountsServices } from "../server/installed";
 import { bootAccounts } from "../test-support/boot";
@@ -38,6 +43,18 @@ import { fakeAccountsCore } from "../testing";
 import { accountByAddress } from "../storage/accounts";
 
 const DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * What a send of an email that carries no secret is handed to put secrets
+ * back: never asked, so a secret it is asked for is refused.
+ */
+const NO_SECRETS = {
+  secrets: {
+    reveal: async () => ({ ok: false as const, reason: "invalid" as const }),
+  },
+  settings: resolveAccountsSettings({ origin: TEST_ORIGIN }),
+  logger: { warn: () => undefined },
+};
 
 describe.each(getConfiguredTestDialects())(
   "the plugin as a site boots it (%s)",
@@ -75,12 +92,14 @@ describe.each(getConfiguredTestDialects())(
 
       expect(plugin.contributes?.jobs?.map(job => job.slug)).toEqual([
         SEND_EMAIL_JOB,
+        SEND_EMAIL_JOB_BEFORE_REFS,
         SWEEP_JOB,
       ]);
       expect(plugin.contributes?.events).toEqual([
         { name: "nextlyhq-plugin-accounts.account.deleted" },
         { name: "nextlyhq-plugin-accounts.account.deactivated" },
         { name: "nextlyhq-plugin-accounts.account.reactivated" },
+        { name: "nextlyhq-plugin-accounts.invitation.accepted" },
       ]);
       expect(plugin.contributes?.emailTemplates?.length).toBeGreaterThan(0);
     });
@@ -179,15 +198,15 @@ describe.each(getConfiguredTestDialects())(
 
       // One job, run three times: it sends once.
       for (let attempt = 0; attempt < 3; attempt += 1)
-        await sendQueuedEmail(ctx, email, { jobId: "job-1", now });
+        await sendQueuedEmail(ctx, email, { jobId: "job-1", now }, NO_SECRETS);
       expect(sends).toHaveLength(1);
 
       // Another job whose first send fails: it is free to send on its retry.
       await expect(
-        sendQueuedEmail(ctx, email, { jobId: "job-2", now })
+        sendQueuedEmail(ctx, email, { jobId: "job-2", now }, NO_SECRETS)
       ).rejects.toThrow("did not send");
-      await sendQueuedEmail(ctx, email, { jobId: "job-2", now });
-      await sendQueuedEmail(ctx, email, { jobId: "job-2", now });
+      await sendQueuedEmail(ctx, email, { jobId: "job-2", now }, NO_SECRETS);
+      await sendQueuedEmail(ctx, email, { jobId: "job-2", now }, NO_SECRETS);
       expect(sends).toHaveLength(3);
       // Every send names the account it is to, so core erases its delivery
       // record with the account.
@@ -212,6 +231,57 @@ describe.each(getConfiguredTestDialects())(
           now: new Date(),
         } as Parameters<typeof job.handler>[1]);
       expect(seen).toEqual(["job-7", "job-7"]);
+    });
+
+    it("sends an invitation queued, before its link was queued by ref, for an address with no account, naming no person, and refuses a nameless email of any other kind", async () => {
+      const booted = await bootAccounts(dialect);
+      current = booted.nextly;
+      const people: unknown[] = [];
+      const ctx = {
+        db: booted.ctx.db,
+        dialect: booted.ctx.dialect,
+        services: {
+          email: {
+            sendWithTemplate: async (
+              _slug: string,
+              _to: string,
+              _variables: Record<string, unknown>,
+              options?: { person?: unknown }
+            ) => {
+              people.push(options?.person);
+              return { success: true };
+            },
+          },
+        },
+      };
+      const job = sendEmailJob((email, attempt) =>
+        sendQueuedEmail(ctx, email, attempt, NO_SECRETS)
+      );
+      const run = (email: Record<string, unknown>, jobId: string) =>
+        job.handler({ email }, {
+          jobId,
+          attempt: 1,
+          now: new Date(),
+        } as Parameters<typeof job.handler>[1]);
+
+      await run(
+        {
+          kind: "invitation",
+          accountId: null,
+          to: "dana@example.com",
+          link: "https://shop.example.com/account/invitation?token=t",
+        },
+        "job-invite"
+      );
+      expect(people).toEqual([undefined]);
+
+      await expect(
+        run(
+          { kind: "account-deleted", accountId: null, to: "dana@example.com" },
+          "job-nameless"
+        )
+      ).rejects.toThrow("malformed");
+      expect(people).toHaveLength(1);
     });
 
     it("sweeps what has run out in one pass, and keeps everything live", async () => {

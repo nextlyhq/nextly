@@ -70,6 +70,7 @@ import { _resetEnvCache } from "../shared/lib/env";
 import type { SecurityConfig } from "../shared/types/config";
 import type { SingleConfig } from "../singles/config/types";
 import { getImageProcessor } from "../storage/image-processor";
+import type { StoragePlugin } from "../storage/types";
 
 import {
   PG_ABORTED_TRANSACTION_SQLSTATE,
@@ -317,6 +318,11 @@ export interface CreateTestNextlyOptions {
   /** Plugins to boot (their full lifecycle runs). */
   plugins?: PluginDefinition[];
   /**
+   * Storage plugins, as `storage` in `nextly.config.ts` lists them: for a test
+   * whose collections need storage of their own, such as private files.
+   */
+  storagePlugins?: StoragePlugin[];
+  /**
    * @experimental What the app lists plugins for, as `db.rawSqlPlugins` does
    * in `nextly.config.ts`. Absent, nothing is listed, as in an app that lists
    * nothing: a plugin declaring `rawSql` then refuses the boot, and the
@@ -355,10 +361,11 @@ export interface CreateTestNextlyOptions {
     schema?: { extend?: SchemaHook[] };
   };
   /**
-   * Keep every translatable field per language from the start, as a config's
-   * `experimental.perLanguageStorage` does. Off by default.
+   * The configuration's `experimental.perLanguageStorage`, which chooses no layout any longer:
+   * every installation keeps its translatable fields per language. Set, the start warns that it
+   * is deprecated. A test standing in for an earlier release uses `setPerLanguageStorage` instead.
    *
-   * @experimental
+   * @deprecated Has no effect but the warning.
    */
   perLanguageStorage?: boolean;
   /** Override the adapter (defaults to a fresh in-memory SQLite adapter). */
@@ -944,6 +951,7 @@ async function bootServices(
       hookRegistry: getHookRegistry(),
       plugins: opts.plugins,
       pluginConsent: opts.pluginConsent,
+      ...(opts.storagePlugins ? { storagePlugins: opts.storagePlugins } : {}),
       collections: opts.collections,
       // A site's own widgets reach boot where a site config puts them.
       ...(opts.widgets
@@ -979,7 +987,11 @@ async function bootServices(
       // off. Passed through the config (not set after) so it is published before
       // plugin init() runs, and boot-time plugin events are recorded too.
       webhookAuditEnabled: true,
-      perLanguageStorage: opts.perLanguageStorage === true,
+      // Passed only where a test sets it: the setting chooses no layout, and a site that sets it
+      // is told it is deprecated, which a test of that warning reads.
+      ...(opts.perLanguageStorage === undefined
+        ? {}
+        : { perLanguageStorage: opts.perLanguageStorage }),
     });
   } catch (error) {
     throw namingTestConsentOption(error, opts.pluginConsent);

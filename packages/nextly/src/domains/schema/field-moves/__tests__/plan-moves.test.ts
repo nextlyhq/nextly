@@ -21,6 +21,7 @@ const base = {
   table: "dc_posts",
   dialect: "sqlite" as const,
   localized: false,
+  kind: "collection" as "collection" | "single" | "fieldGroup",
 };
 
 describe("planEntityMoves", () => {
@@ -432,7 +433,7 @@ describe("planEntityMoves", () => {
     );
   });
 
-  it("refuses a move whose values are kept for each language, which this kind of save does not carry yet", () => {
+  it("refuses a move whose values are kept for each language, which these saves do not carry yet", () => {
     expect(() =>
       planEntityMoves({
         ...base,
@@ -661,6 +662,82 @@ describe("planEntityMoves", () => {
         })
       );
     }
+  });
+
+  it("leaves a same-path hint out of the checks of the moves together", () => {
+    // A hint whose path stays the same moves nothing; beside a real move of a field of the same
+    // name in other groups, it must not read as a second move of that name.
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("title"), group("a", [text("title")]), group("b", [])],
+        after: [text("title"), group("a", []), group("b", [text("title")])],
+        moves: [
+          { from: ["title"], to: ["title"] },
+          { from: ["a", "title"], to: ["b", "title"] },
+        ],
+      })
+    ).not.toThrow();
+  });
+
+  it("asks a field group's table nothing of title or slug, whichever generator made it", () => {
+    // A field group's table keeps its own columns (`_parent_id`, `_order`...), none named so,
+    // whether the Builder made it or the code-first pipeline did.
+    const outOnto =
+      (
+        kind: "fieldGroup" | "collection",
+        builtBy: "fieldGroup" | "codeFirst" | "collection"
+      ) =>
+      () =>
+        planEntityMoves({
+          ...base,
+          kind,
+          builtBy,
+          before: [group("meta", [text("title")])],
+          after: [text("title"), group("meta", [])],
+          moves: [{ from: ["meta", "title"], to: ["title"] }],
+        });
+    expect(outOnto("fieldGroup", "fieldGroup")).not.toThrow();
+    expect(outOnto("fieldGroup", "codeFirst")).not.toThrow();
+    // A collection's table keeps its own title while no field takes it, whoever made it.
+    for (const builtBy of ["collection", "codeFirst"] as const) {
+      expect(outOnto("collection", builtBy), builtBy).toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                message: expect.stringContaining(
+                  "Every entry already keeps its own title"
+                ),
+              }),
+            ],
+          },
+        })
+      );
+    }
+  });
+
+  it("asks a Single's table nothing of created_by, a column only a collection's table keeps", () => {
+    const outOnto = (kind: "single" | "collection") => () =>
+      planEntityMoves({
+        ...base,
+        kind,
+        before: [group("meta", [text("createdBy")])],
+        after: [text("createdBy"), group("meta", [])],
+        moves: [{ from: ["meta", "createdBy"], to: ["createdBy"] }],
+      });
+    expect(outOnto("single")).not.toThrow();
+    expect(outOnto("collection")).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              message: expect.stringContaining("created_by"),
+            }),
+          ],
+        },
+      })
+    );
   });
 
   it("refuses a move out of a group onto the title or slug every entry keeps while no field takes it", () => {

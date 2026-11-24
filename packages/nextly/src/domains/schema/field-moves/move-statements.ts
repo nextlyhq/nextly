@@ -18,8 +18,14 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
+import { VERSIONS_TABLE } from "../../../schemas/versions/types";
+import type { VersionsWhereCondition } from "../../versions/db-api";
+import { WORKING_DRAFT_SHAPE } from "../../versions/versions-repository";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
-import type { ColumnKind } from "../services/field-column-descriptor";
+import {
+  toSnakeCase,
+  type ColumnKind,
+} from "../services/field-column-descriptor";
 import { boundedIdentifier } from "../services/index-name";
 
 import type { StoragePlace } from "./check-move";
@@ -424,7 +430,7 @@ function emptyAtDestination(
  * temporary table's NOT NULL column, so the run stops on that constraint, naming the field in the
  * table and column, before any statement has changed anything. The file places these first.
  *
- * On SQLite a date keeps its own names (`nextly_unreadable_date_<field>`), as released.
+ * On SQLite a date keeps its own names (`nextly_unreadable_date_` and the field's name), as released.
  */
 function unkeptValuesStop(
   target: MoveColumn,
@@ -505,6 +511,84 @@ export function missingValuesStop(
       where: "1 = 1",
     }
   );
+}
+
+/**
+ * One condition on the versions table as SQL. The table's columns are the snake case of the names
+ * the versions repository queries them by, on every dialect (held by the drafts stop's tests). An
+ * operator or a value this cannot write is refused, so no file is written with a condition left
+ * out.
+ */
+function versionsConditionSql(
+  condition: VersionsWhereCondition,
+  dialect: SupportedDialect
+): string {
+  const column = quoteIdent(toSnakeCase(condition.column), dialect);
+  if (condition.op === "IS NULL" || condition.op === "IS NOT NULL") {
+    return `${column} ${condition.op}`;
+  }
+  const literal = conditionLiteral(condition.value, dialect);
+  const operator = { "=": "=", "!=": "<>" }[condition.op as "=" | "!="];
+  if (operator === undefined || literal === undefined) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "working-draft-condition-unwritable",
+        column: condition.column,
+        op: condition.op,
+      },
+    });
+  }
+  return `${column} ${operator} ${literal}`;
+}
+
+/** A condition's value as an SQL literal: a boolean as the dialect keeps one, a plain string, a finite number. */
+function conditionLiteral(
+  value: VersionsWhereCondition["value"],
+  dialect: SupportedDialect
+): string | undefined {
+  if (typeof value === "boolean") {
+    if (dialect === "postgresql") return String(value);
+    return value ? "1" : "0";
+  }
+  if (typeof value === "string") return `'${safeLiteral(value)}'`;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return undefined;
+}
+
+/**
+ * Statements that stop a run, before the file changes anything, where a working draft of
+ * `subject` holds the moved field at the place the run moves it away from (`at`): its old place
+ * for the UP, its new one for the DOWN. The run rewrites each entry's row, not a draft's
+ * snapshot, which keeps the field where it was, so publishing that draft would drop its pending
+ * change. A draft holding a null at that place is held too, as is one whose group on the way to
+ * it holds a null: either may be a pending clear. The
+ * Schema Builder's save reads the database it writes from (`refuseMovesUnderWorkingDrafts`); a
+ * file written offline asks the database it runs on. The run stops on
+ * `publish_or_discard_drafts_of_<field>` in `nextly_drafted_<field>`, and goes ahead once those
+ * drafts are published or discarded. It fails closed: a versions table or column the statement
+ * cannot read is an error that stops the run as well.
+ */
+export function workingDraftsStop(
+  dialect: SupportedDialect,
+  subject: { kind: "collection" | "single"; slug: string },
+  at: readonly string[]
+): string[] {
+  const name = at.map(safeKey).join("_");
+  // The subject's working drafts, as the versions repository finds one (`WORKING_DRAFT_SHAPE`),
+  // so the file and the application agree on which rows are working drafts.
+  const working = [
+    { column: "scopeKind", op: "=", value: subject.kind },
+    { column: "scopeSlug", op: "=", value: subject.slug },
+    ...WORKING_DRAFT_SHAPE,
+  ] satisfies readonly VersionsWhereCondition[];
+  return stopWhereNot(dialect, quoteIdent(VERSIONS_TABLE, dialect), {
+    guard: `nextly_drafted_${name}`,
+    reason: `publish_or_discard_drafts_of_${name}`,
+    kept: `NOT (${draftHoldsPlace(dialect, at)})`,
+    where: working
+      .map(condition => versionsConditionSql(condition, dialect))
+      .join(" AND "),
+  });
 }
 
 /**
@@ -709,13 +793,35 @@ export function emptiedContainers(
 }
 
 /**
+ * Whether a working draft's snapshot holds the place `at`: its key, a null included, or a group on
+ * the way to it cleared to null, which clears the field with it.
+ */
+function draftHoldsPlace(
+  dialect: SupportedDialect,
+  at: readonly string[]
+): string {
+  const json = DIALECTS[dialect];
+  const snapshot = quoteIdent("snapshot", dialect);
+  const clearedAbove = at
+    .slice(0, -1)
+    .map((_, i) => at.slice(0, i + 1))
+    .map(
+      above =>
+        `(${json.hasKey(snapshot, above)} AND NOT (${json.holds(snapshot, above)}))`
+    );
+  return [json.hasKey(snapshot, at), ...clearedAbove].join(" OR ");
+}
+
+/**
  * The statement moving the media library's record of where an item is used along with a moved
  * field: each use recorded at `from` (the field's names joined by dots, as the record keeps a
  * path) or under it is recorded at `to` instead, for the entries of `subject`. Left at the old
- * path, a use would no longer be found in the document it names, so the library would stop
- * reporting it and could list the item as unused. A use already recorded at the new path for the
+ * path, a use would still name its item, so the item would go on reading as used (every reader of
+ * whether an item is used keys on its id, never the path): only "Used in" would name the old path,
+ * until the entry is saved again, which records its uses afresh from the content, or
+ * `nextly media reindex-usage` rebuilds the record. A use already recorded at the new path for the
  * same entry, item and language (a row left by a field once there) keeps that row, and the one at
- * the old path stays where nothing reads it, so the unique key is never broken.
+ * the old path stays until such a save or rebuild, so the unique key is never broken.
  */
 export function mediaUsePathStatement(
   dialect: SupportedDialect,
@@ -801,6 +907,13 @@ export function moveDataStatements(
               ? json.fromJson(q(from.column), from.keys, target)
               : q(from.column)
           } WHERE ${source.holds};`,
+          // An explicit JSON null arrives as NULL: a column added or put back with a database
+          // default would otherwise keep that default where the entry said nothing.
+          ...(from.kind === "json"
+            ? [
+                `UPDATE ${table} SET ${q(to.column)} = NULL WHERE ${json.hasKey(q(from.column), from.keys)} AND NOT (${source.holds});`,
+              ]
+            : []),
         ]
       : [
           ...emptyAtDestination(json, table, from, to, source.holds, q),

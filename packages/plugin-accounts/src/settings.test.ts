@@ -34,7 +34,9 @@ describe("resolveAccountsSettings", () => {
         reset: "/account/reset",
         confirmAddress: "/account/address",
         cancelAddressChange: "/account/address/cancel",
+        acceptInvitation: "/account/invitation",
       },
+      signUp: "open",
       verificationRequired: true,
       session: { idleHours: 336, absoluteDays: 30, perAccount: 20 },
       unverifiedKeptDays: 7,
@@ -45,10 +47,12 @@ describe("resolveAccountsSettings", () => {
         codeTries: 5,
       },
       resetLinkMinutes: 60,
+      invitationLinkDays: 7,
       failuresBeforeReset: 100,
       knownBrowsers: { days: 90, perAccount: 10 },
       passwordMinLength: 8,
       breachedPasswordCheck: false,
+      timeZone: "UTC",
     });
   });
 
@@ -97,6 +101,16 @@ describe("resolveAccountsSettings", () => {
     ],
     ["resetLinkMinutes", { resetLinkMinutes: 15 }, { resetLinkMinutes: 14 }],
     [
+      "invitationLinkDays",
+      { invitationLinkDays: 1 },
+      { invitationLinkDays: 0 },
+    ],
+    [
+      "invitationLinkDays",
+      { invitationLinkDays: 30 },
+      { invitationLinkDays: 31 },
+    ],
+    [
       "failuresBeforeReset",
       { failuresBeforeReset: 10 },
       { failuresBeforeReset: 101 },
@@ -118,6 +132,24 @@ describe("resolveAccountsSettings", () => {
       code: "ACCOUNTS_INVALID_OPTIONS",
       paths: [path],
     });
+  });
+
+  it("keeps sign-up open unless the site closes it, and takes no other word for it", () => {
+    expect(resolveAccountsSettings({ origin, signUp: "closed" }).signUp).toBe(
+      "closed"
+    );
+    for (const signUp of ["off", false, "Closed"]) {
+      expect(refusalOf({ origin, signUp })?.paths).toEqual(["signUp"]);
+    }
+  });
+
+  it("takes the site's time zone by its IANA name, and refuses one the runtime does not know", () => {
+    expect(
+      resolveAccountsSettings({ origin, timeZone: "Asia/Karachi" }).timeZone
+    ).toBe("Asia/Karachi");
+    for (const timeZone of ["Mars/Olympus", "", "PKT+5"]) {
+      expect(refusalOf({ origin, timeZone })?.paths).toEqual(["timeZone"]);
+    }
   });
 
   it("refuses a fractional number rather than rounding it", () => {

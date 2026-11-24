@@ -574,9 +574,10 @@ function AlsoNeeded({
 }): JSX.Element | null {
   if (fields.length === 0) return null;
   return (
+    // The border at full strength: faded, it fell below the 3:1 a boundary needs on the page.
     <div
       role="alert"
-      className="grid gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3"
+      className="grid gap-2 rounded-md border border-destructive bg-destructive/5 p-3"
       data-slot="new-page-also-needed"
     >
       <p className="text-sm font-medium">{NEW_PAGE_WORDS.alsoNeeded}</p>

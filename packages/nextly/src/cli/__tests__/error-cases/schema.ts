@@ -140,10 +140,21 @@ export const SCHEMA_CASES = {
     NextlyError.conflict({
       reason: "state",
       message:
-        'A Builder save was left part-way, so the database does not match its migrations yet: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio. To settle it, start the app in development (`next dev`) on this project: its start settles the save.',
+        'A Builder save was left part-way, so the database does not match its migrations yet: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio. To settle it, run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save.',
       logContext: {
         reason: "builder-save-left-part-way",
         saves: ["builder-save-in-progress:collection:posts"],
+      },
+    }),
+  // As a Builder save is refused while an earlier save's remaining migration files have not run.
+  BUILDER_SAVE_EARLIER_LEFT: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        'An earlier Builder save stopped between its migration files (collection "posts"), and the rest of them have not run yet. Start the app in development (`next dev`): its start finishes the previous save. Then save again.',
+      logContext: {
+        reason: "builder-save-pending-files",
+        saves: ["collection:posts"],
       },
     }),
   // As a Builder save is refused over an earlier save's record that cannot be read.

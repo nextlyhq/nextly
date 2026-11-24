@@ -129,6 +129,70 @@ export interface StorageAdapterInfo {
   supportsSignedUrls: boolean;
   /** Whether this adapter supports client-side (direct) uploads */
   supportsClientUploads: boolean;
+  /**
+   * Whether files written through the private calls (`putPrivate`,
+   * `getPrivateUploadUrl`) can be reached only through Nextly: no public
+   * address serves them. An adapter says so only when it is configured that
+   * way, for example with no public URL in front of its bucket. Absent means
+   * no, so a collection of private files is never stored where it may be
+   * public.
+   *
+   * @experimental
+   */
+  supportsPrivateFiles?: boolean;
+}
+
+/**
+ * What a storage says about an object it holds, read without its bytes.
+ *
+ * @experimental
+ */
+export interface StoredObjectHead {
+  /** The object's size in bytes, as stored. */
+  size: number;
+  /** The type it was stored with, where the storage keeps one. */
+  contentType?: string;
+  /** When it was last written, where the storage says. */
+  lastModified?: Date;
+}
+
+/**
+ * Bounds for a read handed back as a stream.
+ *
+ * @experimental
+ */
+export interface StorageStreamOptions {
+  /**
+   * Give up when the storage has not started answering after this long. The
+   * transfer itself is not bounded: its reader decides how long it takes.
+   */
+  timeoutMs?: number;
+}
+
+/**
+ * A short-lived link to a private file, as the private download call takes it.
+ *
+ * @experimental
+ */
+export interface PrivateDownloadUrlOptions {
+  /** How long the link lasts, in seconds, within the adapter's own cap. */
+  expiresIn: number;
+  /** The Content-Disposition the storage answers the link with. */
+  contentDisposition: string;
+  /** The Content-Type the storage answers the link with. */
+  contentType?: string;
+}
+
+/**
+ * A direct upload of a private file, as the private upload call takes it.
+ *
+ * @experimental
+ */
+export interface PrivateUploadUrlOptions {
+  /** The file's exact size in bytes; storage refuses a body of another length. */
+  contentLength: number;
+  /** How long the URL lasts, in seconds, within the adapter's own cap. */
+  expiresIn: number;
 }
 
 // ============================================================
@@ -382,4 +446,63 @@ export interface IStorageAdapter {
    * them, which is said rather than taken as "none".
    */
   list?(): AsyncIterable<StoredFileEntry>;
+
+  /**
+   * What the storage holds at `filePath`, its size and type, without reading
+   * it (optional); `null` when nothing is there.
+   *
+   * @experimental
+   */
+  head?(filePath: string): Promise<StoredObjectHead | null>;
+
+  /**
+   * The file's bytes as a stream, for a response that should not hold the
+   * whole file in memory (optional); `null` when nothing is there.
+   *
+   * @experimental
+   */
+  readStream?(
+    filePath: string,
+    options?: StorageStreamOptions
+  ): Promise<ReadableStream<Uint8Array> | null>;
+
+  /**
+   * Store a private file at exactly `key` (optional). Unlike `upload`, the key
+   * is core's (it names no file and no person), no public address is formed,
+   * the original file name is kept nowhere in the storage, and the object is
+   * marked never to be cached. Required, with the two calls below, for a
+   * collection of private files.
+   *
+   * @experimental
+   */
+  putPrivate?(
+    key: string,
+    buffer: Buffer,
+    options: { mimeType: string }
+  ): Promise<void>;
+
+  /**
+   * A pre-signed URL a browser sends one private file to, at exactly `key`
+   * (optional). Like `getPresignedUploadUrl`, it binds the type and exact
+   * length; unlike it, the object it writes is private and never cached.
+   *
+   * @experimental
+   */
+  getPrivateUploadUrl?(
+    key: string,
+    mimeType: string,
+    options: PrivateUploadUrlOptions
+  ): Promise<ClientUploadData>;
+
+  /**
+   * A link to a private file that lasts `options.expiresIn` seconds and is
+   * answered as an attachment that is never cached (optional). Only Nextly's
+   * checked download hands one out, after the caller's access was checked.
+   *
+   * @experimental
+   */
+  getPrivateDownloadUrl?(
+    key: string,
+    options: PrivateDownloadUrlOptions
+  ): Promise<string>;
 }

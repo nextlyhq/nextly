@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 
+import { DATABASE_LINE, declareFirstLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -12,14 +13,20 @@ import { lazyAction } from "../lazy-action";
  * @param program - Commander program instance
  */
 export function registerMigrateStatusCommand(program: Command): void {
-  program
-    .command("migrate:status")
-    .description("Show current migration status")
-    .option("--json", "Output as JSON for scripting/CI", false)
-    .option("--plugin <name>", "List <name>'s migrations instead of the app's")
-    .action(
-      lazyAction(
-        async () => (await import("./migrate-status")).migrateStatusAction
+  declareFirstLine(
+    program
+      .command("migrate:status")
+      .description("Show current migration status")
+      .option("--json", "Output as JSON for scripting/CI", false)
+      .option(
+        "--plugin <name>",
+        "List <name>'s migrations instead of the app's"
       )
-    );
+      .action(
+        lazyAction(
+          async () => (await import("./migrate-status")).migrateStatusAction
+        )
+      ),
+    DATABASE_LINE
+  );
 }

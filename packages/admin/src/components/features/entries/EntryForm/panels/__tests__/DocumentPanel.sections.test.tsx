@@ -43,6 +43,15 @@ vi.mock("@admin/hooks/queries/useReleasesContaining", () => ({
   },
 }));
 
+const SCHEDULED = {
+  id: "r0",
+  title: "Autumn launch",
+  state: "scheduled",
+  scheduledAt: "2026-11-28T09:00:00Z",
+  timezone: "UTC",
+  memberAction: "publish",
+} as Release;
+
 const can = vi.hoisted(() => ({ current: true }));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => can.current }));
 
@@ -93,8 +102,10 @@ function sectionTitles(): string[] {
 
 beforeEach(() => {
   localization.current = { enabled: false, locales: [], defaultLocale: "en" };
+  // In one scheduled release, so the Publishing section, drawn only while a
+  // document is scheduled, takes its place in the order.
   releases.current = {
-    data: { items: [] },
+    data: { items: [SCHEDULED] },
     isError: false,
     isPending: false,
   };
@@ -204,11 +215,16 @@ describe("the Publishing section", () => {
       ...over,
     }) as Release;
 
-  it("says when nothing is scheduled", () => {
+  it("draws no section while nothing is scheduled", () => {
+    // The panel shows the scheduled time only once one is set; scheduling
+    // itself is a row of the main button's menu.
+    releases.current.data = { items: [] };
     panel();
-    expect(
-      screen.getByRole("region", { name: "Publishing" })
-    ).toHaveTextContent("Not scheduled.");
+    expect(screen.queryByRole("region", { name: "Publishing" })).toBeNull();
+    // The control: a release makes it appear.
+    releases.current.data = { items: [release({})] };
+    panel();
+    expect(screen.getByRole("region", { name: "Publishing" })).toBeTruthy();
   });
 
   it("names the release the document is in, links to it, and says when it goes live", () => {

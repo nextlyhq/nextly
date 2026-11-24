@@ -4,6 +4,7 @@
  * entry on a localized site says which language it starts in. Neither shows
  * on the plain path: an unlocalized site, or the default language.
  */
+import type { ReactNode } from "react";
 import { useForm, FormProvider } from "react-hook-form";
 import { describe, it, expect, vi } from "vitest";
 
@@ -17,12 +18,20 @@ import {
 import { BarUnderTest as DocumentBar } from "./bar-under-test";
 
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
+// History is offered to a reader who may read it.
+vi.mock("@admin/hooks/useCanRequest", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useCanRequest")>()),
+  useCanRequest: () => true,
+}));
 
-const localization = vi.hoisted(() => ({ enabled: true }));
+const localization = vi.hoisted(() => ({
+  enabled: true,
+  locales: [] as { code: string; label: string }[],
+}));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
     enabled: localization.enabled,
-    locales: [],
+    locales: localization.locales,
     defaultLocale: "en",
     fallback: true,
     getLocale: (code: string) =>
@@ -33,9 +42,11 @@ vi.mock("@admin/hooks/useLocalization", () => ({
 function Harness({
   mode = "edit",
   locale,
+  languagesControl,
 }: {
   mode?: "create" | "edit";
   locale?: EntryLocaleContextValue;
+  languagesControl?: ReactNode;
 }) {
   const methods = useForm({ defaultValues: { title: "" } });
   const bar = (
@@ -46,6 +57,8 @@ function Harness({
       isSubmitting={false}
       entry={mode === "edit" ? { id: "e1", status: "draft" } : undefined}
       collectionSlug="posts"
+      historyFields={[]}
+      languagesControl={languagesControl}
       onSaveDraft={vi.fn()}
       onPublish={vi.fn()}
       onSaveChanges={vi.fn()}
@@ -73,6 +86,40 @@ const french: EntryLocaleContextValue = {
 };
 
 describe("DocumentBar language", () => {
+  it("draws the languages control right after History, on a site with two languages or more", () => {
+    localization.locales = [
+      { code: "en", label: "English" },
+      { code: "fr", label: "French" },
+    ];
+    render(
+      <Harness languagesControl={<button type="button">Languages</button>} />
+    );
+    const history = screen.getByRole("button", { name: "History" });
+    const languages = screen.getByRole("button", { name: "Languages" });
+    expect(
+      history.compareDocumentPosition(languages) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    // Before the main button.
+    expect(
+      languages.compareDocumentPosition(
+        screen.getByRole("button", { name: /^publish$/i })
+      ) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("draws no languages control on a one-language site", () => {
+    localization.locales = [{ code: "en", label: "English" }];
+    render(
+      <Harness languagesControl={<button type="button">Languages</button>} />
+    );
+    expect(
+      screen.queryByRole("button", { name: "Languages" })
+    ).not.toBeInTheDocument();
+    // The control: the bar itself is drawn.
+    expect(screen.getByRole("button", { name: "History" })).toBeInTheDocument();
+  });
+
   it("names the language being edited when it is not the default", () => {
     localization.enabled = true;
     render(<Harness locale={french} />);

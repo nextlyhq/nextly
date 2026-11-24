@@ -21,6 +21,7 @@
  * and a first run stopped at each point, then finished by the next run.
  */
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -57,6 +58,10 @@ import type { mergeSetupResultIntoConfig as MergeSetupResultIntoConfig } from ".
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+
+// `nextly migrate` as every installation runs it: per-language storage (`storage-layout`).
+perLanguageStorageSuite();
 
 type LoadedConfig = Parameters<typeof MergeSetupResultIntoConfig>[0];
 
@@ -132,7 +137,12 @@ vi.mock("../../../runtime/cache/tag-expiry-view", async importOriginal => {
 
 const SLUG = "fr-posts";
 
-/** The app's config: one collection, with `extra` fields beyond its two. */
+/**
+ * The app's config: one collection, with `extra` fields beyond its two. Opened
+ * to the admin preset, as a collection reaches a preset role only once it is
+ * opened to it by name: the upgrade case asks that a grant the admin preset
+ * gives is set again by the run.
+ */
 function config(extra: readonly string[] = []): unknown {
   return defineConfig({
     collections: [
@@ -143,6 +153,7 @@ function config(extra: readonly string[] = []): unknown {
           text({ name: "summary" }),
           ...extra.map(name => text({ name })),
         ],
+        grants: { presets: ["admin"] },
       }),
     ],
     db: { migrationsDir: "./migrations" },
@@ -332,8 +343,27 @@ describe.each(getConfiguredTestDialects())(
       ).finally(() => setNonInteractive(false));
       expect(code, said.join("\n")).toBeUndefined();
       const made = migrationNames().filter(base => !before.has(base));
-      expect(made).toHaveLength(1);
-      return made[0];
+      // Beside the schema change, a migration creating the per-language table of a collection
+      // that gains one: every installation keeps translatable fields per language.
+      const own = made.filter(
+        base => !/_(create|adds)_localization_/.test(base)
+      );
+      expect(own, `migrate:create wrote ${made.join(", ")}`).toHaveLength(1);
+      return own[0];
+    }
+
+    /**
+     * The last migration `migrate:create` wrote with `base`, the one the record points at once they
+     * apply: beside the schema change, the migration of a per-language table it creates or extends.
+     */
+    function lastWrittenWith(base: string): string {
+      return writtenWith(base).at(-1)!;
+    }
+
+    /** Every migration `migrate:create` wrote with `base`, in run order. */
+    function writtenWith(base: string): string[] {
+      const stamp = base.replace(/_\d{3}_[^_].*$/, "");
+      return migrationNames().filter(name => name.startsWith(stamp));
     }
 
     /** The app's migrations, by base name, in run order. */
@@ -713,7 +743,7 @@ describe.each(getConfiguredTestDialects())(
             )
           );
           const record = await recordOf(adapter);
-          expect(record?.point).toBe(earlier);
+          expect(record?.point).toBe(lastWrittenWith(earlier));
           expect(
             fieldNames(record?.baseline?.collections[SLUG]?.fields)
           ).toEqual(["slug", "title", "summary"]);
@@ -729,7 +759,7 @@ describe.each(getConfiguredTestDialects())(
         // a migration records it: the run is refused, naming the change.
         const ahead = await migrateRun(config(["extra"]));
         expect(ahead.failure, ahead.said.join("\n")).toBeDefined();
-        expect(ahead.why).toMatch(/^\+ add_column dc_fr_posts\.extra \(/m);
+        expect(ahead.why).toMatch(/fields\.extra \(added\)/);
         await on(url, async adapter => {
           expect(await rowFields(adapter)).toEqual([
             "slug",
@@ -747,7 +777,9 @@ describe.each(getConfiguredTestDialects())(
             "extra",
           ]);
           // The record is written once.
-          expect((await recordOf(adapter))?.point).toBe(earlier);
+          expect((await recordOf(adapter))?.point).toBe(
+            lastWrittenWith(earlier)
+          );
         });
       }, 240_000);
     });
@@ -838,7 +870,16 @@ describe.each(getConfiguredTestDialects())(
         const url = await scratch();
         use(url);
         const base = await migrateCreate("one", withPermissions(["export"]));
-        withoutRecordedPermissions(dir, base);
+        // Every snapshot written with it, the per-language table's migration's included: the newest
+        // is the one the run reads.
+        // Every snapshot written with it: the per-language table's migration keeps none of its own.
+        for (const name of writtenWith(base)) {
+          if (
+            existsSync(join(dir, "migrations", "meta", `${name}.snapshot.json`))
+          ) {
+            withoutRecordedPermissions(dir, name);
+          }
+        }
         // A database an earlier release migrated, then its first run here:
         // the point carries the settings, so the record keeps no rows, and
         // the owned permissions all the same.
@@ -918,7 +959,7 @@ describe.each(getConfiguredTestDialects())(
             "extra",
           ]);
           const record = await recordOf(adapter);
-          expect(record?.point).toBe(earlier);
+          expect(record?.point).toBe(lastWrittenWith(earlier));
           expect(
             fieldNames(record?.baseline?.collections[SLUG]?.fields)
           ).toEqual(["slug", "title", "summary"]);
@@ -942,7 +983,7 @@ describe.each(getConfiguredTestDialects())(
             "extra",
           ]);
           const record = await recordOf(adapter);
-          expect(record?.point).toBe(earlier);
+          expect(record?.point).toBe(lastWrittenWith(earlier));
           // Nothing had written the collection's row when it was taken.
           expect(record?.baseline?.collections).toEqual({});
         });
@@ -1010,7 +1051,7 @@ describe.each(getConfiguredTestDialects())(
         // run's bookkeeping, naming the change, with nothing written.
         const ahead = await migrateRun(config(["extra"]));
         expect(ahead.failure, ahead.said.join("\n")).toBeDefined();
-        expect(ahead.why).toMatch(/^\+ add_column dc_fr_posts\.extra \(/m);
+        expect(ahead.why).toMatch(/fields\.extra \(added\)/);
         await on(url, async adapter => {
           expect(await recordOf(adapter)).toBeUndefined();
           expect(await rowFields(adapter)).toEqual(["title"]);
@@ -1031,7 +1072,7 @@ describe.each(getConfiguredTestDialects())(
           // owned permissions live then are kept all the same: here the one
           // a plugin no build declares had left.
           const record = await recordOf(adapter);
-          expect(record?.point).toBe(first);
+          expect(record?.point).toBe(lastWrittenWith(first));
           expect(record?.baseline).toBeUndefined();
           expect(record?.ownedPermissions?.map(p => p.slug)).toEqual([
             "sync-fr-gone",
@@ -1075,7 +1116,7 @@ describe.each(getConfiguredTestDialects())(
 
         await migrate(config());
         const after = await bookkeeping(url);
-        expect(after.record?.point).toBe(earlier);
+        expect(after.record?.point).toBe(lastWrittenWith(earlier));
         expect(after.expired).toContain(`nextly:${SLUG}`);
       }, 240_000);
 

@@ -513,11 +513,14 @@ export class AuthService extends BaseService {
    *   to avoid leaking account state.
    * @throws NextlyError on DB errors.
    */
-  async changePassword(
-    userId: string,
-    currentPassword: string,
-    newPassword: string
-  ): Promise<void> {
+  /**
+   * Refuses unless `password` is the signed-in user's own current password:
+   * the check a change of password makes, and a sensitive change (closing a
+   * collection to super-admin) asks for again. Throws the same generic
+   * invalid-credentials error for an unknown user, one with no password and a
+   * wrong password, so the answer says nothing about which.
+   */
+  async confirmPassword(userId: string, password: string): Promise<void> {
     let user;
     try {
       user = await this.db.query.users.findFirst({
@@ -543,7 +546,7 @@ export class AuthService extends BaseService {
     }
 
     const isValidPassword = (
-      await this.passwordDigester.verify(currentPassword, user.passwordHash)
+      await this.passwordDigester.verify(password, user.passwordHash)
     ).ok;
 
     if (!isValidPassword) {
@@ -554,6 +557,14 @@ export class AuthService extends BaseService {
         },
       });
     }
+  }
+
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string
+  ): Promise<void> {
+    await this.confirmPassword(userId, currentPassword);
 
     // R-5: the rule binds whenever a password is set, a change included. The
     // new password is judged before anything is hashed, so a refusal leaves

@@ -628,10 +628,21 @@ describe.each(getConfiguredTestDialects())(
       expect((await read(entries, LOCKED, id, "es")).views).toBe(10);
     }, 90_000);
 
+    /**
+     * The editor the discards below are made as, holding what a discard is judged by: the read
+     * and the update of the translated collection. The discard reads the document as its caller
+     * before it removes anything, through the read's own gate.
+     */
+    async function editorWhoMayDiscard(): Promise<void> {
+      await userWhoMay(handle!, "editor", "read", [TRANSLATED]);
+      await grantTo(handle!, "editor", "update", [TRANSLATED]);
+    }
+
     // The shared part's pending change can be thrown away on its own: each language's change
     // stays, and what readers see does not move.
     it("discards the shared draft alone, keeping each language's", async () => {
       const entries = await boot(dialect);
+      await editorWhoMayDiscard();
       const id = await publishedInBoth(entries, TRANSLATED);
       await save(entries, TRANSLATED, id, "es", { title: "es 2", views: 40 });
       expect(Object.keys(await drafts(id)).sort()).toEqual(["es", "shared"]);
@@ -676,6 +687,7 @@ describe.each(getConfiguredTestDialects())(
     // back. The plausible broken implementation reads the shared slot as that unnamed language.
     it("keeps the author's recovery point in the default language when the shared draft is discarded", async () => {
       const entries = await boot(dialect);
+      await editorWhoMayDiscard();
       const id = await publishedInBoth(entries, TRANSLATED);
       await save(entries, TRANSLATED, id, "es", { title: "es 2", views: 40 });
       const repo = new VersionsRepository(

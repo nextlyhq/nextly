@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../i18n/per-language-storage";
 import { text } from "../../../config";
 import { resolveDraftHold, type DraftHoldInput } from "../draft-hold";
+
+// A case that stands in for an earlier release's layout leaves the one every installation runs.
+afterEach(() => _resetPerLanguageStorage());
 
 /** An eligible, published, unlocalized document with a status-less write. */
 const base = (): DraftHoldInput => ({
@@ -73,7 +80,8 @@ describe("resolveDraftHold", () => {
     });
   });
 
-  it("ignores a locale on an unlocalized document", () => {
+  it("ignores a locale on an unlocalized document (an earlier release's layout)", () => {
+    setPerLanguageStorage(false);
     // A localization-configured app can send a locale to a collection that is
     // not localized; keying by it would strand the draft.
     expect(resolveDraftHold({ ...base(), requestLocale: "es" })).toEqual({

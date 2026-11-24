@@ -16,9 +16,11 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import { getPrebuiltHook } from "../../../hooks/prebuilt";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { asRowBackedRelationFields } from "../../field-groups/services/field-group-utils";
 import {
   classifyFieldKind,
   fieldProducesColumn,
@@ -26,6 +28,7 @@ import {
   getColumnDescriptor,
   systemColumnsForFields,
   toSnakeCase,
+  type ColumnOrigin,
 } from "../services/field-column-descriptor";
 
 import {
@@ -614,13 +617,14 @@ function refuseUnmatched(
 function moveColumn(
   move: PlannedMove,
   table: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  builtBy: ColumnOrigin
 ): MoveColumn {
-  const descriptor = getColumnDescriptor(move.field, dialect, "collection");
+  const descriptor = getColumnDescriptor(move.field, dialect, builtBy);
   return {
     table,
     dialect,
-    kind: classifyFieldKind(move.field, "collection"),
+    kind: classifyFieldKind(move.field, builtBy),
     columnType: descriptor?.dialectType ?? "text",
     ...(descriptor?.precision === undefined
       ? {}
@@ -633,7 +637,7 @@ function moveColumn(
  * The statements a save's `moves` need, or the refusal of the first that cannot keep its values,
  * thrown before anything is written.
  */
-export function planEntityMoves(args: {
+export function planEntityMoves(given: {
   before: readonly FieldDefinition[];
   after: readonly FieldDefinition[];
   moves: readonly FieldMoveRequest[];
@@ -643,6 +647,14 @@ export function planEntityMoves(args: {
   localized: boolean;
   table: string;
   dialect: SupportedDialect;
+  /**
+   * What the entity is, which decides its table's own columns: a field group's table keeps its
+   * parent's pointer and order and stores a many-to-many on its row, a Single's keeps no owner,
+   * whichever generator made it.
+   */
+  kind: "collection" | "single" | "fieldGroup";
+  /** Which generator made the table, which decides each field's column (`ColumnOrigin`). */
+  builtBy?: ColumnOrigin;
   /** The entity's admin settings after the save, which name top-level fields. */
   admin?: AdminReferences;
   /** The hooks the entity's definition stores after the save, whose settings name fields. */
@@ -652,6 +664,7 @@ export function planEntityMoves(args: {
   /** The columns the save fills before its copies (a `fill` answer), which need no stop. */
   filledColumns?: readonly string[];
 }): EntityMoves {
+  const args = asStoredByRow(given);
   const result: EntityMoves = {
     up: { first: [], last: [] },
     down: { first: [], last: [] },
@@ -662,43 +675,28 @@ export function planEntityMoves(args: {
     before: rowColumns(args.before),
     after: rowColumns(args.after),
   };
-  // The system columns the table holds before the save, `title` and `slug` among them while no
-  // field takes their name.
-  const systemOf = (fields: readonly FieldDefinition[]) =>
-    new Set(
-      systemColumnsForFields(fields, args.dialect, {
-        builtBy: "collection",
-      }).map(column => column.name)
-    );
-  const system = { before: systemOf(args.before), after: systemOf(args.after) };
-  refuseOverlapping(args.moves);
-  refuseSameNames(args.moves);
-  refuseUnpairedNames(args, args.renames ?? []);
-  for (const request of args.moves) {
-    // A field that keeps its path (moved into or out of a group with no name) keeps its place.
-    if (samePath(request.from, request.to)) continue;
-    refuseInsideOwnPlace(request);
-    refuseUnbound(request);
-    refuseNamedByAdmin(request, args.admin);
-    refuseNamedByHook(request, args.hooks);
-    refuseUnmatched(args.before, args.after, request);
-    const checked = checkMove(args.before, args.after, request, {
-      localized: args.localized,
-    });
-    if (!checked.ok) throw refused(request, checked.message);
-    const { move } = checked;
-    refusePerLanguage(request, move);
-    refuseHoldersNotGroups(request, move, args);
-    refuseRenamedColumns(request, move, args.renames ?? []);
-    refuseMadeRequired(request, move, args.before);
-    refuseUnplaceable(request, move, columns);
-    refuseSystemColumn(request, move, system);
+  const system = systemColumnSets(args);
+  // A field that keeps its path (moved into or out of a group with no name) keeps its place, so
+  // its hint takes no part in the checks of the moves together either.
+  const moves = args.moves.filter(
+    request => !samePath(request.from, request.to)
+  );
+  refuseOverlapping(moves);
+  refuseSameNames(moves);
+  refuseUnpairedNames({ ...args, moves }, args.renames ?? []);
+  for (const request of moves) {
+    const move = checkedMove(request, args, columns, system);
     // A field moving between places on one level (a group with no name) keeps its column, and
     // one whose group only changes its spelling (`seoMeta` to `seo_meta`) keeps its column and
     // key: a copy onto itself, then the clear of the place it left, would delete every value.
     if (move.from.kind === "column" && move.to.kind === "column") continue;
     if (sameJsonPlace(move.from, move.to)) continue;
-    const target = moveColumn(move, args.table, args.dialect);
+    const target = moveColumn(
+      move,
+      args.table,
+      args.dialect,
+      args.builtBy ?? "collection"
+    );
     const statements = placed(
       move,
       target,
@@ -711,6 +709,99 @@ export function planEntityMoves(args: {
     recordColumns(result, move, request, target);
   }
   return result;
+}
+
+/**
+ * The planner's arguments with the fields as the table's row stores them: a field group's row keeps
+ * a many-to-many as a list in a column of its own, where a collection keeps it in a junction table.
+ */
+function asStoredByRow<
+  A extends {
+    before: readonly FieldDefinition[];
+    after: readonly FieldDefinition[];
+    kind: "collection" | "single" | "fieldGroup";
+  },
+>(given: A): A {
+  return given.kind === "fieldGroup"
+    ? {
+        ...given,
+        before: asFieldGroupRow(given.before),
+        after: asFieldGroupRow(given.after),
+      }
+    : given;
+}
+
+/** One requested move, checked against both definitions and refused before anything is written. */
+function checkedMove(
+  request: FieldMoveRequest,
+  args: Parameters<typeof planEntityMoves>[0],
+  columns: { before: Set<string>; after: Set<string> },
+  system: { before: Set<string>; after: Set<string> }
+): PlannedMove {
+  refuseInsideOwnPlace(request);
+  refuseUnbound(request);
+  refuseNamedByAdmin(request, args.admin);
+  refuseNamedByHook(request, args.hooks);
+  refuseUnmatched(args.before, args.after, request);
+  const checked = checkMove(args.before, args.after, request, {
+    localized: args.localized,
+  });
+  if (!checked.ok) throw refused(request, checked.message);
+  const { move } = checked;
+  refusePerLanguage(request, move);
+  refuseHoldersNotGroups(request, move, args);
+  refuseRenamedColumns(request, move, args.renames ?? []);
+  refuseMadeRequired(request, move, args.before);
+  refuseUnplaceable(request, move, columns);
+  refuseSystemColumn(request, move, system);
+  return move;
+}
+
+/**
+ * A field group's fields as its row stores them, at every level: a many-to-many as the list
+ * relationship it is there (`asRowBackedRelationFields`), every other field as it is.
+ */
+function asFieldGroupRow(
+  fields: readonly FieldDefinition[]
+): FieldDefinition[] {
+  const rowBacked = asRowBackedRelationFields(
+    fields as unknown as FieldConfig[]
+  ) as unknown as FieldDefinition[];
+  return rowBacked.map(field => {
+    const { fields: children } = field as { fields?: unknown };
+    return Array.isArray(children)
+      ? {
+          ...field,
+          fields: asFieldGroupRow(children as FieldDefinition[]),
+        }
+      : field;
+  });
+}
+
+/**
+ * The system columns the table holds before the save and after it, `title` and `slug` among them
+ * while no field takes their name, and `created_by` on a collection's alone. A field group's table
+ * keeps its own columns (`_parent_id`, `_order`...), none a field can take, so no move onto or off
+ * one of them is in question there. Asked of the entity's kind, not of the generator that made the
+ * table: a code-first field group's table is a field group's all the same.
+ */
+function systemColumnSets(args: {
+  before: readonly FieldDefinition[];
+  after: readonly FieldDefinition[];
+  dialect: SupportedDialect;
+  kind: "collection" | "single" | "fieldGroup";
+  builtBy?: ColumnOrigin;
+}): { before: Set<string>; after: Set<string> } {
+  const systemOf = (fields: readonly FieldDefinition[]): Set<string> =>
+    args.kind === "fieldGroup"
+      ? new Set()
+      : new Set(
+          systemColumnsForFields(fields, args.dialect, {
+            builtBy: args.builtBy ?? "collection",
+            isSingle: args.kind === "single",
+          }).map(column => column.name)
+        );
+  return { before: systemOf(args.before), after: systemOf(args.after) };
 }
 
 /**

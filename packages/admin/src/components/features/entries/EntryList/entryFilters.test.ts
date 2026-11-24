@@ -65,22 +65,30 @@ describe("buildEntryWhereFilter", () => {
     );
   });
 
-  it("attaches the language filter as a top-level _translated key (never nested in and)", () => {
+  it("attaches the chosen language filter as a top-level _translated key (never nested in and)", () => {
     // Only the language filter → it is the whole where object.
     const only = buildEntryWhereFilter({
       status: "all",
-      translated: { locale: "de", state: "missing" },
+      pluginWheres: [{ _translated: { locale: "de", state: "missing" } }],
     });
     expect(only).toEqual({ _translated: { locale: "de", state: "missing" } });
 
     // Combined with a status filter → _translated stays TOP-LEVEL alongside the status filter.
     const combined = buildEntryWhereFilter({
       status: "published",
-      translated: { locale: "de", state: "translated" },
+      pluginWheres: [{ _translated: { locale: "de", state: "stale" } }],
     }) as Record<string, unknown>;
-    expect(combined._translated).toEqual({ locale: "de", state: "translated" });
+    expect(combined._translated).toEqual({ locale: "de", state: "stale" });
     // The status filter is preserved (top-level object with both keys = implicit AND).
     expect(combined.status).toEqual({ equals: "published" });
+  });
+
+  it("lets the chosen language filter win over a link's", () => {
+    const where = buildEntryWhereFilter({
+      whereParam: '{"_translated":{"locale":"fr","state":"missing"}}',
+      pluginWheres: [{ _translated: { locale: "de", state: "stale" } }],
+    });
+    expect(where).toEqual({ _translated: { locale: "de", state: "stale" } });
   });
 
   it.each([
@@ -157,24 +165,40 @@ describe("buildEntryWhereFilter", () => {
     ).toEqual({ _pendingChange: true });
   });
 
-  it("omits _translated when no language filter is active", () => {
-    const where = buildEntryWhereFilter({ status: "all", translated: null });
-    expect(where).toBeUndefined();
-  });
-
-  it("sends no language filter, the list's own or a link's, for a user who may not read every language's state", () => {
+  it("sends no language filter, a chosen one or a link's, for a user who may not read every language's state", () => {
     // The server refuses the whole list for such a filter, so a filter chosen
     // before access was lost, or carried by a link, is dropped instead.
     const where = buildEntryWhereFilter({
       whereParam:
         '{"_translated":{"locale":"fr","state":"missing"},"title":{"equals":"A"}}',
       status: "draft",
-      translated: { locale: "de", state: "missing" },
+      pluginWheres: [{ _translated: { locale: "de", state: "stale" } }],
       readsTranslationState: false,
     });
     expect(where).not.toHaveProperty("_translated");
     expect(where).toEqual({
       and: [{ title: { equals: "A" } }, { status: { equals: "draft" } }],
     });
+  });
+  it("sends a chosen filter's top-level keys at the top level, beside the list's own", () => {
+    // The review filters' keys (`_stage`, `_waitingForMe`) are read only at the top level: inside
+    // the `and` the status filter joins, the server refuses them.
+    const where = buildEntryWhereFilter({
+      status: "draft",
+      pluginWheres: [{ _stage: "legal" }, { _waitingForMe: true }],
+    });
+    expect(where).toEqual({
+      status: { equals: "draft" },
+      _stage: "legal",
+      _waitingForMe: true,
+    });
+  });
+
+  it("keeps a chosen filter's language key to the same rule as a link's", () => {
+    const where = buildEntryWhereFilter({
+      pluginWheres: [{ _translated: { locale: "fr", state: "missing" } }],
+      readsTranslationState: false,
+    });
+    expect(where).toBeUndefined();
   });
 });

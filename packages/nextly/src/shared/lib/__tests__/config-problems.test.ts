@@ -301,3 +301,233 @@ describe("two collections with one slug, judged where nothing transformed them",
     expect(paths).toContain("collections[1].slug");
   });
 });
+
+describe("a define* collection whose own field of a system field's name takes no column", () => {
+  // A column-less `Title` leaves the `title` column free, so `defineCollection` adds its system
+  // `title` beside it: the two do not declare one column twice, and the collection is valid.
+  it("has no problem", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [
+            { name: "headline", type: "text" },
+            { name: "Title", type: "text", virtual: true } as never,
+          ],
+        }),
+      ],
+    };
+
+    expect(configurationProblems(declared)).toEqual([]);
+  });
+});
+
+describe("a define* collection given a second copy of its system title by a plugin's setup", () => {
+  // One copy is the system field; the other declares the same column again.
+  it("is reported as declaring the column twice", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "notes",
+          fields: [{ name: "body", type: "text" }],
+        }),
+      ],
+    };
+    const [notes] = setupTransformerInput(declared, []).collections;
+    const effective = {
+      collections: [
+        { ...notes, fields: [...notes.fields, { ...notes.fields[0] }] },
+      ],
+    };
+
+    expect(configurationProblems(declared, effective)).toContainEqual(
+      expect.objectContaining({
+        path: "collections[0].fields",
+        code: "FIELD_NAME_DUPLICATE",
+      })
+    );
+  });
+});
+
+describe("a define* collection whose index names its system slug", () => {
+  // The index resolves its fields among those the collection has, the system ones included.
+  it("has no problem", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [{ name: "locale", type: "text" }],
+          indexes: [{ fields: ["slug", "locale"] }],
+        } as never),
+      ],
+    };
+
+    expect(configurationProblems(declared)).toEqual([]);
+  });
+});
+
+describe("a define* entity whose own top-level field takes a system field's exact name but no column", () => {
+  // Such a field leaves the column free, so `define*` adds its own text field of the same name
+  // beside it, and the two would read and write one document key. Each column-less kind is
+  // refused, naming the field and saying to rename it.
+  const columnLess: ReadonlyArray<[string, Record<string, unknown>]> = [
+    ["a component", { type: "component", component: "seo" }],
+    [
+      "a many-to-many",
+      {
+        type: "relationship",
+        relationTo: "tags",
+        options: { relationType: "manyToMany" },
+      },
+    ],
+    ["a virtual field", { type: "text", virtual: true }],
+  ];
+
+  for (const [kind, shape] of columnLess) {
+    for (const name of ["title", "slug"]) {
+      it(`is refused for ${kind} named '${name}' on a collection`, () => {
+        const declared = {
+          collections: [
+            defineCollection({
+              slug: "posts",
+              fields: [
+                { name: "body", type: "text" },
+                { name, ...shape } as never,
+              ],
+            }),
+          ],
+        };
+
+        const problems = configurationProblems(declared);
+        expect(problems).toEqual([
+          expect.objectContaining({
+            path: "collections[0].fields[3].name",
+            code: "FIELD_NAME_RESERVED",
+            declaredByDefine: true,
+          }),
+        ]);
+        expect(problems[0].message).toContain(`Field '${name}'`);
+        expect(problems[0].message).toContain("Rename it");
+      });
+
+      it(`is refused for ${kind} named '${name}' on a Single`, () => {
+        const declared = {
+          singles: [
+            defineSingle({
+              slug: "home",
+              fields: [{ name, ...shape } as never],
+            }),
+          ],
+        };
+
+        expect(configurationProblems(declared)).toEqual([
+          expect.objectContaining({
+            path: "singles[0].fields[2].name",
+            code: "FIELD_NAME_RESERVED",
+            declaredByDefine: true,
+          }),
+        ]);
+      });
+    }
+  }
+
+  it("is refused when a plugin's setup adds it", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "notes",
+          fields: [{ name: "body", type: "text" }],
+        }),
+      ],
+    };
+    const [notes] = setupTransformerInput(declared, []).collections;
+    const effective = {
+      collections: [
+        {
+          ...notes,
+          fields: [
+            ...notes.fields,
+            { name: "slug", type: "component", component: "seo" },
+          ],
+        },
+      ],
+    };
+
+    expect(configurationProblems(declared, effective)).toEqual([
+      expect.objectContaining({
+        path: "collections[0].fields[3].name",
+        code: "FIELD_NAME_RESERVED",
+      }),
+    ]);
+  });
+
+  // A group with no name only lays fields out: the fields inside it are stored at the top level
+  // under their own names (`fieldsStoredOnRow`, the view `define*` decides by), so one there
+  // shares the system field's key as one beside it would.
+  it("is refused inside a group with no name", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [
+            {
+              type: "group",
+              fields: [{ name: "slug", type: "component", component: "seo" }],
+            },
+          ] as never,
+        }),
+      ],
+    };
+
+    expect(configurationProblems(declared)).toContainEqual(
+      expect.objectContaining({
+        path: "collections[0].fields[2].fields[0].name",
+        code: "FIELD_NAME_RESERVED",
+      })
+    );
+  });
+
+  // An entry that is not a field is the entity validators' to report; this check passes it by.
+  it("passes by an entry that is not a field, which a plugin's setup adds", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "notes",
+          fields: [{ name: "body", type: "text" }],
+        }),
+      ],
+    };
+    const [notes] = setupTransformerInput(declared, []).collections;
+    const effective = {
+      collections: [{ ...notes, fields: [...notes.fields, null] }],
+    };
+
+    expect(
+      configurationProblems(declared, effective as never).map(
+        problem => problem.code
+      )
+    ).not.toContain("FIELD_NAME_RESERVED");
+  });
+
+  // A name of another letter case is another document key, and a field inside a named group
+  // lives under the group's key: neither shares one with the system field.
+  it("is accepted when the name differs in case or the field is in a named group", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [
+            { name: "Slug", type: "component", component: "seo" },
+            {
+              name: "meta",
+              type: "group",
+              fields: [{ name: "slug", type: "component", component: "seo" }],
+            },
+          ] as never,
+        }),
+      ],
+    };
+
+    expect(configurationProblems(declared)).toEqual([]);
+  });
+});

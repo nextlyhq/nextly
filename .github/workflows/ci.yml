@@ -755,14 +755,18 @@ jobs:
       # keeps no migration files, its schema being its development start's, so
       # `provision-empty.ts` boots it outside production to create the tables
       # before `nextly migrate` and the plugin installs a production start
-      # requires. The database is the step's own, named here, so the build does
-      # not depend on an `.env` some earlier step left behind.
+      # requires. `nextly migrate:baseline` adopts those tables first, as for any
+      # database a development start made: `nextly migrate` refuses a
+      # configuration no migration records. The database is the step's own,
+      # named here, so the build does not depend on an `.env` some earlier step
+      # left behind.
       - name: Build
         id: build
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: |
           pnpm turbo build --filter='./packages/*'
           pnpm --filter playground exec tsx scripts/provision-empty.ts
+          pnpm --filter playground exec nextly migrate:baseline
           pnpm --filter playground exec nextly migrate
           pnpm --filter playground exec nextly plugins install --all
           pnpm turbo build --filter='./apps/*'
@@ -1986,6 +1990,15 @@ jobs:
         env:
           E2E_HEADER_FOOTER_IN_CODE_ONLY: "1"
 
+      # The specs of a site whose languages are kept in Settings, on a
+      # playground declaring none, by themselves: the runs above leave them out
+      # (see LANGUAGES_UNLOCKED_SPECS in e2e/playwright.config.ts).
+      - name: Run the browser tests of a site keeping its languages in Settings
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nextlyhq/e2e test:e2e
+        env:
+          E2E_LANGUAGES_UNLOCKED_ONLY: "1"
+
       - name: Upload report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -2605,14 +2618,15 @@ jobs:
       # Empty of content, not of schema: the build creates no table, a production
       # start refuses a plugin no `nextly plugins install` has recorded, and
       # `<SiteCode>` in the root layout starts Nextly while `next build`
-      # prerenders `/_not-found`. The tables come from `provision-empty.ts`, as
-      # in the Build step above.
+      # prerenders `/_not-found`. The tables come from `provision-empty.ts`,
+      # adopted by `nextly migrate:baseline`, as in the Build step above.
       - name: Build on an empty database
         if: steps.decide.outputs.inert != 'true'
         env:
           DATABASE_URL: file:${{ runner.temp }}/cache-components-empty.db
         run: |
           pnpm --filter playground exec tsx scripts/provision-empty.ts
+          pnpm --filter playground exec nextly migrate:baseline
           pnpm --filter playground exec nextly migrate
           pnpm --filter playground exec nextly plugins install --all
           pnpm --filter playground exec next build
@@ -2627,6 +2641,7 @@ jobs:
           DATABASE_URL: file:${{ runner.temp }}/cache-components-debug.db
         run: |
           pnpm --filter playground exec tsx scripts/provision-empty.ts
+          pnpm --filter playground exec nextly migrate:baseline
           pnpm --filter playground exec nextly migrate
           pnpm --filter playground exec nextly plugins install --all
           pnpm --filter playground exec next build --debug-prerender

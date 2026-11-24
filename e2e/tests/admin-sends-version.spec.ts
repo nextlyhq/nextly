@@ -20,6 +20,7 @@ import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
 import { createEntry } from "./support/runtime-collection";
 import { test } from "./support/test";
+import { saveFromBar } from "./support/document-bar";
 
 test.describe.configure({ lock: [LOCK.siteSettings, LOCK.homepage] });
 
@@ -100,10 +101,7 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
     // A save of the draft.
     await excerpt(page).fill(`Draft ${tag}`);
     let sent = nextWrite(page, toThis);
-    await page
-      .getByRole("button", { name: /^Save draft$/ })
-      .first()
-      .click();
+    await saveFromBar(page, /^Save draft$/);
     await sent;
 
     // A publish. The form takes in the published entry once the read after

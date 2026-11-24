@@ -22,11 +22,12 @@ import {
   eq,
   isNotNull,
   isNull,
-  like,
   or,
   type Column,
   type Table,
 } from "drizzle-orm";
+
+import { pluginAuditKinds } from "./core-dotted-kinds";
 
 /**
  * The Drizzle surface this needs: one scoped UPDATE.
@@ -193,14 +194,15 @@ export async function eraseActorPersonalData(
     //
     // Core's own rows are left alone: their metadata is core's fixed,
     // identifier-free projection, and it is the record of what happened. A
-    // plugin's kind always carries its `<slug>.` prefix and no core kind
-    // contains a dot, so the dot is what tells the two apart.
+    // plugin's kind always carries its `<slug>.` prefix, and the few core
+    // kinds with a dot are listed, so `pluginAuditKinds` tells the two apart
+    // as the writer does.
     await db
       .update(auditLog)
       .set({ metadata: null })
       .where(
         and(
-          like(auditLog.kind, "%.%"),
+          pluginAuditKinds(auditLog.kind),
           or(
             eq(auditLog.actorUserId, userId),
             eq(auditLog.targetUserId, userId)

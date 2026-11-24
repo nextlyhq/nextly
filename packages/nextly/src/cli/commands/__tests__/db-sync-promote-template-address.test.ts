@@ -10,6 +10,10 @@ import { inspect } from "node:util";
 import type { SQL } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../../domains/i18n/per-language-storage";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections";
 import { createLogger } from "../../utils/logger";
 import { promoteCollection } from "../db-sync-promote";
@@ -57,6 +61,36 @@ describe("the promoted collection's template address", () => {
     );
     expect(address).toBe("/blog");
     expect(asked).toHaveLength(1);
+  });
+
+  it("reads it from the per-language table where the two text fields are kept per language", async () => {
+    // Every installation keeps its translatable fields per language; this
+    // suite otherwise runs on the earlier layout, where they stayed on the
+    // main table.
+    setPerLanguageStorage(true);
+    let read = "";
+    const address = await storedTemplateAddress(
+      {
+        getAllCollections: async () => [
+          {
+            ...templatesRecord,
+            fields: [
+              { name: "collection", type: "text" },
+              { name: "address", type: "text" },
+            ],
+          } as unknown as DynamicCollectionRecord,
+        ],
+        queryStatement: async statement => {
+          read = inspect(statement, { depth: Infinity });
+          return [{ address: "/blog" }];
+        },
+      },
+      "posts"
+    );
+    expect(address).toBe("/blog");
+    expect(read).toContain("dc_templates_locales");
+    expect(read).toContain("_parent");
+    _resetPerLanguageStorage();
   });
 
   it("finds the page builder's templates under the slug a site renamed them to", async () => {

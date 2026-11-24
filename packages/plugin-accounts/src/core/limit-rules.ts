@@ -19,6 +19,8 @@ export const LIMIT_RULES = {
   resetAddress: "reset-address",
   /** Reset requests per known-browser token a request carries. */
   resetToken: "reset-token",
+  /** Invitations sent per address. */
+  invitationAddress: "invitation-address",
   /** Address changes asked for per account. */
   addressChangeAccount: "address-change-account",
   /** Address changes asked for per new address. */
@@ -83,6 +85,9 @@ export function accountsLimitRules(
     [LIMIT_RULES.resendToken]: PER_ADDRESS,
     [LIMIT_RULES.resetAddress]: PER_ADDRESS,
     [LIMIT_RULES.resetToken]: PER_ADDRESS,
+    // An address is invited as often as it may be sent any other link, so
+    // no code calling `invite` in a loop can flood one inbox.
+    [LIMIT_RULES.invitationAddress]: PER_ADDRESS,
     // Address changes: 3 an hour and 10 a day per account, 3 a day per new
     // address, so nobody can use the site to mail strangers.
     [LIMIT_RULES.addressChangeAccount]: {

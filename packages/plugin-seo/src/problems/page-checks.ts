@@ -281,6 +281,13 @@ function shareImageProblems(facts: PageFacts): Problem[] {
   });
 }
 
+/**
+ * What a person does to set one of the entry's own dates: publish the page
+ * for the date it was first published, save it for any other.
+ */
+const saveAction = (field: string | undefined): string =>
+  field === "firstPublishedAt" ? "Publish the page" : "Save the page";
+
 /** What keeps the page's structured data out, fixed where each detail is kept. */
 function structuredDataProblems(facts: PageFacts): Problem[] {
   const { subject } = facts;
@@ -333,6 +340,14 @@ function structuredDataProblems(facts: PageFacts): Problem[] {
             place: "developer" as const,
             note: `${subject.detail ?? subject.label}: the route reads the ${label} without the entry it names. Read the page with a depth of at least 1.`,
           },
+        };
+      // One of the entry's own dates, which Nextly sets when the page is
+      // saved or first published: the page is where that is done.
+      case "save":
+        return {
+          ...base,
+          action: saveAction(problem.field),
+          fix: { place: "page" as const, tab: "content" as const },
         };
     }
   });

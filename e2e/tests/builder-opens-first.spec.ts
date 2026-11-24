@@ -19,6 +19,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { block, clickBlock, pressSave } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
+import { chooseFromMainMenu } from "./support/document-bar";
 import { LOCK } from "./support/locks";
 import {
   createEntry,
@@ -232,10 +233,9 @@ test.describe("the builder's ⋯ menu", () => {
     const bar = page.getByTestId("document-bar");
     await expect(bar.getByText("Unsaved changes")).toBeVisible();
 
-    // And back to the builder by the bar's way in: the edit is still there.
-    await bar
-      .getByRole("link", { name: "Open in builder", exact: true })
-      .click();
+    // And back to the builder by the bar's way in, on its main button's
+    // menu: the edit is still there.
+    await chooseFromMainMenu(page, "Open in builder");
     await expect(page).toHaveURL(builderAt(id));
     await expect(leaveQuestion(page)).toHaveCount(0);
     await expect(await block(page, FIRST)).toBeVisible();
@@ -367,10 +367,7 @@ test.describe("the back arrow", () => {
       editorMode: "page-builder",
     });
     await gotoAdmin(page, `/collections/posts/${id}`);
-    await page
-      .getByTestId("document-bar")
-      .getByRole("link", { name: "Open in builder", exact: true })
-      .click();
+    await chooseFromMainMenu(page, "Open in builder");
     await builderOpen(page);
     await expect(page.getByRole("button", { name: /^Back to / })).toHaveCount(
       0

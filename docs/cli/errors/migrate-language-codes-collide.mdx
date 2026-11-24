@@ -1,0 +1,24 @@
+---
+title: MIGRATE_LANGUAGE_CODES_COLLIDE
+description: "Two language codes, configured or stored, become one code once written in standard form, so `nextly migrate` changed nothing."
+---
+
+## Cause
+
+Two language codes, configured or stored, become one code once written in standard form, so `nextly migrate` changed nothing.
+
+`nextly migrate` keeps every language under its standard code (`pt-BR`, never `pt_BR` or `pt-br`). Two codes the configuration names, or two spellings rows are stored under, would become the same code, so the values of two languages would land in one place. Which of them holds the content is yours to say.
+
+## Fix
+
+- Where the configuration names both spellings, keep one of them, then run `nextly migrate` again.
+- Where rows are stored under both spellings for the same thing, keep the rows of one spelling, then run `nextly migrate` again.
+
+## Example
+
+```text
+✗ The configuration names "pt_BR" and "pt-br" (both "pt-BR"): one language under two codes once written in standard form.
+  Why:  `nextly migrate` keeps every language under its standard code, and these two would become one, putting two languages' values in one place. Nothing was changed.
+  Next: Keep one of them in the configuration and run `nextly migrate` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-language-codes-collide  (MIGRATE_LANGUAGE_CODES_COLLIDE)
+```

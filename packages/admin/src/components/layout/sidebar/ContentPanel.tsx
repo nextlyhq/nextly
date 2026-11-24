@@ -15,6 +15,9 @@ import {
   PluginMenuItems,
   usePluginMatchCounts,
 } from "@admin/components/features/dashboard/PluginMenuItems";
+import { Link } from "@admin/components/ui/link";
+import { ROUTES } from "@admin/constants/routes";
+import { useWaitingScope } from "@admin/hooks/queries/useWaitingForMe";
 import {
   useSidebarCollectionList,
   useSidebarSingleList,
@@ -55,6 +58,10 @@ export function ContentPanel({
   // whenever the reader may read any.
   const singles = useSidebarSingleList({ enabled: hasSingles });
   const folds = useContentFolds();
+  // The panel leads with "Waiting for my review" where anything can ever wait for the reader's
+  // review: any stage, of any collection or Single, whose next step they may take.
+  const waitingScope = useWaitingScope();
+  const hasWorkflows = waitingScope.data?.reviews === true;
 
   // Counts come from the same search the lists draw with, so a heading's
   // count can never disagree with what it lists.
@@ -96,6 +103,18 @@ export function ContentPanel({
       />
 
       <nav aria-label="Content" className="space-y-4">
+        {/* What waits for the reader's review, in the lists they already use (R-11). */}
+        {hasWorkflows ? (
+          <Link
+            href={ROUTES.CONTENT_WAITING}
+            aria-current={
+              isActive(ROUTES.CONTENT_WAITING, true) ? "page" : undefined
+            }
+            className="block rounded-md px-2 py-1.5 text-sm font-medium text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring aria-[current=page]:bg-accent"
+          >
+            Waiting for my review
+          </Link>
+        ) : null}
         {shows.collections ? (
           <ContentFold
             foldKey="collections"

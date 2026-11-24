@@ -5,6 +5,7 @@
  * @module domains/schema/builder-save/push-carries-values
  */
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 import { fieldsWithLeavingSettingsDeferred } from "../../i18n/migration/archive-preflight";
 import type { FieldRename } from "../../i18n/migration/reconcile-companion";
 import type { TableSpec } from "../pipeline/diff/types";
@@ -23,7 +24,10 @@ import { fieldsNewToSingleTable, namedOnRow } from "./single-row-fills";
  * Unique field leaving translation while the entity stays translated,
  * whose setting the push applies once the default language's values are in its shared column
  * (`fieldsWithLeavingSettingsDeferred`); a field whose column changes type or size, whose stored
- * values the push judges before it alters the column; a field new to a Single's table that its row
+ * values the push judges before it alters the column (not a field kept per language before the
+ * save and after it, whose only column is its translations column, which the file's `retypes`
+ * step changes, judged in each language by the save before the file is written); a field new to a
+ * Single's table that its row
  * is filled in; and a change reaching a relation's storage (`reachesRelationStorage`), which the
  * push plans from the live table.
  *
@@ -59,6 +63,12 @@ export async function pushCarriesValues(args: {
     /** Whether the table holds its row. */
     holdsRow: () => Promise<boolean>;
   };
+  /**
+   * The fields the save moves into or out of a group (`hints.moves`), each by its path before and
+   * after. Their values move through the file's own statements, so a field arriving on the row
+   * from a group is not new to it.
+   */
+  moved?: readonly MovedField[];
 }): Promise<boolean> {
   // Translation turned off: its file puts each column back as the main table's snapshot records
   // it, Required and Unique settings included, and the main file that follows is recorded as
@@ -103,6 +113,24 @@ export async function pushCarriesValues(args: {
   });
 }
 
+/** A field the save moves, by its path before and after. */
+interface MovedField {
+  from: readonly string[];
+  to: readonly string[];
+}
+
+/**
+ * The columns of the fields a move brings onto the row, out of a group: a hint whose source is on
+ * the row too moves nothing (the planner skips it), so its field is not counted as brought there.
+ */
+function movedOntoRow(moved: readonly MovedField[] | undefined): Set<string> {
+  return new Set(
+    (moved ?? []).flatMap(m =>
+      m.from.length > 1 && m.to.length === 1 ? [toSnakeCase(m.to[0] ?? "")] : []
+    )
+  );
+}
+
 /**
  * Whether the save's fields are its old ones but for whether each is translated: every name, type
  * and setting the same, in the same order, with `localized` left out at every depth. Anything
@@ -132,6 +160,8 @@ function sameFieldsBesideTranslation(
 function columnTypeChanges(args: {
   oldFields: readonly FieldDefinition[];
   newFields: readonly FieldDefinition[];
+  wasStored: boolean;
+  isStored: boolean;
   columnOf: (field: FieldDefinition) => ColumnDescriptor | null;
   renames: ReadonlyArray<{ from: string; to: string }>;
 }): boolean {
@@ -150,6 +180,14 @@ function columnTypeChanges(args: {
       args.renames.find(rename => rename.to === column)?.from ?? column;
     const old = before.get(from);
     if (old === undefined) return false;
+    // Kept per language before the save and after it: the field has no column on this table, and
+    // its translations column takes the new type in the save's own file.
+    if (
+      isFieldLocalized(old, args.wasStored) &&
+      isFieldLocalized(field, args.isStored)
+    ) {
+      return false;
+    }
     // A field gaining or losing a column of its own (a many-to-many, kept in a junction table, made
     // one-to-one) changes no column's type: the column is added or dropped, as the file writes it.
     const was = shape(old);
@@ -163,13 +201,18 @@ async function fillsSingleRow(
   args: {
     oldFields: readonly FieldDefinition[];
     newFields: readonly FieldDefinition[];
+    moved?: readonly MovedField[];
   },
   row: NonNullable<Parameters<typeof pushCarriesValues>[0]["singleRow"]>
 ): Promise<boolean> {
+  // A field a move brings out of a group takes its values from there, not a fill.
+  const movedOn = movedOntoRow(args.moved);
   const filled = fieldsNewToSingleTable({
     oldFields: args.oldFields,
     newFields: args.newFields,
     renamedTo: row.renamedTo,
-  }).some(row.fills);
+  })
+    .filter(field => !movedOn.has(toSnakeCase(field.name)))
+    .some(row.fills);
   return filled && (await row.holdsRow());
 }

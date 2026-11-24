@@ -44,6 +44,7 @@ import {
 } from "../../domains/i18n/per-language-storage";
 import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
 import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-session";
+import { pluginCollectionSources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -62,6 +63,8 @@ import {
 import {
   mergeRegisteredCollectionsSafely,
   mergeRegisteredSafely,
+  withoutHandedToBuilder,
+  type RegisteredCollectionRow,
 } from "../../domains/schema/pipeline/registered-collections";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type {
@@ -544,7 +547,30 @@ export async function desiredSchemaForSync(
   // a transaction on PG/SQLite). Build the desired-collections bucket
   // alongside the runtime-schema registration for the resolver.
   const desiredCollections: Record<string, DesiredCollection> = {};
-  for (const collection of config.collections) {
+  const registryLogger: ServiceLogger = {
+    info: (msg: string) => logger.debug(msg),
+    warn: (msg: string) => logger.warn(msg),
+    error: (msg: string) => logger.error(msg),
+    debug: (msg: string) => logger.debug(msg),
+  };
+  const registry = new CollectionRegistryService(
+    drizzleAdapter,
+    registryLogger
+  );
+  // The registry's collections, read once: this filter and the merge below must see the same rows,
+  // or a read that failed only for the merge would leave a handed-over collection out of both.
+  const registeredCollections: Promise<RegisteredCollectionRow[]> =
+    registriesPresent ? registry.getAllCollections() : Promise.resolve([]);
+  // A collection a demote handed to the Schema Builder, while its entry is still in the
+  // configuration, is built from the Builder's registry row (merged in below), not from that entry.
+  // A registry that cannot be read leaves every entry in: the merge below reports it and falls back
+  // to the configuration alone, as before.
+  const configured = withoutHandedToBuilder(
+    config.collections,
+    await registeredCollections.catch(() => []),
+    pluginCollectionSources(config.plugins ?? [])
+  );
+  for (const collection of configured) {
     const baseTableName =
       collection.dbName ?? collection.slug.replace(/-/g, "_");
     const tableName = baseTableName.startsWith("dc_")
@@ -622,17 +648,6 @@ export async function desiredSchemaForSync(
   // Schema Builder exist solely in the registry, and on SQLite/MySQL the diff
   // introspects the whole database, so leaving them out proposes dropping
   // every one of them. Same helper the HMR path uses.
-  const registryLogger: ServiceLogger = {
-    info: (msg: string) => logger.debug(msg),
-    warn: (msg: string) => logger.warn(msg),
-    error: (msg: string) => logger.error(msg),
-    debug: (msg: string) => logger.debug(msg),
-  };
-  const registry = new CollectionRegistryService(
-    drizzleAdapter,
-    registryLogger
-  );
-
   // Singles and components created in the Schema Builder are registry-only
   // too, and the same whole-database introspection applies to their
   // `single_*` and `comp_*` tables, so omitting them proposes the same
@@ -657,12 +672,10 @@ export async function desiredSchemaForSync(
     collections: await mergeRegisteredCollectionsSafely(
       desiredCollections,
       async () =>
-        registriesPresent
-          ? withoutRemovedFromCode(
-              await registry.getAllCollections(),
-              declaredCollections
-            )
-          : [],
+        withoutRemovedFromCode(
+          await registeredCollections,
+          declaredCollections
+        ),
       logger
     ),
     singles: await mergeRegisteredSafely(
@@ -798,6 +811,8 @@ export async function performAutoSync(
         // F10 PR 3: db-sync CLI applies print a terminal box + write
         // the NDJSON line. Same singleton across CLI invocations.
         notifier: getProductionNotifier(),
+        // The adapter `db` belongs to: a SQLite push runs in its transaction.
+        adapter: drizzleAdapter,
       });
       return pipeline.apply({
         desired: desiredArg,
@@ -862,6 +877,9 @@ export async function performAutoSync(
   // pipeline code recomputed `dc_<slug>` here unconditionally, which
   // ignored `dbName` overrides. Now we honor them.
   for (const collection of config.collections) {
+    // An entry the desired schema left out is a collection a demote handed to the Schema Builder
+    // (`withoutHandedToBuilder`): its record is the Builder's, and the entry names no table of it.
+    if (desiredCollections[collection.slug] === undefined) continue;
     try {
       const tableName =
         desiredCollections[collection.slug]?.tableName ??

@@ -18,16 +18,20 @@
  * @module user-words.test
  */
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseSource, walk } from "@nextlyhq/module-specifiers/parse-source";
 import type { Node as AstNode } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
-import { TEST_MODULE, collectModules } from "./source-modules";
+import { TEST_MODULE, collectModules, modulePath } from "./source-modules";
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
+
+/** A file's path beneath `src`, with "/" as the lists here write it. */
+const fromSrc = (file: string): string =>
+  modulePath(SRC_DIR, file, relative, sep);
 
 const RULES: readonly RegExp[] = [
   /\blayouts?\b/i,
@@ -141,13 +145,13 @@ describe("the editor's words", () => {
   const files = productFiles();
   const findings = files.flatMap(file =>
     brokenRules(shownTexts(readFileSync(file, "utf8"), file)).map(text => ({
-      file: relative(SRC_DIR, file),
+      file: fromSrc(file),
       text,
     }))
   );
 
   it("reads the files it claims to", () => {
-    expect(files.map(file => relative(SRC_DIR, file))).toEqual(
+    expect(files.map(file => fromSrc(file))).toEqual(
       expect.arrayContaining([
         "editor-words.ts",
         "shell/builder-commands.ts",
