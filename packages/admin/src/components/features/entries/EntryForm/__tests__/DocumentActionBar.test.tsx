@@ -168,8 +168,9 @@ describe("an action that cannot be used", () => {
       />
     );
 
-    // The leading action stays focusable while held, described by why.
+    // The model's hold: the leading action stays focusable, described by why.
     const publish = screen.getByRole("button", { name: /^publish$/i });
+    expect(publish).toBeEnabled();
     expect(publish).toHaveAccessibleDescription(/permission/i);
 
     const save = screen.getByRole("button", { name: /^save$/i });
@@ -237,6 +238,23 @@ describe("an action that cannot be used", () => {
       "Needs approval: In review, waiting for Editors"
     );
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("draws a leading action refused for this instant disabled, with why", () => {
+    // Nothing to save, a submit in flight: not a hold to explain, and the
+    // press would do nothing a moment later either.
+    render(
+      <DocumentActionBar
+        actions={[{ id: "save", label: "Save", placement: "primary" }]}
+        bindings={{
+          save: { onSelect: vi.fn(), disabledReason: "Nothing to save." },
+        }}
+      />
+    );
+    const save = screen.getByRole("button", { name: /^save$/i });
+    expect(save).toBeDisabled();
+    expect(save).not.toHaveAttribute("data-held");
+    expect(save.getAttribute("title")).toBe("Nothing to save.");
   });
 
   it("draws a usable leading action without the held look", () => {

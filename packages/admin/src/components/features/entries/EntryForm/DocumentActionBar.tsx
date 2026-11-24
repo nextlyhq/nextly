@@ -31,11 +31,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Popover,
+  PopoverAnchor,
   PopoverContent,
-  PopoverTrigger,
 } from "@nextlyhq/ui";
 import { ChevronDown, Loader2, Lock, MoreHorizontal } from "lucide-react";
-import { Fragment, useId, type JSX } from "react";
+import { Fragment, useEffect, useId, useState, type JSX } from "react";
 
 import { useInTopBar } from "@admin/components/layout/header/TopBarPlaces";
 import { Link } from "@admin/components/ui/link";
@@ -398,6 +398,7 @@ export function DocumentActionBar({
           rows={mainMenuItems}
           apartOptions={escape}
           pending={pending}
+          explainsHold
         />
       )}
 
@@ -440,9 +441,18 @@ function PrimaryAction({
   optionsLabel = PUBLISH_OPTIONS_LABEL,
   pending,
   menuClassName,
+  explainsHold = false,
 }: {
   primary: Bound;
   options: Bound[];
+  /**
+   * Whether a leading action the model holds (Publish waiting for approval, a
+   * step waiting for a save, a past version on screen) stays pressable and
+   * opens its reason (`MainPress`), as the entry header draws it. A refusal of
+   * this instant (nothing to save, a submit in flight) is drawn disabled
+   * everywhere, as is every hold on a surface that leaves this off.
+   */
+  explainsHold?: boolean;
   /** The bar's own rows, after the model's (`mainMenuItems`). */
   rows?: readonly NarrowMenuItem[];
   /** Rows set apart below a rule, such as publishing past the review. */
@@ -458,28 +468,15 @@ function PrimaryAction({
   const reason = reasonFor(primary.action, primary.binding);
   const rowCount =
     options.length + rows.length + apartOptions.length + dangerOptions.length;
-  const press =
-    reason !== undefined ? (
-      <HeldPress
-        primary={primary}
-        reason={reason}
-        className={cn(rowCount > 0 && "rounded-r-none")}
-      />
-    ) : (
-      <Button
-        size="sm"
-        {...(primary.binding.submitForm === undefined
-          ? { type: "button" as const, onClick: primary.binding.onSelect }
-          : { type: "submit" as const, form: primary.binding.submitForm })}
-        title={primary.action.label}
-        data-action={primary.action.id}
-        data-primary="true"
-        className={cn(rowCount > 0 && "rounded-r-none")}
-      >
-        {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-        {primary.action.label}
-      </Button>
-    );
+  const press = (
+    <MainPress
+      primary={primary}
+      reason={reason}
+      explainsHold={explainsHold}
+      pending={pending}
+      className={cn(rowCount > 0 && "rounded-r-none")}
+    />
+  );
   if (rowCount === 0) return press;
   return (
     <div className="flex items-center" data-publish-split="">
@@ -497,47 +494,82 @@ function PrimaryAction({
 }
 
 /**
- * The leading action while it is held (Publish waiting for approval, a step
- * waiting for a save): drawn visibly held, with a lock and a quiet outline, but
- * never disabled. A disabled control can be neither focused nor pressed, so
- * its reason would reach nobody using a keyboard or a touch screen. It is
- * described by its reason, and pressing it opens that reason beside it; it
- * runs nothing. Its words take the foreground token, which reads at 4.5:1 or
- * more on the bar in light and dark.
+ * The leading action's press.
+ *
+ * While the model holds it (Publish waiting for approval, a step waiting for a
+ * save) and the surface explains holds (`explainsHold`), it is drawn visibly
+ * held, with a lock and a quiet outline, but never disabled: a disabled
+ * control can be neither focused nor pressed, so its reason would reach
+ * nobody using a keyboard or a touch screen. It is then described by its
+ * reason, and pressing it opens that reason beside it; it runs nothing. Its
+ * words take the foreground token, which reads at 4.5:1 or more on the bar in
+ * light and dark. Any other refusal draws it disabled, titled with why.
+ *
+ * ONE button in every state, so the element a person has focused, or a test
+ * holds, stays the same one as a hold comes and goes.
  */
-function HeldPress({
+function MainPress({
   primary,
   reason,
+  explainsHold,
+  pending,
   className,
 }: {
   primary: Bound;
-  reason: string;
+  /** Either kind of reason it is unusable, or undefined. */
+  reason: string | undefined;
+  explainsHold: boolean;
+  pending: boolean;
   className?: string;
 }) {
   const reasonId = useId();
+  const [open, setOpen] = useState(false);
+  const hold = explainsHold ? primary.action.disabledReason : undefined;
+  const held = hold !== undefined;
+  // A hold that lifts takes its reason away with it.
+  useEffect(() => {
+    if (!held) setOpen(false);
+  }, [held]);
+  const submits = !held && primary.binding.submitForm !== undefined;
   return (
-    <Popover>
-      <PopoverTrigger asChild>
+    <Popover open={held && open} onOpenChange={setOpen}>
+      <PopoverAnchor asChild>
         <Button
-          type="button"
           size="sm"
-          variant="outline"
-          aria-describedby={reasonId}
-          title={reason}
+          variant={held ? "outline" : "default"}
+          type={submits ? "submit" : "button"}
+          {...(submits ? { form: primary.binding.submitForm } : {})}
+          onClick={
+            held
+              ? () => setOpen(current => !current)
+              : submits
+                ? undefined
+                : primary.binding.onSelect
+          }
+          disabled={!held && reason !== undefined}
+          aria-describedby={held ? reasonId : undefined}
+          /*
+            The reason is the title when there is one, so a control an author
+            cannot use says why. Three separate permissions and several
+            document states decide these, and a dead button with no
+            explanation reads as broken rather than as forbidden.
+          */
+          title={hold ?? reason ?? primary.action.label}
           data-action={primary.action.id}
           data-primary="true"
-          data-held=""
-          className={cn("gap-1.5 text-foreground", className)}
+          {...(held ? { "data-held": "" } : {})}
+          className={cn(held && "gap-1.5 text-foreground", className)}
         >
-          <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+          {held ? <Lock className="h-3.5 w-3.5" aria-hidden="true" /> : null}
+          {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
           {primary.action.label}
         </Button>
-      </PopoverTrigger>
+      </PopoverAnchor>
       <span id={reasonId} className="sr-only">
-        {reason}
+        {hold ?? ""}
       </span>
       <PopoverContent align="end" className="w-72 text-sm">
-        <p>{reason}</p>
+        <p>{hold}</p>
       </PopoverContent>
     </Popover>
   );
