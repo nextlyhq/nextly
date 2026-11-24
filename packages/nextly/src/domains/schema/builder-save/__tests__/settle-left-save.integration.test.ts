@@ -50,6 +50,7 @@ import type { CollectionService } from "../../../collections/services/collection
 import { MetaService } from "../../../meta/services/meta-service";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { recordAlreadyApplied } from "../../migrate/drift-reconcile";
+import { BLANK_FILE_LINE } from "../../migrate/history-line";
 import { WRITER_LOCK_FILE } from "../../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { SCHEMA_LOCK_TABLE } from "../../pipeline/schema-lock";
@@ -419,6 +420,20 @@ async function registryFieldNames(t: TestNextly): Promise<string[]> {
     typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields;
   return (fields as Array<{ name: string }>).map(field => field.name);
 }
+
+/** A migration written by hand: `header` above its UP line, statements that change nothing. */
+const byHand = (header: string[]): string =>
+  [
+    "-- Migration: by_hand",
+    ...header,
+    "",
+    "-- UP",
+    "SELECT 1;",
+    "",
+    "-- DOWN",
+    "SELECT 1;",
+    "",
+  ].join("\n");
 
 /** The settle, as the next development start runs it, over the same database and folder. */
 function settle(t: TestNextly): Promise<SettledSave[]> {
@@ -1383,6 +1398,119 @@ describe.each(getConfiguredTestDialects())(
       expect(await recordRow(t), "the record stays").toBeDefined();
       for (const file of written) {
         expect(sqlFiles(), "the save's files stay").toContain(file);
+      }
+    }, 300_000);
+
+    /**
+     * A save stopped as its file is put in place, before any of it ran or was recorded on any
+     * dialect (MySQL records a file's attempt before its statements, so a later stop leaves the
+     * record for the stopped-save step): its files, and the last as a migration name.
+     */
+    async function stoppedBeforeItsFiles(
+      t: TestNextly
+    ): Promise<{ written: string[]; last: string }> {
+      await created(t);
+      const filesBefore = sqlFiles();
+      await stopSave(
+        t,
+        [text("heading"), text("alpha")],
+        point =>
+          point.startsWith(`file:${HISTORY_DIR()}`) && point.endsWith(".sql")
+      );
+      const written = sqlFiles().filter(f => !filesBefore.includes(f));
+      expect(written.length).toBeGreaterThan(0);
+      return { written, last: written.at(-1)!.replace(/\.sql$/, "") };
+    }
+
+    /** The entity's create migration, by name: written before the save, from no save of it. */
+    const createMigration = () =>
+      readdirSync(join(HISTORY_DIR(), "meta"))
+        .find(n => n.endsWith("_create.snapshot.json"))!
+        .replace(/\.snapshot\.json$/, "");
+
+    const BY_HAND = "29991231_000000_000_by_hand";
+
+    // A dialect's variant (`<base>.mysql.sql`) is a file of its migration, read with it as the
+    // history reads the folder: a Parent line only the variant states holds the save, and the
+    // migration is named once, by its own name.
+    it("keeps a record whose files a later blank migration's variant was written from, naming the migration once", async () => {
+      const t = await boot();
+      const { written, last } = await stoppedBeforeItsFiles(t);
+      writeFileSync(
+        join(HISTORY_DIR(), `${BY_HAND}.sql`),
+        byHand([BLANK_FILE_LINE])
+      );
+      writeFileSync(
+        join(HISTORY_DIR(), `${BY_HAND}.mysql.sql`),
+        byHand([`-- Parent: ${last}`])
+      );
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["left"]);
+      const notes = settled[0]?.notes.join(" ");
+      expect(notes).toContain(`${BY_HAND} was written from`);
+      expect(notes).not.toContain(".mysql");
+      for (const file of written) {
+        expect(sqlFiles(), "the save's files stay").toContain(file);
+      }
+    }, 300_000);
+
+    // Where a migration's files state different places, the settle refuses nothing: it keeps the
+    // save's files where any of them names one, so nothing is removed under it.
+    it("keeps a record whose files one of a later migration's disagreeing files was written from", async () => {
+      const t = await boot();
+      const { written, last } = await stoppedBeforeItsFiles(t);
+      writeFileSync(
+        join(HISTORY_DIR(), `${BY_HAND}.sql`),
+        byHand([`-- Parent: ${createMigration()}`])
+      );
+      writeFileSync(
+        join(HISTORY_DIR(), `${BY_HAND}.mysql.sql`),
+        byHand([`-- Parent: ${last}`])
+      );
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["left"]);
+      const notes = settled[0]?.notes.join(" ");
+      expect(notes).toContain(`${BY_HAND} was written from`);
+      expect(notes).not.toContain(".mysql");
+      for (const file of written) {
+        expect(sqlFiles(), "the save's files stay").toContain(file);
+      }
+    }, 300_000);
+
+    // A migration with a snapshot is placed by that snapshot, as the history places it: a
+    // hand-written variant's header naming the save's file does not hold the save.
+    it("settles a save a generated migration's variant names, by that migration's snapshot", async () => {
+      const t = await boot();
+      const { written, last } = await stoppedBeforeItsFiles(t);
+      const meta = join(HISTORY_DIR(), "meta");
+      const create = createMigration();
+      const snapshot = JSON.parse(
+        readFileSync(join(meta, `${create}.snapshot.json`), "utf-8")
+      ) as Record<string, unknown>;
+      const later = "29991231_000000_000_later_change";
+      writeFileSync(
+        join(meta, `${later}.snapshot.json`),
+        JSON.stringify(
+          { ...snapshot, parent: create, migration: later },
+          null,
+          2
+        )
+      );
+      writeFileSync(join(HISTORY_DIR(), `${later}.sql`), byHand([]));
+      writeFileSync(
+        join(HISTORY_DIR(), `${later}.mysql.sql`),
+        byHand([`-- Parent: ${last}`])
+      );
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["none"]);
+      for (const file of written) {
+        expect(sqlFiles(), "the save's files are removed").not.toContain(file);
       }
     }, 300_000);
 

@@ -1125,6 +1125,13 @@ exports[`each code, as a command ends with it > MIGRATION_NOT_WRITTEN 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/migration-not-written  (MIGRATION_NOT_WRITTEN)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATION_PLACE_STATED_TWICE 1`] = `
+"✗ The files of migration 20261021_090000_seed state different places in the history: \`20261021_090000_seed.sql\` states \`-- Parent: 20261020_120000_add_posts\`, and \`20261021_090000_seed.mysql.sql\` states \`-- Parent: 20261019_080000_init\`.
+  Why:  A dialect's variant runs in place of the base file on its dialect and is the same migration, so the migration has one place in the history.
+  Next: Make the \`-- Parent:\` and \`-- Merges:\` lines the same in every file of 20261021_090000_seed that states them, or keep them in the base file alone.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-place-stated-twice  (MIGRATION_PLACE_STATED_TWICE)"
+`;
+
 exports[`each code, as a command ends with it > MIGRATION_SQL_UNCHECKABLE 1`] = `
 "✗ A migration contains SQL whose drops cannot be read, so which owner's tables it drops cannot be checked.
   Why:  A statement in \`@acme/seo/20261020_120000_add_redirects\` could not be read: unterminated block comment. It has been refused.
