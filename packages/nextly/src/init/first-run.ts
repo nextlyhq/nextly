@@ -110,10 +110,8 @@ export interface EnsureFirstRunSetupArgs {
    */
   extensionSchema?: ExtensionSchema | undefined;
   /**
-   * The names a new database's field-group storage starts on. `current` (the
-   * default) for a database a development start or `db:sync` sets up;
-   * `legacy` for one a production start sets up before running the migrations
-   * at start, whose history this release writes on the legacy names.
+   * The names a new database's field-group storage starts on: the project's
+   * migration history's (`new-database-naming`). Absent, the current names.
    */
   newSiteFieldGroupNaming?: "legacy" | "current";
 }
@@ -830,8 +828,7 @@ async function setUpNewDatabase(
   const extensionSchema =
     args.extensionSchema ?? getActiveExtensionSchema(dialect);
   // A new site starts its field groups on the current names
-  // (`field-group-new-site`), unless its schema comes from a migration history,
-  // which this release writes on the legacy names.
+  // (`field-group-new-site`), unless its project's history is on the legacy ones.
   const fieldGroupNaming = args.newSiteFieldGroupNaming ?? "current";
   const { withFieldGroupRegistryFor, recordNewSiteOrWarn } = await import(
     "../domains/field-groups/services/field-group-new-site"

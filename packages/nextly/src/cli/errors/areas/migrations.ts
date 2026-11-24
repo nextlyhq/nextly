@@ -1319,6 +1319,13 @@ export const MIGRATION_CODES = defineCodes({
   INVALID_SNAPSHOT: {
     cause:
       "A migration's snapshot file is not valid JSON, or not a snapshot this version of Nextly reads.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        reason: "new-database-history-unreadable",
+        describe: error => sentenceParts(error),
+      },
+    ],
   },
   MISSING_MIGRATION: {
     cause: "A snapshot file in `meta/` has no migration file beside it.",

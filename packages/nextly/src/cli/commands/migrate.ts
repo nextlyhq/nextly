@@ -164,6 +164,10 @@ import {
   type MigrationUnit,
 } from "../../domains/schema/migrate/migration-transaction";
 import {
+  isNewDatabaseHistoryUnreadable,
+  newDatabaseFieldGroupNaming,
+} from "../../domains/schema/migrate/new-database-naming";
+import {
   markedFileChange,
   readOldBuilderLedger,
   withOldBuilderMarks,
@@ -270,8 +274,6 @@ import {
 import {
   EMPTY_SNAPSHOT,
   isOlderFormatSnapshot,
-  historyFieldGroupNamingIn,
-  newestSnapshotName,
   parseSnapshotFile,
   snapshotFieldGroupNaming,
   type SnapshotFile,
@@ -831,10 +833,16 @@ export async function runMigrate(
     const fieldGroups = await declaredFieldGroupStorage(
       adapter as unknown as DrizzleAdapter,
       configResult.config.fieldGroups,
-      await newDatabaseFieldGroupNaming({
-        adapter,
-        migrationsDir: appMigrationsDir,
-      })
+      // A newest snapshot that is no snapshot says no names here: the run's own reading of the
+      // folder names the file and refuses it, before Phase 1 asks again.
+      () =>
+        newDatabaseFieldGroupNaming({
+          adapter,
+          migrationsDir: appMigrationsDir,
+        }).catch((error: unknown) => {
+          if (isNewDatabaseHistoryUnreadable(error)) return undefined;
+          throw error;
+        })
     );
     const extensionSchema = await compileExtensionSchema({
       ...(fieldGroups === undefined
@@ -3728,16 +3736,6 @@ async function missingFromAppStream(
 }
 
 /**
- * The field-group names a database this run sets up for the first time starts on, or undefined
- * for one already set up. "New" is the probe a first start makes (`ensureFirstRunSetup`): the
- * migration ledger is absent, and this run creates it only after the core schema. Never decided
- * from the registry alone, since a catalog listing filtered by privileges reads as holding no
- * registry, and a second registry beside a live one would hide every group.
- *
- * A new database takes the names its history keeps field groups under, and the current names
- * where the project has no history yet, as a new project's first migration records them.
- */
-/**
  * The field-group registry Phase 1 reconciles core with. A database this run sets up for the first
  * time starts its field groups on the names its history keeps them under
  * (`newDatabaseFieldGroupNaming`, then `newSiteNaming`); every other keeps the registry it holds.
@@ -3770,19 +3768,6 @@ async function recordNewDatabaseNaming(
     deps.adapter as unknown as DrizzleAdapter,
     serviceLoggerOf(deps.logger)
   );
-}
-
-async function newDatabaseFieldGroupNaming(
-  deps: Pick<MigrateCoreDeps, "adapter" | "migrationsDir">
-): Promise<FieldGroupNaming | undefined> {
-  const probe = deps.adapter as unknown as {
-    tableExists?: (table: string) => Promise<boolean>;
-  };
-  if (typeof probe.tableExists !== "function") return undefined;
-  if (await probe.tableExists("nextly_schema_events")) return undefined;
-  const metaDir = resolve(deps.migrationsDir, "meta");
-  if ((await newestSnapshotName(metaDir)) === undefined) return "current";
-  return historyFieldGroupNamingIn(metaDir);
 }
 
 /**

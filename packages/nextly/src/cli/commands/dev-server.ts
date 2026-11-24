@@ -28,9 +28,11 @@ import {
   withoutRemovedFromCode,
 } from "../../domains/dynamic-collections/services/removed-from-code";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
-import { MIGRATION_TARGET } from "../../domains/field-groups/migration/target";
 import { recordNewSiteOrWarn } from "../../domains/field-groups/services/field-group-new-site";
-import type { FieldGroupNaming } from "../../domains/field-groups/services/field-group-storage-names";
+import {
+  type FieldGroupNaming,
+  storageNamesFor,
+} from "../../domains/field-groups/services/field-group-storage-names";
 import { readStoredFieldGroupTables } from "../../domains/field-groups/services/field-group-stored-tables";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
@@ -165,20 +167,21 @@ async function resolveRegistryTable(
 }
 
 /**
- * The field-group registry the bootstrap declares, and whether it is a new site's: a database
- * holding neither registry starts on the current names, as a first start sets one up
- * (`field-group-new-site`). Decided by one reading. Null where the catalog cannot be read.
+ * The field-group registry the bootstrap declares, with a new site's names: a database holding
+ * neither registry starts on those its project gives an empty one (`new-database-naming`), as a
+ * first start sets one up. Decided by one reading. Null where the catalog cannot be read.
  */
 async function bootstrapRegistry(
   adapter: DrizzleAdapter,
-  logger: CommandContext["logger"]
-): Promise<{ registryTable: string; newSite: boolean } | null> {
+  logger: CommandContext["logger"],
+  newDatabaseNaming: () => Promise<FieldGroupNaming>
+): Promise<{ registryTable: string; newSite?: FieldGroupNaming } | null> {
   const registryTable = await resolveRegistryTable(adapter, logger);
   if (registryTable === null) return null;
   const { absent } = await readStoredFieldGroupTables(adapter);
-  return absent === true
-    ? { registryTable: MIGRATION_TARGET.registryTable, newSite: true }
-    : { registryTable, newSite: false };
+  if (absent !== true) return { registryTable };
+  const newSite = await newDatabaseNaming();
+  return { registryTable: storageNamesFor(newSite).registryTable, newSite };
 }
 
 /** The CLI's logger as a service takes one: an information line is the command's detail. */
@@ -280,7 +283,10 @@ export async function applyCoreStatements(
 export async function ensureCoreTables(
   adapter: CLIDatabaseAdapter,
   options: ResolvedDevOptions,
-  context: CommandContext
+  context: CommandContext,
+  /** The names an empty database starts its field groups on. Absent, the current names. */
+  newDatabaseNaming: () => Promise<FieldGroupNaming> = () =>
+    Promise.resolve("current")
 ): Promise<void> {
   const { logger } = context;
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
@@ -429,7 +435,11 @@ export async function ensureCoreTables(
       // push naming the spelling that was just moved away from — and the push
       // is the one caller that creates rather than retargets. Re-reading here
       // costs one catalog query and is the only value the push may trust.
-      const registry = await bootstrapRegistry(drizzleAdapter, logger);
+      const registry = await bootstrapRegistry(
+        drizzleAdapter,
+        logger,
+        newDatabaseNaming
+      );
       if (registry === null) {
         pushFailure = { catalog: true };
         return;
@@ -478,11 +488,7 @@ export async function ensureCoreTables(
           );
 
           // Also create system tables (dynamic_collections, etc.)
-          await ensureSystemTables(
-            drizzleAdapter,
-            logger,
-            newSite ? "current" : undefined
-          );
+          await ensureSystemTables(drizzleAdapter, logger, newSite);
 
           logger.success("Core tables created (fallback)");
         } else {
@@ -495,7 +501,7 @@ export async function ensureCoreTables(
         }
       }
       // A new site's storage is settled on the names just created, as a first start records it.
-      if (newSite && pushFailure === undefined) {
+      if (newSite === "current" && pushFailure === undefined) {
         await recordNewSiteOrWarn(drizzleAdapter, serviceLoggerFor(logger));
       }
     }

@@ -24,7 +24,7 @@
  * ```
  */
 
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
@@ -364,6 +364,7 @@ import type {
   AuthConfig,
   SanitizedRateLimitingConfig,
 } from "../shared/types/config";
+import { DEFAULT_MIGRATIONS_DIR } from "../shared/types/migrations-dir-default";
 import type { SingleConfig } from "../singles/config/types";
 import type { ImageProcessor } from "../storage/image-processor";
 import { initializeMediaStorage, type MediaStorage } from "../storage/storage";
@@ -1132,15 +1133,13 @@ async function registerServicesOnce(
   publishLedgerIfAt("before the schema reads", ledgerAt, adapter);
   await refuseUnmigratedDatabaseInBuildPhase(adapter);
 
-  // The names a new database starts its field groups on, one value for the compile below and the
-  // setup: a production start sets one up only to run the migrations at start, so it takes the
-  // names their history keeps field groups under; every other start begins a new site on the
-  // current names. The compile uses it only where the database has no registry yet.
-  const newSiteFieldGroupNaming = await newSiteNamingAtStart(
-    structure.productionStart,
-    resolvedBasePath,
-    transformedConfig
-  );
+  // The names an empty database starts its field groups on, one value for the compile below and
+  // the setup: its history's (`new-database-naming`). Asked here, where a history whose names
+  // cannot be told refuses the start before anything is set up, and only of a start that may set
+  // a database up.
+  const newSiteFieldGroupNaming = structure.mayDefine
+    ? await newSiteNamingAtStart(adapter, resolvedBasePath, transformedConfig)
+    : undefined;
   const bootExtensionSchema = await prepareBootSchema(
     adapter,
     transformedConfig,
@@ -1259,7 +1258,9 @@ async function registerServicesOnce(
           createMissingCompanions: !structure.productionStart,
           completeness,
           // The names the compile above read a new database's groups on.
-          newSiteFieldGroupNaming,
+          ...(newSiteFieldGroupNaming === undefined
+            ? {}
+            : { newSiteFieldGroupNaming }),
         }
       );
 
@@ -2047,8 +2048,8 @@ async function prepareBootSchema(
   transformedConfig: NextlyServiceConfig,
   transformedPlugins: PluginDefinition[],
   logger: Logger,
-  /** The names a database with no registry yet starts its field groups on, as its setup does. */
-  newSiteFieldGroupNaming: "legacy" | "current"
+  /** The names an empty database starts its field groups on, as its setup does. */
+  newSiteFieldGroupNaming: "legacy" | "current" | undefined
 ): Promise<ExtensionSchema | undefined> {
   // The dialect is read defensively because an adapter that cannot report one
   // is a boot that is going to fail regardless, and it must fail at the step
@@ -3966,32 +3967,24 @@ export async function createSchemaRegistry(
 }
 
 /**
- * The field-group names the project's migration history keeps groups under, which a production
- * start sets a new database up on before its migrations run: legacy where the configuration names
- * no migrations folder, the folder has no snapshot, or it cannot be read (the migrations at start
- * report a folder they cannot read).
+ * The names an empty database starts its field groups on (`new-database-naming`), or undefined
+ * for one already set up. A probe that fails refuses nothing: first-run setup makes the same probe
+ * and reports it, and takes the history's names where it answers there.
  */
 async function newSiteNamingAtStart(
-  productionStart: boolean,
+  adapter: DrizzleAdapter,
   projectRoot: string,
   config: { db?: { migrationsDir?: string } }
-): Promise<"legacy" | "current"> {
-  return productionStart
-    ? historyNamingAtStart(projectRoot, config)
-    : "current";
-}
-
-async function historyNamingAtStart(
-  projectRoot: string,
-  config: { db?: { migrationsDir?: string } }
-): Promise<"legacy" | "current"> {
-  const { fieldGroupNamingOfHistory } = await import(
-    "../domains/schema/migrate/resolved-schema"
+): Promise<"legacy" | "current" | undefined> {
+  const { databaseIsEmpty, emptyDatabaseFieldGroupNaming } = await import(
+    "../domains/schema/migrate/new-database-naming"
   );
-  return fieldGroupNamingOfHistory({
-    projectRoot,
-    config: { db: { migrationsDir: config.db?.migrationsDir } },
-  }).catch(() => "legacy" as const);
+  const empty = await databaseIsEmpty(adapter).catch(() => undefined);
+  if (empty === false) return undefined;
+  const naming = emptyDatabaseFieldGroupNaming(
+    resolve(projectRoot, config.db?.migrationsDir ?? DEFAULT_MIGRATIONS_DIR)
+  );
+  return empty === true ? naming : naming.catch(() => undefined);
 }
 
 /**
