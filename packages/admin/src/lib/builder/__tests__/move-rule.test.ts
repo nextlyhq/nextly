@@ -599,18 +599,30 @@ describe("names that clash where a field arrives", () => {
   });
 });
 
-describe("while a save cannot keep values across containers", () => {
+describe("while a save keeps values across named groups but not repeating rows", () => {
   // What the Builder asks today: the switch as it ships.
   const today: MoveContext = {
     entityReadOnly: false,
     surface: "collection",
   };
   const NOT_YET =
-    "Moving a field into or out of a group or repeating rows is not available yet.";
+    "Moving a saved field into or out of repeating rows is not available yet. It can move into and out of named groups.";
 
   it.each([
-    ["into a group", "f-summary-a", { parentFieldId: "f-meta" }],
-    ["out of a group", "f-meta-title", {}],
+    ["into a group", "f-top", { parentFieldId: "f-group" }],
+    ["out of a group", "f-inner", {}],
+  ])("allows a saved field's move %s, the save sending it", (_, id, target) => {
+    const tree = [
+      plain("f-top", "top"),
+      plain("f-group", "group", {
+        type: "group",
+        fields: [plain("f-inner", "inner")],
+      }),
+    ];
+    expect(judgeMove(tree, id, target, today).allowed).toBe(true);
+  });
+
+  it.each([
     ["into repeating rows", "f-summary-a", { parentFieldId: "f-sections" }],
     [
       "into a group inside repeating rows",
@@ -659,7 +671,7 @@ describe("while a save cannot keep values across containers", () => {
     ).toBe("out-of-repeating-rows");
   });
 
-  it("offers only the field's own container in Move to…", () => {
+  it("offers groups but not repeating rows in Move to…", () => {
     const answers = moveDestinations(
       nestedFixtureFields(),
       "f-summary-a",
@@ -670,7 +682,7 @@ describe("while a save cannot keep values across containers", () => {
     ]);
     expect(Object.fromEntries(answers)).toMatchObject({
       top: "ok",
-      "f-meta": "not-available-yet",
+      "f-meta": "ok",
       "f-sections": "not-available-yet",
       "f-items-cta": "not-available-yet",
     });
@@ -874,10 +886,10 @@ describe("leaving repeating rows before the save", () => {
 });
 
 describe("which moves wait for a save that keeps values", () => {
-  // As the Builder asks today: container changes not yet allowed, with the
-  // saved placements the editor knows.
+  // As the Builder asks today: a saved field's change of level into repeating
+  // rows not yet allowed, with the saved placements the editor knows.
   const NOT_YET =
-    "Moving a field into or out of a group or repeating rows is not available yet.";
+    "Moving a saved field into or out of repeating rows is not available yet. It can move into and out of named groups.";
   const fields = () => [
     plain("f-top", "top"),
     plain("f-layout", "", {
@@ -917,7 +929,7 @@ describe("which moves wait for a save that keeps values", () => {
     expect(namesIn(into, "f-rows")).toEqual(["kept", "fresh", "draft"]);
   });
 
-  it("refuses a saved field's move to another level, saying it is not available yet", () => {
+  it("refuses a saved field's move into repeating rows, saying it is not available yet", () => {
     expect(
       refusal(
         judgeMove(fields(), "f-top", { parentFieldId: "f-rows" }, today(saved))
@@ -1012,7 +1024,7 @@ describe("savedFieldsOffTheirLevel", () => {
     plain("f-g", "group", { type: "group", fields: [plain("f-in", "inner")] }),
   ];
 
-  it("finds a saved field a renamed layout group took to another level", () => {
+  it("finds no saved field a renamed layout group took into a named group: that is a move", () => {
     const current = [
       plain("f-layout", "box", {
         type: "group",
@@ -1023,19 +1035,39 @@ describe("savedFieldsOffTheirLevel", () => {
         fields: [plain("f-in", "inner")],
       }),
     ];
-    expect(savedFieldsOffTheirLevel(saved, current).map(f => f.id)).toEqual([
-      "f-body",
-    ]);
+    expect(savedFieldsOffTheirLevel(saved, current)).toEqual([]);
   });
 
-  it("finds the fields of a group whose name was taken away", () => {
+  it("finds no field of a group whose name was taken away: that is a move out of it", () => {
     const current = [
       plain("f-body", "body"),
       plain("f-layout", "", { type: "group", fields: [] }),
       plain("f-g", "", { type: "group", fields: [plain("f-in", "inner")] }),
     ];
-    expect(savedFieldsOffTheirLevel(saved, current).map(f => f.id)).toEqual([
-      "f-in",
+    expect(savedFieldsOffTheirLevel(saved, current)).toEqual([]);
+  });
+
+  it("finds a saved field a renamed layout group took into repeating rows", () => {
+    const rows = [
+      plain("f-rows", "rows", {
+        type: "repeater",
+        fields: [plain("f-layout", "", { type: "group", fields: [] })],
+      }),
+      plain("f-body", "body"),
+    ];
+    const current = [
+      plain("f-rows", "rows", {
+        type: "repeater",
+        fields: [
+          plain("f-layout", "", {
+            type: "group",
+            fields: [plain("f-body", "body")],
+          }),
+        ],
+      }),
+    ];
+    expect(savedFieldsOffTheirLevel(rows, current).map(f => f.id)).toEqual([
+      "f-body",
     ]);
   });
 

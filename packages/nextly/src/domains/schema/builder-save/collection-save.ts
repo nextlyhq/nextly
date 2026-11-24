@@ -1496,6 +1496,8 @@ async function refuseSaveTypeChanges(
     dialect,
     builtBy: kind.builtBy,
     ...componentRow,
+    // A field inside a named group or a repeater too, held in its container's column.
+    nested: true,
   });
   if (changes.length === 0) return;
   const translatedBefore = perLanguageBefore(save.previous, table, previous);

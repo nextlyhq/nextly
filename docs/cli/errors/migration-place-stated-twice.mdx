@@ -1,0 +1,27 @@
+---
+title: MIGRATION_PLACE_STATED_TWICE
+description: "The files of one migration (its base file and a dialect's variant) state different places in the history, so the command refused and changed nothing."
+---
+
+## Cause
+
+The files of one migration (its base file and a dialect's variant) state different places in the history, so the command refused and changed nothing.
+
+A migration can have more than one file. Beside `0003_seed.sql`, a file named for a dialect, such as `0003_seed.mysql.sql`, runs in its place on that dialect. The variant belongs to the same migration and has the same place in the history.
+
+A blank migration (`nextly migrate:create --blank`) has no snapshot, so its header states its place: the migration it was written after (`-- Parent:`), and the branch ends it records a merge of (`-- Merges:`). A migration states that once. A file of the migration that states nothing follows the others, so a variant does not need to repeat the base file's header. When two files of the migration state different places, there is no single place to read. `nextly migrate`, `nextly migrate:create`, `nextly migrate:check` and a Schema Builder save refuse, and name both files and what each states.
+
+A migration with a snapshot is placed by its snapshot. What its files' headers say does not place it.
+
+## Fix
+
+Make the `-- Parent:` and `-- Merges:` lines the same in every file of the migration that states them, or keep them in the base file alone and remove them from the variants. Then run the command again.
+
+## Example
+
+```text
+✗ The files of migration 20261021_090000_seed state different places in the history: `20261021_090000_seed.sql` states `-- Parent: 20261020_120000_add_posts`, and `20261021_090000_seed.mysql.sql` states `-- Parent: 20261019_080000_init`.
+  Why:  A dialect's variant runs in place of the base file on its dialect and is the same migration, so the migration has one place in the history.
+  Next: Make the `-- Parent:` and `-- Merges:` lines the same in every file of 20261021_090000_seed that states them, or keep them in the base file alone.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-place-stated-twice  (MIGRATION_PLACE_STATED_TWICE)
+```

@@ -129,7 +129,9 @@ function jsonOf(text: string): OldValue {
  * exactly: each number read from its own writing (the reviver's source), so 0.10000000000000001 is
  * told from the 0.1 it parses to. Null where the text is no JSON.
  */
-function parseJson(text: string): { value: unknown; inexact: boolean } | null {
+export function parseJson(
+  text: string
+): { value: unknown; inexact: boolean } | null {
   let inexact = false;
   const reviver = (
     _key: string,
@@ -176,8 +178,11 @@ function listOf(from: FieldTypeOnDialect, text: string): OldValue {
   return { kind: "list", items: parsed.map(item => itemOf(from.item, item)) };
 }
 
-/** One item of a list, as its JSON value reads for the list's item type. */
-function itemOf(
+/**
+ * One value held inside a JSON value, as its JSON value reads for `item`: a list's item, or a named
+ * group's or a repeater's field (`collectNestedTypeChange`).
+ */
+export function itemOf(
   item: FieldTypeOnDialect | undefined,
   value: unknown
 ): OldValue {

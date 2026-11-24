@@ -20,7 +20,11 @@ import type {
 } from "../../../schemas/dynamic-collections";
 import type { CollectionRegistryService } from "../../../services/collections/collection-registry-service";
 import { createLogger } from "../../utils/logger";
-import { demoteCollection, type DemotedCollection } from "../db-sync-demote";
+import {
+  demoteCollection,
+  demotedCollectionIn,
+  type DemotedCollection,
+} from "../db-sync-demote";
 import { promotedCollection } from "../db-sync-promote-collection";
 
 vi.mock("../db-sync-registry", async importOriginal => ({
@@ -32,7 +36,9 @@ vi.mock("../db-sync-registry", async importOriginal => ({
 /** What a demote of `collection` writes, with `existing` the record already registered. */
 async function demoted(
   collection: DemotedCollection,
-  existing: DynamicCollectionRecord | null = null
+  existing: DynamicCollectionRecord | null = null,
+  /** The dialect of the database the demote runs on, as its adapter states it. */
+  dialect?: "postgresql" | "mysql" | "sqlite"
 ) {
   const registered: DynamicCollectionInsert[] = [];
   const updated: Partial<DynamicCollectionInsert>[] = [];
@@ -58,7 +64,7 @@ async function demoted(
     collection,
     logger: createLogger({ quiet: true }),
     registry,
-    adapter: {} as never,
+    adapter: (dialect === undefined ? {} : { dialect }) as never,
     confirm: async code => {
       shown = code;
       return true;
@@ -173,6 +179,33 @@ describe("a demoted collection's record", () => {
     ).toBe("dc_renamed");
   });
 
+  it("keeps the timestamps setting a record already holds, whatever the configuration now says", async () => {
+    // The configuration turned timestamps on since the record was written: the table was built
+    // without the timestamp columns, and a demote adds no column.
+    const synced = {
+      ...asRecord({
+        slug: "articles",
+        labels: { singular: "Article", plural: "Articles" },
+        tableName: "dc_articles",
+        fields: [],
+        source: "code",
+        schemaHash: "older",
+      }),
+      locked: true,
+      timestamps: false,
+    };
+    const { updated } = await demoted(coded({ timestamps: true }), synced);
+    expect(updated).toHaveLength(1);
+    expect(updated[0].timestamps).toBe(false);
+    // A collection the registry does not hold yet takes the setting its configuration states.
+    expect((await registeredFor(coded({ timestamps: false }))).timestamps).toBe(
+      false
+    );
+    expect((await registeredFor(coded({ timestamps: true }))).timestamps).toBe(
+      true
+    );
+  });
+
   it("keeps the lifecycle when it replaces a record already registered", async () => {
     const existing = asRecord({
       slug: "articles",
@@ -233,6 +266,12 @@ describe("a demoted collection's record", () => {
     }
   );
 
+  it("is registered with the hash the registry compares fields by, as an update writes it", async () => {
+    // A different hash for the same fields reads as a schema change at the Builder's first save.
+    const record = await registeredFor(coded());
+    expect(record.schemaHash).toBe(calculateSchemaHash(record.fields as never));
+  });
+
   it("writes its fields, names and table", async () => {
     const collection = coded();
     const record = await registeredFor(collection);
@@ -258,11 +297,128 @@ describe("a demoted collection's code-only options", () => {
         indexes: [{ fields: ["body"], unique: true }],
       })
     );
-    expect(shown).toContain("hooks, indexes.");
+    expect(shown).toContain("hooks.");
+  });
+
+  it("say its compound indexes go at the next schema sync, not when its code entry is removed", async () => {
+    // Once demoted, the code entry is ignored by every schema sync, so the indexes it declares are
+    // not in the schema the next sync applies, whether or not the entry is still there.
+    const { shown } = await demoted(
+      coded({
+        hooks: { beforeCreate: [() => undefined] },
+        indexes: [{ fields: ["body"], unique: true }],
+      })
+    );
+    expect(shown).toContain(
+      "Its compound indexes are dropped at the next schema sync"
+    );
+    expect(shown).not.toContain("indexes.");
   });
 
   it("are not mentioned for a collection without any", async () => {
     const { shown } = await demoted(coded());
     expect(shown).not.toContain("Schema Builder cannot hold");
+    expect(shown).not.toContain("compound indexes");
+    // Nor for one that declares an empty list of them.
+    expect((await demoted(coded({ indexes: [] }))).shown).not.toContain(
+      "compound indexes"
+    );
+  });
+});
+
+describe("a demoted collection's columns", () => {
+  it("are named where the Schema Builder's column rules describe them differently, on the database's dialect", async () => {
+    // A shared text field stating no width is VARCHAR(255) on a code-first MySQL table and TEXT on
+    // a Schema Builder one. From the next sync the table is the Builder's, so the column widens.
+    // Translated, so its translatable fields are kept per language whatever the site's layout.
+    const { shown } = await demoted(
+      coded({
+        localized: true,
+        fields: [
+          { name: "code", type: "text", localized: false },
+          { name: "body", type: "text" },
+        ],
+      }),
+      null,
+      "mysql"
+    );
+    expect(shown).toContain(
+      "From the next schema sync its table follows the Schema Builder's column rules"
+    );
+    expect(shown).toMatch(/code \(varchar\(255\) to text\)/);
+    // `slug` keeps its column: both builders bound it, since it is indexed.
+    expect(shown).not.toMatch(/\bslug \(/);
+    // A translatable field's column is in the translations table, not the table the note names.
+    expect(shown).not.toMatch(/\bbody \(/);
+  });
+
+  it("include the fields a group with no name keeps on the collection's own row", async () => {
+    // A presentational group stores its fields as columns of the collection's table, so the next
+    // sync changes them as it changes a top-level field.
+    const { shown } = await demoted(
+      coded({
+        localized: true,
+        fields: [
+          {
+            type: "group",
+            fields: [
+              { name: "sku", type: "text", localized: false },
+              { name: "caption", type: "text" },
+            ],
+          },
+        ],
+      }),
+      null,
+      "mysql"
+    );
+    expect(shown).toMatch(/sku \(varchar\(255\) to text\)/);
+    // Its translatable field is kept per language, like a top-level one.
+    expect(shown).not.toMatch(/\bcaption \(/);
+  });
+
+  it("are not mentioned where both rules describe every column the same way", async () => {
+    // SQLite stores every text field as TEXT, whoever built the table.
+    const { shown } = await demoted(coded(), null, "sqlite");
+    expect(shown).not.toContain("column rules");
+  });
+});
+
+describe("which collection a demote may move", () => {
+  const plugin = {
+    name: "@acme/forms",
+    contributes: { collections: [{ slug: "articles" }] },
+  };
+
+  it("is the app's own collection the configuration defines", () => {
+    const collection = coded();
+    expect(demotedCollectionIn("articles", { collections: [collection] })).toBe(
+      collection
+    );
+  });
+
+  it("is never a plugin's, even under an address the configuration also lists", () => {
+    // A plugin registers its collection again at every start, so a hand-over to the Builder would
+    // be taken back by the next one; under a Builder record's address it would mark that record as
+    // handed over from code.
+    const refused = demotedCollectionIn("articles", {
+      collections: [coded()],
+      plugins: [plugin],
+    });
+    expect(refused).toMatchObject({ code: "DEMOTE_PLUGIN_COLLECTION" });
+    expect((refused as { what: string }).what).toContain("@acme/forms");
+  });
+
+  it("is refused as not defined when the configuration has none under the address", () => {
+    expect(
+      demotedCollectionIn("articles", {
+        collections: [],
+        plugins: [
+          {
+            name: "@acme/pages",
+            contributes: { collections: [{ slug: "pages" }] },
+          },
+        ],
+      })
+    ).toMatchObject({ code: "DEMOTE_COLLECTION_NOT_FOUND" });
   });
 });

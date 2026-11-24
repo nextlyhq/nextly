@@ -6,7 +6,7 @@
  * The shape is given one more condition here than the repository holds: a stop written from the
  * shape carries it, and one that spells the shape out again does not.
  */
-import { getTableColumns } from "drizzle-orm";
+import { getColumns } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 
 import { nextlyVersionsMysql } from "../../../../schemas/versions/mysql";
@@ -67,7 +67,7 @@ describe("workingDraftsStop", () => {
     ["mysql", nextlyVersionsMysql],
     ["sqlite", nextlyVersionsSqlite],
   ] as const)("names each column as the %s table does", (_dialect, table) => {
-    const columns = getTableColumns(table) as Record<string, { name: string }>;
+    const columns = getColumns(table) as Record<string, { name: string }>;
     for (const { column } of [
       { column: "scopeKind" },
       { column: "scopeSlug" },

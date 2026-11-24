@@ -455,5 +455,110 @@ describe.each(LOCK_DIALECTS)(
         ).toBe(false);
       }
     );
+
+    it.runIf(dialect === "sqlite")(
+      "compares a counter with the highest key inside SQLite, and reads a key with a conflict clause",
+      async () => {
+        const coversOf = async (table: string) =>
+          (
+            await readLiveSchema(adapter.getDrizzle(), dialect, [
+              `CREATE TABLE ${table} (id integer)`,
+            ])
+          ).counterCovers(table);
+        // Above 2^53 a JavaScript number reads the counter and the key one below it as equal.
+        const large = `${P}_large`;
+        await adapter.executeQuery(
+          `CREATE TABLE ${large} (id INTEGER PRIMARY KEY AUTOINCREMENT, label text)`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${large} (id, label) VALUES (9007199254740993, 'a')`
+        );
+        expect(await coversOf(large)).toBe(true);
+        await adapter.executeQuery(
+          `UPDATE sqlite_sequence SET seq = 9007199254740992 WHERE name = '${large}'`
+        );
+        expect(await coversOf(large)).toBe(false);
+        // `ON CONFLICT <resolution>` may stand between the key and AUTOINCREMENT.
+        const conflict = `${P}_conflict`;
+        await adapter.executeQuery(
+          `CREATE TABLE ${conflict} (id INTEGER PRIMARY KEY ON CONFLICT REPLACE AUTOINCREMENT, label text)`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${conflict} (label) VALUES ('a'), ('b'), ('c')`
+        );
+        expect(await coversOf(conflict)).toBe(true);
+        await adapter.executeQuery(
+          `UPDATE sqlite_sequence SET seq = 1 WHERE name = '${conflict}'`
+        );
+        expect(await coversOf(conflict)).toBe(false);
+      }
+    );
+
+    it.runIf(dialect === "sqlite")(
+      "takes a counter stored as text for one that does not cover the rows",
+      async () => {
+        const texted = `${P}_texted`;
+        await adapter.executeQuery(
+          `CREATE TABLE ${texted} (id INTEGER PRIMARY KEY AUTOINCREMENT, label text)`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${texted} (label) VALUES ('a'), ('b'), ('c')`
+        );
+        const covers = async () =>
+          (
+            await readLiveSchema(adapter.getDrizzle(), dialect, [
+              `CREATE TABLE ${texted} (id integer)`,
+            ])
+          ).counterCovers(texted);
+        expect(await covers()).toBe(true);
+        // `sqlite_sequence.seq` has no declared type, so a counter written by hand as text stays
+        // text, and SQLite orders every text above every integer: '1' would read as covering 3.
+        await adapter.executeQuery(
+          `UPDATE sqlite_sequence SET seq = '1' WHERE name = '${texted}'`
+        );
+        expect(await covers()).toBe(false);
+        // One that would cover as a number is not taken either: SQLite never writes text there.
+        await adapter.executeQuery(
+          `UPDATE sqlite_sequence SET seq = '5' WHERE name = '${texted}'`
+        );
+        expect(await covers()).toBe(false);
+      }
+    );
+
+    it.runIf(dialect === "sqlite")(
+      "reads a key declared AUTOINCREMENT at the table's level",
+      async () => {
+        const wrong: string[] = [];
+        for (const [table, key] of [
+          [`${P}_tablekey`, "PRIMARY KEY (id AUTOINCREMENT)"],
+          [`${P}_tablekeyd`, "PRIMARY KEY (id DESC AUTOINCREMENT)"],
+          [
+            `${P}_tablekeyc`,
+            "PRIMARY KEY (id COLLATE BINARY DESC AUTOINCREMENT)",
+          ],
+        ] as const) {
+          await adapter.executeQuery(
+            `CREATE TABLE ${table} (id INTEGER, label text, ${key})`
+          );
+          await adapter.executeQuery(
+            `INSERT INTO ${table} (label) VALUES ('a'), ('b'), ('c')`
+          );
+          const covers = async () =>
+            (
+              await readLiveSchema(adapter.getDrizzle(), dialect, [
+                `CREATE TABLE ${table} (id integer)`,
+              ])
+            ).counterCovers(table);
+          if (!(await covers())) wrong.push(`${key}: not read as covering`);
+          // Held to the same check as the column form: a counter below the highest key.
+          await adapter.executeQuery(
+            `UPDATE sqlite_sequence SET seq = 1 WHERE name = '${table}'`
+          );
+          if (await covers())
+            wrong.push(`${key}: a low counter read as covering`);
+        }
+        expect(wrong).toEqual([]);
+      }
+    );
   }
 );
