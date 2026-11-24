@@ -433,7 +433,7 @@ async function writeDemotedRecord(
  * storage migration in flight, then what the registry refuses the write on), and nothing asked,
  * locked or written.
  */
-async function previewDemotion(args: {
+export async function previewDemotion(args: {
   collection: DemotedCollection;
   registry: CollectionRegistryService;
   adapter: DrizzleAdapter;

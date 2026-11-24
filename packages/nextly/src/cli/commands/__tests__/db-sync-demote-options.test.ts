@@ -23,6 +23,7 @@ import { createLogger } from "../../utils/logger";
 import {
   demoteCollection,
   demotedCollectionIn,
+  previewDemotion,
   type DemotedCollection,
 } from "../db-sync-demote";
 import { promotedCollection } from "../db-sync-promote-collection";
@@ -368,6 +369,28 @@ describe("a demote that would lose a unique index", () => {
       expect(written).toEqual([]);
     }
   );
+
+  it("is refused by a dry run before a storage migration is asked about, as the demote is", async () => {
+    // `--dry-run` names the refusal the real run ends on, so it asks in the same order.
+    const order: string[] = [];
+    const refusal = await previewDemotion({
+      collection: unique(),
+      registry: {
+        getCollectionBySlug: async () => null,
+        assertRegistrable: async () => order.push("registrable"),
+      } as unknown as CollectionRegistryService,
+      adapter: {
+        dialect: "sqlite",
+        tableExists: async () => {
+          order.push("migration in flight");
+          return false;
+        },
+      } as never,
+      logger: createLogger({ quiet: true }),
+    });
+    expect(refusal.refusals?.[0]).toContain("tenant, code");
+    expect(order).toEqual([]);
+  });
 
   it("names every one it would lose, and no index that is not unique", async () => {
     const refused = await demoted(

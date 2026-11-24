@@ -7,7 +7,9 @@
  * - **The app's schema hooks on its table**, while its entry is still in the configuration. A hook
  *   is compiled against the Builder's record, not the ignored entry: one on a field the Builder
  *   added is applied, and one on a field the Builder removed is refused, naming it, with nothing
- *   changed. So on `nextly db:sync`, its dry run, a development start and a reload.
+ *   changed. So on `nextly db:sync`, its dry run and a reload. A development start does the first
+ *   too, and over the second warns and goes on as the code entry has it, so a Builder save cannot
+ *   leave the admin unreachable.
  *
  * Each case owns its database: a throwaway database on PostgreSQL and MySQL, a temporary file on
  * SQLite.
@@ -351,6 +353,39 @@ for (const dialect of getConfiguredTestDialects()) {
             ?.entityIndexes.get(TABLE)
             ?.map(index => index.columns)
         ).toEqual([["rank"]]);
+      }, 120_000);
+
+      it("starts with a warning over a hook on a field the Builder removed", async () => {
+        await builderSaves(fields =>
+          fields.filter(field => field.name !== "code")
+        );
+        const own = (await createAdapter({
+          type: dialect,
+          url,
+        } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
+        connections.push(own);
+        freshProcess();
+        const warnings: string[] = [];
+
+        await createTestNextly({
+          adapter: own as never,
+          collections: [posts()],
+          db: {
+            migrationsDir: "./migrations",
+            uiSchemaFile: "./ui-schema.json",
+            schema: { extend: [indexing("code")] },
+          },
+          basePath: dir,
+          logger: {
+            ...quiet,
+            warn: (message: string) => warnings.push(message),
+          } as never,
+        });
+
+        const warned = warnings.filter(line => line.includes("schema hook"));
+        expect(warned).toHaveLength(1);
+        expect(warned[0]).toContain("hoi_posts");
+        expect(warned[0]).toContain('names the column "code"');
       }, 120_000);
 
       it("reloads with a hook added on a field the Builder added", async () => {
