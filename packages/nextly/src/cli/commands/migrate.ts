@@ -5231,6 +5231,7 @@ async function changeFilesFrom(
         filename: `${files[end].name}.sql`,
         before: before?.entities,
         target: target.entities,
+        fieldGroupNaming: snapshotFieldGroupNaming(target),
         statements: written.flatMap(file =>
           splitSqlStatements(file.upSql, dialect, file)
         ),

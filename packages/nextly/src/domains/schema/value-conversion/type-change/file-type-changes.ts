@@ -17,6 +17,10 @@
  */
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import {
+  type FieldGroupNaming,
+  underNaming,
+} from "../../../field-groups/services/field-group-storage-names";
 import { DEFAULT_TABLE_NAME_RESOLVERS } from "../../migrate/resolved-schema";
 import { renamesIn, tablesChangedIn } from "../../migrate/statement-targets";
 import type {
@@ -57,6 +61,8 @@ export interface FileTypeChangeSource {
   before: EntitySettingsRecord | undefined;
   /** The entities the file's own snapshot records. */
   target: EntitySettingsRecord | undefined;
+  /** The names the file's history keeps field groups under (`snapshotFieldGroupNaming`). */
+  fieldGroupNaming: FieldGroupNaming;
   /**
    * The UP statements, as the runner splits them, of every file the change between the two
    * snapshots is written in, in run order, for the renames they make: the migration's own and the
@@ -92,7 +98,8 @@ const KINDS = [
 function tableOf(
   kind: SettingsEntityKind,
   slug: string,
-  settings: RecordedEntitySettings["settings"]
+  settings: RecordedEntitySettings["settings"],
+  fieldGroupNaming: FieldGroupNaming
 ): string {
   const dbName =
     typeof settings.dbName === "string" && settings.dbName !== ""
@@ -103,7 +110,10 @@ function tableOf(
     ? DEFAULT_TABLE_NAME_RESOLVERS.collection(entity)
     : kind === "single"
       ? DEFAULT_TABLE_NAME_RESOLVERS.single(entity)
-      : DEFAULT_TABLE_NAME_RESOLVERS.component(entity);
+      : underNaming(
+          fieldGroupNaming,
+          DEFAULT_TABLE_NAME_RESOLVERS.component(entity)
+        );
 }
 
 /** A recorded declaration's fields, or undefined where it records none. */
@@ -205,11 +215,12 @@ interface RecordedEntity {
 function entitiesByTable(
   record: EntitySettingsRecord,
   key: keyof EntitySettingsRecord,
-  kind: SettingsEntityKind
+  kind: SettingsEntityKind,
+  fieldGroupNaming: FieldGroupNaming
 ): Map<string, RecordedEntity> {
   return new Map(
     Object.entries(record[key]).map(([slug, recorded]) => {
-      const table = tableOf(kind, slug, recorded.settings);
+      const table = tableOf(kind, slug, recorded.settings, fieldGroupNaming);
       return [table.toLowerCase(), { slug, table, recorded }];
     })
   );
@@ -245,11 +256,12 @@ function guardedByTheFile(change: FieldTypeChange): boolean {
  */
 function tablesBefore(
   renames: readonly (readonly [string, string])[],
-  before: EntitySettingsRecord
+  before: EntitySettingsRecord,
+  fieldGroupNaming: FieldGroupNaming
 ): Map<string, string> {
   const known = new Set(
     KINDS.flatMap(([key, kind]) => [
-      ...entitiesByTable(before, key, kind).keys(),
+      ...entitiesByTable(before, key, kind, fieldGroupNaming).keys(),
     ])
   );
   const origin = new Map<string, string>();
@@ -275,11 +287,12 @@ export function fileTypeChangesOf(
   const { before, target, dialect } = source;
   if (before === undefined || target === undefined) return [];
   const renames = renamesMadeBy(source.statements, dialect);
-  const tableBefore = tablesBefore(renames.tables, before);
+  const naming = source.fieldGroupNaming;
+  const tableBefore = tablesBefore(renames.tables, before, naming);
   return KINDS.flatMap(([key, kind]) => {
     // Paired by their table, not their slug: a slug the file renames keeps its table where it
     // states one (`dbName`), and a table the file renames is paired through the rename.
-    const beforeByTable = entitiesByTable(before, key, kind);
+    const beforeByTable = entitiesByTable(before, key, kind, naming);
     const paired = new Set<RecordedEntity>();
     const unpaired: {
       slug: string;
@@ -287,7 +300,7 @@ export function fileTypeChangesOf(
       after: RecordedEntitySettings;
     }[] = [];
     const changes = Object.entries(target[key]).flatMap(([slug, after]) => {
-      const table = tableOf(kind, slug, after.settings);
+      const table = tableOf(kind, slug, after.settings, naming);
       const was = recordedBefore(beforeByTable, tableBefore, table);
       if (was === undefined) {
         unpaired.push({ slug, table, after });
