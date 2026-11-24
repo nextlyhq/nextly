@@ -7463,7 +7463,9 @@ export class SingleMutationService extends BaseService {
               tx,
               companion,
               entryId,
-              translatedIn
+              translatedIn,
+              // A repeater's or group's text is laid on the live structure.
+              live
             )) as SingleDocument,
             singleMeta.fields
           )
@@ -7718,7 +7720,9 @@ export class SingleMutationService extends BaseService {
         tx,
         companion,
         entryId,
-        locale
+        locale,
+        // A repeater's or group's text is laid on the structure this row holds.
+        parentRow
       );
       Object.assign(parentRow, translations);
       // The language's row is its state even where every value in it is

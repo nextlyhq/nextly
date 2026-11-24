@@ -759,7 +759,8 @@ export interface PopulateCompanionAllArgs {
  * The structures of `source`'s repeaters and groups keeping one structure in every language, by
  * field name: what an every-language read lays each language's overlay on
  * (`populateCompanionFieldsAllLocales`), which reads into rows holding their id alone. Taken from a
- * row as read (one language's text on it) or as stored: either way its structure alone, the text
+ * row as read (one language's text on it, named by field) or as stored (named by column): either
+ * way its structure alone, the text
  * split off by its shape, read with its components' fields on `db`.
  */
 export async function structuresBeside(
@@ -771,9 +772,16 @@ export async function structuresBeside(
   const refs = await withComponentShapes(localizedFields, db);
   const out: Record<string, unknown> = {};
   for (const field of refs) {
-    if (!field.sharedStructure || !Object.hasOwn(source, field.name)) continue;
+    if (!field.sharedStructure) continue;
+    // A row as read names it by field, a main row as stored by column.
+    const key = Object.hasOwn(source, field.name)
+      ? field.name
+      : Object.hasOwn(source, field.column)
+        ? field.column
+        : null;
+    if (key === null) continue;
     out[field.name] = splitStoredValue(
-      source[field.name],
+      source[key],
       field.sharedStructure
     ).structure;
   }

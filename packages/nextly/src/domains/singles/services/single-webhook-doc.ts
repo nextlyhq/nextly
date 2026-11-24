@@ -24,6 +24,7 @@ import { readComponentSubtrees } from "../../field-groups/read-component-subtree
 import {
   populateCompanionFieldsAllLocales,
   resolveLocalizedValue,
+  structuresBeside,
 } from "../../i18n/companion-join";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import { cachedCompanionReadiness } from "../../i18n/runtime/companion-readiness";
@@ -43,14 +44,16 @@ export async function readCompanionLocaleValues(
   tx: TransactionContext,
   companion: CompanionSchema,
   entryId: string,
-  locale: string
+  locale: string,
+  mainRow?: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   const byLocale = await readCompanionValuesByLocale(
     adapter,
     tx,
     companion,
     entryId,
-    [locale]
+    [locale],
+    mainRow
   );
   return byLocale.get(locale) ?? {};
 }
@@ -60,19 +63,33 @@ export async function readCompanionLocaleValues(
  * write that needs every language's state reads it in a single round trip
  * however many languages there are. Each locale's values are resolved by the
  * rule a one-locale read applies: a blank translation reads as null.
+ *
+ * A repeater or group keeping one structure in every language comes back as each language's value,
+ * its text laid on the structure `mainRow` holds (`structuresBeside`); with no main row it is left
+ * out, never its text alone.
  */
 export async function readCompanionValuesByLocale(
   adapter: DrizzleAdapter,
   tx: TransactionContext,
   companion: CompanionSchema,
   entryId: string,
-  locales: readonly string[]
+  locales: readonly string[],
+  mainRow?: Record<string, unknown>
 ): Promise<Map<string, Record<string, unknown>>> {
   const byLocale = new Map<string, Record<string, unknown>>(
     locales.map(locale => [locale, {}])
   );
   if (locales.length === 0) return byLocale;
-  const row: Record<string, unknown> = { id: entryId };
+  const row: Record<string, unknown> = {
+    id: entryId,
+    ...(mainRow
+      ? await structuresBeside(
+          mainRow,
+          companion.localizedFields,
+          tx.getDrizzle()
+        )
+      : {}),
+  };
   await populateCompanionFieldsAllLocales({
     db: tx.getDrizzle<
       Parameters<typeof populateCompanionFieldsAllLocales>[0]["db"]
