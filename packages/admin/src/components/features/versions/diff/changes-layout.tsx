@@ -14,11 +14,10 @@
  * @module components/features/versions/diff/changes-layout
  */
 
-import { Columns2 } from "lucide-react";
 import type { Provider, JSX } from "react";
 import { createContext, useContext, useId } from "react";
 
-import { Button } from "@admin/components/ui";
+import { SegmentedChoice } from "@admin/components/ui/segmented-choice";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { usePersistedState } from "@admin/hooks/usePersistedState";
 import type { FieldDiff } from "@admin/services/versionApi";
@@ -92,13 +91,21 @@ export function layoutFor(
   return { layout: splittable ? preference : "inline", splittable };
 }
 
-/** Why the toggle is off, said to everyone who reaches it. */
+/** Why side by side cannot be chosen, said to everyone who reaches it. */
 const NO_SPLIT_REASON = "This comparison has no side-by-side view";
 
+/** The two layouts, as the choice names them. */
+const LAYOUT_OPTIONS = [
+  { value: "inline", label: "Inline" },
+  { value: "split", label: "Side by side" },
+] as const;
+
 /**
- * The side-by-side toggle, pressed while the two versions are in columns.
- * Disabled, with the reason, for a comparison none of whose changes has a
- * side-by-side view: a toggle that changed nothing would read as broken.
+ * How changes are shown: Inline or Side by side, both in view as one choice,
+ * so the one not chosen is a press away and the chosen one reads as chosen.
+ * For a comparison none of whose changes has a side-by-side view, Side by side
+ * cannot be chosen, with the reason, and Inline, which is what is drawn, reads
+ * as chosen: a choice that changed nothing would read as broken.
  */
 export function ChangesLayoutToggle({
   layout,
@@ -110,30 +117,28 @@ export function ChangesLayoutToggle({
   splittable?: boolean;
 }): JSX.Element {
   const reasonId = useId();
-  const split = splittable && layout === "split";
+  const drawn: ChangesLayout = splittable ? layout : "inline";
   return (
-    // The reason rides on the wrapper too: a disabled button shows no title.
-    <span
-      className="inline-flex"
-      title={splittable ? undefined : NO_SPLIT_REASON}
-    >
-      <Button
-        type="button"
-        variant={split ? "default" : "outline"}
-        size="sm"
-        aria-pressed={split}
-        disabled={!splittable}
+    <>
+      <SegmentedChoice
+        aria-label="How changes are shown"
+        options={LAYOUT_OPTIONS.map(option =>
+          option.value === "split" && !splittable
+            ? { ...option, disabled: true }
+            : option
+        )}
+        value={drawn}
+        onSelect={next => {
+          if (isChangesLayout(next)) onChange(next);
+        }}
+        title={splittable ? undefined : NO_SPLIT_REASON}
         aria-describedby={splittable ? undefined : reasonId}
-        onClick={() => onChange(split ? "inline" : "split")}
-      >
-        <Columns2 className="h-4 w-4" aria-hidden="true" />
-        Side by side
-      </Button>
+      />
       {splittable ? null : (
         <span id={reasonId} className="sr-only">
           {NO_SPLIT_REASON}
         </span>
       )}
-    </span>
+    </>
   );
 }
