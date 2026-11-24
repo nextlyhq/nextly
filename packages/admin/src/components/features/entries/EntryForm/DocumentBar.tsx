@@ -608,6 +608,7 @@ function mainMenuItemsFor({
     ...viewsToOpenIn.map((way, index) => ({
       id: `open-in-view-${index}`,
       label: way.label,
+      href: way.address,
       onSelect: () => navigateTo(way.address),
     })),
   ];

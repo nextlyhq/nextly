@@ -18,6 +18,11 @@ import {
 import { BarUnderTest as DocumentBar } from "./bar-under-test";
 
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
+// History is offered to a reader who may read it.
+vi.mock("@admin/hooks/useCanRequest", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useCanRequest")>()),
+  useCanRequest: () => true,
+}));
 
 const localization = vi.hoisted(() => ({
   enabled: true,

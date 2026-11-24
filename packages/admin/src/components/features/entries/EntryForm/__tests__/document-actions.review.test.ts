@@ -327,7 +327,7 @@ describe("the next step, per person and stage", () => {
 
       expect(actions[0]).toMatchObject({ id: "publish", placement: "primary" });
       expect(
-        actionsAt(actions, "toolbar").map(action => action.label)
+        actionsAt(actions, "publish-menu").map(action => action.label)
       ).toContain("Save draft");
     });
   });

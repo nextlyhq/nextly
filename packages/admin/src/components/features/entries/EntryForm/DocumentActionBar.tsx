@@ -38,6 +38,7 @@ import { ChevronDown, Loader2, Lock, MoreHorizontal } from "lucide-react";
 import { Fragment, useId, type JSX } from "react";
 
 import { useInTopBar } from "@admin/components/layout/header/TopBarPlaces";
+import { Link } from "@admin/components/ui/link";
 import { cn } from "@admin/lib/utils";
 
 import { BAR_CONTROLS_GAP, BAR_ICON_CONTROL } from "./bar-controls";
@@ -201,6 +202,12 @@ export interface NarrowMenuItem {
   id: string;
   label: string;
   onSelect: () => void;
+  /**
+   * Where the row leads, for a way into another view: drawn as a link, so a
+   * middle or modified click opens it in a new tab as a list row's does, and
+   * `onSelect` is not called.
+   */
+  href?: string;
   disabled?: boolean;
   /**
    * The row that shows or hides the document panel. While it is folded here,
@@ -409,6 +416,9 @@ export function DocumentActionBar({
 /** The built-in Publish's id, under both "Publish" and "Publish changes". */
 const PUBLISH_ACTION_ID = "publish";
 
+/** The built-in Save's id, under every word it is said with. */
+const SAVE_ACTION_ID = "save";
+
 /** Whether a row publishes past the workflow, which the menu sets apart. */
 function skipsReview(entry: Bound): boolean {
   return entry.action.id === PUBLISH_WITHOUT_REVIEW_ACTION_ID;
@@ -585,14 +595,7 @@ export function ActionOptionsMenu({
           <OptionRow key={entry.action.id} entry={entry} />
         ))}
         {rows.map(item => (
-          <DropdownMenuItem
-            key={item.id}
-            disabled={item.disabled === true}
-            onSelect={item.onSelect}
-            data-menu-row={item.id}
-          >
-            {item.label}
-          </DropdownMenuItem>
+          <BarRow key={item.id} item={item} />
         ))}
         {/* A rule only between two populated groups, as in More. */}
         {options.length + rows.length > 0 && apartOptions.length > 0 ? (
@@ -610,6 +613,33 @@ export function ActionOptionsMenu({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * One of the bar's own rows in a menu: a link where it leads to another view,
+ * otherwise an item that runs it.
+ */
+function BarRow({ item }: { item: NarrowMenuItem }) {
+  if (item.href !== undefined) {
+    return (
+      <DropdownMenuItem
+        asChild
+        disabled={item.disabled === true}
+        data-menu-row={item.id}
+      >
+        <Link href={item.href}>{item.label}</Link>
+      </DropdownMenuItem>
+    );
+  }
+  return (
+    <DropdownMenuItem
+      disabled={item.disabled === true}
+      onSelect={item.onSelect}
+      data-menu-row={item.id}
+    >
+      {item.label}
+    </DropdownMenuItem>
   );
 }
 
@@ -670,9 +700,14 @@ const COMPACT_DANGER_IDS: ReadonlySet<string> = new Set(["unpublish"]);
 
 /**
  * What a compact bar draws: the leading action, the rows its arrow holds
- * (the toolbar's, then the other ways to publish) and, below a rule, the
- * destructive one it keeps. One answer for every compact drawing, so a
- * status-carrying pair and the compact bar keep the same rows.
+ * (the toolbar's, then the main button's menu: saving and the other ways to
+ * publish) and, below a rule, the destructive one it keeps. One answer for
+ * every compact drawing, so a status-carrying pair and the compact bar keep
+ * the same rows.
+ *
+ * `withToolbar: false` is for a surface that draws its own Save beside the
+ * leading action: it leaves out the toolbar's rows and Save, which would
+ * otherwise be offered twice.
  */
 export function compactRows(
   actions: readonly EditorDocumentAction[],
@@ -684,7 +719,9 @@ export function compactRows(
     primary,
     options: [
       ...(withToolbar ? bound(actionsAt(available, "toolbar"), bindings) : []),
-      ...bound(actionsAt(available, "publish-menu"), bindings),
+      ...bound(actionsAt(available, "publish-menu"), bindings).filter(
+        entry => withToolbar || entry.action.id !== SAVE_ACTION_ID
+      ),
     ],
     danger: bound(
       menuGroups(available).danger.filter(action =>
@@ -790,14 +827,7 @@ function DocumentMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className={menuClassName}>
         {narrowItems.map(item => (
-          <DropdownMenuItem
-            key={item.id}
-            disabled={item.disabled === true}
-            onSelect={item.onSelect}
-            data-narrow-item={item.id}
-          >
-            {item.label}
-          </DropdownMenuItem>
+          <BarRow key={item.id} item={item} />
         ))}
         {narrowItems.length > 0 && wideMenu ? <DropdownMenuSeparator /> : null}
         {documentItems.map(({ action, binding }) => (
