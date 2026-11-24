@@ -22,6 +22,7 @@ import {
   defineCollection,
   defineConfig,
   defineFieldGroup,
+  defineSingle,
 } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import {
@@ -58,6 +59,7 @@ export interface LoadedConfig {
 export interface Declared {
   collections: ReturnType<typeof defineCollection>[];
   fieldGroups: ReturnType<typeof defineFieldGroup>[];
+  singles?: ReturnType<typeof defineSingle>[];
 }
 
 export interface SiteOptions {
@@ -236,6 +238,7 @@ export async function openStorageGenerationSite(
     defineConfig({
       collections: declared.collections,
       fieldGroups: declared.fieldGroups,
+      ...(declared.singles ? { singles: declared.singles } : {}),
       ...(localization ? { localization } : {}),
       ...(plugins ? { plugins } : {}),
     });
@@ -259,6 +262,7 @@ export async function openStorageGenerationSite(
         adapter: database.adapter as never,
         collections: declared.collections,
         fieldGroups: declared.fieldGroups,
+        ...(declared.singles ? { singles: declared.singles } : {}),
         ...(localization ? { localization } : {}),
         ...(bootPlugins ? { plugins: bootPlugins } : {}),
         ...(logger ? { logger: logger as never } : {}),

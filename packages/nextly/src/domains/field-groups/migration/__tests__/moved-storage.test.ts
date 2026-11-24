@@ -135,7 +135,7 @@ const txOf = () => {
     },
   };
   inFlow = handle;
-  return { said, handle, tx: { getDrizzle: () => handle } as never };
+  return { said, handle };
 };
 const TX = { select: () => undefined };
 const rowsOf = (...slugs: string[]) => ({
@@ -177,7 +177,7 @@ const failing = (adapter: Adapter, error: unknown, tx = txOf()) =>
   refusingMovedStorage({
     adapter: adapter as never,
     rows: rowsOf("hero", "cta"),
-    tx: tx.tx,
+    executor: tx.handle,
     work: () => Promise.reject(error),
   }).then(
     () => undefined,
@@ -309,7 +309,7 @@ describe("the savepoint a transaction takes", () => {
     refusingMovedStorage({
       adapter: adapter as never,
       rows: rowsOf("hero"),
-      tx: tx.tx,
+      executor: tx.handle,
       work: () =>
         error === undefined ? Promise.resolve() : Promise.reject(error),
     }).catch((raised: unknown) => {
@@ -449,12 +449,14 @@ describe("the savepoint a transaction takes", () => {
 });
 
 describe("raiseIfMoved", () => {
-  const raise = (dialect: Dialect, executor?: unknown) =>
-    raiseIfMoved({
+  const raise = (dialect: Dialect, executor?: object) => {
+    inFlow = executor;
+    return raiseIfMoved({
       adapter: adapterOf(dialect) as never,
       error: missingTable[dialect]("comp_hero"),
       ...(executor === undefined ? {} : { executor }),
     });
+  };
 
   it("raises a moved table, on a transaction and off one", async () => {
     held = { fg_hero: ["id"] };
@@ -471,6 +473,24 @@ describe("raiseIfMoved", () => {
     for (const dialect of ["sqlite", "mysql", "postgresql"] as const) {
       await expect(raise(dialect)).resolves.toBeUndefined();
     }
+  });
+});
+
+describe("an executor that is the pool rather than a transaction", () => {
+  it("is read as no transaction: a lookup follows a moved registry and goes on", async () => {
+    const lookup = vi
+      .fn()
+      .mockRejectedValueOnce(missingTable.postgresql("dynamic_components"))
+      .mockResolvedValueOnce({ slug: "hero" });
+    await expect(
+      lookingUpRegistry({
+        adapter: adapterOf("postgresql") as never,
+        executor: POOL,
+        lookup,
+        useName: () => undefined,
+      })
+    ).resolves.toEqual({ slug: "hero" });
+    expect(readOn).toEqual([]);
   });
 });
 

@@ -1,5 +1,4 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, asc, eq, getColumns, type SQL } from "drizzle-orm";
 
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -53,6 +52,7 @@ import { directFieldGroupFields } from "../field-group-write-access";
 import {
   followMovedFieldGroupTable,
   isMovedStorageError,
+  isOnTransaction,
   raiseIfMoved,
   refusingMovedStorage,
 } from "../migration/moved-storage";
@@ -948,14 +948,16 @@ export class FieldGroupQueryService extends BaseService {
   async populateComponentData(
     params: PopulateComponentDataParams
   ): Promise<Record<string, unknown>> {
-    const [populated] = await this.populateComponentDataInEach(params, [
-      {
-        locale: params.locale,
-        fallbackLocale: params.fallbackLocale,
-        // The languages the entry is not published in travel with the language read.
-        skipLanguages: params.skipLanguages,
-      },
-    ]);
+    const [populated] = await this.guarded(params.executor, () =>
+      this.populateComponentDataInEach(params, [
+        {
+          locale: params.locale,
+          fallbackLocale: params.fallbackLocale,
+          // The languages the entry is not published in travel with the language read.
+          skipLanguages: params.skipLanguages,
+        },
+      ])
+    );
     return populated;
   }
 
@@ -972,20 +974,25 @@ export class FieldGroupQueryService extends BaseService {
       "locale" | "fallbackLocale" | "skipLanguages"
     > & {
       languages: readonly ComponentReadLanguage[];
-      /** The write's transaction `executor` reads on, for a read the write is refused by. */
-      tx?: TransactionContext;
     }
   ): Promise<Record<string, unknown>[]> {
-    const { tx, languages, ...read } = params;
-    const work = () => this.populateComponentDataInEach(read, languages);
-    return tx === undefined
-      ? work()
-      : refusingMovedStorage({
-          adapter: this.adapter,
-          rows: this.registryService,
-          tx,
-          work,
-        });
+    return this.guarded(params.executor, () =>
+      this.populateComponentDataInEach(params, params.languages)
+    );
+  }
+
+  /**
+   * A read of field groups, refused to be retried when it runs on a write's transaction and meets
+   * storage the migration moved (`refusingMovedStorage`). Every public read is made through it: a
+   * write reads the groups it holds before it writes them, and afterwards for what it records.
+   */
+  private guarded<T>(executor: unknown, work: () => Promise<T>): Promise<T> {
+    return refusingMovedStorage({
+      adapter: this.adapter,
+      rows: this.registryService,
+      executor,
+      work,
+    });
   }
 
   private async populateComponentDataInEach(
@@ -1165,6 +1172,14 @@ export class FieldGroupQueryService extends BaseService {
   async populateComponentDataMany(
     params: PopulateComponentDataManyParams
   ): Promise<Record<string, unknown>[]> {
+    return this.guarded(params.executor, () =>
+      this.populateComponentDataManyOn(params)
+    );
+  }
+
+  private async populateComponentDataManyOn(
+    params: PopulateComponentDataManyParams
+  ): Promise<Record<string, unknown>[]> {
     const {
       entries,
       parentTable,
@@ -1307,6 +1322,22 @@ export class FieldGroupQueryService extends BaseService {
    * stored.
    */
   async populateComponentDataBesideEntries(
+    params: Omit<
+      PopulateComponentDataManyParams,
+      "locale" | "fallbackLocale" | "access"
+    > & {
+      /** Who each language's related rows are read for, asked in that language. */
+      accessIn: (locale: string) => ComponentReadAccess;
+      /** One language's pending change, by top-level field, shown in place of its stored values. */
+      pending?: { locale: string; values: Record<string, unknown> };
+    }
+  ): Promise<void> {
+    return this.guarded(params.executor, () =>
+      this.populateComponentDataBesideEntriesOn(params)
+    );
+  }
+
+  private async populateComponentDataBesideEntriesOn(
     params: Omit<
       PopulateComponentDataManyParams,
       "locale" | "fallbackLocale" | "access"
@@ -2086,7 +2117,7 @@ export class FieldGroupQueryService extends BaseService {
     followed: boolean
   ): Promise<string | undefined> {
     if (followed || !isMovedStorageError(error)) return undefined;
-    if (executor !== undefined) {
+    if (isOnTransaction(this.adapter, executor)) {
       await raiseIfMoved({ adapter: this.adapter, error, executor });
       return undefined;
     }

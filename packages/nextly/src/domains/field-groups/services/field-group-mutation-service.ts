@@ -1026,7 +1026,7 @@ export class FieldGroupMutationService extends BaseService {
         refusingMovedStorage({
           adapter: this.adapter,
           rows: this.registryService,
-          tx,
+          executor: tx.getDrizzle(),
           work: () => this.writeFieldGroupsInTx(tx, params, validateOnly),
         })
     );
@@ -1156,7 +1156,7 @@ export class FieldGroupMutationService extends BaseService {
     await refusingMovedStorage({
       adapter: this.adapter,
       rows: this.registryService,
-      tx,
+      executor: tx.getDrizzle(),
       work: async () => {
         for (const f of this.storedFieldGroupFields(fields)) {
           await this.deleteFieldComponentDataInTx(

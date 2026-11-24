@@ -1256,7 +1256,6 @@ describe("FieldGroupDataService", () => {
         parentTable: "dc_pages",
         fields: [seoComponentField()] as never,
         executor: TX_DRIZZLE_HANDLE,
-        tx: createMockTxContext() as never,
         strict: true,
         depth: 0,
         languages: [{}],

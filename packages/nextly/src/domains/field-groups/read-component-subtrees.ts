@@ -124,7 +124,6 @@ export async function readComponentSubtreesByLocale({
         parentTable,
         fields: fieldConfigs,
         executor: tx.getDrizzle(),
-        tx,
         depth: 0,
         strict: true,
         // Each named language read with no fallback, so an embedded localized

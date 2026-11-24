@@ -15,7 +15,6 @@
  * @module domains/field-groups/migration/moved-storage
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
 import {
@@ -228,6 +227,14 @@ async function heldElsewhere(
   });
 }
 
+/** Whether a caller handed over a transaction's connection rather than nothing, or the pool. */
+export function isOnTransaction(
+  adapter: DrizzleAdapter,
+  executor: unknown
+): boolean {
+  return onTransaction(adapter, executor) !== undefined;
+}
+
 /**
  * Whether a read that failed with `error` is worth following: storage the migration could have
  * moved, or a table this process has not registered, as a name the migration gave is until then.
@@ -304,7 +311,8 @@ export async function lookingUpRegistry<T>(args: {
   /** Makes `lookup` address the registry as `name` for the rest of the transaction. */
   useName: (name: string) => void;
 }): Promise<T> {
-  const { adapter, executor, lookup, useName } = args;
+  const { adapter, lookup, useName } = args;
+  const executor = onTransaction(adapter, args.executor);
   const forget = (): void => {
     forgetFieldGroupStorageNames(adapter);
     clearRegistryRowCache();
@@ -348,6 +356,16 @@ export async function lookingUpRegistry<T>(args: {
     await adapter.afterRollback(forget);
     throw storageMovingRefusal(candidate.missing);
   }
+}
+
+/**
+ * The transaction's connection a caller handed over, or undefined when what it handed over is the
+ * pool: a read with no transaction open can follow a move and go on, as one given no executor can.
+ */
+function onTransaction(adapter: DrizzleAdapter, executor: unknown): unknown {
+  return executor !== undefined && adapter.transactionOpenInFlow()
+    ? executor
+    : undefined;
 }
 
 /** The catalog as `executor`, the connection a transaction holds, reads it. */
@@ -459,11 +477,13 @@ let savepointSequence = 0;
 export async function refusingMovedStorage<T>(args: {
   adapter: DrizzleAdapter;
   rows: FieldGroupRows;
-  tx: TransactionContext;
+  /** The caller's transaction; `work` runs plainly for a caller that has none. */
+  executor: unknown;
   work: () => Promise<T>;
 }): Promise<T> {
-  const { adapter, rows, tx, work } = args;
-  const executor: unknown = tx.getDrizzle();
+  const { adapter, rows, work } = args;
+  const executor = onTransaction(adapter, args.executor);
+  if (executor === undefined) return work();
   const savepoint = await takeSavepoint(adapter, executor);
   try {
     return await work();
@@ -503,7 +523,8 @@ export async function raiseIfMoved(args: {
   /** The caller's transaction, when it runs on one. */
   executor?: unknown;
 }): Promise<void> {
-  const { adapter, error, executor } = args;
+  const { adapter, error } = args;
+  const executor = onTransaction(adapter, args.executor);
   const candidate = moveCandidate(error);
   if (candidate === undefined) return;
   if (executor === undefined) {

@@ -29,10 +29,12 @@ import { recordStatements } from "../../../__tests__/helpers/record-statements";
 import {
   defineCollection,
   defineFieldGroup,
+  defineSingle,
   fieldGroup,
   text,
 } from "../../../config";
 import { getConfiguredTestDialects } from "../../../plugins/test-nextly";
+import { takeAbortedTransactionSightings } from "../../../plugins/aborted-transaction-sightings";
 import { underSavepoint } from "../../versions/version-capture-service";
 import { refusingMovedStorage } from "../migration/moved-storage";
 
@@ -49,6 +51,16 @@ const declared = {
   collections: [
     defineCollection({
       slug: "fgnm_posts",
+      versions: true,
+      fields: [
+        text({ name: "title" }),
+        fieldGroup({ name: "card", component: "fgnm_card" }),
+      ],
+    }),
+  ],
+  singles: [
+    defineSingle({
+      slug: "fgnm_home",
       versions: true,
       fields: [
         text({ name: "title" }),
@@ -119,6 +131,10 @@ describe.each(getConfiguredTestDialects())(
         data: { title: "P", card: { heading: "Kept" } } as never,
       });
       const id = (created.item as { id: string }).id;
+      await nextly.updateSingle({
+        slug: "fgnm_home" as never,
+        data: { title: "H", card: { heading: "Kept" } } as never,
+      });
       if (options.migrated === true) {
         expect((await site.migrateStorage()).ran).toBe(true);
         ({ nextly } = await site.developmentStart(declared));
@@ -142,7 +158,18 @@ describe.each(getConfiguredTestDialects())(
       };
       const remove = () =>
         outcome(nextly.delete({ collection: "fgnm_posts" as never, id }));
-      return { save, read, heading, remove };
+      const saveSingle = (value = "New") =>
+        outcome(
+          nextly.updateSingle({
+            slug: "fgnm_home" as never,
+            data: { card: { heading: value }, _overwrite: true } as never,
+          })
+        );
+      const singleHeading = async () => {
+        const found = await nextly.findSingle({ slug: "fgnm_home" as never });
+        return (found as { card?: { heading?: unknown } }).card?.heading;
+      };
+      return { save, read, heading, remove, saveSingle, singleHeading };
     };
 
     /** The whole migration's renames, under a server that keeps running. */
@@ -209,7 +236,7 @@ describe.each(getConfiguredTestDialects())(
 
       await tried(() => save("First"), [MOVING]);
       expect(await heading()).toBe("First");
-      expect(await rowsIn(CURRENT)).toBe(1);
+      expect(await rowsIn(CURRENT)).toBe(2);
     });
 
     it("refuses a first save of a group that keeps its table name, whose column moved, and saves it on the retry", async () => {
@@ -220,7 +247,16 @@ describe.each(getConfiguredTestDialects())(
 
       await tried(() => save("First"), [MOVING]);
       expect(await heading()).toBe("First");
-      expect(await rowsIn(TABLE)).toBe(1);
+      expect(await rowsIn(TABLE)).toBe(2);
+    });
+
+    it("refuses a first save of a Single's group the whole migration moved, and saves it on the retry", async () => {
+      // A Single reads the groups it holds on its transaction before it writes them.
+      const { saveSingle, singleHeading } = await openSite();
+      await moveEverything();
+
+      await tried(() => saveSingle("First"), [MOVING]);
+      expect(await singleHeading()).toBe("First");
     });
 
     it("refuses a delete meeting a moved table, rather than leaving the group's rows behind", async () => {
@@ -228,7 +264,7 @@ describe.each(getConfiguredTestDialects())(
       await moveEverything();
 
       await tried(remove, [MOVING]);
-      expect(await rowsIn(CURRENT)).toBe(0);
+      expect(await rowsIn(CURRENT), "the Single's row alone").toBe(1);
     });
 
     it("loses nothing to a rollback under a server on the current names, and saves on a retry", async () => {
@@ -240,11 +276,11 @@ describe.each(getConfiguredTestDialects())(
 
       await tried(async () => {
         const answer = await save("Back");
-        expect(await rowsIn(TABLE), "what the group held is there").toBe(1);
+        expect(await rowsIn(TABLE), "what the group held is there").toBe(2);
         return answer;
       }, [MOVING, "INTERNAL_ERROR"]);
       expect(await heading()).toBe("Back");
-      expect(await rowsIn(TABLE)).toBe(1);
+      expect(await rowsIn(TABLE)).toBe(2);
     });
 
     describe.runIf(dialect === "postgresql")(
@@ -265,7 +301,7 @@ describe.each(getConfiguredTestDialects())(
             refusingMovedStorage({
               adapter,
               rows: { getAllComponents: async () => [] },
-              tx,
+              executor: tx.getDrizzle(),
               work,
             });
           const step = (tx: TransactionContext, id: number) =>
@@ -311,6 +347,8 @@ describe.each(getConfiguredTestDialects())(
           );
           expect(done).not.toBe("ok");
           expect(await marks()).toEqual([]);
+          // Gone on past on purpose: the statement after it met the aborted transaction.
+          expect(takeAbortedTransactionSightings().length).toBeGreaterThan(0);
         });
 
         it("cannot be reported as done by a caller that goes on and runs nothing more", async () => {
@@ -323,7 +361,10 @@ describe.each(getConfiguredTestDialects())(
               await meetMove(tx).catch(() => undefined);
             })
           );
-          expect([done, await marks()]).not.toEqual(["ok", []]);
+          // The commit itself fails: the transaction was rolled back, not committed.
+          expect(done).not.toBe("ok");
+          expect(await marks()).toEqual([]);
+          takeAbortedTransactionSightings();
         });
 
         it("inside another part's savepoint, undoes that part alone when it is the first to take its own", async () => {
@@ -360,6 +401,7 @@ describe.each(getConfiguredTestDialects())(
           expect(seen).toEqual([MOVING]);
           expect(done).not.toBe("ok");
           expect(await marks()).toEqual([]);
+          takeAbortedTransactionSightings();
         });
       }
     );
