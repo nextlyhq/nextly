@@ -135,6 +135,7 @@ import {
   readDeletionFacts,
   runDeletions,
   runStatements,
+  tablesLeftDropped,
 } from "../../domains/schema/migrate/file-deletions";
 import {
   configurationRowsMessage,
@@ -865,26 +866,28 @@ export async function runMigrate(
     // backup nobody confirmed is refused here, before anything changes.
     // A run whose `--step` takes every pending migration reaches the data steps as a run without
     // it does, so it is asked the same before its schema changes; only one that leaves some
-    // pending leaves the steps to the run that finishes them. A count that cannot be read is
-    // taken as leaving some, as `--step` always was.
+    // pending leaves the steps to the run that finishes them. Which it does is read from the
+    // run's own plan (`migrationsAhead`). A plan that cannot be read is taken as leaving some, as
+    // `--step` always was.
+    const ahead = await migrationsAhead({
+      adapter,
+      db,
+      dialect,
+      migrationsDir: appMigrationsDir,
+      logger,
+      declared,
+      pluginMigrationSets: (
+        await pluginMigrationArgs(configResult.config.plugins ?? [])
+      ).pluginMigrationSets,
+      step: options.step,
+    }).catch(() => undefined);
     const stepLeavesPending =
-      options.step !== undefined &&
-      (await migrationsStillPending({
-        adapter,
-        db,
-        dialect,
-        migrationsDir: appMigrationsDir,
-        logger,
-        declared,
-        pluginMigrationSets: (
-          await pluginMigrationArgs(configResult.config.plugins ?? [])
-        ).pluginMigrationSets,
-      }).then(
-        pending => pending > (options.step ?? 0),
-        () => true
-      ));
+      options.step !== undefined && (ahead?.leavesPending ?? true);
     await storedData
-      .confirmBeforeSchemaChanges(stepLeavesPending ? options.step : undefined)
+      .confirmBeforeSchemaChanges(
+        stepLeavesPending ? options.step : undefined,
+        ahead?.dropped
+      )
       .catch(fail);
 
     // The consent a deleting file needs, read from the flag and the environment before anything
@@ -4905,6 +4908,68 @@ export async function migrationsStillPending(args: {
           undefined
         );
   return files.length + modules.length;
+}
+
+/**
+ * What a run with `step` leaves of the migrations, read from the plan the run itself follows:
+ * the plugin modules within its budget first (`pendingPluginModules`), then the app files within
+ * what is left (`appStepAfter`, `fileRunPlan`), which runs past the budget to close a move and
+ * reads a step of zero or less as no limit. `leavesPending` says whether any module or file stays
+ * pending; `dropped` names the tables the app files it runs leave dropped (`tablesLeftDropped`),
+ * whose rows the data steps after them never reach.
+ */
+export async function migrationsAhead(args: {
+  adapter: CLIDatabaseAdapter;
+  db: unknown;
+  dialect: SupportedDialect;
+  migrationsDir: string;
+  logger: CommandContext["logger"];
+  declared?: DeclaredNames;
+  pluginMigrationSets: readonly PluginMigrationSet[];
+  step: number | undefined;
+}): Promise<{ leavesPending: boolean; dropped: ReadonlySet<string> }> {
+  const listed = await listMigrationFiles(
+    args.adapter,
+    args.db,
+    args.dialect,
+    args.migrationsDir,
+    args.logger,
+    args.declared
+  );
+  const applied =
+    args.pluginMigrationSets.length === 0
+      ? new Map<string, string | null>()
+      : await appliedPluginModules({
+          adapter: args.adapter,
+          db: args.db,
+          dialect: args.dialect,
+        });
+  const modulesPending = pendingPluginModules(
+    args.pluginMigrationSets,
+    applied,
+    undefined
+  ).length;
+  const modulesRun = pendingPluginModules(
+    args.pluginMigrationSets,
+    applied,
+    args.step
+  ).length;
+  const files = appFilesInStep(listed, appStepAfter(args.step, modulesRun));
+  const runs = new Set(files);
+  const filesLeft = listed.some(
+    ({ file, applied: done }) => !done && !runs.has(file)
+  );
+  return {
+    leavesPending: modulesRun < modulesPending || filesLeft,
+    dropped: new Set(
+      tablesLeftDropped(
+        files.flatMap(file =>
+          splitSqlStatements(file.upSql, args.dialect, file)
+        ),
+        args.dialect
+      )
+    ),
+  };
 }
 
 /** The app's migration files in run order, each with whether the ledger records it applied. */

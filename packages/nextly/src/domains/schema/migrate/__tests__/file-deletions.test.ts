@@ -21,6 +21,7 @@ import {
   runDeletions,
   type DeletionFacts,
   type NulledColumn,
+  tablesLeftDropped,
 } from "../file-deletions";
 import { guardedIndexDrop } from "../../pipeline/sql-templates/mysql-live-restate";
 
@@ -1991,5 +1992,46 @@ describe("a prepared statement on MySQL", () => {
         description: expect.stringContaining("not read, may delete data"),
       })
     );
+  });
+});
+
+describe("the tables a statement list leaves dropped", () => {
+  it("names a dropped table, a translations table dropped with it, lower-cased", () => {
+    expect(
+      tablesLeftDropped(
+        [
+          'DROP TABLE IF EXISTS "dc_Notes_locales" CASCADE',
+          'DROP TABLE "dc_notes"',
+        ],
+        "postgresql"
+      ).sort()
+    ).toEqual(["dc_notes", "dc_notes_locales"]);
+  });
+
+  it("leaves out a table made again after it is dropped, as SQLite rebuilds one", () => {
+    expect(
+      tablesLeftDropped(
+        [
+          'CREATE TABLE "__new_dc_posts" ("id" text PRIMARY KEY)',
+          'DROP TABLE "dc_posts"',
+          'ALTER TABLE "__new_dc_posts" RENAME TO "dc_posts"',
+          'DROP TABLE "dc_tags"',
+          'CREATE TABLE "dc_tags" ("id" text PRIMARY KEY)',
+        ],
+        "sqlite"
+      )
+    ).toEqual([]);
+  });
+
+  it("names a table renamed away, and nothing for a statement that drops none", () => {
+    expect(
+      tablesLeftDropped(
+        [
+          'ALTER TABLE "dc_old" RENAME TO "dc_new"',
+          'ALTER TABLE "dc_new" ADD COLUMN "x" text',
+        ],
+        "postgresql"
+      )
+    ).toEqual(["dc_old"]);
   });
 });

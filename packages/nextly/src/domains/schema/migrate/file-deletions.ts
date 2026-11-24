@@ -2822,6 +2822,41 @@ export function functionsDefinedBy(
   );
 }
 
+/**
+ * The tables a statement list leaves dropped, lower-cased, read in order: one dropped and then
+ * made again, or renamed onto (SQLite's rebuild of a table under a new name, renamed back), is not
+ * among them, and one renamed away is. What the localisation steps leave out ahead of a run whose
+ * files remove an entity, since the run never reaches the rows those tables hold.
+ */
+export function tablesLeftDropped(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): string[] {
+  const dropped = new Set<string>();
+  // Made by the list itself: such a table renamed away was never one the database held.
+  const made = new Set<string>();
+  const gone = (table: string) => {
+    if (!made.delete(table)) dropped.add(table);
+  };
+  const there = (table: string) => {
+    dropped.delete(table);
+    made.add(table);
+  };
+  for (const statement of statements) {
+    for (const step of readStatement(statement, dialect)) {
+      if (step.kind === "drop" && step.temporary !== true) {
+        gone(step.table.toLowerCase());
+      } else if (step.kind === "create" && step.temporary !== true) {
+        there(step.table.toLowerCase());
+      } else if (step.kind === "rename-table") {
+        gone(step.from.toLowerCase());
+        there(step.to.toLowerCase());
+      }
+    }
+  }
+  return [...dropped];
+}
+
 /** A read that answers undefined rather than throwing. */
 async function settle<T>(read: () => Promise<T>): Promise<T | undefined> {
   try {

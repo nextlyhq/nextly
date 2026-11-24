@@ -63,9 +63,13 @@ export interface StoredDataOfRun {
   /**
    * Before the command changes the schema: refuses work whose backup nobody
    * confirmed. Not made for a run limited by `--step`, which may stop before
-   * the steps.
+   * the steps. `droppedAhead` names the tables the run's migrations drop, whose rows the steps
+   * then never reach (`UpgradeStepContext.droppedAhead`).
    */
-  confirmBeforeSchemaChanges: (step?: number) => Promise<void>;
+  confirmBeforeSchemaChanges: (
+    step?: number,
+    droppedAhead?: ReadonlySet<string>
+  ) => Promise<void>;
   /**
    * Once the schema is up to date: runs the steps. `schemaChanges` names what the command changed
    * in the schema before them, which a refusal the steps make then says stays applied.
@@ -222,7 +226,10 @@ export function storedDataOfRun(args: {
     return yes;
   };
   /** What the steps are run with, before or after the run's schema changes. */
-  const deps = (afterMigrations: boolean): DataStepsDeps => ({
+  const deps = (
+    afterMigrations: boolean,
+    droppedAhead?: ReadonlySet<string>
+  ): DataStepsDeps => ({
     afterMigrations,
     adapter,
     command: args.command,
@@ -234,6 +241,7 @@ export function storedDataOfRun(args: {
     warn: message => logger.warn(message),
     ...(args.underLock !== undefined ? { underLock: args.underLock } : {}),
     ...(args.site !== undefined ? { site: args.site } : {}),
+    ...(droppedAhead !== undefined ? { droppedAhead } : {}),
     ...(args.lockTtlSeconds !== undefined
       ? { lockTtlSeconds: args.lockTtlSeconds }
       : {}),
@@ -272,10 +280,10 @@ export function storedDataOfRun(args: {
     // steps leaves the schema as it was too. A count that cannot be read
     // yet, on a database whose tables the run creates, is taken again after
     // it; a refusal made then says that the schema changes had applied.
-    confirmBeforeSchemaChanges: async step => {
+    confirmBeforeSchemaChanges: async (step, droppedAhead) => {
       if (step !== undefined) return;
       try {
-        const before = deps(false);
+        const before = deps(false, droppedAhead);
         // A refusal of the stored data holds whatever the migrations change, so it is made here,
         // with nothing changed and before any backup question, by any step: a later step's too,
         // where an earlier one has work. Anything else is a count taken again after them.

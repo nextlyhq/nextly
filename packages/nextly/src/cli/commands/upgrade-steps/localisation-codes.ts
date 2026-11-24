@@ -104,6 +104,8 @@ async function translationTables(
   const tables: string[] = [];
   for (const entity of await siteEntities(context)) {
     const table = `${entity.tableName}_locales`;
+    // One the run's migrations drop, as they do where an entity stops being translated.
+    if (context.droppedAhead?.has(table.toLowerCase())) continue;
     if (await context.adapter.tableExists(table)) tables.push(table);
   }
   return tables;
