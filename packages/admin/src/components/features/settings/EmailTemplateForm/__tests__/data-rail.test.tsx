@@ -28,7 +28,11 @@ beforeAll(
   60_000
 );
 
-const CLEAR: TemplateVariableCheck = { undeclared: [], missing: [] };
+const CLEAR: TemplateVariableCheck = {
+  undeclared: [],
+  missing: [],
+  blanks: "checked",
+};
 
 const ORDER: SampleDeclaration[] = [
   {
@@ -252,6 +256,7 @@ describe("the Data panel's JSON", () => {
 
 describe("the Data panel's variable check", () => {
   const check: TemplateVariableCheck = {
+    blanks: "checked",
     undeclared: [{ name: "order", paths: ["order.number", "order.lines"] }],
     missing: ["order.number", "currency"],
   };
@@ -277,6 +282,24 @@ describe("the Data panel's variable check", () => {
     const missing = screen.getByTestId("missing-values");
     expect(missing.textContent).toContain("{{currency}}");
     expect(missing.textContent).toContain("{{order.number}}");
+  });
+
+  it.each([
+    ["loading", "Every variable used is declared. Checking for blank values…"],
+    [
+      "kept",
+      "Every variable used is declared. Blank values aren't checked for an email kept on its first engine.",
+    ],
+    [
+      "unavailable",
+      "Every variable used is declared. Blank values couldn't be checked.",
+    ],
+  ] as const)("claims no value it hasn't checked: %s", (blanks, text) => {
+    render(<Harness variables={ORDER} check={{ ...CLEAR, blanks }} />);
+    expect(screen.getByTestId("variable-check").textContent).toContain(text);
+    expect(
+      screen.queryByText("Every variable used is declared and has a value.")
+    ).toBeNull();
   });
 
   it("says so when everything used is declared and has a value", () => {

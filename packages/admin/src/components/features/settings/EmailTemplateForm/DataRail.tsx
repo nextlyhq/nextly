@@ -172,6 +172,15 @@ function JsonEditor({
   );
 }
 
+/** What the check found nothing wrong with, as far as it looked. */
+const ALL_CLEAR: Record<TemplateVariableCheck["blanks"], string> = {
+  checked: "Every variable used is declared and has a value.",
+  loading: "Every variable used is declared. Checking for blank values…",
+  kept: "Every variable used is declared. Blank values aren't checked for an email kept on its first engine.",
+  unavailable:
+    "Every variable used is declared. Blank values couldn't be checked.",
+};
+
 /** The variables the template uses but doesn't declare, and those left blank. */
 function VariableCheck({
   check,
@@ -242,7 +251,7 @@ function VariableCheck({
       ) : null}
       {check.undeclared.length === 0 && check.missing.length === 0 ? (
         <p className="rounded-md border border-border bg-muted p-3 text-xs text-muted-foreground">
-          Every variable used is declared and has a value.
+          {ALL_CLEAR[check.blanks]}
         </p>
       ) : null}
     </div>

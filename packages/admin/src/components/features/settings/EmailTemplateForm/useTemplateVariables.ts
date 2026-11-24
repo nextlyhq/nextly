@@ -32,6 +32,30 @@ export interface TemplateVariableCheck {
   undeclared: UndeclaredVariable[];
   /** The paths written out with no value and no fallback, each once. */
   missing: string[];
+  /**
+   * Whether blank values were judged: not yet, not for a body kept on its
+   * first engine, or not at all where the analysis could not be loaded.
+   */
+  blanks: "checked" | "loading" | "kept" | "unavailable";
+}
+
+/**
+ * Whether a declaration covers `path`: one of its top-level name, or a dotted
+ * one naming it or what it is read from.
+ */
+function coveredBy(declared: ReadonlySet<string>, path: string): boolean {
+  if (declared.has(path.split(/[.[]/)[0] ?? path)) return true;
+  for (const name of declared) {
+    if (!name.includes(".")) continue;
+    if (
+      path === name ||
+      path.startsWith(`${name}.`) ||
+      path.startsWith(`${name}[`)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function useTemplateVariables({
@@ -56,11 +80,17 @@ export function useTemplateVariables({
   liquid: boolean;
 }): TemplateVariableCheck {
   const [analysis, setAnalysis] = useState<VariableAnalysis | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
   useEffect(() => {
     let live = true;
-    void import("./liquid/liquid-variables").then(loaded => {
-      if (live) setAnalysis(loaded);
-    });
+    import("./liquid/liquid-variables").then(
+      loaded => {
+        if (live) setAnalysis(loaded);
+      },
+      () => {
+        if (live) setUnavailable(true);
+      }
+    );
     return () => {
       live = false;
     };
@@ -93,7 +123,7 @@ export function useTemplateVariables({
     const undeclared = new Map<string, string[]>();
     for (const path of paths) {
       const name = path.split(/[.[]/)[0] ?? path;
-      if (supplied.has(name) || declaredNames.has(name)) continue;
+      if (supplied.has(name) || coveredBy(declaredNames, path)) continue;
       undeclared.set(name, [...(undeclared.get(name) ?? []), path]);
     }
 
@@ -113,6 +143,22 @@ export function useTemplateVariables({
         paths: used,
       })),
       missing,
+      blanks: !liquid
+        ? "kept"
+        : parsed
+          ? "checked"
+          : unavailable
+            ? "unavailable"
+            : "loading",
     };
-  }, [analysis, key, liquidKey, declared, data, isLayoutRow, liquid]);
+  }, [
+    analysis,
+    unavailable,
+    key,
+    liquidKey,
+    declared,
+    data,
+    isLayoutRow,
+    liquid,
+  ]);
 }
