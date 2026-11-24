@@ -486,6 +486,46 @@ describe("VersionComparePage — choosing the two versions", () => {
     );
   });
 
+  it("swaps a pair the page resolved from the version before", async () => {
+    // The past version's Compare opens `from=previous`: the page draws two
+    // versions, and they can be swapped as any two can.
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        from="previous"
+        to={9}
+      />
+    );
+
+    const swap = screen.getByRole("button", { name: "Swap the two versions" });
+    expect(swap).toBeEnabled();
+    await userEvent.click(swap);
+    expect(navigateMock).toHaveBeenCalledWith(
+      versionsHref(collection("e1"), { from: 9, to: 8 })
+    );
+  });
+
+  it("does not offer the version on the other side as the older one", () => {
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        from={8}
+        to={9}
+      />
+    );
+
+    const older = within(screen.getByRole("combobox", { name: "Compare" }));
+    // A version compared with itself says nothing.
+    expect(older.queryByRole("option", { name: /^Version 9/ })).toBeNull();
+    expect(
+      older.getByRole("option", { name: /^Version 7/ })
+    ).toBeInTheDocument();
+  });
+
   it("offers older versions only in the newer one's language", () => {
     useVersionsMock.mockReturnValue(
       listing([row(9, "fr"), row(8, "de"), row(7, "fr")])

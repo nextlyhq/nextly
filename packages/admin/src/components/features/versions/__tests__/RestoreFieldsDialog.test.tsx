@@ -330,6 +330,19 @@ describe("RestoreFieldsDialog", () => {
     ).toBeDisabled();
   });
 
+  it("says nothing changes while no field is chosen", async () => {
+    renderDialog({
+      language: "Spanish",
+      rows: [{ ...rows[0]!, shared: false }],
+    });
+    await userEvent.click(screen.getByRole("checkbox", { name: /Title/ }));
+
+    expect(
+      screen.getByText("No field is chosen, so nothing changes.")
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Changes Spanish/)).toBeNull();
+  });
+
   it("asks a question naming the version", () => {
     renderDialog();
 

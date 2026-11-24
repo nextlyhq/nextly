@@ -433,7 +433,7 @@ describe("VersionComparePage, its choices", () => {
 
       await waitFor(() =>
         expect(error).toHaveBeenCalledWith(
-          "Couldn't copy the link. Copy it from the address bar."
+          "Couldn't copy the link. Copy it from the box below."
         )
       );
     } finally {
@@ -441,6 +441,66 @@ describe("VersionComparePage, its choices", () => {
       if (original) Object.defineProperty(navigator, "clipboard", original);
       else Reflect.deleteProperty(navigator, "clipboard");
     }
+  });
+
+  it("shows the pinned link to copy by hand when the browser offers no clipboard", async () => {
+    baselineMock.mockReturnValue({
+      data: { from: 3, to: 5, baseline: { name: "last-viewed", versionNo: 3 } },
+      isLoading: false,
+      isError: false,
+    });
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    try {
+      renderPage({ from: "last-viewed" });
+      screen.getByRole("button", { name: "Copy link" }).click();
+
+      // The address bar still names the reader's own baseline; the link
+      // shown names the two versions drawn.
+      const field = await screen.findByRole("textbox", {
+        name: "Link to this comparison",
+      });
+      const shown = new URL((field as HTMLInputElement).value);
+      expect(shown.searchParams.get("from")).toBe("3");
+      expect(shown.searchParams.get("to")).toBe("5");
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("offers older versions in the drawn comparison's language when the newer one is not loaded", () => {
+    // A shared link can name a version beyond the loaded page: the list has
+    // no record of it, but the comparison drawn says its language.
+    useVersionsMock.mockReturnValue({
+      data: {
+        pages: [
+          {
+            items: [
+              { ...row(9), locale: "fr" },
+              { ...row(8), locale: "de" },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      hasNextPage: true,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+    drawn.locale = "fr";
+
+    renderPage({ from: 19, to: 20 });
+
+    const older = screen.getByRole("combobox", { name: "Compare" });
+    const names = [...older.querySelectorAll("option")].map(o => o.textContent);
+    expect(names.some(n => n?.startsWith("Version 9"))).toBe(true);
+    expect(names.some(n => n?.startsWith("Version 8"))).toBe(false);
   });
 
   it("names the version it restores", () => {

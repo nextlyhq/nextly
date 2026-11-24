@@ -614,6 +614,10 @@ export function VersionComparePage({
   // that left the pair to the page, or named a baseline such as "the version
   // you last looked at", would open a different comparison after the next
   // save, or for another reader.
+  // The link to copy by hand, shown where the browser would not copy it: the
+  // address bar may still name the reader's own baseline, so it is not the
+  // link to share.
+  const [manualLink, setManualLink] = useState<string | null>(null);
   const copyLink = useCallback(() => {
     const href = shown
       ? new URL(
@@ -626,8 +630,10 @@ export function VersionComparePage({
           window.location.origin
         ).href
       : window.location.href;
-    const failed = () =>
-      toast.error("Couldn't copy the link. Copy it from the address bar.");
+    const failed = () => {
+      setManualLink(href);
+      toast.error("Couldn't copy the link. Copy it from the box below.");
+    };
     // A page served without HTTPS, or a browser that withholds it, has no
     // clipboard to write to: said, rather than a press that does nothing.
     if (typeof navigator.clipboard?.writeText !== "function") {
@@ -693,11 +699,22 @@ export function VersionComparePage({
     typeof from === "string" ? from : String(from ?? shown?.from ?? "");
   const newerValue = String(shown?.to ?? to ?? "");
   const newerMeta = metaOf(Number(newerValue));
-  // A version the older side may be: one in the newer side's language.
+  // The newer side's language: its record where it is loaded, else what the
+  // drawn comparison says, since a shared link can name a version beyond the
+  // loaded page. Unknown until either answers.
+  const newerLocale =
+    newerMeta !== undefined
+      ? newerMeta.locale
+      : seen !== null
+        ? seen.locale
+        : undefined;
+  // A version the older side may be: one in the newer side's language, and
+  // not the newer one itself, which compared with itself says nothing.
   const olderChoices = versions.filter(
     v =>
       v.versionNo !== null &&
-      (newerMeta === undefined || v.locale === newerMeta.locale)
+      String(v.versionNo) !== newerValue &&
+      (newerLocale === undefined || v.locale === newerLocale)
   );
 
   return (
@@ -729,6 +746,19 @@ export function VersionComparePage({
             ) : null}
           </div>
         </div>
+
+        {manualLink !== null ? (
+          <label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
+            Link to this comparison
+            <input
+              readOnly
+              value={manualLink}
+              // Chosen whole as it is reached, ready to copy.
+              onFocus={event => event.currentTarget.select()}
+              className="h-9 rounded-md border border-input bg-background px-2 font-mono text-xs text-foreground"
+            />
+          </label>
+        ) : null}
 
         {/* A labelled region rather than `main`: the dashboard shell already
             provides the document's one primary landmark, and nesting a second
@@ -776,7 +806,13 @@ export function VersionComparePage({
               className="h-9 w-9 px-0"
               aria-label="Swap the two versions"
               title="Swap the two versions"
-              disabled={!shown || typeof from === "string"}
+              // Any two versions drawn can trade places, a pair resolved from
+              // "the version before" among them; only a baseline the server
+              // resolves again on each read cannot be pinned the other way.
+              disabled={
+                !shown ||
+                (typeof from === "string" && namesServerBaseline(from))
+              }
               onClick={swap}
             >
               <ArrowLeftRight className="h-4 w-4" aria-hidden="true" />
