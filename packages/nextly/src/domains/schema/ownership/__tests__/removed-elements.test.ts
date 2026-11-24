@@ -89,11 +89,14 @@ const columns = (...names: string[]): Deletion[] =>
 /** What the check refused with, or undefined where it let the change through. */
 async function judged(
   deletions: Deletion[],
-  from: RemovedElementsSources
+  from: RemovedElementsSources,
+  /** Names as the database has them, as a push gives them; a file's are read lower-cased. */
+  exactNames = false
 ): Promise<NextlyError | undefined> {
   try {
     await refuseRemovingOthersElements({
       deletions,
+      exactNames,
       sources: from,
       dialect: "postgresql",
       entity: "Collection 'posts'",
@@ -326,7 +329,8 @@ describe("two tables whose names differ only in letter case", () => {
         liveNames: { [TABLE]: [TABLE, "Dc_Posts"] },
         recorded: [onTheOther],
         indexColumns: { idx_code: ["code"] },
-      })
+      }),
+      true
     );
 
     expect(refused).toBeUndefined();
@@ -339,7 +343,8 @@ describe("two tables whose names differ only in letter case", () => {
         liveNames: { [TABLE]: [TABLE, "Dc_Posts"] },
         recorded: [recordedIndex, onTheOther],
         indexColumns: { idx_code: ["code"] },
-      })
+      }),
+      true
     );
 
     expect(refused?.publicMessage).toContain(`on ${TABLE}`);
@@ -359,10 +364,24 @@ describe("two tables whose names differ only in letter case", () => {
         },
         recorded: [recordedIndex, onTheOther],
         indexColumns: { idx_code: ["code"] },
-      })
+      }),
+      true
     );
 
     expect(refused?.publicMessage).toContain(`on ${TABLE}`);
+    expect(refused?.publicMessage).toContain("on Dc_Posts");
+  });
+
+  it("refuses what stands on either, where a file names the table: its names are read lower-cased", async () => {
+    const refused = await judged(
+      columns("code"),
+      sources({
+        liveNames: { [TABLE]: [TABLE, "Dc_Posts"] },
+        recorded: [onTheOther],
+        indexColumns: { idx_code: ["code"] },
+      })
+    );
+
     expect(refused?.publicMessage).toContain("on Dc_Posts");
   });
 
