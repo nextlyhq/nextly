@@ -27,6 +27,8 @@ const stubs = vi.hoisted(() => ({
   compared: 0,
   inFlow: false,
   joined: 0,
+  // The entity's running table as the registry of tables holds it, where the case has one.
+  registry: undefined as { getTable: () => unknown } | undefined,
 }));
 
 vi.mock("../../pipeline/schema-lock", async original => ({
@@ -70,7 +72,7 @@ vi.mock("../../../../di/register-runtime-tables", () => ({
   registerEntityRuntimeTables: vi.fn(),
 }));
 vi.mock("../../../../dispatcher/helpers/di", () => ({
-  getSchemaRegistryFromDI: () => undefined,
+  getSchemaRegistryFromDI: () => stubs.registry,
   getCollectionsHandlerFromDI: () => undefined,
 }));
 
@@ -108,6 +110,7 @@ beforeEach(() => {
   stubs.compared = 0;
   stubs.inFlow = false;
   stubs.joined = 0;
+  stubs.registry = undefined;
   vi.mocked(registerEntityRuntimeTables).mockClear();
 });
 
@@ -148,6 +151,22 @@ describe("the left-save guard's comparison and the schema lock", () => {
     expect(entity).toMatchObject({ slug: "posts", tableName: "dc_posts" });
     expect(entity.fields.map(field => field.name)).toEqual(["note"]);
     expect(dialect).toBe("mysql");
+  });
+
+  it("narrows the running tables again where the definitions were loaded again since", async () => {
+    let running: object = { loaded: 1 };
+    stubs.registry = { getTable: () => running };
+    await expect(write({ note: "x" })).resolves.toBeUndefined();
+    await expect(write({ note: "x" })).resolves.toBeUndefined();
+    const registered = vi.mocked(registerEntityRuntimeTables).mock.calls;
+    expect(registered, "once for the table it registered").toHaveLength(1);
+
+    // Every definition loaded again puts the entity's whole table back in its place.
+    running = { loaded: 2 };
+    await expect(write({ note: "x" })).resolves.toBeUndefined();
+
+    expect(registered).toHaveLength(2);
+    expect(registered[1]![1].fields.map(field => field.name)).toEqual(["note"]);
   });
 
   it("inside a transaction, holds every field where nothing was compared before it opened", async () => {

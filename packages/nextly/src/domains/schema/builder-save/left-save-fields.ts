@@ -94,9 +94,10 @@ const comparedById = new Map<
 
 /**
  * The entities whose running tables this process has narrowed (`shapeRunningTables`), by kind and
- * slug, with the record and the missing fields they were narrowed for.
+ * slug, with the record and the missing fields they were narrowed for, and the table registered
+ * then: another one in its place since (the definitions loaded again) is narrowed again.
  */
-const narrowedBy = new Map<string, string>();
+const narrowedBy = new Map<string, { shape: string; table: unknown }>();
 
 /**
  * Refuses a write to an entry of `kind` `slug` that sets a field a left save holds: a key of
@@ -440,9 +441,15 @@ async function shapeRunningTables(
     await restoreRunningTables(args);
     return;
   }
-  // Registered again where the record or the missing fields changed since the last narrowing.
+  // Registered again where the record or the missing fields changed since the last narrowing, or
+  // where something put another table in place of the one it registered.
   const shape = `${recordId}:${[...missing].sort().join(",")}`;
-  if (narrowedBy.get(key) === shape) return;
+  const { getSchemaRegistryFromDI } = await import(
+    "../../../dispatcher/helpers/di"
+  );
+  const running = () => getSchemaRegistryFromDI()?.getTable(registry.tableName);
+  const narrowed = narrowedBy.get(key);
+  if (narrowed?.shape === shape && narrowed.table === running()) return;
   const gone = new Set(missing);
   await registerRunningTables(args, {
     ...registry,
@@ -450,7 +457,7 @@ async function shapeRunningTables(
       field => typeof field.name !== "string" || !gone.has(field.name)
     ),
   });
-  narrowedBy.set(key, shape);
+  narrowedBy.set(key, { shape, table: running() });
 }
 
 /** Puts back the registry's own running tables for an entity this process narrowed, if it did. */
