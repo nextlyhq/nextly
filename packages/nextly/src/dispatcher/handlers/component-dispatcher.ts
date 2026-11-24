@@ -26,7 +26,10 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertSaveLeavesNoFieldGroupCycle } from "../../domains/field-groups/field-group-cycles";
-import { refuseFieldGroupFieldsChangedInHost } from "../../domains/field-groups/field-group-fields-read-only";
+import {
+  refuseFieldGroupFieldsChangedInHost,
+  withFieldGroupCopiesJudged,
+} from "../../domains/field-groups/field-group-fields-read-only";
 import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
 import {
   registerComponentRuntimeSchema,
@@ -376,11 +379,6 @@ export const COMPONENTS_METHODS: Record<
       // what none of them can judge is a plugin type's own options, so an
       // unsatisfiable declaration would be stored and fail on every write.
       assertValidPluginFieldOptions(b.fields);
-      // Another field group's fields are changed only in its own editor, a new field group's too.
-      await refuseFieldGroupFieldsChangedInHost(
-        b.fields,
-        getComponentRegistryFromDI()
-      );
 
       const isLocalized = b.localized === true;
       // i18n: a localized component stores translatable values via the
@@ -408,20 +406,25 @@ export const COMPONENTS_METHODS: Record<
           },
         });
       }
+      // Another field group's fields are changed only in its own editor: the service judges the
+      // save's copies under its schema lock.
+      const request: Parameters<typeof metadata.createFieldGroup>[0] = {
+        slug: b.slug,
+        label: b.label || b.slug,
+        fields: b.fields,
+        admin: b.admin,
+        description: b.description,
+        source: "ui",
+        locked: false,
+        // i18n: persist the Internationalization flag so the component reads/writes per language.
+        localized: isLocalized,
+        schemaHash,
+        schemaVersion: 1,
+      };
       const { record: created, migrationStatus } =
-        await metadata.createFieldGroup({
-          slug: b.slug,
-          label: b.label || b.slug,
-          fields: b.fields,
-          admin: b.admin,
-          description: b.description,
-          source: "ui",
-          locked: false,
-          // i18n: persist the Internationalization flag so the component reads/writes per language.
-          localized: isLocalized,
-          schemaHash,
-          schemaVersion: 1,
-        });
+        await withFieldGroupCopiesJudged(getComponentRegistryFromDI(), () =>
+          metadata.createFieldGroup(request)
+        );
 
       // Migration status drives the toast copy so admins immediately
       // know whether the table was applied.
@@ -490,25 +493,26 @@ export const COMPONENTS_METHODS: Record<
           },
         });
       }
-      // Another field group's fields are changed only in its own editor.
-      await refuseFieldGroupFieldsChangedInHost(
-        b?.fields,
-        getComponentRegistryFromDI()
+      // Another field group's fields are changed only in its own editor: the service judges the
+      // save's copies under its schema lock.
+      const { record } = await withFieldGroupCopiesJudged(
+        getComponentRegistryFromDI(),
+        () =>
+          metadataService.updateFieldGroup({
+            slug,
+            label: b?.label,
+            description: b?.description,
+            admin: b?.admin,
+            fields: b?.fields as unknown as FieldDefinition[] | undefined,
+            // 🔴 Read through the shared helper, never off the cast body. `b` is a type assertion over
+            // whatever JSON arrived, so `localized: "false"` survives it as a truthy string: the
+            // transition would take the ENABLED branch and drop the main table's translatable columns
+            // while the registry, which stores `data.localized === true`, recorded the group disabled.
+            // The collection and single dispatchers already read it this way.
+            localized: readRequestLocalized(b),
+            source: "ui",
+          })
       );
-      const { record } = await metadataService.updateFieldGroup({
-        slug,
-        label: b?.label,
-        description: b?.description,
-        admin: b?.admin,
-        fields: b?.fields as unknown as FieldDefinition[] | undefined,
-        // 🔴 Read through the shared helper, never off the cast body. `b` is a type assertion over
-        // whatever JSON arrived, so `localized: "false"` survives it as a truthy string: the
-        // transition would take the ENABLED branch and drop the main table's translatable columns
-        // while the registry, which stores `data.localized === true`, recorded the group disabled.
-        // The collection and single dispatchers already read it this way.
-        localized: readRequestLocalized(b),
-        source: "ui",
-      });
 
       return respondMutation(`Component "${slug}" updated.`, record);
     },

@@ -24,9 +24,9 @@ const BADGE_REF: Field = {
 const CARD_FIELDS: Field[] = [NOTE, SUMMARY, BADGE_REF];
 
 /** The field groups as stored, read through a counter so a test can see each is read once. */
-function stored() {
+function stored(card: Field[] = CARD_FIELDS) {
   const fields: Record<string, Field[]> = {
-    card: CARD_FIELDS,
+    card,
     badge: BADGE_FIELDS,
   };
   const findComponentForWrite = vi.fn(async (slug: string) =>
@@ -137,6 +137,31 @@ describe("refuseFieldGroupFieldsChangedInHost", () => {
       )
     ).rejects.toThrow(refusedNaming("card"));
   });
+
+  // Only a read's additions to a field-group field are left out of the comparison: the same key
+  // on another type's field is an option of its own, whose change a host's copy shows.
+  it.each(["componentFields", "componentSchemas"] as const)(
+    "refuses a change to another type's %s option inside a copy",
+    async key => {
+      const themed = (value: unknown): Field[] => [
+        ...CARD_FIELDS,
+        { name: "theme", type: "palette", [key]: value },
+      ];
+      const fieldGroups = stored(themed(["a"]));
+      await expect(
+        refuseFieldGroupFieldsChangedInHost(
+          [cardRef({ fields: themed(["b"]) })],
+          fieldGroups
+        )
+      ).rejects.toThrow(refusedNaming("card"));
+      await expect(
+        refuseFieldGroupFieldsChangedInHost(
+          [cardRef({ fields: themed(["a"]) })],
+          fieldGroups
+        )
+      ).resolves.toBeUndefined();
+    }
+  );
 
   it("leaves a field group it does not hold to the save's own checks", async () => {
     await expect(

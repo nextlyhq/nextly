@@ -12,6 +12,8 @@
  *
  * @module domains/field-groups/field-group-fields-read-only
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { NextlyError } from "../../errors";
 import { deepEqual } from "../../shared/lib/deep-equal";
 
@@ -28,16 +30,47 @@ export interface StoredFieldGroups {
   findComponentForWrite(slug: string): Promise<{ fields?: unknown } | null>;
 }
 
+/** The field groups a request's save compares its copies with, while its service call runs. */
+const judging = new AsyncLocalStorage<StoredFieldGroups>();
+
+/**
+ * Runs a request's save of a host's fields: a service it reaches, where it is to write them,
+ * compares the copies in the save with `fieldGroups` (`judgeFieldGroupCopies`), inside its own
+ * schema exclusion, so a field group's edit can land neither before the comparison nor between it
+ * and the write. Nothing is compared where there is no registry to compare with.
+ */
+export function withFieldGroupCopiesJudged<T>(
+  fieldGroups: StoredFieldGroups | undefined,
+  save: () => Promise<T>
+): Promise<T> {
+  return fieldGroups === undefined ? save() : judging.run(fieldGroups, save);
+}
+
+/**
+ * Refuses the fields a service is about to write, inside its schema exclusion, where they change
+ * a field group's fields through a host (`refuseFieldGroupFieldsChangedInHost`), for a request's
+ * save alone: a save of server code opens no scope (`withFieldGroupCopiesJudged`) and is not asked.
+ */
+export async function judgeFieldGroupCopies(fields: unknown): Promise<void> {
+  await refuseFieldGroupFieldsChangedInHost(fields, judging.getStore());
+}
+
 /** What a read adds to a field-group field beside its reference, which is not its definition. */
 const DERIVED = ["componentFields", "componentSchemas"] as const;
 
-/** `fields` with what a read adds to each field-group field taken away, at any depth. */
+/**
+ * `fields` with what a read adds to each field-group field taken away, at any depth: from a
+ * field-group field alone, since another type's `componentFields` or `componentSchemas` is an
+ * option of its own (a plugin field's), which a change must be seen in.
+ */
 function withoutDerived(fields: unknown): unknown {
   if (!Array.isArray(fields)) return fields;
   return fields.map(field => {
     if (field === null || typeof field !== "object") return field;
     const copy: Record<string, unknown> = { ...field };
-    for (const key of DERIVED) delete copy[key];
+    if (isFieldGroupFieldType(copy.type)) {
+      for (const key of DERIVED) delete copy[key];
+    }
     if (Array.isArray(copy.fields)) copy.fields = withoutDerived(copy.fields);
     return copy;
   });

@@ -29,7 +29,12 @@ import { readAuthenticatedUser } from "./authenticated-user";
  */
 export async function readableFieldOwners(adapter: DrizzleAdapter): Promise<{
   owners: FieldOwner[];
-  /** Whether the reader may read every collection and Single there is. */
+  /**
+   * Whether the reader may read every collection and Single there is. Decided by the reader alone,
+   * as the field-group list's counts are, and never by the field group asked about: a flag that
+   * followed the field group would tell a reader that a collection or Single hidden from them
+   * uses it.
+   */
   complete: boolean;
 }> {
   const { ownersReadableBy, readFieldOwners } = await import(

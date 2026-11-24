@@ -26,8 +26,9 @@ const NOUNS: Record<FieldGroupUserNamed["entityType"], string> = {
  * the field group b, the Single s (through b).` Each holder is named once, in the order given
  * (direct uses first), by its noun and slug; one reached through other field groups ends
  * `(through b)`, or `(through c, then b)` for a longer chain. When the reader may not read every
- * user (`complete` false), it ends `, and others you may not read.`; with no user at all, it is
- * empty.
+ * collection and Single (`complete` false), it ends `, and others you may not read.`, whether or not
+ * any hidden one uses this field group: the ending says nothing about a hidden user. With no user
+ * at all and `complete` true, it is empty.
  *
  * @internal The Schema Builder's own refusal reads it, so both say the same; not a public promise.
  */

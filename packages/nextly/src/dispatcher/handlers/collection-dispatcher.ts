@@ -42,7 +42,10 @@ import { container } from "../../di/container";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { DynamicCollectionService } from "../../domains/dynamic-collections/services/dynamic-collection-service";
-import { refuseFieldGroupFieldsChangedInHost } from "../../domains/field-groups/field-group-fields-read-only";
+import {
+  refuseFieldGroupFieldsChangedInHost,
+  withFieldGroupCopiesJudged,
+} from "../../domains/field-groups/field-group-fields-read-only";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { fieldsAsFirstPushed } from "../../domains/i18n/migration/archive-preflight";
 import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
@@ -744,13 +747,13 @@ const COLLECTIONS_METHODS: Record<
       const createdFields = (created as { fields?: unknown }).fields;
       if (createdFields !== undefined) {
         assertValidPluginFieldOptions(createdFields);
-        // A field group's fields are changed only in its own editor, a new collection's too.
-        await refuseFieldGroupFieldsChangedInHost(
-          createdFields,
-          getComponentRegistryFromDI()
-        );
       }
-      const result = await svc.createCollection(created);
+      // A field group's fields are changed only in its own editor, a new collection's too: the
+      // service judges the save's copies under its schema lock.
+      const result = await withFieldGroupCopiesJudged(
+        getComponentRegistryFromDI(),
+        () => svc.createCollection(created)
+      );
       const collection = unwrapServiceResult(result);
       return respondMutation(
         result.message ?? "Collection created.",
@@ -890,25 +893,26 @@ const COLLECTIONS_METHODS: Record<
       const updatedFields = (body as { fields?: unknown }).fields;
       if (updatedFields !== undefined) {
         assertValidPluginFieldOptions(updatedFields);
-        // A field group's fields are changed only in its own editor.
-        await refuseFieldGroupFieldsChangedInHost(
-          updatedFields,
-          getComponentRegistryFromDI()
-        );
       }
       // The request's answers for a field leaving and another arriving: the change runs with
       // them, so a pair it doesn't answer is refused, not taken for a rename.
       const renames = parseFieldRenameAnswers(
         (body as { renames?: unknown }).renames
       );
-      const result = await withFieldRenameAnswers(renames, async () =>
-        svc.updateCollection(
-          { collectionName: p.collectionName },
-          await withFieldsAsStored(
-            p.collectionName,
-            withoutRenameAnswers(body as Record<string, unknown>)
+      // A field group's fields are changed only in its own editor: the service judges the save's
+      // copies under its schema lock.
+      const result = await withFieldGroupCopiesJudged(
+        getComponentRegistryFromDI(),
+        () =>
+          withFieldRenameAnswers(renames, async () =>
+            svc.updateCollection(
+              { collectionName: p.collectionName },
+              await withFieldsAsStored(
+                p.collectionName,
+                withoutRenameAnswers(body as Record<string, unknown>)
+              )
+            )
           )
-        )
       );
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,

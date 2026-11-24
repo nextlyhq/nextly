@@ -23,7 +23,7 @@ import { LIST_READ_GATES, requireRouteListRead } from "../auth/list-read-gates";
 import { getService } from "../di";
 import { SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import { clampLimit } from "../domains/collections/query/query-parser";
-import { refuseFieldGroupFieldsChangedInHost } from "../domains/field-groups/field-group-fields-read-only";
+import { withFieldGroupCopiesJudged } from "../domains/field-groups/field-group-fields-read-only";
 import type {
   CreateFieldGroupInput,
   FieldGroupMetadataService,
@@ -193,11 +193,6 @@ export const POST = withErrorHandler(async (request: Request) => {
 
   // Same rules as the ui-schema.json mirror (see api/fields-payload).
   assertValidFieldsPayload(validated.fields);
-  // Another field group's fields are changed only in its own editor, a new field group's too.
-  await refuseFieldGroupFieldsChangedInHost(
-    validated.fields,
-    getService("fieldGroupRegistryService")
-  );
 
   // Validated by assertValidFieldsPayload above; cast through `unknown`
   // to the registry's config type while keeping the payload unstripped.
@@ -205,17 +200,23 @@ export const POST = withErrorHandler(async (request: Request) => {
 
   const schemaHash = calculateSchemaHash(fields);
 
-  const { record, migrationStatus } = await metadata.createFieldGroup({
-    slug: validated.slug,
-    label: validated.label,
-    // The table is named by the service, under the naming the site's storage is on.
-    description: validated.description,
-    fields,
-    admin: validated.admin,
-    source: "ui",
-    locked: false,
-    schemaHash,
-  });
+  // Another field group's fields are changed only in its own editor: the service judges the save's
+  // copies under its schema lock.
+  const { record, migrationStatus } = await withFieldGroupCopiesJudged(
+    getService("fieldGroupRegistryService"),
+    () =>
+      metadata.createFieldGroup({
+        slug: validated.slug,
+        label: validated.label,
+        // The table is named by the service, under the naming the site's storage is on.
+        description: validated.description,
+        fields,
+        admin: validated.admin,
+        source: "ui",
+        locked: false,
+        schemaHash,
+      })
+  );
 
   // The status is reported rather than swallowed. A create whose DDL failed still has a row
   // describing what was attempted, and answering an unqualified success for it is what let a field

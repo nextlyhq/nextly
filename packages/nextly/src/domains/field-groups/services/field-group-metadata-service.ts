@@ -59,6 +59,7 @@ import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 import { assertSaveLeavesNoFieldGroupCycle } from "../field-group-cycles";
+import { judgeFieldGroupCopies } from "../field-group-fields-read-only";
 import { typeColumnForNewTable } from "../storage/resolve-storage-names";
 
 import { assertNotDiverged } from "./assert-not-diverged";
@@ -287,6 +288,8 @@ export class FieldGroupMetadataService {
       input.fields,
       null
     );
+    // Another field group's fields are changed only in its own editor, for a request's save.
+    await judgeFieldGroupCopies(input.fields);
     await this.assertSaveLeavesNoCycle(input.slug, input.fields);
     // A translated field marked unique needs an index this server may not be able to key. Refused
     // here, before the main table: the companion is provisioned after it, and a failure there is
@@ -510,6 +513,8 @@ export class FieldGroupMetadataService {
         input.fields,
         existing.fields ?? []
       );
+      // Another field group's fields are changed only in its own editor, for a request's save.
+      await judgeFieldGroupCopies(input.fields);
       await this.assertSaveLeavesNoCycle(input.slug, input.fields);
     }
 

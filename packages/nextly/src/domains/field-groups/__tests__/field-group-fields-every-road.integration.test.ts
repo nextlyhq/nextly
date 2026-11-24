@@ -460,5 +460,91 @@ describe.each(getConfiguredTestDialects())(
         });
       }
     );
+
+    // A road that saves through a service compares a save's copies inside that service's schema
+    // exclusion, and writes them in it: no other schema change lands between the two. Proved by a
+    // field group's own edit begun while the comparison reads it.
+    const SERVICE_ROADS = ROADS.filter(road =>
+      [
+        "the Builder's collection create",
+        "the Builder's collection update",
+        "the Builder's Single create",
+        "the Builder's Single update",
+        "the Builder's field group create",
+        "the Builder's field group update",
+        "the field group route's POST",
+        "the field group route's PATCH",
+      ].includes(road.road)
+    );
+    const EXTRA: Field = { name: "extra", type: "text" };
+
+    it.each(SERVICE_ROADS)(
+      "$road holds off the field group's own edit while it compares and writes",
+      async road => {
+        const t = await boot();
+        if (!road.creates) {
+          expect(
+            await outcomeOf(() => builderCreate[road.kind]([HEADLINE, cardRef]))
+          ).toEqual({ accepted: true });
+        }
+        const groups = t.getService("fieldGroupRegistryService");
+        const read = groups.findComponentForWrite.bind(groups);
+        const cardVersion = (await groups.getComponent(CARD)).schemaVersion;
+
+        // The comparison reads the field group first, then its own editor's save lands before the
+        // host's write: the edit a comparison outside the exclusion would let through. Begun in a
+        // context of its own, so its schema change is another one's, not a nested one the save's
+        // exclusion would let in.
+        let begin: () => void = () => undefined;
+        const asked = new Promise<void>(resolve => {
+          begin = resolve;
+        });
+        const edit = (async (): Promise<Outcome> => {
+          await asked;
+          // The field group's own editor's save: it changes the field group's table, so it takes the
+          // schema exclusion.
+          return outcomeOf(() =>
+            dispatchComponents(
+              "applyComponentSchemaChanges",
+              { slug: CARD },
+              {
+                fields: [NOTE, SUMMARY, EXTRA],
+                confirmed: true,
+                schemaVersion: cardVersion ?? 1,
+              }
+            )
+          );
+        })();
+        let concurrent: Outcome | undefined;
+        vi.spyOn(groups, "findComponentForWrite").mockImplementation(
+          async slug => {
+            const found = await read(slug);
+            if (slug === CARD && concurrent === undefined) {
+              begin();
+              concurrent = await Promise.race([
+                edit,
+                new Promise<Outcome>(resolve =>
+                  setTimeout(() => resolve({ refused: "timed out" }), 8000)
+                ),
+              ]);
+            }
+            return found;
+          }
+        );
+
+        expect(await outcomeOf(() => road.send(t, ECHO))).toEqual({
+          accepted: true,
+        });
+
+        // Refused, not merely late: the save held the exclusion.
+        expect(concurrent).toEqual({ refused: expect.anything() });
+        expect(concurrent).not.toEqual({ refused: "timed out" });
+        vi.restoreAllMocks();
+        const card = await groups.getComponent(CARD);
+        expect(
+          (card.fields as unknown as Field[]).map(field => field.name)
+        ).toEqual(["note", "summary"]);
+      }
+    );
   }
 );
