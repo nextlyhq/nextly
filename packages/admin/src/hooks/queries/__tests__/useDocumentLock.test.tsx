@@ -719,12 +719,23 @@ describe("useDocumentLock", () => {
 
     await waitFor(() => expect(result.current.state.status).toBe("lost"));
 
-    // Nothing further is asked: the beat stopped with the claim.
+    // Nothing is claimed or taken while it cannot be confirmed: each beat
+    // only asks about the claim it had, which displaces nobody, and the claim
+    // stays lost while the asks fail (see useDocumentLock.offline.test.tsx).
     const after = patch.mock.calls.length;
-    await act(async () => {
-      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS * 3);
-    });
-    expect(patch.mock.calls.length).toBe(after);
+    for (let beat = 0; beat < 3; beat += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+      });
+    }
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(patch.mock.calls.slice(after)).toEqual(
+      Array.from({ length: 3 }, () => [
+        "/document-lock",
+        { ...ref, claimToken: "t1" },
+      ])
+    );
+    expect(result.current.state.status).toBe("lost");
   });
 
   it("holds the claim while failures stay inside the deadline", async () => {
