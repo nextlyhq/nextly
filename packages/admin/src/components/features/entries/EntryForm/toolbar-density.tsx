@@ -47,9 +47,11 @@ export const TOOLBAR_CONTAINER = "@container/toolbar";
  *   because they are the ones an author is least often reaching for while
  *   typing a title.
  * - `cluster` — History, beside the entry header's one main button. That
- *   header's cluster (History, the languages control, at most one secondary
- *   step, the main button, More and the panel toggle) is narrower than the
- *   one `secondary` was measured against, so History keeps its word longer.
+ *   header's cluster (History, at most one secondary step, the main button,
+ *   More and the panel toggle) is narrower than the one `secondary` was
+ *   measured against, so History keeps its word longer.
+ * - `cluster-with-languages` — History where the languages control sits
+ *   beside it too, a wider cluster, so its word gives way sooner.
  *
  * Only a control that keeps an icon may give up its words. The document's own
  * verbs (Save draft, Unpublish, Discard changes) and the primary action draw
@@ -57,7 +59,10 @@ export const TOOLBAR_CONTAINER = "@container/toolbar";
  * their words at every width. With the title on a line of its own, the
  * action row no longer has to make room for it, so they can.
  */
-export type ToolbarLabelPriority = "secondary" | "cluster";
+export type ToolbarLabelPriority =
+  | "secondary"
+  | "cluster"
+  | "cluster-with-languages";
 
 /**
  * Thresholds are the ROW'S OUTER width, and the arbitrary values are the reason
@@ -87,9 +92,15 @@ export type ToolbarLabelPriority = "secondary" | "cluster";
 const COLLAPSE_AT: Record<ToolbarLabelPriority, string> = {
   // 48rem of usable width + 3rem of padding.
   secondary: "@max-[51rem]/toolbar:sr-only",
-  // The widest one-button cluster, every control in it and History's word
-  // shown, measures about 43.5rem: below 44rem of bar the word gives way.
-  cluster: "@max-[44rem]/toolbar:sr-only",
+  // The entry header's `toolbar` is the bar's part after the trail, at least
+  // 32rem wide on an unfolded bar. Its widest one-button cluster with History's
+  // word (a reviewer's: History, Request changes…, Approve and its arrow, More,
+  // the panel toggle) measures about 31rem, so History keeps its word down to
+  // 36rem of that part: at 1440px beside a long trail, the part is about 40rem.
+  cluster: "@max-[36rem]/toolbar:sr-only",
+  // With the languages control beside History the cluster measures about
+  // 43.5rem: below 44rem of the part the word gives way.
+  "cluster-with-languages": "@max-[44rem]/toolbar:sr-only",
 };
 
 export interface ToolbarLabelProps {

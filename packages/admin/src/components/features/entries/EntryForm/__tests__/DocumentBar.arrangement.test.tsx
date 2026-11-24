@@ -319,16 +319,17 @@ describe("the document bar", () => {
   });
 
   it("keeps History's word until the bar is narrower than the main button's cluster needs", () => {
-    // The header's cluster is History, the languages control, at most one
-    // secondary step, the main button, More and the panel toggle: its word
-    // gives way only below 44rem of bar, later than the supporting actions'
-    // 51rem, so a 1440px editor shows it as drawn.
+    // The header's cluster is History, at most one secondary step, the main
+    // button, More and the panel toggle: its word gives way only below 36rem of
+    // the bar's part after the trail, later than the supporting actions' 51rem,
+    // so a 1440px editor shows it beside a long trail as drawn.
     render(<Harness state={STATES[1]!} />);
     const history = screen.getByRole("button", { name: "History" });
     const label = [...history.querySelectorAll("span")].find(
       span => span.textContent === "History"
     );
-    expect(label?.className).toContain("@max-[44rem]/toolbar:sr-only");
+    expect(label?.className).toContain("@max-[36rem]/toolbar:sr-only");
+    expect(label?.className).not.toContain("@max-[44rem]/toolbar:sr-only");
     expect(label?.className).not.toContain("@max-[51rem]/toolbar:sr-only");
   });
 
