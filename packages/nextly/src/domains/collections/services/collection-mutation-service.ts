@@ -317,6 +317,7 @@ import {
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   compareBeforeTransaction,
+  refuseReadOverLeftSave,
   refuseWriteOverLeftSave,
   writtenKeys,
 } from "../../schema/builder-save/left-save-fields";
@@ -21670,6 +21671,12 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // The row is read, through this process's tables, to be removed: readied as any read is.
+    await refuseReadOverLeftSave({
+      adapter: this.adapter,
+      kind: "collection",
+      slug: params.collectionName,
+    });
     // Set once the outbox event is appended (below); lets the catch report a
     // committed-but-hook-failed delete as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
@@ -24996,6 +25003,12 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code; see createEntryWrite.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
       executor: tx.getDrizzle(),
+    });
+    // The row is read, through this process's tables, to be removed: readied as any read is.
+    await refuseReadOverLeftSave({
+      adapter: this.adapter,
+      kind: "collection",
+      slug: params.collectionName,
     });
     // True only in the window between the row delete and the outbox insert: a
     // failure there has left this shared transaction with a delete but no event,
