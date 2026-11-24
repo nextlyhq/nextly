@@ -11317,19 +11317,10 @@ export class CollectionMutationService extends BaseService {
    * (`updateEntry`), and each language told what that publish tells it. An
    * unpublish moves the statuses alone.
    */
-  private setLifecycleAllLocales(
-    direction: LifecycleDirection,
-    params: AllLocalesLifecycleParams
-  ): Promise<CollectionServiceResult> {
-    return this.inWriteTries(tries =>
-      this.setLifecycleAllLocalesOnce(direction, params, tries)
-    );
-  }
-
-  /** {@link setLifecycleAllLocales}, one try of it. */
-  private async setLifecycleAllLocalesOnce(
+  private async setLifecycleAllLocales(
     direction: LifecycleDirection,
     params: AllLocalesLifecycleParams,
+    /** The tries this is one of. */
     tries: WriteTries
   ): Promise<CollectionServiceResult> {
     // Refused first when the collection is removed from code: publishing or
@@ -13985,7 +13976,9 @@ export class CollectionMutationService extends BaseService {
   async publishAllLocales(
     params: AllLocalesLifecycleParams
   ): Promise<CollectionServiceResult> {
-    return this.setLifecycleAllLocales(PUBLISH_ALL_LOCALES, params);
+    return this.inWriteTries(tries =>
+      this.setLifecycleAllLocales(PUBLISH_ALL_LOCALES, params, tries)
+    );
   }
 
   /**
@@ -14049,7 +14042,9 @@ export class CollectionMutationService extends BaseService {
         data: null,
       };
     }
-    return this.setLifecycleAllLocales(WITHDRAW_ALL_LOCALES, params);
+    return this.inWriteTries(tries =>
+      this.setLifecycleAllLocales(WITHDRAW_ALL_LOCALES, params, tries)
+    );
   }
 
   /**
