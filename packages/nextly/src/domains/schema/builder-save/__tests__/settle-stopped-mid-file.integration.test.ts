@@ -642,6 +642,7 @@ describe.skipIf(!getConfiguredTestDialects().includes("mysql"))(
             applied,
             `${readFileSync(applied, "utf-8")}\n-- edited\n`
           );
+          const aside = asideNames();
           writePending();
           try {
             await start();
@@ -649,9 +650,7 @@ describe.skipIf(!getConfiguredTestDialects().includes("mysql"))(
             expect(watched.runs, "the start's migrate step ran").toBe(0);
             expect(await startRan(t), "the pending file ran").toBe(false);
             expect(await recordRow(t), "the record stays").toBeDefined();
-            expect(asideNames(), "the stopped file stays aside").toHaveLength(
-              1
-            );
+            expect(asideNames(), "what was set aside stays so").toEqual(aside);
           } finally {
             await t.adapter.executeQuery("DROP TABLE IF EXISTS start_ran");
           }
