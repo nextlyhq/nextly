@@ -319,6 +319,26 @@ const REWRITTEN: ReadonlySet<Family> = new Set([
 ]);
 
 /**
+ * The databases a road rewrites a field's values on (`rewritesValuesOn`). MySQL commits each schema
+ * statement on its own, and no hold keeps the application's writes out of the table on every road
+ * that converts: one answered as stored while the values are copied would be overwritten with the
+ * value copied before it, or left empty. So a change there is judged by the database's cast, and
+ * one that would rewrite any value is refused before any statement (`needs-rewrite`), as it cannot
+ * be deployed yet. PostgreSQL and SQLite convert in one transaction, which keeps writes out.
+ *
+ * Adding MySQL here is the whole of converting there, once every such road holds writes.
+ */
+const REWRITES_ON: ReadonlySet<SupportedDialect> = new Set([
+  "postgresql",
+  "sqlite",
+]);
+
+/** Whether a road that writes a type change's values itself rewrites them on `dialect`. */
+export function rewritesValuesOn(dialect: SupportedDialect): boolean {
+  return REWRITES_ON.has(dialect);
+}
+
+/**
  * What the stored-value judgement is asked to hand over: each value's reading, gathered into
  * `readings`, where a unique MySQL text weighs them after the scan (`collated`); and, where the
  * road writes the values (`rewritten`), that it judges them as rewritten.
@@ -362,12 +382,19 @@ export interface JudgingPass {
   readingPages?: (table: string, column: string) => ReadingPages | undefined;
 }
 
-/** Whether a save that rewrites the values writes `from`'s values as `to` reads them. */
+/**
+ * Whether a save that rewrites the values writes `from`'s values as `to` reads them: a pair of
+ * families it converts, on a database it rewrites values on.
+ */
 function rewritesPair(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect
 ): boolean {
-  return REWRITTEN.has(from.family) && REWRITTEN.has(to.family);
+  return (
+    rewritesValuesOn(from.dialect) &&
+    REWRITTEN.has(from.family) &&
+    REWRITTEN.has(to.family)
+  );
 }
 
 /**
@@ -883,7 +910,8 @@ const DEPLOYED_BY_CAST =
 
 /**
  * The refusals a save's judged type changes give: each blocked one, each lossy one whose field the
- * owner has not consented to clearing values of (`acknowledged`, by field path), and each change
+ * owner has not consented to clearing values of (`acknowledged`, by field path) or whose values the
+ * road does not write itself (`converted`), so nothing would clear them, and each change
  * of a field kept per language whose translations column takes another type
  * (`changesTranslationsColumn`): that column keeps the old type, so each language's value, and each
  * written after, would stay of the old type, held or not; and each change of a field whose entity
@@ -926,13 +954,14 @@ function refusalOf(
   const { judgement } = change.result;
   const blocked = judgement.class === "blocked";
   const name = changedFieldName(change);
-  const lossy = judgement.class === "lossy" && !acknowledged.has(name);
+  // Only a change the conversion writes clears its values: consent never lets one the cast converts
+  // through, as the cast does not clear what it cannot read.
+  const consented = acknowledged.has(name) && change.converted === true;
+  const lossy = judgement.class === "lossy" && !consented;
   // A cleared value is no value, which a required field's column refuses: the clear is refused
   // even confirmed, rather than written part way into a NOT NULL that stops it.
   const clearsRequired =
-    judgement.class === "lossy" &&
-    acknowledged.has(name) &&
-    change.to.required === true;
+    judgement.class === "lossy" && consented && change.to.required === true;
   const translated = change.changesTranslationsColumn === true;
   const leaving = change.leavesWithEntity === true;
   if (!blocked && !lossy && !clearsRequired && !translated && !leaving) {

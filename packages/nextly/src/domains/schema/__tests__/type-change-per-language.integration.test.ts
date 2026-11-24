@@ -41,6 +41,7 @@ import {
 import { marksNoTransaction } from "../migrate/split-sql";
 import { parseSqlSections } from "../migrate/sql-sections";
 import { withMigrateLock } from "../pipeline/locks";
+import { rewritesValuesOn } from "../value-conversion/type-change/field-type-changes";
 
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 
@@ -213,6 +214,9 @@ describe.each(getConfiguredTestDialects())(
     // the type change a translatable field makes there. A number is not translatable, so a text
     // becoming one also leaves translation, which a save refuses until the two are made apart.
     const email = { name: "v", type: "email" };
+    /** A case that rewrites or clears a value, which no road does on MySQL (`rewritesValuesOn`). */
+    const converts = it.skipIf(!rewritesValuesOn(dialect));
+    const refuses = it.runIf(!rewritesValuesOn(dialect));
 
     it("converts a text field into an email in its translations table, and keeps an empty one empty", async () => {
       const t = await boot(dialect);
@@ -225,56 +229,68 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t)).toEqual({ a: "a@b.co", b: null });
     });
 
-    it("clears a value that cannot convert once the clear is confirmed with its count, and converts the rest", async () => {
-      const t = await boot(dialect);
-      await createPosts([{ name: "v", type: "text" }]);
-      await write(t, "kept", { v: "a@b.co" });
-      await write(t, "lost", { v: "not an address" });
+    converts(
+      "clears a value that cannot convert once the clear is confirmed with its count, and converts the rest",
+      async () => {
+        const t = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        await write(t, "kept", { v: "a@b.co" });
+        await write(t, "lost", { v: "not an address" });
 
-      await save(t, [email], {
-        confirmedTypeChanges: [{ field: "v", kept: 1, changed: 0, lost: 1 }],
-      });
+        await save(t, [email], {
+          confirmedTypeChanges: [{ field: "v", kept: 1, changed: 0, lost: 1 }],
+        });
 
-      expect(await read(t)).toEqual({ kept: "a@b.co", lost: null });
-    });
+        expect(await read(t)).toEqual({ kept: "a@b.co", lost: null });
+      }
+    );
 
-    it("refuses a change that would lose a value when no clear is confirmed, and changes nothing", async () => {
-      const t = await boot(dialect);
-      await createPosts([{ name: "v", type: "text" }]);
-      await write(t, "kept", { v: "a@b.co" });
-      await write(t, "lost", { v: "not an address" });
+    converts(
+      "refuses a change that would lose a value when no clear is confirmed, and changes nothing",
+      async () => {
+        const t = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        await write(t, "kept", { v: "a@b.co" });
+        await write(t, "lost", { v: "not an address" });
 
-      await expect(save(t, [email])).rejects.toMatchObject(
-        refusedSaying("Confirm clearing the values that cannot convert")
-      );
+        await expect(save(t, [email])).rejects.toMatchObject(
+          refusedSaying("Confirm clearing the values that cannot convert")
+        );
 
-      expect(await read(t)).toEqual({ kept: "a@b.co", lost: "not an address" });
-    });
+        expect(await read(t)).toEqual({
+          kept: "a@b.co",
+          lost: "not an address",
+        });
+      }
+    );
 
-    it("converts a deploy's own values when nextly migrate replays the file, clearing one that cannot convert only with consent", async () => {
-      const first = await boot(dialect);
-      await createPosts([{ name: "v", type: "text" }]);
-      const created = await filesWritten();
-      await write(first, "kept", { v: "a@b.co" });
-      await save(first, [email]);
-      await first.destroy();
-      instance = undefined;
+    converts(
+      "converts a deploy's own values when nextly migrate replays the file, clearing one that cannot convert only with consent",
+      async () => {
+        const first = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        const created = await filesWritten();
+        await write(first, "kept", { v: "a@b.co" });
+        await save(first, [email]);
+        await first.destroy();
+        instance = undefined;
 
-      const second = await boot(dialect);
-      await migrateFolder(second, created);
-      await write(second, "address", { v: "c@d.co" });
-      await write(second, "word", { v: "zzz" });
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await write(second, "address", { v: "c@d.co" });
+        await write(second, "word", { v: "zzz" });
 
-      await expect(migrateFolder(second)).rejects.toThrow();
-      expect(await read(second)).toEqual({ address: "c@d.co", word: "zzz" });
+        await expect(migrateFolder(second)).rejects.toThrow();
+        expect(await read(second)).toEqual({ address: "c@d.co", word: "zzz" });
 
-      await migrateFolder(
-        second,
-        undefined,
-        resolveDataLossConsent({ flag: true, env: {} })
-      );
-      expect(await read(second)).toEqual({ address: "c@d.co", word: null });
-    });
+        await migrateFolder(
+          second,
+          undefined,
+          resolveDataLossConsent({ flag: true, env: {} })
+        );
+        expect(await read(second)).toEqual({ address: "c@d.co", word: null });
+      }
+    );
 
     it("takes a deploy's own values back when migrate:down rolls the change back", async () => {
       const first = await boot(dialect);
@@ -301,31 +317,109 @@ describe.each(getConfiguredTestDialects())(
 
     // A text becoming a rich text stays translatable too: each language's text becomes a document
     // of its lines in the translations table, a form the database's cast does not write.
-    it("converts a text field into a rich text in its translations table, a document of its lines", async () => {
-      const t = await boot(dialect);
-      await createPosts([{ name: "v", type: "text" }]);
-      await write(t, "a", { v: "one\ntwo" });
+    converts(
+      "converts a text field into a rich text in its translations table, a document of its lines",
+      async () => {
+        const t = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        await write(t, "a", { v: "one\ntwo" });
 
-      await save(t, [{ name: "v", type: "richText" }]);
+        await save(t, [{ name: "v", type: "richText" }]);
 
-      expect(textsOf((await read(t)).a)).toEqual(["one", "two"]);
-    });
+        expect(textsOf((await read(t)).a)).toEqual(["one", "two"]);
+      }
+    );
 
-    it("converts a deploy's own texts into rich texts when nextly migrate replays the file", async () => {
-      const first = await boot(dialect);
-      await createPosts([{ name: "v", type: "text" }]);
-      const created = await filesWritten();
-      await write(first, "a", { v: "one" });
-      await save(first, [{ name: "v", type: "richText" }]);
-      await first.destroy();
-      instance = undefined;
+    converts(
+      "converts a deploy's own texts into rich texts when nextly migrate replays the file",
+      async () => {
+        const first = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        const created = await filesWritten();
+        await write(first, "a", { v: "one" });
+        await save(first, [{ name: "v", type: "richText" }]);
+        await first.destroy();
+        instance = undefined;
 
-      const second = await boot(dialect);
-      await migrateFolder(second, created);
-      await write(second, "b", { v: "three" });
-      await migrateFolder(second);
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await write(second, "b", { v: "three" });
+        await migrateFolder(second);
 
-      expect(textsOf((await read(second)).b)).toEqual(["three"]);
-    });
+        expect(textsOf((await read(second)).b)).toEqual(["three"]);
+      }
+    );
+
+    // Where no road rewrites values, each change above that would rewrite or clear one is judged by
+    // the database's cast and refused, its counts confirmed or not: the values stay as they were.
+    refuses(
+      "refuses to clear a value where no road rewrites values, its counts confirmed or not",
+      async () => {
+        const t = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        await write(t, "kept", { v: "a@b.co" });
+        await write(t, "lost", { v: "not an address" });
+
+        for (const extra of [
+          {},
+          {
+            confirmedTypeChanges: [
+              { field: "v", kept: 1, changed: 0, lost: 1 },
+            ],
+          },
+        ]) {
+          await expect(save(t, [email], extra)).rejects.toMatchObject(
+            refusedSaying("can't be deployed yet")
+          );
+        }
+
+        expect(await read(t)).toEqual({
+          kept: "a@b.co",
+          lost: "not an address",
+        });
+      }
+    );
+
+    refuses(
+      "refuses a text becoming a rich text where no road rewrites values",
+      async () => {
+        const t = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        await write(t, "a", { v: "one" });
+
+        await expect(
+          save(t, [{ name: "v", type: "richText" }])
+        ).rejects.toMatchObject(refusedSaying("can't be deployed yet"));
+
+        expect(await read(t)).toEqual({ a: "one" });
+      }
+    );
+
+    refuses(
+      "refuses a deploy's own value that cannot convert, given consent to clear it, where no road rewrites values",
+      async () => {
+        const first = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        const created = await filesWritten();
+        await write(first, "kept", { v: "a@b.co" });
+        await save(first, [email]);
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await write(second, "address", { v: "c@d.co" });
+        await write(second, "word", { v: "zzz" });
+
+        await expect(
+          migrateFolder(
+            second,
+            undefined,
+            resolveDataLossConsent({ flag: true, env: {} })
+          )
+        ).rejects.toMatchObject(refusedSaying("can't be deployed yet"));
+        expect(await read(second)).toEqual({ address: "c@d.co", word: "zzz" });
+      }
+    );
   }
 );

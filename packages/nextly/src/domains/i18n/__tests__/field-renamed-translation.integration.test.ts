@@ -1173,12 +1173,16 @@ describeEachDialect("a translated field that is renamed", dialect => {
     );
 
     // A rename is offered only between fields of one type and storage, so the dialog never offers
-    // this pair, and an answer naming it counts for nothing. A text becoming a select is a change
-    // the save's own file converts value by value, on MySQL too, where the select's column is
-    // another type: the save judges the change with no rename and refuses the translated field's
-    // removal beside the added one, before anything is written, and every language is kept.
+    // this pair, and an answer naming it counts for nothing. Where text and a select share a column
+    // type (SQLite, PostgreSQL), the dialog's save runs its own file, judges the change with no
+    // rename and refuses the translated field's removal beside the added one. On MySQL the select's
+    // column is another type, so the push applies the change (`pushCarriesValues`), which judges
+    // the type change first. Either way it is refused before anything is written, and every
+    // language is kept.
     expect(JSON.stringify(refused)).toMatch(
-      /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/
+      dialect === "mysql"
+        ? /TYPE_CHANGE_LOSES_VALUES/
+        : /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/
     );
     expect(await companionValues("dc_posts", "heading", id)).toEqual({
       en: "Hello",

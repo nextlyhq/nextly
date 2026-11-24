@@ -354,6 +354,22 @@ describe("pushCarriesValues", () => {
         ).toBe(false);
       });
 
+      // No road rewrites values on MySQL (`rewritesValuesOn`), so the change keeps the push there.
+      it("keeps the push for the same field on MySQL, where no road rewrites values", async () => {
+        const typeChange = save({
+          oldFields: [shared("views")],
+          newFields: [field("views", { type: "number", localized: false })],
+          columnOf: (f: FieldDefinition) =>
+            getColumnDescriptor(f, "mysql", "collection"),
+        });
+        expect(
+          await pushCarriesValues({
+            ...typeChange,
+            convertsValues: { dialect: "mysql", builtBy: "collection" },
+          })
+        ).toBe(true);
+      });
+
       it.each([
         [
           "a type change it does not convert (a text becoming a repeater)",

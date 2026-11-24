@@ -8,9 +8,11 @@ import { describe, expect, it } from "vitest";
 import type { FieldDefinition } from "../../../../../schemas/dynamic-collections";
 import { fieldTypeOnDialect } from "../field-type";
 import {
+  convertsByValue,
   fieldTypeChangesOf,
   type JudgedFieldTypeChange,
   pendingMigrationRefusal,
+  rewritesValuesOn,
   translationsColumnChanges,
   typeChangeRefusals,
 } from "../field-type-changes";
@@ -132,6 +134,32 @@ const judged = (
   },
 });
 
+// MySQL commits each schema statement on its own, and no hold keeps writes out on every road that
+// converts, so no road rewrites a value there yet. The conversion's integration cases on MySQL are
+// skipped by this answer, so a database leaving it here is a change of this case, never a silent skip.
+describe("the databases a road rewrites a field's values on", () => {
+  it("rewrites on PostgreSQL and SQLite, and not on MySQL", () => {
+    expect(
+      (["sqlite", "postgresql", "mysql"] as const).filter(rewritesValuesOn)
+    ).toEqual(["sqlite", "postgresql"]);
+  });
+
+  it.each([
+    ["sqlite", true],
+    ["postgresql", true],
+    ["mysql", false],
+  ] as const)(
+    "on %s converts a text becoming a number value by value: %s",
+    (dialect, converts) => {
+      expect(
+        convertsByValue(f("v", "text"), f("v", "number"), dialect, {
+          builtBy: "collection",
+        })
+      ).toBe(converts);
+    }
+  );
+});
+
 // A translated change is judged by the column its migration gives the translations table on every
 // database, so a save on one database never writes a file that leaves another's in the old type.
 describe("whether a translated field's translations column takes another type", () => {
@@ -170,7 +198,7 @@ describe("the refusals a save's type changes give", () => {
     ]);
   });
 
-  it("refuses a lossy change unless its field is acknowledged, and never a safe one", () => {
+  it("refuses a lossy change unless the road converts it and its field is acknowledged, and never a safe one", () => {
     expect(
       typeChangeRefusals("Collection 'products'", [judged("lossy")]).map(
         r => r.code
@@ -179,10 +207,18 @@ describe("the refusals a save's type changes give", () => {
     expect(
       typeChangeRefusals(
         "Collection 'products'",
-        [judged("lossy")],
+        [{ ...judged("lossy"), converted: true }],
         new Set(["price"])
       )
     ).toEqual([]);
+    // The database's cast clears nothing it cannot read, so consent does not let one through.
+    expect(
+      typeChangeRefusals(
+        "Collection 'products'",
+        [judged("lossy")],
+        new Set(["price"])
+      ).map(r => r.code)
+    ).toEqual(["TYPE_CHANGE_LOSES_VALUES"]);
     expect(
       typeChangeRefusals("Collection 'products'", [judged("safe")])
     ).toEqual([]);

@@ -31,6 +31,7 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import type { ServiceContainer } from "../../../services";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { documentOfText } from "../value-conversion/type-change/document";
+import { rewritesValuesOn } from "../value-conversion/type-change/field-type-changes";
 
 import { textsOf } from "./helpers/document-texts";
 import { readTableDefinition } from "./helpers/table-definition";
@@ -52,6 +53,11 @@ interface Pair {
   values: Record<string, readonly [written: unknown, read: unknown]>;
   /** How many values cannot convert, cleared with the save's confirmation. */
   lost?: number;
+  /**
+   * The database's cast reads each of these values as the rules do, so the change goes ahead where
+   * no road rewrites values (MySQL, `rewritesValuesOn`); any other is refused there.
+   */
+  cast?: true;
   /** How a value read back is compared, where the form it reads in is not its own. */
   as?: (value: unknown) => unknown;
 }
@@ -83,12 +89,14 @@ const parsed = (value: unknown) => JSON.parse(String(value)) as unknown;
 const PAIRS: readonly Pair[] = [
   {
     name: "an email becomes a text, kept",
+    cast: true,
     from: email,
     to: text,
     values: { a: ["a@b.co", "a@b.co"] },
   },
   {
     name: "a choice becomes a text, kept",
+    cast: true,
     from: select,
     to: text,
     values: { a: ["a", "a"] },
@@ -162,6 +170,7 @@ const PAIRS: readonly Pair[] = [
   },
   {
     name: "a document becomes JSON, kept",
+    cast: true,
     from: richText,
     to: json,
     values: { a: [documentOfText("hello"), documentOfText("hello")] },
@@ -175,12 +184,14 @@ const PAIRS: readonly Pair[] = [
   },
   {
     name: "a whole number becomes a text",
+    cast: true,
     from: whole,
     to: text,
     values: { a: [12, "12"] },
   },
   {
     name: "a fraction becomes a text, a whole one with no point",
+    cast: true,
     from: float,
     to: text,
     values: { a: [1.5, "1.5"], whole: [34, "34"] },
@@ -201,6 +212,7 @@ const PAIRS: readonly Pair[] = [
   },
   {
     name: "a whole number becomes a fraction, kept",
+    cast: true,
     from: whole,
     to: float,
     values: { a: [12, 12] },
@@ -214,6 +226,7 @@ const PAIRS: readonly Pair[] = [
   },
   {
     name: "a number becomes a JSON number",
+    cast: true,
     from: float,
     to: json,
     values: { a: [1.5, 1.5] },
@@ -246,6 +259,7 @@ const PAIRS: readonly Pair[] = [
   },
   {
     name: "a checkbox becomes a number",
+    cast: true,
     from: checkbox,
     to: whole,
     values: { on: [true, 1], off: [false, 0] },
@@ -331,6 +345,7 @@ const PAIRS: readonly Pair[] = [
   },
   {
     name: "a JSON list becomes a list",
+    cast: true,
     from: json,
     to: chips,
     values: {
@@ -342,6 +357,7 @@ const PAIRS: readonly Pair[] = [
   },
   {
     name: "a list becomes another list, item by item",
+    cast: true,
     from: chips,
     to: { type: "select", hasMany: true, options: OPTIONS },
     values: {
@@ -353,6 +369,7 @@ const PAIRS: readonly Pair[] = [
   },
   {
     name: "a list becomes a JSON list, an empty one kept empty",
+    cast: true,
     from: chips,
     to: json,
     values: {
@@ -535,11 +552,15 @@ describe.each(getConfiguredTestDialects())(
             lost: number;
           }>;
         };
-        expect(typeChanges).toEqual([
-          expect.objectContaining({ field: "v", lost: pair.lost ?? 0 }),
-        ]);
+        expect(typeChanges).toEqual([expect.objectContaining({ field: "v" })]);
+        // A value the cast does not read as the rules do is counted as blocked where no road
+        // rewrites it, so only where one does are the counts the pair's own.
+        if (rewritesValuesOn(dialect)) {
+          expect(typeChanges[0]?.lost).toBe(pair.lost ?? 0);
+        }
 
-        await dispatchCollections(
+        const held = valuesOf(await direct(t));
+        const saved = dispatchCollections(
           {} as ServiceContainer,
           "applySchemaChanges",
           { collectionName: SLUG },
@@ -557,6 +578,23 @@ describe.each(getConfiguredTestDialects())(
             ),
           }
         );
+        if (!rewritesValuesOn(dialect) && pair.cast !== true) {
+          await expect(saved).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+            publicData: {
+              errors: [
+                expect.objectContaining({
+                  path: "fields.v",
+                  message: expect.stringContaining("can't be deployed yet"),
+                }),
+              ],
+            },
+          });
+          expect(valuesOf(await direct(t))).toEqual(held);
+          expect(await definition(t, dialect)).toEqual(before);
+          return;
+        }
+        await saved;
         clearRegistryRowCache();
 
         const expected = Object.fromEntries(

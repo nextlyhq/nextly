@@ -14,6 +14,7 @@ import {
   FirstQuestionWatch,
   landingPush,
   nextSteps,
+  partlyAppliedChange,
   partWayPush,
 } from "../landing-push";
 
@@ -466,5 +467,55 @@ describe("nextSteps, the file checked against the database", () => {
         "Then run `nextly migrate`, which brings the registry in step with the recorded files. " +
         "Or reverse what of it ran and run `nextly migrate`, which runs them from the start."
     );
+  });
+});
+
+// A refusal says its review is to be taken again only where nothing was changed. One told with the
+// files kept for a change that applied in part has changed something, so it says so no longer, and
+// keeps everything else it said.
+describe("partlyAppliedChange", () => {
+  const errors = [
+    {
+      path: "fields.price",
+      code: "TYPE_CHANGE_COUNTS_CHANGED",
+      message: "price now keeps 1 value.",
+    },
+  ];
+  const counts = {
+    typeChanges: [{ field: "price", kept: 1, changed: 0, lost: 0 }],
+  };
+
+  it("leaves out that the review is to be taken again, and its counts, keeping the errors", () => {
+    const refused = NextlyError.validation({
+      errors,
+      review: { reviewAgain: true, counts },
+    });
+    // The fixture's control: the refusal itself says it.
+    expect(refused.publicData).toEqual({ errors, reviewAgain: true, counts });
+
+    const told = partlyAppliedChange(refused, ["20261124_posts.sql"]);
+
+    expect(told.code).toBe("VALIDATION_ERROR");
+    expect(told.publicData).toEqual({ errors });
+  });
+
+  it("keeps other public data as it was, and absent where it was absent or said nothing else", () => {
+    const other = new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage: "Validation failed.",
+      publicData: { errors },
+    });
+    expect(partlyAppliedChange(other, []).publicData).toEqual({ errors });
+    const none = new NextlyError({
+      code: "NEXTLY_TABLE_BUSY",
+      publicMessage: "The table is busy.",
+    });
+    expect(partlyAppliedChange(none, []).publicData).toBeUndefined();
+    const only = new NextlyError({
+      code: "NEXTLY_TABLE_BUSY",
+      publicMessage: "The table is busy.",
+      publicData: { reviewAgain: true },
+    });
+    expect(partlyAppliedChange(only, []).publicData).toBeUndefined();
   });
 });
