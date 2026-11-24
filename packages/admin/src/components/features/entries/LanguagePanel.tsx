@@ -673,8 +673,6 @@ export function DocumentLanguagePanel({
   onLocaleChange?: LanguagePanelProps["onSelect"] | undefined;
   /** Accepted from the document panel; nothing here reads it. */
   hasStatus?: boolean | undefined;
-  /** Accepted from the document panel; nothing here reads it. */
-  publishAllDisabled?: boolean | undefined;
 }): JSX.Element | null {
   return (
     <LanguagePanel
