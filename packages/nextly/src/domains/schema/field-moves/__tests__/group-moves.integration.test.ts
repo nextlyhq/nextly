@@ -270,6 +270,12 @@ async function migrateFolder(
   clearRegistryRowCache();
 }
 
+/**
+ * How many files a save moving fields into a group writes: on MySQL the moves' own, and the one that
+ * drops the columns they left; one elsewhere, where a file runs in one transaction.
+ */
+const filesOfAMoveIn = (dialect: TestDialect) => (dialect === "mysql" ? 2 : 1);
+
 /** The newest migration file the saves wrote. */
 async function newestFile(): Promise<string> {
   const files = (await readdir(join(basePath, "migrations")))
@@ -278,8 +284,11 @@ async function newestFile(): Promise<string> {
   return readFile(join(basePath, "migrations", files.at(-1) ?? ""), "utf-8");
 }
 
-/** `nextly migrate:down` of the newest migration on `t`'s database, reading the files the saves wrote. */
-async function migrateDown(t: TestNextly): Promise<void> {
+/**
+ * `nextly migrate:down` of the newest migration on `t`'s database, or of the newest `step`, reading
+ * the files the saves wrote.
+ */
+async function migrateDown(t: TestNextly, step = 1): Promise<void> {
   const adapter = t.adapter as unknown as DrizzleAdapter;
   const migrationsDir = join(basePath, "migrations");
   await migrateDownCore({
@@ -291,7 +300,7 @@ async function migrateDown(t: TestNextly): Promise<void> {
     nodeEnv: "test",
     logger: createLogger({ quiet: true }),
     options: {
-      step: 1,
+      step,
       consent: resolveDataLossConsent({ flag: true, env: {} }),
       yes: true,
       dryRun: false,
@@ -724,7 +733,7 @@ describe.each(getConfiguredTestDialects())(
       );
 
       // The column comes back nullable, takes its values from the group, then is required again.
-      await migrateDown(t);
+      await migrateDown(t, filesOfAMoveIn(dialect));
 
       const rows = await run<{ summary: string }>(
         t,
@@ -752,6 +761,9 @@ describe.each(getConfiguredTestDialects())(
         t,
         `UPDATE ${q(TABLE)} SET ${q("meta")} = NULL WHERE ${q("slug")} = 'one'`
       );
+      // On MySQL the file that dropped the column is rolled back first, on its own: the moves' file,
+      // which stops, is the newest then.
+      if (filesOfAMoveIn(dialect) === 2) await migrateDown(t);
       const groups = await storedGroups(t);
       const columns = await columnsOf(t);
 
@@ -796,7 +808,7 @@ describe.each(getConfiguredTestDialects())(
         seo: { summary: "bare summary" },
       });
 
-      await migrateDown(t);
+      await migrateDown(t, filesOfAMoveIn(dialect));
 
       expect(await storedGroups(t)).toEqual(before);
       const rows = await run<{ summary: string }>(

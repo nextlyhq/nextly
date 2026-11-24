@@ -166,6 +166,14 @@ goes, and copy it back in the `DOWN`. The column the move deletes still needs th
 moved out of a group onto its entity's row needs a value in every entry: `nextly migrate` stops
 before it changes anything where an entry's group holds none, naming the field.
 
+On MySQL, which commits each schema change as it runs, the moves are a migration of their own, its
+name ending in `_moves`, and every other change is in the migration after it. The moves' file copies
+the values and leaves the column of a field moved into a group in place; the next file drops it. So a
+run stopped part-way leaves every value where your app reads it. Commit both files with their
+snapshots: `nextly migrate` runs them in order, and `nextly migrate:down` rolls them back one at a
+time, the second first. Moves with nothing else to change, such as a field moved out of a group into
+an optional one, are one file. The Schema Builder's saves write the same files.
+
 With no terminal (CI, `--non-interactive`), every move is declined unless you pass
 `--accept-moves`, which accepts them all; `migrate:create` warns about each one it declines,
 naming the field. A declined move stays a delete and an add: `--accept-renames` never pairs

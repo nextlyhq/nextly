@@ -171,6 +171,11 @@ export interface DeletionHold {
   readonly standingIn: (
     changed?: readonly string[]
   ) => (db: unknown) => Promise<void>;
+  /**
+   * The tables held in every file of the save that changes them, not only in the last one that
+   * does, where values are counted: those a move carries values in, whose first file copies them.
+   */
+  readonly inEveryFile?: readonly string[];
 }
 
 /**
@@ -399,6 +404,7 @@ export function writesHeldWhileMoving(args: {
   const nothing = () => Promise.resolve();
   return {
     tables: args.tables,
+    inEveryFile: args.tables,
     check: hold(args.tables),
     compare: nothing,
     standingIn: () => nothing,
@@ -428,6 +434,7 @@ export function bothHolds(
     };
   return {
     tables: [...new Set([...first.tables, ...second.tables])],
+    inEveryFile: [...(first.inEveryFile ?? []), ...(second.inEveryFile ?? [])],
     check: inTurn(first.check, second.check),
     compare: inTurn(first.compare, second.compare),
     standingIn: changed =>

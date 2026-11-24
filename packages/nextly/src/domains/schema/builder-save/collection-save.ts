@@ -4700,7 +4700,8 @@ interface SaveDeletionHold extends DeletionHold {
 /**
  * Where a file-by-file run of `ordered` counts what `hold` deletes: the held tables each file counts,
  * each in the last file whose statements change it (`fileDeletingFrom`), which deletes its values
- * after any file that converts it. A file whose tables hold no removed field's values is left out.
+ * after any file that converts it, and those held in every file (`inEveryFile`) in each that changes
+ * them. A file whose tables hold no removed field's values is left out.
  */
 async function deletingFilesOf(
   deps: CollectionSaveDeps,
@@ -4709,8 +4710,24 @@ async function deletingFilesOf(
 ): Promise<Map<string, readonly string[]>> {
   const deleting = await fileDeletingFrom(deps, ordered, hold.tables);
   const tablesByFile = new Map<string, string[]>();
-  for (const [table, filename] of deleting) {
-    tablesByFile.set(filename, [...(tablesByFile.get(filename) ?? []), table]);
+  const holdIn = (filename: string, table: string) => {
+    const held = tablesByFile.get(filename) ?? [];
+    if (!held.includes(table)) tablesByFile.set(filename, [...held, table]);
+  };
+  for (const [table, filename] of deleting) holdIn(filename, table);
+  const everywhere = hold.inEveryFile ?? [];
+  if (everywhere.length > 0) {
+    const dialect = deps.adapter.getCapabilities().dialect;
+    for (const filename of ordered) {
+      const changed = tablesChangedBy(await unitOf(deps, filename), dialect);
+      // A file whose tables cannot be named may change any of them.
+      const names = changed?.map(table => table.toLowerCase());
+      for (const table of everywhere) {
+        if (names?.includes(table.toLowerCase()) !== false) {
+          holdIn(filename, table);
+        }
+      }
+    }
   }
   // A file whose tables hold no removed field's values counts nothing.
   for (const [filename, tables] of tablesByFile) {

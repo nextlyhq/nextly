@@ -1,19 +1,25 @@
 /**
  * A field moved into or out of a group in a code-first config, stopped part-way on MySQL: a schema
- * statement commits as it runs, so a `nextly migrate` stopped by a failure after any one of the
- * move file's statements leaves what ran before it in place. Every entry's value must still be
- * stored in the place the field was moving from or the place it was moving to, and the registry
- * must place the field where its values are.
+ * statement commits as it runs, so a `nextly migrate` stopped after any one of the move's statements,
+ * by a failure or by the process being killed, leaves what ran before it in place. Every entry's
+ * value must still be stored in the place the field was moving from or the place it was moving to,
+ * and the registry must place the field where its values are.
  *
- * The move file is the code road's: `nextly migrate:create --accept-moves` over the config before
- * and after the move. Each stop replays the files into a fresh database, the entries written
- * before the move's file runs, and stops it after statement N, for every N it reaches. The Schema
+ * The move's files are the code road's: `nextly migrate:create --accept-moves` over the config before
+ * and after the move. Each stop replays the files into a fresh database, the entries written before
+ * the move's files run, and stops them after statement N, for every N each reaches. The Schema
  * Builder's road is `move-stopped-part-way.integration.test.ts`.
  *
  * Reading an entry back through the app is not asked here: a code-first app runs the config's
  * definition, which is ahead of the database until `nextly migrate` finishes the file.
  */
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,6 +28,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../../../__tests__/helpers/fresh-database";
 import { perLanguageStorageSuite } from "../../../../__tests__/storage-layout";
+import {
+  NEXTLY_RUN_TIMEOUT,
+  runNextly,
+} from "../../../../cli/__tests__/helpers/run-nextly";
 import { runMigrate } from "../../../../cli/commands/migrate";
 import { runMigrateCreate } from "../../../../cli/commands/migrate-create";
 import type { CommandContext } from "../../../../cli/program";
@@ -41,7 +51,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { setNonInteractive } from "../../migrate/can-prompt";
-import { withStopPoints } from "../../migrate/stop-points";
+import { KILL_AT_VARIABLE, withStopPoints } from "../../migrate/stop-points";
 
 // Written for per-language storage as every installation runs it (`storage-layout`). The moved fields
 // are shared, kept on the entry's own row in every language: a translated field's move goes through
@@ -217,9 +227,44 @@ async function migrate(step?: number): Promise<void> {
   }
 }
 
-function sqlFiles(): number {
-  return readdirSync(join(dir, "migrations")).filter(f => f.endsWith(".sql"))
-    .length;
+function sqlFileNames(): string[] {
+  return readdirSync(join(dir, "migrations"))
+    .filter(f => f.endsWith(".sql"))
+    .sort();
+}
+
+const sqlFiles = () => sqlFileNames().length;
+
+/**
+ * `nextly migrate` over the folder as a process of its own, at the database `url`, killing itself
+ * after statement `n` of `file`; whether it was killed there, rather than running to its end.
+ */
+async function killedAfter(
+  url: string,
+  config: unknown,
+  file: string,
+  n: number
+): Promise<boolean> {
+  // The project's configuration as a deploy reads it: this process's commands load the mock's.
+  writeFileSync(
+    join(dir, "nextly.config.ts"),
+    `export default ${JSON.stringify(config)};\n`
+  );
+  const ran = await runNextly(
+    ["migrate", "--accept-data-loss", "--non-interactive", "--force-unlock"],
+    dir,
+    {
+      DATABASE_URL: url,
+      DB_DIALECT: "mysql",
+      NODE_ENV: "test",
+      [KILL_AT_VARIABLE]: `${file}: after statement ${String(n)}`,
+    }
+  );
+  if (ran.status === 0) return false;
+  expect(ran.stderr, `${ran.stdout}\n${ran.stderr}`).toContain(
+    "stopped by SIGKILL"
+  );
+  return true;
 }
 
 /**
@@ -247,6 +292,30 @@ async function stoppedAfter(
   });
   return stopped ? "stopped" : "ran";
 }
+
+/** The entries, written through the app declaring the posts before the move, into `url`. */
+async function writeEntries(
+  url: string,
+  before: Where,
+  required: boolean
+): Promise<void> {
+  const writer = await start(url, posts(before, required));
+  for (const { title, slug, ...values } of ENTRIES) {
+    await writer.nextly.create({
+      collection: SLUG as never,
+      data: (before === "grouped"
+        ? { title, slug, meta: { note: "n", ...values } }
+        : { title, slug, ...values, meta: { note: "n" } }) as never,
+    });
+  }
+  await shutdownServices().catch(() => {});
+}
+
+/** The config before the move and after it. */
+const configs = (before: Where, after: Where, required: boolean) =>
+  [posts(before, required), posts(after, required)].map(collections =>
+    defineConfig({ collections, db: { migrationsDir: "./migrations" } })
+  );
 
 const run = <T>(t: TestNextly, statement: string) =>
   (t.adapter as unknown as DrizzleAdapter).executeQuery(
@@ -313,14 +382,7 @@ describe.runIf(getConfiguredTestDialects().includes("mysql"))(
     it.each(SCENARIOS)(
       "$name: stopped after each statement of the move's file",
       async ({ before, after, required }) => {
-        const beforeConfig = defineConfig({
-          collections: posts(before, required),
-          db: { migrationsDir: "./migrations" },
-        });
-        const afterConfig = defineConfig({
-          collections: posts(after, required),
-          db: { migrationsDir: "./migrations" },
-        });
+        const [beforeConfig, afterConfig] = configs(before, after, required);
         // The files, written once over a first database: the collection, then the move.
         await openDatabase();
         await create("create_posts", beforeConfig);
@@ -333,16 +395,7 @@ describe.runIf(getConfiguredTestDialects().includes("mysql"))(
           // A database of its own for each stop, holding the entries before the move runs.
           const url = await openDatabase();
           await migrate(created);
-          const writer = await start(url, posts(before, required));
-          for (const { title, slug, ...values } of ENTRIES) {
-            await writer.nextly.create({
-              collection: SLUG as never,
-              data: (before === "grouped"
-                ? { title, slug, meta: { note: "n", ...values } }
-                : { title, slug, ...values, meta: { note: "n" } }) as never,
-            });
-          }
-          await shutdownServices().catch(() => {});
+          await writeEntries(url, before, required);
           if ((await stoppedAfter(n, () => migrate())) === "ran") break;
           stops += 1;
           await expectEveryValueKept(
@@ -350,10 +403,41 @@ describe.runIf(getConfiguredTestDialects().includes("mysql"))(
             `after statement ${String(n)}`
           );
         }
-        // The move's file ran statements, so the stops reached it.
+        // The move's files ran statements, so the stops reached them.
         expect(stops).toBeGreaterThan(0);
       },
       600_000
+    );
+
+    it.each(SCENARIOS)(
+      "$name: the process killed after each statement of the move's files",
+      async ({ before, after, required }) => {
+        const [beforeConfig, afterConfig] = configs(before, after, required);
+        await openDatabase();
+        await create("create_posts", beforeConfig);
+        const created = sqlFiles();
+        await create("move_fields", afterConfig);
+
+        const killed: string[] = [];
+        for (const file of sqlFileNames().slice(created)) {
+          for (let n = 1; n < 40; n++) {
+            const url = await openDatabase();
+            await migrate(created);
+            await writeEntries(url, before, required);
+            if (!(await killedAfter(url, afterConfig, file, n))) break;
+            killed.push(`${file}: ${String(n)}`);
+            await expectEveryValueKept(
+              await start(url),
+              `killed in ${file} after statement ${String(n)}`
+            );
+          }
+        }
+        // Each of the move's files was killed in.
+        for (const file of sqlFileNames().slice(created)) {
+          expect(killed.some(at => at.startsWith(file))).toBe(true);
+        }
+      },
+      40 * NEXTLY_RUN_TIMEOUT
     );
   }
 );
