@@ -32,6 +32,7 @@ import {
   COMPANION_OPTIONAL_STRUCTURAL_COLUMNS,
   COMPANION_STRUCTURAL_COLUMNS,
 } from "../../i18n/migration/generate-up";
+import { keepsTranslationsInside } from "../../i18n/shared-structure";
 import { buildDesiredTableFromComponentFields } from "../../schema/pipeline/diff/build-from-fields";
 import { sizeFromDeclaration } from "../../schema/pipeline/diff/declared-size";
 import { normalizeDefault } from "../../schema/pipeline/diff/normalize-default";
@@ -794,6 +795,23 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
       localized && !laidOut.has(field) && isFieldLocalized(field, true);
     const onMain = mainColumns.get(descriptor.name);
     const onCompanion = companionColumns.get(descriptor.name);
+
+    // A repeater or group keeping translations inside has its structure on the main table and its
+    // overlay under the same name on the companion, so both copies are expected there. Only the
+    // container's own column is taken so, and only where the group is translated and the
+    // container keeps text inside: every other column on both tables is still refused below.
+    if (
+      onMain &&
+      onCompanion &&
+      localized &&
+      !laidOut.has(field) &&
+      keepsTranslationsInside(field, true)
+    ) {
+      claimedMain.add(descriptor.name);
+      claimedCompanion.add(descriptor.name);
+      outcomes.set(field, field);
+      continue;
+    }
 
     if (onMain && onCompanion) {
       // Both tables hold it: a localization enable that created and seeded the companion without

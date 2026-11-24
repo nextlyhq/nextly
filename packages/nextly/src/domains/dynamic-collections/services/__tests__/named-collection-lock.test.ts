@@ -160,9 +160,7 @@ describe("a collection's named lock", () => {
  * `site_a`, the registry holds `posts` and `authors`, and the take of the names answers `taken`
  * (every name by default), or fails when `takeFails`.
  */
-function mysqlHold(
-  options: { taken?: number; takeFails?: boolean } = {}
-): {
+function mysqlHold(options: { taken?: number; takeFails?: boolean } = {}): {
   tx: TransactionContext;
   statements: { sql: string; params: unknown[] }[];
   registry: DynamicCollectionRegistryService;

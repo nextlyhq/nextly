@@ -963,7 +963,8 @@ export const COMPONENTS_METHODS: Record<
               fields: {
                 tableName,
                 builtBy: "fieldGroup",
-                oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
+                oldFields: (component.fields ??
+                  []) as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
                 wasLocalized,
                 isLocalized,

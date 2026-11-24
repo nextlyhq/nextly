@@ -44,7 +44,6 @@ import {
   companionSpecShell,
   deriveCompanionSpec,
   deriveCompanionTableSpec,
-  keepsSharedStructures,
 } from "../../i18n/migration/derive-companion-spec";
 import { planFieldAddedToTranslationMigration } from "../../i18n/migration/field-added-to-translation";
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
@@ -4018,12 +4017,11 @@ function withLocalizedMarker(
 /**
  * The containers of `entity` with an overlay column on its translations table: each repeater or
  * group keeping one structure in every language with text inside (`keepsTranslationsInside`), by
- * the same rule the runtime builds that table by (`deriveCompanionTableSpec`).
+ * the same rule the runtime builds that table by (`deriveCompanionTableSpec`), a field group's too.
  */
 function overlayContainersOf(
   entity: MinimalConfigEntity
 ): MinimalConfigEntity["fields"] {
-  if (!keepsSharedStructures(entity.tableName)) return [];
   return entity.fields.filter(field =>
     keepsTranslationsInside(field as StructuredField, true)
   );

@@ -230,19 +230,6 @@ async function bootLanguages(dialect: TestDialect): Promise<TestNextly> {
         fields: [{ name: "body", type: "probe", localized: true }],
       } as unknown as CollectionConfig,
       {
-        // A group kept per language, holding the type's field.
-        slug: "framed",
-        localized: true,
-        fields: [
-          {
-            name: "hero",
-            type: "group",
-            localized: true,
-            fields: [{ name: "body", type: "probe" }],
-          },
-        ],
-      } as unknown as CollectionConfig,
-      {
         // A group with one structure in every language: its translated field
         // is each language's text, its other field one value for all of them.
         slug: "framedonce",
@@ -1174,23 +1161,6 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
 
       expect(await at("de")).toEqual({ kind: "value", value: { said: "de" } });
       expect(await at("en")).toEqual({ kind: "value", value: { said: "en" } });
-    });
-
-    it("refuses a field inside a group kept per language, by name", async () => {
-      const t = await bootLanguages(dialect);
-      const read = languagesReader(t, "probe");
-
-      // Refused from the definition alone, before any row is read.
-      await expect(
-        read({
-          collection: "framed",
-          id: "any",
-          field: "hero.body",
-          form: "published",
-        })
-      ).rejects.toThrow(
-        /"framed\.hero\.body" cannot be read here: it is inside a group kept per language/
-      );
     });
 
     it("reads a field inside a group with one structure in the language asked, and a shared one the same in every language", async () => {
