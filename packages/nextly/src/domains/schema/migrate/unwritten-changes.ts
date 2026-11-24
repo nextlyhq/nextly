@@ -47,6 +47,7 @@ import {
 import {
   settingsChangesFor,
   type EntitySettingsChange,
+  type SettingsEntityKind,
 } from "../migrate-create/entity-settings";
 import type { MinimalConfigEntity } from "../migrate-create/generate";
 import type { SnapshotFile } from "../migrate-create/snapshot-io";
@@ -112,6 +113,33 @@ export interface UnwrittenChanges {
    * recording (`recordsForTheFirstTime`): a notice, never a change.
    */
   settingsNotRecorded?: boolean;
+  /**
+   * The declared entity each table belongs to, by table name (`tableOwners`), so a report can
+   * name a table's change under its entity.
+   */
+  owners?: ReadonlyMap<string, TableOwner>;
+}
+
+/** The entity a table belongs to: its kind, as its settings are recorded, and its slug. */
+export interface TableOwner {
+  kind: SettingsEntityKind;
+  slug: string;
+}
+
+/** Each declared entity's table, with the entity it belongs to. */
+function tableOwners(entities: DeclaredEntities): Map<string, TableOwner> {
+  const owners = new Map<string, TableOwner>();
+  const kinds: [readonly MinimalConfigEntity[], SettingsEntityKind][] = [
+    [entities.collections, "collection"],
+    [entities.singles, "single"],
+    [entities.components, "fieldGroup"],
+  ];
+  for (const [list, kind] of kinds) {
+    for (const entity of list) {
+      owners.set(entity.tableName, { kind, slug: entity.slug });
+    }
+  }
+  return owners;
 }
 
 /** Whether `changes` names nothing. */
@@ -148,6 +176,7 @@ export function compareWithNewestSnapshot(args: {
     permissions: permissionDifferences(args.permissions, latest, args.recorded),
     noSnapshot: latest === null,
     perLanguageMoves: args.pending.perLanguageMoves,
+    owners: tableOwners(entities),
   };
 }
 

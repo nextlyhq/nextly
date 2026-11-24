@@ -29,6 +29,7 @@ import {
   declareClosedToSuperAdmin,
   declaredClosedMarks,
 } from "../auth/access/closed-to-super-admin";
+import type { LoadConfigResult } from "../cli/utils/config-loader";
 import type {
   CollectionConfig,
   CollectionHooks,
@@ -189,6 +190,8 @@ import {
   type TypeChangedEntity,
   typeChangesHeldBack,
 } from "./code-first-type-changes";
+import type { DriftInputs } from "./drift-block";
+import { driftReportAllowed } from "./drift-gate";
 import { planFieldGroupReload } from "./field-group-reload-plan";
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
 import { bootSeedingFollows } from "./seed-permissions";
@@ -1929,7 +1932,7 @@ async function applyReload(opts?: ReloadOptions): Promise<void> {
     "../domains/webhooks/event-type-registry"
   );
   const webhookEventTypes = stageWebhookEventTypes();
-  let loaded = false;
+  let loaded: DriftInputs | undefined;
   let landed = false;
   try {
     await applyReloadHolding(
@@ -1939,8 +1942,8 @@ async function applyReload(opts?: ReloadOptions): Promise<void> {
           principalKinds.commit();
           webhookEventTypes.commit();
         },
-        configLoaded: () => {
-          loaded = true;
+        configLoaded: read => {
+          loaded = read;
         },
       },
       opts
@@ -1949,13 +1952,20 @@ async function applyReload(opts?: ReloadOptions): Promise<void> {
     principalKinds.abandon();
     webhookEventTypes.abandon();
   }
+  // The changes not yet in a migration, said once a reload has landed: at a development start and
+  // after each save that applies. The gate is asked first and the report loaded only behind it, so
+  // a production start loads none of it and reads no migration file.
+  if (landed && loaded !== undefined && driftReportAllowed()) {
+    const { reportPendingChanges } = await import("./drift-block");
+    await reportPendingChanges(loaded);
+  }
   // A start's reload that read a configuration and did not land left some of
   // it behind its declaration (an apply deferred or failed, a sync that
   // failed), which the start's own checks do not all see: a Single has no drift
   // check. So the start records nothing new. One that read no configuration
   // file applies nothing, landed or not: the start's configuration came from
   // its caller, and `registerServices` brought it in.
-  if (opts?.atStart === true && loaded && !landed) {
+  if (opts?.atStart === true && loaded !== undefined && !landed) {
     await markStartIncomplete();
   }
 }
@@ -1967,7 +1977,11 @@ async function markStartIncomplete(): Promise<void> {
 }
 
 async function applyReloadHolding(
-  principalKinds: { commit: () => void; configLoaded: () => void },
+  principalKinds: {
+    commit: () => void;
+    /** The configuration was read and accepted: what a report of its changes compares. */
+    configLoaded: (read: DriftInputs) => void;
+  },
   opts?: ReloadOptions
 ): Promise<void> {
   const resolverArg = opts?.resolver;
@@ -1983,6 +1997,9 @@ async function applyReloadHolding(
   // every subsequent request into a 500.
   // The configuration as the loader handed it over, made the services' own once the reload lands.
   let loadedConfig: SanitizedNextlyConfig | undefined;
+  // The plugin extends the loader left for Schema Builder entities, which a comparison of the
+  // changes not yet in a migration materialises as `migrate:create` does.
+  let loadedExtends: LoadConfigResult["deferredExtends"];
   let newConfig:
     | {
         collections?: CollectionDef[];
@@ -2090,6 +2107,7 @@ async function applyReloadHolding(
       missing: opts?.atStart === true ? "defaults" : "refuse",
     });
     loadedConfig = result.config;
+    loadedExtends = result.deferredExtends;
     // Watch exactly what this read: the config and every file it imported. Set
     // before the checks below, which may still refuse the edit; the fix for a
     // refusal is another save of one of these same files.
@@ -2194,7 +2212,14 @@ async function applyReloadHolding(
     undoOptimisticReloadWork();
     return;
   }
-  principalKinds.configLoaded();
+  if (loadedConfig !== undefined) {
+    principalKinds.configLoaded({
+      config: loadedConfig,
+      ...(loadedExtends === undefined
+        ? {}
+        : { deferredExtends: loadedExtends }),
+    });
+  }
 
   // Republish the audit seam from the reloaded config, so toggling
   // `webhooks.audit` in nextly.config.ts takes effect on save without a restart.

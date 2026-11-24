@@ -386,11 +386,14 @@ function entityChanges(
 
 /** `posts: description, admin.group`, with the kind named for a non-collection. */
 export function describeSettingsChange(change: EntitySettingsChange): string {
-  const who =
-    change.kind === "collection"
-      ? change.slug
-      : `${change.slug} (${change.kind === "single" ? "single" : "field group"})`;
-  return `${who}: ${change.changes.join(", ")}`;
+  return `${entityLabel(change.kind, change.slug)}: ${change.changes.join(", ")}`;
+}
+
+/** An entity as a report names it: a collection by its slug, a Single or field group with its kind. */
+export function entityLabel(kind: SettingsEntityKind, slug: string): string {
+  return kind === "collection"
+    ? slug
+    : `${slug} (${kind === "single" ? "single" : "field group"})`;
 }
 
 function joinPath(path: string, key: string): string {

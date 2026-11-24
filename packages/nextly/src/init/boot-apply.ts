@@ -352,7 +352,7 @@ async function settleLeftSavesAtStart(
  * registered, the process's own folder and config. Every step of the start reads this one answer,
  * so its settle, its migrate step and its registration from snapshots read the same folder.
  */
-async function startProject(): Promise<{
+export async function startProject(): Promise<{
   root: string;
   migrationsDir: string;
   database: string | undefined;
