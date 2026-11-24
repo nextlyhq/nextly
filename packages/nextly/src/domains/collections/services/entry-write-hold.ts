@@ -330,33 +330,62 @@ async function refuseChanged(
     where: { and: [{ column: "slug", op: "=", value: entity.slug }] },
   });
   const heldFields = storedFieldsOf(row?.fields);
-  const remaining = new Set(heldFields.map(field => field.name));
-  const removed = loaded.setsFields.filter(name => !remaining.has(name));
   // Made again from the definition as it stands, however it is refused: the rows this process
   // keeps of it are cleared, so a retry reads it rather than the one the write was made from.
   clearRegistryRowCache();
-  if (removed.length === 0) {
-    if (madeFromWhatHolds(loaded, heldFields, dialect)) return;
-    throw changedWhileHeld(entity.slug);
-  }
-  throw NextlyError.validation({
-    errors: removed.map(name => ({
-      path: `fields.${name}`,
-      code: "FIELD_REMOVED",
-      message: `${name} was removed from this collection while this write waited for a change to it, so nothing was written. Review the entry and save it again.`,
-    })),
-    logContext: {
-      reason: "field-removed-while-held",
-      slug: entity.slug,
-      fields: removed,
-    },
+  const set = setFieldsNotAsHeld(loaded, heldFields, dialect);
+  if (set.length > 0) throw setFieldsChangedWhileHeld(entity.slug, set);
+  // A create reads no entry through the definition and writes only the columns its data sets: none
+  // of them changed, so it goes on.
+  if (loaded.insertsOnly === true) return;
+  // Any other write reads the entry through the definition it was made from.
+  if (madeFromWhatHolds(loaded, heldFields, dialect)) return;
+  throw changedWhileHeld(entity.slug);
+}
+
+/** A field a write sets, and what a save did to it: `"removed"`, or `"changed"` how it is stored. */
+interface SetField {
+  readonly name: string;
+  readonly was: "removed" | "changed";
+}
+
+/**
+ * The fields a write made from `loaded` sets that the held definition (`held`) no longer has, or
+ * keeps by name but stores differently: a value written there would go to no column, or be written
+ * as the earlier type or to the earlier relation. Each is named to the person.
+ */
+function setFieldsNotAsHeld(
+  loaded: LoadedRegistryRow,
+  held: readonly FieldDefinition[],
+  dialect: SupportedDialect
+): SetField[] {
+  if (loaded.setsFields.length === 0) return [];
+  const names = new Set(held.map(field => field.name));
+  const different = storedDifferently(loaded, held, dialect);
+  return loaded.setsFields.flatMap((name): SetField[] => {
+    if (!names.has(name)) return [{ name, was: "removed" }];
+    return different.has(name) ? [{ name, was: "changed" }] : [];
+  });
+}
+
+/** The fields `held` keeps from `loaded`, by name, but stores differently (`fieldsStoredDifferently`). */
+function storedDifferently(
+  loaded: LoadedRegistryRow,
+  held: readonly FieldDefinition[],
+  dialect: SupportedDialect
+): ReadonlySet<string> {
+  return fieldsStoredDifferently({
+    previous: loaded.stored,
+    next: held,
+    dialect,
+    // A collection's table is built by the collection's generator.
+    builtBy: "collection",
   });
 }
 
 /**
- * Whether a write made from `loaded` still reads and writes every field where, and as, the held
- * definition (`held`) stores it: a create, the fields it sets; any other write, which reads the
- * entry through the definition first, every field.
+ * Whether a write that reads the entry first was made from a definition that still holds: each of
+ * its fields is there, stored as it was. One that was taken out, or is stored differently, is not.
  */
 function madeFromWhatHolds(
   loaded: LoadedRegistryRow,
@@ -364,16 +393,31 @@ function madeFromWhatHolds(
   dialect: SupportedDialect
 ): boolean {
   const names = new Set(held.map(field => field.name));
-  const concerned = loaded.insertsOnly === true ? loaded.setsFields : loaded.fields;
-  if (concerned.some(name => !names.has(name))) return false;
-  const different = fieldsStoredDifferently({
-    previous: loaded.stored,
-    next: held,
-    dialect,
-    // A collection's table is built by the collection's generator.
-    builtBy: "collection",
+  if (loaded.fields.some(name => !names.has(name))) return false;
+  const different = storedDifferently(loaded, held, dialect);
+  return !loaded.fields.some(name => different.has(name));
+}
+
+/** The refusal of a write that sets fields a save removed or stores differently, naming each. */
+function setFieldsChangedWhileHeld(
+  slug: string,
+  set: readonly SetField[]
+): NextlyError {
+  return NextlyError.validation({
+    errors: set.map(({ name, was }) => ({
+      path: `fields.${name}`,
+      code: was === "removed" ? "FIELD_REMOVED" : "FIELD_CHANGED",
+      message:
+        was === "removed"
+          ? `${name} was removed from this collection while this write waited for a change to it, so nothing was written. Review the entry and save it again.`
+          : `${name} changed while this write waited for a change to this collection, so nothing was written. Review the entry and save it again.`,
+    })),
+    logContext: {
+      reason: "set-fields-changed-while-held",
+      slug,
+      fields: set.map(({ name, was }) => ({ name, was })),
+    },
   });
-  return !concerned.some(name => different.has(name));
 }
 
 /**

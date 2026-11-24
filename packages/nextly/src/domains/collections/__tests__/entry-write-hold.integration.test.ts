@@ -482,6 +482,7 @@ describe.each(getConfiguredTestDialects())(
       });
       await saveDefinition(t, fields => [...fields, tags("alpha")]);
       const updates = await loadedNow(t, { title: "t" });
+      const updatesTags = await loadedNow(t, { title: "t", tags: ["a1"] });
       const createsTags = await loadedNow(
         t,
         { title: "t", tags: ["a1"] },
@@ -500,20 +501,83 @@ describe.each(getConfiguredTestDialects())(
       await expect(heldFor(t, updates)).rejects.toMatchObject({
         code: "COLLECTION_BEING_CHANGED",
       });
-      await expect(heldFor(t, createsTags)).rejects.toMatchObject({
-        code: "COLLECTION_BEING_CHANGED",
+      // Set, and stored differently now: named, as a removed field is.
+      const changed = (name: string) => ({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: `fields.${name}`,
+              code: "FIELD_CHANGED",
+              message: expect.stringContaining("changed while this write waited for a change"),
+            }),
+          ],
+        },
       });
+      await expect(heldFor(t, updatesTags)).rejects.toMatchObject(
+        changed("tags")
+      );
+      await expect(heldFor(t, createsTags)).rejects.toMatchObject(
+        changed("tags")
+      );
       await expect(heldFor(t, createsTitle)).resolves.toBeUndefined();
 
-      // A column stored as another type, the same.
-      const updatesAgain = await loadedNow(t, { title: "t" });
+      // A column stored as another type, the same: a write that sets it is refused naming it,
+      // whichever way it is made, and told it changed while it waited.
+      const setsNote = await loadedNow(t, { title: "t", note: "12" });
+      const createsNote = await loadedNow(
+        t,
+        { title: "t", note: "12" },
+        { insertsOnly: true }
+      );
       await saveDefinition(t, fields =>
         fields.map(field =>
           field.name === "note" ? { ...field, type: "number" } : field
         )
       );
-      await expect(heldFor(t, updatesAgain)).rejects.toMatchObject({
-        code: "COLLECTION_BEING_CHANGED",
+      await expect(heldFor(t, setsNote)).rejects.toMatchObject(changed("note"));
+      await expect(heldFor(t, createsNote)).rejects.toMatchObject(
+        changed("note")
+      );
+    }, 30_000);
+
+    // Set together, a field a save removed and one it stores differently are named together, each
+    // by what happened to it.
+    it("refuses a write that sets a removed and a changed field, naming each", async () => {
+      const t = await boot();
+      const tags = (target: string) => ({
+        name: "tags",
+        type: "relationship",
+        relationTo: target,
+        hasMany: true,
+        options: { target, relationType: "manyToMany" },
+      });
+      await saveDefinition(t, fields => [...fields, tags("alpha")]);
+      const loaded = await loadedNow(t, {
+        title: "t",
+        note: "n",
+        tags: ["a1"],
+      });
+      await saveDefinition(t, fields =>
+        fields
+          .filter(field => field.name !== "note")
+          .map(field => (field.name === "tags" ? tags("beta") : field))
+      );
+
+      await expect(heldFor(t, loaded)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.note",
+              code: "FIELD_REMOVED",
+            }),
+            expect.objectContaining({
+              path: "fields.tags",
+              code: "FIELD_CHANGED",
+            }),
+          ],
+        },
       });
     }, 30_000);
 
