@@ -569,5 +569,60 @@ describe.each(LEFT_SAVE_SUITES)(
       },
       600_000
     );
+
+    // Any process may settle the save, as its development start does, and the refusal ends for every
+    // one of them: the same process sends the write again, and so does another that was never told.
+    it.runIf(dialect === "mysql")(
+      "ends the refusal for every process once the second process settles the save",
+      async () => {
+        const t = await boot({ numeric: true });
+        await killRetype(t);
+        expect(await headingType(t), `killed at ${killedAt}`).toBe("text");
+
+        const [refused, settled, accepted, again] = await fromAnotherProcess(
+          [
+            {
+              kind: "write",
+              via: "rest",
+              data: { title: "R1", slug: "r1", heading: 8 },
+            },
+            { kind: "settle", via: "api" },
+            {
+              kind: "write",
+              via: "rest",
+              data: { title: "R2", slug: "r2", heading: "x" },
+            },
+            {
+              kind: "write",
+              via: "api",
+              data: { title: "A2", slug: "a2", heading: "y" },
+            },
+          ],
+          { settles: true }
+        );
+        expectRefused(refused!);
+        expect(settled!.ok, JSON.stringify(settled)).toBe(true);
+        expect(accepted!.ok, JSON.stringify(accepted)).toBe(true);
+        expect(again!.ok, JSON.stringify(again)).toBe(true);
+
+        for (const later of await fromAnotherProcess([
+          {
+            kind: "write",
+            via: "rest",
+            data: { title: "R3", slug: "r3", heading: "z" },
+          },
+          {
+            kind: "write",
+            via: "api",
+            data: { title: "A3", slug: "a3", heading: "z" },
+          },
+          { kind: "read", via: "rest" },
+          { kind: "read", via: "api" },
+        ])) {
+          expect(later.ok, JSON.stringify(later)).toBe(true);
+        }
+      },
+      600_000
+    );
   }
 );

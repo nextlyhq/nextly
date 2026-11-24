@@ -13,11 +13,17 @@
  * environment's (`NEXTLY_TEST_LOCALES`, the default one first). `registry-moved` moves the stored schema version, as a registry write
  * anywhere does, so the next request loads every definition again from the registry rows. `request`
  * makes its `within` operations in one request, and `pause` stops until the test lets it go on.
+ * `settle` settles the Builder saves left part-way, as this process's development start does; the
+ * environment then names the project's migration folder and definition (`NEXTLY_TEST_MIGRATIONS`,
+ * `NEXTLY_TEST_DEFINITION`).
  */
 import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { runWithAccessMemo } from "../../../auth/access/request-memo";
 import { createAdapter } from "../../../database/factory";
+import { settleLeftSaves } from "../../../domains/schema/builder-save/settle-left-save";
+import { settleRegistryWriter } from "../../../domains/schema/builder-save/settle-registry";
 import { writeRegistryRows } from "../../../domains/schema/schema-version";
 import { createTestNextly } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
@@ -32,6 +38,7 @@ type Operation = {
     | "delete"
     | "registry-moved"
     | "pause"
+    | "settle"
     | "request";
   via: "rest" | "api";
   data?: Record<string, unknown>;
@@ -78,9 +85,14 @@ const adapter = await createAdapter({ type: dialect, url } as Parameters<
 const locales = (process.env.NEXTLY_TEST_LOCALES ?? "")
   .split(",")
   .filter(Boolean);
+const migrationsDir = process.env.NEXTLY_TEST_MIGRATIONS;
+const uiSchemaFile = process.env.NEXTLY_TEST_DEFINITION;
 const copy = await createTestNextly({
   adapter: adapter as never,
   basePath,
+  ...(migrationsDir === undefined || uiSchemaFile === undefined
+    ? {}
+    : { db: { migrationsDir, uiSchemaFile } }),
   ...(locales.length === 0
     ? {}
     : { localization: { locales, defaultLocale: locales[0] as string } }),
@@ -248,6 +260,20 @@ async function apiOf(operation: Operation, target: string): Promise<Outcome> {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       return { ...operation, ok: existsSync(operation.until ?? "") };
+    }
+    case "settle": {
+      const settled = await settleLeftSaves({
+        adapter: copy.adapter,
+        projectRoot: basePath as string,
+        migrationsDir: join(basePath as string, migrationsDir ?? ""),
+        logger: { info: () => undefined, warn: () => undefined },
+        writeRegistry: settleRegistryWriter(copy.adapter),
+      });
+      return {
+        ...operation,
+        ok: settled.length > 0 && settled.every(one => one.outcome !== "left"),
+        message: settled.map(one => one.outcome).join(","),
+      };
     }
     case "registry-moved":
       await writeRegistryRows(copy.adapter, () => Promise.resolve());

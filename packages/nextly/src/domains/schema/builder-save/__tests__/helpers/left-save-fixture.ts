@@ -106,6 +106,7 @@ export type Outcome = {
     | "delete"
     | "registry-moved"
     | "pause"
+    | "settle"
     | "request";
   via: "rest" | "api";
   data?: Record<string, unknown>;
@@ -504,7 +505,9 @@ export function leftSaveSuite({
 
   /** `operations` sent from another process of the site, through REST and the Direct API. */
   async function fromAnotherProcess(
-    operations: Array<Omit<Outcome, "ok">>
+    operations: Array<Omit<Outcome, "ok">>,
+    /** Where the process settles, it is told the project's migration folder and definition. */
+    { settles = false }: { settles?: boolean } = {}
   ): Promise<Outcome[]> {
     const { stdout } = await run(
       process.execPath,
@@ -528,6 +531,12 @@ export function leftSaveSuite({
           DATABASE_URL: url,
           NEXTLY_TEST_COOKIE: cookie,
           ...(languages ? { NEXTLY_TEST_LOCALES: LOCALES.join(",") } : {}),
+          ...(settles
+            ? {
+                NEXTLY_TEST_MIGRATIONS: MIGRATIONS,
+                NEXTLY_TEST_DEFINITION: DEFINITION,
+              }
+            : {}),
         },
         timeout: 150_000,
         maxBuffer: 64 * 1024 * 1024,
