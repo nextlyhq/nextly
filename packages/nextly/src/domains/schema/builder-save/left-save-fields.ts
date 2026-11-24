@@ -155,29 +155,71 @@ async function heldFieldsOf(args: {
 }): Promise<HeldFields | undefined> {
   if (isProductionRuntime()) return undefined;
   if (args.adapter.getCapabilities().dialect !== "mysql") return undefined;
-  const { own, fieldGroups } = await standingRecordsOf(args);
-  // A save made outside development leaves its files for `nextly migrate` and changes no table.
-  const applying = (row: ReadRow | undefined) =>
-    row !== undefined && !("record" in row && row.record.applies === false);
-  const groups = fieldGroups.filter(group => applying(group.row));
-  if (!applying(own) && groups.length === 0) {
+  const standing = await applyingRecordsOf(args);
+  if (standing === undefined) {
     await restoreRunningTables(args);
     return undefined;
   }
   const registry = await registryRowOf(args);
   if (registry === null) return undefined;
-  const mine = applying(own)
-    ? await heldByOwnRecord(args, own as ReadRow, registry)
-    : undefined;
+  const mine =
+    standing.own === undefined
+      ? undefined
+      : await heldByOwnRecord(args, standing.own, registry);
   if (mine === "busy") return undefined;
-  const embedding = await heldByFieldGroups(args, groups, registry);
-  const fields = [...new Set([...(mine?.fields ?? []), ...embedding])];
+  return heldOver(
+    args,
+    mine,
+    await heldByFieldGroups(args, standing.groups, registry)
+  );
+}
+
+/**
+ * The records standing over the entity whose saves applied their own changes: undefined where none
+ * does. A save made outside development leaves its files for `nextly migrate` and changes no table.
+ */
+async function applyingRecordsOf(args: {
+  adapter: DrizzleAdapter;
+  kind: EntryKind;
+  slug: string;
+  tx?: unknown;
+}): Promise<
+  | { own: ReadRow | undefined; groups: ReadonlyArray<{ slug: string }> }
+  | undefined
+> {
+  const { own, fieldGroups } = await standingRecordsOf(args);
+  const applying = (row: ReadRow | undefined): row is ReadRow =>
+    row !== undefined && !("record" in row && row.record.applies === false);
+  const groups = fieldGroups.filter(group => applying(group.row));
+  if (!applying(own) && groups.length === 0) return undefined;
+  return { own: applying(own) ? own : undefined, groups };
+}
+
+/**
+ * What a write or read of the entity meets over the fields its own record and the field groups'
+ * hold: undefined where they hold none. The refusal names the save behind it: the entity's own
+ * where that holds a field, else the field group's, whose settle lifts it.
+ */
+function heldOver(
+  args: { kind: EntryKind; slug: string },
+  mine: { fields: readonly string[]; compared: boolean } | undefined,
+  embedding: EmbeddingFields
+): HeldFields | undefined {
+  const fields = [...new Set([...(mine?.fields ?? []), ...embedding.fields])];
   if (fields.length === 0) return undefined;
+  const group = (mine?.fields.length ?? 0) > 0 ? undefined : embedding.group;
   return {
     fields: new Set(fields),
     // A field group's save is not compared: the host's reads, which reach its tables, are refused.
-    compared: (mine === undefined || mine.compared) && embedding.length === 0,
-    refusal: heldFieldsRefusal(args.kind, args.slug, fields),
+    compared:
+      (mine === undefined || mine.compared) && embedding.fields.length === 0,
+    refusal:
+      group === undefined
+        ? heldFieldsRefusal(args.kind, args.slug, fields)
+        : heldFieldsRefusal("fieldGroup", group, fields, {
+            kind: args.kind,
+            slug: args.slug,
+          }),
   };
 }
 
@@ -187,7 +229,12 @@ async function heldFieldsOf(args: {
  * change holds the lock.
  */
 async function heldByOwnRecord(
-  args: { adapter: DrizzleAdapter; kind: EntryKind; slug: string; tx?: unknown },
+  args: {
+    adapter: DrizzleAdapter;
+    kind: EntryKind;
+    slug: string;
+    tx?: unknown;
+  },
   own: ReadRow,
   registry: RegistryRow
 ): Promise<{ fields: readonly string[]; compared: boolean } | "busy"> {
@@ -204,6 +251,14 @@ async function heldByOwnRecord(
   return { fields: unserved.fields, compared: true };
 }
 
+/** The entity's fields a field group's left save holds, and the first such field group. */
+interface EmbeddingFields {
+  fields: readonly string[];
+  group: string | undefined;
+}
+
+const NO_EMBEDDING: EmbeddingFields = { fields: [], group: undefined };
+
 /**
  * The entity's fields that hold a field group a save left part-way stands over, wherever in the
  * field they sit (a group's or a repeater's fields included). Not compared from the tables: each is
@@ -213,37 +268,44 @@ async function heldByFieldGroups(
   args: { adapter: DrizzleAdapter },
   groups: ReadonlyArray<{ slug: string }>,
   registry: RegistryRow
-): Promise<string[]> {
-  if (groups.length === 0) return [];
+): Promise<EmbeddingFields> {
+  if (groups.length === 0) return NO_EMBEDDING;
   const slugs = new Set(groups.map(group => group.slug));
-  const embedding = registry.fields.flatMap(field =>
-    typeof field.name === "string" && embeds(field, slugs) ? [field.name] : []
-  );
-  if (embedding.length === 0) return [];
-  return (await lockFree(args.adapter)) ? embedding : [];
+  const held = registry.fields.flatMap(field => {
+    const name = field.name;
+    const group =
+      typeof name === "string" ? embeddedGroup(field, slugs) : undefined;
+    return typeof name === "string" && group !== undefined
+      ? [{ name, group }]
+      : [];
+  });
+  if (held.length === 0 || !(await lockFree(args.adapter))) {
+    return NO_EMBEDDING;
+  }
+  return { fields: held.map(each => each.name), group: held[0]?.group };
 }
 
-/** Whether `field`, or a field within it, holds one of the field groups `slugs` names. */
-function embeds(field: unknown, slugs: ReadonlySet<string>): boolean {
-  if (typeof field !== "object" || field === null) return false;
+/** The field group of `slugs` that `field`, or a field within it, holds: undefined where none. */
+function embeddedGroup(
+  field: unknown,
+  slugs: ReadonlySet<string>
+): string | undefined {
+  if (typeof field !== "object" || field === null) return undefined;
   const named = field as {
     component?: unknown;
     components?: unknown;
     fields?: unknown;
   };
-  if (typeof named.component === "string" && slugs.has(named.component)) {
-    return true;
+  const own = [
+    named.component,
+    ...(Array.isArray(named.components) ? named.components : []),
+  ].find((slug): slug is string => typeof slug === "string" && slugs.has(slug));
+  if (own !== undefined || !Array.isArray(named.fields)) return own;
+  for (const child of named.fields) {
+    const found = embeddedGroup(child, slugs);
+    if (found !== undefined) return found;
   }
-  if (
-    Array.isArray(named.components) &&
-    named.components.some(c => typeof c === "string" && slugs.has(c))
-  ) {
-    return true;
-  }
-  return (
-    Array.isArray(named.fields) &&
-    named.fields.some(child => embeds(child, slugs))
-  );
+  return undefined;
 }
 
 /**
@@ -439,24 +501,32 @@ async function registryRowOf(args: {
 
 /**
  * The refusal of a write or read over `fields`, which a save of `kind` `slug` left part-way holds:
- * naming them and what settles them. Its CLI code is `BUILDER_SAVE_FIELD_UNSETTLED`.
+ * naming them and what settles them. Where the save is a field group's and the fields are those of
+ * another entity that embed it (`host`), it names them as that entity's. Its CLI code is
+ * `BUILDER_SAVE_FIELD_UNSETTLED`.
  */
 export function heldFieldsRefusal(
   kind: SaveInProgressKind,
   slug: string,
-  fields: readonly string[]
+  fields: readonly string[],
+  host?: { kind: EntryKind; slug: string }
 ): NextlyError {
   const kindName = kind === "fieldGroup" ? "field group" : kind;
   const names = fields.map(name => `"${name}"`).join(", ");
   const one = fields.length === 1;
+  const changed =
+    host === undefined
+      ? `it changed ${one ? "the field" : "the fields"} ${names} without recording ${one ? "it" : "them"} yet`
+      : `it changed what ${one ? "the field" : "the fields"} ${names} of the ${host.kind} "${host.slug}" ${one ? "holds" : "hold"} without recording it yet`;
   return new NextlyError({
     code: "BUILDER_SAVE_FIELD_UNSETTLED",
-    publicMessage: `A Builder save of the ${kindName} "${slug}" was left part-way, and it changed ${one ? "the field" : "the fields"} ${names} without recording ${one ? "it" : "them"} yet. A write that sets ${one ? "it" : "one of them"}, or a read that needs ${one ? "it" : "them"}, is refused until the save is settled: the next development start (\`next dev\`), or the next save of this ${kindName} in the Schema Builder, settles it. Then try again.`,
+    publicMessage: `A Builder save of the ${kindName} "${slug}" was left part-way, and ${changed}. A write that sets ${one ? "it" : "one of them"}, or a read that needs ${one ? "it" : "them"}, is refused until the save is settled: the next development start (\`next dev\`), or the next save of this ${kindName} in the Schema Builder, settles it. Then try again.`,
     logContext: {
       reason: "builder-save-field-unsettled",
       kind,
       slug,
       fields: [...fields],
+      ...(host === undefined ? {} : { host: `${host.kind}:${host.slug}` }),
     },
   });
 }

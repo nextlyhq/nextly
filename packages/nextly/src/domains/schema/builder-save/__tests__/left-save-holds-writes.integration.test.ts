@@ -31,6 +31,8 @@ import { createAdapter } from "../../../../database/factory";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { resolveVersionsConfig } from "../../../versions/resolve-config";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
+import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -137,23 +139,38 @@ function causesOf(answer: unknown): string {
   return chain.join(" <- ");
 }
 
+/** The same for a save's answer, a response by its status and body. */
+const saidBy = async (answer: unknown): Promise<string> =>
+  answer instanceof Response
+    ? `${answer.status} ${await answer.clone().text()}`
+    : causesOf(answer);
+
 /** What one of the other process's operations came to (`helpers/left-save-writer.ts`). */
 type Outcome = {
-  kind: "write" | "read" | "update";
+  kind: "write" | "read" | "update" | "single-write" | "single-read";
   via: "rest" | "api";
   data?: Record<string, unknown>;
   /** The entry an update changes. */
   id?: string;
+  /** The collection, or the Single, sent to, where not the suite's collection. */
+  slug?: string;
+  /** How far a read populates relationships. */
+  depth?: number;
   ok: boolean;
   status?: number;
   code?: string;
   message?: string;
+  /** A thrown error's message with each cause it carries. */
+  detail?: string;
   items?: Array<Record<string, unknown>>;
+  item?: Record<string, unknown>;
 };
 
 let basePath: string;
 let current: TestNextly | undefined;
 let stopped: Promise<unknown> | undefined;
+/** The point the last save was killed at, for a case to name when it finds another state. */
+let killedAt: string | undefined;
 let drops: Array<() => Promise<void>> = [];
 
 beforeEach(() => {
@@ -212,12 +229,25 @@ describe.each(
     let url: string;
     let cookie: string;
 
+    /** A Single of the suite's, and the field group its collection may embed. */
+    const hero = `held_hero_${dialect.slice(0, 2)}`;
+    const card = `held_card_${dialect.slice(0, 2)}`;
+
     /**
      * A new database of this dialect, the instance on it, an editor, and the collection: with
      * `drafts`, Draft/Published and keeping each live entry's edits as a draft until published,
-     * as a collection demoted from code does.
+     * as a collection demoted from code does; with `status`, the Draft/Published switch alone;
+     * with `headingDefault`, `heading` given that default; with `card`, a field `card` holding
+     * the field group `card`.
      */
-    async function boot(options: { drafts?: boolean } = {}): Promise<TestNextly> {
+    async function boot(
+      options: {
+        drafts?: boolean;
+        status?: boolean;
+        headingDefault?: string;
+        card?: boolean;
+      } = {}
+    ): Promise<TestNextly> {
       if (dialect === "sqlite") {
         url = `file:${join(basePath, "site.db")}`;
       } else {
@@ -249,6 +279,13 @@ describe.each(
         }),
         process.env.NEXTLY_SECRET ?? ""
       )}`;
+      if (options.card === true) {
+        await dispatchComponents(
+          "createComponent",
+          {},
+          { slug: card, label: card, fields: [field("label")] }
+        );
+      }
       await dispatchCollections(
         {} as ServiceContainer,
         "createCollection",
@@ -256,8 +293,18 @@ describe.each(
         {
           name: slug,
           label: slug,
-          fields: [field("heading"), field("note")],
-          ...(options.drafts === true ? { status: true } : {}),
+          fields: [
+            options.headingDefault === undefined
+              ? field("heading")
+              : { ...field("heading"), defaultValue: options.headingDefault },
+            field("note"),
+            ...(options.card === true
+              ? [{ name: "card", type: "component", component: card }]
+              : []),
+          ],
+          ...(options.drafts === true || options.status === true
+            ? { status: true }
+            : {}),
         }
       );
       if (options.drafts === true) {
@@ -277,11 +324,11 @@ describe.each(
     }
 
     /**
-     * The columns of the collection's tables: its main table and its translations table, where
-     * a translatable field's column is kept.
+     * The columns of an entity's tables, the collection's unless named: its main table and its
+     * translations table, where a translatable field's column is kept.
      */
-    async function liveColumns(t: TestNextly): Promise<string[]> {
-      const tables = [table, `${table}_locales`];
+    async function liveColumns(t: TestNextly, of = table): Promise<string[]> {
+      const tables = [of, `${of}_locales`];
       const live = await introspectLiveSnapshot(
         t.adapter.getDrizzle(),
         t.adapter.dialect,
@@ -292,58 +339,87 @@ describe.each(
         .flatMap(each => each.columns.map(column => column.name));
     }
 
-    async function versionOf(t: TestNextly): Promise<number> {
-      const row = await t.adapter.selectOne<{ schema_version?: unknown }>(
-        "dynamic_collections",
-        { where: { and: [{ column: "slug", op: "=", value: slug }] } }
+    /** The schema version a save of the entity `entity` in `registry` names. */
+    async function versionOf(
+      t: TestNextly,
+      registry = "dynamic_collections",
+      entity = slug
+    ): Promise<number> {
+      const row = await t.adapter.selectOne<{ schemaVersion?: unknown }>(
+        registry,
+        { where: { and: [{ column: "slug", op: "=", value: entity }] } }
       );
-      return Number(row?.schema_version ?? 1);
+      return Number(row?.schemaVersion ?? 1);
     }
+
+    /** What a save renaming `heading` to `headline` in the table `inTable` sends beside its fields. */
+    const renameHeading = (inTable: string) => ({
+      renameResolutions: [
+        {
+          tableName: inTable,
+          fromColumn: "heading",
+          toColumn: "headline",
+          choice: "rename",
+        },
+      ],
+    });
 
     /** Start the save renaming `heading` to `headline` and kill it where `at` says. */
     async function killRename(
       t: TestNextly,
       at: (point: string) => Promise<boolean> | boolean
     ): Promise<void> {
+      const schemaVersion = await versionOf(t);
+      await killSave(t, at, () =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: slug },
+          {
+            fields: [field("headline"), field("note")],
+            confirmed: true,
+            schemaVersion,
+            ...renameHeading(table),
+          }
+        )
+      );
+    }
+
+    /** Start `save` and kill it where `at` says; resolves once it has stopped there. */
+    async function killSave(
+      t: TestNextly,
+      at: (point: string) => Promise<boolean> | boolean,
+      save: () => Promise<unknown>
+    ): Promise<void> {
       const reached = new Promise<void>(resolve => {
         kill.reached = resolve;
       });
       let armed = true;
-      kill.at = point =>
-        (point.startsWith("unit:") || point.startsWith("push:")) &&
-        armed &&
-        at(point) === true;
-      const schemaVersion = await versionOf(t);
-      stopped = withStopPoints(
-        async point => {
-          if (!armed || !(await at(point))) return;
-          armed = false;
-          kill.at = () => true;
-          await stopHere(point);
-        },
-        () =>
-          dispatchCollections(
-            {} as ServiceContainer,
-            "applySchemaChanges",
-            { collectionName: slug },
-            {
-              fields: [field("headline"), field("note")],
-              confirmed: true,
-              schemaVersion,
-              renameResolutions: [
-                {
-                  tableName: table,
-                  fromColumn: "heading",
-                  toColumn: "headline",
-                  choice: "rename",
-                },
-              ],
-            }
-          )
-      ).catch((error: unknown) => error);
+      // The points the save reached, so one that ended before its kill point says where it went.
+      const passed: string[] = [];
+      kill.at = point => {
+        passed.push(point);
+        const here =
+          (point.startsWith("unit:") || point.startsWith("push:")) &&
+          armed &&
+          at(point) === true;
+        if (here) killedAt = point;
+        return here;
+      };
+      stopped = withStopPoints(async point => {
+        passed.push(point);
+        if (!armed || !(await at(point))) return;
+        armed = false;
+        killedAt = point;
+        kill.at = () => true;
+        await stopHere(point);
+      }, save).catch((error: unknown) => error);
       const outcome = await Promise.race([
         reached.then(() => "reached"),
-        stopped.then(answer => `the save ended first: ${causesOf(answer)}`),
+        stopped.then(
+          async answer =>
+            `the save ended first: ${await saidBy(answer)}; it passed ${passed.join(" | ")}`
+        ),
       ]);
       expect(outcome, "the save never reached the kill point").toBe("reached");
       await clearStoppedHolds(t);
@@ -448,6 +524,39 @@ describe.each(
       return splitSqlStatements(parseSqlSections(content).upSql, "mysql");
     }
 
+    /**
+     * A kill point just after the save's statement `which` picks: one its push makes, or one of its
+     * migration files', read from disk.
+     */
+    const afterStatement =
+      (which: (statement: string) => boolean) =>
+      (point: string): boolean => {
+        if (point.startsWith("push: ")) {
+          return which(point.slice("push: ".length));
+        }
+        const after = /^([^:]+): after statement (\d+)$/.exec(point);
+        if (after === null) return false;
+        const statement = statementsOf(after[1]!)[Number(after[2]) - 1];
+        return statement !== undefined && which(statement);
+      };
+    /**
+     * The statement that renames `column`: a push's own ALTER TABLE, or the EXECUTE of a file's
+     * restatement, which renames on MySQL as the one prepared statement its file runs. The SET
+     * before it holds the rename's text and runs nothing.
+     */
+    const renames = (column: string) => (statement: string) =>
+      /^\s*EXECUTE\b/i.test(statement) ||
+      new RegExp(
+        `^\\s*ALTER\\s+TABLE\\b.*RENAME\\s+COLUMN\\s+\`?${column}\`?`,
+        "is"
+      ).test(statement);
+    /** The statement that drops `column`. */
+    const dropsColumn = (column: string) => (statement: string) =>
+      new RegExp(
+        `^\\s*ALTER\\s+TABLE\\b.*DROP\\s+(COLUMN\\s+)?\`?${column}\`?`,
+        "is"
+      ).test(statement);
+
     /** Whether an outcome is a database error rather than an answer of Nextly's own. */
     const databaseError = (o: Outcome) =>
       /unknown column|no such column|does not exist|ER_BAD_FIELD/i.test(
@@ -463,18 +572,14 @@ describe.each(
         // Killed once the rename has committed, before its registry update: after the statement
         // that renames, read from the file the save runs or the push it makes, as no query may run
         // beside the save. A collection that keeps values per language pushes its change.
-        await killRename(t, point => {
-          if (point.startsWith("push: ")) {
-            return /RENAME\s+COLUMN\s+`?heading`?/i.test(point);
-          }
-          const after = /^(.*_update[^:]*): after statement (\d+)$/.exec(point);
-          if (after === null) return false;
-          const statement = statementsOf(after[1]!)[Number(after[2]) - 1];
-          return statement !== undefined && /^\s*EXECUTE\b/i.test(statement);
-        });
+        await killRename(t, afterStatement(renames("heading")));
         const columns = await liveColumns(t);
-        expect(columns).toContain("headline");
-        expect(columns).not.toContain("heading");
+        expect(columns, `killed at ${killedAt}`).toContain("headline");
+        expect(columns, `killed at ${killedAt}`).not.toContain("heading");
+        // Each layout by the road its save takes: its file, or the push.
+        expect(killedAt).toMatch(
+          perLanguage ? /^push: / : /_update\.sql: after statement/
+        );
 
         const held = await fromAnotherProcess(operations("heading", 1));
 
@@ -543,15 +648,10 @@ describe.each(
         expect(before?.heading, "the edit is held, not live").toBe(
           "live heading"
         );
-        await killRename(t, point => {
-          if (point.startsWith("push: ")) {
-            return /RENAME\s+COLUMN\s+`?heading`?/i.test(point);
-          }
-          const after = /^(.*_update[^:]*): after statement (\d+)$/.exec(point);
-          if (after === null) return false;
-          const statement = statementsOf(after[1]!)[Number(after[2]) - 1];
-          return statement !== undefined && /^\s*EXECUTE\b/i.test(statement);
-        });
+        await killRename(t, afterStatement(renames("heading")));
+        expect(await liveColumns(t), `killed at ${killedAt}`).toContain(
+          "headline"
+        );
 
         const published = { status: "published", _overwrite: true };
         const outcomes = await fromAnotherProcess([
@@ -571,6 +671,282 @@ describe.each(
           `SELECT headline FROM ${table} WHERE id = '${id}'`
         )) as unknown as Array<{ headline: unknown }>;
         expect(live?.headline).toBe("live heading");
+      },
+      600_000
+    );
+
+    // A create's defaults are written with it: one for a field a committed rename holds sets that
+    // field, though the request names only another.
+    it.runIf(dialect === "mysql")(
+      "refuses a create whose default sets a field a committed rename changed, writing nothing",
+      async () => {
+        const t = await boot({ headingDefault: "a default" });
+        await killRename(t, afterStatement(renames("heading")));
+        expect(await liveColumns(t), `killed at ${killedAt}`).toContain(
+          "headline"
+        );
+
+        const outcomes = await fromAnotherProcess([
+          {
+            kind: "write",
+            via: "rest",
+            data: { title: "D1", slug: "d1", note: "only the note" },
+          },
+          {
+            kind: "write",
+            via: "api",
+            data: { title: "D2", slug: "d2", note: "only the note" },
+          },
+        ]);
+
+        for (const refused of outcomes) {
+          expect(refused.ok, JSON.stringify(refused)).toBe(false);
+          expect(refused.code, JSON.stringify(refused)).toBe(
+            "BUILDER_SAVE_FIELD_UNSETTLED"
+          );
+          expect(refused.message, JSON.stringify(refused)).toMatch(/heading/);
+        }
+        const rows = (await t.adapter.executeQuery(
+          `SELECT slug FROM ${table}`
+        )) as unknown as Array<{ slug: unknown }>;
+        expect(rows.map(row => row.slug)).toEqual(["first"]);
+      },
+      600_000
+    );
+
+    // A read of another collection populates its relationship to this one: the related rows are
+    // read as this collection's tables hold them, never dropped for a database error.
+    it.runIf(dialect === "mysql")(
+      "populates a relationship to a collection a committed rename changed, on a read of another collection",
+      async () => {
+        const t = await boot();
+        const refs = `held_refs_${dialect.slice(0, 2)}`;
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: refs,
+            label: refs,
+            fields: [
+              { name: "target", type: "relationship", relationTo: slug },
+            ],
+          }
+        );
+        const [first] = (await t.adapter.executeQuery(
+          `SELECT id FROM ${table} WHERE slug = 'first'`
+        )) as unknown as Array<{ id: unknown }>;
+        const firstId = String(first?.id);
+        await t.nextly.create({
+          collection: refs,
+          data: { title: "Ref", slug: "ref", target: firstId },
+        } as never);
+        await killRename(t, afterStatement(renames("heading")));
+        expect(await liveColumns(t), `killed at ${killedAt}`).toContain(
+          "headline"
+        );
+
+        const outcomes = await fromAnotherProcess([
+          { kind: "read", via: "rest", slug: refs, depth: 1 },
+          { kind: "read", via: "api", slug: refs, depth: 1 },
+        ]);
+
+        for (const read of outcomes) {
+          expect(read.ok, JSON.stringify(read)).toBe(true);
+          expect(read.items?.[0]?.target, JSON.stringify(read)).toMatchObject({
+            id: firstId,
+            note: "n",
+          });
+        }
+      },
+      600_000
+    );
+
+    // Turning Draft/Published off drops the status column the registry row still declares: no
+    // read can leave it out, so the whole collection is held, its reads included.
+    it.runIf(dialect === "mysql")(
+      "refuses every write and read of a collection whose committed change dropped its status column",
+      async () => {
+        const t = await boot({ status: true });
+        // The settings save turns it off; the schema save only ever turns it on.
+        await killSave(t, afterStatement(dropsColumn("status")), () =>
+          dispatchCollections(
+            {} as ServiceContainer,
+            "updateCollection",
+            { collectionName: slug },
+            { fields: [field("heading"), field("note")], status: false }
+          )
+        );
+        expect(await liveColumns(t), `killed at ${killedAt}`).not.toContain(
+          "status"
+        );
+
+        const outcomes = await fromAnotherProcess([
+          {
+            kind: "write",
+            via: "rest",
+            data: { title: "S1", slug: "s1", note: "only the note" },
+          },
+          {
+            kind: "write",
+            via: "api",
+            data: { title: "S2", slug: "s2", note: "only the note" },
+          },
+          { kind: "read", via: "rest" },
+          { kind: "read", via: "api" },
+        ]);
+
+        for (const refused of outcomes) {
+          expect(refused.ok, JSON.stringify(refused)).toBe(false);
+          expect(databaseError(refused), JSON.stringify(refused)).toBe(false);
+          expect(refused.code, JSON.stringify(refused)).toBe(
+            "BUILDER_SAVE_FIELD_UNSETTLED"
+          );
+        }
+      },
+      600_000
+    );
+
+    // A field group's rows are kept in its own table, which its save changed: each field of the
+    // collection holding the group is held, and the collection's reads, which reach that table.
+    it.runIf(dialect === "mysql")(
+      "refuses a write setting a field that holds a field group a committed rename changed, and the collection's reads, naming the field group",
+      async () => {
+        const t = await boot({ card: true });
+        const schemaVersion = await versionOf(t, "dynamic_components", card);
+        await killSave(t, afterStatement(renames("label")), () =>
+          dispatchComponents(
+            "applyComponentSchemaChanges",
+            { slug: card },
+            {
+              fields: [field("caption")],
+              confirmed: true,
+              schemaVersion,
+              renameResolutions: [
+                {
+                  tableName: `comp_${card}`,
+                  fromColumn: "label",
+                  toColumn: "caption",
+                  choice: "rename",
+                },
+              ],
+            }
+          )
+        );
+
+        expect(
+          await liveColumns(t, `comp_${card}`),
+          `killed at ${killedAt}`
+        ).toContain("caption");
+
+        const [restSets, apiSets, apiOther, restRead, apiRead] =
+          await fromAnotherProcess([
+            {
+              kind: "write",
+              via: "rest",
+              data: { title: "C1", slug: "c1", card: { label: "x" } },
+            },
+            {
+              kind: "write",
+              via: "api",
+              data: { title: "C2", slug: "c2", card: { label: "y" } },
+            },
+            {
+              kind: "write",
+              via: "api",
+              data: { title: "C3", slug: "c3", note: "only the note" },
+            },
+            { kind: "read", via: "rest" },
+            { kind: "read", via: "api" },
+          ]);
+
+        for (const refused of [restSets!, apiSets!, restRead!, apiRead!]) {
+          expect(refused.ok, JSON.stringify(refused)).toBe(false);
+          expect(refused.code, JSON.stringify(refused)).toBe(
+            "BUILDER_SAVE_FIELD_UNSETTLED"
+          );
+          expect(refused.message, JSON.stringify(refused)).toContain(
+            `field group "${card}"`
+          );
+          expect(refused.message, JSON.stringify(refused)).toMatch(/"card"/);
+        }
+        // What each write left, read past the guard: a refused write nothing, the other its row.
+        const rows = (await t.adapter.executeQuery(
+          `SELECT slug FROM ${table} ORDER BY slug`
+        )) as unknown as Array<{ slug: unknown }>;
+        const left = rows.map(row => row.slug);
+        expect(apiOther!.ok, JSON.stringify({ apiOther, left })).toBe(true);
+        expect(left).toEqual(["c3", "first"]);
+      },
+      600_000
+    );
+
+    // A Single's first write, and its first read, insert its document with each field's default:
+    // where a committed rename holds a field that has one, both are refused, with nothing written.
+    it.runIf(dialect === "mysql")(
+      "refuses a Single's first write and first read where a field with a default is one a committed rename changed",
+      async () => {
+        const t = await boot();
+        const withDefault = (name: string): Field => ({
+          ...field(name),
+          defaultValue: "a default",
+        });
+        await dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: hero,
+            label: hero,
+            fields: [withDefault("heading"), field("note")],
+          }
+        );
+        const schemaVersion = await versionOf(t, "dynamic_singles", hero);
+        await killSave(t, afterStatement(renames("heading")), () =>
+          dispatchSingles(
+            "applySingleSchemaChanges",
+            { slug: hero },
+            {
+              fields: [withDefault("headline"), field("note")],
+              confirmed: true,
+              schemaVersion,
+              ...renameHeading(`single_${hero}`),
+            }
+          )
+        );
+
+        expect(
+          await liveColumns(t, `single_${hero}`),
+          `killed at ${killedAt}`
+        ).toContain("headline");
+
+        const outcomes = await fromAnotherProcess([
+          {
+            kind: "single-write",
+            via: "rest",
+            slug: hero,
+            data: { note: "only the note", _overwrite: true },
+          },
+          {
+            kind: "single-write",
+            via: "api",
+            slug: hero,
+            data: { note: "only the note", _overwrite: true },
+          },
+          { kind: "single-read", via: "rest", slug: hero },
+          { kind: "single-read", via: "api", slug: hero },
+        ]);
+
+        for (const refused of outcomes) {
+          expect(refused.ok, JSON.stringify(refused)).toBe(false);
+          expect(refused.code, JSON.stringify(refused)).toBe(
+            "BUILDER_SAVE_FIELD_UNSETTLED"
+          );
+          expect(refused.message, JSON.stringify(refused)).toMatch(/heading/);
+        }
+        expect(
+          await t.adapter.executeQuery(`SELECT id FROM single_${hero}`),
+          "no document inserted"
+        ).toEqual([]);
       },
       600_000
     );

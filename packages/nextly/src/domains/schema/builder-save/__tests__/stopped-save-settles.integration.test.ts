@@ -1769,6 +1769,8 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(sql, "the save's files").toHaveLength(1);
         const applied = await appliedFiles(t);
+        const record = await recordOf(t, path);
+        expect(record, "the failed save's record").toBeDefined();
 
         // The next development start, over the same database and folder.
         const settled = await settleLeftSaves({
@@ -1782,6 +1784,9 @@ describe.each(getConfiguredTestDialects())(
         });
 
         expect(settled.map(s => s.outcome)).not.toContain("none");
+        // Left as it stands, its record kept for a settle that can tell what its rows did.
+        expect(settled.find(s => s.slug === path.slug)?.outcome).toBe("left");
+        expect(await recordOf(t, path), "its record stays").toEqual(record);
         expect(
           filesBelow(history()).filter(
             f => f.endsWith(".sql") && !folderBefore.includes(f)

@@ -563,6 +563,69 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // A save that changes rows of its own whose definition could not be written stopped before any
+    // of its statements ran: its files go, as any such save's do, on MySQL too, where a save whose
+    // statements failed keeps them.
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+      "withdraws a save with row changes of its own whose definition could not be written, none of it run",
+      async () => {
+        await writeCollectionSave(deps(), {
+          slug: "posts",
+          previous: null,
+          entity: posts([text("body")]),
+          change: "create",
+        });
+        await post("a", "kept");
+        await post("b", null);
+        const before = {
+          files: migrationFiles(),
+          snapshots: snapshotFiles(),
+          definition: definition(),
+        };
+
+        // The definition's folder made unwritable: the save's files are written, its definition
+        // cannot be put in place.
+        chmodSync(dir, 0o555);
+        let failure: unknown;
+        try {
+          failure = await writeCollectionSave(deps(), {
+            slug: "posts",
+            previous: posts([text("body")]),
+            entity: posts([text("body", { required: true })]),
+            change: "update",
+            resolutions: [
+              { column: "body", kind: "delete_nonconforming" as const },
+            ],
+          }).then(
+            () => undefined,
+            (error: unknown) => error
+          );
+        } finally {
+          chmodSync(dir, 0o755);
+        }
+
+        const causes: string[] = [];
+        for (let cause = failure; cause instanceof Error; cause = cause.cause) {
+          causes.push(cause.message);
+        }
+        expect(causes.join(" <- "), "refused at the definition").toMatch(
+          /ui-schema/
+        );
+        expect({
+          files: migrationFiles(),
+          snapshots: snapshotFiles(),
+          definition: definition(),
+        }).toEqual(before);
+        const rows = (await adapter.executeQuery(
+          "SELECT id FROM dc_posts ORDER BY id"
+        )) as unknown as { id: string }[];
+        expect(
+          rows.map(r => r.id),
+          "no row deleted"
+        ).toEqual(["a", "b"]);
+      }
+    );
+
     describe("while another session holds the collection's table", () => {
       let free: () => void = () => {};
       let holding: Promise<unknown> = Promise.resolve();

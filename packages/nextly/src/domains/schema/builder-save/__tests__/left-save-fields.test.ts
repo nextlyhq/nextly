@@ -2,47 +2,87 @@
  * The guard over writes and reads while a Builder save stands left part-way costs nothing where it
  * can hold nothing: in production, where Builder saves never run, and on PostgreSQL and SQLite,
  * where a save's change commits whole or not at all. There it returns before any statement, so no
- * handle to the database is even asked for. On MySQL in development it reads the entity's record,
- * one statement, which the control case watches it send.
+ * handle to the database is even asked for, nor any use made of a transaction's. On MySQL in
+ * development it reads the records standing over the entity, its own and the field groups', in one
+ * statement, which the control case watches it send.
+ *
+ * Every road's check is one of these calls: a write before its transaction, a write inside one
+ * (`tx`), the comparison a road makes before opening one, a read, and the read a relationship's
+ * populated target makes (`readTargetRows`).
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { loadDialectTables } from "../../../../database/dialect-tables";
 import {
+  compareBeforeTransaction,
   refuseReadOverLeftSave,
   refuseWriteOverLeftSave,
 } from "../left-save-fields";
 
-/** An adapter of `dialect` that counts every handle a caller asks it for, and reads no record. */
+/** A database handle that reads no record, counting each statement sent through it. */
+function countingDb(): { db: unknown; statements: () => number } {
+  let sent = 0;
+  // The records' read selects from `nextly_meta` by their keys; none stands.
+  const db = {
+    select: () => ({
+      from: () => ({
+        where: () => {
+          sent += 1;
+          return Promise.resolve([]);
+        },
+      }),
+    }),
+  };
+  return { db, statements: () => sent };
+}
+
+/**
+ * An adapter of `dialect` that counts every handle a caller asks it for, and a transaction's handle
+ * that counts each use made of it, both reading no record.
+ */
 function countingAdapter(dialect: "mysql" | "postgresql" | "sqlite"): {
   adapter: DrizzleAdapter;
+  tx: unknown;
   handles: () => number;
+  statements: () => number;
+  txUses: () => number;
 } {
   let asked = 0;
-  // The record read selects from `nextly_meta` by its key; no record stands.
-  const db = {
-    select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
-  };
+  let used = 0;
+  const own = countingDb();
+  const inTx = countingDb();
   const adapter = {
     getCapabilities: () => ({ dialect }),
     getDrizzle: () => {
       asked += 1;
-      return db;
+      return own.db;
     },
   } as unknown as DrizzleAdapter;
-  return { adapter, handles: () => asked };
+  const tx = new Proxy(inTx.db as object, {
+    get: (target, key, receiver) => {
+      used += 1;
+      return Reflect.get(target, key, receiver) as unknown;
+    },
+  });
+  return {
+    adapter,
+    tx,
+    handles: () => asked,
+    statements: () => own.statements() + inTx.statements(),
+    txUses: () => used,
+  };
 }
 
-/** A write and a read of one collection's entries through the guard. */
-async function writeAndRead(adapter: DrizzleAdapter): Promise<void> {
-  await refuseWriteOverLeftSave({
-    adapter,
-    kind: "collection",
-    slug: "posts",
-    data: { title: "A post" },
-  });
-  await refuseReadOverLeftSave({ adapter, kind: "collection", slug: "posts" });
+/** Each road's check over one collection's entries, as the services make them. */
+async function everyRoad(adapter: DrizzleAdapter, tx: unknown): Promise<void> {
+  const target = { adapter, kind: "collection" as const, slug: "posts" };
+  await refuseWriteOverLeftSave({ ...target, data: { title: "A post" } });
+  await compareBeforeTransaction(target);
+  await refuseWriteOverLeftSave({ ...target, data: { title: "A post" }, tx });
+  await refuseReadOverLeftSave(target);
+  // A relationship to `posts`, populated on a read of another collection.
+  await refuseReadOverLeftSave(target);
 }
 
 beforeAll(async () => {
@@ -58,26 +98,31 @@ describe("the left-save guard's cost", () => {
   it("sends no statement in production, on any dialect", async () => {
     vi.stubEnv("NODE_ENV", "production");
     for (const dialect of ["mysql", "postgresql", "sqlite"] as const) {
-      const { adapter, handles } = countingAdapter(dialect);
-      await writeAndRead(adapter);
-      expect(handles(), dialect).toBe(0);
+      const counted = countingAdapter(dialect);
+      await everyRoad(counted.adapter, counted.tx);
+      expect(counted.handles(), dialect).toBe(0);
+      expect(counted.txUses(), dialect).toBe(0);
     }
   });
 
   it("sends no statement on PostgreSQL or SQLite in development", async () => {
     vi.stubEnv("NODE_ENV", "development");
     for (const dialect of ["postgresql", "sqlite"] as const) {
-      const { adapter, handles } = countingAdapter(dialect);
-      await writeAndRead(adapter);
-      expect(handles(), dialect).toBe(0);
+      const counted = countingAdapter(dialect);
+      await everyRoad(counted.adapter, counted.tx);
+      expect(counted.handles(), dialect).toBe(0);
+      expect(counted.txUses(), dialect).toBe(0);
     }
   });
 
-  // The control: the same counting sees the one read the guard makes where it can hold a field.
-  it("reads the entity's record once per write and read on MySQL in development", async () => {
+  // The control: the same counting sees the one read each check makes where it can hold a field,
+  // the check inside a transaction reading on that transaction's handle.
+  it("reads the records standing over the entity once per check on MySQL in development", async () => {
     vi.stubEnv("NODE_ENV", "development");
-    const { adapter, handles } = countingAdapter("mysql");
-    await writeAndRead(adapter);
-    expect(handles()).toBe(2);
+    const counted = countingAdapter("mysql");
+    await everyRoad(counted.adapter, counted.tx);
+    expect(counted.statements()).toBe(5);
+    expect(counted.handles()).toBe(4);
+    expect(counted.txUses()).toBeGreaterThan(0);
   });
 });

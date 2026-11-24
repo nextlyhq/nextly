@@ -6,19 +6,25 @@
  * holds (`NEXTLY_TEST_COOKIE`), or through the Direct API. Run by
  * `left-save-holds-writes.integration.test.ts` through `tsx`, so this process runs the source,
  * not a build. Arguments: the dialect, the database URL, the app's folder, the collection's slug,
- * and the operations as JSON: `{ kind: "write" | "read" | "update"; via: "rest" | "api"; data?;
- * id? }`, an update naming the entry it changes.
+ * and the operations as JSON: `{ kind: "write" | "read" | "update" | "single-write" |
+ * "single-read"; via: "rest" | "api"; data?; id?; slug?; depth? }`, an update naming the entry it
+ * changes, `slug` another collection or a Single to send it to, and a read's `depth` how far it
+ * populates relationships.
  */
 import { createAdapter } from "../../../database/factory";
 import { createTestNextly } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
 
 type Operation = {
-  kind: "write" | "read" | "update";
+  kind: "write" | "read" | "update" | "single-write" | "single-read";
   via: "rest" | "api";
   data?: Record<string, unknown>;
   /** The entry an update changes. */
   id?: string;
+  /** The collection, or the Single, the operation goes to, where not the one named on the line. */
+  slug?: string;
+  /** How far a read populates relationships. */
+  depth?: number;
 };
 
 /** What one operation came to: whether it went through, and what it said. */
@@ -27,7 +33,11 @@ type Outcome = Operation & {
   status?: number;
   code?: string;
   message?: string;
+  /** A thrown error's message with each cause it carries, for a case to name when it fails. */
+  detail?: string;
   items?: Array<Record<string, unknown>>;
+  /** What a Single read answered. */
+  item?: Record<string, unknown>;
 };
 
 const ORIGIN = "http://localhost";
@@ -92,10 +102,37 @@ async function fromResponse(
     ...(Array.isArray(body.items)
       ? { items: body.items as Array<Record<string, unknown>> }
       : {}),
+    // A Single's document comes back bare.
+    ...(operation.kind === "single-read" && response.status < 300
+      ? { item: body }
+      : {}),
   };
 }
 
-/** The outcome of a Direct API call that threw: its code and its public message. */
+/** An error's message with each cause it carries. */
+function causesOf(error: unknown): string {
+  const chain: string[] = [];
+  for (
+    let cause = error, depth = 0;
+    cause !== undefined && depth < 6;
+    depth++
+  ) {
+    const { message, sqlMessage, logContext } = (cause ?? {}) as {
+      message?: string;
+      sqlMessage?: string;
+      logContext?: unknown;
+    };
+    chain.push(
+      [message, sqlMessage, logContext && JSON.stringify(logContext)]
+        .filter(Boolean)
+        .join(" / ")
+    );
+    cause = cause instanceof Error ? cause.cause : undefined;
+  }
+  return chain.join(" <- ");
+}
+
+/** The outcome of a Direct API call that threw: its code, its public message and its causes. */
 function fromError(operation: Operation, error: unknown): Outcome {
   const e = error as {
     code?: string;
@@ -107,46 +144,79 @@ function fromError(operation: Operation, error: unknown): Outcome {
     ok: false,
     ...(e.code === undefined ? {} : { code: e.code }),
     message: e.publicMessage ?? e.message ?? String(error),
+    detail: causesOf(error),
   };
+}
+
+/** The REST request an operation makes, to `target`. */
+function restOf(operation: Operation, target: string): Promise<Response> {
+  switch (operation.kind) {
+    case "write":
+      return send("POST", `/collections/${target}/entries`, operation.data);
+    case "update":
+      return send(
+        "PATCH",
+        `/collections/${target}/entries/${operation.id ?? ""}`,
+        operation.data
+      );
+    case "single-write":
+      return send("PATCH", `/singles/${target}`, operation.data);
+    case "single-read":
+      return send("GET", `/singles/${target}`);
+    default:
+      return send(
+        "GET",
+        `/collections/${target}/entries${
+          operation.depth === undefined ? "" : `?depth=${operation.depth}`
+        }`
+      );
+  }
+}
+
+/** The Direct API call an operation makes, to `target`, and what it answered. */
+async function apiOf(operation: Operation, target: string): Promise<Outcome> {
+  const data = operation.data ?? {};
+  switch (operation.kind) {
+    case "update":
+      await copy.nextly.update({
+        collection: target,
+        id: operation.id,
+        data,
+      } as never);
+      return { ...operation, ok: true };
+    case "write":
+      await copy.nextly.create({ collection: target, data } as never);
+      return { ...operation, ok: true };
+    case "single-write":
+      await copy.nextly.updateSingle({ slug: target, data } as never);
+      return { ...operation, ok: true };
+    case "single-read":
+      return {
+        ...operation,
+        ok: true,
+        item: (await copy.nextly.findSingle({
+          slug: target,
+        } as never)) as Record<string, unknown>,
+      };
+    default: {
+      const found = (await copy.nextly.find({
+        collection: target,
+        ...(operation.depth === undefined ? {} : { depth: operation.depth }),
+      } as never)) as { items: Array<Record<string, unknown>> };
+      return { ...operation, ok: true, items: found.items };
+    }
+  }
 }
 
 const outcomes: Outcome[] = [];
 for (const operation of JSON.parse(operations) as Operation[]) {
+  const target = operation.slug ?? slug;
   try {
-    if (operation.via === "rest") {
-      outcomes.push(
-        await fromResponse(
-          operation,
-          operation.kind === "write"
-            ? await send("POST", `/collections/${slug}/entries`, operation.data)
-            : operation.kind === "update"
-              ? await send(
-                  "PATCH",
-                  `/collections/${slug}/entries/${operation.id ?? ""}`,
-                  operation.data
-                )
-              : await send("GET", `/collections/${slug}/entries`)
-        )
-      );
-    } else if (operation.kind === "update") {
-      await copy.nextly.update({
-        collection: slug,
-        id: operation.id,
-        data: operation.data ?? {},
-      } as never);
-      outcomes.push({ ...operation, ok: true });
-    } else if (operation.kind === "write") {
-      await copy.nextly.create({
-        collection: slug,
-        data: operation.data ?? {},
-      } as never);
-      outcomes.push({ ...operation, ok: true });
-    } else {
-      const found = (await copy.nextly.find({ collection: slug } as never)) as {
-        items: Array<Record<string, unknown>>;
-      };
-      outcomes.push({ ...operation, ok: true, items: found.items });
-    }
+    outcomes.push(
+      operation.via === "rest"
+        ? await fromResponse(operation, await restOf(operation, target))
+        : await apiOf(operation, target)
+    );
   } catch (error) {
     outcomes.push(fromError(operation, error));
   }

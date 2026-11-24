@@ -19,11 +19,13 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { folderSnapshot } from "../../../../cli/__tests__/helpers/folder-snapshot";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import {
   createTestNextly,
@@ -261,6 +263,27 @@ describe.each(getConfiguredTestDialects())(
       return current;
     }
 
+    // The control: the same stop over a history with no fault settles, as none of it applied, so
+    // each refusal below is its fault's, not one every such stop meets.
+    for (const settle of SETTLES) {
+      it(`settles the same stop ${settle.road} over a history with no fault`, async () => {
+        const t = await boot();
+        const before = sqlFiles();
+        await stopSave(t, [text("heading"), text("alpha")], point =>
+          point.startsWith("unit:")
+        );
+        await clearStoppedHolds(t);
+        expect(sqlFiles().length, "the stopped save's file").toBeGreaterThan(
+          before.length
+        );
+
+        await settle.run(t);
+
+        expect(await recordRow(t), "the record clears").toBeUndefined();
+        expect(sqlFiles(), "the stopped save's file removed").toEqual(before);
+      }, 300_000);
+    }
+
     for (const fault of HISTORY_FAULTS) {
       for (const settle of SETTLES) {
         it(`refuses with the check's message and writes nothing ${settle.road}, with ${fault.name}`, async () => {
@@ -274,8 +297,11 @@ describe.each(getConfiguredTestDialects())(
           );
           await clearStoppedHolds(t);
           await fault.make(t, applied!);
-          const files = sqlFiles();
+          // Every file of the folder by its content, the snapshots included, and the record: a
+          // settle that rewrote one under the same name, or changed the record, is told apart.
+          const folder = folderSnapshot(HISTORY_DIR());
           const definition = definitionText();
+          const record = await recordRow(t);
 
           await expect(settle.run(t)).rejects.toThrow(
             expect.objectContaining({
@@ -283,12 +309,72 @@ describe.each(getConfiguredTestDialects())(
             })
           );
 
-          expect(sqlFiles()).toEqual(files);
+          expect(folderSnapshot(HISTORY_DIR())).toEqual(folder);
           expect(definitionText()).toBe(definition);
-          expect(await recordRow(t), "the record stays").toBeDefined();
+          expect(record, "the stopped save's record").toBeDefined();
+          expect(await recordRow(t), "the record stays as it was").toEqual(
+            record
+          );
         }, 300_000);
       }
     }
+
+    // Two saves left on this host: one the settle leaves as it stands (made outside development,
+    // its files left for `nextly migrate`), with an attempt at its file unresolved, and one it can
+    // settle. An attempt is passed over only while its own save is settled: the other's refuses
+    // the settle before anything of the one it could settle is written.
+    it("refuses to settle a save over another save's unresolved attempt that it leaves, writing nothing", async () => {
+      const t = await boot();
+      const side = "history_side";
+      const sideFile = "29990101_000000_000_history_side_update.sql";
+      await dispatchSingles(
+        "createSingle",
+        {},
+        { slug: side, label: side, fields: [text("heading")] }
+      );
+      await stopSave(t, [text("heading"), text("alpha")], point =>
+        point.startsWith("unit:")
+      );
+      await clearStoppedHolds(t);
+      // The other save's record, as one made outside development stands: its file in the folder and
+      // named, its attempt at it started under `nextly migrate` and never ended. In the folder, so
+      // no check of a missing file refuses before the attempts are judged.
+      writeFileSync(
+        join(HISTORY_DIR(), sideFile),
+        "-- UP\nSELECT 1;\n\n-- DOWN\nSELECT 1;\n"
+      );
+      const stood = (await recordRow(t)) as Record<string, unknown>;
+      await new MetaService(t.adapter, consoleLogger).set(
+        `builder-save-in-progress:single:${side}`,
+        {
+          ...stood,
+          id: randomUUID(),
+          slug: side,
+          applies: false,
+          files: [sideFile],
+        }
+      );
+      await new SchemaEventsRepository(
+        t.adapter.getDrizzle(),
+        t.adapter.dialect
+      ).recordStart({
+        eventType: "file_apply",
+        source: "cli-migrate",
+        filename: sideFile,
+      } as Parameters<SchemaEventsRepository["recordStart"]>[0]);
+      const folder = folderSnapshot(HISTORY_DIR());
+      const definition = definitionText();
+
+      await expect(settleAtStart(t)).rejects.toThrow(
+        expect.objectContaining({ code: "NEXTLY_MIGRATION_HISTORY_REFUSED" })
+      );
+
+      expect(folderSnapshot(HISTORY_DIR())).toEqual(folder);
+      expect(definitionText()).toBe(definition);
+      expect(await recordRow(t), "the record it could settle stays").toEqual(
+        stood
+      );
+    }, 300_000);
 
     // A Single whose row the table holds takes a field with a default by the push, which fills the
     // row; the save's files are recorded after it. Stopped before the first is recorded, the table

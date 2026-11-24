@@ -823,7 +823,9 @@ describe.each(getConfiguredTestDialects())(
       vi.mocked(MetaService.prototype.delete).mockRestore();
       // A later migration of the Single, in the folder and applied, and the registry row as it left
       // it. In the folder, as a deployed build holds every file it applied: one the ledger records
-      // and the folder lacks is a history the settle's checks refuse to settle over.
+      // and the folder lacks is a history the settle's checks refuse to settle over. Named for a
+      // moment after the save's, as a migration written later is: that name alone tells it from the
+      // save's own files, and its headers only make it one the history checks read.
       const repo = new SchemaEventsRepository(
         t.adapter.getDrizzle(),
         t.adapter.dialect

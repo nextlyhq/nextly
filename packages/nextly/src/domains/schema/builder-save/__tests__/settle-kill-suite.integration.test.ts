@@ -19,6 +19,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +36,7 @@ import { createLogger } from "../../../../cli/utils/logger";
 import { defineConfig } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
+import { runBootTimeApplyIfDev } from "../../../../init/boot-apply";
 import { _resetBootMigrationsGateForTest } from "../../../../init/boot-migrations-gate";
 import {
   createTestNextly,
@@ -45,7 +47,10 @@ import {
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { consoleLogger } from "../../../../shared/types";
 import { MetaService } from "../../../meta/services/meta-service";
-import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import {
+  SchemaEventsRepository,
+  type SchemaEventRow,
+} from "../../events/schema-events-repository";
 import { setNonInteractive } from "../../migrate/can-prompt";
 import { withStopPoints } from "../../migrate/stop-points";
 import { WRITER_LOCK_FILE } from "../../migrate-create/writer-hold";
@@ -56,8 +61,17 @@ import {
   SCHEMA_LOCK_TABLE,
 } from "../../pipeline/schema-lock";
 import { MIGRATION_LOCK_TABLE } from "../../../field-groups/migration/session";
-import { settleLeftSaves } from "../settle-left-save";
+import { setAside } from "../collection-save";
+import { settleLeftSaves, type SettledOutcome } from "../settle-left-save";
 import { settleRegistryWriter } from "../settle-registry";
+import { letRenamesGo, stoppedAtRename } from "./helpers/stop-at-rename";
+
+// A settle may be stopped at one of its renames, as a process killed there.
+vi.mock("node:fs/promises", async original =>
+  (await import("./helpers/stop-at-rename")).stoppingRenames(
+    await original<typeof import("node:fs/promises")>()
+  )
+);
 
 /** Where the save is stopped, and how to let it go. Shared with the module mocks below. */
 const kill = vi.hoisted(() => ({
@@ -128,6 +142,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  letRenamesGo();
   kill.at = undefined;
   kill.reached = undefined;
   kill.release?.();
@@ -152,29 +167,43 @@ const sqlFiles = (): string[] =>
         .sort()
     : [];
 
-/** The killed save's three kill points, each with the dialects it can stop on. */
+/**
+ * The killed save's three kill points, each with the dialects it can stop on, the fields it added
+ * that stand live while it is parked there, and how the next development start settles it.
+ */
 const KILLS: Array<{
   name: string;
   on: (dialect: TestDialect) => boolean;
   at: (point: string) => boolean;
+  parked: string[];
+  settles: SettledOutcome;
 }> = [
   {
     name: "before its file ran",
     on: () => true,
     at: point => point.startsWith("unit:") && point.includes("_update"),
+    parked: [],
+    settles: "none",
   },
   {
     name: "after everything applied, before its record cleared",
     on: () => true,
     at: point => point === "clear",
+    parked: ["subtitle", "summary"],
+    settles: "all",
   },
   {
     name: "after the first statement of its file",
     on: dialect => dialect === "mysql",
     at: point =>
       point.includes("_update") && point.endsWith(": after statement 1"),
+    parked: ["subtitle"],
+    settles: "partial",
   },
 ];
+
+/** The two fields the killed save adds, of which a kill point leaves some live. */
+const ADDED = ["subtitle", "summary"];
 
 describe.each(getConfiguredTestDialects())(
   "the commands around a Builder save left part-way (%s)",
@@ -245,6 +274,18 @@ describe.each(getConfiguredTestDialects())(
         .filter(row => row.status === "applied")
         .map(row => String(row.filename))
         .sort();
+    }
+
+    /**
+     * Every file-apply event this database's ledger holds, by id: a refused command that appended
+     * one, applied or not, changes it, where `appliedFiles` sees only the applied ones.
+     */
+    async function fileApplyRows(t: TestNextly): Promise<SchemaEventRow[]> {
+      const rows = await new SchemaEventsRepository(
+        t.adapter.getDrizzle(),
+        t.adapter.dialect
+      ).listFileApplies();
+      return [...rows].sort((a, b) => a.id.localeCompare(b.id));
     }
 
     /** Start a save adding two fields and kill it at `at`; resolves once it has stopped there. */
@@ -367,6 +408,17 @@ describe.each(getConfiguredTestDialects())(
       }
     }
 
+    /** The killed save's fields a migration file's UP adds to the Single's table, in order. */
+    function addsOf(text: string): string[] {
+      const up = text.split("-- DOWN")[0] ?? "";
+      return ADDED.filter(name =>
+        new RegExp(
+          `ALTER\\s+TABLE\\s+[\`"]?${TABLE}[\`"]?\\s+ADD\\s+(COLUMN\\s+)?[\`"]?${name}[\`"]?`,
+          "i"
+        ).test(up)
+      );
+    }
+
     const migrate = () =>
       command(context =>
         runMigrate(
@@ -391,8 +443,14 @@ describe.each(getConfiguredTestDialects())(
         async () => {
           const t = await boot();
           await killSave(t, killed.at);
+          // How far the save got, read off the live table while it is parked.
+          const parked = await liveColumns(t);
+          expect(
+            ADDED.filter(name => parked.includes(name)),
+            "the fields live while parked"
+          ).toEqual(killed.parked);
           const files = sqlFiles();
-          const applied = await appliedFiles(t);
+          const ledger = await fileApplyRows(t);
 
           const checked = await check();
           const created = await create();
@@ -402,18 +460,19 @@ describe.each(getConfiguredTestDialects())(
           expect(ok(created.code), created.said).toBe(false);
           expect(created.said).toContain("left part-way");
           expect(sqlFiles(), "the folder unchanged").toEqual(files);
-          expect(await appliedFiles(t), "the ledger unchanged").toEqual(
-            applied
+          expect(await fileApplyRows(t), "the ledger unchanged").toEqual(
+            ledger
           );
 
-          // The next development start settles it.
-          await settleLeftSaves({
+          // The next development start settles it, as far as the save got.
+          const settled = await settleLeftSaves({
             adapter: t.adapter,
             projectRoot: basePath,
             migrationsDir: historyDir(),
             logger: { info: () => undefined, warn: () => undefined },
             writeRegistry: settleRegistryWriter(t.adapter),
           });
+          expect(settled.map(each => each.outcome)).toEqual([killed.settles]);
           expect(await recordRow(t), "the record clears").toBeUndefined();
           const settledFiles = sqlFiles();
           const settledApplied = await appliedFiles(t);
@@ -454,15 +513,14 @@ describe.each(getConfiguredTestDialects())(
         const written = sqlFiles().filter(f => !before.includes(f));
         expect(written).toHaveLength(1);
         expect(written[0]).not.toBe(stoppedFile);
+        const aside = join(historyDir(), `${stoppedFile!}.stopped`);
+        expect(existsSync(aside), "the stopped file kept aside").toBe(true);
+        // The replacement adds what applied, and only that. The stopped file, the control, adds
+        // both fields, so an UP that read either file's text whole would be told apart.
+        expect(addsOf(readFileSync(aside, "utf-8"))).toEqual(ADDED);
         expect(
-          readFileSync(join(historyDir(), written[0]!), "utf-8").split(
-            "-- DOWN"
-          )[0]
-        ).not.toMatch(/summary/);
-        expect(
-          existsSync(join(historyDir(), `${stoppedFile!}.stopped`)),
-          "the stopped file kept aside"
-        ).toBe(true);
+          addsOf(readFileSync(join(historyDir(), written[0]!), "utf-8"))
+        ).toEqual(["subtitle"]);
         expect(await liveColumns(t)).toContain("subtitle");
         // The folder the settle left passes the checks the next commands make.
         const checked = await check();
@@ -473,13 +531,134 @@ describe.each(getConfiguredTestDialects())(
       300_000
     );
 
+    /**
+     * A settle set the stopped file aside and stopped; the next one put it back and was killed
+     * there, before it judged anything: the file stands in the folder as the stop left it.
+     */
+    async function killedOncePutBack(t: TestNextly): Promise<string> {
+      const before = sqlFiles();
+      await killSave(t, KILLS[2]!.at);
+      const [stoppedFile] = sqlFiles().filter(f => !before.includes(f));
+      await setAside({ migrationsDir: historyDir() }, stoppedFile!);
+      expect(
+        await stoppedAtRename(
+          from => from.endsWith(".stopped") && from.includes("meta"),
+          () =>
+            settleLeftSaves({
+              adapter: t.adapter,
+              projectRoot: basePath,
+              migrationsDir: historyDir(),
+              logger: { info: () => undefined, warn: () => undefined },
+              writeRegistry: settleRegistryWriter(t.adapter),
+            })
+        ),
+        "the settle stopped once its file was back"
+      ).toBe("reached");
+      expect(sqlFiles(), "the file is back in the folder").toContain(
+        stoppedFile
+      );
+      return stoppedFile!;
+    }
+
+    /** A development start over the project, and everything it logged. */
+    async function startSays(): Promise<string> {
+      const lines: string[] = [];
+      const spies = (["info", "warn", "error"] as const).map(level =>
+        vi
+          .spyOn(consoleLogger, level)
+          .mockImplementation(message => void lines.push(String(message)))
+      );
+      try {
+        await runBootTimeApplyIfDev({ caller: "kill suite" });
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+      return lines.join("\n");
+    }
+
+    // The control: with neither the record nor the attempt standing, the same start over the same
+    // folder reads the file as pending and runs it.
+    it.runIf(dialect === "mysql")(
+      "runs the same file at a development start once neither its record nor its attempt stands",
+      async () => {
+        const t = await boot();
+        const stoppedFile = await killedOncePutBack(t);
+        const ledger = await fileApplyRows(t);
+        await new MetaService(t.adapter, consoleLogger).delete(RECORD_KEY);
+        await t.adapter.executeQuery(
+          `DELETE FROM nextly_schema_events WHERE filename = '${stoppedFile}'`
+        );
+
+        const said = await startSays();
+
+        const ran = (await fileApplyRows(t)).filter(
+          row =>
+            row.filename === stoppedFile &&
+            !ledger.some(earlier => earlier.id === row.id)
+        );
+        expect(ran.length, said).toBeGreaterThan(0);
+      },
+      300_000
+    );
+
+    // Back in the folder, the file is no migration to run: the settle comes first, and where it
+    // refuses or leaves the save, neither command nor start runs anything.
+    for (const unsettled of [
+      {
+        name: "the history refuses the settle",
+        make: (_t: TestNextly, stoppedFile: string) => {
+          const applied = sqlFiles().find(f => f !== stoppedFile);
+          const path = join(historyDir(), applied!);
+          writeFileSync(path, `${readFileSync(path, "utf-8")}\n-- edited\n`);
+          return Promise.resolve();
+        },
+      },
+      {
+        name: "the settle leaves the save as it stands",
+        // A record that does not say what its files carry is never judged from the tables.
+        make: async (t: TestNextly) => {
+          const record = (await recordRow(t)) as Record<string, unknown>;
+          const { ownStatements: _, ...older } = record;
+          await new MetaService(t.adapter, consoleLogger).set(
+            RECORD_KEY,
+            older
+          );
+        },
+      },
+    ]) {
+      it.runIf(dialect === "mysql")(
+        `runs nothing of a file put back by a killed settle, at nextly migrate or a development start, where ${unsettled.name}`,
+        async () => {
+          const t = await boot();
+          const stoppedFile = await killedOncePutBack(t);
+          await unsettled.make(t, stoppedFile);
+          const ledger = await fileApplyRows(t);
+          const columns = await liveColumns(t);
+
+          const migrated = await migrate();
+          expect(ok(migrated.code), migrated.said).toBe(false);
+          expect(await fileApplyRows(t), "migrate ran nothing").toEqual(ledger);
+          expect(await liveColumns(t)).toEqual(columns);
+
+          const said = await startSays();
+          expect(said).toContain("Pending migrations were not applied");
+          expect(await fileApplyRows(t), "the start ran nothing").toEqual(
+            ledger
+          );
+          expect(await liveColumns(t)).toEqual(columns);
+          expect(await recordRow(t), "the record stays").toBeDefined();
+        },
+        300_000
+      );
+    }
+
     it.runIf(dialect === "mysql")(
       "refuses nextly migrate in production on a save killed inside its file, writing nothing",
       async () => {
         const t = await boot();
         await killSave(t, KILLS[2]!.at);
         const files = sqlFiles();
-        const applied = await appliedFiles(t);
+        const ledger = await fileApplyRows(t);
         vi.stubEnv("NODE_ENV", "production");
         _resetEnvCache();
 
@@ -490,7 +669,7 @@ describe.each(getConfiguredTestDialects())(
         expect(ok(migrated.code), migrated.said).toBe(false);
         expect(migrated.said).toContain("left part-way");
         expect(sqlFiles()).toEqual(files);
-        expect(await appliedFiles(t)).toEqual(applied);
+        expect(await fileApplyRows(t), "the ledger unchanged").toEqual(ledger);
         expect(await recordRow(t), "the record stays").toBeDefined();
       },
       300_000

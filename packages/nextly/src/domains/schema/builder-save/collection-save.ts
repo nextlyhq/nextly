@@ -1203,11 +1203,12 @@ async function judgedStop(
 }
 
 /**
- * The entity before and after a stopped save, where the stop is one its main table's shape alone
- * can judge: an update of one file, of an entity not translated (whose change reaches its
- * translations table too), carrying no junction or key statements of its own, and no fill or
- * delete of rows (`resolutions`, `rowFills`), which MySQL commits as it runs, so rows it changed
- * before a later statement failed stay changed whatever the table's shape reads as. A field with
+ * The entity before and after a stopped save, where the stop is one its tables' shape alone can
+ * judge: an update of one file that does not change where its translatable values are kept,
+ * carrying no junction or key statements of its own, and no change of rows (`ownRowChanges`): a
+ * fill or delete of rows, which MySQL commits as it runs, so rows it changed before a later
+ * statement failed stay changed whatever the table's shape reads as, or a field's move, whose
+ * values may stand at either place whatever the shape reads as. A field with
  * no name that holds fields (a group with no name) keeps its fields on the table's row, by their
  * own names, which the judgement does not reach: a save changing one is not judged.
  */
@@ -1218,7 +1219,8 @@ function judgeableStop(
   const { previous, entity } = save;
   if (previous === null || entity === null) return undefined;
   const oneFile = files.adopt === undefined && files.change.length === 1;
-  if (!oneFile || carriesItsOwnRows(save) || pastItsTable(previous, entity)) {
+  const changesRows = carriesItsOwnRows(save) || ownRowChanges(save);
+  if (!oneFile || changesRows || pastItsTable(previous, entity)) {
     return undefined;
   }
   return { previous, entity };

@@ -198,7 +198,7 @@ export async function settleLeftSaves(
     // Before each record's first write, exempting only that record's own attempts: a record an
     // earlier turn left with its attempt unresolved refuses the next one's settle, nothing of it
     // written, rather than being passed over.
-    await checkHistoryBeforeSettling(deps, [row], here);
+    await checkHistoryOver(deps, row, here);
     const one = await settleRow(deps, row, here);
     if (one !== undefined) settled.push(one);
   }
@@ -222,7 +222,7 @@ export async function settleLeftSaves(
  * on a history those checks cannot vouch for. Asked only where a record of this host is to be
  * settled; an unresolved attempt at those records' own files is the stop the settle resolves, and
  * is not refused (`checkSaveHistory`'s `settling`). Asked of one record at a time
- * (`settleLeftSaves`), so only the attempt being resolved is let through.
+ * (`checkHistoryOver`), so only the attempt being resolved is let through.
  */
 async function checkHistoryBeforeSettling(
   deps: SettleDeps,
@@ -249,6 +249,69 @@ async function checkHistoryBeforeSettling(
     },
     { settling, command: "The settle of a Builder save left part-way" }
   );
+}
+
+/**
+ * The history's checks over the one record `row`, with a file an earlier settle of it set aside and
+ * then stopped put back first, so the checks read the file the ledger's attempt is at. Where they
+ * refuse, it is set aside again: a refused settle leaves the folder as it found it.
+ */
+async function checkHistoryOver(
+  deps: SettleDeps,
+  row: Awaited<ReturnType<typeof readSavesInProgress>>[number],
+  here: string
+): Promise<void> {
+  const restored =
+    "record" in row && row.record.host === here
+      ? await restoreSetAside(deps, row.record)
+      : [];
+  try {
+    await checkHistoryBeforeSettling(deps, [row], here);
+  } catch (error) {
+    // The refusal is what is said, whatever becomes of the move: a file left in the folder stands
+    // as the stop left it, its record and its unresolved attempt refusing every run of it.
+    for (const filename of restored) {
+      await setAside(deps, filename).catch((asideError: unknown) =>
+        deps.logger.warn(
+          `${filename}, put back for its Builder save to be settled, could not be set aside again: ${
+            asideError instanceof Error
+              ? asideError.message
+              : String(asideError)
+          }`
+        )
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Puts back the files a settle set aside (`setAside`) and then stopped, before writing anything in
+ * their place: every file the record names is set aside and none written since, as a replacement's
+ * names join the record as each is written. The settle then judges them as the stop left them.
+ * Where a replacement is named already, nothing moves: putting the stopped file back beside it would
+ * leave a file no ledger row records, for `nextly migrate` to run. Nothing moves either for a
+ * record this settle leaves as it stands (`only`, one made outside development, production's).
+ * Answers the files put back.
+ */
+async function restoreSetAside(
+  deps: SettleDeps,
+  record: LeftSave
+): Promise<string[]> {
+  const judged =
+    record.applies === true &&
+    deps.stopsLeft !== true &&
+    (deps.only === undefined || deps.only.has(record.id));
+  const named = judged ? (record.files ?? []) : [];
+  const path = (filename: string) => join(deps.migrationsDir, filename);
+  const aside = named.filter(
+    filename =>
+      !existsSync(path(filename)) && existsSync(`${path(filename)}.stopped`)
+  );
+  if (aside.length === 0 || aside.length !== named.length) return [];
+  await assertWriterHold(deps.migrationsDir);
+  for (const filename of aside) await restoreAside(deps, filename);
+  return aside;
 }
 
 /**
@@ -429,7 +492,6 @@ async function settledOutcome(
   }
   const dialect = deps.adapter.getCapabilities().dialect;
   const repo = new SchemaEventsRepository(deps.adapter.getDrizzle(), dialect);
-  await restoreSetAside(deps, record);
   const { files, unclear } = await filesOfSave(deps, record);
   if (unclear.length > 0) {
     // A file named for the save's moment, with no ledger row, that the settle cannot tell as the
@@ -450,28 +512,6 @@ async function settledOutcome(
   notes.push(...(await keepSavedDefinition(deps, record)));
   if (judged === "pending") return settlePending(deps, record);
   return settleAll(deps, repo, record, files, notes, kept);
-}
-
-/**
- * Puts back the files a settle set aside (`setAside`) and then stopped, before writing anything in
- * their place: every file the record names is set aside and none written since, as a replacement's
- * names join the record as each is written. The next settle then judges them as the stop left them.
- * Where a replacement is named already, nothing moves: putting the stopped file back beside it would
- * leave a file no ledger row records, for `nextly migrate` to run.
- */
-async function restoreSetAside(
-  deps: SettleDeps,
-  record: LeftSave
-): Promise<void> {
-  const named = record.files ?? [];
-  const path = (filename: string) => join(deps.migrationsDir, filename);
-  const aside = named.filter(
-    filename =>
-      !existsSync(path(filename)) && existsSync(`${path(filename)}.stopped`)
-  );
-  if (aside.length === 0 || aside.length !== named.length) return;
-  await assertWriterHold(deps.migrationsDir);
-  for (const filename of aside) await restoreAside(deps, filename);
 }
 
 /**
