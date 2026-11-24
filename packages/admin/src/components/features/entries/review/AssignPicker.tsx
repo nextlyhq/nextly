@@ -90,6 +90,8 @@ function assignOptions({
       .filter(
         person =>
           person.id !== me &&
+          // A deactivated person is refused as an assignee.
+          person.isActive !== false &&
           person.roles.some(role => holding.has(String(role.id)))
       )
       .map(person => ({

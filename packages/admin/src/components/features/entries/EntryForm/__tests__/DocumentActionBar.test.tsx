@@ -277,6 +277,40 @@ describe("an action that cannot be used", () => {
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
+  it("names the arrow for what it holds: publishing where Publish leads, the document's actions where Save does", () => {
+    // A collection with no publish lifecycle leads with Save, and its arrow
+    // holds the preview and the document's views: nothing that publishes.
+    const { unmount } = render(
+      <DocumentActionBar
+        actions={[{ id: "save", label: "Save", placement: "primary" }]}
+        bindings={{ save: { onSelect: vi.fn() } }}
+        mainMenuItems={[
+          { id: "preview-open", label: "Preview", onSelect: vi.fn() },
+        ]}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: "More document actions" })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "More ways to publish" })
+    ).toBeNull();
+    unmount();
+    // The control: where Publish leads, the arrow says so.
+    render(
+      <DocumentActionBar
+        actions={[{ id: "publish", label: "Publish", placement: "primary" }]}
+        bindings={{ publish: { onSelect: vi.fn() } }}
+        mainMenuItems={[
+          { id: "preview-open", label: "Preview", onSelect: vi.fn() },
+        ]}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: "More ways to publish" })
+    ).toBeInTheDocument();
+  });
+
   it("draws a leading action refused for this instant disabled, with why", () => {
     // Nothing to save, a submit in flight: not a hold to explain, and the
     // press would do nothing a moment later either.

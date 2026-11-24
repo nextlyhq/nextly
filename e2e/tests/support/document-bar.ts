@@ -9,8 +9,12 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
-/** What the main button's arrow is called. */
-export const MAIN_MENU = "More ways to publish";
+/**
+ * What the main button's arrow is called: the ways to publish where Publish
+ * or a workflow step leads, the document's actions where Save does (a
+ * collection with no publish lifecycle).
+ */
+export const MAIN_MENU = /^More (ways to publish|document actions)$/;
 
 /** The document bar of the editor on screen. */
 export function documentBar(page: Page): Locator {

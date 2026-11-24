@@ -355,6 +355,39 @@ describe("ReviewSection", () => {
     );
   });
 
+  it("offers no deactivated person, whom an assignment would be refused", async () => {
+    held.slugs = new Set(["read-users"]);
+    usersSpy.mockResolvedValue({
+      items: [
+        {
+          id: "sam",
+          name: "Sam Okafor",
+          email: "sam@x",
+          roles: [{ id: "r-ed" }],
+          isActive: true,
+        },
+        {
+          id: "old",
+          name: "Former Editor",
+          email: "old@x",
+          roles: [{ id: "r-ed" }],
+          isActive: false,
+        },
+      ],
+      meta: {},
+    });
+    fetchSpy.mockResolvedValue(answer(part()));
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    await waitFor(async () => {
+      expect(await openPicker(section)).toEqual([
+        "Me",
+        "Editors (the whole role)",
+        "Sam Okafor",
+      ]);
+    });
+  });
+
   it("lists no people for a person who may not list them", async () => {
     fetchSpy.mockResolvedValue(answer(part()));
     render(<ReviewSection document={post} />);

@@ -404,6 +404,14 @@ export function DocumentActionBar({
           options={everyday}
           rows={mainMenuItems}
           apartOptions={escape}
+          // Named for what it holds: the ways to publish where Publish or a
+          // workflow step leads, the document's other actions where Save does
+          // (a collection with no publish lifecycle).
+          optionsLabel={
+            primary.action.id === SAVE_ACTION_ID
+              ? DOCUMENT_OPTIONS_LABEL
+              : PUBLISH_OPTIONS_LABEL
+          }
           pending={pending}
           explainsHold
         />
