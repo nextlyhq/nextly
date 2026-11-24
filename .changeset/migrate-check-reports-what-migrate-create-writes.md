@@ -29,10 +29,13 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-`nextly migrate:check` now reports exactly the changes `nextly migrate:create` would write, and both commands run without a database.
+`nextly migrate:check` now reports the changes `nextly migrate:create` would write, and both commands run without a database.
 
-- One comparison serves `migrate:check`, `migrate:create`, `nextly migrate`, a production start and `migrate:fresh`: what the configuration, the plugins, the Schema Builder's definition file and the app's extension tables declare that the newest snapshot does not record. A change written in a file beside the main migration, such as a translated field's new column type, is now named as `migrate:create` writes it (`~ translations column types dc_posts`), where the check named only the field's recorded settings before. The check names each change as `nextly migrate` names it (`+` added, `-` removed, `~` changed).
-- Neither command needs `DATABASE_URL`. The dialect comes from `--dialect`, then the newest migration file's `-- Dialect:` header, then `DB_DIALECT` or the scheme of `DATABASE_URL` read without connecting, then a question at a terminal. With none of these and no terminal, both refuse with the new `DIALECT_NOT_STATED` code, naming `--dialect`.
-- A Schema Builder definition file that git ignores is refused by `migrate:check` with the new `BUILDER_DEFINITION_IGNORED` code, naming the file; `migrate:create` writes from it and warns, naming it.
+- One comparison serves `migrate:check`, `migrate:create`, `nextly migrate`, a production start and `migrate:fresh`: what the configuration, the plugins, the Schema Builder's definition file and the app's extension tables declare that the newest snapshot does not record. A change written in a file beside the main migration, such as a translated field's new column type, is now listed as that file (`~ translations column types dc_posts`), and a field moving to its per-language table as `~ translations table dc_posts`. A project whose first migration would hold only permissions now fails `migrate:check`.
+- `migrate:check` lists every change, where it listed ten, and marks each one: `+` added, `-` removed, `~` changed. A list with tables in it now names the settings that changed as well.
+- When several fields move to a per-language table beside another change, the refusal always says how to capture the other change.
+- Neither command needs `DATABASE_URL`. The dialect comes from `--dialect`, then the newest migration, then `DB_DIALECT` or the scheme of `DATABASE_URL` read without connecting, then a question at a terminal. With none of these and no terminal, both refuse with the new `DIALECT_NOT_STATED` code, naming `--dialect`.
+- `migrate:create --record-snapshot` refuses a `DATABASE_URL` that names a database of another dialect than the migrations are for, with the new `DATABASE_DIALECT_DIFFERS` code.
+- A Schema Builder definition file that git ignores is refused by `migrate:check` with the new `BUILDER_DEFINITION_IGNORED` code, whether or not the checkout holds it. `migrate:create` writes from one that is there and warns, naming it.
 - Over a snapshot written before snapshots recorded settings and permissions, both commands say "Settings not yet recorded in a migration". The check still passes, and `migrate:create` records them in its next migration.
-- With no database named, `migrate:check` refuses over any Schema Builder save this machine left part-way, since it cannot tell which database the save was for.
+- With no database named, both commands refuse over any Schema Builder save this machine left part-way, since they cannot tell which database the save was for.
