@@ -80,9 +80,10 @@ function sqlValueLiteral(value: unknown, dialect: SupportedDialect): string {
 }
 
 /**
- * The statements settling `resolution`'s rows, in the order they run: the one statement every
- * road writes for a column of the main table, and for a field kept per language
- * (`perLanguageStatements`) the statements over its translations table. Every road that settles
+ * The statements settling `resolution`'s rows, in the order they run: for a column of the main
+ * table, the one statement `resolutionStatement` writes; for a field kept per language
+ * (`perLanguageStatements`), the statements over its translations table, which
+ * `resolutionStatement` does not write. Every road that settles
  * rows, a save's migration file and the push that applies a change in development, writes them
  * from here, so the two settle the same rows.
  */
@@ -93,14 +94,22 @@ export function resolutionStatements(
   if (resolution.perLanguage !== undefined) {
     return perLanguageStatements(resolution, resolution.perLanguage, dialect);
   }
+  return [resolutionStatement(resolution, dialect)];
+}
+
+/** The statement settling `resolution`'s rows. */
+export function resolutionStatement(
+  resolution: ColumnResolution,
+  dialect: SupportedDialect
+): string {
   const table = quoteIdent(resolution.tableName, dialect);
   const column = quoteIdent(resolution.columnName, dialect);
   if (resolution.kind === "delete_nonconforming") {
-    return [`DELETE FROM ${table} WHERE ${column} IS NULL;`];
+    return `DELETE FROM ${table} WHERE ${column} IS NULL;`;
   }
-  return [
-    `UPDATE ${table} SET ${column} = ${fillLiteral(resolution, dialect)} WHERE ${column} IS NULL;`,
-  ];
+  const value =
+    resolution.json === true ? jsonText(resolution.value) : resolution.value;
+  return `UPDATE ${table} SET ${column} = ${sqlValueLiteral(value, dialect)} WHERE ${column} IS NULL;`;
 }
 
 /** A fill's value as the SQL literal its column takes: a JSON column's as its JSON text. */

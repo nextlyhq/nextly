@@ -13,7 +13,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { resolutionStatements } from "../resolution-statements";
+import {
+  resolutionStatement,
+  resolutionStatements,
+} from "../resolution-statements";
 
 const at = new Date(Date.UTC(2026, 10, 11, 9, 30, 15, 250));
 const fill = (value: unknown) =>
@@ -24,23 +27,23 @@ const fill = (value: unknown) =>
     value,
   }) as const;
 
-describe("resolutionStatements for a date fill", () => {
+describe("resolutionStatement for a date fill", () => {
   it.each([
     ["postgresql", `'2026-11-11T09:30:15.250Z'`],
     ["mysql", `'2026-11-11 09:30:15.250'`],
     ["sqlite", String(Math.floor(at.getTime() / 1000))],
   ] as const)("writes the instant as %s reads a date", (dialect, literal) => {
-    expect(resolutionStatements(fill(at), dialect)).toEqual([
-      expect.stringContaining(`= ${literal} WHERE`),
-    ]);
+    expect(resolutionStatement(fill(at), dialect)).toContain(
+      `= ${literal} WHERE`
+    );
   });
 
   it("still refuses a value no column stores", () => {
     expect(() =>
-      resolutionStatements(fill(new Date(Number.NaN)), "postgresql")
+      resolutionStatement(fill(new Date(Number.NaN)), "postgresql")
     ).toThrow(/must be a string, a finite number, a boolean or a date/);
     expect(() =>
-      resolutionStatements(fill({ not: "a date" }), "postgresql")
+      resolutionStatement(fill({ not: "a date" }), "postgresql")
     ).toThrow(/must be a string/);
   });
 });
