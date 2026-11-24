@@ -1,0 +1,32 @@
+---
+"nextly": patch
+"create-nextly-app": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/ui": patch
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/plugin-accounts": patch
+"@nextlyhq/plugin-commerce": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
+---
+
+Renaming a text field and making one required now work where its values are kept for each language, the storage every installation runs since per-language storage became the default. The Schema Builder's review offers a text field's rename on its translations table, and the rename keeps every language's value, through the Builder and through `nextly migrate:create` alike, where before the save failed half-applied or the field read empty. A fill or delete answer for a text field made required settles exactly the entries with no value in the default language, on the translations table's default-language rows: the review counts those entries, and the save's migration file and its push settle the same rows. A Single's text field added with a default gives the Single's document that default in the default language.
