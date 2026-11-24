@@ -123,6 +123,9 @@ export type Outcome = {
   depth?: number;
   /** The language the operation is sent in. */
   locale?: string;
+  /** What a read filters by: REST's query as written, and the same as the Direct API takes it. */
+  query?: string;
+  where?: Record<string, unknown>;
   ok: boolean;
   status?: number;
   code?: string;

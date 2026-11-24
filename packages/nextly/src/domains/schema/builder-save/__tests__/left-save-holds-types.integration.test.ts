@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import type { ServiceContainer } from "../../../../services";
 import type { TestNextly } from "../../../../plugins/test-nextly";
 import { settleLeftSaves } from "../settle-left-save";
@@ -54,6 +55,7 @@ describe.each(LEFT_SAVE_SUITES)(
       boot,
       versionOf,
       killSave,
+      hero,
       fromAnotherProcess,
       afterStatement,
       databaseError,
@@ -620,6 +622,225 @@ describe.each(LEFT_SAVE_SUITES)(
           { kind: "read", via: "api" },
         ])) {
           expect(later.ok, JSON.stringify(later)).toBe(true);
+        }
+      },
+      600_000
+    );
+
+    // A publish writes the entry's held draft into the live row, whatever the request itself sets.
+    it.runIf(dialect === "mysql")(
+      "refuses publishing a held draft that sets the field, naming it, with the live entry unchanged",
+      async () => {
+        const t = await boot({ drafts: true, numeric: true });
+        const created = (await t.nextly.create({
+          collection: slug,
+          data: {
+            title: "Live",
+            slug: "live",
+            heading: 3,
+            note: "n",
+            status: "published",
+          },
+        } as never)) as { item?: { id?: unknown } };
+        const id = String(created.item?.id);
+        await t.nextly.update({
+          collection: slug,
+          id,
+          data: { heading: 9, _overwrite: true },
+        } as never);
+        await killRetype(t);
+        expect(await headingType(t), `killed at ${killedAt}`).toBe("text");
+        const before = await rows(t);
+
+        const published = { status: "published", _overwrite: true };
+        for (const refused of await fromAnotherProcess([
+          { kind: "update", via: "rest", id, data: published },
+          { kind: "update", via: "api", id, data: published },
+        ])) {
+          expectRefused(refused);
+        }
+        expect(await rows(t), "nothing of either publish is written").toEqual(
+          before
+        );
+      },
+      600_000
+    );
+
+    // A Single's document is made on its first write, and its later ones update it: both set the
+    // field, or leave it alone.
+    it.runIf(dialect === "mysql").each([
+      ["before its document is made", false],
+      ["once its document is made", true],
+    ] as const)(
+      "refuses a Single's write that sets the field %s, over REST and the Direct API, changing nothing; lets one of another field through; reads it; and accepts the write once settled",
+      async (_when, made) => {
+        const t = await boot();
+        const numeric = { ...field("heading"), type: "number" };
+        await dispatchSingles(
+          "createSingle",
+          {},
+          { slug: hero, label: hero, fields: [numeric, field("note")] }
+        );
+        if (made) {
+          await t.nextly.updateSingle({
+            slug: hero,
+            data: { heading: 7, note: "n", _overwrite: true },
+          } as never);
+        }
+        const schemaVersion = await versionOf(t, "dynamic_singles", hero);
+        await killSave(t, afterStatement(retypes), () =>
+          dispatchSingles(
+            "applySingleSchemaChanges",
+            { slug: hero },
+            {
+              fields: [field("heading"), field("note")],
+              confirmed: true,
+              schemaVersion,
+            }
+          )
+        );
+        const before = (await t.adapter.executeQuery(
+          `SELECT * FROM single_${hero}`
+        )) as unknown as Array<Record<string, unknown>>;
+
+        const set = { heading: 8, _overwrite: true };
+        for (const refused of await fromAnotherProcess([
+          { kind: "single-write", via: "rest", slug: hero, data: set },
+          { kind: "single-write", via: "api", slug: hero, data: set },
+        ])) {
+          expectRefused(refused);
+        }
+        expect(
+          (await t.adapter.executeQuery(
+            `SELECT * FROM single_${hero}`
+          )) as unknown as Array<Record<string, unknown>>,
+          "nothing changed"
+        ).toEqual(before);
+
+        const [restOther, apiOther, restRead, apiRead] =
+          await fromAnotherProcess([
+            {
+              kind: "single-write",
+              via: "rest",
+              slug: hero,
+              data: { note: "over REST", _overwrite: true },
+            },
+            {
+              kind: "single-write",
+              via: "api",
+              slug: hero,
+              data: { note: "through the API", _overwrite: true },
+            },
+            { kind: "single-read", via: "rest", slug: hero },
+            { kind: "single-read", via: "api", slug: hero },
+          ]);
+        for (const through of [restOther!, apiOther!]) {
+          expect(through.ok, JSON.stringify(through)).toBe(true);
+        }
+        for (const read of [restRead!, apiRead!]) {
+          expect(databaseError(read), JSON.stringify(read)).toBe(false);
+          expect(read.item?.note, JSON.stringify(read)).toBe("through the API");
+        }
+
+        await settle(t);
+        for (const accepted of await fromAnotherProcess([
+          {
+            kind: "single-write",
+            via: "rest",
+            slug: hero,
+            data: { heading: "x", _overwrite: true },
+          },
+          {
+            kind: "single-write",
+            via: "api",
+            slug: hero,
+            data: { heading: "y", _overwrite: true },
+          },
+        ])) {
+          expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
+        }
+      },
+      600_000
+    );
+
+    it.runIf(dialect === "mysql")(
+      "answers a list and one filtered by the field and by another, over REST and the Direct API, never with a database error",
+      async () => {
+        const t = await boot({ numeric: true });
+        await killRetype(t);
+        expect(await headingType(t), `killed at ${killedAt}`).toBe("text");
+
+        const reads = await fromAnotherProcess([
+          { kind: "read", via: "rest" },
+          { kind: "read", via: "api" },
+          {
+            kind: "read",
+            via: "rest",
+            query: "where[heading][equals]=7",
+          },
+          {
+            kind: "read",
+            via: "api",
+            where: { heading: { equals: 7 } },
+          },
+          { kind: "read", via: "rest", query: "where[note][equals]=n" },
+          { kind: "read", via: "api", where: { note: { equals: "n" } } },
+          { kind: "read", via: "rest", query: "sort=heading" },
+        ]);
+        for (const read of reads) {
+          expect.soft(databaseError(read), JSON.stringify(read)).toBe(false);
+          expect.soft(read.ok, JSON.stringify(read)).toBe(true);
+        }
+        // Filtered by the field or not, the entry is among them.
+        for (const read of [reads[0]!, reads[1]!, reads[4]!, reads[5]!]) {
+          expect
+            .soft(
+              read.items?.some(item => item.slug === "first"),
+              JSON.stringify(read)
+            )
+            .toBe(true);
+        }
+      },
+      600_000
+    );
+
+    it.runIf(dialect === "mysql")(
+      "populates a relationship to the collection on a read of another, over REST and the Direct API",
+      async () => {
+        const t = await boot({ numeric: true });
+        const refs = `held_refs_${dialect.slice(0, 2)}`;
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: refs,
+            label: refs,
+            fields: [
+              { name: "target", type: "relationship", relationTo: slug },
+            ],
+          }
+        );
+        const [first] = (await t.adapter.executeQuery(
+          `SELECT id FROM ${table} WHERE slug = 'first'`
+        )) as unknown as Array<{ id: unknown }>;
+        const firstId = String(first?.id);
+        await t.nextly.create({
+          collection: refs,
+          data: { title: "Ref", slug: "ref", target: firstId },
+        } as never);
+        await killRetype(t);
+        expect(await headingType(t), `killed at ${killedAt}`).toBe("text");
+
+        for (const read of await fromAnotherProcess([
+          { kind: "read", via: "rest", slug: refs, depth: 1 },
+          { kind: "read", via: "api", slug: refs, depth: 1 },
+        ])) {
+          expect(read.ok, JSON.stringify(read)).toBe(true);
+          expect(read.items?.[0]?.target, JSON.stringify(read)).toMatchObject({
+            id: firstId,
+            note: "n",
+          });
         }
       },
       600_000

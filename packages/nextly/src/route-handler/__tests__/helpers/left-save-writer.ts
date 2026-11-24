@@ -10,7 +10,8 @@
  * "single-read"; via: "rest" | "api"; data?; id?; slug?; depth? }`, an update naming the entry it
  * changes, `slug` another collection or a Single to send it to, a read's `depth` how far it
  * populates relationships, and `locale` the language it is sent in. The site's languages are the
- * environment's (`NEXTLY_TEST_LOCALES`, the default one first). `registry-moved` moves the stored schema version, as a registry write
+ * environment's (`NEXTLY_TEST_LOCALES`, the default one first). A read may filter: `query` as REST
+ * takes it, `where` as the Direct API does. `registry-moved` moves the stored schema version, as a registry write
  * anywhere does, so the next request loads every definition again from the registry rows. `request`
  * makes its `within` operations in one request, and `pause` stops until the test lets it go on.
  * `settle` settles the Builder saves left part-way, as this process's development start does; the
@@ -55,6 +56,9 @@ type Operation = {
   depth?: number;
   /** The language the operation is sent in. */
   locale?: string;
+  /** What a read filters by: REST's query as written, and the same as the Direct API takes it. */
+  query?: string;
+  where?: Record<string, unknown>;
 };
 
 /** What one operation came to: whether it went through, and what it said. */
@@ -221,11 +225,15 @@ function restOf(operation: Operation, target: string): Promise<Response> {
     default:
       return send(
         "GET",
-        `/collections/${target}/entries${
-          operation.depth === undefined
-            ? inLanguage
-            : `?depth=${operation.depth}`
-        }`
+        `/collections/${target}/entries?${[
+          ...(operation.depth === undefined
+            ? []
+            : [`depth=${operation.depth}`]),
+          ...(operation.locale === undefined
+            ? []
+            : [`locale=${operation.locale}`]),
+          ...(operation.query === undefined ? [] : [operation.query]),
+        ].join("&")}`
       );
   }
 }
@@ -299,6 +307,7 @@ async function apiOf(operation: Operation, target: string): Promise<Outcome> {
       const found = (await copy.nextly.find({
         collection: target,
         ...(operation.depth === undefined ? {} : { depth: operation.depth }),
+        ...(operation.where === undefined ? {} : { where: operation.where }),
         ...languageOf(operation),
       } as never)) as { items: Array<Record<string, unknown>> };
       return { ...operation, ok: true, items: found.items };
