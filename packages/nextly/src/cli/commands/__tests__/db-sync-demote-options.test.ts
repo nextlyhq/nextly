@@ -260,8 +260,8 @@ describe("a demoted collection's record", () => {
     async (_what, options) => {
       const collection = coded(options);
       const record = asRecord(await registeredFor(collection));
-      expect(toCodeFirstCollectionConfig(promotedFrom(record))).toEqual(
-        toCodeFirstCollectionConfig(collection)
+      expect(toCodeFirstCollectionConfig(promotedFrom(record), "code")).toEqual(
+        toCodeFirstCollectionConfig(collection, "code")
       );
     }
   );

@@ -25,23 +25,29 @@ describe("the code-first registry projection", () => {
     ["posts", "legacy_posts"],
     ["posts", "dc_legacy"],
   ])("names the pipeline's table for %s (dbName %s)", (slug, dbName) => {
-    const projected = toCodeFirstCollectionConfig({ slug, fields: [], dbName });
+    const projected = toCodeFirstCollectionConfig(
+      { slug, fields: [], dbName },
+      "code"
+    );
     expect(projected.tableName).toBe(resolveCollectionTableName(slug, dbName));
   });
 
   it("keeps the runs of - and _ the pipeline keeps", () => {
     expect(
-      toCodeFirstCollectionConfig({ slug: "a__b", fields: [] }).tableName
+      toCodeFirstCollectionConfig({ slug: "a__b", fields: [] }, "code")
+        .tableName
     ).toBe("dc_a__b");
   });
 
   it("defaults timestamps to true, and keeps an explicit false", () => {
     expect(
-      toCodeFirstCollectionConfig({ slug: "a", fields: [] }).timestamps
+      toCodeFirstCollectionConfig({ slug: "a", fields: [] }, "code").timestamps
     ).toBe(true);
     expect(
-      toCodeFirstCollectionConfig({ slug: "a", fields: [], timestamps: false })
-        .timestamps
+      toCodeFirstCollectionConfig(
+        { slug: "a", fields: [], timestamps: false },
+        "code"
+      ).timestamps
     ).toBe(false);
   });
 });

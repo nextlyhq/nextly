@@ -411,7 +411,9 @@ async function previewDemotion(args: {
  * hash of its fields, which the caller adds.
  */
 function demotedOptions(collection: DemotedCollection) {
-  const config = toCodeFirstCollectionConfig(collection);
+  // The app's own: a plugin's collection is never demoted (`demotedCollectionIn`). The record's
+  // owner is the caller's to write, and is not taken from this projection.
+  const config = toCodeFirstCollectionConfig(collection, "code");
   return {
     labels: {
       singular:

@@ -465,7 +465,11 @@ async function recordedRows(
         ...names(recorded, storedCollections, slug),
         write: () =>
           collections.writeRecordedCollection(
-            recordedCollection(slug, recorded),
+            recordedCollection(
+              slug,
+              recorded,
+              deps.collectionSources?.get(slug)
+            ),
             collectionOriginOf(recorded, deps.collectionSources?.get(slug)),
             options("collection", recorded, storedCollections, slug)
           ),
@@ -652,14 +656,17 @@ function recordedFieldGroup(
  */
 function recordedCollection(
   slug: string,
-  recorded: RecordedEntitySettings
+  recorded: RecordedEntitySettings,
+  /** The plugin's origin, for a collection one contributes (`RegistryWriteDeps`). */
+  plugin: `plugin:${string}` | undefined
 ): CodeFirstCollectionConfig {
   const declared = { ...declaration(recorded), slug };
   if (recorded.source === "code") {
     return toCodeFirstCollectionConfig(
       declared as CodeFirstCollectionSource<
         CodeFirstCollectionConfig["fields"][number]
-      >
+      >,
+      plugin ?? "code"
     );
   }
   const row = collectionRowValues(declared as UiSchemaEntity);
