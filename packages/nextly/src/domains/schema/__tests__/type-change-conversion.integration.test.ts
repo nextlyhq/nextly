@@ -709,6 +709,64 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v")).toEqual({ one: ["a"] });
     });
 
+    /**
+     * The collection's table, still empty, with the CHECK a field's validation put on a table an
+     * earlier version made, which no migration file tracks or drops.
+     */
+    async function addValidationCheck(
+      t: TestNextly,
+      check: string
+    ): Promise<void> {
+      const table = `dc_${SLUG}`;
+      const constraint = `CONSTRAINT ${q(`chk_${table}_validation`)} CHECK (${check})`;
+      if (dialect !== "sqlite") {
+        await exec(t, `ALTER TABLE ${q(table)} ADD ${constraint}`);
+        return;
+      }
+      // SQLite adds no constraint to a table it holds: made again with it, its indexes after it.
+      const made = await (
+        t.adapter as unknown as {
+          executeQuery<R>(statement: string): Promise<R[]>;
+        }
+      ).executeQuery<{ type: string; sql: string | null }>(
+        `SELECT type, sql FROM sqlite_master WHERE tbl_name = '${table}' ORDER BY type DESC`
+      );
+      const [create, ...indexes] = made.flatMap(object => object.sql ?? []);
+      await exec(t, `DROP TABLE ${q(table)}`);
+      await exec(t, (create ?? "").replace(/\)\s*$/, `, ${constraint})`));
+      for (const index of indexes) await exec(t, index);
+    }
+
+    // A CHECK written for the old type's values judges the new type's as they are written: MySQL
+    // would refuse one once the column was emptied for it, with nothing to roll back, and
+    // PostgreSQL the type itself. Refused before any value is written, naming the constraint.
+    it("refuses a change of a column a CHECK constraint names, naming it, and changes nothing", async () => {
+      const t = await boot([{ name: "v", type: "text" }]);
+      await addValidationCheck(t, `LENGTH(${q("v")}) >= 2`);
+      await write(t, "a", { v: "012" });
+
+      expect(await save(t, [{ name: "v", type: "number" }])).toMatchObject(
+        refusedSaying(`chk_dc_${SLUG}_validation`)
+      );
+
+      expect(await read(t, "v")).toEqual({ a: "012" });
+    });
+
+    // The same constraint naming another column of the table is no bar to the change.
+    it("changes a column beside one a CHECK constraint names", async () => {
+      const t = await boot([
+        { name: "v", type: "text" },
+        { name: "kept", type: "text" },
+      ]);
+      const { db, conversion } = await judgedThenConversion(t, 0);
+      await addValidationCheck(t, `LENGTH(${q("kept")}) >= 2`);
+      await write(t, "a", { v: "012", kept: "words" });
+
+      await conversion.run(db);
+
+      expect((await stored(t)).a).toBe("12");
+    });
+
     /** `v` of each entry, by title, as the table holds it: its text, or null for no value. */
     async function stored(
       t: TestNextly

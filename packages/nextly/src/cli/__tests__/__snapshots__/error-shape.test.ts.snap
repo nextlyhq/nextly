@@ -675,6 +675,13 @@ exports[`each code, as a command ends with it > CONVERSION_RULES_UNKNOWN 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/conversion-rules-unknown  (CONVERSION_RULES_UNKNOWN)"
 `;
 
+exports[`each code, as a command ends with it > CONVERSION_SNAPSHOT_MISSING 1`] = `
+"✗ A migration's field type change converts its values, and the snapshots that say how could not both be read, so nothing of it ran.
+  Why:  migrations.20261123_101500_products.sql: Migration 20261123_101500_products.sql converts its field type changes' values, but the snapshots it is judged between do not both record the fields: one is missing from meta/, or was written before snapshots recorded them. Nothing was changed.
+  Next: Restore the snapshot missing from the migrations folder's meta/ from version control, where it was committed with its migration, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/conversion-snapshot-missing  (CONVERSION_SNAPSHOT_MISSING)"
+`;
+
 exports[`each code, as a command ends with it > CORE_DESTRUCTIVE_CHANGE_DECLINED 1`] = `
 "✗ Core schema reconciliation aborted: destructive operations were not confirmed.
   Why:  drops column 'nextly_users.legacy_role'

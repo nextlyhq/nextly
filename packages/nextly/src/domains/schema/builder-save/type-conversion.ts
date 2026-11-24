@@ -38,6 +38,7 @@ import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column
 import { mysqlSeesEveryTriggerQuery } from "../busy-table/run-unit";
 import { runStatement } from "../pipeline/_internal/run-statement";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
+import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import { readUpdateTriggers } from "../pipeline/live-table-facts";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 import { columnDescriptorAt } from "../value-conversion/type-change/field-type";
@@ -216,8 +217,9 @@ export function isConversionRefusal(error: unknown): boolean {
 /**
  * The refusals of `conversion`'s columns that need no judging of their values, asked before
  * anything of a save is written so the save refuses then, as it is again where the conversion
- * runs (`judgedAgain`): a column left by a conversion that stopped part-way, update triggers, and
- * on SQLite a translations column a view, trigger or condition depends on.
+ * runs (`judgedAgain`): a column left by a conversion that stopped part-way, update triggers, a
+ * CHECK constraint naming the column, and on SQLite a translations column a view, trigger or
+ * condition depends on.
  *
  * @throws {NextlyError} a validation error naming each refusal
  */
@@ -235,6 +237,7 @@ export async function refuseConversionAsItStands(
     label,
     judged.filter(change => change.converted === true)
   );
+  await refuseOverChecks(db, dialect, label, conversion.columns);
   if (dialect === "sqlite") {
     // The translations columns the conversion swaps; a REAL column it swaps is known where it runs.
     await refuseSqliteSwapDependents(
@@ -332,8 +335,9 @@ interface PlannedColumn extends ConvertedColumn {
  * of cleared values other than the one a review confirmed; a column left by a conversion that
  * stopped part-way; a table whose rows fire update triggers, which the conversion's row-by-row
  * writes would set off (PostgreSQL's in-place change fires none, but its values are written into
- * the column beside it first); and on SQLite a translations column whose swap a view, a trigger
- * or an index on an expression or with a condition would stop part-way.
+ * the column beside it first); a CHECK constraint naming the column, written for its old type; and
+ * on SQLite a translations column whose swap a view, a trigger or an index on an expression or with
+ * a condition would stop part-way.
  *
  * @throws {NextlyError} a validation error naming each refusal, with nothing written
  */
@@ -365,6 +369,7 @@ async function judgedAgain(
   }
   await refuseLeftColumns(db, dialect, input.label, only);
   await refuseOverUpdateTriggers(db, dialect, input.label, judged);
+  await refuseOverChecks(db, dialect, input.label, only);
   const planned: PlannedColumn[] = [];
   for (const change of judged) {
     const column = only.find(
@@ -512,6 +517,57 @@ async function refuseUnseenTriggers(
     })),
     logContext: { reason: "type-change-over-unseen-triggers" },
   });
+}
+
+/**
+ * Refuse a conversion of a column a named CHECK constraint of its table names, such as the one a
+ * field's validation put on a table an earlier version made (`chk_<table>_validation`): it was
+ * written for the old type's values, and no statement of the change drops it. PostgreSQL would
+ * refuse to give the column a type its comparison does not take, SQLite the rebuild that would
+ * drop it, and MySQL a reading it does not allow, once the column was emptied for it and with
+ * nothing to roll back. A column that keeps its type takes its values in place, under the
+ * constraint as it stands.
+ */
+async function refuseOverChecks(
+  db: unknown,
+  dialect: SupportedDialect,
+  label: string,
+  columns: readonly ConvertedColumn[]
+): Promise<void> {
+  const retyped = columns.filter(column => !column.keepsType);
+  const live = await introspectLiveSnapshot(db, dialect, [
+    ...new Set(retyped.map(column => column.table)),
+  ]);
+  const errors = retyped.flatMap(column => {
+    const naming = (
+      live.tables.find(table => table.name === column.table)?.checks ?? []
+    )
+      .filter(check => namesColumn(check.sql, column.column))
+      .map(check => check.name);
+    if (naming.length === 0) return [];
+    const many = naming.length > 1;
+    return [
+      {
+        path: `fields.${column.field}`,
+        code: "TYPE_CHANGE_BLOCKED",
+        message: `${label}: field '${column.field}' cannot change type while ${many ? "constraints" : "constraint"} ${naming.join(", ")} on ${column.table} ${many ? "check" : "checks"} its values as the old type holds them. Drop ${many ? "them" : "it"} first, then save again.`,
+      },
+    ];
+  });
+  if (errors.length === 0) return;
+  throw NextlyError.validation({
+    errors,
+    logContext: { reason: "type-change-over-checks" },
+  });
+}
+
+/** Whether a CHECK's expression names `column`, its text literals aside. */
+function namesColumn(expression: string, column: string): boolean {
+  const named = new RegExp(
+    `(?<![\\w$])${escapeRegExp(column)}(?![\\w$])`,
+    "i"
+  );
+  return named.test(expression.replace(/'(?:[^']|'')*'/g, "''"));
 }
 
 /**

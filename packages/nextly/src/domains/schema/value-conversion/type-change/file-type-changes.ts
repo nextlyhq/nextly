@@ -743,6 +743,20 @@ export interface FileTypeChangeJudgement {
 }
 
 /**
+ * Refuse a marked file whose snapshots do not both record the fields: a marked change is converted
+ * as its mark says, or refused, and one that cannot be judged is never left to the database's cast
+ * instead.
+ *
+ * @throws {NextlyError} a validation error (`unjudgeableMarkRefusal`)
+ */
+function refuseUnjudgeableMark(source: FileTypeChangeSource): void {
+  if ((source.converts ?? []).length === 0) return;
+  if (source.before === undefined || source.target === undefined) {
+    throw unjudgeableMarkRefusal(source.filename);
+  }
+}
+
+/**
  * The file's field type changes judged on the values the database holds now: their refusals
  * (`fileTypeChangeRefusals`), and for a change whose file converts its values, the conversion
  * that writes them, with the run's consent to clear those that cannot convert.
@@ -751,14 +765,7 @@ export async function judgeFileTypeChanges(
   db: unknown,
   source: FileTypeChangeSource
 ): Promise<FileTypeChangeJudgement> {
-  // A marked change is converted as its mark says, or refused: one whose snapshots do not both
-  // record the fields cannot be judged, and is never left to the database's cast instead.
-  if (
-    (source.converts ?? []).length > 0 &&
-    (source.before === undefined || source.target === undefined)
-  ) {
-    throw unjudgeableMarkRefusal(source.filename);
-  }
+  refuseUnjudgeableMark(source);
   const refusals: FileTypeChangeRefusal[] = [];
   const conversions: TypeConversion[] = [];
   for (const { kind, slug, input, unread } of fileTypeChangesOf(source)) {

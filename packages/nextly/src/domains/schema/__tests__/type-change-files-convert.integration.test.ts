@@ -408,7 +408,14 @@ describe.each(getConfiguredTestDialects())(
       const created = await filesWritten();
       await write(first, "kept", { v: "12" });
       await save(first, [float], {
-        renames: [{ from: "v", to: "w", choice: "rename" }],
+        renameResolutions: [
+          {
+            tableName: "dc_tcf_posts",
+            fromColumn: "v",
+            toColumn: "w",
+            choice: "rename",
+          },
+        ],
       });
       await first.destroy();
       instance = undefined;
