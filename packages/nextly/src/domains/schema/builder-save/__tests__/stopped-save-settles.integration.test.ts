@@ -609,13 +609,19 @@ describe.each(getConfiguredTestDialects())(
   (dialect: TestDialect) => {
     const history = () => join(basePath, HISTORY);
 
-    /** Boot in development, as the Builder runs, over the shared folder. */
-    async function boot(): Promise<TestNextly> {
+    /**
+     * Boot in development, as the Builder runs, over the shared folder: on the earlier layout, or
+     * with `perLanguage` keeping translatable values per language, as every installation does.
+     */
+    async function boot({
+      perLanguage = false,
+    }: { perLanguage?: boolean } = {}): Promise<TestNextly> {
       vi.stubEnv("NODE_ENV", "development");
       current = await createTestNextly({
         dialect,
         basePath,
         db: { migrationsDir: HISTORY, uiSchemaFile: DEFINITION },
+        ...(perLanguage ? { perLanguageStorage: true } : {}),
       });
       return current;
     }
@@ -1007,6 +1013,54 @@ describe.each(getConfiguredTestDialects())(
           "the save again"
         ).toBeUndefined();
         await expectTurnedOnWhole(t);
+      },
+      300_000
+    );
+
+    // Where values are kept per language a save that stops while its process lives is not judged: it
+    // is left as it stopped, its file as written and recorded nowhere, for `nextly migrate:resolve`.
+    it.runIf(dialect === "mysql")(
+      "a save kept per language, stopped at its second addition while its process lives, is not judged: its file stays as written",
+      async () => {
+        const path = PATHS.find(
+          each => each.name === "a collection's Builder apply"
+        )!;
+        // Shared, so the save changes the main table alone, in one file.
+        const shared = (name: string) => ({ ...text(name), localized: false });
+        const t = await boot({ perLanguage: true });
+        await path.create(t, [shared("heading")]);
+        const folderBefore = filesBelow(history());
+        const failed = failStatement(t, adding(path.table, "beta"));
+        vi.mocked(judgeStoppedSave).mockClear();
+
+        const outcome = await outcomeOf(
+          path.save(t, [shared("heading"), shared("alpha"), shared("beta")])
+        );
+
+        expect(failed(), "no statement adding `beta` was met").toBe(1);
+        expect(outcome.failed, "the save was reported as going through").toBe(
+          true
+        );
+        expect(
+          await liveColumns(t, path.table),
+          "the first addition stayed"
+        ).toContain("alpha");
+        expect(
+          vi.mocked(judgeStoppedSave),
+          "what applied was judged"
+        ).not.toHaveBeenCalled();
+        const written = filesBelow(history()).filter(
+          file => file.endsWith(".sql") && !folderBefore.includes(file)
+        );
+        expect(written, "the save's one file").toHaveLength(1);
+        const up = readFileSync(join(history(), written[0]!), "utf8").split(
+          "-- DOWN"
+        )[0]!;
+        expect(up, "both additions, as it was written").toMatch(/alpha/);
+        expect(up, "both additions, as it was written").toMatch(/beta/);
+        expect(await appliedFiles(t), "recorded applied").not.toContain(
+          written[0]
+        );
       },
       300_000
     );
