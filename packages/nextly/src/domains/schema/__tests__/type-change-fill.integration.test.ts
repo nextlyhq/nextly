@@ -445,7 +445,13 @@ describe.each(getConfiguredTestDialects())(
       },
       { why: "no value", type: "number", fill: null },
       { why: "outside the column", type: "number", fill: 1e30 },
-      { why: "a rule of its own", type: "email", fill: "not an address" },
+      { why: "no address", type: "email", fill: "not an address" },
+      {
+        why: "a rule of the field's own",
+        type: "number",
+        fill: 20,
+        field: { validation: { max: 10 } },
+      },
       { why: "an empty text", type: "email", fill: "" },
       { why: "a date with no offset", type: "date", fill: "2024-01-02" },
       {
@@ -456,13 +462,14 @@ describe.each(getConfiguredTestDialects())(
       },
     ])(
       "refuses a fill the field does not take ($why), and changes nothing",
-      async ({ type, fill, options }) => {
+      async ({ type, fill, options, field = {} }) => {
         const t = await boot(dialect, [text({ required: true })]);
         await write(t, "lost", { v: "nothing of it" });
         const written = await files();
+        const next = options === undefined ? field : { options };
 
         expect(
-          await save(t, [to(type, options === undefined ? {} : { options })], {
+          await save(t, [to(type, next)], {
             kept: 0,
             changed: 0,
             lost: 1,
@@ -676,6 +683,14 @@ describe.each(getConfiguredTestDialects())(
         await write(second, "one", { v: ["x"] });
         await write(second, "empty", { v: [] });
         await write(second, "none", {});
+
+        // The rows the file would make required over are the ones it fills: a dry run says so, and not
+        // that a real run would refuse them.
+        const said = await dryRun(second);
+        expect(said).toContain(
+          '2 rows left with no value, replaced with "a, b\'s \\"c\\""'
+        );
+        expect(said).not.toContain("cannot become required");
 
         const refusal = await migrate(
           second,
