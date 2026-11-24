@@ -13,7 +13,12 @@
  *
  * @module domains/schema/migrate/mysql-implicit-commit
  */
-import { leadingWords } from "./split-sql";
+import {
+  MYSQL_LIVE_RUN_LENGTH,
+  mysqlLiveRunAt,
+} from "../pipeline/sql-templates/mysql-live-restate";
+
+import { leadingWords, statementTokens } from "./split-sql";
 
 /** The objects whose creation, change, drop or rename commits MySQL's transaction, by verb. */
 const MYSQL_COMMITTING: Readonly<Record<string, ReadonlySet<string>>> = {
@@ -37,24 +42,135 @@ export function commitsOnMysql(statement: string): boolean {
   return objects.has(object ?? "");
 }
 
-/** The first words of the statements that change rows, none of which commits MySQL's transaction. */
-const ROW_CHANGING = new Set(["INSERT", "UPDATE", "DELETE", "REPLACE"]);
+/**
+ * The first words of the statements that change no row a run could be judged by: a read, the
+ * session's own housekeeping, and a schema statement, whose shape is judged from the tables. A
+ * `SELECT` that calls a stored function changing rows is the exception nothing here reads.
+ */
+const LEAVES_ROWS_ALONE = new Set([
+  "SELECT",
+  "SHOW",
+  "EXPLAIN",
+  "DESCRIBE",
+  "DESC",
+  "PREPARE",
+  "DEALLOCATE",
+  "CREATE",
+  "ALTER",
+  "DROP",
+  "RENAME",
+  "LOCK",
+  "UNLOCK",
+  "GRANT",
+  "REVOKE",
+  "ANALYZE",
+  "BEGIN",
+  "START",
+  "COMMIT",
+  "SAVEPOINT",
+  "RELEASE",
+  "USE",
+]);
 
-/** Whether `statement` changes rows on MySQL, read from its first word. */
-function changesRowsOnMysql(statement: string): boolean {
-  return ROW_CHANGING.has(leadingWords(statement, "mysql", 1)[0] ?? "");
+/** The first words of the statements that never commit MySQL's transaction. */
+const NEVER_COMMITS = new Set([
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "REPLACE",
+  "SELECT",
+  "WITH",
+  "DO",
+  "PREPARE",
+  "DEALLOCATE",
+  "SHOW",
+  "EXPLAIN",
+  "DESCRIBE",
+  "DESC",
+  "SAVEPOINT",
+  "RELEASE",
+  "USE",
+]);
+
+/** The words that make a `SET` more than a plain session or user variable. */
+const NOT_A_PLAIN_SET = new Set([
+  "AUTOCOMMIT",
+  "PASSWORD",
+  "ROLE",
+  "TRANSACTION",
+  "GLOBAL",
+  "PERSIST",
+  "PERSIST_ONLY",
+  "NAMES",
+  "CHARACTER",
+  "CHARSET",
+  "DEFAULT",
+  "RESOURCE",
+]);
+
+/**
+ * Whether `statement` sets only plain session or user variables, whatever their values are read
+ * from, a subquery included. `SET autocommit` commits, so it is none, under any of its spellings.
+ */
+function setsPlainVariables(statement: string): boolean {
+  const tokens = statementTokens(statement, "mysql");
+  return (
+    tokens[0] === "SET" &&
+    tokens.every(token => {
+      // Every part of a qualified name is read (`@@GLOBAL.x`), as a quoted one's is.
+      const word = typeof token === "string" ? token : (token.name ?? "");
+      return !word
+        .replace(/^@+/, "")
+        .split(".")
+        .some(part => NOT_A_PLAIN_SET.has(part));
+    })
+  );
 }
 
 /**
- * Whether `statement` may commit MySQL's open transaction: one `commitsOnMysql` reads as committing,
- * or a prepared statement's `EXECUTE`, whose text is not read here. Counting `EXECUTE` errs toward
+ * The indexes in `statements` where one of Nextly's own restatements (`mysqlLiveRunAt`) runs: an
+ * `EXECUTE` of a schema statement the module wrote, which commits and changes no row.
+ */
+function restatementsRunIn(statements: readonly string[]): ReadonlySet<number> {
+  const executes = new Set<number>();
+  for (let at = 0; at < statements.length; at++) {
+    if (mysqlLiveRunAt(statements, at) === undefined) continue;
+    executes.add(at + MYSQL_LIVE_RUN_LENGTH - 2);
+    at += MYSQL_LIVE_RUN_LENGTH - 1;
+  }
+  return executes;
+}
+
+/** Whether `statement` may change rows on MySQL: every one not known to leave them alone. */
+function mayChangeRowsOnMysql(statement: string): boolean {
+  const first = leadingWords(statement, "mysql", 1)[0] ?? "";
+  return first === "SET"
+    ? !setsPlainVariables(statement)
+    : !LEAVES_ROWS_ALONE.has(first);
+}
+
+/**
+ * Whether `statement` may commit MySQL's open transaction: every one not known not to. It errs toward
  * rows reported durable, never toward rows reported undone.
  */
 function mayCommitOnMysql(statement: string): boolean {
-  return (
-    commitsOnMysql(statement) ||
-    leadingWords(statement, "mysql", 1)[0] === "EXECUTE"
-  );
+  if (commitsOnMysql(statement)) return true;
+  const [first, second] = leadingWords(statement, "mysql", 2);
+  if (first === "SET") return !setsPlainVariables(statement);
+  // A temporary table's CREATE and DROP do not commit.
+  if ((first === "CREATE" || first === "DROP") && second === "TEMPORARY") {
+    return false;
+  }
+  return !NEVER_COMMITS.has(first ?? "");
+}
+
+/**
+ * Whether `statement` runs a statement whose text is not read here, so an error it answers may come
+ * from one that already committed: a prepared statement, and a procedure.
+ */
+export function runsAnotherStatementOnMysql(statement: string): boolean {
+  const first = leadingWords(statement, "mysql", 1)[0];
+  return first === "EXECUTE" || first === "CALL";
 }
 
 /**
@@ -64,6 +180,8 @@ function mayCommitOnMysql(statement: string): boolean {
 export interface DurableRows {
   starting(statement: string, index: number): void;
   ran(statement: string, index: number): void;
+  /** MySQL could not read the statement just started, so it committed nothing (`starting` undone). */
+  unread(): void;
   /**
    * The statements, from the first, that stay applied whatever happens after: undefined where no
    * statement that changes rows is among them, or not on MySQL.
@@ -88,26 +206,36 @@ export function durableRowsOf(
     return {
       starting: () => undefined,
       ran: () => undefined,
+      unread: () => undefined,
       kept: () => undefined,
     };
   }
-  let kept = statements.slice(0, from).some(changesRowsOnMysql)
-    ? from
-    : undefined;
-  // A row statement since the last commit, which the next committing statement makes durable.
+  const restatements = restatementsRunIn(statements);
+  const changesRowsAt = (statement: string, index: number) =>
+    !restatements.has(index) && mayChangeRowsOnMysql(statement);
+  let kept = statements.slice(0, from).some(changesRowsAt) ? from : undefined;
+  // A statement that may have changed rows since the last commit, which the next one makes durable.
   let rowsOpen = false;
+  // What both were before the statement just started.
+  let before = { kept, rowsOpen };
   return {
     starting(statement, index) {
+      before = { kept, rowsOpen };
       if (!mayCommitOnMysql(statement)) return;
       if (rowsOpen || kept !== undefined) kept = index;
       rowsOpen = false;
     },
     ran(statement, index) {
+      const changesRows = changesRowsAt(statement, index);
       if (mayCommitOnMysql(statement)) {
-        if (kept !== undefined) kept = index + 1;
-      } else if (changesRowsOnMysql(statement)) {
+        // One that changes rows and may commit has made its own durable, whatever came before it.
+        if (kept !== undefined || changesRows) kept = index + 1;
+      } else if (changesRows) {
         rowsOpen = true;
       }
+    },
+    unread() {
+      ({ kept, rowsOpen } = before);
     },
     kept: () => kept,
   };
