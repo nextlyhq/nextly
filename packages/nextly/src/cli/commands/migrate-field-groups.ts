@@ -9,6 +9,16 @@
  * at a time of the operator's choosing, rather than a flag day. It runs only when an operator asks
  * for it here: no start, `nextly migrate` or deploy step reaches it.
  *
+ * A rollback (`--down`) serves a running site the same way, with one difference. On PostgreSQL, a
+ * server whose storage is already on the current names pays nothing to watch for a move, so a save
+ * of its that meets a rollback may fail once with an internal error instead of the refusal. It
+ * loses nothing and writes nothing under a wrong name, and the same save succeeds when retried.
+ *
+ * Content a server saves while the run rewrites stored documents keeps the key it was saved under.
+ * A save that began before the last rewrite and commits after it either makes the run refuse, naming
+ * the row, and running it again finishes it, or, committed after the run's last check, keeps the old
+ * key too. Both keys are read.
+ *
  * ## It previews by default, and that is the interface
  *
  * Running it with no flags writes NOTHING and prints the plan. Applying is `--apply`, and `--apply`
@@ -111,6 +121,11 @@ export async function runMigrateFieldGroups(
     logger.warn(
       "While this runs, content saves to field groups may be refused with a message to retry them. Reads keep working."
     );
+    if (direction === "down") {
+      logger.warn(
+        "On PostgreSQL, a save on a server already on the current names may instead fail once with an internal error. Nothing is lost; save again."
+      );
+    }
   }
   logger.newline();
 

@@ -221,9 +221,16 @@ function unrewrittenRowRefusal(
  *
  * Its `run` re-runs the ledger rewrites, which is what makes the common case
  * self-healing: a straggler row committed after its original step is simply
- * rewritten here. Its `verify` refuses only when the surface is still dirty
- * afterwards — which means a writer is active, and the answer to that is to
- * quiesce and re-run, exactly what the runner's retry offers.
+ * rewritten here. Its `verify` rewrites once more and then refuses for a row
+ * written before this step began that still carries the old key: the walk
+ * reached the end of the table, so such a row is a defect. A row written since
+ * is a server saving, under the key every writer still writes, and readers
+ * accept both; it is not waited for, or no site under traffic would settle.
+ *
+ * One row is outside that rule: one stamped before this step began by a transaction that commits
+ * after the last pass. Committed before the check, it reads as missed and the run refuses, naming
+ * it, and the next `--apply` rewrites it. Committed after the check, it is not seen at all and keeps
+ * the old key, which readers accept.
  *
  * Up only. Going down the data steps come last, so their own verify is already
  * the final word; going up the renames follow them, and a write landing during

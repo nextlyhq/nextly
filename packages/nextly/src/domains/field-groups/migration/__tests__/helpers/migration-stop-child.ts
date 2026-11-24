@@ -6,16 +6,19 @@
  * with `NEXTLY_TEST_KILL_AT` naming the stop point it kills itself at. It wires the adapter as the
  * command does (both spellings of the field-group registry resolvable) and runs the engine with a
  * short schema-lock lease, so the run that resumes after a kill finds the lock lapsed in seconds
- * rather than after the production lease. When the run ends it prints `ended ok <steps>`, or
+ * rather than after the production lease. Given `pause` as a fifth argument it stops for its parent
+ * once, at the first batch the content rewrite commits: it prints `paused` and goes on at the next
+ * line it is sent. When the run ends it prints `ended ok <steps>`, or
  * `ended error <code>`.
  *
  * @module domains/field-groups/migration/__tests__/helpers/migration-stop-child
  */
-const [dialect, url, layout, lease] = process.argv.slice(2) as [
+const [dialect, url, layout, lease, pause] = process.argv.slice(2) as [
   "sqlite" | "postgresql" | "mysql",
   string,
   "on" | "off",
   string,
+  "pause" | undefined,
 ];
 
 // Stop points act only under the test environment, as in the suite's own process.
@@ -38,6 +41,10 @@ const { getFieldGroupRegistryAliases } = await import(
   "../../../storage/registry-schemas"
 );
 const { runFieldGroupMigration } = await import("../../run");
+const { withStopPoints } = await import(
+  "../../../../schema/migrate/stop-points"
+);
+const { REWRITE_BATCH_COMMITTED } = await import("../../stop-point-names");
 
 setPerLanguageStorage(layout === "on");
 await loadDialectTables(dialect);
@@ -57,14 +64,26 @@ adapter.setTableResolver(registry);
 
 const quiet = { info() {}, warn() {}, error() {}, debug() {} };
 try {
-  const outcome = await runFieldGroupMigration({
-    adapter: adapter as never,
-    logger: quiet as never,
-    direction: "up",
-    dryRun: false,
-    backupConfirmed: true,
-    leaseSeconds: Number(lease),
-  });
+  let paused = false;
+  const outcome = await withStopPoints(
+    pause !== "pause"
+      ? undefined
+      : async point => {
+          if (paused || point !== REWRITE_BATCH_COMMITTED) return;
+          paused = true;
+          console.log("paused");
+          await new Promise(resolve => process.stdin.once("data", resolve));
+        },
+    () =>
+      runFieldGroupMigration({
+        adapter: adapter as never,
+        logger: quiet as never,
+        direction: "up",
+        dryRun: false,
+        backupConfirmed: true,
+        leaseSeconds: Number(lease),
+      })
+  );
   console.log(
     `ended ok ${"steps" in outcome ? String(outcome.steps) : outcome.reason}`
   );

@@ -7,8 +7,8 @@
  * stop point (`NEXTLY_TEST_KILL_AT`): during the content rewrite, after one batch has committed and
  * before its progress is recorded, and, on MySQL, where each rename commits on its own, between two
  * renames. A kill is what an operator's run meets when its process or host dies, and it leaves no
- * chance to record anything on the way out. A dropped connection is the other way a run stops: it
- * runs here, and from one of those points on, every other session of its database is ended.
+ * chance to record anything on the way out. A dropped connection is the other way a run stops: the
+ * same process, whose sessions are ended from one of those points on.
  *
  * What separates a correct resume from a plausibly broken one:
  * - a resume that trusted the recorded step alone would skip the batch the kill interrupted, or
@@ -38,10 +38,7 @@ vi.mock("../../../../cli/utils/config-loader", async importOriginal => ({
 
 import { recordStatements } from "../../../../__tests__/helpers/record-statements";
 import { createAdapter } from "../../../../database/factory";
-import {
-  KILL_AT_VARIABLE,
-  withStopPoints,
-} from "../../../schema/migrate/stop-points";
+import { KILL_AT_VARIABLE } from "../../../schema/migrate/stop-points";
 import { startScript } from "../../../schema/pipeline/__tests__/helpers/schema-lock-world";
 import { getConfiguredTestDialects } from "../../../../plugins/test-nextly";
 import { perLanguageStorageEnabled } from "../../../i18n/per-language-storage";
@@ -99,6 +96,24 @@ const DOCUMENTS = [
   { table: "nextly_versions", column: "snapshot" },
   { table: "nextly_events", column: "payload" },
 ] as const;
+
+/** The database's sessions, by the server's own id, the asking one among them. */
+async function sessionsOf(
+  at: Pick<StorageGenerationSite, "adapter">,
+  dialect: Dialect
+): Promise<Set<number>> {
+  const rows = await at.adapter.executeQuery<{ id: number | string }>(
+    dialect === "postgresql"
+      ? "SELECT pid AS id FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()"
+      : "SELECT ID AS id FROM information_schema.PROCESSLIST WHERE DB = DATABASE() AND ID <> CONNECTION_ID()"
+  );
+  const own = await at.adapter.executeQuery<{ id: number | string }>(
+    dialect === "postgresql"
+      ? "SELECT pg_backend_pid() AS id"
+      : "SELECT CONNECTION_ID() AS id"
+  );
+  return new Set([...rows, ...own].map(row => Number(row.id)));
+}
 
 /** Every stored document, by ledger and row, as its parsed value. */
 async function documentsOf(
@@ -173,6 +188,8 @@ async function finishesOnce(
       : [{ from: named[1]!.toLowerCase(), to: named[2]!.toLowerCase() }];
   });
   const from = renames.map(each => each.from);
+  // The registry is renamed last, so whatever an earlier run had done there is one left to see.
+  expect(from.length, "renames seen").toBeGreaterThan(0);
   expect(new Set(from).size, "each table renamed at most once").toBe(
     from.length
   );
@@ -345,56 +362,66 @@ describe.each(getConfiguredTestDialects().filter(each => each !== "sqlite"))(
       }
       const before = await documentsOf(site, dialect);
 
-      // Another session, which ends every other one of this database, again and again from the
-      // point on: a run that asks for a fresh connection loses that one too.
+      // Another session, which ends the run's, again and again from the point on: a run that asks
+      // for a fresh connection loses that one too.
       const admin = await createAdapter({
         type: dialect,
         url: site.url!,
         pool: { max: 1 },
       } as Parameters<typeof createAdapter>[0]);
-      let ending: ReturnType<typeof setInterval> | undefined;
-      const endOthers = async (): Promise<void> => {
-        if (dialect === "postgresql") {
-          await admin.executeQuery(
-            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()"
-          );
-          return;
-        }
-        const others = await admin.executeQuery<{ id: number | string }>(
-          "SELECT ID AS id FROM information_schema.PROCESSLIST WHERE DB = DATABASE() AND ID <> CONNECTION_ID()"
-        );
-        for (const { id } of others) {
-          await admin
-            .executeQuery(`KILL ${String(Number(id))}`)
-            .catch(() => {});
-        }
-      };
-      let stopped = "";
-      try {
-        await withStopPoints(
-          async point => {
-            if (point !== REWRITE_BATCH_COMMITTED || ending) return;
-            await endOthers();
-            ending = setInterval(() => {
-              void endOthers().catch(() => {});
-            }, 5);
-          },
-          () => site!.migrateStorage({ leaseSeconds: LEASE_SECONDS })
-        ).then(
-          () => {
-            stopped = "it ran to its end";
-          },
-          (error: unknown) => {
-            stopped = `stopped: ${String((error as { code?: unknown }).code ?? error)}`;
+      const adminIds = new Set(
+        (
+          await admin.executeQuery<{ id: number | string }>(
+            dialect === "postgresql"
+              ? "SELECT pg_backend_pid() AS id"
+              : "SELECT CONNECTION_ID() AS id"
+          )
+        ).map(row => Number(row.id))
+      );
+      // This suite's own sessions are idle by now, and stay open: the run's alone are ended.
+      const mine = await sessionsOf(site, dialect);
+      const run = startScript(RUN, [
+        dialect,
+        site.url!,
+        perLanguageStorageEnabled() ? "on" : "off",
+        String(LEASE_SECONDS),
+        "pause",
+      ]);
+      await run.printed("paused");
+      let exited = false;
+      let ended = 0;
+      const dropping = (async () => {
+        while (!exited) {
+          for (const id of await sessionsOf(
+            { adapter: admin as never },
+            dialect
+          )) {
+            if (mine.has(id) || adminIds.has(id)) continue;
+            await admin
+              .executeQuery(
+                dialect === "postgresql"
+                  ? `SELECT pg_terminate_backend(${id})`
+                  : `KILL ${id}`
+              )
+              .then(() => {
+                ended += 1;
+              })
+              .catch(() => {});
           }
-        );
-      } finally {
-        if (ending) clearInterval(ending);
-        // Let an end still under way finish before the next session opens.
-        await new Promise(resolve => setTimeout(resolve, 200));
-        await admin.disconnect();
-      }
-      expect(stopped).toMatch(/^stopped: /);
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+      })();
+      run.send("go on");
+      const code = await run.exited;
+      exited = true;
+      await dropping;
+      await admin.disconnect();
+      // It lost its connections and did not reach its end, however it said so.
+      expect(ended).toBeGreaterThan(0);
+      expect(run.lines().filter(line => line.startsWith("ended ok"))).toEqual(
+        []
+      );
+      expect(code).not.toBe(0);
 
       await new Promise(resolve =>
         setTimeout(resolve, (LEASE_SECONDS + 1) * 1000)

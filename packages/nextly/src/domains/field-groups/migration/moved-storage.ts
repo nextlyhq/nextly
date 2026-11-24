@@ -32,6 +32,7 @@ import {
   registryReadTransaction,
 } from "../../dynamic-collections/services/collection-row-cache";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { isCompanionReady } from "../../i18n/runtime/companion-readiness";
 import { introspectLiveColumns } from "../../schema/pipeline/diff/introspect-live";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import { registerComponentRuntimeSchema } from "../services/field-group-table-provisioning";
@@ -282,6 +283,21 @@ async function followEveryTable(
   for (const tableName of tables) {
     await followMovedFieldGroupTable({ adapter, rows, tableName });
   }
+  // Each follow forgot the registry's name to read it again; left forgotten by one that could not,
+  // the next write would resolve it inside its transaction (`resolveAgain`).
+  await resolveAgain(adapter);
+}
+
+/**
+ * Forget the registry this process resolved, and resolve it again before anything needs it. Called
+ * off any transaction, always: left to the next lookup, that one may run on a transaction, where
+ * resolving reads the catalog on another connection, which a pool of one has not got.
+ */
+async function resolveAgain(adapter: DrizzleAdapter): Promise<void> {
+  forgetFieldGroupStorageNames(adapter);
+  clearRegistryRowCache();
+  // A catalog that cannot be read is left to the next lookup to say so.
+  await resolveFieldGroupRegistryTable(adapter).catch(() => undefined);
 }
 
 /** Whether `candidate` is the field-group registry itself. */
@@ -313,10 +329,6 @@ export async function lookingUpRegistry<T>(args: {
 }): Promise<T> {
   const { adapter, lookup, useName } = args;
   const executor = onTransaction(adapter, args.executor);
-  const forget = (): void => {
-    forgetFieldGroupStorageNames(adapter);
-    clearRegistryRowCache();
-  };
   const savepoint =
     executor === undefined ? undefined : await takeSavepoint(adapter, executor);
   try {
@@ -326,17 +338,17 @@ export async function lookingUpRegistry<T>(args: {
     if (candidate === undefined || !isRegistry(candidate)) throw error;
     if (executor === undefined) {
       if (adapter.transactionOpenInFlow()) {
-        await adapter.afterRollback(forget);
+        await adapter.afterRollback(() => resolveAgain(adapter));
         throw error;
       }
-      forget();
+      await resolveAgain(adapter);
       // A second failure says no more than the first, which is the one raised.
       return lookup().catch(() => {
         throw error;
       });
     }
     if (!(await canAsk(adapter, executor, savepoint))) {
-      await adapter.afterRollback(forget);
+      await adapter.afterRollback(() => resolveAgain(adapter));
       throw error;
     }
     const moved = await isMovedStorage(
@@ -353,7 +365,7 @@ export async function lookingUpRegistry<T>(args: {
     }
     await leaveAborted(adapter, executor);
     if (!moved) throw error;
-    await adapter.afterRollback(forget);
+    await adapter.afterRollback(() => resolveAgain(adapter));
     throw storageMovingRefusal(candidate.missing);
   }
 }
@@ -652,7 +664,17 @@ async function follow(args: {
       storesPerLanguage(group),
       held.columns
     );
-    return registered.registered ? current : undefined;
+    if (!registered.registered) return undefined;
+    // What a server settled at its start about the group's translations, it settled under the
+    // companion's old name. A write on a transaction its caller opened can read that answer and
+    // never ask for it, and would take the new companion for one that is not there yet.
+    if (storesPerLanguage(group)) {
+      await isCompanionReady(
+        adapter,
+        `${current}${STORAGE_FORMAT.companionSuffix}`
+      );
+    }
+    return current;
   }
   return undefined;
 }

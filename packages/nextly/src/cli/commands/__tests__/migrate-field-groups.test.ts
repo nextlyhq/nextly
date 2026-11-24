@@ -289,6 +289,31 @@ describe("migrate:field-groups — what it tells the operator", () => {
     expect(warning).toBeLessThan(printed.indexOf("ENGINE STARTED"));
   });
 
+  it("says, before a rollback alone, how a save that meets it may fail on PostgreSQL", async () => {
+    runFieldGroupMigration.mockImplementation(async () => {
+      printed.push("ENGINE STARTED");
+      return { ran: true, direction: "down", steps: 9, restartNeeded: false };
+    });
+    const said = (): number =>
+      printed.findIndex(line =>
+        /PostgreSQL.*may instead fail once.*save again/i.test(line)
+      );
+
+    await runMigrateFieldGroups(
+      { apply: true, backupConfirmed: true, down: true },
+      context
+    );
+    expect(said(), printed.join("\n")).toBeGreaterThanOrEqual(0);
+    expect(said()).toBeLessThan(printed.indexOf("ENGINE STARTED"));
+
+    printed.length = 0;
+    await runMigrateFieldGroups(
+      { apply: true, backupConfirmed: true },
+      context
+    );
+    expect(said()).toBe(-1);
+  });
+
   it("says when it ends that no running server needs a restart, when none does", async () => {
     runFieldGroupMigration.mockResolvedValue({
       ran: true,

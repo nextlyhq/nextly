@@ -20,6 +20,7 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import { isCompanionReady } from "../../../i18n/runtime/companion-readiness";
 import { introspectLiveColumns } from "../../../schema/pipeline/diff/introspect-live";
 import {
   forgetFieldGroupStorageNames,
@@ -47,6 +48,13 @@ vi.mock("../../../schema/pipeline/diff/introspect-live", async original => ({
   introspectLiveColumns: vi.fn(),
 }));
 
+vi.mock("../../../i18n/runtime/companion-readiness", async original => ({
+  ...(await original<
+    typeof import("../../../i18n/runtime/companion-readiness")
+  >()),
+  isCompanionReady: vi.fn(async () => true),
+}));
+
 /** The tables the database holds, with their columns. */
 let held: Record<string, string[]> = {};
 /** The connections the catalog was read on. */
@@ -71,6 +79,7 @@ beforeEach(() => {
   registered = { comp_hero: "_component_type", comp_cta: "_component_type" };
   forgetFieldGroupStorageNames();
   vi.mocked(registerComponentRuntimeSchema).mockClear();
+  vi.mocked(isCompanionReady).mockClear();
   vi.mocked(introspectLiveColumns).mockImplementation(
     async (db, _dialect, names) => {
       readOn.push(db);
@@ -445,6 +454,54 @@ describe("the savepoint a transaction takes", () => {
     expect(
       vi.mocked(registerComponentRuntimeSchema).mock.calls.map(call => call[2])
     ).toContain("comp_hero");
+  });
+});
+
+describe("what a follow leaves settled", () => {
+  it("is the registry's name, resolved off the transaction before the retry needs it", async () => {
+    held = {
+      dynamic_field_groups: ["id"],
+      fg_hero: ["id", "_field_group_type"],
+    };
+    const listTables = vi.fn(async () => Object.keys(held));
+    const adapter = { ...adapterOf("postgresql"), listTables };
+    const effects: (() => unknown)[] = [];
+    adapter.afterRollback = async effect => {
+      effects.push(effect);
+    };
+    const error = missingTable.postgresql("comp_hero");
+    await failing(adapter, error, txOf());
+
+    inFlow = undefined;
+    for (const effect of effects) await effect();
+    const asked = listTables.mock.calls.length;
+    expect(asked).toBeGreaterThan(0);
+
+    // The retry, on a transaction of its own: nothing is left to ask of the catalog there.
+    inFlow = {};
+    await resolveRegistryTableName(adapter as never);
+    expect(listTables).toHaveBeenCalledTimes(asked);
+  });
+
+  it("is the moved companion's readiness, for a group whose translations it keeps", async () => {
+    held = {
+      fg_hero: ["id", "_field_group_type"],
+      fg_cta: ["id", "_field_group_type"],
+    };
+    await refusalAfterFollowing({
+      adapter: adapterOf("sqlite") as never,
+      rows: {
+        getAllComponents: async () =>
+          [
+            { slug: "hero", tableName: "fg_hero", fields: [], localized: true },
+            { slug: "cta", tableName: "fg_cta", fields: [] },
+          ] as never,
+      },
+      error: missingTable.sqlite("comp_hero"),
+    });
+    expect(vi.mocked(isCompanionReady).mock.calls.map(call => call[1])).toEqual(
+      ["fg_hero_locales"]
+    );
   });
 });
 
