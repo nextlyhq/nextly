@@ -182,7 +182,9 @@ function carriesRightsRefusal(error: object): boolean {
     logContext?: { dbCode?: unknown };
   };
   return [code, errno, logContext?.dbCode].some(
-    value => value !== undefined && RIGHTS_REFUSALS.has(String(value))
+    value =>
+      (typeof value === "string" || typeof value === "number") &&
+      RIGHTS_REFUSALS.has(String(value))
   );
 }
 

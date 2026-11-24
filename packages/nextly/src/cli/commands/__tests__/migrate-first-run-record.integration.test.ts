@@ -137,7 +137,12 @@ vi.mock("../../../runtime/cache/tag-expiry-view", async importOriginal => {
 
 const SLUG = "fr-posts";
 
-/** The app's config: one collection, with `extra` fields beyond its two. */
+/**
+ * The app's config: one collection, with `extra` fields beyond its two. Opened
+ * to the admin preset, as a collection reaches a preset role only once it is
+ * opened to it by name: the upgrade case asks that a grant the admin preset
+ * gives is set again by the run.
+ */
 function config(extra: readonly string[] = []): unknown {
   return defineConfig({
     collections: [
@@ -148,6 +153,7 @@ function config(extra: readonly string[] = []): unknown {
           text({ name: "summary" }),
           ...extra.map(name => text({ name })),
         ],
+        grants: { presets: ["admin"] },
       }),
     ],
     db: { migrationsDir: "./migrations" },
