@@ -144,6 +144,7 @@ import {
   populateCompanionFieldsAllLocales,
   populateTranslationStatus,
   selectEntryWithCompanion,
+  structuresBeside,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -154,6 +155,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import { provenanceFieldsOf } from "../../i18n/provenance/field-status";
 import { translationProvenancePresent } from "../../i18n/provenance/record-provenance";
 import {
   ALL_LOCALES_KEY,
@@ -179,6 +181,7 @@ import {
   resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
@@ -1965,8 +1968,11 @@ export class SingleQueryService extends BaseService {
   ) {
     if (!doc || typeof doc.id !== "string") return undefined;
     const table = `${singleMeta.tableName}_locales`;
+    // Where its translatable values live, as the read takes them
+    // (`languageReadParts`): every Single's, once the site keeps each one
+    // per language, not only one marked translated.
     const translated =
-      this.localization !== undefined && singleMeta.localized === true;
+      this.localization !== undefined && storesPerLanguage(singleMeta);
     return languageCountersBeforeContent(
       this.adapter.getDrizzle<SelectsRows>(),
       {
@@ -2281,7 +2287,11 @@ export class SingleQueryService extends BaseService {
       fillCompanionFields({
         rows: [doc],
         companionRows: translations.companionRows,
-        localizedFields: translations.companion.localizedFields,
+        // A container placing a component is put back by its component's fields.
+        localizedFields: await withComponentShapes(
+          translations.companion.localizedFields,
+          this.adapter.getDrizzle()
+        ),
         localeChain: translations.localeChain,
         idKey: "id",
         statusValues:
@@ -2345,7 +2355,16 @@ export class SingleQueryService extends BaseService {
     if (!companion) return;
     // Read into a copy keyed by id, then attached beside the document's own
     // values: the document keeps every field in its own language and type.
-    const everyLanguage: Record<string, unknown> = { id: doc.id };
+    // Its repeaters and groups keeping one structure carry it, for each language's text to be
+    // laid on (`structuresBeside`).
+    const everyLanguage: Record<string, unknown> = {
+      id: doc.id,
+      ...(await structuresBeside(
+        doc,
+        companion.localizedFields,
+        this.adapter.getDrizzle()
+      )),
+    };
     await populateCompanionFieldsAllLocales({
       db: this.adapter.getDrizzle(),
       companionTable: companion.table,
@@ -2463,7 +2482,7 @@ export class SingleQueryService extends BaseService {
           scopeKind: "single" as const,
           scopeSlug: slug,
           dialect: this.adapter.dialect,
-          fields: companion.localizedFields.map(field => field.name),
+          ...provenanceFieldsOf(companion.localizedFields),
         }
       : undefined;
     await populateTranslationStatus({

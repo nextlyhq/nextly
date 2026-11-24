@@ -71,6 +71,9 @@ describe("the content types route", () => {
       // A named group, and each field in it by its path.
       { name: "event", label: "Event" },
       { name: "event.startsAt", label: "Event › Starts at" },
+      // Then the dates every entry holds by itself, the lifecycle off.
+      { name: "createdAt", label: "Created", kind: "built-in" },
+      { name: "updatedAt", label: "Updated", kind: "built-in" },
     ]);
     expect(body.items[0]?.fields).toEqual([
       { name: "byline", token: "Byline" },
@@ -271,5 +274,77 @@ describe("the content types route, for the Content types tab", () => {
       { key: "landing", reason: "own-seo", source: "code" },
       { key: "docs-old", reason: "left-out", source: "builder" },
     ]);
+  });
+});
+
+describe("the fields a detail may be read from", () => {
+  /** A site with one collection and one Single, each with or without the lifecycle. */
+  function datedContext(status: boolean): PluginRouteContext {
+    const fields = [
+      { name: "title", type: "text", label: "Title" },
+      {
+        name: "seo",
+        type: "group",
+        fields: [{ name: "ogImage", type: "upload", label: "Share image" }],
+      },
+    ];
+    return {
+      user: { id: "u1" },
+      caller: { can: async () => true },
+      services: {
+        collections: {
+          getCollection: async () => ({
+            labels: { plural: "Cases" },
+            status,
+            fields,
+          }),
+          listCollections: async () => ({
+            data: [],
+            pagination: { total: 0, hasMore: false },
+          }),
+          listEntries: async () => ({
+            data: [],
+            pagination: { total: 0, limit: 1, offset: 0, hasMore: false },
+          }),
+        },
+        singles: {
+          list: async () => ({
+            data: [{ slug: "home", label: "Home", status, fields }],
+          }),
+        },
+      },
+    } as unknown as PluginRouteContext;
+  }
+
+  const fieldsOf = (item: Record<string, unknown> | undefined) =>
+    item?.mappableFields as { name: string; label: string; kind?: string }[];
+
+  it("offers the entry's own dates after its declared fields, and the first publication only with the lifecycle", async () => {
+    for (const status of [false, true]) {
+      const [collection, single] = await listedBy(
+        { collections: ["cases"], singles: ["home"] },
+        datedContext(status)
+      );
+      const own = [
+        { name: "createdAt", label: "Created", kind: "built-in" },
+        { name: "updatedAt", label: "Updated", kind: "built-in" },
+        ...(status
+          ? [
+              {
+                name: "firstPublishedAt",
+                label: "First published",
+                kind: "built-in",
+              },
+            ]
+          : []),
+      ];
+      for (const item of [collection, single]) {
+        expect(fieldsOf(item)).toEqual([
+          { name: "title", label: "Title" },
+          { name: "seo.ogImage", label: "SEO › Share image", kind: "seo" },
+          ...own,
+        ]);
+      }
+    }
   });
 });

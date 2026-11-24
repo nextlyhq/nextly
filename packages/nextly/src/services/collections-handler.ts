@@ -35,7 +35,7 @@ import {
 import type { FieldSources } from "../domains/versions/restored-from";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
-import { attachedWorkflowSummary } from "../domains/workflows/registry";
+import { shownWorkflowSummary } from "../domains/workflows/stage-presentation";
 import type {
   RichTextOutputFormat,
   RichTextStyles,
@@ -745,7 +745,7 @@ export class CollectionsHandler {
       // knows before a document exists that it cannot be created as
       // published, and leads a new one with Save draft. `null` where none is
       // attached.
-      data.workflow = attachedWorkflowSummary(
+      data.workflow = await shownWorkflowSummary(
         "collection",
         typeof data.slug === "string" ? data.slug : ""
       );
@@ -865,6 +865,10 @@ export class CollectionsHandler {
      * super-admin-owned key gets no session bypass.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** The API key behind `authenticatedScope`, by id, passed through for `_waitingForMe`. */
+    apiKeyId?: string;
+    /** Give each row its review state under `_review` (a list read only). */
+    reviewState?: boolean;
     /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Public callers default to 'published'; trusted callers can
@@ -1092,6 +1096,8 @@ export class CollectionsHandler {
      * count matches the rows it can list.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** The API key behind `authenticatedScope`, by id, passed through for `_waitingForMe`. */
+    apiKeyId?: string;
     /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Same semantics as listEntries.

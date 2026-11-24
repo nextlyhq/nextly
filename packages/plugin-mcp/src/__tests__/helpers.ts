@@ -166,6 +166,8 @@ export function dataOf<S>(body: RpcBody<S>): S {
 export interface ToolRefusal {
   code: string;
   message: string;
+  /** The id of the request the refusal answered, a new one for every refusal. */
+  requestId: string;
   data?: Record<string, unknown>;
 }
 
@@ -272,13 +274,14 @@ async function permissionId(handle: TestNextly, slug: string) {
 
 /**
  * A key holding exactly the permissions named, by their stored spelling, minted by the
- * install's owner. Returns its secret and its id, as the history of its moves names it.
+ * install's owner. Returns its secret, its id, as the history of its moves names it, and the id
+ * of the role it acts as, which work is assigned to for the key to find it waiting.
  */
 export async function keyGranting(
   handle: TestNextly,
   label: string,
   slugs: readonly string[]
-): Promise<{ key: string; id: string }> {
+): Promise<{ key: string; id: string; roleId: string }> {
   const owner = await ownerOf(handle);
   const permissionIds: string[] = [];
   for (const slug of slugs) {
@@ -294,7 +297,7 @@ export async function keyGranting(
     roleId: role.item.id,
     expiresIn: "never",
   });
-  return { key, id: meta.id };
+  return { key, id: meta.id, roleId: role.item.id };
 }
 
 /**
@@ -525,12 +528,13 @@ export async function trustedSend(
   });
 }
 
-/** Assigns `part` where it stands to the user `userId`, trusted. */
+/** Assigns `part` where it stands to the user `assigneeId`, or to a role of that id, trusted. */
 export async function trustedAssign(
   handle: TestNextly,
   document: DocRef,
   part: string | null,
-  userId: string
+  assigneeId: string,
+  kind: "user" | "role" = "user"
 ): Promise<void> {
   const state = await trustedPart(handle, document, part);
   await handle.nextly.workflows.assign({
@@ -539,7 +543,7 @@ export async function trustedAssign(
         document,
         part,
         revision: state?.revision ?? 0,
-        assignee: { kind: "user", id: userId },
+        assignee: { kind, id: assigneeId },
       },
     ],
   });

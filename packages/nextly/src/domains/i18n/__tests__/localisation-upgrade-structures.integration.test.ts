@@ -17,6 +17,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { LOCALISATION_DATA_STEPS } from "../../../cli/commands/upgrade-steps";
 import {
   defineCollection,
+  defineFieldGroup,
+  fieldGroup,
   group,
   number,
   repeater,
@@ -30,6 +32,9 @@ import {
 } from "../../../plugins/test-nextly";
 import { parsedValue } from "../../../shared/lib/json-column-value";
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+import { VERSIONS_TABLE } from "../../../schemas/versions/types";
+import { WORKING_DRAFT_SHAPE } from "../../versions/versions-repository";
+import { workingDraftKey } from "../../versions/working-draft-key";
 import { _resetPerLanguageStorage } from "../per-language-storage";
 
 import {
@@ -63,15 +68,41 @@ const SLIDESHOWS = defineCollection({
   ],
 });
 
+/** A component an earlier release held inline in a row's list, its instances given no id. */
+const UP_CARD = defineFieldGroup({
+  slug: "upcard",
+  fields: [text({ name: "label" }), number({ name: "size" })],
+});
+
+const BOARDS = defineCollection({
+  slug: "upboards",
+  localized: true,
+  fields: [
+    text({ name: "title" }),
+    repeater({
+      name: "panels",
+      fields: [
+        number({ name: "position" }),
+        fieldGroup({ name: "cards", component: "upcard", repeatable: true }),
+      ],
+    }),
+  ],
+});
+
 const SITE = {
-  collections: [SLIDESHOWS],
+  collections: [SLIDESHOWS, BOARDS],
   singles: [],
+  fieldGroups: [UP_CARD],
   localization: { locales: ["en", "es"], defaultLocale: "en" },
 };
 
 /** The one step under test, as `nextly migrate` lists it. */
 const STRUCTURES_STEP = LOCALISATION_DATA_STEPS.filter(step =>
   step.title.startsWith("keep one structure")
+);
+/** The step splitting a whole-document pending change by part. */
+const DRAFTS_STEP = LOCALISATION_DATA_STEPS.filter(step =>
+  step.title.startsWith("split pending changes")
 );
 
 /** Booting a site takes most of the default timeout on MySQL alone. */
@@ -104,7 +135,8 @@ describeEachDialect(
       _resetPerLanguageStorage();
       t = await createTestNextly({
         adapter: database.adapter as never,
-        collections: [SLIDESHOWS],
+        collections: [SLIDESHOWS, BOARDS],
+        fieldGroups: [UP_CARD],
         localization: SITE.localization,
       });
       return t;
@@ -304,6 +336,189 @@ describeEachDialect(
         expect(byName("slides")).not.toHaveProperty("localized");
         expect(byName("seo")).not.toHaveProperty("localized");
         expect(byName("slides")).toMatchObject({ type: "repeater" });
+      },
+      BOOT_TIMEOUT
+    );
+
+    it(
+      "splits a pending change holding a repeater whole: its text to the language's draft by row, no shared draft for an unchanged structure",
+      async () => {
+        await boot();
+        const created = await t!.nextly.create({
+          collection: SLUG,
+          locale: "en",
+          data: {
+            title: "Show",
+            slides: [
+              { caption: "first", rank: 1 },
+              { caption: "second", rank: 2 },
+            ],
+          },
+        });
+        const id = (created.item as { id: string }).id;
+        const [first, second] = (await read(id, "en")).slides;
+        const ref = {
+          scopeKind: "collection" as const,
+          scopeSlug: SLUG,
+          entryId: id,
+        };
+        // As an earlier release held it: the whole document in Spanish, the repeater whole,
+        // its rows and order as live.
+        await database!.adapter.insert(
+          VERSIONS_TABLE,
+          {
+            id: crypto.randomUUID(),
+            scopeKind: "collection",
+            scopeSlug: SLUG,
+            entryId: id,
+            versionNo: null,
+            status: "draft",
+            isAutosave: false,
+            snapshot: JSON.stringify({
+              title: "Muestra",
+              slides: [
+                { id: first!.id, caption: "primero", rank: 1 },
+                { id: second!.id, caption: "segundo", rank: 2 },
+              ],
+            }),
+            label: null,
+            locale: "es",
+            draftKey: workingDraftKey(ref, "es"),
+            sourceVersionNo: null,
+            createdBy: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          { returning: [] }
+        );
+
+        await migrateData(database!.adapter, SITE, DRAFTS_STEP);
+
+        const rows = await database!.adapter.select<{
+          locale: string | null;
+          snapshot: unknown;
+        }>(VERSIONS_TABLE, {
+          where: {
+            and: [
+              { column: "entryId", op: "=", value: id },
+              ...WORKING_DRAFT_SHAPE,
+            ],
+          },
+        });
+        const bySlot = Object.fromEntries(
+          rows.map(row => [row.locale ?? "shared", parsedValue(row.snapshot)])
+        ) as Record<string, Record<string, unknown>>;
+        // The structure equals live, so it starts no shared change; the text is Spanish's, by row.
+        expect(Object.keys(bySlot)).toEqual(["es"]);
+        expect(bySlot.es!.slides).toEqual({
+          [first!.id]: { caption: "primero" },
+          [second!.id]: { caption: "segundo" },
+        });
+        expect(bySlot.es!.title).toBe("Muestra");
+      },
+      BOOT_TIMEOUT
+    );
+
+    /**
+     * An entry of `upboards` stored as an earlier release stored a repeater translated whole whose
+     * rows hold a list of component instances: no structure on the main table, and each language's
+     * whole value on its row, its instances with no id.
+     */
+    async function boardStoredWhole(
+      values: Record<string, unknown[]>
+    ): Promise<string> {
+      const created = await t!.nextly.create({
+        collection: "upboards",
+        locale: "en",
+        data: { title: "Board" },
+      });
+      const id = (created.item as { id: string }).id;
+      await t!.nextly.update({
+        collection: "upboards",
+        id,
+        locale: "es",
+        data: { title: "Tablero", _overwrite: true },
+      });
+      const adapter = database!.adapter;
+      await adapter.update(
+        "dc_upboards",
+        { panels: null },
+        { and: [{ column: "id", op: "=", value: id }] }
+      );
+      for (const [locale, panels] of Object.entries(values)) {
+        await adapter.update(
+          "dc_upboards_locales",
+          { panels: JSON.stringify(panels) },
+          {
+            and: [
+              { column: "_parent", op: "=", value: id },
+              { column: "_locale", op: "=", value: locale },
+            ],
+          }
+        );
+      }
+      return id;
+    }
+
+    const panelWith = (labels: string[]) => [
+      {
+        id: "p1",
+        position: 1,
+        cards: labels.map((label, index) => ({
+          _componentType: "upcard",
+          label,
+          size: index + 1,
+        })),
+      },
+    ];
+
+    it(
+      "gives instances stored without an id one id at the same place in every language, each keeping its own text",
+      async () => {
+        await boot();
+        const id = await boardStoredWhole({
+          en: panelWith(["one", "two"]),
+          es: panelWith(["uno", "dos"]),
+        });
+
+        await migrateData(database!.adapter, SITE, STRUCTURES_STEP);
+
+        const cardsIn = async (locale: string) =>
+          (
+            (await t!.nextly.findByID({
+              collection: "upboards",
+              id,
+              locale,
+            })) as { panels: { cards: { id?: string; label?: string }[] }[] }
+          ).panels[0]!.cards;
+        const en = await cardsIn("en");
+        const es = await cardsIn("es");
+        expect(en.map(card => card.label)).toEqual(["one", "two"]);
+        expect(es.map(card => card.label)).toEqual(["uno", "dos"]);
+        // One id per instance, the same in every language.
+        expect(es.map(card => card.id)).toEqual(en.map(card => card.id));
+        expect(new Set(en.map(card => card.id)).size).toBe(2);
+      },
+      BOOT_TIMEOUT
+    );
+
+    it(
+      "refuses instances stored without an id whose lists differ by language, naming the document",
+      async () => {
+        await boot();
+        const id = await boardStoredWhole({
+          en: panelWith(["one", "two"]),
+          // Spanish holds one instance fewer: its place cannot say which instance is which.
+          es: panelWith(["uno"]),
+        });
+
+        await expect(
+          migrateData(database!.adapter, SITE, STRUCTURES_STEP)
+        ).rejects.toThrow(
+          new RegExp(
+            `"upboards", field "panels": document ${id}: es has other rows`
+          )
+        );
       },
       BOOT_TIMEOUT
     );

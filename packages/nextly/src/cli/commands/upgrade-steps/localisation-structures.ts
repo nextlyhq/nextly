@@ -21,6 +21,8 @@
  *
  * @module cli/commands/upgrade-steps/localisation-structures
  */
+import { randomUUID } from "node:crypto";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
@@ -150,13 +152,23 @@ async function structuredColumns(
 ): Promise<StructuredColumn[]> {
   const adapter = context.adapter as unknown as DrizzleAdapter;
   const found: StructuredColumn[] = [];
-  for (const entity of await siteEntities(context)) {
+  const entities = await siteEntities(context);
+  // The site's components, by slug: a container placing one is read through its fields.
+  const components = new Map(
+    entities
+      .filter(entity => entity.kind === "component")
+      .map(entity => [entity.slug, entity.fields as readonly StructuredField[]])
+  );
+  for (const entity of entities) {
     const languagesTable = languagesTableOf(entity.tableName);
     if (!(await adapter.tableExists(languagesTable))) continue;
     const shaped = withoutContainerFlags(entity.fields).fields.flatMap(
       field => {
         if (!isPlainObject(field) || typeof field.name !== "string") return [];
-        const shape = sharedStructureShape(field as unknown as StructuredField);
+        const shape = sharedStructureShape(
+          field as unknown as StructuredField,
+          slug => components.get(slug)
+        );
         return shape ? [{ field: field.name, shape }] : [];
       }
     );
@@ -250,10 +262,11 @@ async function findingsFor(
  */
 function judge(
   id: string,
-  values: ReadonlyMap<string, unknown>,
+  stored: ReadonlyMap<string, unknown>,
   shape: SharedStructureShape,
   defaultLocale: string
 ): Conversion | string {
+  const values = withPositionIds(stored, shape, defaultLocale);
   const fromDefault = values.get(defaultLocale);
   if (fromDefault === undefined) {
     return `document ${id} has no "${defaultLocale}" value to take the structure from (it has ${[...values.keys()].join(", ")})`;
@@ -274,6 +287,70 @@ function judge(
     overlays.set(locale, splitSharedStructure(value, shape).overlay ?? {});
   }
   return { id, structure, overlays };
+}
+
+/**
+ * Give the rows and instances an earlier release stored without an id (a component's instances
+ * held inline in a row were never given one) the same id at the same place in every language, so
+ * each language's text can be kept by it. Only where every language's list there is as long as the
+ * default language's: a list that differs keeps no id, and its languages then compare unequal and
+ * are refused (`judge`). A row that has an id keeps it. Returns each language's value, read from
+ * its stored text, with those ids given.
+ */
+function withPositionIds(
+  stored: ReadonlyMap<string, unknown>,
+  shape: SharedStructureShape,
+  defaultLocale: string
+): Map<string, unknown> {
+  const levels = [...stored.entries()].map(([locale, value]) => ({
+    locale,
+    value: parsedValue(value),
+  }));
+  alignLevel(
+    levels.map(level => level.value),
+    shape,
+    levels.findIndex(level => level.locale === defaultLocale)
+  );
+  return new Map(levels.map(level => [level.locale, level.value]));
+}
+
+/** {@link withPositionIds} at one level: the same container's value in each language. */
+function alignLevel(
+  inLanguages: unknown[],
+  shape: SharedStructureShape,
+  primary: number
+): void {
+  const recurse = (rows: Record<string, unknown>[]) => {
+    for (const [name, nested] of Object.entries(shape.inner)) {
+      alignLevel(
+        rows.map(row => row[name]),
+        nested,
+        primary
+      );
+    }
+  };
+  if (shape.kind === "group") {
+    if (inLanguages.every(isPlainObject)) {
+      recurse(inLanguages);
+    }
+    return;
+  }
+  if (!inLanguages.every(Array.isArray)) return;
+  const lists = inLanguages as unknown[][];
+  const length = lists[primary >= 0 ? primary : 0]?.length ?? 0;
+  if (lists.some(list => list.length !== length)) return;
+  for (let index = 0; index < length; index += 1) {
+    const rows = lists.map(list => list[index]);
+    if (!rows.every(isPlainObject)) continue;
+    const records = rows;
+    const ids = new Set(records.map(row => row.id));
+    // Every language without an id here: one is minted and given to all of them.
+    if (ids.size === 1 && (ids.has(undefined) || ids.has(""))) {
+      const id = randomUUID();
+      for (const row of records) row.id = id;
+    }
+    recurse(records);
+  }
 }
 
 /** Each field's findings, for every repeater or group that can hold content stored whole. */

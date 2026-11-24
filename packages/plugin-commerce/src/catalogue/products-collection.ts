@@ -146,6 +146,10 @@ export function productsCollection(slug = "products"): ContributedCollection {
     labels: { singular: "Product", plural: "Products" },
     fields,
     timestamps: true,
+    // Open to every preset role, each by its own rule (an Author does not
+    // delete, a Viewer reads), as before collections started closed to them:
+    // a new store's editors keep its catalogue.
+    grants: { presets: ["admin", "editor", "author", "viewer"] },
     admin: {
       isPlugin: true,
       group: "Commerce",

@@ -20,6 +20,10 @@ import { describeError } from "../../../errors";
 import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import { judgeAddress } from "../../../shared/address-rule";
 import { _resetEnvCache } from "../../../shared/lib/env";
+import {
+  sanitizeConfig,
+  type NextlyConfig,
+} from "../../../shared/types/config";
 import type { LoadConfigResult } from "../../utils/config-loader";
 import { runDbSync } from "../db-sync";
 import { createDebouncedSync } from "../dev-watcher";
@@ -48,14 +52,17 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-/** A configuration declaring one collection under `slug`, as the loader hands it over. */
+/**
+ * A configuration declaring one collection under `slug`, as the loader hands it over: sanitized,
+ * so it carries every default the commands read (its `db` settings among them).
+ */
 function configWith(slug: string): LoadConfigResult {
   return {
-    config: {
+    config: sanitizeConfig({
       collections: [{ slug, fields: [text({ name: "title" })] }],
       singles: [],
       fieldGroups: [],
-    },
+    } as unknown as NextlyConfig),
   } as unknown as LoadConfigResult;
 }
 

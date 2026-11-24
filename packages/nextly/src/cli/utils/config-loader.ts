@@ -1098,15 +1098,16 @@ function configFileFor(options: LoadConfigOptions): string | undefined {
 export async function loadConfig(
   options: LoadConfigOptions = {}
 ): Promise<LoadConfigResult> {
-  // A cached default, given where no configuration file was found, is no answer to a caller that
+  // The cache answers only for the file this call would read itself: one from another project,
+  // or from a file since removed, is read again, whatever the caller does without one. And a
+  // cached default, given where no configuration file was found, is no answer to a caller that
   // refuses to act without one: it is asked again, and refused.
-  // Nor is one from another project, or from a file since removed: the file this call would
-  // read must be the one the cache holds.
-  const cachedDefaultRefused =
-    options.missing === "refuse" &&
-    (cachedConfig?.configPath === undefined ||
-      cachedConfig.configPath !== configFileFor(options));
-  if (cachedConfig && !options.watch && !cachedDefaultRefused) {
+  const wanted = configFileFor(options);
+  const cachedElsewhere =
+    cachedConfig !== null &&
+    (cachedConfig.configPath !== wanted ||
+      (wanted === undefined && options.missing === "refuse"));
+  if (cachedConfig && !options.watch && !cachedElsewhere) {
     debugLog(options, "Returning cached config");
     return cachedConfig;
   }

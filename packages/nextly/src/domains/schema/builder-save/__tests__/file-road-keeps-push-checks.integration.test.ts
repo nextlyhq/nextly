@@ -9,11 +9,10 @@
  *   its data. One the request answers, as a rename onto a field it adds, is not refused as
  *   undescribed: the history's drift check judges it, as it does any column the history lacks.
  *
- * One step the push takes once it has run is not the file road's: Unique turned off while another
- * unique index covers the column, the push drops that index too. The file does not carry that drop,
- * so a database the file is replayed on keeps the index; dropping it here alone would have this
- * database accept repeats that database refuses. Pinned below as the gap it is, until the file
- * carries the drop.
+ * And one step the push takes once it has run, the file carries: Unique turned off while another
+ * unique index covers the column under a name Nextly did not make, the push drops that index too,
+ * and the file the save writes drops it by name, so this database and every one the file is
+ * replayed on accept repeats alike.
  *
  * Each runs through the collection's schema dialog in development, where an untranslated
  * collection's save runs its file.
@@ -225,10 +224,9 @@ describeEachDialect(
       expect(await columnsOf("dc_posts")).not.toContain("code");
     });
 
-    // The gap, pinned: the file does not carry the drop of a unique index it did not declare, so the
-    // file road leaves it, and the column still refuses repeats here as on any database the file is
-    // replayed on. Once the file carries that drop, both accept them and this is turned round.
-    it("keeps another unique index covering the column when Unique is turned off, as the file leaves it everywhere", async () => {
+    // The file carries the drop of the unique index it did not declare, so the column takes repeats
+    // here, as on any database the file is replayed on that holds the index under that name.
+    it("drops another unique index covering the column when Unique is turned off, as the file does everywhere", async () => {
       await collectionWith(
         "posts",
         [HEADING, { ...CODE, unique: true }],
@@ -242,7 +240,7 @@ describeEachDialect(
 
       expect(await dialogSave([HEADING, { ...CODE }])).toBeUndefined();
 
-      // Saved on the file's road; the index it did not declare still holds the column unique.
+      // Saved on the file's road, which dropped the index it did not declare too.
       expect(pushed).not.toHaveBeenCalled();
       const repeat = await handler()
         .getEntryService()
@@ -250,7 +248,7 @@ describeEachDialect(
           { collectionName: "posts", overrideAccess: true },
           { heading: "Two", code: "a" }
         );
-      expect(repeat.success, JSON.stringify(repeat)).toBe(false);
+      expect(repeat.success, JSON.stringify(repeat)).toBe(true);
     });
   }
 );

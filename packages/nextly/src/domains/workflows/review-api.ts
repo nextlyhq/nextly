@@ -15,13 +15,12 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { decidePermission } from "../../auth/access/decide";
 import { NextlyError } from "../../errors";
-import { resolveUserRoles } from "../../services/lib/permissions";
 import type { PublishCaller } from "../collections/services/publish-gate";
 import { configuredLocales } from "../i18n/configured-locales";
 import { newestVersionNoPerLocale } from "../versions/versions-repository";
 
 import { primaryStep } from "./define-workflow";
-import { roleIdsOfSlugs } from "./holders";
+import { holdersOf } from "./holders";
 import { livePartsOf, partStage, pendingPartsOn } from "./implicit-stage";
 import { lastMovesOn, type LastMove } from "./last-moves";
 import {
@@ -30,9 +29,11 @@ import {
   versionUnderReview,
 } from "./part-versions";
 import {
+  nameWaits,
   partsWaitingFor,
   partWaitsDecider,
   type PartWaitingFor,
+  type PartWaits,
   type PartWaitsDecider,
 } from "./part-waits-for";
 import { registeredWorkflows, workflowAttachedTo } from "./registry";
@@ -322,6 +323,8 @@ export interface WaitingPart {
   stageColour: string | null;
   /** Who it is assigned to; null for work no one is assigned, which waits for every holder. */
   assignee: ReviewAssignee | null;
+  /** Whom it waits for, named as the document's own review read names it. */
+  waitingFor: PartWaitingFor | null;
   enteredAt: Date;
   dueAt: Date | null;
 }
@@ -494,8 +497,20 @@ export async function waitingFor(
   }
   const end = query.offset + query.limit;
   const shownLast = waiting.length > end ? waiting[end - 1] : undefined;
+  // Whom each part on the page waits for, named once for the page: one read per kind of name.
+  const page = waiting.slice(query.offset, end);
+  const names = await nameWaits(
+    adapter,
+    page.map(each => ({
+      slug: each.part.document.scopeSlug,
+      waits: each.waits,
+    }))
+  );
   return {
-    items: waiting.slice(query.offset, end).map(each => each.part),
+    items: page.map((each, index) => ({
+      ...each.part,
+      waitingFor: names[index] ?? null,
+    })),
     total: waiting.length,
     totalCapped: !scan.done(),
     next:
@@ -507,10 +522,14 @@ export async function waitingFor(
   };
 }
 
-/** A waiting part, with where it stands in the list's order. */
+/**
+ * A waiting part, with where it stands in the list's order and whom it waits for, decided but not
+ * yet named.
+ */
 interface PlacedPart {
   part: WaitingPart;
   position: WaitingPosition;
+  waits: PartWaits;
 }
 
 /** What deciding whether a window's parts wait for the caller needs, asked once per list. */
@@ -544,6 +563,7 @@ async function waitingIn(
   await primeDeciders(window, stageOfRow, deciderOf);
   const movable: ReviewState[] = [];
   const stageOf = new Map<ReviewState, ScopedStage>();
+  const waitsOf = new Map<ReviewState, PartWaits>();
   for (const row of window) {
     const scoped = stageOfRow.get(
       `${row.scopeKind}:${row.scopeSlug}:${row.stage}`
@@ -559,6 +579,7 @@ async function waitingIn(
     if (takesStep(scoped.step, query.caller, accountable, row.enteredBy)) {
       movable.push(row);
       stageOf.set(row, scoped);
+      waitsOf.set(row, waits);
     }
   }
   // The read check, asked of every part the caller may move at once, before the page is cut: a
@@ -576,15 +597,31 @@ async function waitingIn(
   const items: PlacedPart[] = [];
   for (const [index, row] of movable.entries()) {
     const scoped = stageOf.get(row);
-    if (readable[index] !== true || !scoped) continue;
+    const waits = waitsOf.get(row);
+    if (readable[index] !== true || !scoped || waits === undefined) continue;
     // Shown as every surface shows the stage: its saved label and colour, else the code's.
     const shown = (await presentationOf(scoped.workflow))(row.stage);
     items.push({
       part: waitingItem(row, row.assignee, shown),
       position: waitingPosition(row),
+      waits,
     });
   }
   return items;
+}
+
+/**
+ * How many stages' next step the caller may take, in collections and Singles they may read: the
+ * stages the waiting list looks in (`takeableStages`), counted with no document read. Nothing can
+ * ever wait for a caller with none.
+ *
+ * @experimental
+ */
+export async function takeableStageCount(
+  adapter: DrizzleAdapter,
+  query: Pick<WaitingQuery, "caller" | "readsEntity">
+): Promise<number> {
+  return (await takeableStages(adapter, query)).length;
 }
 
 /**
@@ -593,7 +630,7 @@ async function waitingIn(
  */
 async function takeableStages(
   adapter: DrizzleAdapter,
-  query: WaitingQuery
+  query: Pick<WaitingQuery, "caller" | "readsEntity">
 ): Promise<ScopedStage[]> {
   const actor = await workflowCallerActor(adapter, query.caller);
   const takeable: ScopedStage[] = [];
@@ -777,32 +814,6 @@ function waitingScan(
   return scan;
 }
 
-/**
- * Whom the caller stands for when work is assigned: a person, as themselves and every role they
- * hold now (inherited ones included). A key, full-access or scoped, as its roles alone, never as
- * its owner in person: work assigned to the owner by name is the owner's to see, as an approval is
- * a person's to give. Its roles are those its scope names, or, where it names none, its owner's,
- * as its permissions are judged.
- */
-async function holdersOf(
-  adapter: DrizzleAdapter,
-  caller: WaitingQuery["caller"]
-): Promise<ReviewAssignee[]> {
-  if (caller.kind === "key") {
-    // A scope names its roles by slug; work is assigned to a role by id.
-    const ids =
-      caller.scope.roles !== undefined
-        ? await roleIdsOfSlugs(adapter, caller.scope.roles)
-        : [...(await resolveUserRoles(caller.userId)).roleIds];
-    return ids.map(id => ({ kind: "role" as const, id }));
-  }
-  const { roleIds } = await resolveUserRoles(caller.userId);
-  return [
-    { kind: "user", id: caller.userId },
-    ...[...roleIds].map(id => ({ kind: "role" as const, id })),
-  ];
-}
-
 /** One waiting part, its stage shown as `shown` says (its workflow's saved presentation). */
 function waitingItem(
   row: ReviewState,
@@ -820,6 +831,8 @@ function waitingItem(
     stageLabel: shown.label,
     stageColour: shown.colour,
     assignee,
+    // Named once for the page it lands on, by `nameWaits`.
+    waitingFor: null,
     enteredAt: row.enteredAt,
     dueAt: row.dueAt,
   };

@@ -255,6 +255,16 @@ function buildHeaderMap(
  * });
  * ```
  */
+/**
+ * The headers a response may set for itself, which the site's defaults then
+ * leave as they are. Each is one a handler tightens for what it serves, never
+ * one it would loosen.
+ */
+const RESPONSE_OWNED: ReadonlySet<string> = new Set([
+  "content-security-policy",
+  "referrer-policy",
+]);
+
 export function createSecurityHeadersMiddleware(
   config?: SecurityHeadersConfig
 ): (response: Response) => Response {
@@ -269,6 +279,15 @@ export function createSecurityHeadersMiddleware(
     const newHeaders = new Headers(response.headers);
 
     for (const [name, value] of headerEntries) {
+      // A response that set its own policy keeps it: a handler sets one only
+      // to be stricter than the site's, as a private file's download is
+      // sandboxed and sends no referrer.
+      if (
+        RESPONSE_OWNED.has(name.toLowerCase()) &&
+        response.headers.has(name)
+      ) {
+        continue;
+      }
       newHeaders.set(name, value);
     }
 

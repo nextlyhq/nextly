@@ -27,6 +27,7 @@ import { draftsKeptByPart } from "../versions/part-drafts";
 
 import { isBlank } from "./blank-value";
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
+import { nonBlankColumnSql } from "./non-blank-sql";
 import {
   documentLanguageKey,
   fieldProvenanceOf,
@@ -37,9 +38,12 @@ import {
 } from "./provenance/field-status";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
 import { buildCompanionStampTable } from "./runtime/companion-stamp-table";
+import { withComponentShapes } from "./runtime/component-shapes";
 import {
   assembleStoredValue,
   type SharedStructureShape,
+  splitStoredValue,
+  type StructuredField,
 } from "./shared-structure";
 import type { TranslationFilterState } from "./translation-filter-states";
 
@@ -85,6 +89,13 @@ export interface LocalizedFieldRef {
    * resolve or compare whole.
    */
   sharedStructure?: SharedStructureShape;
+  /**
+   * Set beside `sharedStructure` for a container placing a component inside it, whose values its
+   * rows hold inline: the container's definition, which its shape is read again from once the
+   * components' fields are read (`withComponentShapes`). Until then the shape holds only what the
+   * container translates of its own.
+   */
+  placingComponents?: StructuredField;
 }
 
 // The blank rule lives beside nothing else, so the shared-structure assembly reads the same one.
@@ -263,9 +274,12 @@ export async function populateCompanionFieldsByLanguage(
   });
   if (companionRows === undefined) return undefined;
 
+  // A container placing a component is put back by its component's fields, read on this read's
+  // own handle (`withComponentShapes`).
+  const refs = await withComponentShapes(localizedFields, db);
   for (const language of languages) {
     fillCompanionFields({
-      localizedFields,
+      localizedFields: refs,
       statusValues: args.statusValues,
       revealed: args.revealed,
       idKey: args.idKey,
@@ -742,6 +756,39 @@ export interface PopulateCompanionAllArgs {
 }
 
 /**
+ * The structures of `source`'s repeaters and groups keeping one structure in every language, by
+ * field name: what an every-language read lays each language's overlay on
+ * (`populateCompanionFieldsAllLocales`), which reads into rows holding their id alone. Taken from a
+ * row as read (one language's text on it, named by field) or as stored (named by column): either
+ * way its structure alone, the text
+ * split off by its shape, read with its components' fields on `db`.
+ */
+export async function structuresBeside(
+  source: Record<string, unknown>,
+  localizedFields: readonly LocalizedFieldRef[],
+  db: unknown
+): Promise<Record<string, unknown>> {
+  if (!localizedFields.some(field => field.sharedStructure)) return {};
+  const refs = await withComponentShapes(localizedFields, db);
+  const out: Record<string, unknown> = {};
+  for (const field of refs) {
+    if (!field.sharedStructure) continue;
+    // A row as read names it by field, a main row as stored by column.
+    const key = Object.hasOwn(source, field.name)
+      ? field.name
+      : Object.hasOwn(source, field.column)
+        ? field.column
+        : null;
+    if (key === null) continue;
+    out[field.name] = splitStoredValue(
+      source[key],
+      field.sharedStructure
+    ).structure;
+  }
+  return out;
+}
+
+/**
  * `locale=all` variant (admin/export): instead of one resolved value, set each localized field
  * to a language-keyed object (`{ en: "...", de: "..." }`) covering every configured locale.
  * Missing translations are `null`. Mutates `rows` in place; a companion that is not there yet is
@@ -772,6 +819,8 @@ export async function populateCompanionFieldsAllLocales(
   });
   if (companionRows === undefined) return;
 
+  // A container placing a component is put back by its component's fields (`withComponentShapes`).
+  const refs = await withComponentShapes(localizedFields, db);
   const byParent = indexCompanionRowsByParent(
     companionRows,
     args.statusValues,
@@ -780,7 +829,7 @@ export async function populateCompanionFieldsAllLocales(
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
-    for (const field of localizedFields) {
+    for (const field of refs) {
       const keyed: Record<string, unknown> = {};
       if (field.sharedStructure) {
         // Each language's value assembled from the one structure and that language's overlay
@@ -841,6 +890,14 @@ export function buildLocalizedOrderExpr(args: {
    * and never compared with an empty string.
    */
   nonText?: boolean;
+  /**
+   * The entity is not translated: its values are kept per language for
+   * storage alone, so an empty string is a value rather than a translation
+   * left blank, and sorts as the value it was when it was kept on the
+   * entity's own row. A language holding text is still read first, as the
+   * read shows it; the empty string is ordered by where none does.
+   */
+  blankIsValue?: boolean;
 }): SQL {
   const {
     companionTableName,
@@ -852,10 +909,19 @@ export function buildLocalizedOrderExpr(args: {
   const t = sql.identifier(companionTableName);
   const col = sql.identifier(columnName);
   const statusPredicate = statusMembership(t, statusValues);
-  const perLocale = localeChain.map(code => {
-    const value = sql`(SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}${statusPredicate})`;
-    return args.nonText === true ? value : sql`NULLIF(${value}, '')`;
-  });
+  const valueIn = (code: string) =>
+    sql`(SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}${statusPredicate})`;
+  if (args.nonText === true) {
+    const values = localeChain.map(valueIn);
+    return values.length === 1
+      ? values[0]
+      : sql`COALESCE(${sql.join(values, sql`, `)})`;
+  }
+  const perLocale = [
+    ...localeChain.map(code => sql`NULLIF(${valueIn(code)}, '')`),
+    // Where no language holds text, the first empty string, as a value.
+    ...(args.blankIsValue === true ? localeChain.map(valueIn) : []),
+  ];
   // One language, as a read with fallback off asks: its value alone. SQLite
   // refuses COALESCE with a single argument.
   if (perLocale.length === 1) return perLocale[0];
@@ -974,12 +1040,7 @@ export function buildTranslationStatusCondition(args: {
   const nonBlankOn = (ref: CompanionTableRef): SQL =>
     localizedColumns.length > 0
       ? sql.join(
-          localizedColumns.map(c => {
-            const col = sql.identifier(c);
-            return nonText.has(c)
-              ? sql`(${ref}.${col} IS NOT NULL)`
-              : sql`(${ref}.${col} IS NOT NULL AND ${ref}.${col} <> '')`;
-          }),
+          localizedColumns.map(c => nonBlankColumnSql(ref, c, nonText.has(c))),
           sql` OR `
         )
       : sql`1=0`;

@@ -15,7 +15,9 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   defineCollection,
+  defineFieldGroup,
   defineSingle,
+  fieldGroup,
   group,
   number,
   repeater,
@@ -56,6 +58,53 @@ const ARTICLES = defineCollection({
       name: "seo",
       fields: [text({ name: "headline" }), number({ name: "weight" })],
     }),
+    // A repeater inside a repeater: each level's rows keep their translations by their own ids.
+    repeater({
+      name: "sections",
+      fields: [
+        text({ name: "heading" }),
+        repeater({
+          name: "items",
+          fields: [text({ name: "label" }), number({ name: "qty" })],
+        }),
+      ],
+    }),
+  ],
+});
+
+/** A component, placed inside each row of a repeater. */
+const PANEL_CARD = defineFieldGroup({
+  slug: "panelcard",
+  fields: [text({ name: "label" }), number({ name: "size" })],
+});
+
+/** A collection whose repeater holds a component in each row. */
+const GALLERIES = defineCollection({
+  slug: "galleries",
+  fields: [
+    text({ name: "title" }),
+    repeater({
+      name: "panels",
+      fields: [
+        number({ name: "position" }),
+        fieldGroup({ name: "card", component: "panelcard" }),
+      ],
+    }),
+  ],
+});
+
+/** A Single whose repeater holds a list of component instances in each row. */
+const BOARD = defineSingle({
+  slug: "boardsite",
+  fields: [
+    text({ name: "heading" }),
+    repeater({
+      name: "panels",
+      fields: [
+        number({ name: "position" }),
+        fieldGroup({ name: "cards", component: "panelcard", repeatable: true }),
+      ],
+    }),
   ],
 });
 
@@ -89,8 +138,9 @@ describeEachDialect("one structure across languages", dialect => {
   async function site(): Promise<TestNextly> {
     t = await createTestNextly({
       dialect,
-      collections: [ARTICLES],
-      singles: [NOTICE],
+      collections: [ARTICLES, GALLERIES],
+      singles: [NOTICE, BOARD],
+      fieldGroups: [PANEL_CARD],
       localization: LANGUAGES,
     });
     return t;
@@ -342,6 +392,473 @@ describeEachDialect("one structure across languages", dialect => {
         "segundo",
         "back",
       ]);
+    },
+    BOOT_TIMEOUT
+  );
+
+  it(
+    "keeps each nested row's translation with it when the inner rows are reordered in another language",
+    async () => {
+      const { nextly } = await site();
+      type Item = { id: string; label?: string; qty?: number };
+      type Section = { id: string; heading?: string; items: Item[] };
+      const sectionsIn = async (id: string, locale: string) =>
+        (
+          (await nextly.findByID({ collection: "articles", id, locale })) as {
+            sections: Section[];
+          }
+        ).sections;
+      const created = await nextly.create({
+        collection: "articles",
+        locale: "en",
+        data: {
+          title: "Nested",
+          sections: [
+            {
+              heading: "Section",
+              items: [
+                { label: "apple", qty: 1 },
+                { label: "bread", qty: 2 },
+              ],
+            },
+          ],
+        },
+      });
+      const id = (created.item as { id: string }).id;
+      const [section] = await sectionsIn(id, "en");
+      const [apple, bread] = section!.items;
+      await write(nextly, id, "es", {
+        sections: [
+          {
+            id: section!.id,
+            heading: "Sección",
+            items: [
+              { id: apple!.id, label: "manzana", qty: 1 },
+              { id: bread!.id, label: "pan", qty: 2 },
+            ],
+          },
+        ],
+      });
+
+      // English reorders the inner rows and changes a shared value inside one.
+      await write(nextly, id, "en", {
+        sections: [
+          {
+            id: section!.id,
+            heading: "Section",
+            items: [
+              { id: bread!.id, label: "bread", qty: 3 },
+              { id: apple!.id, label: "apple", qty: 1 },
+            ],
+          },
+        ],
+      });
+
+      const [es] = await sectionsIn(id, "es");
+      expect(es!.heading).toBe("Sección");
+      expect(es!.items.map(item => [item.id, item.label, item.qty])).toEqual([
+        [bread!.id, "pan", 3],
+        [apple!.id, "manzana", 1],
+      ]);
+      const [en] = await sectionsIn(id, "en");
+      expect(en!.items.map(item => item.label)).toEqual(["bread", "apple"]);
+    },
+    BOOT_TIMEOUT
+  );
+
+  it(
+    "keeps a component's translation inside each row with its row when the rows are reordered",
+    async () => {
+      const { nextly } = await site();
+      type Panel = {
+        id: string;
+        position?: number;
+        card?: { label?: string; size?: number } | null;
+      };
+      const panelsIn = async (id: string, locale: string) =>
+        (
+          (await nextly.findByID({ collection: "galleries", id, locale })) as {
+            panels: Panel[];
+          }
+        ).panels;
+      const created = await nextly.create({
+        collection: "galleries",
+        locale: "en",
+        data: {
+          title: "Gallery",
+          panels: [
+            { position: 1, card: { label: "one", size: 10 } },
+            { position: 2, card: { label: "two", size: 20 } },
+          ],
+        },
+      });
+      const id = (created.item as { id: string }).id;
+      const [first, second] = await panelsIn(id, "en");
+      await nextly.update({
+        collection: "galleries",
+        id,
+        locale: "es",
+        data: {
+          panels: [
+            { id: first!.id, position: 1, card: { label: "uno", size: 10 } },
+            { id: second!.id, position: 2, card: { label: "dos", size: 20 } },
+          ],
+          _overwrite: true,
+        },
+      });
+
+      // English reorders the rows.
+      await nextly.update({
+        collection: "galleries",
+        id,
+        locale: "en",
+        data: {
+          panels: [
+            { id: second!.id, position: 2, card: { label: "two", size: 20 } },
+            { id: first!.id, position: 1, card: { label: "one", size: 10 } },
+          ],
+          _overwrite: true,
+        },
+      });
+
+      // Each row's component keeps its own Spanish text, on the rows in their new order.
+      expect(
+        (await panelsIn(id, "es")).map(panel => [panel.id, panel.card?.label])
+      ).toEqual([
+        [second!.id, "dos"],
+        [first!.id, "uno"],
+      ]);
+      expect(
+        (await panelsIn(id, "en")).map(panel => panel.card?.label)
+      ).toEqual(["two", "one"]);
+    },
+    BOOT_TIMEOUT
+  );
+
+  it(
+    "gives every language's repeater and group, each assembled with that language's own text, in an every-language read",
+    async () => {
+      const { nextly } = await site();
+      const { id, first, second } = await translatedArticle(nextly);
+
+      const read = (await nextly.findByID({
+        collection: "articles",
+        id,
+        locale: "en",
+        translations: "all",
+      } as never)) as {
+        _allLocales?: Record<string, Record<string, unknown>>;
+      };
+
+      const slides = read._allLocales?.slides as
+        | Record<string, Slide[] | null>
+        | undefined;
+      // Each language's rows, the one structure with its own text: never the text alone.
+      expect(
+        slides?.es?.map(({ id: row, caption, rank }) => [row, caption, rank])
+      ).toEqual([
+        [first, "primero", 1],
+        [second, "segundo", 2],
+      ]);
+      expect(slides?.en?.map(slide => slide.caption)).toEqual([
+        "first",
+        "second",
+      ]);
+      expect(read._allLocales?.seo).toMatchObject({
+        en: { headline: "Read me", weight: 5 },
+        es: { headline: "Léeme", weight: 5 },
+      });
+    },
+    BOOT_TIMEOUT
+  );
+
+  it(
+    "drops a removed component instance's text inside a Single's row in every language, so an instance given its id again reads afresh",
+    async () => {
+      const { nextly } = await site();
+      type Card = { id: string; label?: string };
+      type Panel = { id: string; cards?: Card[] };
+      const panelsIn = async (locale: string) =>
+        (
+          (await nextly.findSingle({ slug: "boardsite", locale })) as {
+            panels: Panel[];
+          }
+        ).panels;
+      const write = (locale: string, panels: unknown[]) =>
+        nextly.updateSingle({
+          slug: "boardsite",
+          locale,
+          data: { panels, _overwrite: true },
+        });
+
+      await write("en", [
+        {
+          position: 1,
+          cards: [
+            { label: "one", size: 1 },
+            { label: "two", size: 2 },
+          ],
+        },
+      ]);
+      const [panel] = await panelsIn("en");
+      const [one, two] = panel!.cards!;
+      await write("es", [
+        {
+          id: panel!.id,
+          position: 1,
+          cards: [
+            { id: one!.id, label: "uno", size: 1 },
+            { id: two!.id, label: "dos", size: 2 },
+          ],
+        },
+      ]);
+      // The control: Spanish's own text before the removal.
+      expect((await panelsIn("es"))[0]!.cards!.map(c => c.label)).toEqual([
+        "uno",
+        "dos",
+      ]);
+
+      // English removes the second instance inside the row, then gives an instance its id again.
+      await write("en", [
+        {
+          id: panel!.id,
+          position: 1,
+          cards: [{ id: one!.id, label: "one", size: 1 }],
+        },
+      ]);
+      await write("en", [
+        {
+          id: panel!.id,
+          position: 1,
+          cards: [
+            { id: one!.id, label: "one", size: 1 },
+            { id: two!.id, label: "back", size: 2 },
+          ],
+        },
+      ]);
+
+      // The removed instance's Spanish text went with it: it reads English's.
+      expect((await panelsIn("es"))[0]!.cards!.map(c => c.label)).toEqual([
+        "uno",
+        "back",
+      ]);
+    },
+    BOOT_TIMEOUT
+  );
+
+  it(
+    "stores no translation for a language whose text inside a container is all blank",
+    async () => {
+      const { nextly } = await site();
+      const created = await nextly.create({
+        collection: "articles",
+        locale: "en",
+        data: {
+          title: "Hello",
+          slides: [{ caption: "first", alt: "a1", rank: 1 }],
+        },
+      });
+      const id = (created.item as { id: string }).id;
+      const [slide] = (await read(nextly, id, "en")).slides;
+      const overlayIn = async (locale: string) => {
+        const rows = await t!.adapter.select<{ slides: unknown }>(
+          "dc_articles_locales",
+          {
+            columns: ["slides"],
+            where: {
+              and: [
+                { column: "_parent", op: "=", value: id },
+                { column: "_locale", op: "=", value: locale },
+              ],
+            },
+          }
+        );
+        return rows[0]?.slides ?? null;
+      };
+
+      // Spanish writes the rows with nothing translated in them.
+      await write(nextly, id, "es", {
+        title: "Hola",
+        slides: [{ id: slide!.id, caption: "", alt: "", rank: 1 }],
+      });
+
+      // The control: English's text is stored.
+      expect(await overlayIn("en")).not.toBeNull();
+      // Spanish holds no translation inside the repeater, so none is stored, and it reads English's.
+      expect(await overlayIn("es")).toBeNull();
+      expect((await read(nextly, id, "es")).slides[0]?.caption).toBe("first");
+    },
+    BOOT_TIMEOUT
+  );
+
+  it(
+    "keeps each component instance's translation with it when the instances inside a Single's row are reordered",
+    async () => {
+      const { nextly } = await site();
+      type Card = { id: string; label?: string; size?: number };
+      type Panel = { id: string; cards?: Card[] };
+      const panelsIn = async (locale: string) =>
+        (
+          (await nextly.findSingle({ slug: "boardsite", locale })) as {
+            panels: Panel[];
+          }
+        ).panels;
+      const write = (locale: string, panels: unknown[]) =>
+        nextly.updateSingle({
+          slug: "boardsite",
+          locale,
+          data: { panels, _overwrite: true },
+        });
+
+      await write("en", [
+        {
+          position: 1,
+          cards: [
+            { label: "one", size: 1 },
+            { label: "two", size: 2 },
+          ],
+        },
+      ]);
+      const [panel] = await panelsIn("en");
+      const [one, two] = panel!.cards!;
+      // Each instance has an id of its own, minted once.
+      expect(one!.id).toEqual(expect.any(String));
+      expect(two!.id).not.toBe(one!.id);
+      await write("es", [
+        {
+          id: panel!.id,
+          position: 1,
+          cards: [
+            { id: one!.id, label: "uno", size: 1 },
+            { id: two!.id, label: "dos", size: 2 },
+          ],
+        },
+      ]);
+
+      // English reorders the instances, with a shared value changed.
+      await write("en", [
+        {
+          id: panel!.id,
+          position: 1,
+          cards: [
+            { id: two!.id, label: "two", size: 20 },
+            { id: one!.id, label: "one", size: 1 },
+          ],
+        },
+      ]);
+
+      const [es] = await panelsIn("es");
+      expect(es!.cards!.map(c => [c.id, c.label, c.size])).toEqual([
+        [two!.id, "dos", 20],
+        [one!.id, "uno", 1],
+      ]);
+      // The ids moved with the instances: none re-minted by the save.
+      const [en] = await panelsIn("en");
+      expect(en!.cards!.map(c => c.id)).toEqual([two!.id, one!.id]);
+    },
+    BOOT_TIMEOUT
+  );
+
+  /** The paths of one document's live provenance records in `locale`, sorted. */
+  async function livePaths(
+    scope: { kind: string; slug: string; id: string },
+    locale: string
+  ): Promise<string[]> {
+    const rows = await t!.adapter.select<{
+      scopeKind: string;
+      scopeSlug: string;
+      entryId: string;
+      locale: string;
+      partState: string;
+      fieldPath: string;
+    }>("nextly_translation_provenance");
+    return rows
+      .filter(
+        row =>
+          row.scopeKind === scope.kind &&
+          row.scopeSlug === scope.slug &&
+          row.entryId === scope.id &&
+          row.locale === locale &&
+          row.partState === "live"
+      )
+      .map(row => row.fieldPath)
+      .sort();
+  }
+
+  it(
+    "forgets a removed row's record in every language, keeping the other rows'",
+    async () => {
+      const { nextly } = await site();
+      const { id, first, second } = await translatedArticle(nextly);
+      // Spanish copies the rows from English: each row's record names the row it copied.
+      await write(nextly, id, "es", {
+        slides: [
+          { id: first, caption: "primero", rank: 1 },
+          { id: second, caption: "segundo", rank: 2 },
+        ],
+        _provenance: { slides: { origin: "copy", sourceLocale: "en" } },
+      });
+      const scope = { kind: "collection", slug: "articles", id };
+      // The control: Spanish records both rows.
+      expect(await livePaths(scope, "es")).toEqual(
+        expect.arrayContaining([`slides#${first}`, `slides#${second}`])
+      );
+
+      // English removes the second row: the one structure loses it in every language.
+      await write(nextly, id, "en", {
+        slides: [{ id: first, caption: "first", alt: "a1", rank: 1 }],
+      });
+
+      const paths = await livePaths(scope, "es");
+      expect(paths).toContain(`slides#${first}`);
+      expect(paths).not.toContain(`slides#${second}`);
+    },
+    BOOT_TIMEOUT
+  );
+
+  it(
+    "forgets a row removed from a Single's structure in every language",
+    async () => {
+      const { nextly } = await site();
+      const noticeIn = async (locale: string) =>
+        (await nextly.findSingle({ slug: "notice", locale })) as {
+          id: string;
+          slides: { id: string }[];
+        };
+      const write = (locale: string, data: Record<string, unknown>) =>
+        nextly.updateSingle({
+          slug: "notice",
+          locale,
+          data: { ...data, _overwrite: true },
+        });
+
+      await write("en", {
+        slides: [
+          { caption: "first", rank: 1 },
+          { caption: "second", rank: 2 },
+        ],
+      });
+      const notice = await noticeIn("en");
+      const [one, two] = notice.slides;
+      await write("es", {
+        slides: [
+          { id: one!.id, caption: "primero", rank: 1 },
+          { id: two!.id, caption: "segundo", rank: 2 },
+        ],
+        _provenance: { slides: { origin: "copy", sourceLocale: "en" } },
+      });
+      const scope = { kind: "single", slug: "notice", id: notice.id };
+      expect(await livePaths(scope, "es")).toEqual(
+        expect.arrayContaining([`slides#${one!.id}`, `slides#${two!.id}`])
+      );
+
+      await write("en", {
+        slides: [{ id: one!.id, caption: "first", rank: 1 }],
+      });
+
+      const paths = await livePaths(scope, "es");
+      expect(paths).toContain(`slides#${one!.id}`);
+      expect(paths).not.toContain(`slides#${two!.id}`);
     },
     BOOT_TIMEOUT
   );

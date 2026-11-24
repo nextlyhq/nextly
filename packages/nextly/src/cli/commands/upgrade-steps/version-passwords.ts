@@ -23,8 +23,7 @@ import { storedPasswordsOn, storedPasswordTotal } from "./stored-passwords";
 const sourceOf = (context: UpgradeStepContext) =>
   storedPasswordsOn(context.adapter as unknown as DrizzleAdapter);
 
-export const versionPasswordsStep: UpgradeStep = {
-  title: "remove passwords kept in version history",
+export const versionPasswordsWork: Pick<UpgradeStep, "pending" | "run"> = {
   pending: async context =>
     storedPasswordTotal(await countVersionsHoldingPasswords(sourceOf(context))),
   run: async context => {

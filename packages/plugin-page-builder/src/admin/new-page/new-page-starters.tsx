@@ -145,7 +145,8 @@ function StarterChoices({
                     ? "cursor-not-allowed border-dashed border-border"
                     : on
                       ? "cursor-pointer border-primary ring-1 ring-primary"
-                      : "cursor-pointer border-border hover:border-foreground/30"
+                      : // A hovered card's border in a token that reaches 3:1 unfaded.
+                        "cursor-pointer border-border hover:border-muted-foreground"
                 }`}
               >
                 {/* Disabled, so neither a click nor the arrow keys choose

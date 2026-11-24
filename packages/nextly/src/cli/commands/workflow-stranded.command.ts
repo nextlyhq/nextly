@@ -6,20 +6,25 @@
 import type { Command } from "commander";
 
 import { withDryRun } from "../dry-run";
+import { DATABASE_LINE, declareFirstLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /** Register `nextly workflow:stranded` and `nextly workflow:move-stranded`. */
 export function registerWorkflowStrandedCommands(program: Command): void {
-  program
-    .command("workflow:stranded")
-    .description("List documents in a workflow stage that no longer exists")
-    .option("--collection <slug>", "Only this collection's documents")
-    .option("--single <slug>", "Only this Single's document")
-    .action(
-      lazyAction(
-        async () => (await import("./workflow-stranded")).workflowStrandedAction
-      )
-    );
+  declareFirstLine(
+    program
+      .command("workflow:stranded")
+      .description("List documents in a workflow stage that no longer exists")
+      .option("--collection <slug>", "Only this collection's documents")
+      .option("--single <slug>", "Only this Single's document")
+      .action(
+        lazyAction(
+          async () =>
+            (await import("./workflow-stranded")).workflowStrandedAction
+        )
+      ),
+    DATABASE_LINE
+  );
 
   // A move writes every document it names, so it offers the dry run every writing command does.
   const moveStranded = program
@@ -38,6 +43,7 @@ export function registerWorkflowStrandedCommands(program: Command): void {
     )
     .option("--collection <slug>", "Only this collection's documents")
     .option("--single <slug>", "Only this Single's document");
+  declareFirstLine(moveStranded, DATABASE_LINE);
   withDryRun(moveStranded).action(
     lazyAction(
       async () =>

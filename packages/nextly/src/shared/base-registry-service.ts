@@ -305,7 +305,12 @@ export abstract class BaseRegistryService<
    */
   protected async getRecordBySlug(
     slug: string,
-    executor?: unknown
+    executor?: unknown,
+    /**
+     * Read through the registry row cache outside a transaction whatever `readsRowsFromCache`
+     * says: for a lookup that decides no write (`getRecordBySlugForRead`).
+     */
+    forRead = false
   ): Promise<TRecord | null> {
     try {
       const table = await this.resolveRegistryTableName();
@@ -332,7 +337,7 @@ export abstract class BaseRegistryService<
               slug,
               read
             )
-          : this.readsRowsFromCache &&
+          : (this.readsRowsFromCache || forRead) &&
               executor === undefined &&
               !this.adapter.transactionOpenInFlow()
             ? // Its own key space: `getCollection` caches collection rows of another shape.
@@ -353,6 +358,17 @@ export abstract class BaseRegistryService<
       // this, a real unique-violation collapses to INTERNAL_ERROR.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+  }
+
+  /**
+   * A record by slug, or null, from the registry row cache outside a transaction: for a read that
+   * decides no write, such as which languages a document's history is about. Kept while the
+   * registry has not changed (`cachedRegistryRow`), so a screen asking it on every request reads
+   * no registry row once warm. On a transaction it is held by the transaction's memo, as
+   * `getRecordBySlug` is.
+   */
+  protected getRecordBySlugForRead(slug: string): Promise<TRecord | null> {
+    return this.getRecordBySlug(slug, undefined, true);
   }
 
   /**

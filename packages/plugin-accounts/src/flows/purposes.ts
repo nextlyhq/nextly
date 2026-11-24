@@ -20,4 +20,6 @@ export const PURPOSES = {
   addressChangeCode: "address-change-code",
   /** The old address's link that cancels the change. */
   addressChangeCancel: "address-change-cancel",
+  /** The link in an invitation, which makes the invited address's account. */
+  invitation: "invitation",
 } as const;

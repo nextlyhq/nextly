@@ -11,7 +11,7 @@
 import AxeBuilder from "@axe-core/playwright";
 
 /** WCAG 2.2 AA and every level below it, as `builder-a11y.spec.ts` states. */
-const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
+export const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
 /**
  * One known defect in the shared chrome, set aside by rule AND place.

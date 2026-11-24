@@ -14,14 +14,24 @@
 
 import type { FieldConfig, DataFieldConfig } from "nextly/config";
 
-import type { NextlyColumn } from "@admin/components/ui/table/data-table";
+import type {
+  CellRenderer,
+  NextlyColumn,
+} from "@admin/components/ui/table/data-table";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { fieldLabel } from "@admin/lib/field-label";
+import type { WorkflowStepKind } from "@admin/types/workflows";
 
 import { entryTitleField } from "../entry-title";
+import {
+  isFieldTranslated,
+  type LocaleTranslationMeta,
+} from "../translation-meta";
 
 import { EntryTableCell } from "./EntryTableCell";
-import { LanguageDots } from "./LanguageDots";
+import { LanguageChips } from "./LanguageChips";
+import { ReviewCell, rowReviewParts } from "./ReviewCell";
+import type { TitleLanguage } from "./TitleLanguageSelect";
 
 // ============================================================================
 // Types
@@ -52,6 +62,18 @@ export interface CollectionForColumns {
    * when this is true.
    */
   status?: boolean;
+  /**
+   * The workflow that holds the collection's publishing, where one is attached: the list offers
+   * its bulk moves (Submit for review, Assign…, Send back…) only then.
+   */
+  workflow?: {
+    slug: string;
+    label: string;
+    /** Its stages in order, by name and label: the list's stage filter offers them. */
+    stages?: readonly { name: string; label: string }[];
+    /** Its steps, by kind: the bulk moves are found among them (`bulkMoveSteps`). */
+    steps?: readonly { name: string; label: string; kind: WorkflowStepKind }[];
+  } | null;
   /**
    * Whether the table shows each row's translation state: a collection with multilingual content
    * (i18n), listed for a user who may read every language's state. When true, the table renders
@@ -235,6 +257,11 @@ export function getAvailableColumns(
     builtInColumns.push("translations");
   }
 
+  // Where each row stands in its workflow, only for a collection a workflow holds.
+  if (collection.workflow) {
+    builtInColumns.push("review");
+  }
+
   if (useAsTitle && !builtInColumns.includes(useAsTitle)) {
     builtInColumns.push(useAsTitle);
   }
@@ -294,6 +321,11 @@ export function getDefaultVisibleColumns(
   // 5. Translation-completeness column for localized collections.
   if (collection.localized) {
     orderedDataColumns.push("translations");
+  }
+
+  // The Review column, for a collection a workflow holds.
+  if (collection.workflow) {
+    orderedDataColumns.push("review");
   }
 
   // 6. Remaining data columns
@@ -406,6 +438,105 @@ export function pickTitleFieldName(
 export interface EntryColumnActions {
   /** Open a row in a given content language. Absent leaves the marks inert. */
   openInLocale?: (entryId: string, locale: string) => void;
+  /** The title column's titles in a language the reader chose. Absent shows the list's own. */
+  titlesIn?: TitlesShownIn;
+}
+
+/** Titles shown in a chosen language, over the title column. */
+export interface TitlesShownIn {
+  /** The language chosen. */
+  language: TitleLanguage;
+  /** The default language, which the list's own read shows titles in. */
+  defaultLanguage: TitleLanguage;
+  /** Each row's title in the chosen language, by id, once read; a row not returned is absent. */
+  titles: ReadonlyMap<string, unknown> | undefined;
+  /**
+   * Whether the list's own titles may be another language's: the list reads the default
+   * language with fallback, so where the default language falls back to another, a title it
+   * lacks is that other language's, and nothing on the row says which.
+   */
+  defaultMayFallBack?: boolean;
+}
+
+/**
+ * Whether a row's own title, from the list's read, may be another language's than the default:
+ * where the default may fall back to another language, or the row says its default language
+ * holds nothing. Such a title is never presented as the default language's.
+ */
+export function listTitleMayBeAnotherLanguages(
+  row: Record<string, unknown>,
+  shownIn: Pick<TitlesShownIn, "defaultLanguage" | "defaultMayFallBack">
+): boolean {
+  if (shownIn.defaultMayFallBack === true) return true;
+  const defaultMeta = (
+    row._translations as Record<string, { translated?: boolean }> | undefined
+  )?.[shownIn.defaultLanguage.code];
+  return defaultMeta?.translated === false;
+}
+
+/** The `dir` a language's text is written in. */
+const dirOf = (language: TitleLanguage): "rtl" | "ltr" =>
+  language.rtl ? "rtl" : "ltr";
+
+/**
+ * The title column's cell for titles in a chosen language, drawn by the column's own cell so a
+ * title looks the same in either language.
+ *
+ * A row shows a title in the chosen language only where the read in that language returned one
+ * that is present (`isFieldTranslated`). Anything else (not read yet, not translated, a row or
+ * field that read did not return, a read that was refused) shows the list's own title, in the
+ * default language,
+ * marked with its language once the read has answered, so a default title is never passed off
+ * as a translation. Each title carries its language's `lang` and `dir`.
+ */
+function titleInLanguageCell(
+  base: CellRenderer<Record<string, unknown>>,
+  titleName: string,
+  shownIn: TitlesShownIn
+): CellRenderer<Record<string, unknown>> {
+  return ctx => {
+    const id = ctx.row.id;
+    const title =
+      typeof id === "string" || typeof id === "number"
+        ? shownIn.titles?.get(String(id))
+        : undefined;
+    // Present by the one rule a translated value is judged by, so a structured value (a rich
+    // text title) counts as a translation as a non-blank string does, and the column's own cell
+    // draws it.
+    if (isFieldTranslated(title)) {
+      return (
+        <span
+          lang={shownIn.language.code}
+          dir={dirOf(shownIn.language)}
+          data-title-language={shownIn.language.code}
+        >
+          {base({
+            ...ctx,
+            value: title,
+            row: { ...ctx.row, [titleName]: title },
+          })}
+        </span>
+      );
+    }
+    // The list's own title is marked as the default language's only where it can only be that.
+    if (listTitleMayBeAnotherLanguages(ctx.row, shownIn)) return base(ctx);
+    return (
+      <span className="inline-flex flex-wrap items-baseline gap-x-1.5">
+        <span
+          lang={shownIn.defaultLanguage.code}
+          dir={dirOf(shownIn.defaultLanguage)}
+          data-title-language={shownIn.defaultLanguage.code}
+        >
+          {base(ctx)}
+        </span>
+        {shownIn.titles !== undefined && (
+          <span className="text-xs text-muted-foreground">
+            ({shownIn.defaultLanguage.label})
+          </span>
+        )}
+      </span>
+    );
+  };
 }
 
 /**
@@ -498,9 +629,9 @@ export function buildEntryColumns(
     const hidden = isHidden(columnName);
 
     if (!field) {
-      // One dot per translatable language, so a row says WHICH languages are
-      // missing rather than only how many. Offered by `getAvailableColumns`
-      // for localized collections only, so a non-localized table is unchanged.
+      // One chip per language, so a row says WHICH languages need work and
+      // what kind. Offered by `getAvailableColumns` for localized collections
+      // only, so a non-localized table is unchanged.
       if (columnName === "translations") {
         cols.push({
           name: "translations",
@@ -508,12 +639,18 @@ export function buildEntryColumns(
           sortable: false,
           hidden,
           cell: ({ row }) => (
-            <LanguageDots
+            <LanguageChips
               translations={
                 row._translations as
-                  | Record<string, { translated: boolean; status?: string }>
+                  | Record<string, LocaleTranslationMeta>
                   | undefined
               }
+              // The document's own status speaks for every language only on a
+              // collection with the Draft / Published lifecycle: elsewhere a
+              // field named `status` is the author's own.
+              {...(collection.status === true
+                ? { documentStatus: row.status }
+                : {})}
               {...(actions?.openInLocale && typeof row.id === "string"
                 ? {
                     onOpenLocale: (locale: string) =>
@@ -522,6 +659,17 @@ export function buildEntryColumns(
                 : {})}
             />
           ),
+        });
+        continue;
+      }
+      // Where each part of the row stands in the collection's workflow, as the list read placed it.
+      if (columnName === "review") {
+        cols.push({
+          name: "review",
+          header: "Review",
+          sortable: false,
+          hidden,
+          cell: ({ row }) => <ReviewCell parts={rowReviewParts(row)} />,
         });
         continue;
       }
@@ -634,6 +782,22 @@ export function buildEntryColumns(
         />
       ),
     });
+  }
+
+  // The title column shows titles in the language the reader chose, where one is chosen. It is
+  // not sortable then: the list orders by the default language's titles, not the ones shown.
+  const titlesIn = actions?.titlesIn;
+  if (titlesIn) {
+    const titleName = getEntryTitleField(collection);
+    const index = cols.findIndex(column => column.name === titleName);
+    const base = index >= 0 ? cols[index].cell : undefined;
+    if (titleName && base) {
+      cols[index] = {
+        ...cols[index],
+        sortable: false,
+        cell: titleInLanguageCell(base, titleName, titlesIn),
+      };
+    }
   }
 
   return cols;

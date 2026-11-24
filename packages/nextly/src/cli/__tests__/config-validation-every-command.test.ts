@@ -110,6 +110,17 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/**
+ * The report a run ends with: what it wrote to stderr from the error shape's
+ * first line on. A run starts with its own first line, the database it was
+ * about to use or what it was starting, which differs by command and is no
+ * part of the report.
+ */
+function reportOf(stderr: string): string {
+  const start = stderr.indexOf("✗");
+  return (start === -1 ? stderr : stderr.slice(start)).trim();
+}
+
 /** What `nextly <args>` ends with in `dir`: its exit status, and what it wrote to stderr. */
 async function run(
   args: readonly string[]
@@ -180,7 +191,7 @@ describe("an invalid configuration, given to every command that reads its entiti
       ) {
         wrong.push(`${name}: ${first}`);
       }
-      reports.set(name, ran.stderr.trim());
+      reports.set(name, reportOf(ran.stderr));
       // Nothing written, and no database opened.
       const left = readdirSync(dir).filter(file => file !== "nextly.config.ts");
       if (left.length > 0) wrong.push(`${name}: wrote ${left.join(", ")}`);
@@ -225,6 +236,15 @@ describe("a project with no configuration file", () => {
 
   // A plugin's own rollback reads its migrations and no app entity, so it goes on without one; it
   // ends for its own reason (no such plugin), never for the missing configuration.
+  // A blank migration reads no entity, only the migrations folder, so it is written where the
+  // default configuration puts that folder.
+  it("is no reason for migrate:create --blank to refuse", async () => {
+    const ran = await run(["migrate:create", "--blank", "--name", "by_hand"]);
+
+    expect(ran.stderr).not.toContain("CONFIG_MISSING");
+    expect(ran.status, ran.stderr).toBe(0);
+  });
+
   it("is no reason for migrate:down --plugin to refuse", async () => {
     const ran = await run(["migrate:down", "--plugin", "@acme/seo"]);
 
@@ -261,7 +281,7 @@ describe("an invalid configuration, saved while the development server runs", ()
 
     await reloadNextlyConfig();
 
-    const report = command.stderr.trim();
+    const report = reportOf(command.stderr);
     expect(report).toContain("CONFIG_INVALID");
     expect(
       warned.some(message => message.includes(report)),

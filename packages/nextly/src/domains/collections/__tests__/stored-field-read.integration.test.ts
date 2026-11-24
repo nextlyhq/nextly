@@ -230,6 +230,22 @@ async function bootLanguages(dialect: TestDialect): Promise<TestNextly> {
         fields: [{ name: "body", type: "probe", localized: true }],
       } as unknown as CollectionConfig,
       {
+        // A group with one structure in every language: its translated field
+        // is each language's text, its other field one value for all of them.
+        slug: "framedonce",
+        localized: true,
+        fields: [
+          {
+            name: "hero",
+            type: "group",
+            fields: [
+              { name: "body", type: "probe", localized: true },
+              { name: "note", type: "probe", localized: false },
+            ],
+          },
+        ],
+      } as unknown as CollectionConfig,
+      {
         slug: "staged",
         localized: true,
         status: true,
@@ -1145,6 +1161,48 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
 
       expect(await at("de")).toEqual({ kind: "value", value: { said: "de" } });
       expect(await at("en")).toEqual({ kind: "value", value: { said: "en" } });
+    });
+
+    it("reads a field inside a group with one structure in the language asked, and a shared one the same in every language", async () => {
+      const t = await bootLanguages(dialect);
+      const id = await created(t, "framedonce", {
+        hero: { body: { said: "en" }, note: { n: 1 } },
+      });
+      await t.nextly.update({
+        collection: "framedonce",
+        id,
+        locale: "de",
+        data: {
+          hero: { body: { said: "de" }, note: { n: 1 } },
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      } as never);
+      const read = languagesReader(t, "probe");
+      const at = (field: string, locale: string) =>
+        read({
+          collection: "framedonce",
+          id,
+          field,
+          form: "published",
+          locale,
+        } as never);
+
+      expect(await at("hero.body", "de")).toEqual({
+        kind: "value",
+        value: { said: "de" },
+      });
+      expect(await at("hero.body", "en")).toEqual({
+        kind: "value",
+        value: { said: "en" },
+      });
+      // A language holding no text for it has none, never another language's.
+      expect(await at("hero.body", "fr")).toEqual({ kind: "absent" });
+      // The shared value is the structure's, the same in every language.
+      expect(await at("hero.note", "fr")).toEqual({
+        kind: "value",
+        value: { n: 1 },
+      });
     });
 
     it("tells a Single's validators the language the save is in", async () => {

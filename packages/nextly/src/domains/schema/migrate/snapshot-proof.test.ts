@@ -1399,6 +1399,205 @@ describe("what a hand-made database can hold under the names a file writes", () 
     ).toBe("shown");
   });
 
+  it("a constraint named inside a column's definition is asked what a table-level one is", async () => {
+    const KEY = `"author" text CONSTRAINT "dc_posts_author_fk" REFERENCES "dc_posts" ("id")`;
+    const CREATE_KEY = (tail: string) =>
+      `CREATE TABLE "dc_posts" ("id" text PRIMARY KEY, ${KEY}${tail})`;
+    const ADD_KEY = (tail: string) =>
+      `ALTER TABLE "dc_posts" ADD COLUMN ${KEY}${tail}`;
+    const MYSQL_CHECK = "CONSTRAINT `dc_posts_title_ck` CHECK (`title` <> '')";
+    const CREATE_CHECK = (tail: string) =>
+      `CREATE TABLE \`dc_posts\` (\`id\` varchar(36) PRIMARY KEY, \`title\` text ${MYSQL_CHECK}${tail})`;
+    const ADD_CHECK = (tail: string) =>
+      `ALTER TABLE \`dc_posts\` ADD COLUMN \`title\` text ${MYSQL_CHECK}${tail}`;
+    const UNIQUE = `ALTER TABLE "dc_posts" ADD COLUMN "slug" text CONSTRAINT "dc_posts_slug_key" UNIQUE`;
+    for (const [statement, dialect, facts, status] of [
+      // PostgreSQL: the key's deferrability, as the definition declares it.
+      [
+        CREATE_KEY(" DEFERRABLE INITIALLY DEFERRED"),
+        "postgresql",
+        { deferrability: "not" },
+        "not-done",
+      ],
+      [
+        CREATE_KEY(" DEFERRABLE INITIALLY DEFERRED"),
+        "postgresql",
+        { deferrability: "deferred" },
+        "shown",
+      ],
+      [
+        CREATE_KEY(""),
+        "postgresql",
+        { deferrability: "immediate" },
+        "not-done",
+      ],
+      [CREATE_KEY(""), "postgresql", { deferrability: "not" }, "shown"],
+      [
+        ADD_KEY(" DEFERRABLE"),
+        "postgresql",
+        { deferrability: "not" },
+        "not-done",
+      ],
+      [
+        ADD_KEY(" DEFERRABLE"),
+        "postgresql",
+        { deferrability: "immediate" },
+        "shown",
+      ],
+      // Words of the column's next constraint are not the key's: SET NULL is its action.
+      [
+        ADD_KEY(" ON DELETE SET NULL DEFERRABLE"),
+        "postgresql",
+        { deferrability: "immediate" },
+        "shown",
+      ],
+      [ADD_KEY(" NOT NULL"), "postgresql", { deferrability: "not" }, "shown"],
+      // A unique constraint's index, by the default method.
+      [UNIQUE, "postgresql", { index: "other" }, "not-done"],
+      [UNIQUE, "postgresql", { index: "plain" }, "shown"],
+      // MySQL: a column check's enforcement.
+      [CREATE_CHECK(""), "mysql", { enforced: false }, "not-done"],
+      [CREATE_CHECK(""), "mysql", { enforced: true }, "shown"],
+      [ADD_CHECK(" NOT ENFORCED"), "mysql", { enforced: true }, "not-done"],
+      [ADD_CHECK(" NOT ENFORCED"), "mysql", { enforced: false }, "shown"],
+    ] as const) {
+      expect(await one(statement, dialect, facts), statement).toBe(status);
+    }
+    // A name that is itself a word opening a column constraint still names the constraint.
+    expect(
+      await one(
+        `ALTER TABLE "dc_posts" ADD COLUMN "author" text CONSTRAINT generated REFERENCES "dc_posts" ("id") DEFERRABLE INITIALLY DEFERRED`,
+        "postgresql",
+        { deferrability: "not" }
+      )
+    ).toBe("not-done");
+    // A column a later statement drops takes its constraints with it: nothing is asked of them.
+    expect(
+      await one(
+        ADD_KEY(" DEFERRABLE"),
+        "postgresql",
+        { deferrability: "not" },
+        ['ALTER TABLE "dc_posts" DROP COLUMN "author"']
+      )
+    ).toBe("shown");
+  });
+
+  it("a later drop ends only an object of its own kind under the name", async () => {
+    const CHECK =
+      "ALTER TABLE `dc_posts` ADD CONSTRAINT `dc_posts_title_ck` CHECK (`title` <> '')";
+    // MySQL: an index or a key of the check's name is another object, so the check is still asked.
+    for (const later of [
+      "DROP INDEX `dc_posts_title_ck` ON `dc_posts`",
+      "ALTER TABLE `dc_posts` DROP INDEX `dc_posts_title_ck`",
+      "ALTER TABLE `dc_posts` DROP KEY `dc_posts_title_ck`",
+      "ALTER TABLE `dc_posts` DROP FOREIGN KEY `dc_posts_title_ck`",
+    ]) {
+      expect(
+        await one(CHECK, "mysql", { enforced: false }, [later]),
+        later
+      ).toBe("not-done");
+    }
+    // A drop of its own kind ends it, a drop of any constraint included.
+    for (const later of [
+      "ALTER TABLE `dc_posts` DROP CHECK `dc_posts_title_ck`",
+      "ALTER TABLE `dc_posts` DROP CONSTRAINT `dc_posts_title_ck`",
+    ]) {
+      expect(
+        await one(CHECK, "mysql", { enforced: false }, [later]),
+        later
+      ).toBe("shown");
+    }
+    // PostgreSQL: an index of a foreign key's name is another object.
+    const KEY =
+      'ALTER TABLE "dc_posts" ADD CONSTRAINT "dc_posts_author_fk" FOREIGN KEY ("title") REFERENCES "dc_posts" ("id")';
+    expect(
+      await one(KEY, "postgresql", { deferrability: "deferred" }, [
+        'DROP INDEX "dc_posts_author_fk"',
+      ])
+    ).toBe("not-done");
+    expect(
+      await one(KEY, "postgresql", { deferrability: "deferred" }, [
+        'ALTER TABLE "dc_posts" DROP CONSTRAINT "dc_posts_author_fk"',
+      ])
+    ).toBe("shown");
+    // A validated constraint is ended by a constraint's drop, not by an index's.
+    const VALIDATE =
+      'ALTER TABLE "dc_posts" VALIDATE CONSTRAINT "dc_posts_author_fk"';
+    expect(
+      await one(VALIDATE, "postgresql", { validated: false }, [
+        'DROP INDEX "dc_posts_author_fk"',
+      ])
+    ).toBe("not-done");
+    // A unique constraint is an index on MySQL, which an index's drop ends; not on PostgreSQL.
+    expect(
+      await one(
+        "ALTER TABLE `dc_posts` ADD CONSTRAINT `dc_posts_slug_uq` UNIQUE (`slug`)",
+        "mysql",
+        { index: "other" },
+        ["DROP INDEX `dc_posts_slug_uq` ON `dc_posts`"]
+      )
+    ).toBe("shown");
+    expect(
+      await one(
+        'ALTER TABLE "dc_posts" ADD CONSTRAINT "dc_posts_slug_uq" UNIQUE ("slug")',
+        "postgresql",
+        { index: "other" },
+        ['DROP INDEX "dc_posts_slug_uq"']
+      )
+    ).toBe("not-done");
+    // An index is not ended by a constraint's drop.
+    expect(
+      await one(
+        "ALTER TABLE `dc_posts` ADD INDEX `dc_posts_slug_idx` (`slug`)",
+        "mysql",
+        { index: "other" },
+        ["ALTER TABLE `dc_posts` DROP CHECK `dc_posts_slug_idx`"]
+      )
+    ).toBe("not-done");
+    for (const plain of [
+      "ALTER TABLE `dc_posts` ADD INDEX `dc_posts_slug_idx` (`slug`)",
+      "CREATE INDEX `dc_posts_slug_idx` ON `dc_posts` (`slug`)",
+    ]) {
+      expect(
+        await one(plain, "mysql", { index: null }, [
+          "ALTER TABLE `dc_posts` DROP CONSTRAINT `dc_posts_slug_idx`",
+        ]),
+        plain
+      ).toBe("not-done");
+    }
+    // A MySQL unique index is a constraint too, which a constraint's drop removes.
+    for (const unique of [
+      "ALTER TABLE `dc_posts` ADD UNIQUE INDEX `dc_posts_slug_uq` (`slug`)",
+      "CREATE UNIQUE INDEX `dc_posts_slug_uq` ON `dc_posts` (`slug`)",
+    ]) {
+      expect(
+        await one(unique, "mysql", { index: null }, [
+          "ALTER TABLE `dc_posts` DROP CONSTRAINT `dc_posts_slug_uq`",
+        ]),
+        unique
+      ).toBe("shown");
+    }
+  });
+
+  it("MySQL's RENAME INDEX moves an index and not a check of the same name", async () => {
+    const asked: string[] = [];
+    await statusesAgainst(
+      [
+        "ALTER TABLE `dc_posts` ADD CONSTRAINT `dc_posts_title_ck` CHECK (`title` <> '')",
+        "ALTER TABLE `dc_posts` RENAME INDEX `dc_posts_title_ck` TO `renamed`",
+      ],
+      "mysql",
+      {
+        ...liveWith({}),
+        checkEnforced: (table, name) => {
+          asked.push(`${table}.${name}`);
+          return true;
+        },
+      }
+    );
+    expect(asked).toEqual(["dc_posts.dc_posts_title_ck"]);
+  });
+
   it("an index a file creates must be a plain one in the database", async () => {
     const CREATE = 'CREATE INDEX "dc_posts_slug_idx" ON "dc_posts" ("slug")';
     const ADD = "ALTER TABLE `dc_posts` ADD INDEX `dc_posts_slug_idx` (`slug`)";
@@ -1495,6 +1694,167 @@ describe("what a hand-made database can hold under the names a file writes", () 
     ] as const) {
       expect(shown(statement, dialect), statement).toBe(true);
     }
+  });
+
+  it("a MySQL index declared inside CREATE TABLE is read as the statement forms are", () => {
+    const create = (element: string) =>
+      `CREATE TABLE \`dc_posts\` (\`id\` varchar(36) PRIMARY KEY, \`slug\` text, ${element})`;
+    for (const element of [
+      "INDEX `i` USING HASH (`slug`)",
+      "KEY `i` (`slug` DESC)",
+      "UNIQUE KEY `i` (`slug`) USING HASH",
+      "CONSTRAINT `i` UNIQUE (`slug` DESC)",
+      "FULLTEXT INDEX `i` (`slug`)",
+    ]) {
+      expect(shown(create(element), "mysql"), element).toBe(false);
+    }
+    for (const element of [
+      "INDEX `i` (`slug`(191))",
+      "UNIQUE KEY `i` (`slug`(191))",
+      "KEY `i` USING BTREE (`slug`(191))",
+      "CONSTRAINT `i` UNIQUE (`slug`(191))",
+    ]) {
+      expect(shown(create(element), "mysql"), element).toBe(true);
+    }
+  });
+
+  it("a key or exclusion that states what no snapshot records is not shown, on every road", () => {
+    const create = (element: string) =>
+      `CREATE TABLE "dc_posts" ("id" text PRIMARY KEY, "slug" text, ${element})`;
+    const unshown: Array<[string, SupportedDialect]> = [
+      [
+        create('CONSTRAINT "u" UNIQUE NULLS NOT DISTINCT ("slug")'),
+        "postgresql",
+      ],
+      [create('UNIQUE NULLS NOT DISTINCT ("slug")'), "postgresql"],
+      [
+        create('CONSTRAINT "x" EXCLUDE USING gist ("slug" WITH =)'),
+        "postgresql",
+      ],
+      [create('EXCLUDE USING gist ("slug" WITH =)'), "postgresql"],
+      [
+        create('CONSTRAINT "u" UNIQUE ("slug") USING INDEX TABLESPACE "fast"'),
+        "postgresql",
+      ],
+      [create('UNIQUE ("slug" DESC)'), "sqlite"],
+      [
+        'CREATE TABLE "dc_posts" ("id" text, "slug" text, PRIMARY KEY ("id" DESC))',
+        "sqlite",
+      ],
+      // The same forms added to a table, named or not: an unnamed EXCLUDE is not a column.
+      [
+        'ALTER TABLE "dc_posts" ADD EXCLUDE USING gist ("slug" WITH =)',
+        "postgresql",
+      ],
+      [
+        'ALTER TABLE "dc_posts" ADD CONSTRAINT "x" EXCLUDE USING gist ("slug" WITH =)',
+        "postgresql",
+      ],
+      [
+        'ALTER TABLE "dc_posts" ADD UNIQUE NULLS NOT DISTINCT ("slug")',
+        "postgresql",
+      ],
+      [
+        'ALTER TABLE "dc_posts" ADD CONSTRAINT "u" UNIQUE NULLS NOT DISTINCT ("slug")',
+        "postgresql",
+      ],
+      // The same key declared on its column, in a body or added with the column.
+      [
+        'CREATE TABLE "dc_posts" ("id" text PRIMARY KEY, "slug" text UNIQUE NULLS NOT DISTINCT)',
+        "postgresql",
+      ],
+      [
+        'ALTER TABLE "dc_posts" ADD COLUMN "slug" text UNIQUE NULLS NOT DISTINCT',
+        "postgresql",
+      ],
+      [
+        'ALTER TABLE "dc_posts" ADD COLUMN "slug" text CONSTRAINT "u" UNIQUE NULLS NOT DISTINCT',
+        "postgresql",
+      ],
+      [
+        'CREATE TABLE "dc_posts" ("id" integer PRIMARY KEY DESC, "slug" text)',
+        "sqlite",
+      ],
+    ];
+    expect(unshown.filter(([s, d]) => shown(s, d))).toEqual([]);
+    // A plain key stays shown on every road and dialect.
+    const plain: Array<[string, SupportedDialect]> = [
+      [create('CONSTRAINT "u" UNIQUE ("slug")'), "postgresql"],
+      [create('UNIQUE ("slug")'), "sqlite"],
+      [
+        'CREATE TABLE "dc_posts" ("id" text, "slug" text, PRIMARY KEY ("id", "slug"))',
+        "sqlite",
+      ],
+      ['ALTER TABLE "dc_posts" ADD UNIQUE ("slug")', "postgresql"],
+      ['ALTER TABLE "dc_posts" ADD PRIMARY KEY ("id")', "postgresql"],
+      [
+        'ALTER TABLE "dc_posts" ADD CONSTRAINT "u" UNIQUE ("slug")',
+        "postgresql",
+      ],
+      // Plain keys on their column, and a column PostgreSQL lets be named `exclude`.
+      [
+        'CREATE TABLE "dc_posts" ("id" text PRIMARY KEY, "slug" text UNIQUE NOT NULL)',
+        "postgresql",
+      ],
+      [
+        'CREATE TABLE "dc_posts" ("id" integer PRIMARY KEY AUTOINCREMENT, "slug" text)',
+        "sqlite",
+      ],
+      ['ALTER TABLE "dc_posts" ADD COLUMN "slug" text UNIQUE', "postgresql"],
+      [
+        'CREATE TABLE "dc_posts" ("id" text PRIMARY KEY, exclude text)',
+        "postgresql",
+      ],
+      ['ALTER TABLE "dc_posts" ADD exclude boolean', "postgresql"],
+    ];
+    expect(plain.filter(([s, d]) => !shown(s, d))).toEqual([]);
+  });
+
+  it("a MySQL index's own name is not read as an order word, on every road", () => {
+    const create = (element: string) =>
+      `CREATE TABLE \`dc_posts\` (\`id\` varchar(36) PRIMARY KEY, \`slug\` text, ${element})`;
+    const named = [
+      create("INDEX nulls (`slug`(191))"),
+      create("UNIQUE KEY nulls (`slug`(191))"),
+      create("KEY nulls USING BTREE (`slug`(191))"),
+      create("CONSTRAINT `u` UNIQUE nulls (`slug`(191))"),
+      "ALTER TABLE `dc_posts` ADD INDEX nulls (`slug`(191))",
+      "ALTER TABLE `dc_posts` ADD UNIQUE KEY nulls (`slug`(191))",
+      "ALTER TABLE `dc_posts` ADD CONSTRAINT `u` UNIQUE INDEX nulls (`slug`(191))",
+      // A foreign key's own index may be named too.
+      "ALTER TABLE `dc_posts` ADD CONSTRAINT `fk` FOREIGN KEY nulls (`title`) REFERENCES `dc_posts` (`id`)",
+    ];
+    expect(named.filter(statement => !shown(statement, "mysql"))).toEqual([]);
+    // What follows the name is still read.
+    const stating = [
+      create("INDEX nulls (`slug` DESC)"),
+      "ALTER TABLE `dc_posts` ADD INDEX nulls USING HASH (`slug`)",
+      "ALTER TABLE `dc_posts` ADD CONSTRAINT `u` UNIQUE nulls (`slug` DESC)",
+      // `CONSTRAINT` with no name before the key it opens.
+      create("CONSTRAINT UNIQUE (`slug` DESC)"),
+    ];
+    expect(stating.filter(statement => shown(statement, "mysql"))).toEqual([]);
+  });
+
+  it("a key named inside a column reads past the table it references", async () => {
+    const add = (target: string, tail: string) =>
+      `ALTER TABLE "dc_posts" ADD COLUMN "author" text CONSTRAINT "dc_posts_author_fk" REFERENCES ${target}${tail}`;
+    const wrong: string[] = [];
+    for (const target of [
+      'generated ("id")',
+      'public.generated ("id")',
+      "generated",
+    ]) {
+      const statement = add(target, " DEFERRABLE INITIALLY DEFERRED");
+      for (const [live, status] of [
+        ["deferred", "shown"],
+        ["not", "not-done"],
+      ] as const) {
+        const got = await one(statement, "postgresql", { deferrability: live });
+        if (got !== status) wrong.push(`${target} against ${live}: ${got}`);
+      }
+    }
+    expect(wrong).toEqual([]);
   });
 
   it("a SQLite rebuild's sequence carry needs a counter that covers the table's rows", async () => {

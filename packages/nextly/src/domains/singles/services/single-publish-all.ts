@@ -132,6 +132,7 @@ import {
   companionNotReadyMessage,
   isCompanionReady,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapesOf } from "../../i18n/runtime/component-shapes";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { partsTogether, type ChangedParts } from "../../versions/changed-parts";
 import {
@@ -1555,7 +1556,9 @@ export class SinglePublishAllService extends BaseService {
             tx,
             companion,
             plan.existingDoc.id,
-            [...statuses.keys()]
+            [...statuses.keys()],
+            // A repeater's or group's text is laid on the structure the Single holds.
+            plan.existingDoc
           )
         : new Map<string, Record<string, unknown>>();
     const translated = new Set(
@@ -2700,7 +2703,13 @@ export class SinglePublishAllService extends BaseService {
     access: FieldGroupWriteAccess
   ): Promise<void> {
     if (pending.length === 0) return;
-    const { singleMeta, existingDoc, companion } = plan;
+    const { singleMeta, existingDoc } = plan;
+    // A container placing a component is split by its component's fields, read on this
+    // transaction (`withComponentShapes`).
+    const companion = await withComponentShapesOf(
+      plan.companion,
+      tx.getDrizzle()
+    );
     // So the type tags the drafts record come off at every depth.
     const componentFields = await this.componentFieldsOn(tx, plan.fieldConfigs);
 
@@ -2955,7 +2964,9 @@ export class SinglePublishAllService extends BaseService {
             tx,
             companion,
             plan.existingDoc.id,
-            promoted
+            promoted,
+            // A repeater's or group's text is laid on the structure the Single holds.
+            plan.existingDoc
           )
         : new Map<string, Record<string, unknown>>();
     const holdsComponents = pending.some(
@@ -3013,7 +3024,9 @@ export class SinglePublishAllService extends BaseService {
     const { parts } = plan;
     const structure: PendingStructure | null = valuesOn
       ? {
-          keys: await partKeysOf(plan.fieldConfigs),
+          keys: await partKeysOf(plan.fieldConfigs, {
+            executor: valuesOn.getDrizzle(),
+          }),
           liveIn: locale =>
             withLiveStructures(
               valuesOn,
@@ -3898,7 +3911,9 @@ export class SinglePublishAllService extends BaseService {
           tx,
           plan.companion,
           plan.existingDoc.id,
-          told.map(language => language.locale)
+          told.map(language => language.locale),
+          // Laid on the structure the publish left, as each language's text is.
+          publishedRow
         )
       : new Map<string, Record<string, unknown>>();
 

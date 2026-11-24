@@ -1377,7 +1377,18 @@ page last changed is read from a field named `dateModified`, `modifiedAt`, `corr
 holds a date. Where it is empty, as a correction date is on a page never corrected, it is the
 page's [`<lastmod>`](#the-sitemap-and-robotstxt) date, when its content last changed, rather than
 the row's own `updatedAt`, which every save moves, an SEO-only one included. Map `dateModified`
-(or `datePublished`) to read another field. Structured data states only what the route
+(or `datePublished`) to read another field.
+
+A detail can also be read from one of the dates every entry holds by itself: `createdAt`, and
+`firstPublishedAt` on a type with drafts and publishing. A type with no publish date of its own can
+map `datePublished` to either, in its options or under **SEO › Content types**, which offers them
+as Created and First published for the date published and a video's upload date. Until a new
+page is saved (or, for `firstPublishedAt`, first published), its SEO tab says when the date will be
+set rather than asking for it. A `dateModified` mapped to `updatedAt` is not read from it either,
+for the reason above: the page keeps the date its content last changed, which falls back to the row's
+`updatedAt` only where no such date is kept.
+
+Structured data states only what the route
 read for the page, so a relationship names someone only where the route read the entry it holds:
 give a route that shows its author `depth: 1`. The route's own access rules, language and cache
 tags then govern the author as they govern the page, so an unpublished or private author is never
@@ -2004,6 +2015,13 @@ it keeps working drafts can't be read from the plugin; change its SEO in its own
    where a page can't be put back, the screen says **Part of the import may be in place** instead. Once it is applied, the screen says how many values were imported on how many
    pages, and offers the report, one row per version, to download.
 
+Importing published versions needs permission to publish. Where a type keeps working drafts, the
+import writes a page's published version as a save of that version, as publishing does, so the
+person importing needs the type's publish permission as well as its update permission. Without it
+the import is refused with **Importing into the published version of "…" needs permission to
+publish it**, and nothing is imported. Its drafts are never written in place of the published
+version.
+
 Pages in a file are matched by their address, in the language that address is served in, or by
 their slug, in the default language, where the file names no address. A share image is matched to
 the media library by its file name.
@@ -2078,6 +2096,9 @@ Which built-in roles hold what:
   other than Admin never pick up a permission a plugin declares. Editors and Authors change a
   page's SEO with the page while `pagePermissions` is off, and none of them reaches site-wide SEO
   or the check. Give the people who should a role of your own holding the permissions above.
+- The plugin's collections (redirects, the not-found log, the problems found and its other
+  records) are open to Admin, Editor, Author and Viewer, each by its own rule;
+  [`presetGrants`](/docs/permissions#the-preset-roles-reach-a-collection-only-once-it-is-opened-to-them) in the config changes that.
 
 The sitemap, robots.txt and each page's head are public. Making a [share image](#share-images-of-the-right-size)
 is a change to the media library, asked as `create-media` and `read-media`.

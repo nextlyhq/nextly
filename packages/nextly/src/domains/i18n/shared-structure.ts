@@ -79,25 +79,74 @@ function isStructureContainer(
  * field that is no repeater or group, one translated whole (`localized: true`, whose value is kept
  * per language as it stands), one that is never translatable, or one holding no translatable
  * value at any depth. Read for a field of a translated entity.
+ *
+ * A component placed inside (its values held inline in the container's rows) is read through its
+ * own fields with `components`; without, it is no value of the container's, as where its fields
+ * are not to hand (`placesComponent` says whether the shape needs them).
  */
 export function sharedStructureShape(
-  field: StructuredField
+  field: StructuredField,
+  components?: ComponentFieldsOf
 ): SharedStructureShape | null {
   if (!isStructureContainer(field)) return null;
   if (field.localized === true || neverTranslatable(field)) return null;
-  return shapeOfLevel(field.type, field.fields ?? [], new WeakSet());
+  return shapeOfLevel(
+    field.type,
+    field.fields ?? [],
+    new WeakSet(),
+    components ? { fieldsOf: components, open: new Set() } : undefined
+  );
+}
+
+/**
+ * Whether a repeater or group places a component anywhere inside it, whose values its rows hold
+ * inline: its shape then depends on that component's fields, read from the registry when its
+ * values are split or put back together. Answered from the container's own definition alone.
+ */
+export function placesComponent(field: StructuredField): boolean {
+  if (!isStructureContainer(field)) return false;
+  const open = new WeakSet<object>();
+  const visit = (level: readonly StructuredField[]): boolean =>
+    level.some(child => {
+      if (componentSlugsOf(child).length > 0) return true;
+      if (!isStructureContainer(child) || open.has(child)) return false;
+      open.add(child);
+      return visit(child.fields ?? []);
+    });
+  return visit(field.fields ?? []);
 }
 
 /**
  * Whether `field` keeps translations inside it, and so has an overlay column on its entity's
- * translation table beside its structure on the main table. False on an entity that is not
- * translated.
+ * translation table beside its structure on the main table: one holding translatable text, or
+ * placing a component (whose text, if any, is known only from its own fields). Decided from the
+ * entity's own definition, so its tables never depend on another entity's. False on an entity
+ * that is not translated.
  */
 export function keepsTranslationsInside(
   field: StructuredField,
   entityLocalized: boolean
 ): boolean {
-  return entityLocalized && sharedStructureShape(field) !== null;
+  if (!entityLocalized) return false;
+  if (field.localized === true || neverTranslatable(field)) return false;
+  return sharedStructureShape(field) !== null || placesComponent(field);
+}
+
+/**
+ * The shape a container keeping translations inside is split by before its components' fields
+ * are read: what it translates of its own, or nothing yet. Read again with the components' fields
+ * once they are to hand (`sharedStructureShape`), a component holding no text leaves it empty.
+ */
+export function shapeBeforeComponents(
+  field: StructuredField & { type: string }
+): SharedStructureShape {
+  return (
+    sharedStructureShape(field) ?? {
+      kind: field.type === "group" ? "group" : "repeater",
+      texts: [],
+      inner: {},
+    }
+  );
 }
 
 /**
@@ -146,39 +195,46 @@ function shapeOfLevel(
         }
         continue;
       }
-      if (components && componentSlugsOf(child).length > 0) {
-        const nested = componentStructureShape(
-          child,
-          components.fieldsOf,
-          components.open
-        );
-        if (nested) inner[child.name] = nested;
-        continue;
-      }
-      if (isStructureContainer(child)) {
-        // A container inside keeps the one structure too, whatever its own flag says: no level
-        // of a shared structure has rows of its own per language.
-        if (open.has(child) || neverTranslatable(child)) continue;
-        open.add(child);
-        const nested = shapeOfLevel(
-          child.type,
-          child.fields ?? [],
-          open,
-          components
-        );
-        open.delete(child);
-        if (nested) inner[child.name] = nested;
-        continue;
-      }
-      // The rule a top-level field of a translated entity is classified by.
-      if (isFieldLocalized({ ...child, name: child.name }, true)) {
-        texts.push(child.name);
-      }
+      const added = childShape(child, child.name, open, components);
+      if (added === "text") texts.push(child.name);
+      else if (added !== null) inner[child.name] = added;
     }
   };
   visit(fields);
   if (texts.length === 0 && Object.keys(inner).length === 0) return null;
   return { kind, texts, inner };
+}
+
+/**
+ * What one named field of a level adds to the level's shape: the shape of what it translates
+ * inside (a component it places, or a container inside), `"text"` where it is translatable text
+ * of the level itself, or `null` where it translates nothing.
+ */
+function childShape(
+  child: StructuredField,
+  name: string,
+  open: WeakSet<object>,
+  components: ComponentReach | undefined
+): SharedStructureShape | "text" | null {
+  if (components && componentSlugsOf(child).length > 0) {
+    return componentStructureShape(child, components.fieldsOf, components.open);
+  }
+  if (isStructureContainer(child)) {
+    // A container inside keeps the one structure too, whatever its own flag says: no level of a
+    // shared structure has rows of its own per language.
+    if (open.has(child) || neverTranslatable(child)) return null;
+    open.add(child);
+    const nested = shapeOfLevel(
+      child.type,
+      child.fields ?? [],
+      open,
+      components
+    );
+    open.delete(child);
+    return nested;
+  }
+  // The rule a top-level field of a translated entity is classified by.
+  return isFieldLocalized({ ...child, name }, true) ? "text" : null;
 }
 
 /** The components a field places: one, or a dynamic zone's several; none for any other field. */

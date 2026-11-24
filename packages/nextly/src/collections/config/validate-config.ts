@@ -24,6 +24,8 @@
  * ```
  */
 
+import { unknownPresetSlugs } from "../../auth/preset-reach";
+import { PRESET_ROLE_SLUGS } from "../../auth/role-presets";
 import {
   COLLECTION_DB_OPTION_NAMES,
   COLLECTION_ID_TYPES,
@@ -83,6 +85,7 @@ import { declaresOwnId } from "../fields/repeater-row-identity";
 // C7/D16 — accept plugin-registered custom field types (must be registered
 // before the config is validated; see field-type-registry).
 
+import { filesProblems } from "./collection-files";
 import type { CollectionConfig } from "./define-collection";
 
 export { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS };
@@ -159,6 +162,10 @@ export type ValidationErrorCode =
   | "ACCESS_INVALID_TYPE"
   | "ACCESS_FUNCTION_INVALID"
   | "ACCESS_KEY_UNKNOWN"
+  // A `grants.presets` that is not a list of preset role slugs.
+  | "GRANTS_PRESETS_INVALID"
+  // A `closedToSuperAdmin` that is not `true` or `false`.
+  | "CLOSED_TO_SUPER_ADMIN_INVALID"
   // Index errors
   | "INDEX_INVALID_TYPE"
   | "INDEX_FIELDS_REQUIRED"
@@ -172,7 +179,10 @@ export type ValidationErrorCode =
   | "DB_ALLOW_ID_ON_CREATE_INVALID"
   | "DB_SLUG_PATHS_INVALID"
   // Public address errors
-  | "PUBLIC_ADDRESS_INVALID";
+  | "PUBLIC_ADDRESS_INVALID"
+  // A `files` option that is malformed, or beside a setting a collection of
+  // files cannot have.
+  | "FILES_INVALID";
 
 /**
  * A single validation error with path and context.
@@ -726,6 +736,45 @@ function validateAccess(access: unknown, errors: ValidationError[]): void {
 }
 
 /**
+ * Validates `grants.presets` where it is written: a list of the preset role
+ * slugs. A misspelt one (`"editors"`) would open the collection to nothing
+ * and say nothing, which is the silent half of a grant this check exists to
+ * prevent.
+ */
+function validateGrants(grants: unknown, errors: ValidationError[]): void {
+  if (grants === undefined) return;
+  if (!isPlainObject(grants)) {
+    errors.push({
+      path: "grants",
+      code: "GRANTS_PRESETS_INVALID",
+      message: 'grants must be an object, such as { presets: ["editor"] }.',
+    });
+    return;
+  }
+  const { presets } = grants as { presets?: unknown };
+  if (presets === undefined) return;
+  if (
+    !Array.isArray(presets) ||
+    !presets.every((slug): slug is string => typeof slug === "string")
+  ) {
+    errors.push({
+      path: "grants.presets",
+      code: "GRANTS_PRESETS_INVALID",
+      message: `grants.presets must be a list of preset role slugs: ${PRESET_ROLE_SLUGS.join(", ")}.`,
+    });
+    return;
+  }
+  const unknown = unknownPresetSlugs(presets);
+  if (unknown.length > 0) {
+    errors.push({
+      path: "grants.presets",
+      code: "GRANTS_PRESETS_INVALID",
+      message: `grants.presets names ${unknown.map(s => `"${s}"`).join(", ")}, which is not a preset role. The preset roles are ${PRESET_ROLE_SLUGS.join(", ")}.`,
+    });
+  }
+}
+
+/**
  * Validates the collection's `db` options where they are written.
  *
  * The write path reads them leniently: an `idType` it does not recognise
@@ -862,7 +911,27 @@ export function validateCollectionConfig(
 
   validateAccess(config.access, errors);
 
+  validateGrants((config as { grants?: unknown }).grants, errors);
+
+  // A value other than a boolean would leave the collection open while the
+  // config reads as closing it.
+  const closed = (config as { closedToSuperAdmin?: unknown })
+    .closedToSuperAdmin;
+  if (closed !== undefined && typeof closed !== "boolean") {
+    errors.push({
+      path: "closedToSuperAdmin",
+      code: "CLOSED_TO_SUPER_ADMIN_INVALID",
+      message: "closedToSuperAdmin must be true or false.",
+    });
+  }
+
   validateDbOptions(config.db, errors);
+
+  // A collection whose entries are files: the option's own shape, the
+  // settings it cannot be beside, and the fields it needs for each file.
+  for (const problem of filesProblems(config)) {
+    errors.push({ ...problem, code: "FILES_INVALID" });
+  }
 
   // Judged by the rule every public address is, so a template a plugin
   // supplies for a Builder type and one declared here never disagree.

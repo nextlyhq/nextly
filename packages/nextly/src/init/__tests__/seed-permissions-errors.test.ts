@@ -52,6 +52,11 @@ vi.mock("../../di/service-access", () => ({
   },
 }));
 vi.mock("../../database/seeders/role-presets", () => ({ seedRolePresets }));
+// The audit of the configuration's closed-to-super-admin marks needs a real
+// connection; its own tests are beside it.
+vi.mock("../record-declared-closed-marks", () => ({
+  recordDeclaredClosedMarks: async () => {},
+}));
 vi.mock("../../domains/auth/services/public-role", () => ({
   PUBLIC_ROLE_SLUG: "public",
   publicRoleMade: async () => true,

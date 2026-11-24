@@ -344,7 +344,7 @@ export async function saveRewrittenDraft(
   const patched = { ...slot.snapshot, [field]: shaped[field] };
   let snapshot = patched;
   let replaces = slot.snapshot;
-  const keys = await partKeysOf(draft.fields);
+  const keys = await partKeysOf(draft.fields, { executor: tx.getDrizzle() });
   if (draftsKeptByPart()) {
     // The whole document the drafts describe in this part's language, as its
     // next read assembles it, with and without the new value.

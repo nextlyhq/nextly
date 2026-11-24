@@ -378,6 +378,14 @@ export interface AdminBranding {
   devReload?: boolean;
 
   /**
+   * The collections and Singles a workflow holds that this reader may read,
+   * by slug, from the session-gated half alone. Absent means the server did
+   * not say (the answer has not arrived, or it comes from a server that does
+   * not send it), never that nothing is held.
+   */
+  workflowEntities?: string[];
+
+  /**
    * INSTALLED plugin metadata, for sidebar rendering and plugin settings pages.
    *
    * Comes from the session-gated half alone, so its absence means the list has

@@ -82,6 +82,8 @@ vi.mock("../../runtime/hmr-listener", () => ({
   // Read by `getNextly` when it answers from the instance it keeps.
   consumeHmrReloadFlag: () => false,
   markHmrReloadInFlight: vi.fn(),
+  // Called by `shutdown`, which closes the config watch a start opened.
+  stopHmrListener: vi.fn(),
 }));
 vi.mock("../../storage/image-processor", () => ({
   getImageProcessor: () => undefined,

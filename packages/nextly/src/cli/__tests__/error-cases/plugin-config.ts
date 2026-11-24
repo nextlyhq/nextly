@@ -7,7 +7,7 @@
  *
  * @module cli/__tests__/error-cases/plugin-config
  */
-import { collectPluginAuditKinds } from "../../../domains/audit/plugin-audit";
+import { collectPluginAuditKinds } from "../../../domains/audit/plugin-audit-kinds";
 import {
   assertBuilderDefinitionsKept,
   assertRelationTargetsDeclared,

@@ -74,11 +74,31 @@ type Route = "direct" | "rest";
  * On MySQL, two more than before its transactions took savepoints: the
  * version a publish records is inserted under a savepoint of its own, taken
  * and released, as it is on PostgreSQL.
+ *
+ * Raised (from 67/68, 70/72 and 72/73) when every installation came to keep
+ * its translatable fields per language, by design:
+ * - each read of the page also reads its per-language row (the page's title
+ *   and slug), six on a publish; the components a page places read theirs
+ *   once; and the page's per-language revisions are read for the version the
+ *   publish answers with;
+ * - the change's event records one more part, its language;
+ * - the REST save sends the title and slug, which are written to the page's
+ *   per-language row (an insert and an update) with where each value came
+ *   from (a read and two writes);
+ * - each working-draft lookup runs once per part, the shared one
+ *   (`locale IS NULL`) and the language's: five more version reads
+ *   ({@link VERSION_READS}), which one query could answer (a follow-up).
+ *
+ * On MySQL, three more (from 86/95) since an entry write holds its collection
+ * against a Builder save that deletes a field's values: the publish's write
+ * transaction takes the collection's named locks, reads its registry row for
+ * share and lets the named locks go (`holdEntityForWrite`), measured as
+ * exactly those three statements more on each route.
  */
 const PINS: Readonly<Record<TestDialect, Readonly<Record<Route, number>>>> = {
-  sqlite: { direct: 67, rest: 68 },
-  postgresql: { direct: 70, rest: 72 },
-  mysql: { direct: 72, rest: 73 },
+  sqlite: { direct: 78, rest: 87 },
+  postgresql: { direct: 83, rest: 93 },
+  mysql: { direct: 89, rest: 98 },
 };
 
 /**
@@ -103,8 +123,10 @@ const COMPONENT_READS = 6;
 /**
  * Reads of the version history: the components' working drafts in one query
  * per check, the page's own, and what recording the published version reads.
+ * Each working-draft lookup is made once per part, the shared one and the
+ * language's, so five of them twice: 12 before drafts were kept by part.
  */
-const VERSION_READS = 12;
+const VERSION_READS = 17;
 
 const heading = (id: string, text: string) => ({
   id,

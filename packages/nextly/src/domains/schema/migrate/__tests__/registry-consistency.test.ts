@@ -18,6 +18,7 @@ import {
   type LiveColumns,
   type RegistryRows,
 } from "../registry-consistency";
+import { _resetPerLanguageStorage } from "../../../i18n/per-language-storage";
 import type { RegisteredCollectionRow as Row } from "../../pipeline/registered-collections";
 import type { EntityKind } from "../resolved-schema";
 
@@ -129,6 +130,29 @@ describe("compareRegistryWithTables — columns", () => {
     });
 
     expect(report.missingColumns.map(d => d.field)).toEqual(["views"]);
+  });
+
+  it("leaves an untranslated entity's translatable fields to its companion, where every installation keeps them", () => {
+    // The layout every installation runs, not this file's earlier one
+    // (`__tests__/storage-layout`), which the next test gets back.
+    _resetPerLanguageStorage();
+    const report = compare({
+      rows: rows({
+        single: [
+          {
+            slug: "homepage",
+            tableName: "single_homepage",
+            fields: [
+              { name: "heroTitle", type: "text" },
+              { name: "showSearch", type: "checkbox" },
+            ],
+          },
+        ],
+      }),
+      live: live({ single_homepage: ["id"] }),
+    });
+
+    expect(report.missingColumns.map(d => d.field)).toEqual(["showSearch"]);
   });
 
   it("expects a column for a many-to-many on a field group's row", () => {
