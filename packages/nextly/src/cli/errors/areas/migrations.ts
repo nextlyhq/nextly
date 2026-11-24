@@ -1344,7 +1344,7 @@ export const MIGRATION_CODES = defineCodes({
   },
   FIELD_GROUP_STORAGE_NOT_MIGRATED: {
     cause:
-      "`nextly migrate` reached the migration that moves the history to the current field-group names on a database whose field groups are still on the legacy names.",
+      "A migration on the current field-group names was to be applied or recorded as applied on a database whose field groups are still on the legacy names.",
     from: [
       {
         code: "VALIDATION_ERROR",
@@ -1371,6 +1371,28 @@ export const MIGRATION_CODES = defineCodes({
       {
         code: "VALIDATION_ERROR",
         reason: "field-group-history-names-unrecorded",
+        describe: error => sentenceParts(error),
+      },
+    ],
+  },
+  FIELD_GROUP_ROLLBACK_REFUSED: {
+    cause:
+      "`nextly migrate:field-groups --down` was run on a database whose applied migration history is on the current field-group names.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        reason: "field-group-rollback-under-current-history",
+        describe: error => sentenceParts(error),
+      },
+    ],
+  },
+  FIELD_GROUP_ROLLBACK_HISTORY_UNREADABLE: {
+    cause:
+      "`nextly migrate:field-groups --down` could not tell which field-group names the database's applied migration history is on.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        reason: "field-group-rollback-history-unreadable",
         describe: error => sentenceParts(error),
       },
     ],

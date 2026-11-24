@@ -22,6 +22,10 @@ import {
   fieldGroupStorageNotMigratedError,
   fieldGroupTypeColumnNotRecordedError,
 } from "../../../domains/schema/migrate/field-group-history";
+import {
+  rollbackHistoryUnreadableError,
+  rollbackRefusedError,
+} from "../../../domains/schema/migrate/field-group-rollback";
 import { ownWriteLockError } from "../../../domains/schema/migrate/migration-transaction";
 import { fieldGroupHistoryNamesUnrecordedError } from "../../../domains/schema/migrate-create/snapshot-io";
 import {
@@ -597,6 +601,13 @@ export const MIGRATION_CASES = {
       "20261101_120000_000_add_banner",
       ["fg_banner"],
       ["comp_card"]
+    ),
+  FIELD_GROUP_ROLLBACK_REFUSED: () =>
+    rollbackRefusedError("20261119_120000_000_field_group_current_names"),
+  FIELD_GROUP_ROLLBACK_HISTORY_UNREADABLE: () =>
+    rollbackHistoryUnreadableError(
+      "20261119_120000_000_field_group_current_names",
+      "its snapshot cannot be read"
     ),
   FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED: () =>
     fieldGroupTypeColumnNotRecordedError(["fg_banner"]),

@@ -896,6 +896,20 @@ exports[`each code, as a command ends with it > FIELD_GROUP_NAMES_OPTION_INVALID
   Docs: https://nextlyhq.com/docs/cli/errors/field-group-names-option-invalid  (FIELD_GROUP_NAMES_OPTION_INVALID)"
 `;
 
+exports[`each code, as a command ends with it > FIELD_GROUP_ROLLBACK_HISTORY_UNREADABLE 1`] = `
+"✗ Whether this database's field groups can be moved back could not be told: 20261119_120000_000_field_group_current_names is recorded applied, and its snapshot cannot be read.
+  Why:  A history on the current field-group names cannot be moved back, and only the project's migrations say which names it is on.
+  Next: Nothing was changed. Run the command from the project that holds its migrations.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-rollback-history-unreadable  (FIELD_GROUP_ROLLBACK_HISTORY_UNREADABLE)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_ROLLBACK_REFUSED 1`] = `
+"✗ This database's field groups cannot be moved back to the legacy names: its applied migration history is on the current ones (dynamic_field_groups, fg_<slug>), as 20261119_120000_000_field_group_current_names records.
+  Why:  Every migration after it is planned against those names, and no command moves a history back.
+  Next: Nothing was changed. The field-group storage stays on the current names while this history is applied.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-rollback-refused  (FIELD_GROUP_ROLLBACK_REFUSED)"
+`;
+
 exports[`each code, as a command ends with it > FIELD_GROUP_STORAGE_NOT_MIGRATED 1`] = `
 "✗ 20261119_120000_000_field_group_current_names.sql moves the migration history to the current field-group names (dynamic_field_groups, fg_<slug>), and this database's field groups are still on the legacy ones (dynamic_components, comp_<slug>).
   Why:  Applying it would record a move the database has not made.

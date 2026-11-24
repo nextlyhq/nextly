@@ -61,6 +61,8 @@
     "field-group-migration-in-flight",
     "field-group-names-differ-from-history",
     "field-group-names-option-invalid",
+    "field-group-rollback-history-unreadable",
+    "field-group-rollback-refused",
     "field-group-storage-not-migrated",
     "field-group-storage-refused",
     "field-group-transition-refused",

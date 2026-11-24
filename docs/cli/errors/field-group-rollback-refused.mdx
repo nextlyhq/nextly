@@ -1,0 +1,23 @@
+---
+title: FIELD_GROUP_ROLLBACK_REFUSED
+description: "`nextly migrate:field-groups --down` was run on a database whose applied migration history is on the current field-group names."
+---
+
+## Cause
+
+`nextly migrate:field-groups --down` was run on a database whose applied migration history is on the current field-group names.
+
+The newest applied migration that has a snapshot records the field groups under the current names (`dynamic_field_groups`, `fg_<slug>`). Every migration after it is planned against those names, so moving the storage back would leave the database and its history on different names. Nothing was changed. A move back that was started earlier and stopped part-way is not refused: run the command again to finish it.
+
+## Fix
+
+Leave the field groups on the current names. No command moves a migration history back to the legacy names.
+
+## Example
+
+```text
+✗ This database's field groups cannot be moved back to the legacy names: its applied migration history is on the current ones (dynamic_field_groups, fg_<slug>), as 20261119_120000_000_field_group_current_names records.
+  Why:  Every migration after it is planned against those names, and no command moves a history back.
+  Next: Nothing was changed. The field-group storage stays on the current names while this history is applied.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-rollback-refused  (FIELD_GROUP_ROLLBACK_REFUSED)
+```

@@ -16,12 +16,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,9 +38,13 @@ import {
 } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { clearServices, shutdownServices } from "../../../di/register";
+import { hashManifest } from "../../../domains/field-groups/migration/manifest";
 import { runFieldGroupMigration } from "../../../domains/field-groups/migration/run";
+import { beginMigration } from "../../../domains/field-groups/migration/state";
 import { forgetFieldGroupStorageNames } from "../../../domains/field-groups/storage/resolve-storage-names";
+import { MetaService } from "../../../domains/meta/services/meta-service";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
+import { refuseRollbackUnderCurrentHistory } from "../../../domains/schema/migrate/field-group-rollback";
 import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 import {
   createTestNextly,
@@ -52,7 +57,9 @@ import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCheck } from "../migrate-check";
+import { runMigrateFieldGroups } from "../migrate-field-groups";
 import { runMigrateCreate } from "../migrate-create";
+import { runMigrateResolve } from "../migrate-resolve";
 
 /** The configuration the commands load, set by each step before it runs them. */
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
@@ -267,6 +274,23 @@ const check = () =>
       { cwd: dir } as Parameters<typeof runMigrateCheck>[0],
       context
     )
+  );
+
+/** `nextly migrate:resolve --applied <file>`, with the given options. */
+const resolveApplied = (file: string, options: Record<string, unknown>) =>
+  run(context =>
+    runMigrateResolve(
+      { cwd: dir, applied: file, ...options } as Parameters<
+        typeof runMigrateResolve
+      >[0],
+      context
+    )
+  );
+
+/** `nextly migrate:field-groups --down`, a preview unless `options` applies it. */
+const storageDown = (options: Record<string, unknown>) =>
+  run(context =>
+    runMigrateFieldGroups({ cwd: dir, down: true, ...options }, context)
   );
 
 /** The files a run wrote, by name: `<name>.sql` and its snapshot. */
@@ -587,5 +611,230 @@ describe.each(getConfiguredTestDialects())(
         )
       ).toBe(false);
     });
+
+    // `migrate:resolve --applied` records a file without running it. The move of the history is
+    // held to the same rule there as in `nextly migrate`, whether or not the file is compared.
+    for (const [how, options] of [
+      ["compared with the database", {}],
+      ["not compared", { skipVerify: true }],
+      ["in a dry run", { dryRun: true }],
+    ] as const) {
+      it(`refuses to record a file on the current names on a database that has not moved, ${how}`, async () => {
+        const url = await legacyProject();
+        expect(
+          (await create(undefined, { fieldGroupNames: "current" })).exit
+        ).toBeUndefined();
+        const transition = basename(written("field_group_current_names").sql);
+
+        const refused = await resolveApplied(transition, options);
+
+        // A dry run reports what a real run would refuse, and ends as a run that did its work.
+        if ("dryRun" in options) {
+          expect(refused.said).toContain("A real run would refuse");
+        } else {
+          expect(refused.exit, refused.said).not.toBeUndefined();
+        }
+        expect(refused.said).toContain("are still on the legacy ones");
+        expect(refused.said).toContain("nextly migrate:field-groups");
+        const adapter = await connect(dialect, url);
+        expect(await appliedNames(dialect, adapter)).not.toContain(transition);
+      }, 120_000);
+    }
+
+    // A template's older-format snapshot says nothing of the current names, and no snapshot can be
+    // compared: recorded without the comparison, as before.
+    it("still records a template's older-format file without comparing it", async () => {
+      const url = await legacyProject();
+      const name = "20261125_120000_000_template";
+      writeFileSync(
+        join(dir, "migrations", `${name}.sql`),
+        "-- Migration: template\n\n-- UP\nSELECT 1;\n\n-- DOWN\nSELECT 1;\n"
+      );
+      writeFileSync(
+        join(dir, "migrations", "meta", `${name}.snapshot.json`),
+        JSON.stringify({ version: 1, collections: [], singles: [] })
+      );
+
+      const recorded = await resolveApplied(`${name}.sql`, {
+        skipVerify: true,
+      });
+
+      expect(recorded.exit, recorded.said).toBeUndefined();
+      const adapter = await connect(dialect, url);
+      expect(await appliedNames(dialect, adapter)).toContain(`${name}.sql`);
+
+      // And the storage of a database whose newest file is one may move back.
+      await migrateStorage(dialect, url);
+      const down = await storageDown({});
+      expect(down.exit, down.said).toBeUndefined();
+      expect(down.said).toContain("Preview of a down migration");
+    }, 120_000);
+
+    it("records a file on the current names on a database that moved", async () => {
+      const url = await legacyProject();
+      await migrateStorage(dialect, url);
+      expect(
+        (await create(undefined, { fieldGroupNames: "current" })).exit
+      ).toBeUndefined();
+      const transition = basename(written("field_group_current_names").sql);
+
+      const recorded = await resolveApplied(transition, {});
+
+      expect(recorded.exit, recorded.said).toBeUndefined();
+      const adapter = await connect(dialect, url);
+      expect(await appliedNames(dialect, adapter)).toContain(transition);
+    }, 120_000);
+
+    /** The project moved whole: its storage, then its history, applied. */
+    async function movedProject(): Promise<string> {
+      const url = await legacyProject();
+      await migrateStorage(dialect, url);
+      expect(
+        (await create(undefined, { fieldGroupNames: "current" })).exit
+      ).toBeUndefined();
+      const moved = await migrate();
+      expect(moved.exit, moved.said).toBeUndefined();
+      return url;
+    }
+
+    // Once the applied history is on the current names, no command moves it back, so neither does
+    // the storage. The preview refuses too: it describes a run that would be refused.
+    for (const [how, options] of [
+      ["a real run", { apply: true, backupConfirmed: true }],
+      ["a preview", {}],
+    ] as const) {
+      it(`refuses to move the storage back under a history on the current names, in ${how}`, async () => {
+        const url = await movedProject();
+
+        const refused = await storageDown(options);
+
+        expect(refused.exit, refused.said).not.toBeUndefined();
+        expect(refused.said).toContain("cannot be moved back");
+        expect(refused.said).toContain("_field_group_current_names");
+        const adapter = await connect(dialect, url);
+        expect(await adapter.tableExists("fg_fh_card")).toBe(true);
+        expect(await adapter.tableExists("comp_fh_card")).toBe(false);
+      }, 120_000);
+    }
+
+    it("moves the storage back while the history is still on the legacy names", async () => {
+      const url = await legacyProject();
+      await migrateStorage(dialect, url);
+
+      const down = await storageDown({ apply: true, backupConfirmed: true });
+
+      expect(down.exit, down.said).toBeUndefined();
+      const adapter = await connect(dialect, url);
+      expect(await adapter.tableExists("comp_fh_card")).toBe(true);
+      expect(await adapter.tableExists("fg_fh_card")).toBe(false);
+      const app = await start(dialect, url, FIRST);
+      const [post] = (
+        await app.nextly.find({ collection: "fh_posts" as never })
+      ).items as Array<{ card?: { heading?: string } }>;
+      expect(post.card?.heading).toBe("H");
+    }, 120_000);
+
+    it("refuses where the history's names cannot be told, naming the file", async () => {
+      const url = await movedProject();
+      const transition = written("field_group_current_names");
+      const content = await readFile(transition.snapshot, "utf-8");
+
+      // A snapshot that cannot be read.
+      writeFileSync(transition.snapshot, "{");
+      const unreadable = await storageDown({});
+      expect(unreadable.exit, unreadable.said).not.toBeUndefined();
+      expect(unreadable.said).toContain("its snapshot cannot be read");
+      expect(unreadable.said).toContain(
+        "Run the command from the project that holds its migrations"
+      );
+      writeFileSync(transition.snapshot, content);
+
+      // Another project's folder: the ledger records files this one does not hold.
+      renameSync(join(dir, "migrations"), join(dir, "elsewhere"));
+      const missing = await storageDown({});
+      expect(missing.exit, missing.said).not.toBeUndefined();
+      expect(missing.said).toContain("is not in the migrations folder");
+
+      const adapter = await connect(dialect, url);
+      expect(await adapter.tableExists("fg_fh_card")).toBe(true);
+    }, 120_000);
+
+    // A hand-written file has no snapshot and says nothing: the newest file that has one decides.
+    it("reads past a hand-written file to the newest one that says which names it is on", async () => {
+      const url = await movedProject();
+      const files = readdirSync(join(dir, "migrations"))
+        .filter(f => f.endsWith(".sql"))
+        .sort();
+      const byHand = `${files
+        .at(-1)!
+        .replace(/_[^\d].*$/, "")
+        .replace(/^\d{4}/, "2099")}_by_hand.sql`;
+      writeFileSync(
+        join(dir, "migrations", byHand),
+        "-- Migration: by_hand\n-- nextly:blank\n\n-- UP\nSELECT 1;\n\n-- DOWN\nSELECT 1;\n"
+      );
+      const applied = await migrate();
+      expect(applied.exit, applied.said).toBeUndefined();
+      const adapter = await connect(dialect, url);
+      expect(await appliedNames(dialect, adapter)).toContain(byHand);
+
+      const refused = await storageDown({});
+
+      expect(refused.exit, refused.said).not.toBeUndefined();
+      expect(refused.said).toContain("cannot be moved back");
+    }, 120_000);
+
+    // The engine refuses the opposite direction while a run is in flight, so a stopped `--down` is
+    // finished only by `--down`: it is not judged, even from a folder that holds no migration.
+    it("passes a move back that is in flight on, whatever the folder holds", async () => {
+      const url = await movedProject();
+      const app = await start(dialect, url, FIRST);
+      const adapter = app.adapter as unknown as DrizzleAdapter;
+      const entries = [
+        {
+          kind: "registry" as const,
+          from: "dynamic_components",
+          to: "dynamic_field_groups",
+        },
+      ];
+      await beginMigration(new MetaService(adapter, SILENT as never), {
+        direction: "down",
+        migrationId: "fh-stalled",
+        plan: { registryHash: "fh", manifestHash: hashManifest(entries) },
+        appliedManifest: entries,
+      });
+
+      await expect(
+        refuseRollbackUnderCurrentHistory({
+          adapter,
+          migrationsDir: join(dir, "no-such-folder"),
+        })
+      ).resolves.toBeUndefined();
+    }, 120_000);
+
+    // A new site has no history to be on either names, and is not refused. Its recorded move holds
+    // the registry alone, which is all a move back undoes.
+    it("moves a new site with no history back, and its groups still read", async () => {
+      const url = await openDatabase(dialect);
+      loaded.config = configOf(FIRST);
+      const first = await start(dialect, url, FIRST);
+      await first.nextly.create({
+        collection: "fh_posts" as never,
+        data: { title: "P", card: { heading: "H" } } as never,
+      });
+      await shutdownServices().catch(() => {});
+
+      const down = await storageDown({ apply: true, backupConfirmed: true });
+
+      expect(down.exit, down.said).toBeUndefined();
+      const adapter = await connect(dialect, url);
+      expect(await adapter.tableExists("dynamic_components")).toBe(true);
+      expect(await adapter.tableExists("dynamic_field_groups")).toBe(false);
+      const app = await start(dialect, url, FIRST);
+      const [post] = (
+        await app.nextly.find({ collection: "fh_posts" as never })
+      ).items as Array<{ card?: { heading?: string } }>;
+      expect(post.card?.heading).toBe("H");
+    }, 180_000);
   }
 );
