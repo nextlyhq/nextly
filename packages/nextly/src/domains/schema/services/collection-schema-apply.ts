@@ -1362,10 +1362,10 @@ async function refuseCompanionTakingOthersElements(
   });
   await refuseCompanionPlanTakingOthersElements({
     adapter,
-    statements: [...(plan.beforeMain ?? []), ...plan.statements],
-    entity: entityLabel("collection", change.slug),
+    plan,
+    kind: "collection",
+    slug: change.slug,
     oldFields,
-    builtBy: "collection",
   });
 }
 

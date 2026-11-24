@@ -717,33 +717,44 @@ export function fieldOfColumn(
  */
 export async function refuseCompanionPlanTakingOthersElements(args: {
   adapter: RecordedElementsAdapter;
-  /** The plan's statements, in the order the reconcile runs them. */
-  statements: readonly string[];
-  /** How the refusal names the entity: "Single 'home'". */
-  entity: string;
+  /** The plan the reconcile runs: its statements, in the order it runs them. */
+  plan: {
+    readonly beforeMain?: readonly string[];
+    readonly statements: readonly string[];
+  };
+  /** The entity the refusal names, and whose field columns the plan drops. */
+  kind: "collection" | "single" | "fieldGroup";
+  slug: string;
   /** The entity's fields before the change, which name the columns the plan drops. */
   oldFields: readonly FieldDefinition[];
-  builtBy: Parameters<typeof getColumnDescriptor>[2];
 }): Promise<void> {
-  if (args.statements.length === 0) return;
+  const statements = [...(args.plan.beforeMain ?? []), ...args.plan.statements];
+  if (statements.length === 0) return;
   const dialect = args.adapter.dialect;
   const db = args.adapter.getDrizzle();
-  const { fileDeletions, readDeletionFacts } = await import(
-    "../migrate/file-deletions"
-  );
+  const [{ fileDeletions, readDeletionFacts }, { entityLabel }] =
+    await Promise.all([
+      import("../migrate/file-deletions"),
+      import("../value-conversion/type-change/field-type-changes"),
+    ]);
   await refuseRemovingOthersElements({
     deletions: fileDeletions(
-      args.statements,
+      statements,
       dialect,
-      await readDeletionFacts(db, dialect, args.statements)
+      await readDeletionFacts(db, dialect, statements)
     ),
     dialect,
-    entity: args.entity,
+    entity: entityLabel(args.kind, args.slug),
     sources: databaseRemovedElementsSources(args.adapter, dialect),
     fieldOf: (_table, column) =>
       column === undefined
         ? undefined
-        : fieldOfColumn(args.oldFields, column, dialect, args.builtBy),
+        : fieldOfColumn(
+            args.oldFields,
+            column,
+            dialect,
+            args.kind === "fieldGroup" ? "fieldGroup" : "collection"
+          ),
   });
 }
 

@@ -225,21 +225,15 @@ export async function refuseComponentCompanionTakingOthersElements(
   args: ReconcileComponentCompanionArgs
 ): Promise<void> {
   if (!args.wasLocalized && !args.localized) return;
-  const plan = await componentCompanionPlanOf({
-    ...args,
-    settleLeaving: undefined,
-  });
-  const [{ refuseCompanionPlanTakingOthersElements }, { entityLabel }] =
-    await Promise.all([
-      import("../../schema/ownership/removed-elements"),
-      import("../../schema/value-conversion/type-change/field-type-changes"),
-    ]);
+  const { refuseCompanionPlanTakingOthersElements } = await import(
+    "../../schema/ownership/removed-elements"
+  );
   await refuseCompanionPlanTakingOthersElements({
     adapter: args.adapter,
-    statements: [...(plan.beforeMain ?? []), ...plan.statements],
-    entity: entityLabel("fieldGroup", args.slug),
+    plan: await componentCompanionPlanOf({ ...args, settleLeaving: undefined }),
+    kind: "fieldGroup",
+    slug: args.slug,
     oldFields: args.oldFields,
-    builtBy: "fieldGroup",
   });
 }
 

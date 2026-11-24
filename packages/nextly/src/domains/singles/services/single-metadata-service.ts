@@ -113,6 +113,7 @@ import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import type { SqliteTypeChange } from "../../schema/services/sqlite-nullability-rebuild";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
+import type { ReconcileSingleCompanionArgs } from "./reconcile-single-companion";
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type {
   SingleRegistryService,
@@ -2944,6 +2945,30 @@ export class SingleMetadataService {
     return rename ? { from: rename.from.name, to: rename.to.name } : undefined;
   }
 
+  /** The companion's change in this save: what the reconcile applies, and what its drops are judged by. */
+  private async companionChange(
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan,
+    adapter: DrizzleAdapter
+  ): Promise<ReconcileSingleCompanionArgs> {
+    return {
+      slug: input.slug,
+      tableName: input.existing.tableName,
+      oldFields: plan.previousFields,
+      newFields: plan.fields,
+      localized: input.isLocalized,
+      wasLocalized: input.wasLocalized,
+      // The companion's own `_status`, before and after this save.
+      status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
+      wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
+      statusFromEntryInEveryLanguage:
+        input.layout?.statusFromEntryInEveryLanguage,
+      adapter,
+      // One rename rule for every column: the main table's decides a translated field's too.
+      renamed: await this.detectedFieldRename(plan.previousFields, plan.fields),
+    };
+  }
+
   /**
    * Run the plan, reporting how far it got.
    *
@@ -2998,23 +3023,12 @@ export class SingleMetadataService {
 
     // What the companion reconcile after the main table's change would drop of another owner's,
     // refused before anything here runs (`removed-elements.ts`).
-    const { refuseSingleCompanionTakingOthersElements } = await import(
-      "./reconcile-single-companion"
-    );
-    await refuseSingleCompanionTakingOthersElements({
-      slug: input.slug,
-      tableName,
-      oldFields: plan.previousFields,
-      newFields: plan.fields,
-      localized: input.isLocalized,
-      wasLocalized: input.wasLocalized,
-      status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
-      wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
-      statusFromEntryInEveryLanguage:
-        input.layout?.statusFromEntryInEveryLanguage,
-      adapter,
-      renamed: await this.detectedFieldRename(plan.previousFields, plan.fields),
-    });
+    const companion = await this.companionChange(input, plan, adapter);
+    const {
+      reconcileSingleCompanion,
+      refuseSingleCompanionTakingOthersElements,
+    } = await import("./reconcile-single-companion");
+    await refuseSingleCompanionTakingOthersElements(companion);
 
     // Before the try below, as the migration is: a failure here stops the save before the main
     // table changes.
@@ -3059,30 +3073,11 @@ export class SingleMetadataService {
       // default locale from main on enable, restore and archive on disable, ADD/DROP columns as
       // translatable fields change. Reported as a failed migration rather than thrown: the main
       // table is already in its new shape, and the row describing it is what makes a retry possible.
-      const { reconcileSingleCompanion } = await import(
-        "./reconcile-single-companion"
-      );
       try {
         await reconcileSingleCompanion({
+          ...companion,
           busyTable: this.busyTableWait(adapter),
-          slug: input.slug,
-          tableName,
-          oldFields: plan.previousFields,
-          newFields: plan.fields,
-          localized: input.isLocalized,
-          wasLocalized: input.wasLocalized,
-          // The companion's own `_status`, before and after this save.
-          status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
-          wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
-          statusFromEntryInEveryLanguage:
-            input.layout?.statusFromEntryInEveryLanguage,
-          adapter,
           joinedBefore,
-          // One rename rule for every column: the main table's decides a translated field's too.
-          renamed: await this.detectedFieldRename(
-            plan.previousFields,
-            plan.fields
-          ),
         });
       } catch (companionError) {
         // 🔴 The shape is RETRACTED here, never rebound, because nothing at this level knows what
