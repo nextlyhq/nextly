@@ -385,6 +385,12 @@ describe.each(
       return Number(row?.schemaVersion ?? 1);
     }
 
+    /** What a save removing `heading` sends to have its drop confirmed, with its count of values. */
+    const dropHeading = (count: number) => ({
+      resolutions: { heading: { action: "confirm_drop" } },
+      confirmedDeletions: [{ field: "heading", count }],
+    });
+
     /** What a save renaming `heading` to `headline` in the table `inTable` sends beside its fields. */
     const renameHeading = (inTable: string) => ({
       renameResolutions: [
@@ -1211,7 +1217,12 @@ describe.each(
                 {} as ServiceContainer,
                 "applySchemaChanges",
                 { collectionName: slug },
-                { fields: [field("note")], confirmed: true, schemaVersion }
+                {
+                  fields: [field("note")],
+                  confirmed: true,
+                  schemaVersion,
+                  ...dropHeading(1),
+                }
               )
             );
           }
@@ -1302,7 +1313,12 @@ describe.each(
             {} as ServiceContainer,
             "applySchemaChanges",
             { collectionName: slug },
-            { fields: [field("note")], confirmed: true, schemaVersion }
+            {
+              fields: [field("note")],
+              confirmed: true,
+              schemaVersion,
+              ...dropHeading(0),
+            }
           )
         );
         expect(await liveColumns(t), `killed at ${killedAt}`).not.toContain(
@@ -1357,7 +1373,12 @@ describe.each(
           dispatchSingles(
             "applySingleSchemaChanges",
             { slug: hero },
-            { fields: [field("note")], confirmed: true, schemaVersion }
+            {
+              fields: [field("note")],
+              confirmed: true,
+              schemaVersion,
+              ...dropHeading(0),
+            }
           )
         );
         expect(
