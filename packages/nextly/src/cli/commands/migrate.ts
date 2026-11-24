@@ -55,7 +55,10 @@ import {
   settleAfterMigrate,
   settleBeforeMigrate,
 } from "../../domains/schema/builder-save/settle-at-migrate";
-import type { TypeConversion } from "../../domains/schema/builder-save/type-conversion";
+import type {
+  ConvertedColumn,
+  TypeConversion,
+} from "../../domains/schema/builder-save/type-conversion";
 import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
 import {
   runUnitInTries,
@@ -92,6 +95,7 @@ import {
 } from "../../domains/schema/migrate/companion-drift";
 import {
   type ConvertsMark,
+  filledBy,
   readConvertsMark,
 } from "../../domains/schema/migrate/converts-header";
 import {
@@ -214,6 +218,7 @@ import {
   type SchemaShape,
 } from "../../domains/schema/migrate/rename-preflight";
 import {
+  type FilledColumns,
   previewRequiredColumns,
   refuseRequiredColumnsOverNulls,
 } from "../../domains/schema/migrate/required-column-guard";
@@ -305,6 +310,8 @@ import {
   newestAppliedAppMigration,
   writeRegistryRows,
 } from "../../domains/schema/schema-version";
+import { describeRowCount } from "../../domains/schema/value-conversion/describe";
+import { rewritesValuesOn } from "../../domains/schema/value-conversion/type-change/field-type-changes";
 import {
   fileTypeChangesOf,
   judgeFileTypeChanges,
@@ -1832,9 +1839,20 @@ async function previewFiles(
       args.dialect,
       m,
       logger,
-      at > 0 || modulesFirst
+      at > 0 || modulesFirst,
+      filledColumnsOf(m, args.dialect)
     );
   }
+}
+
+/** The columns `file`'s conversion fills on `dialect`, as its mark names them (`filledBy`). */
+function filledColumnsOf(
+  file: ParsedMigration,
+  dialect: SupportedDialect
+): FilledColumns {
+  return filledBy(
+    rewritesValuesOn(dialect) ? (file.converts()?.columns ?? []) : []
+  );
 }
 
 /**
@@ -2098,12 +2116,21 @@ async function previewJudgedChange(
   const judged = await judgeFileTypeChanges(db, source);
   for (const column of judged.conversions.flatMap(c => c.columns)) {
     logger.info(
-      `    ↻ ${source.filename} converts ${column.table}.${column.column} value by value, as ${column.field}'s new type reads each: ${String(column.counts.kept + column.counts.changed)} converted, ${String(column.counts.lost)} that cannot convert cleared`
+      `    ↻ ${source.filename} converts ${column.table}.${column.column} value by value, as ${column.field}'s new type reads each: ${writtenBy(column)}`
     );
   }
   for (const refusal of judged.refusals) {
     logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
   }
+}
+
+/** What a conversion writes into a column's rows, as a dry run says it. */
+function writtenBy(column: ConvertedColumn): string {
+  const { counts, fill } = column;
+  const converted = `${String(counts.kept + counts.changed)} converted, ${String(counts.lost)} that cannot convert`;
+  return fill === undefined
+    ? `${converted} cleared`
+    : `${converted}; ${describeRowCount(fill.rows)} left with no value, replaced with ${JSON.stringify(fill.value)}`;
 }
 
 /** A unit's deletions as the dry run lists them, with the consent a real run needs; nothing when none. */
@@ -5767,7 +5794,14 @@ export async function runFileMigrations(args: {
         unit: "file",
       });
       // A column made required over rows that would break it: refused here, before any statement.
-      await refuseRequiredColumnsOverNulls(db, dialect, upStatements, filename);
+      // Rows the file's conversion fills before its first statement are judged with it below.
+      await refuseRequiredColumnsOverNulls(
+        db,
+        dialect,
+        upStatements,
+        filename,
+        filledColumnsOf(m, dialect)
+      );
       // A column made unique while its entries repeat a value: refused here too, before any
       // statement, where MySQL would otherwise keep every statement before the index's.
       await refuseUniqueIndexesOverRepeats(db, dialect, upStatements, filename);

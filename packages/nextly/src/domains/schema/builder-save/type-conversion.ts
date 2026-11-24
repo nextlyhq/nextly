@@ -61,7 +61,7 @@ import {
   clearedFieldsOf,
   refuseChangedCounts,
   sameCounts,
-  type TypeChangeCounts,
+  type ConfirmedTypeChange,
   typeChangeCountsOf,
 } from "./type-change-counts";
 
@@ -76,7 +76,7 @@ const ROWS_PER_STATEMENT = 200;
  *   own values no review counted (`--accept-data-loss`), with how the run's refusal asks for it.
  */
 export type ClearConsent =
-  | { kind: "review"; confirmed: readonly TypeChangeCounts[] | undefined }
+  | { kind: "review"; confirmed: readonly ConfirmedTypeChange[] | undefined }
   | {
       kind: "run";
       covers: (change: JudgedFieldTypeChange) => boolean;
@@ -119,6 +119,11 @@ export interface ConvertedColumn {
    * statement rather than refused (`conversionRefusals`' `leftToCast`).
    */
   castReaches: boolean;
+  /**
+   * The value written into the rows the change would leave with none (`JudgedFieldTypeChange.fill`),
+   * as it was chosen, and how many rows the judgement before the run found take it.
+   */
+  fill?: { value: unknown; rows: number };
 }
 
 /** A type change's values converted one by one. */
@@ -193,6 +198,7 @@ export function typeConversionOf(args: {
             to: { type, nullable: true },
           }),
         castReaches: castReaches(change, dialect, translations),
+        ...fillOf(change),
       },
     ];
   });
@@ -234,6 +240,18 @@ function castReaches(
   return (
     dialect === "postgresql" && !translations && change.result.written === 0
   );
+}
+
+/** The judged change's fill, where one the field takes was chosen, and the rows it is written into. */
+function fillOf(change: JudgedFieldTypeChange): Pick<ConvertedColumn, "fill"> {
+  return change.fill?.readsAs === undefined
+    ? {}
+    : { fill: { value: change.fill.value, rows: change.leavesEmpty ?? 0 } };
+}
+
+/** How many rows the judged change leaves with no value, which no fill is written into. */
+function emptiedBy(change: JudgedFieldTypeChange): number {
+  return change.fill?.readsAs === undefined ? change.result.emptied : 0;
 }
 
 /** How many of the judged change's values are kept, changed and lost. */
@@ -346,13 +364,15 @@ export function consentedRefusals(
     };
   }
   // Only a change the conversion writes clears its values: a run's consent never lets a lossy
-  // change the cast converts through, as the cast does not clear what it cannot read.
+  // change the cast converts through, as the cast does not clear what it cannot read. A fill it
+  // writes replaces values, or puts one where there was none, which takes the same consent.
   const acknowledged = new Set(
     judged
       .filter(
         change =>
           change.converted === true &&
-          change.result.cleared.length > 0 &&
+          (change.result.cleared.length > 0 ||
+            (fillOf(change).fill?.rows ?? 0) > 0) &&
           consent.covers(change)
       )
       .map(change => change.to.name)
@@ -426,7 +446,7 @@ async function judgedAgain(
       ),
       swaps:
         dialect === "sqlite" &&
-        swapsOnSqlite(column, facts, change.result.emptied > 0),
+        swapsOnSqlite(column, facts, emptiedBy(change) > 0),
     });
   }
   const { refusals: carried, leftToCast } = await conversionRefusals(
@@ -642,7 +662,7 @@ async function convertColumn(
     });
   }
   // The column beside goes once the column has taken its values, unless it took the column's place.
-  const empties = judged.some(change => change.result.emptied > 0);
+  const empties = judged.some(change => emptiedBy(change) > 0);
   if (!(await swapIn(db, dialect, planned, empties))) {
     await run(sql`ALTER TABLE ${table} DROP COLUMN ${beside}`);
   }

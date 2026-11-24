@@ -354,7 +354,9 @@ export function reviewOf(preview: CollectionSavePreview): BuilderSaveReview {
  * The counts the person confirmed for fields changing type, as an apply's body sends them: each
  * field's name and how many of its values the change keeps, changes and loses, at most 500. Absent
  * where the body sends none: a change that loses values is then refused as it always has been, and
- * one that loses none goes ahead (`CollectionSave.confirmedTypeChanges`). One reading for the
+ * one that loses none goes ahead (`CollectionSave.confirmedTypeChanges`). A required field's item may
+ * carry the value written into the rows its change would leave with none (`fill`), held to the field's
+ * new type where the change is judged. One reading for the
  * collection's, the Single's and the field group's apply, so the three take the same consent.
  */
 const ConfirmedTypeChangesBody = z.object({
@@ -365,6 +367,7 @@ const ConfirmedTypeChangesBody = z.object({
         kept: z.number().int().min(0),
         changed: z.number().int().min(0),
         lost: z.number().int().min(0),
+        fill: z.unknown().optional(),
       })
     )
     .max(500)

@@ -22,7 +22,7 @@ import {
 
 import type { CollectionSave } from "./collection-save";
 import type { ConfirmedDeletion } from "./deletion-counts";
-import type { TypeChangeCounts } from "./type-change-counts";
+import type { ConfirmedTypeChange } from "./type-change-counts";
 
 /** A field's answer in the earlier per-field shape the admin still sends. */
 export interface PerFieldResolution {
@@ -45,7 +45,7 @@ export interface SchemaChangeAnswers {
    * How many values of each field changing type the review showed it keeps, changes and loses, as
    * the person confirmed them (`CollectionSave.confirmedTypeChanges`).
    */
-  confirmedTypeChanges?: readonly TypeChangeCounts[];
+  confirmedTypeChanges?: readonly ConfirmedTypeChange[];
   /**
    * A Single's one row given the default each field new to its table states, by field
    * (`singleRowFills`): not an answer the person gave, and judged as a Single's fill alone

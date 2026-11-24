@@ -39,6 +39,7 @@ import { BLANK_FILE_LINE } from "../migrate/history-line";
 import { NO_TRANSACTION_MARKER } from "../migrate/split-sql";
 
 import { getDialectDisplayName } from "./dialect-name";
+import { withFills } from "./planned-deletions";
 
 /**
  * The field-group header written into a generated migration, and the pattern that reads it
@@ -284,7 +285,7 @@ export function formatMigrationFile(args: FormatArgs): string {
   const downBody = downBodyOf(args);
 
   return `-- Migration: ${args.name}
-${destructiveLines(args.deletions ?? [])}${convertsHeaderLine(args.convertsValues ?? [])}${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}-- Generated at: ${now}
+${destructiveLines(withFills(args.deletions ?? [], args.convertsValues ?? []))}${convertsHeaderLine(args.convertsValues ?? [])}${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}-- Generated at: ${now}
 -- Dialect: ${getDialectDisplayName(args.dialect)}
 
 -- UP

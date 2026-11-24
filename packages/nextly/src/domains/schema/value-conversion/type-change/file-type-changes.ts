@@ -512,14 +512,15 @@ function entityTypeChange(args: {
 /**
  * The columns a marked change rewrites (`EntityTypeChangeInput.rewrites`): those its marks name,
  * by table and column, as the database spells them in either case, where the values are read
- * before the first statement. A mark naming the columns as `target` holds them
- * (`convertsNamedAt`) names them through the fields they become (`heldThroughTarget`). Nothing
- * for an unmarked one.
+ * before the first statement, with the fills they carry (`fillsOf`). A mark naming the columns as
+ * `target` holds them (`convertsNamedAt`) names them through the fields they become
+ * (`heldThroughTarget`), and its fills are the change's own, never its reverse's. Nothing for an
+ * unmarked one.
  */
 function convertedOf(
   source: FileTypeChangeSource,
   entity: EntityNames
-): Pick<EntityTypeChangeInput, "rewrites"> {
+): Pick<EntityTypeChangeInput, "rewrites" | "fills"> {
   const named = new Set(
     (source.converts ?? []).map(c => columnKey(c.table, c.column))
   );
@@ -528,7 +529,37 @@ function convertedOf(
     source.convertsNamedAt === "target"
       ? heldThroughTarget(named, entity)
       : named;
-  return { rewrites: (table, column) => held.has(columnKey(table, column)) };
+  return {
+    rewrites: (table, column) => held.has(columnKey(table, column)),
+    ...(source.convertsNamedAt === "target"
+      ? {}
+      : { fills: fillsOf(source.converts ?? [], entity) }),
+  };
+}
+
+/** The fills a file's marks carry for the entity's changed fields, by each field's new name. */
+function fillsOf(
+  converts: readonly ConvertedColumnName[],
+  entity: EntityNames
+): Map<string, unknown> {
+  const fills = new Map<string, unknown>();
+  for (const change of entity.changes) {
+    if (change.within !== undefined) continue;
+    const column = entity.columnOf(change.from);
+    if (column === undefined) continue;
+    const marked = converts.find(
+      each =>
+        each.fill !== undefined &&
+        [entity.readFrom, `${entity.readFrom}_locales`].some(
+          table =>
+            columnKey(table, column) === columnKey(each.table, each.column)
+        )
+    );
+    if (marked?.fill !== undefined) {
+      fills.set(change.to.name, marked.fill.value);
+    }
+  }
+  return fills;
 }
 
 /** An entity's tables and changed fields, as `entityTypeChange` reads them. */
@@ -879,9 +910,13 @@ function runConsentOf(
     kind: "run",
     covers: change => consentCovers(consent, clearOf(change, input)),
     clearsBy: change =>
-      `Run it again with ${ACCEPT_DATA_LOSS_FLAG}=${change.table}.${change.column} to clear the ` +
-      `${String(change.result.cleared.length)} value(s) that cannot convert, as the save that wrote ` +
-      `it cleared those its database held.`,
+      `Run it again with ${ACCEPT_DATA_LOSS_FLAG}=${change.table}.${change.column} to ${
+        change.fill?.readsAs === undefined
+          ? `clear the ${String(change.result.cleared.length)} value(s) that cannot convert, as the ` +
+            `save that wrote it cleared those its database held.`
+          : `write the fill value the file carries into the ${String(change.leavesEmpty ?? 0)} row(s) ` +
+            `the change would leave with no value, as the save that wrote it did.`
+      }`,
   };
 }
 

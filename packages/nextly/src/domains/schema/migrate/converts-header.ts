@@ -26,6 +26,8 @@ const CONVERTS_HEADER = "-- Converts values:";
 export interface ConvertedColumnName {
   table: string;
   column: string;
+  /** The value it writes into the rows of a required field its change would leave with none. */
+  fill?: { value: unknown };
 }
 
 /** What a file's mark states: the rules it was written under and the columns it converts. */
@@ -39,15 +41,62 @@ export function convertsHeaderLine(
   columns: readonly ConvertedColumnName[]
 ): string {
   if (columns.length === 0) return "";
-  const names = columns.map(c => `${c.table}.${c.column}`).join(", ");
+  const names = columns.map(columnEntry).join(", ");
   return `${CONVERTS_HEADER} rules ${String(CONVERSION_RULES_VERSION)}; ${names}\n`;
+}
+
+/**
+ * Whether a column is one a conversion of `columns` fills (`ConvertedColumnName.fill`), by its table
+ * and name in either case: its rows holding no value are written before the file's first statement.
+ */
+export function filledBy(
+  columns: readonly ConvertedColumnName[]
+): (table: string, column: string) => boolean {
+  const filled = new Set(
+    columns
+      .filter(column => column.fill !== undefined)
+      .map(column => `${column.table}.${column.column}`.toLowerCase())
+  );
+  return (table, column) => filled.has(`${table}.${column}`.toLowerCase());
+}
+
+/**
+ * A column as a mark names it: `posts.price`, with its fill where it has one, `posts.price fill 0`. The
+ * fill is its JSON, percent-encoded, so it holds no space, comma, quote or line break of its own.
+ */
+function columnEntry(column: ConvertedColumnName): string {
+  const name = `${column.table}.${column.column}`;
+  if (column.fill === undefined) return name;
+  const fill = encodeURIComponent(JSON.stringify(column.fill.value)).replace(
+    /[!'()*]/g,
+    character =>
+      `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`
+  );
+  return `${name} fill ${fill}`;
+}
+
+/** A column read back from a mark (`columnEntry`), or null where it is not one. */
+function columnFrom(entry: string): ConvertedColumnName | null {
+  const match = COLUMN.exec(entry.trim());
+  if (match === null) return null;
+  const [, table, column, fill] = match;
+  if (fill === undefined) return { table, column };
+  try {
+    return {
+      table,
+      column,
+      fill: { value: JSON.parse(decodeURIComponent(fill)) as unknown },
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** A mark's line as written (`convertsHeaderLine`). */
 const MARK = /^-- Converts values:\s*rules\s+(\d+)\s*;\s*(.+)$/;
 
-/** A table and column name as a mark writes them: identifiers, joined by a dot. */
-const COLUMN = /^([A-Za-z0-9_$]+)\.([A-Za-z0-9_$]+)$/;
+/** A table and column name as a mark writes them: identifiers, joined by a dot, and a fill, if any. */
+const COLUMN = /^([A-Za-z0-9_$]+)\.([A-Za-z0-9_$]+)(?: fill (\S+))?$/;
 
 /**
  * The mark of a migration file's `content`, read in its header (the lines above `-- UP`), or null
@@ -68,9 +117,7 @@ export function readConvertsMark(
     .find(each => each.startsWith(CONVERTS_HEADER));
   if (line === undefined) return null;
   const match = MARK.exec(line);
-  const columns = (match?.[2] ?? "")
-    .split(",")
-    .map(each => COLUMN.exec(each.trim()));
+  const columns = (match?.[2] ?? "").split(",").map(columnFrom);
   if (match === null || columns.some(column => column === null)) {
     throw markRefusal(
       filename,
@@ -86,9 +133,7 @@ export function readConvertsMark(
   }
   return {
     rules,
-    columns: columns.flatMap(column =>
-      column === null ? [] : [{ table: column[1], column: column[2] }]
-    ),
+    columns: columns.flatMap(column => column ?? []),
   };
 }
 

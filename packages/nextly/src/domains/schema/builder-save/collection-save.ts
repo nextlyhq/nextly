@@ -119,7 +119,7 @@ import { heldValueAt, holdsValueAt } from "../field-moves/move-statements";
 import { movedColumnSentences } from "../field-moves/moved-column-facts";
 import type { EntityMoves } from "../field-moves/plan-moves";
 import { checksumOf } from "../migrate/applied-checksums";
-import type { ConvertedColumnName } from "../migrate/converts-header";
+import { type ConvertedColumnName, filledBy } from "../migrate/converts-header";
 import { migrationDriftError, type DriftItem } from "../migrate/drift-error";
 import {
   applyFailedError,
@@ -242,11 +242,12 @@ import {
   type StoppedChange,
 } from "./stopped-save";
 import {
+  chosenFillsOf,
   clearedFieldsOf,
   refuseChangedCounts,
   type ReviewedTypeChange,
   reviewedTypeChanges,
-  type TypeChangeCounts,
+  type ConfirmedTypeChange,
 } from "./type-change-counts";
 import {
   conversionRefusalsAsItStands,
@@ -321,9 +322,10 @@ export interface CollectionSave {
    * in the save's review: the save goes ahead only while every field changing type is named here
    * with the counts it still has (`refuseChangedCounts`), and clears values only where some were
    * confirmed lost. Absent, a change that loses values is refused as it always has been, and any
-   * other goes ahead.
+   * other goes ahead. A required field's item may carry the value written into the rows its change
+   * would leave with none (`fill`), which the change is refused for otherwise.
    */
-  confirmedTypeChanges?: readonly TypeChangeCounts[];
+  confirmedTypeChanges?: readonly ConfirmedTypeChange[];
   /**
    * The registry row's migration status before the save, where the caller read the row: a field
    * type change while the definition still awaits its migration is refused, since the columns do
@@ -1650,6 +1652,7 @@ async function judgeSaveTypeChanges(
     renamed,
     ...(await migrationStatusOf(deps, save, table)),
     acknowledged: clearedFieldsOf(save.confirmedTypeChanges),
+    fills: chosenFillsOf(save.confirmedTypeChanges),
     // Where the save's file applies its change here (development), it writes each value of a
     // pair it converts as the new type reads it, in the transaction of the file that changes the
     // column (`typeConversionOf`), and marks the file so `nextly migrate` converts alike. A save a
@@ -4206,7 +4209,8 @@ async function runWritten(
       splitSqlStatements(file.sql, dialect, {
         transaction: file.transaction,
       }),
-      filename
+      filename,
+      filledBy(conversion?.columns ?? [])
     );
   }
 

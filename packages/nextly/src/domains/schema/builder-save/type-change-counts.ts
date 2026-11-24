@@ -26,8 +26,22 @@ export interface TypeChangeCounts {
   lost: number;
 }
 
+/** A field's counts as a person confirmed them, and the value chosen for the rows left with none. */
+export interface ConfirmedTypeChange extends TypeChangeCounts {
+  /**
+   * The value the save writes into each row the change would leave with none, where the new field is
+   * required (`ReviewedTypeChange.leavesEmpty`): in the new type's own JSON form.
+   */
+  fill?: unknown;
+}
+
 /** A field's type change as a save's review shows it: its counts, and the first rows of each. */
 export interface ReviewedTypeChange extends TypeChangeCounts {
+  /**
+   * How many rows the change would leave with no value though the new field is required, which it is
+   * refused for unless a fill is chosen (`ConfirmedTypeChange.fill`). Absent where there are none.
+   */
+  leavesEmpty?: number;
   /**
    * Each reason a value is not kept as it is (`new-form` for a changed one), its count and the
    * first of the rows, by key and, where the field is kept per language, by language: never a value.
@@ -36,16 +50,27 @@ export interface ReviewedTypeChange extends TypeChangeCounts {
 }
 
 /**
- * The fields whose lost values the person confirmed clearing: the consent the type-change
- * judgement takes (`typeChangeRefusals`' `acknowledged`), by field name.
+ * The fields whose lost values the person confirmed clearing, or replacing with a fill: the consent
+ * the type-change judgement takes (`typeChangeRefusals`' `acknowledged`), by field name.
  */
 export function clearedFieldsOf(
-  confirmed: readonly TypeChangeCounts[] | undefined
+  confirmed: readonly ConfirmedTypeChange[] | undefined
 ): ReadonlySet<string> {
   return new Set(
     (confirmed ?? [])
-      .filter(change => change.lost > 0)
+      .filter(change => change.lost > 0 || change.fill !== undefined)
       .map(change => change.field)
+  );
+}
+
+/** The fills chosen for the fields changing type (`EntityTypeChangeInput.fills`), by field name. */
+export function chosenFillsOf(
+  confirmed: readonly ConfirmedTypeChange[] | undefined
+): ReadonlyMap<string, unknown> {
+  return new Map(
+    (confirmed ?? []).flatMap(change =>
+      change.fill === undefined ? [] : [[change.field, change.fill] as const]
+    )
   );
 }
 
@@ -76,12 +101,20 @@ export function typeChangeCountsOf(
 export function reviewedTypeChanges(
   judged: readonly JudgedFieldTypeChange[]
 ): ReviewedTypeChange[] {
-  return typeChangeCountsOf(judged).map(counts => ({
-    ...counts,
-    reasons: judged
-      .filter(change => changedFieldName(change) === counts.field)
-      .flatMap(change => change.result.judgement.reasons),
-  }));
+  return typeChangeCountsOf(judged).map(counts => {
+    const changes = judged.filter(
+      change => changedFieldName(change) === counts.field
+    );
+    const leavesEmpty = changes.reduce(
+      (rows, change) => rows + (change.leavesEmpty ?? 0),
+      0
+    );
+    return {
+      ...counts,
+      ...(leavesEmpty === 0 ? {} : { leavesEmpty }),
+      reasons: changes.flatMap(change => change.result.judgement.reasons),
+    };
+  });
 }
 
 /**

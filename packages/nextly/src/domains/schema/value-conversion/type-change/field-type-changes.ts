@@ -38,8 +38,10 @@ import {
   type FieldTypeOnDialect,
   fieldTypeOnDialect,
 } from "./field-type";
+import { chosenFill, type ChosenFill } from "./fill";
 import {
   collectNestedTypeChange,
+  type CollectOptions,
   FIRST_KEYS,
   fieldAccepts,
   judgeStoredTypeChange,
@@ -305,6 +307,14 @@ export interface JudgedFieldTypeChange extends FieldTypeChange {
    * the change (`typeChangeRefusals`).
    */
   movesTranslation?: "joins" | "leaves";
+  /**
+   * How many rows a converted change leaves with no value though the new field is required: a value
+   * lost, or one the new type keeps as no value, and, where the column is made NOT NULL, the rows
+   * that hold none already. Refused, with the count, unless a fill is chosen for them.
+   */
+  leavesEmpty?: number;
+  /** The value chosen for those rows (`fills`), where one was: what a converted change writes there. */
+  fill?: ChosenFill;
 }
 
 /**
@@ -364,6 +374,20 @@ function readingOptions(
       : {}),
     ...(rewritten ? { rewrites: true as const } : {}),
   };
+}
+
+/**
+ * The fill the stored-value judgement writes into the rows the change would leave empty, where one
+ * was chosen and the field takes it: into those holding none already only where the column would
+ * refuse them.
+ */
+function fillOption(
+  how: RowJudging & { fill?: ChosenFill }
+): Pick<CollectOptions, "fill"> {
+  const readsAs = how.fill?.readsAs;
+  return readsAs === undefined
+    ? {}
+    : { fill: { readsAs, empties: how.madeNotNull } };
 }
 
 /** Whether `rewrites` names `column` of `table`. */
@@ -454,6 +478,8 @@ export async function judgeFieldTypeChanges(
      * (`rewritesPair`): each change there is judged that way (`converted`).
      */
     rewrites?: RewritesAt;
+    /** The value chosen for the rows a converted change would leave empty, by the new field's name. */
+    fills?: ReadonlyMap<string, unknown>;
   } & JudgingPass
 ): Promise<JudgedFieldTypeChange[]> {
   const judged: JudgedFieldTypeChange[] = [];
@@ -491,13 +517,35 @@ async function judgeOnRow(
   const text = await textOf(held.table);
   const moves = await movesTranslation(change, args, held, columnsOf);
   const how = rowJudging(change, args, held, { text, moves });
+  const fill = how.rewritten
+    ? await chosenFill(change.to, change.toType, args.fills)
+    : undefined;
+  const result = await storedJudgementOnRow(change, args, held, text, {
+    ...how,
+    ...(fill === undefined ? {} : { fill }),
+  });
   return {
     ...change,
     ...held,
-    result: await storedJudgementOnRow(change, args, held, text, how),
+    result,
     ...rowFlags(change, args, held, how),
     ...(moves === undefined ? {} : { movesTranslation: moves }),
+    ...(how.rewritten ? { leavesEmpty: leftEmpty(change, how, result) } : {}),
+    ...(fill === undefined ? {} : { fill }),
   };
+}
+
+/**
+ * How many rows the change leaves with no value though the new field is required
+ * (`JudgedFieldTypeChange.leavesEmpty`): none for an optional one.
+ */
+function leftEmpty(
+  change: FieldTypeChange,
+  how: RowJudging,
+  result: StoredTypeChangeJudgement
+): number {
+  if (change.to.required !== true) return 0;
+  return result.emptied + (how.madeNotNull ? result.empty : 0);
 }
 
 /**
@@ -531,6 +579,11 @@ interface RowJudging {
   unique: boolean;
   /** A unique MySQL text, whose repeats only the database's collation weighs. */
   collated: boolean;
+  /**
+   * The column is NOT NULL once changed: a required field's own column, never its column in a
+   * translations table, where a language may hold no value.
+   */
+  madeNotNull: boolean;
 }
 
 /**
@@ -558,7 +611,10 @@ function rowJudging(
     change.to.unique === true || (rewritten && change.from.unique === true);
   const collated =
     text !== undefined && unique && COLLATED_FAMILIES.has(change.toType.family);
-  return { rewritten, unique, collated };
+  const madeNotNull =
+    held.table !== args.translationsTable &&
+    columnDescriptorAt(change.to, args.dialect, args)?.nullable === false;
+  return { rewritten, unique, collated, madeNotNull };
 }
 
 /** A row's change judged over the values its column holds, as `rowJudging` says to judge it. */
@@ -567,7 +623,7 @@ async function storedJudgementOnRow(
   args: JudgeArgs,
   held: { table: string; column: string },
   text: TableText | undefined,
-  how: RowJudging
+  how: RowJudging & { fill?: ChosenFill }
 ): Promise<StoredTypeChangeJudgement> {
   const readings: { key: RowKey; readsAs: string }[] = [];
   const pages = how.rewritten
@@ -587,6 +643,7 @@ async function storedJudgementOnRow(
     // A unique field holds each value once: two that read as one value of the new type block.
     unique: how.unique && !how.collated,
     ...readingOptions(how.collated, how.rewritten, readings),
+    ...fillOption(how),
     ...(pages === undefined ? {} : { readingPages: pages }),
   });
   if (!how.collated || text === undefined) return judgedHere;
@@ -998,24 +1055,22 @@ function refusalOf(
   // Only a change the conversion writes clears its values: consent never lets one the cast converts
   // through, as the cast does not clear what it cannot read.
   const consented = acknowledged.has(name) && change.converted === true;
-  const lossy = judgement.class === "lossy" && !consented;
-  // A value written as none, cleared or kept as no value, leaves its row with none, which a required
-  // field's column refuses: refused even confirmed, rather than written part way into a NOT NULL
-  // that stops it.
-  const emptiesRequired =
-    change.converted === true && change.to.required === true && !lossy
-      ? change.result.emptied
-      : 0;
+  // A row of a required field left with no value is refused even confirmed, rather than written part
+  // way into a NOT NULL that stops it, unless a fill is chosen for it. A value the fill replaces is
+  // lost as a cleared one is, so it waits for the same consent.
+  const empties = emptiesOf(change);
+  const lossy =
+    (judgement.class === "lossy" || empties.filled > 0) && !consented;
   const translated = change.changesTranslationsColumn === true;
   const leaving = change.leavesWithEntity === true;
-  if (!blocked && !lossy && emptiesRequired === 0 && !translated && !leaving) {
+  if (!blocked && !lossy && !empties.refused && !translated && !leaving) {
     return null;
   }
   const why = refusalReasons({
     translated,
     leaving,
     lossy,
-    emptiesRequired,
+    empties,
     moves: change.movesTranslation,
     rewritten: judgement.reasons.some(r => r.kind === "needs-rewrite"),
     converted: change.converted === true,
@@ -1025,13 +1080,13 @@ function refusalOf(
     clearsBy: () => clearsBy(change),
   });
   const values =
-    judgement.class !== "safe" && (blocked || lossy || emptiesRequired > 0)
+    judgement.class !== "safe" && (blocked || lossy || empties.refused)
       ? ` (${describeClassed(judgement)})`
       : "";
   return {
     path: name,
     code:
-      blocked || translated || leaving
+      blocked || translated || leaving || empties.fillRefused !== undefined
         ? "TYPE_CHANGE_BLOCKED"
         : "TYPE_CHANGE_LOSES_VALUES",
     message: [
@@ -1039,6 +1094,38 @@ function refusalOf(
       ...why,
       "A new field of the new type keeps the old values beside the new ones.",
     ].join(" "),
+  };
+}
+
+/** The rows a change of a required field leaves with no value, by what is written into them. */
+interface EmptiesLeft {
+  /** Rows no fill was chosen for: the change is refused, naming how many. */
+  unfilled: number;
+  /** Rows the chosen fill is written into. */
+  filled: number;
+  /** Why the fill chosen is not one the field takes, where it isn't. */
+  fillRefused?: string;
+  /** The change is refused for its rows or its fill. */
+  refused: boolean;
+}
+
+/** The rows `change` leaves empty, as the fill chosen for it, if any, reaches them. */
+function emptiesOf(change: JudgedFieldTypeChange): EmptiesLeft {
+  const rows = change.leavesEmpty ?? 0;
+  if (change.fill === undefined) {
+    return { unfilled: rows, filled: 0, refused: rows > 0 };
+  }
+  if (change.fill.readsAs !== undefined) {
+    return { unfilled: 0, filled: rows, refused: false };
+  }
+  return {
+    unfilled: 0,
+    filled: 0,
+    fillRefused:
+      change.to.required === true
+        ? "The fill value chosen for it is not one the changed field takes: choose a value of its new type, one its own rules accept."
+        : "A fill value is for a required field: an optional field's values that cannot convert are cleared. Leave the fill value out, or make the field required.",
+    refused: true,
   };
 }
 
@@ -1052,8 +1139,8 @@ function refusalReasons(of: {
   translated: boolean;
   leaving: boolean;
   lossy: boolean;
-  /** How many rows of a required field the change would leave with no value. */
-  emptiesRequired: number;
+  /** The rows of a required field the change would leave with no value. */
+  empties: EmptiesLeft;
   /** The field's values also move into or out of the translations table. */
   moves: JudgedFieldTypeChange["movesTranslation"];
   rewritten: boolean;
@@ -1096,21 +1183,23 @@ const MOVES_AS_STORED: Record<
 };
 
 /**
- * Why the change's values themselves stop it, beyond their own reasons: rows of a required field left
- * with no value; a lost value the road clears once consented to (`clearsBy`); or one, or a value read
+ * Why the change's values themselves stop it, beyond their own reasons: a fill the field does not
+ * take; rows of a required field left with no value; a lost value the road clears once consented to (`clearsBy`); or one, or a value read
  * only once rewritten, that nothing would clear or rewrite (`unwrittenReason`). Undefined where none
  * does.
  */
 function valuesReason(of: {
   lossy: boolean;
-  emptiesRequired: number;
+  empties: EmptiesLeft;
   moves: JudgedFieldTypeChange["movesTranslation"];
   rewritten: boolean;
   converted: boolean;
   clearsBy: () => string;
 }): string | undefined {
-  if (of.emptiesRequired > 0) {
-    return `It is required, so ${describeRowCount(of.emptiesRequired)} would be left with no value in it: make it optional first, or change its values so each converts, then save again.`;
+  const { unfilled, fillRefused } = of.empties;
+  if (fillRefused !== undefined) return fillRefused;
+  if (unfilled > 0) {
+    return `It is required, so ${describeRowCount(unfilled)} would be left with no value in it: choose a fill value for ${unfilled === 1 ? "it" : "them"} where the change is saved, make the field optional first, or change its values so each converts.`;
   }
   if (of.converted) return of.lossy ? of.clearsBy() : undefined;
   return of.lossy || of.rewritten ? unwrittenReason(of) : undefined;
@@ -1240,6 +1329,8 @@ export interface EntityTypeChangeInput {
   builtByBefore?: ColumnOrigin;
   /** The columns whose values the road rewrites, for each pair it converts (`judgeFieldTypeChanges`' `rewrites`). */
   rewrites?: RewritesAt;
+  /** The fills chosen for the rows those changes would leave empty (`judgeFieldTypeChanges`' `fills`). */
+  fills?: ReadonlyMap<string, unknown>;
 }
 
 /**
@@ -1309,6 +1400,7 @@ export async function judgeEntityTypeChanges(
       : {}),
     changes,
     ...(entity.rewrites === undefined ? {} : { rewrites: entity.rewrites }),
+    ...(entity.fills === undefined ? {} : { fills: entity.fills }),
     ...pass,
   });
   return {

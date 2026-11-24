@@ -46,9 +46,11 @@ export interface StoredTypeChangeJudgement {
    * no value (a list's `[]` becoming a text).
    */
   emptied: number;
+  /** How many rows hold no value, before and after. */
+  empty: number;
   /**
-   * How many rows hold a value the new type reads only once it is written: one lost or emptied, or
-   * one whose stored form is not its reading. Where none does, the database's own conversion reaches
+   * How many rows hold a value the new type reads only once it is written: one lost or emptied, one
+   * whose stored form is not its reading, or one filled. Where none does, the database's own conversion reaches
    * every reading, as `rewrites` absent judges it.
    */
   written: number;
@@ -71,6 +73,16 @@ export interface CollectOptions {
    * only by a save that runs that conversion, for the pairs it writes (`rewritesPair`).
    */
   rewrites?: boolean;
+  /**
+   * The value the save writes into each row the change leaves with none, as the new type reads it:
+   * a required field's fill (`fill.ts`). Handed over as any reading is, and a unique field's repeats
+   * count it as one. Each row is still counted as its own value was judged.
+   */
+  fill?: {
+    readsAs: string;
+    /** Whether the rows that hold no value already are filled too, not only those emptied. */
+    empties: boolean;
+  };
 }
 
 /**
@@ -224,6 +236,7 @@ function blockedPairJudgement(
     cleared: [],
     counts: { kept: 0, changed: 0, lost: 0, blocked: 0 },
     emptied: 0,
+    empty: 0,
     written: 0,
   };
 }
@@ -249,7 +262,10 @@ function readBack(
 }
 
 /** Whether a JSON column's `readsAs` is a string an entry's read takes as another value (`readBack`). */
-function readsAsItsOwnJson(to: FieldTypeOnDialect, readsAs: string): boolean {
+export function readsAsItsOwnJson(
+  to: FieldTypeOnDialect,
+  readsAs: string
+): boolean {
   if (to.family !== "json" || to.dialect === "sqlite") return false;
   const value: unknown = JSON.parse(readsAs);
   if (typeof value !== "string") return false;
@@ -314,6 +330,7 @@ class TypeChangeTally {
   >();
   private readonly cleared: RowKey[] = [];
   private emptied = 0;
+  private empty = 0;
   private written = 0;
   private readonly repeatsOf:
     | ((key: RowKey, readsAs: string) => RowKey[] | undefined)
@@ -331,7 +348,8 @@ class TypeChangeTally {
     if (
       this.emptyNotHeld(key, verdict, stored) ||
       (verdict.readsAs !== undefined &&
-        this.blocks(key, verdict.outcome, verdict.readsAs, stored))
+        this.blocks(key, verdict.outcome, verdict.readsAs, stored)) ||
+      this.fillBlocks(key, verdict, stored)
     ) {
       this.counts.blocked += 1;
       return;
@@ -342,7 +360,10 @@ class TypeChangeTally {
     this.note(REPORTED_AS[verdict.reason], key);
   }
 
-  /** A value the change writes, counted: one cleared, one emptied, one stored in another form. */
+  /**
+   * A row as the change writes it, counted: one cleared, one emptied, one that holds none already, one
+   * stored in another form, one filled.
+   */
   private countWritten(
     key: RowKey,
     verdict: ValueVerdict,
@@ -350,10 +371,38 @@ class TypeChangeTally {
   ): void {
     const lost = verdict.outcome === "lost";
     if (lost) this.cleared.push(key);
-    if (stored !== null && leavesNone(verdict)) this.emptied += 1;
-    if (lost || this.outcomeAsStored(verdict, stored) !== verdict.outcome) {
+    if (leavesNone(verdict)) this.countNone(stored);
+    if (
+      lost ||
+      this.filled(verdict, stored) ||
+      this.outcomeAsStored(verdict, stored) !== verdict.outcome
+    ) {
       this.written += 1;
     }
+  }
+
+  /** A row left with no value: one that holds something now, or one that holds none already. */
+  private countNone(stored: string | null): void {
+    if (stored === null) this.empty += 1;
+    else this.emptied += 1;
+  }
+
+  /** Whether the change writes its fill into the row. */
+  private filled(verdict: ValueVerdict, stored: string | null): boolean {
+    const { fill } = this.options;
+    if (fill === undefined || !leavesNone(verdict)) return false;
+    return stored !== null || fill.empties;
+  }
+
+  /** Whether the fill, where the row takes it, blocks the change: one a unique field would hold twice. */
+  private fillBlocks(
+    key: RowKey,
+    verdict: ValueVerdict,
+    stored: string | null
+  ): boolean {
+    const { fill } = this.options;
+    if (fill === undefined || !this.filled(verdict, stored)) return false;
+    return this.blocks(key, "changed", fill.readsAs, null);
   }
 
   /** The class the worst value gives, every reason with its rows, and the rows to clear. */
@@ -373,6 +422,7 @@ class TypeChangeTally {
       cleared: this.cleared,
       counts: this.counts,
       emptied: this.emptied,
+      empty: this.empty,
       written: this.written,
     };
   }
@@ -592,6 +642,7 @@ export async function judgeStoredTypeChange(
       ...(args.unique !== undefined ? { unique: args.unique } : {}),
       ...(onReading !== undefined ? { onReading } : {}),
       ...(args.rewrites === true ? { rewrites: true } : {}),
+      ...(args.fill !== undefined ? { fill: args.fill } : {}),
     }
   );
   if (pages !== undefined && page.length > 0) {
