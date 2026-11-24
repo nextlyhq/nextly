@@ -6,11 +6,13 @@ import type { Command } from "commander";
 
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { withDryRun } from "../dry-run";
-import { DATABASE_LINE, declareFirstLine } from "../first-line";
+import { declareFirstLine, startLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /** Register the `nextly webhooks:prune` command. */
 export function registerWebhooksPruneCommand(program: Command): void {
+  // With retention switched off the run ends before connecting, so it starts
+  // with its own line; a pass names its database when it connects (once a run).
   // `--dry-run` carries the one meaning and help line it has everywhere.
   declareFirstLine(
     withDryRun(
@@ -26,6 +28,6 @@ export function registerWebhooksPruneCommand(program: Command): void {
           async () => (await import("./webhooks-prune")).webhooksPruneAction
         )
       ),
-    DATABASE_LINE
+    startLine("Pruning webhook deliveries...")
   );
 }

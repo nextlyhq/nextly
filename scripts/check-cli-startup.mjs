@@ -24,6 +24,18 @@
  * start line), so a stray warning or Commander's refusal of the arguments
  * does not pass as a fast answer.
  *
+ * Last, every command that runs an action is timed until its own code has
+ * loaded (`codeLoadInvocations`). Run with the start-up probe set
+ * (`STARTUP_PROBE_ENV` in `cli/lazy-action.ts`), a command writes one line
+ * once its action's module is imported and ends there, doing none of its
+ * work. Each is run 5 times in the same project, and once more with a loader
+ * hook that counts the modules it resolved. This pass reports and enforces no
+ * budget yet, but a run that does not exit 0 fails the check, as does a
+ * counting run that does not end with the line or writes no count. A command
+ * that exits 0 without the line runs an action written inline rather than
+ * through `lazyAction`: it is named as such and held to the answer-only
+ * budget, so code that action imports for itself cannot load untimed.
+ *
  * Run after the build: `node scripts/check-cli-startup.mjs`.
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -61,6 +73,26 @@ const FIRST_LINE_BUDGET_MS = 1000;
 const RUNS = 10;
 // One run that takes this long has hung: an answer is a few hundred ms.
 const RUN_TIMEOUT_MS = 10_000;
+// A command's own code, timed to the line it writes once that code has loaded.
+const CODE_LOAD_RUNS = 5;
+// One load that takes this long has hung: the heaviest takes a few seconds.
+const CODE_LOAD_TIMEOUT_MS = 60_000;
+// The line the module-counting hook writes as a run ends.
+const MODULES_LINE = "nextly: modules resolved ";
+// Loaded with `--import` into the counting run only, so the timed runs carry
+// no hook: every module the run resolved from a file, written as it exits.
+const MODULE_COUNT_HOOK = `data:text/javascript,${encodeURIComponent(
+  [
+    'import { registerHooks } from "node:module";',
+    "const seen = new Set();",
+    "registerHooks({ resolve(specifier, context, next) {",
+    "  const resolved = next(specifier, context);",
+    '  if (!resolved.url.startsWith("node:")) seen.add(resolved.url);',
+    "  return resolved;",
+    "} });",
+    `process.on("exit", () => process.stderr.write(${JSON.stringify(MODULES_LINE)} + seen.size + "\\n"));`,
+  ].join("\n")
+)}`;
 
 /**
  * The program and the helpers that list its answer-only invocations and judge
@@ -76,6 +108,10 @@ async function loadSource() {
     wrongAnswer: source.wrongAnswer,
     // Throws naming a command the table leaves out: the check fails on it.
     commands: source.firstLineInvocations(createProgram()),
+    // Every command that runs an action, and the variants timed beside them.
+    codeLoads: source.codeLoadInvocations(createProgram()),
+    // The variable that stops a run once its code has loaded, and the line it writes then.
+    probe: { env: source.STARTUP_PROBE_ENV, line: source.CODE_LOADED_LINE },
     firstLineHelpers: {
       firstNonBlankLine: source.firstNonBlankLine,
       // The line each command declared, as the program's own test judges it.
@@ -293,20 +329,134 @@ function answerOnlyFailures(invocations, wrongAnswer) {
 }
 
 /** Every command, each timed to its first line in a project in step: the failures. */
-async function firstLineFailures(commands, helpers) {
+async function firstLineFailures(commands, helpers, { project, env }) {
   console.log(
     `\ncommands: ${commands.length}, ${RUNS} runs each to the first line, budget ${FIRST_LINE_BUDGET_MS} ms (median)`
   );
+  const failures = [];
+  for (const args of commands) {
+    const failure = await measureFirstLine(args, project, env, helpers);
+    if (failure !== undefined) failures.push(failure);
+  }
+  return failures;
+}
+
+/** One run of `args` under the start-up probe, with its wall time in milliseconds. */
+function probed(args, { project, env }, probe, nodeArgs = []) {
+  const started = process.hrtime.bigint();
+  const run = spawnSync(process.execPath, [...nodeArgs, BIN, ...args], {
+    cwd: project,
+    encoding: "utf8",
+    env: { ...env, [probe.env]: "loaded" },
+    timeout: CODE_LOAD_TIMEOUT_MS,
+  });
+  const ms = Number(process.hrtime.bigint() - started) / 1e6;
+  return { ms, run };
+}
+
+/**
+ * How a probed run ended: `loaded` once it wrote the probe's line and exited
+ * 0, `none` when it exited 0 without the line (it loads no code of its own),
+ * or why it failed.
+ */
+function probedOutcome(run, probe) {
+  const failed = unfinished(run);
+  if (failed) return { failure: failed };
+  const loaded = run.stderr.split("\n").some(line => line === probe.line);
+  if (run.status === 0) return { kind: loaded ? "loaded" : "none" };
+  const said = run.stderr.trim().split("\n").slice(-3).join(" / ");
+  return {
+    failure: `ended (exit ${String(run.status)}) without loading: ${said}`,
+  };
+}
+
+/**
+ * The modules a run of `args` resolved from files before its code had loaded,
+ * or why the counting run does not say: it must end as the timed runs did,
+ * since the hook writes its count however a run ends.
+ */
+function modulesResolved(args, where, probe) {
+  const { run } = probed(args, where, probe, ["--import", MODULE_COUNT_HOOK]);
+  const outcome = probedOutcome(run, probe);
+  if (outcome.failure)
+    return { failure: `the counting run ${outcome.failure}` };
+  if (outcome.kind !== "loaded") {
+    return { failure: "the counting run ended before its code loaded" };
+  }
+  const line = run.stderr
+    .split("\n")
+    .find(text => text.startsWith(MODULES_LINE));
+  return line === undefined
+    ? { failure: "the counting run wrote no module count" }
+    : { count: Number(line.slice(MODULES_LINE.length)) };
+}
+
+/**
+ * `args` run `CODE_LOAD_RUNS` times under the probe: its times and how every
+ * run ended (`loaded` or `none`, the same each time), or why one failed.
+ */
+function probedRuns(args, where, probe) {
+  const times = [];
+  const kinds = new Set();
+  for (let index = 0; index < CODE_LOAD_RUNS; index += 1) {
+    const { ms, run } = probed(args, where, probe);
+    const outcome = probedOutcome(run, probe);
+    if (outcome.failure) return { failure: outcome.failure };
+    kinds.add(outcome.kind);
+    times.push(ms);
+  }
+  if (kinds.size > 1) return { failure: "loaded its code in some runs only" };
+  return { times, kind: [...kinds][0] };
+}
+
+/**
+ * An action written inline, which exits without the probe's line: held to the
+ * answer-only budget, since nothing times what it imports for itself.
+ */
+function inlineActionFailure(name, ms) {
+  const over = ms > BUDGET_MS;
+  console.log(
+    `${over ? "FAIL" : "ok  "} ${ms.toFixed(0).padStart(5)} ms                ${name}  (inline action, loads no code of its own)`
+  );
+  return over
+    ? `${name}: an inline action ran ${ms.toFixed(0)} ms (median), over ${BUDGET_MS} ms; load its code through lazyAction`
+    : undefined;
+}
+
+/**
+ * `args` timed `CODE_LOAD_RUNS` times to its code loaded, and its modules
+ * counted: the reason it failed, or `undefined`. The times are reported, not
+ * judged, except an inline action's.
+ */
+function measureCodeLoad(args, where, probe) {
+  const name = `nextly ${args.join(" ")}`;
+  const runs = probedRuns(args, where, probe);
+  if (runs.failure) return `${name}: ${runs.failure}`;
+  const ms = median(runs.times);
+  if (runs.kind === "none") return inlineActionFailure(name, ms);
+  const modules = modulesResolved(args, where, probe);
+  console.log(
+    `     ${ms.toFixed(0).padStart(5)} ms  ${String(modules.count ?? "?").padStart(5)} modules  ${name}`
+  );
+  return modules.failure ? `${name}: ${modules.failure}` : undefined;
+}
+
+/** Every command that runs an action, each timed to its code loaded: the failures. */
+function codeLoadFailures(runs, where, probe) {
+  console.log(
+    `\ncode loads: ${runs.length}, ${CODE_LOAD_RUNS} runs each to the line written once a command's code has loaded (median); reported, no budget yet`
+  );
+  return runs
+    .map(args => measureCodeLoad(args, where, probe))
+    .filter(failure => failure !== undefined);
+}
+
+/** `work` given a throwaway SQLite project in step and the environment its commands run with. */
+async function withProject(work) {
   const scratch = mkdtempSync(join(tmpdir(), "nextly-first-line-"));
   try {
     const env = commandEnvironment(scratch);
-    const project = makeProject(scratch, env);
-    const failures = [];
-    for (const args of commands) {
-      const failure = await measureFirstLine(args, project, env, helpers);
-      if (failure !== undefined) failures.push(failure);
-    }
-    return failures;
+    return await work({ project: makeProject(scratch, env), env });
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -317,11 +467,20 @@ async function main() {
     console.error(`No built CLI at ${BIN}: build nextly first.`);
     process.exit(1);
   }
-  const { invocations, wrongAnswer, commands, firstLineHelpers } =
-    await loadSource();
+  const {
+    invocations,
+    wrongAnswer,
+    commands,
+    codeLoads,
+    probe,
+    firstLineHelpers,
+  } = await loadSource();
   const failures = [
     ...answerOnlyFailures(invocations, wrongAnswer),
-    ...(await firstLineFailures(commands, firstLineHelpers)),
+    ...(await withProject(async where => [
+      ...(await firstLineFailures(commands, firstLineHelpers, where)),
+      ...codeLoadFailures(codeLoads, where, probe),
+    ])),
   ];
   if (failures.length > 0) {
     console.error(`\n${failures.length} start-up check(s) failed:`);
@@ -329,7 +488,7 @@ async function main() {
     process.exit(1);
   }
   console.log(
-    "\nEvery answer-only invocation and every command's first line is within its budget."
+    "\nEvery answer-only invocation and every command's first line is within its budget, and every command's code load was timed."
   );
 }
 

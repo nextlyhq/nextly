@@ -180,6 +180,20 @@ export function wrongFirstLine(
     : `expected a line matching ${String(first.pattern)}, got: ${line}`;
 }
 
+/**
+ * The runs the start-up timing stops once their command's code has loaded:
+ * every command that runs an action, with the arguments it is timed to its
+ * first line with. A parent that only holds subcommands answers with its help
+ * and loads nothing, so it is not among them. A variant of a command's
+ * arguments would time the same thing: the run stops as the action's module
+ * loads, before the action reads them.
+ */
+export function codeLoadInvocations(program: Command): string[][] {
+  return firstLineInvocations(program).filter(args =>
+    runsAnAction(program, commandPathOf(program, args))
+  );
+}
+
 /** Whether the command `path` names under `program` runs an action itself, holding no subcommands. */
 export function runsAnAction(
   program: Command,
