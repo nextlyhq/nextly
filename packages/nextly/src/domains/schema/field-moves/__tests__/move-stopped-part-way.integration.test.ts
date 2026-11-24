@@ -58,30 +58,57 @@ const moved = (required: boolean): Field[] =>
     ...(required ? { required } : {}),
   }));
 
-/** Each scenario: the fields before and after, and the moves the Builder sends. */
+/** A field the save adds beside its moves. */
+const EXTRA: Field = { name: "extra", type: "text", localized: false };
+
+/**
+ * Each scenario: the fields before and after, the moves the Builder sends, and how many files the
+ * save writes: the moves' own, and one more where the save has anything else to change.
+ */
 const SCENARIOS: {
   name: string;
   before: Field[];
   after: Field[];
   moves: Move[];
+  files: number;
 }[] = [
   {
     name: "into a group",
     before: [...moved(false), group([NOTE])],
     after: [group([NOTE, ...moved(false)])],
     moves: MOVED.map(name => ({ from: [name], to: ["meta", name] })),
+    // The second drops the columns they left.
+    files: 2,
+  },
+  {
+    name: "into a group, beside a field added",
+    before: [...moved(false), group([NOTE])],
+    after: [EXTRA, group([NOTE, ...moved(false)])],
+    moves: MOVED.map(name => ({ from: [name], to: ["meta", name] })),
+    files: 2,
   },
   {
     name: "out of a group",
     before: [group([NOTE, ...moved(false)])],
     after: [...moved(false), group([NOTE])],
     moves: MOVED.map(name => ({ from: ["meta", name], to: [name] })),
+    // Nothing is left to change once the values are out.
+    files: 1,
+  },
+  {
+    name: "out of a group, beside a field added",
+    before: [group([NOTE, ...moved(false)])],
+    after: [...moved(false), EXTRA, group([NOTE])],
+    moves: MOVED.map(name => ({ from: ["meta", name], to: [name] })),
+    files: 2,
   },
   {
     name: "out of a group, into a required field",
     before: [group([NOTE, ...moved(false)])],
     after: [...moved(true), group([NOTE])],
     moves: MOVED.map(name => ({ from: ["meta", name], to: [name] })),
+    // The second makes them required.
+    files: 2,
   },
 ];
 
@@ -310,10 +337,10 @@ async function expectEveryValueReadable(
 describe.runIf(getConfiguredTestDialects().includes("mysql"))(
   "a field move stopped part-way on MySQL leaves every value readable",
   () => {
-    describe.each(SCENARIOS)("$name", ({ before, after, moves }) => {
+    describe.each(SCENARIOS)("$name", ({ before, after, moves, files }) => {
       it("through the Builder's schema dialog, stopped after each statement", async () => {
         let stops = 0;
-        for (let n = 1; n < 40; n++) {
+        for (let n = 1; n < 60; n++) {
           await instance?.destroy();
           instance = undefined;
           await freshFolder();
@@ -335,15 +362,14 @@ describe.runIf(getConfiguredTestDialects().includes("mysql"))(
         await createPosts(first, before);
         const created = await filesWritten();
         await save(first, after, moves);
-        const total = await filesWritten();
-        expect(total).toBeGreaterThan(created);
+        expect((await filesWritten()) - created).toBe(files);
 
         let stops = 0;
-        for (let n = 1; n < 40; n++) {
+        for (let n = 1; n < 60; n++) {
           const second = await boot();
           await migrateFolder(second, created);
           await seed(second, before);
-          // Counted from the move's files alone: the earlier ones have run.
+          // Counted from the save's files alone: the earlier ones have run.
           if ((await stoppedAfter(n, () => migrateFolder(second))) === "ran") {
             break;
           }
