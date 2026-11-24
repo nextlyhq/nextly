@@ -22,6 +22,6 @@ export function registerMigrateCheckCommand(program: Command): void {
           async () => (await import("./migrate-check")).migrateCheckAction
         )
       ),
-    startLine("Checking the migrations...")
+    startLine("Checking the migrations...", "no database")
   );
 }
