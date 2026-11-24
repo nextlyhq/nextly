@@ -316,6 +316,20 @@ describe("RestoreFieldsDialog", () => {
     expect(screen.queryByText(/until you publish/)).toBeNull();
   });
 
+  it("says the editor already holds the version when there is nothing to put back", () => {
+    renderDialog({ rows: [] });
+
+    expect(
+      screen.getByText(
+        "The editor already holds every value this version would put back."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Changed fields" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Restore 0 fields" })
+    ).toBeDisabled();
+  });
+
   it("asks a question naming the version", () => {
     renderDialog();
 

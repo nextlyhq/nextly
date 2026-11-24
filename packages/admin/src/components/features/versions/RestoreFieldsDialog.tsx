@@ -190,7 +190,15 @@ export function RestoreFieldsDialog({
             They arrive as unsaved changes, so you can check them before saving.
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {rows.length === 0 ? (
+          // A version the editor already matches field for field: said, so
+          // an empty list and "Restore 0 fields" are not left to explain it.
+          <p className="rounded-md border border-border px-3 py-2.5 text-sm text-muted-foreground">
+            The editor already holds every value this version would put back.
+          </p>
+        ) : null}
         <ul
+          hidden={rows.length === 0}
           aria-label="Changed fields"
           className="max-h-80 divide-y divide-border overflow-y-auto rounded-md border border-border"
         >
