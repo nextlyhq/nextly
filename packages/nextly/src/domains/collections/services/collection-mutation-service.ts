@@ -319,6 +319,7 @@ import {
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { withComponentShapes } from "../../i18n/runtime/component-shapes";
+import { sameSharedStructure } from "../../i18n/shared-structure";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import {
@@ -19013,6 +19014,23 @@ export class CollectionMutationService extends BaseService {
             updatePayload.firstPublishedAt = updateStamp;
           }
 
+          // A repeater's or group's structure written as it is stored changes nothing the main
+          // row's version covers: its text went to the language's row. Left out of the UPDATE, so
+          // a save of translated values alone moves only that language's counter, and a reader of
+          // another language keeps the version it holds (`sameSharedStructure`).
+          for (const written of localizedUpdate?.sharedStructures ?? []) {
+            if (
+              written.field in updatePayload &&
+              sameSharedStructure(
+                updatePayload[written.field],
+                (preUpdateRow as Record<string, unknown> | undefined)?.[
+                  written.field
+                ]
+              )
+            ) {
+              delete updatePayload[written.field];
+            }
+          }
           // Keyed by SQL column name, as the adapter takes it; see
           // `writeRowAndTranslation`.
           const columns: Record<string, unknown> = {};

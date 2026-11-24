@@ -671,3 +671,16 @@ export function assembleStoredValue(
     ? structure
     : asStoredLike(structure, assembled);
 }
+
+/**
+ * Whether a structure a save writes is the one the row stores, read as values (`parsedValue`):
+ * stored as JSON text on one driver and as an object on another, the two compare by what they
+ * hold. A save writing back the same structure changes nothing the row's version covers.
+ */
+export function sameSharedStructure(
+  written: unknown,
+  stored: unknown
+): boolean {
+  if (stored === undefined) return false;
+  return isDeepStrictEqual(parsedValue(written), parsedValue(stored));
+}
