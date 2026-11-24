@@ -54,8 +54,11 @@ async function beat(times = 1) {
   }
 }
 
-/** Held, then offline on time-keeping beats until the claim is lost. */
-async function lostWhileOffline() {
+/**
+ * Held, then offline on time-keeping beats until the claim is lost. The
+ * release the loss sends answers with `release`, offline by default.
+ */
+async function lostWhileOffline(release: () => Promise<void> = offline) {
   const seen: string[] = [];
   const hook = renderHook(() => {
     const lock = useDocumentLock(ref);
@@ -67,6 +70,7 @@ async function lostWhileOffline() {
   );
   patch.mockImplementation(offline);
   post.mockImplementation(offline);
+  del.mockImplementationOnce(release);
   del.mockImplementation(offline);
   await beat(
     Math.ceil(DOCUMENT_LOCK_LOSS_AFTER_MS / DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS)
@@ -95,15 +99,20 @@ afterEach(() => {
 
 describe("a claim lost while offline", () => {
   it("comes back under a new token once the connection returns, so a late release cannot remove it", async () => {
-    const { result } = await lostWhileOffline();
-
-    // The release sent when the claim was lost is still on its way.
+    // The release the loss sends is still on its way when the claim comes back.
     let releaseLands: () => void = () => {};
-    del.mockReturnValue(
-      new Promise<void>(resolve => {
-        releaseLands = resolve;
-      })
+    const { result } = await lostWhileOffline(
+      () =>
+        new Promise<void>(resolve => {
+          releaseLands = resolve;
+        })
     );
+    expect(del).toHaveBeenCalledTimes(1);
+    expect(del).toHaveBeenCalledWith("/document-lock", {
+      ...ref,
+      claimToken: "t1",
+    });
+
     post.mockImplementation(() =>
       answer({ status: "acquired", claimToken: "t2" })
     );
@@ -111,18 +120,21 @@ describe("a claim lost while offline", () => {
       answer({ status: "renewed", waiting: false })
     );
     await beat();
-
     await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
     expect(post).toHaveBeenLastCalledWith("/document-lock", reclaim);
+
+    // It lands now, naming the old token: the claim held is the new one,
+    // which it does not name, so nothing here moves.
     await act(async () => {
       releaseLands();
     });
-    // The new claim is the one renewed from here on.
     await beat();
+    expect(result.current.state.status).toBe("held-by-me");
     expect(patch).toHaveBeenLastCalledWith("/document-lock", {
       ...ref,
       claimToken: "t2",
     });
+    expect(del).toHaveBeenCalledTimes(1);
   });
 
   it("names who took it when somebody else claimed it meanwhile", async () => {
@@ -254,6 +266,24 @@ describe("a claim lost while offline", () => {
     // The earlier reclaim's win arrives after all: it was this editor's own.
     await firstAnswers("t2");
     await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+  });
+
+  it("keeps asking when a late win cannot be confirmed", async () => {
+    const { result, seen, before, firstAnswers } = await overlappingReclaims();
+
+    // Another blip as the late win is confirmed: nothing is known, so the
+    // refusal it explained is not reported either.
+    patch.mockImplementation(offline);
+    await firstAnswers("t2");
+    const asked = post.mock.calls.length;
+    post.mockImplementation(() =>
+      answer({ status: "acquired", claimToken: "t3" })
+    );
+    await beat(2);
+
+    expect(post.mock.calls.length).toBeGreaterThan(asked);
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(seen.slice(before)).not.toContain("taken-over");
   });
 
   it("does not take a late win that a colleague's takeover since replaced", async () => {

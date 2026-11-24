@@ -405,10 +405,11 @@ export function useDocumentLock({
     // reported: that late win may be this editor's own, and is taken once a
     // renewal confirms it.
     let adoptable: string | null = null;
-    // Whether a reclaim of `adoptable` has been refused: a win that answers
-    // after a refusal predates it, and the refusal may be a colleague's
-    // takeover since, so it is confirmed before it is taken.
-    let reclaimRefused = false;
+    // The reclaims sent by the time one was last refused, counted as
+    // `lapsedAsks` counts them: a win from one of those predates the refusal,
+    // which may be a colleague's takeover since, so it is confirmed before it
+    // is taken. A reclaim sent after it answers for the present.
+    let refusedThrough = 0;
     // Whether a colleague's claim has been reported since this editor last
     // held the document, and whether it has held it at all in this run. A
     // claim won after the first, and never the second, is a gain.
@@ -501,7 +502,7 @@ export function useDocumentLock({
       lapsed = null;
       deferredHolder = null;
       adoptable = null;
-      reclaimRefused = false;
+      refusedThrough = 0;
       // Winning the document ends the ask: nobody waits for what they hold. The
       // server clears its own mark on the same event, so neither side is left
       // telling somebody that this editor is queueing for its own claim.
@@ -740,14 +741,26 @@ export function useDocumentLock({
             return;
           }
           release(won);
-          if (!cancelled && lapsed === asked && deferredHolder !== null) {
-            reportReclaimRefused(deferredHolder);
+          if (cancelled || lapsed !== asked) return;
+          // Replaced by a live claim of someone else's: theirs, as told now.
+          if (
+            item.status !== "renewed" &&
+            item.holder !== undefined &&
+            item.holder.expiresInSeconds > 0
+          ) {
+            reportReclaimRefused(item.holder);
+            return;
           }
+          // Gone with nobody holding it: the refusal waiting was that win's
+          // own claim, just handed back, so the next beat asks again.
+          deferredHolder = null;
         })
         .catch(() => {
-          // Unconfirmed: handed back, and the claim stays as it was, lost or
-          // reported, to be asked about again.
+          // Unconfirmed: handed back. The refusal waiting may have been that
+          // win's own claim, so it is not reported; the claim stays lost and
+          // the next beat asks again.
           release(won);
+          if (!cancelled && lapsed === asked) deferredHolder = null;
         });
     };
 
@@ -763,7 +776,6 @@ export function useDocumentLock({
       const seq = (lapsedAsks += 1);
       lapsedAsk = seq;
       reclaimsOut += 1;
-      if (adoptable !== asked) reclaimRefused = false;
       adoptable = asked;
       const freeSlot = () => {
         if (lapsedAsk === seq) lapsedAsk = null;
@@ -794,7 +806,7 @@ export function useDocumentLock({
               release(item.claimToken);
               return;
             }
-            if (reclaimRefused) {
+            if (seq <= refusedThrough) {
               confirmLateWin(asked, item.claimToken, item.changed);
               return;
             }
@@ -802,7 +814,7 @@ export function useDocumentLock({
             tell(item.changed, true);
             return;
           }
-          if (adoptable === asked) reclaimRefused = true;
+          refusedThrough = lapsedAsks;
           if (cancelled || lapsed !== asked) return;
           // Refused while an earlier reclaim is out: perhaps by the claim
           // that one won. It waits for it, at most a beat.
