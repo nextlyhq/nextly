@@ -2795,6 +2795,101 @@ describe.each(getConfiguredTestDialects())(
         expect(await translatedNotes(t)).toBe("gone");
       }, 60_000);
     }
+
+    /** What came of `send`, sent while the save on `road` holds the collection after its count. */
+    async function heldBySave(
+      t: TestNextly,
+      road: "file" | "push",
+      send: () => Promise<unknown>
+    ): Promise<unknown> {
+      pushRoad.forced = road === "push";
+      const { paused, release } = gated(afterCount);
+      const applying = save(t, 3);
+      const reached = await Promise.race([
+        paused.then(() => true),
+        applying.then(() => false),
+      ]);
+      expect(reached || (await applying)).toBe(true);
+      let settled = false;
+      const writing = send()
+        .then(
+          () => "written",
+          (error: unknown) => error
+        )
+        .finally(() => {
+          settled = true;
+        });
+      await new Promise(resolve => setTimeout(resolve, 1_000));
+      const heldBack = !settled;
+      release();
+      expect(heldBack).toBe(true);
+      expect(await applying).toBe("applied");
+      return writing;
+    }
+
+    /** The first entry's id. */
+    async function firstId(t: TestNextly): Promise<string> {
+      const [first] = await query<{ id: unknown }>(
+        t,
+        `SELECT ${q("id")} AS id FROM ${q(TABLE)} ORDER BY ${q("id")}`
+      );
+      return String(first?.id);
+    }
+
+    // A held write that sets only what the save keeps is made again here too: its values are read
+    // from and written to the translations table as the save left it, without the removed column,
+    // and its before hook runs once. Made again through the tables of before the save, it fails on
+    // that column; made whole again, its hook runs twice.
+    for (const road of ["file", "push"] as const) {
+      it.each(HOOKED_WRITES)(
+        `runs a before hook once for a held $op made again after a save on the ${road} road, and stores what the hook set in the translations table`,
+        async ({ phase, write: send }) => {
+          const t = await bootPerLanguage();
+          for (const note of ["a", "b", "c"]) await write(t, note);
+          const id = await firstId(t);
+          let runs = 0;
+          t.hooks.register(phase, SLUG, context => {
+            runs += 1;
+            return {
+              ...(context.data as Record<string, unknown>),
+              label: `set by run ${String(runs)}`,
+            };
+          });
+          const outcome = await heldBySave(t, road, () => send(t, id));
+          expect(outcome, told(outcome)).toBe("written");
+          expect(runs).toBe(1);
+          const stored = await query<{ label: unknown }>(
+            t,
+            `SELECT ${q("label")} AS label FROM ${q(VALUES_TABLE)} WHERE ${q("label")} LIKE 'set by%'`
+          );
+          expect(stored.map(row => row.label)).toEqual(["set by run 1"]);
+          expect(await translatedNotes(t)).toBe("gone");
+        },
+        60_000
+      );
+
+      it(`deletes the entry of a held delete made again after a save on the ${road} road, its before hook run once`, async () => {
+        const t = await bootPerLanguage();
+        for (const note of ["a", "b", "c"]) await write(t, note);
+        const id = await firstId(t);
+        let runs = 0;
+        t.hooks.register("beforeDelete", SLUG, () => {
+          runs += 1;
+        });
+        const outcome = await heldBySave(t, road, () =>
+          t.nextly.delete({ collection: SLUG, id })
+        );
+        expect(outcome, told(outcome)).toBe("written");
+        expect(runs).toBe(1);
+        for (const table of [TABLE, VALUES_TABLE]) {
+          const [rows] = await query<{ n: number | string }>(
+            t,
+            `SELECT COUNT(*) AS n FROM ${q(table)}`
+          );
+          expect(Number(rows?.n)).toBe(2);
+        }
+      }, 60_000);
+    }
   }
 );
 
