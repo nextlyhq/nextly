@@ -2982,7 +2982,10 @@ async function companionRenameDecisions(
 ): Promise<Map<string, CompanionRename[]>> {
   const byTable = new Map<string, CompanionRename[]>();
   for (const { entity, kind } of entities) {
-    if (entity.localized !== true) continue;
+    // Where its translatable values are kept, as the companion's own plan reads it: under
+    // per-language storage an entity that is not translated keeps them in its translations table
+    // too, so a rename of one of its text fields is that table's rename, not an add and a drop.
+    if (!storesPerLanguage(entity)) continue;
     const recorded = previous.tables.find(
       t => t.name === entity.tableName
     )?.localizedColumns;
