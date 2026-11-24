@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   askOnce,
   replayingWrite,
+  savesHoldEntriesHere,
   WRITE_TRIES,
   WriteTries,
 } from "../write-tries";
@@ -129,6 +130,40 @@ describe("the tries of an entry write", () => {
       { password: "plain", tags: ["a"] },
       { password: "plain", tags: ["a"] },
     ]);
+  });
+
+  it("keeps nothing, and is made once, where no save can hold entries", async () => {
+    const tries = new WriteTries(false);
+    const left = { data: { title: "t" } };
+    const run = vi.fn(() => left);
+    const write = vi.fn(async () => {
+      // The thing itself, each time it is asked for: no copy is made for a try that cannot come.
+      expect(await tries.kept("hooks", run)).toBe(left);
+      expect(await tries.kept("hooks", run)).toBe(left);
+      tries.compared(true);
+      throw new Error("made from an earlier definition");
+    });
+    const reload = reloads();
+
+    await expect(tries.make(write, reload)).rejects.toThrow(
+      "made from an earlier definition"
+    );
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("is made again outside production alone", () => {
+    const before = process.env.NODE_ENV;
+    try {
+      vi.stubEnv("NODE_ENV", "production");
+      expect(savesHoldEntriesHere()).toBe(false);
+      vi.stubEnv("NODE_ENV", "development");
+      expect(savesHoldEntriesHere()).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(process.env.NODE_ENV).toBe(before);
   });
 
   it("hands on the thing itself where a step's answer is not data", async () => {

@@ -10887,6 +10887,12 @@ export class CollectionMutationService extends BaseService {
   ) {
     // An answer that ends the change before its transaction opens.
     const answered = (answer: CollectionServiceResult) => ({ answer });
+    // Resolved through the collection so a custom tableName/dbName override is
+    // honored below, matching every other mutation. The row the hold compares,
+    // read before the table the entry is read through; see `updateEntry`.
+    const publishCollection = await this.collectionService.getCollection(
+      params.collectionName
+    );
     const toUpdate = await this.entryToUpdate({ ...params, gate: null });
     if (toUpdate.answer) return answered(toUpdate.answer);
     const { accessUser, schema, existingEntry } = toUpdate;
@@ -10895,11 +10901,6 @@ export class CollectionMutationService extends BaseService {
     // mere presence of a `status` column: a collection that defines an
     // ordinary user field named `status` has the column but no lifecycle, so
     // it is not publishable and must not demand the publish permission here.
-    // Resolved through the collection so a custom tableName/dbName override is
-    // honored below, matching every other mutation.
-    const publishCollection = await this.collectionService.getCollection(
-      params.collectionName
-    );
     const hasMainStatus =
       (publishCollection as { status?: boolean }).status === true;
     // A collection with a lifecycle is asked the lifecycle grant here, before
@@ -17231,6 +17232,13 @@ export class CollectionMutationService extends BaseService {
       // answering by language would otherwise refuse over a language that does
       // not go live.
       const publishesEveryLanguage = sweepAllLocales && gate === "publish";
+      // Collection metadata, for its relation fields and hooks and for the hold
+      // to compare: read before the table the entry is read through, so that a
+      // save landing between the two is found by the hold, rather than leaving
+      // this update a table of before it and a row of after.
+      const collection = await this.collectionService.getCollection(
+        params.collectionName
+      );
       const toUpdate = await this.entryToUpdate({
         ...params,
         gate: publishesEveryLanguage ? null : gate,
@@ -17264,10 +17272,6 @@ export class CollectionMutationService extends BaseService {
       // from this copy.
       const storedRow = detachData(existingEntry as Record<string, unknown>);
 
-      // Get collection metadata to identify relation fields and hooks
-      const collection = await this.collectionService.getCollection(
-        params.collectionName
-      );
       const fields = collectionFields(collection);
       const storedHooks = this.hookService.getStoredHooks(
         collection as Record<string, unknown>
@@ -21732,7 +21736,9 @@ export class CollectionMutationService extends BaseService {
       authenticatedScope?: AuthenticatedScope;
       appliesFilter?: boolean;
     },
-    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper }
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    // Collection metadata: for the languages the entry holds.
+    collection: Awaited<ReturnType<DynamicCollectionService["getCollection"]>>
   ) {
     // A delete rule that answers a filter allows only the entries it
     // matches, so the gate hands the filter back for the delete to match its
@@ -21748,11 +21754,6 @@ export class CollectionMutationService extends BaseService {
       // super-admin bypass does not apply to a super-admin-owned key here.
       authenticatedScope: params.authenticatedScope,
     };
-    // Collection metadata: for the languages the entry holds, and for the
-    // stored hooks the delete runs after this.
-    const collection = await this.collectionService.getCollection(
-      params.collectionName
-    );
     // A delete removes every language the entry holds, so it is asked in
     // each of them, each time told that one, and a refusal in any refuses
     // it. Each filter answered is matched in its language now, before any
@@ -21772,7 +21773,7 @@ export class CollectionMutationService extends BaseService {
       appliesFilter: params.appliesFilter !== false,
     });
     if ("refusal" in asked) return { refusal: asked.refusal };
-    return { refusal: undefined, collection, deleteLanguages, asked };
+    return { refusal: undefined, deleteLanguages, asked };
   }
 
   /**
@@ -21804,7 +21805,8 @@ export class CollectionMutationService extends BaseService {
     );
     const gate = await this.deleteGateOf(
       { ...params, overrideAccess: false, routeAuthorized: false },
-      schema
+      schema,
+      await this.collectionService.getCollection(params.collectionName)
     );
     return gate.refusal === undefined;
   }
@@ -21872,6 +21874,11 @@ export class CollectionMutationService extends BaseService {
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
 
+      // The row the hold compares, read before the table the entry is read
+      // through; see `updateEntry`.
+      const collection = await this.collectionService.getCollection(
+        params.collectionName
+      );
       const schema = await this.fileManager.loadDynamicSchema(
         params.collectionName
       );
@@ -21897,10 +21904,11 @@ export class CollectionMutationService extends BaseService {
       // gate `canDeleteEntry` asks too, so the two cannot drift.
       const gate = await this.deleteGateOf(
         { ...params, user: accessUser },
-        schema
+        schema,
+        collection
       );
       if (gate.refusal !== undefined) return gate.refusal;
-      const { collection, deleteLanguages } = gate;
+      const { deleteLanguages } = gate;
       const { languages: askedLanguages, filters: deleteFilters } = gate.asked;
       const { storedHooks, tableName, requestFacts, ...setup } =
         this.operationSetup(collection, params);

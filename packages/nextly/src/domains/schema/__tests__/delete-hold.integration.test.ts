@@ -51,6 +51,7 @@ import {
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { ServiceContainer } from "../../../services";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
+import { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import { registerFieldFunctions } from "../../../shared/lib/field-level-registry";
@@ -1453,6 +1454,62 @@ describe.each(getConfiguredTestDialects())(
       expect(row?.label).toBe("changed");
       expect(await hasNoteColumn(t)).toBe(false);
     }, 60_000);
+
+    // A write reads the table its entry is kept in, and the registry row it is compared by, one after
+    // the other. A save that lands whole between the two leaves the table as it was and the row as it
+    // is, so a write compared by that row is found to stand, and its own reads name the column that
+    // is gone: the row it is compared by has to be the one read first.
+    it.each([
+      {
+        op: "update",
+        write: (t: TestNextly, id: string) =>
+          t.nextly.update({
+            collection: SLUG,
+            id,
+            data: { label: "changed", _overwrite: true },
+          } as never),
+      },
+      {
+        op: "delete",
+        write: (t: TestNextly, id: string) =>
+          t.nextly.delete({ collection: SLUG, id }),
+      },
+    ])(
+      "applies the $op of an entry whose table it read before a save and its registry row after",
+      async ({ write }) => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        const id = await firstEntry(t);
+        let saved = false;
+        const real = CollectionFileManager.prototype.loadDynamicSchema;
+        const spy = vi
+          .spyOn(CollectionFileManager.prototype, "loadDynamicSchema")
+          .mockImplementation(async function (
+            this: CollectionFileManager,
+            ...args: Parameters<typeof real>
+          ) {
+            const table: unknown = await real.apply(this, args);
+            // The write's own first read of the table: the save lands whole before its next read.
+            if (!saved && args[0] === SLUG) {
+              saved = true;
+              expect(await apply(t, 3)).toBeInstanceOf(Response);
+            }
+            return table;
+          });
+        try {
+          const outcome = await write(t, id).then(
+            () => "written",
+            (error: unknown) => error
+          );
+          expect(saved).toBe(true);
+          expect(outcome, told(outcome)).toBe("written");
+        } finally {
+          spy.mockRestore();
+        }
+        expect(await hasNoteColumn(t)).toBe(false);
+      },
+      60_000
+    );
 
     // A delete sets nothing, and reads the entry first: made again as an update is, its hooks run
     // once.

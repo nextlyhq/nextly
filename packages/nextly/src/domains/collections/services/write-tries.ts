@@ -20,10 +20,14 @@
  * and landed just after it. A field the caller or a hook set that the save removed, or stores
  * differently, refuses the write by name rather than making it again (`refuseMadeFromEarlier`).
  *
+ * Only where a save can hold entries (`savesHoldEntriesHere`): elsewhere a write is made once, and
+ * nothing is kept for a try that cannot come, so no write pays a copy of its data for one.
+ *
  * @module domains/collections/services/write-tries
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import { isProductionRuntime } from "../../../shared/builder-refusal";
 import { detachData } from "../../../shared/lib/detach";
 
 /** How many times a write is made, the first included. */
@@ -34,6 +38,15 @@ const running = new AsyncLocalStorage<WriteTries>();
 
 /** What one try came to. */
 type Outcome<T> = { readonly value: T } | { readonly error: unknown };
+
+/**
+ * Whether a write here may wait for a save that changes its collection's definition. A Schema
+ * Builder save is the one that holds entries, and none runs in production. Anything else that comes
+ * to hold them while a server runs says so here.
+ */
+export function savesHoldEntriesHere(): boolean {
+  return !isProductionRuntime();
+}
 
 export class WriteTries {
   /** How many tries have been started. */
@@ -46,6 +59,9 @@ export class WriteTries {
   private readonly left = new Map<string, unknown>();
   /** Each question's answer, as a try last heard it. */
   private readonly answers = new Map<string, unknown>();
+
+  /** `again` says whether the write may be made again: decided once, for the whole write. */
+  constructor(private readonly again: boolean = savesHoldEntriesHere()) {}
 
   /** Whether the try under way is a later one, made from what the first left. */
   get madeAgain(): boolean {
@@ -74,7 +90,7 @@ export class WriteTries {
       this.changed = false;
       this.holds = false;
       const outcome = await running.run(this, () => settled(write));
-      const again = this.changed && this.made < WRITE_TRIES;
+      const again = this.again && this.changed && this.made < WRITE_TRIES;
       if (!again || !(await reload())) return valueOf(outcome);
     }
   }
@@ -93,6 +109,7 @@ export class WriteTries {
    * (hashing a password, encoding a value) reaches no other try.
    */
   async kept<T>(step: string, run: () => Promise<T> | T): Promise<T> {
+    if (!this.again) return run();
     if (this.left.has(step)) return detachData(this.left.get(step) as T);
     const result = await run();
     this.left.set(step, detachData(result));
@@ -101,6 +118,7 @@ export class WriteTries {
 
   /** What `step` answered the first time it ran: the thing itself, where no copy would serve. */
   async once<T>(step: string, run: () => Promise<T> | T): Promise<T> {
+    if (!this.again) return run();
     if (this.left.has(step)) return this.left.get(step) as T;
     const result = await run();
     this.left.set(step, result);
@@ -117,7 +135,7 @@ export class WriteTries {
       return this.answers.get(question) as T;
     }
     const answer = await ask();
-    if (!this.holds) this.answers.set(question, answer);
+    if (this.again && !this.holds) this.answers.set(question, answer);
     return answer;
   }
 }
