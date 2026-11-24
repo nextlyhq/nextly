@@ -85,10 +85,12 @@ function posts(indexes?: { fields: string[]; unique?: boolean }[]) {
 
 const UNIQUE = [{ fields: ["tenant", "code"], unique: true }];
 
-/** The app's hook: an index on `column` of the collection's table. */
-function indexing(column: string): SchemaHook {
+/** The app's hook: an index on each of `columns` of the collection's table. */
+function indexing(...columns: string[]): SchemaHook {
   return ({ schema }) => {
-    schema.extendTable(TABLE, { indexes: [{ columns: [column] }] });
+    schema.extendTable(TABLE, {
+      indexes: columns.map(column => ({ columns: [column] })),
+    });
   };
 }
 
@@ -386,6 +388,71 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(warned).toHaveLength(1);
         expect(warned[0]).toContain("hoi_posts");
         expect(warned[0]).toContain('names the column "code"');
+      }, 120_000);
+
+      it("starts with a warning where hooks name a field the Builder added and one it removed", async () => {
+        // Neither the record nor the code entry has both fields.
+        await addsRank();
+        await builderSaves(fields =>
+          fields.filter(field => field.name !== "code")
+        );
+        const own = (await createAdapter({
+          type: dialect,
+          url,
+        } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
+        connections.push(own);
+        freshProcess();
+        const warnings: string[] = [];
+
+        await createTestNextly({
+          adapter: own as never,
+          collections: [posts()],
+          db: {
+            migrationsDir: "./migrations",
+            uiSchemaFile: "./ui-schema.json",
+            schema: { extend: [indexing("rank", "code")] },
+          },
+          basePath: dir,
+          logger: {
+            ...quiet,
+            warn: (message: string) => warnings.push(message),
+          } as never,
+        });
+
+        expect(
+          warnings.filter(
+            line =>
+              line.includes("schema hook") &&
+              line.includes('names the column "code"')
+          )
+        ).toHaveLength(1);
+        expect(
+          activeExtensionSchema()
+            ?.entityIndexes.get(TABLE)
+            ?.map(index => index.columns)
+        ).toEqual([["rank"], ["code"]]);
+      }, 120_000);
+
+      it("still refuses to start over a hook on a field neither has", async () => {
+        const own = (await createAdapter({
+          type: dialect,
+          url,
+        } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
+        connections.push(own);
+        freshProcess();
+
+        await expect(
+          createTestNextly({
+            adapter: own as never,
+            collections: [posts()],
+            db: {
+              migrationsDir: "./migrations",
+              uiSchemaFile: "./ui-schema.json",
+              schema: { extend: [indexing("nowhere")] },
+            },
+            basePath: dir,
+          })
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
       }, 120_000);
 
       it("reloads with a hook added on a field the Builder added", async () => {
