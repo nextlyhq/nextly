@@ -518,6 +518,56 @@ describe("VersionComparePage, its choices", () => {
     }
   });
 
+  it("keeps the current comparison's copy box when an earlier copy succeeds late", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    let finishFirst: () => void = () => {};
+    const writeText = vi.fn(
+      () => new Promise<void>(resolve => (finishFirst = resolve))
+    );
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    try {
+      // Comparison A: a copy that has not answered yet.
+      const { rerender } = renderPage({ from: 4, to: 5 });
+      screen.getByRole("button", { name: "Copy link" }).click();
+      expect(writeText).toHaveBeenCalledTimes(1);
+
+      // Comparison B, where copying fails: B's link to copy by hand shows.
+      rerender(
+        <VersionComparePage
+          scope={scope}
+          documentHref="/admin/collections/posts/e1"
+          readOnlyHref="/admin/collections/posts"
+          from={3}
+          to={5}
+        />
+      );
+      Object.defineProperty(navigator, "clipboard", {
+        value: undefined,
+        configurable: true,
+      });
+      screen.getByRole("button", { name: "Copy link" }).click();
+      const box = await screen.findByRole("textbox", {
+        name: "Link to this comparison",
+      });
+      expect(
+        new URL((box as HTMLInputElement).value).searchParams.get("from")
+      ).toBe("3");
+
+      // A's copy succeeds at last: it copied A, so B's box stays.
+      finishFirst();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(
+        screen.getByRole("textbox", { name: "Link to this comparison" })
+      ).toBeInTheDocument();
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
   it("offers older versions in the drawn comparison's language when the newer one is not loaded", () => {
     // A shared link can name a version beyond the loaded page: the list has
     // no record of it, but the comparison drawn says its language.

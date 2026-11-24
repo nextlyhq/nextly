@@ -545,8 +545,13 @@ describe("VersionComparePage — choosing the two versions", () => {
       screen.getByRole("combobox", { name: "with" }),
       "9"
     );
-    const target = String(navigateMock.mock.calls.at(-1)?.[0]);
-    expect(target).not.toContain("locale=");
+    // The choice navigates, to the version before 9 in its own (no)
+    // language, and the address's earlier language goes with it.
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).toHaveBeenCalledWith(
+      versionsHref(collection("e1"), { from: "previous", to: 9 })
+    );
+    expect(String(navigateMock.mock.calls[0]?.[0])).not.toContain("locale=");
   });
 
   it("offers no numbered older version until the newer one's language is known", () => {

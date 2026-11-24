@@ -653,8 +653,10 @@ export function VersionComparePage({
     void navigator.clipboard
       .writeText(href)
       .then(() => {
-        // Copied: the box to copy from by hand has done its work.
-        setManualLink(null);
+        // Copied: the box for THIS link has done its work. A copy answering
+        // late, after the page moved to another comparison, leaves that
+        // comparison's box alone: what it put on the clipboard is not it.
+        setManualLink(current => (current === href ? null : current));
         toast.success("Link copied. It opens this comparison.");
       })
       .catch(failed);
