@@ -50,11 +50,7 @@ describe("resolutionStatement for a date fill", () => {
 });
 
 describe("resolutionStatements for a field kept per language", () => {
-  const perLanguage = {
-    companionTable: "dc_posts_locales",
-    locale: "en",
-    stamp: "2026-11-24 09:15:30.250",
-  };
+  const perLanguage = { companionTable: "dc_posts_locales", locale: "en" };
 
   it("deletes an entry without the value, then every language's row of it", () => {
     expect(
@@ -86,8 +82,30 @@ describe("resolutionStatements for a field kept per language", () => {
         "postgresql"
       )
     ).toEqual([
-      `UPDATE "dc_posts_locales" SET "note" = 'it''s', "_updated_at" = '2026-11-24 09:15:30.250' WHERE "_locale" = 'en' AND "note" IS NULL;`,
-      `INSERT INTO "dc_posts_locales" ("_parent", "_locale", "_updated_at", "note") SELECT "id", 'en', '2026-11-24 09:15:30.250', 'it''s' FROM "dc_posts" WHERE "id" NOT IN (SELECT "_parent" FROM (SELECT DISTINCT "_parent" FROM "dc_posts_locales" WHERE "_locale" = 'en') AS "with_row");`,
+      `UPDATE "dc_posts_locales" SET "note" = 'it''s', "_updated_at" = now() WHERE "_locale" = 'en' AND "note" IS NULL;`,
+      `INSERT INTO "dc_posts_locales" ("_parent", "_locale", "_updated_at", "note") SELECT "id", 'en', now(), 'it''s' FROM "dc_posts" WHERE "id" NOT IN (SELECT "_parent" FROM (SELECT DISTINCT "_parent" FROM "dc_posts_locales" WHERE "_locale" = 'en') AS "with_row");`,
     ]);
   });
+
+  it.each([
+    ["postgresql", "now()"],
+    ["mysql", "UTC_TIMESTAMP(3)"],
+    ["sqlite", "CAST(strftime('%s', 'now') AS INTEGER)"],
+  ] as const)(
+    "stamps a fill's rows with %s's clock, read when the statement runs and stored as the runtime stores it",
+    (dialect, clock) => {
+      const [update, insert] = resolutionStatements(
+        {
+          tableName: "dc_posts",
+          columnName: "note",
+          kind: "fill",
+          value: "filled",
+          perLanguage,
+        },
+        dialect
+      );
+      expect(update).toContain(`= ${clock} WHERE`);
+      expect(insert).toContain(`, ${clock}, 'filled'`);
+    }
+  );
 });

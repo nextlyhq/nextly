@@ -232,6 +232,41 @@ export function requiredTextFieldCases(
       const keptPerLanguage = (translated: boolean) =>
         layout === "per-language" || translated;
 
+      /**
+       * A collection whose text field `note` is kept once for every language, and three entries:
+       * one with a note, two with none.
+       */
+      async function sharedNotes(
+        slug: string,
+        translated: boolean
+      ): Promise<{ kept: string; empty: string; bare: string }> {
+        const created = await handler().createCollection({
+          name: slug,
+          label: "Note",
+          localized: translated,
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "note", type: "text", localized: false },
+          ],
+        });
+        expect(created.success, JSON.stringify(created)).toBe(true);
+        const write = async (data: Record<string, unknown>) => {
+          const entry = await handler()
+            .getEntryService()
+            .createEntry(
+              { collectionName: slug, overrideAccess: true, locale: "en" },
+              data
+            );
+          expect(entry.success, JSON.stringify(entry)).toBe(true);
+          return String((entry.data as { id: unknown }).id);
+        };
+        return {
+          kept: await write({ heading: "Kept", note: "kept" }),
+          empty: await write({ heading: "Empty" }),
+          bare: await write({ heading: "Bare" }),
+        };
+      }
+
       /** A save's change, the field it settles, and how many entries hold no value for it. */
       interface Change {
         fields: Record<string, unknown>[];
@@ -728,6 +763,33 @@ export function requiredTextFieldCases(
             });
           }
 
+          // A field that leaves the main table for the translations table moves its values there
+          // first, so its entries without a value are the ones whose main column was empty.
+          if (keptPerLanguage(translated)) {
+            it(`fills a shared text field of ${kind} collection joining the translations table and made required, counting its empty entries (${road})`, async () => {
+              const answer: Answer = { kind: "fill", value: "filled" };
+              const slug = `${slugOf(answer)}_join`;
+              const ids = await sharedNotes(slug, translated);
+              const joined: Change = {
+                ...NOTE_REQUIRED,
+                fields: [
+                  { name: "heading", type: "text" },
+                  { name: "note", type: "text", required: true },
+                ],
+              };
+
+              await through(road, slug, translated, answer, joined);
+
+              expect(
+                await defaultLanguageValues(slug, translated, "note")
+              ).toEqual({
+                [ids.kept]: "kept",
+                [ids.empty]: "filled",
+                [ids.bare]: "filled",
+              });
+            });
+          }
+
           // A field kept per language has no NOT NULL to hold an entry without its value, so these
           // cases are its own; a column of the main table made required already holds none.
           if (keptPerLanguage(translated)) {
@@ -891,6 +953,63 @@ export function requiredTextFieldCases(
           expect(read).toMatchObject({ heading: "Hello", tagline: "Welcome" });
         });
       }
+
+      it("stores a localized date a Single's push is given as its default as its file stores it", async () => {
+        // A translated Single, so the date is kept per language on either layout.
+        const stored = new Map<string, unknown>();
+        for (const environment of ["development", "production"] as const) {
+          const slug = `${prefix}_dated_${environment === "development" ? "dev" : "prod"}`;
+          vi.stubEnv("NODE_ENV", "development");
+          await dispatchSingles(
+            "createSingle",
+            {},
+            {
+              slug,
+              label: "Dated",
+              localized: true,
+              fields: [{ name: "heading", type: "text" }],
+            }
+          );
+          await current.nextly.updateSingle({
+            slug,
+            data: { heading: "Hello", _overwrite: true },
+          });
+
+          // In development the save's file is run; outside it, its push applies the change.
+          vi.stubEnv("NODE_ENV", environment);
+          await dispatchSingles(
+            "applySingleSchemaChanges",
+            { slug },
+            {
+              fields: [
+                { name: "heading", type: "text" },
+                {
+                  name: "published",
+                  type: "date",
+                  localized: true,
+                  defaultValue: "2026-01-15",
+                },
+              ],
+              confirmed: true,
+              schemaVersion: await schemaVersionOf("dynamic_singles", slug),
+            }
+          );
+          vi.stubEnv("NODE_ENV", "development");
+
+          const [row] = await query<{ value: unknown }>(
+            `SELECT ${quote(dialect, "published")} AS value FROM ${quote(dialect, `single_${slug}_locales`)} WHERE ${quote(dialect, "_locale")} = 'en'`
+          );
+          stored.set(environment, row?.value);
+        }
+
+        // The value the push left is the one the file writes.
+        const value = (v: unknown) =>
+          v instanceof Date ? v.toISOString() : String(v);
+        expect(stored.get("development")).toBeDefined();
+        expect(value(stored.get("production"))).toBe(
+          value(stored.get("development"))
+        );
+      });
     }
   );
 }

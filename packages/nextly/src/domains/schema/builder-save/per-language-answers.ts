@@ -17,8 +17,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../../../types/database-operations";
+import { statedMoment } from "../../dynamic-collections/services/stated-default";
 import { appLocalization } from "../../i18n/configured-locales";
-import { encodeStamp } from "../../i18n/runtime/companion-stamp-column";
 import type {
   BrowserRenameResolution,
   LegacyResolutionsBundle,
@@ -98,22 +98,24 @@ export function defaultLanguage(configured: string | undefined): string {
   return appLocalization()?.defaultLocale ?? configured ?? "en";
 }
 
-/**
- * Where a field kept per language on main table `table` settles its rows: the translations table,
- * in `locale`, each row a fill writes stamped with this moment as the runtime stamps a language's
- * change of content (`encodeStamp`), so a translation of the filled value is told older than it.
- */
+/** Where a field kept per language on main table `table` settles its rows, in `locale`. */
 export function perLanguageColumn(
   table: string,
-  locale: string,
-  dialect: SupportedDialect
+  locale: string
 ): PerLanguageColumn {
-  const companionTable = `${table}_locales`;
-  return {
-    companionTable,
-    locale,
-    stamp: encodeStamp(new Date(), companionTable, dialect),
-  };
+  return { companionTable: `${table}_locales`, locale };
+}
+
+/**
+ * A Single's row fill as a statement writes it: a date as the moment it names, which the
+ * statement stores in the dialect's form (`storedDateValue`), and any other value as it is. Both
+ * the save's file and the push write the fill through this, so they store the same value.
+ */
+export function rowFillValue(
+  type: string | undefined,
+  value: unknown
+): unknown {
+  return type === "date" ? (statedMoment(value) ?? value) : value;
 }
 
 /**
@@ -176,9 +178,9 @@ function perLanguageSettleStatements(
       const answer =
         (madeRequired(args.oldFields, args.newFields, name, renames)
           ? answerFor(args, name)
-          : undefined) ?? fillFor(args.rowFills, name);
+          : undefined) ?? rowFillFor(args.rowFills, field);
       if (answer === undefined) return [];
-      return [settlement(args.tableName, field, answer, locale, dialect)];
+      return [settlement(args.tableName, field, answer, locale)];
     }
   );
   return resolutions.flatMap(r => resolutionStatements(r, dialect));
@@ -216,13 +218,12 @@ function settlement(
   table: string,
   field: FieldDefinition,
   answer: Answer,
-  locale: string,
-  dialect: SupportedDialect
+  locale: string
 ): ColumnResolution {
   const settled = {
     tableName: table,
     columnName: toSnakeCase(field.name),
-    perLanguage: perLanguageColumn(table, locale, dialect),
+    perLanguage: perLanguageColumn(table, locale),
   };
   if (answer.kind === "delete") {
     return { ...settled, kind: "delete_nonconforming" };
@@ -238,6 +239,17 @@ function settlement(
 
 /** An answer for a field's entries: fill them, or delete them. */
 type Answer = { kind: "fill"; value: unknown } | { kind: "delete" };
+
+/** A Single's row fill for `field` among `rowFills`, as the fill the file writes for it. */
+function rowFillFor(
+  rowFills: PushAnswers["rowFills"],
+  field: FieldDefinition
+): Answer | undefined {
+  const fill = fillFor(rowFills, field.name);
+  return fill?.kind === "fill"
+    ? { kind: "fill", value: rowFillValue(field.type, fill.value) }
+    : fill;
+}
 
 /** A fill for field `name` among `fills`, as the answer it is. */
 function fillFor(

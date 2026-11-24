@@ -67,7 +67,6 @@ import {
   holdCollectionOnSession,
 } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
-import { statedMoment } from "../../dynamic-collections/services/stated-default";
 import {
   resolveFieldGroupStorageNames,
   underNaming,
@@ -229,6 +228,7 @@ import {
   keptPerLanguage,
   madeRequired,
   perLanguageColumn,
+  rowFillValue,
   sourceColumn,
 } from "./per-language-answers";
 import {
@@ -2028,12 +2028,9 @@ function fileResolutions(
     ...(save.rowFills ?? []).map(fill => ({
       column: fill.column,
       kind: "fill" as const,
-      // A date is written as the moment it names, which the fill stores in the dialect's form
-      // (`storedDateValue`), as the PATCH road's fill does; never the text it was stated in.
-      value:
-        answeredField(save, fill.column)?.type === "date"
-          ? (statedMoment(fill.value) ?? fill.value)
-          : fill.value,
+      // A date is written as the moment it names (`rowFillValue`), as the PATCH road's fill
+      // stores it; never the text it was stated in.
+      value: rowFillValue(answeredField(save, fill.column)?.type, fill.value),
     })),
   ];
   if (answers.length === 0) return {};
@@ -2059,7 +2056,7 @@ function fileResolutions(
  * required field kept per language needs. Undefined where the field's column is the main table's.
  */
 function perLanguageColumnOf(
-  deps: Pick<CollectionSaveDeps, "config" | "adapter">,
+  deps: Pick<CollectionSaveDeps, "config">,
   save: CollectionSave,
   table: string,
   name: string
@@ -2070,8 +2067,7 @@ function perLanguageColumnOf(
   }
   return perLanguageColumn(
     table,
-    defaultLanguage(deps.config.localization?.defaultLocale),
-    deps.adapter.getCapabilities().dialect
+    defaultLanguage(deps.config.localization?.defaultLocale)
   );
 }
 
@@ -2117,6 +2113,7 @@ async function settledRows(
         : await settledPerLanguage(deps, save, {
             table,
             exists,
+            live,
             perLanguage,
             resolution,
             source,
@@ -2248,6 +2245,7 @@ async function settledPerLanguage(
   args: {
     table: string;
     exists: boolean;
+    live: TableSpec | undefined;
     perLanguage: PerLanguageColumn;
     resolution: NonNullable<CollectionSave["resolutions"]>[number];
     /** The field's column as the database still names it (`sourceColumn`). */
@@ -2267,16 +2265,28 @@ async function settledPerLanguage(
   }
   if (!args.exists) return 0;
   const { companionTable, locale } = args.perLanguage;
-  return countEntriesWithoutDefaultLanguageValue(
-    deps.adapter.getDrizzle(),
-    deps.adapter.getCapabilities().dialect,
-    {
-      table: args.table,
-      companionTable,
-      column: await liveCompanionColumn(deps, companionTable, args.source),
-      locale,
-    }
-  );
+  const db = deps.adapter.getDrizzle();
+  const { dialect } = deps.adapter.getCapabilities();
+  const column = await liveCompanionColumn(deps, companionTable, args.source);
+  // A field this save moves into the translations table still has its column on the main table,
+  // with the values the move copies over before the answer runs: the entries without one are those
+  // whose main column is empty.
+  const movesFromMain =
+    column === null && args.live?.columns.some(c => c.name === args.source);
+  if (movesFromMain === true) {
+    return (
+      await countRowsBreakingNotNull(db, dialect, {
+        table: args.table,
+        column: args.source,
+      })
+    ).total;
+  }
+  return countEntriesWithoutDefaultLanguageValue(db, dialect, {
+    table: args.table,
+    companionTable,
+    column,
+    locale,
+  });
 }
 
 /** `column` where translations table `companionTable` has it, else null. */

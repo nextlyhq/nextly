@@ -24,12 +24,6 @@ import { quoteIdent } from "./identifier-quoting";
 export interface PerLanguageColumn {
   companionTable: string;
   locale: string;
-  /**
-   * The content stamp (`_updated_at`) every row a fill writes takes, encoded as the runtime writes
-   * one (`encodeStamp`): the default language's value changed at that moment, so every translation
-   * of it written before then is older than its source.
-   */
-  stamp: unknown;
 }
 
 /**
@@ -118,6 +112,19 @@ export function resolutionStatement(
   return `UPDATE ${table} SET ${column} = ${sqlValueLiteral(value, dialect)} WHERE ${column} IS NULL;`;
 }
 
+/**
+ * The database's clock as a stamp column (`_updated_at`) stores the moment it reads: the epoch
+ * seconds SQLite keeps, the UTC datetime with milliseconds MySQL keeps, and an instant on
+ * PostgreSQL, the same forms the runtime's encoder gives a stamp (`encodeStamp`).
+ */
+function stampClock(dialect: SupportedDialect): string {
+  return dialect === "postgresql"
+    ? "now()"
+    : dialect === "mysql"
+      ? "UTC_TIMESTAMP(3)"
+      : "CAST(strftime('%s', 'now') AS INTEGER)";
+}
+
 /** A fill's value as the SQL literal its column takes: a JSON column's as its JSON text. */
 function fillLiteral(
   resolution: Extract<ColumnResolution, { kind: "fill" }>,
@@ -138,7 +145,10 @@ function fillLiteral(
  *   leaves every row in place, even where each statement commits as it runs (MySQL).
  * - A fill gives each default-language row holding NULL the value, then adds a default-language
  *   row holding it for each entry that has none; the row's other columns take their defaults. Each
- *   row it writes takes the content stamp (`PerLanguageColumn.stamp`).
+ *   row it writes is stamped (`_updated_at`) with the moment the statement runs, in the form the
+ *   runtime stores a stamp (`stampClock`): the default language's value changes then, so every
+ *   translation of it written before is older than its source. Read at run time, not when the
+ *   statement is written: a migration may run long after, behind a translation edited meanwhile.
  *
  * No column is made NOT NULL: a translations table's columns stay nullable, since a language
  * other than the default one may hold no value and fall back. Where a statement reads the table it
@@ -167,7 +177,7 @@ function perLanguageStatements(
     ];
   }
   const value = fillLiteral(resolution, dialect);
-  const stamp = sqlValueLiteral(perLanguage.stamp, dialect);
+  const stamp = stampClock(dialect);
   const stampColumn = q("_updated_at");
   const withRow = `SELECT DISTINCT ${parent} FROM ${companion} WHERE ${inDefaultLanguage}`;
   return [
