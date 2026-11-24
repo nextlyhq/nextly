@@ -107,13 +107,41 @@ function valuesOf(type: FieldTypeOnDialect): OldValue[] {
   }
 }
 
-/** Whether `type` is a choice, or a list of choices, with no options to judge its values against yet. */
-function choiceWithNoOptions(type: FieldTypeOnDialect): boolean {
-  if (type.family === "choice") return (type.options ?? []).length === 0;
+/** The choice `type` is, or is a list of; undefined for any other type. */
+function choiceOf(type: FieldTypeOnDialect): FieldTypeOnDialect | undefined {
+  if (type.family === "choice") return type;
+  return type.family === "list" && type.item !== undefined
+    ? choiceOf(type.item)
+    : undefined;
+}
+
+/**
+ * Whether the values judged of `type` (`valuesOf`) are all it may hold: a checkbox's two, the
+ * options of a choice that has some, or a list of such items, which the rules judge item by item.
+ * Any other type holds more values than are judged here.
+ */
+function everyValueJudged(type: FieldTypeOnDialect): boolean {
+  const choice = choiceOf(type);
+  if (choice !== undefined) return (choice.options ?? []).length > 0;
+  if (type.family === "list") {
+    return type.item !== undefined && everyValueJudged(type.item);
+  }
+  return type.family === "checkbox";
+}
+
+/**
+ * Whether a change to `to` may lose values the ones judged do not show, `to` being a choice or a
+ * list of choices: one with no options yet takes them later, and its values are judged against those
+ * then; one with options refuses every other value, which a type holding any value may hold.
+ */
+function choiceMayRefuse(
+  from: FieldTypeOnDialect,
+  to: FieldTypeOnDialect
+): boolean {
+  const choice = choiceOf(to);
   return (
-    type.family === "list" &&
-    type.item !== undefined &&
-    choiceWithNoOptions(type.item)
+    choice !== undefined &&
+    ((choice.options ?? []).length === 0 || !everyValueJudged(from))
   );
 }
 
@@ -127,8 +155,7 @@ export function pairOutcome(
   to: FieldTypeOnDialect
 ): PairOutcome | null {
   if (pairBlocked(from, to) !== null) return null;
-  // A choice given no options yet takes them later, and every value is judged against those then.
-  if (choiceWithNoOptions(to)) return "may-lose";
+  if (choiceMayRefuse(from, to)) return "may-lose";
   let converts = false;
   // Only values a field of `from` can hold: those the rules keep for the type itself. None of them
   // held means no value here is judged, so nothing says every value is kept.

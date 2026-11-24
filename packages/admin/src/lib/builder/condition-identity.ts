@@ -9,8 +9,10 @@
  * marked, and counts as an error the save refuses, until it names a field it
  * can read or is removed. Nothing is stored about it: it is judged from the
  * fields as they stand, so it holds after any change, undo or redo alike. The
- * one exception reads the last saved definition beside them: a saved dropdown
- * whose type changes no longer has the options a condition compared it with.
+ * one exception reads the last saved definition beside them, for a condition
+ * inherited from it: a saved dropdown whose type changes no longer has the
+ * options the condition compared it with, and a source that became rich text
+ * no longer holds a text to compare.
  *
  * @module lib/builder/condition-identity
  */
@@ -146,8 +148,9 @@ function operatorFits(type: string, operator: string): boolean {
  * yet: a condition not yet given a source is unfinished, not broken. `saved` is
  * where the field was last saved (`savedPlaceOf`), where there is one: a source
  * that was saved as a dropdown and is now another type no longer has the
- * options a condition inherited from it compares with. A comparison made since,
- * or changed since, reads the source as it is now.
+ * options a condition inherited from it compares with, and one that became rich
+ * text holds nothing a value inherited from it compares with. A comparison made
+ * since, or changed since, reads the source as it is now.
  */
 export function brokenConditionOf(
   field: BuilderField,
@@ -177,8 +180,10 @@ export function brokenConditionOf(
       message: `${subject}'s condition compares ${called(source)} in a way a ${source.type} field cannot. Choose another comparison, or remove the condition.`,
     };
   }
+  const was = sourceComparedAsSaved(source, condition, saved);
   return (
-    formerOptionBreak(subject, source, condition, saved) ??
+    becameRichTextBreak(subject, source, condition, was) ??
+    formerOptionBreak(subject, source, condition, was) ??
     missingOptionBreak(subject, source, condition)
   );
 }
@@ -192,23 +197,46 @@ function comparedText(condition: ReturnType<typeof normalized>): string | null {
 }
 
 /**
- * A condition inherited from a saved dropdown that is now another type, comparing it with one of the
- * options it had (`saved`, where the reader was last saved).
+ * A condition inherited from a saved source (`was`) of another type that is now rich text, comparing
+ * it with a value: the entry form reads a document as no text at all, so the comparison would answer
+ * the same whatever the document holds. Whether the source holds anything is still read.
+ */
+function becameRichTextBreak(
+  subject: string,
+  source: BuilderField,
+  condition: ReturnType<typeof normalized>,
+  was: BuilderField | undefined
+): BrokenCondition | null {
+  const unread =
+    was !== undefined &&
+    was.type !== "richText" &&
+    source.type === "richText" &&
+    operatorTakesValue(condition.operator);
+  return unread
+    ? {
+        reason: "operator-unsupported",
+        message: `${subject}'s condition compares the value of ${called(source)}, whose rich text it cannot read. Choose another field for it, or remove the condition.`,
+      }
+    : null;
+}
+
+/**
+ * A condition inherited from a saved dropdown (`was`) that is now another type, comparing it with
+ * one of the options it had.
  */
 function formerOptionBreak(
   subject: string,
   source: BuilderField,
   condition: ReturnType<typeof normalized>,
-  saved: FieldPlacement | undefined
+  was: BuilderField | undefined
 ): BrokenCondition | null {
   const value = comparedText(condition);
-  const wasChoice = saved?.siblings.find(each => each.id === source.id);
-  if (value === null || wasChoice === undefined) return null;
   const former =
-    CHOICE_TYPES.has(wasChoice.type) &&
+    value !== null &&
+    was !== undefined &&
+    CHOICE_TYPES.has(was.type) &&
     !CHOICE_TYPES.has(source.type) &&
-    comparedBeforeTheChange(saved?.field, wasChoice, condition) &&
-    (wasChoice.options ?? []).some(option => option.value === value);
+    (was.options ?? []).some(option => option.value === value);
   return former
     ? {
         reason: "option-removed",
@@ -235,6 +263,23 @@ function missingOptionBreak(
         message: `${subject}'s condition compares ${called(source)} with "${value}", which is no longer one of its options. Choose another value, or remove the condition.`,
       }
     : null;
+}
+
+/**
+ * The source as it was saved, where the reader was saved (`saved`) comparing it just as `condition`
+ * does now: the source a condition inherited from the saved definition was made of. None for a
+ * condition made, or changed, since.
+ */
+function sourceComparedAsSaved(
+  source: BuilderField,
+  condition: ReturnType<typeof normalized>,
+  saved: FieldPlacement | undefined
+): BuilderField | undefined {
+  const was = saved?.siblings.find(each => each.id === source.id);
+  return was !== undefined &&
+    comparedBeforeTheChange(saved?.field, was, condition)
+    ? was
+    : undefined;
 }
 
 /**

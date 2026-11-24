@@ -1,8 +1,9 @@
 /**
  * The fields as last saved, for the parts of the settings panel that judge a field against its saved
  * definition: a condition comparing a saved dropdown with one of its options is broken once that
- * dropdown is another type (`brokenConditionOf`). A surface that keeps a saved definition (the
- * Schema Builder) provides it; elsewhere it is empty, and only the fields as they stand are judged.
+ * dropdown is another type, and one comparing a saved source's value once that source is rich text
+ * (`brokenConditionOf`). A surface that keeps a saved definition (the Schema Builder) provides it;
+ * elsewhere it is empty, and only the fields as they stand are judged.
  *
  * @module components/field-ui/settings-panel/saved-fields-context
  */
