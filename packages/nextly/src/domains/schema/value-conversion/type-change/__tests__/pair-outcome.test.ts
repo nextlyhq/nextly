@@ -130,18 +130,79 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
   );
 
   // A field group sizes a text by its own maximum length, on every database.
-  it("judges an address becoming a shorter text by what the text's column holds", () => {
-    const inGroup = (type: string, extra: Record<string, unknown> = {}) =>
-      fieldTypeOnDialect(
-        { name: "f", type, ...extra } as FieldDefinition,
-        dialect,
-        "fieldGroup"
-      );
-    const shorter = inGroup("text", { maxLength: 40 });
-    expect(pairOutcome(inGroup("email"), inGroup("text"))).toBe("keeps");
-    expect(pairOutcome(inGroup("email"), shorter)).toBe(
-      dialect === "sqlite" ? "keeps" : "may-lose"
-    );
+  it.each([
+    ["much shorter", 40],
+    ["shorter than the shortest address judged", 10],
+    // An address as long as this need only be one longer, which an email's own column still holds.
+    ["shorter by a few characters", 250],
+    ["shorter by one", 254],
+  ])(
+    "judges an address becoming a %s text by what the text's column holds",
+    (_shorter, maxLength) => {
+      const inGroup = (type: string, extra: Record<string, unknown> = {}) =>
+        fieldTypeOnDialect(
+          { name: "f", type, ...extra } as FieldDefinition,
+          dialect,
+          "fieldGroup"
+        );
+      expect(pairOutcome(inGroup("email"), inGroup("text"))).toBe("keeps");
+      expect(
+        pairOutcome(inGroup("email"), inGroup("text", { maxLength }))
+      ).toBe(dialect === "sqlite" ? "keeps" : "may-lose");
+      // As long as an email's own column on MySQL: none of its addresses is longer.
+      expect(
+        pairOutcome(inGroup("email"), inGroup("text", { maxLength: 255 }))
+      ).toBe(dialect === "postgresql" ? "may-lose" : "keeps");
+    }
+  );
+
+  // Every family is judged over a value longer than a bounded text holds that its own column still
+  // holds: one its column could not hold would be judged by nobody.
+  it.each([
+    ["a whole number", "number", {}, 5, "converts"],
+    ["a number with a fraction", "number", { format: "float" }, 22, "converts"],
+    ["a choice with no options", "select", {}, 40, "keeps"],
+    ["a choice with no options, by one", "select", {}, 254, "keeps"],
+    ["rich text", "richText", {}, 100_000, "converts"],
+  ] as const)(
+    "judges %s becoming a shorter text by what the text's column holds",
+    (_value, type, extra, maxLength, unbounded) => {
+      const inGroup = (of: string, settings: Record<string, unknown> = {}) =>
+        fieldTypeOnDialect(
+          { name: "f", type: of, ...settings } as FieldDefinition,
+          dialect,
+          "fieldGroup"
+        );
+      expect(
+        pairOutcome(inGroup(type, extra), inGroup("text", { maxLength }))
+      ).toBe(dialect === "sqlite" ? unbounded : "may-lose");
+    }
+  );
+
+  // A double names numbers of up to 309 digits, which MySQL's bounded column for a unique text does
+  // not hold.
+  it("judges a number with a fraction becoming a unique text by its longest writing", () => {
+    const fraction = { format: "float" } as Partial<FieldDefinition>;
+    expect(outcome("number", "text", fraction)).toBe("converts");
+    expect(
+      outcome("number", "text", fraction, {
+        unique: true,
+      } as Partial<FieldDefinition>)
+    ).toBe(dialect === "mysql" ? "may-lose" : "converts");
+    // A whole number is never that long.
+    expect(
+      outcome("number", "text", {}, {
+        unique: true,
+      } as Partial<FieldDefinition>)
+    ).toBe("converts");
+  });
+
+  // The numbers judged for their length are each kept by a double, so none is lost to JSON by them.
+  it("keeps every number judged as JSON", () => {
+    expect(outcome("number", "json")).toBe("keeps");
+    expect(
+      outcome("number", "json", { format: "float" } as Partial<FieldDefinition>)
+    ).toBe("keeps");
   });
 
   // A checkbox holds two values and a choice its options, each judged: the mark says what the
