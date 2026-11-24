@@ -95,6 +95,22 @@ describe("Restore this field", () => {
     expect(restore).toHaveBeenCalledWith("views");
   });
 
+  it("sits in the changed field's heading row, beside its name, and only there", () => {
+    renderChanges({ rowFor: name => row(name), restore: vi.fn() });
+
+    const heading = screen.getByRole("heading", { name: /Views/ });
+    const headingRow = heading.parentElement as HTMLElement;
+    const button = screen.getByRole("button", {
+      name: "Restore this field: Views",
+    });
+    // In the row that names the field and its change, not under its value:
+    // the action reads with the field it acts on.
+    expect(headingRow).toContainElement(button);
+    expect(
+      heading.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it("says why a field cannot be restored, instead of offering it", () => {
     renderChanges({
       rowFor: name =>
