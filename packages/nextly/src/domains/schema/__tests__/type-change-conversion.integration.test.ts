@@ -752,6 +752,21 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v")).toEqual({ a: "012" });
     });
 
+    // A change that keeps the kind of value, and every value as it is, leaves the constraint reading
+    // what it read before: no bar to it, and it holds after.
+    it("changes a column a CHECK constraint names where its kind and every value stay", async () => {
+      const t = await boot([{ name: "v", type: "text" }]);
+      await addValidationCheck(t, `LENGTH(${q("v")}) >= 2`);
+      await write(t, "a", { v: "a@b.co" });
+
+      expect(await save(t, [{ name: "v", type: "email" }])).toBeUndefined();
+
+      expect(await read(t, "v")).toEqual({ a: "a@b.co" });
+      await expect(
+        exec(t, `UPDATE ${q(`dc_${SLUG}`)} SET ${q("v")} = 'x'`)
+      ).rejects.toThrow();
+    });
+
     // The same constraint naming another column of the table is no bar to the change.
     it("changes a column beside one a CHECK constraint names", async () => {
       const t = await boot([

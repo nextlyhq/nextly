@@ -40,6 +40,7 @@ import { runStatement } from "../pipeline/_internal/run-statement";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import { readUpdateTriggers } from "../pipeline/live-table-facts";
+import { kindChanges } from "../repair-columns/conversion/carry";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 import { columnDescriptorAt } from "../value-conversion/type-change/field-type";
 import {
@@ -102,6 +103,11 @@ export interface ConvertedColumn {
    * the change states it again, so only its values are written, in place (`swapIn`).
    */
   keepsType: boolean;
+  /**
+   * The column's new type holds another kind of value (a text becoming a number), by the one rule
+   * a column repair judges what a CHECK reads by (`kindChanges`).
+   */
+  changesKind: boolean;
 }
 
 /** A type change's values converted one by one. */
@@ -160,6 +166,15 @@ export function typeConversionOf(args: {
         cleared: change.result.cleared.length,
         takesPlaceOnSqlite: translations,
         keepsType: was === type,
+        changesKind:
+          was === undefined ||
+          kindChanges({
+            dialect,
+            table: change.table,
+            column: change.column,
+            from: { type: was, nullable: true },
+            to: { type, nullable: true },
+          }),
       },
     ];
   });
@@ -237,7 +252,7 @@ export async function refuseConversionAsItStands(
     label,
     judged.filter(change => change.converted === true)
   );
-  await refuseOverChecks(db, dialect, label, conversion.columns);
+  await refuseOverChecks(db, dialect, label, conversion.columns, judged);
   if (dialect === "sqlite") {
     // The translations columns the conversion swaps; a REAL column it swaps is known where it runs.
     await refuseSqliteSwapDependents(
@@ -369,7 +384,7 @@ async function judgedAgain(
   }
   await refuseLeftColumns(db, dialect, input.label, only);
   await refuseOverUpdateTriggers(db, dialect, input.label, judged);
-  await refuseOverChecks(db, dialect, input.label, only);
+  await refuseOverChecks(db, dialect, input.label, only, judged);
   const planned: PlannedColumn[] = [];
   for (const change of judged) {
     const column = only.find(
@@ -521,24 +536,28 @@ async function refuseUnseenTriggers(
 
 /**
  * Refuse a conversion of a column a named CHECK constraint of its table names, such as the one a
- * field's validation put on a table an earlier version made (`chk_<table>_validation`): it was
+ * field's validation put on a table an earlier version made (`chk_<table>_validation`), where the
+ * change gives the column another kind of value or writes any of its values in another form: it was
  * written for the old type's values, and no statement of the change drops it. PostgreSQL would
  * refuse to give the column a type its comparison does not take, SQLite the rebuild that would
  * drop it, and MySQL a reading it does not allow, once the column was emptied for it and with
- * nothing to roll back. A column that keeps its type takes its values in place, under the
- * constraint as it stands.
+ * nothing to roll back. Where the kind stays and every value is kept as it is, the check reads each
+ * as before, as a column repair judges it (`kindChanges`).
  */
 async function refuseOverChecks(
   db: unknown,
   dialect: SupportedDialect,
   label: string,
-  columns: readonly ConvertedColumn[]
+  columns: readonly ConvertedColumn[],
+  judged: readonly JudgedFieldTypeChange[]
 ): Promise<void> {
-  const retyped = columns.filter(column => !column.keepsType);
+  const readAnew = columns.filter(
+    column => column.changesKind || rewritesAnyValue(column, judged)
+  );
   const live = await introspectLiveSnapshot(db, dialect, [
-    ...new Set(retyped.map(column => column.table)),
+    ...new Set(readAnew.map(column => column.table)),
   ]);
-  const errors = retyped.flatMap(column => {
+  const errors = readAnew.flatMap(column => {
     const naming = (
       live.tables.find(table => table.name === column.table)?.checks ?? []
     )
@@ -550,7 +569,7 @@ async function refuseOverChecks(
       {
         path: `fields.${column.field}`,
         code: "TYPE_CHANGE_BLOCKED",
-        message: `${label}: field '${column.field}' cannot change type while ${many ? "constraints" : "constraint"} ${naming.join(", ")} on ${column.table} ${many ? "check" : "checks"} its values as the old type holds them. Drop ${many ? "them" : "it"} first, then save again.`,
+        message: `${label}: field '${column.field}' cannot change type while the CHECK ${many ? "constraints" : "constraint"} ${naming.join(", ")} on ${column.table} ${many ? "read" : "reads"} its values as the old type holds them. Drop ${many ? "them" : "it"} first, then save again.`,
       },
     ];
   });
@@ -561,12 +580,22 @@ async function refuseOverChecks(
   });
 }
 
+/** Whether the judgement writes any value of `column` in another form than it holds. */
+function rewritesAnyValue(
+  column: ConvertedColumn,
+  judged: readonly JudgedFieldTypeChange[]
+): boolean {
+  return judged.some(
+    change =>
+      change.table === column.table &&
+      change.column === column.column &&
+      change.result.counts.changed > 0
+  );
+}
+
 /** Whether a CHECK's expression names `column`, its text literals aside. */
 function namesColumn(expression: string, column: string): boolean {
-  const named = new RegExp(
-    `(?<![\\w$])${escapeRegExp(column)}(?![\\w$])`,
-    "i"
-  );
+  const named = new RegExp(`(?<![\\w$])${escapeRegExp(column)}(?![\\w$])`, "i");
   return named.test(expression.replace(/'(?:[^']|'')*'/g, "''"));
 }
 
