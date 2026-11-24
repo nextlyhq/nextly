@@ -121,6 +121,75 @@ describe("Change type… on a field not saved yet", () => {
   });
 });
 
+describe("Change type… on a new group holding a new field and a saved field moved in", () => {
+  const summary: BuilderField = {
+    id: "f-summary",
+    name: "summary",
+    label: "Summary",
+    type: "text",
+  };
+  const fresh: BuilderField = {
+    id: "f-fresh",
+    name: "fresh",
+    label: "Fresh",
+    type: "number",
+  };
+  const holder: BuilderField = {
+    id: "f-holder",
+    name: "holder",
+    label: "Holder",
+    type: "group",
+    fields: [fresh, summary],
+  };
+  // The saved field stands on the row; the group is the draft's own, so the server is asked nothing.
+  const changeHolder = (holding: BuilderField) => {
+    const onChanged = vi.fn();
+    const { unmount } = render(
+      <BuilderChangeType
+        config={COLLECTION_BUILDER_CONFIG}
+        fields={[holding]}
+        fieldId="f-holder"
+        entitySlug="posts"
+        savedFields={[summary]}
+        onCancel={vi.fn()}
+        onChanged={onChanged}
+      />
+    );
+    return { onChanged, unmount };
+  };
+
+  it("becomes only the other container, every other type unavailable with how many fields it holds, and keeps them there and back", async () => {
+    const user = userEvent.setup();
+    const there = changeHolder(holder);
+    const rows = [...document.querySelectorAll('[role="option"][data-type]')];
+    const open = rows
+      .filter(each => each.getAttribute("aria-disabled") !== "true")
+      .map(each => each.getAttribute("data-type"));
+    expect(open).toEqual(["repeater"]);
+    expect(rows.length).toBeGreaterThan(5);
+    for (const each of rows.filter(
+      r => r.getAttribute("data-type") !== "repeater"
+    )) {
+      expect(each).toHaveTextContent("It holds 2 fields");
+    }
+    await user.click(row("repeater"));
+    const asRows = there.onChanged.mock.calls[0]?.[0] as BuilderField;
+    expect(asRows).toMatchObject({
+      type: "repeater",
+      fields: [fresh, summary],
+    });
+    there.unmount();
+
+    const back = changeHolder(asRows);
+    await user.click(row("group"));
+    expect(back.onChanged.mock.calls[0]?.[0]).toMatchObject({
+      type: "group",
+      fields: [fresh, summary],
+    });
+    expect(asked).toEqual([]);
+  });
+});
+
 describe("Change type… on a saved field", () => {
   it("asks the server by the field's saved path, and shows each answer: a mark, or the save's own reason", async () => {
     answer = async () => [

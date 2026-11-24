@@ -15,6 +15,7 @@ import {
   withSavedTypeRestored,
   withTypeChanged,
 } from "../change-type";
+import { builderFieldErrors } from "../field-validators";
 
 const ENTRIES = {
   surface: { surface: "entries" as const },
@@ -163,6 +164,38 @@ describe("a field changed to another type", () => {
     );
     expect(next).not.toHaveProperty("relationTo");
     expect(next).not.toHaveProperty("maxDepth");
+  });
+
+  // As often as wanted before the first save: nothing of the types between is left behind, and what
+  // the new type needs is asked for at the field.
+  it("from text to number to dropdown and back keeps its name and label, its missing options marked while it is a dropdown", () => {
+    const text: BuilderField = {
+      id: "f-1",
+      name: "kind",
+      label: "Kind",
+      type: "text",
+      validation: {},
+    } as BuilderField;
+    const asNumber = withTypeChanged(text, "number", fits("number"));
+    const asSelect = withTypeChanged(asNumber, "select", fits("select"));
+    const back = withTypeChanged(asSelect, "text", fits("text"));
+    for (const [each, type] of [
+      [asNumber, "number"],
+      [asSelect, "select"],
+      [back, "text"],
+    ] as const) {
+      expect(each).toMatchObject({
+        id: "f-1",
+        name: "kind",
+        label: "Kind",
+        type,
+      });
+    }
+    expect(builderFieldErrors([asSelect]).get("f-1")?.message).toMatch(
+      /at least one option/
+    );
+    expect(builderFieldErrors([asNumber]).has("f-1")).toBe(false);
+    expect(back).toEqual(text);
   });
 
   it("a group becoming repeating rows keeps the fields it holds", () => {
