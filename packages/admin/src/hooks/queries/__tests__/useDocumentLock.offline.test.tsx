@@ -185,6 +185,71 @@ describe("a claim lost while offline", () => {
     expect(post.mock.calls.length).toBeGreaterThan(asked + 1);
   });
 
+  /**
+   * Two reclaims out at once: the first wins `t2` and answers late, so the
+   * second, which still names `t1`, is refused by this editor's own new
+   * claim. That refusal is not a colleague's.
+   */
+  async function overlappingReclaims() {
+    const hook = await lostWhileOffline();
+    let firstAnswers: (value: unknown) => void = () => {};
+    post.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          firstAnswers = resolve;
+        })
+    );
+    post.mockImplementation(() =>
+      answer({
+        status: "held",
+        holder: { ownerId: "u1", ownerLabel: "Ada", expiresInSeconds: 150 },
+        waiting: false,
+      })
+    );
+    const before = hook.seen.length;
+    const sent = post.mock.calls.length;
+    // The first stalls past its slot; a later beat sends the second, which
+    // is answered at once.
+    while (post.mock.calls.length < sent + 2) await beat();
+    return {
+      ...hook,
+      before,
+      firstAnswers: (claimToken: string) =>
+        act(async () => {
+          firstAnswers({
+            message: "",
+            item: { status: "acquired", claimToken },
+          });
+        }),
+    };
+  }
+
+  it("waits for its own earlier reclaim before taking a refusal as someone else's", async () => {
+    const { result, seen, before, firstAnswers } = await overlappingReclaims();
+    expect(result.current.state.status).toBe("lost");
+
+    await firstAnswers("t2");
+
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(seen.slice(before)).not.toContain("taken-over");
+    // Kept, not handed back.
+    expect(del).not.toHaveBeenCalledWith("/document-lock", {
+      ...ref,
+      claimToken: "t2",
+    });
+  });
+
+  it("reports the refusal a beat later when the earlier reclaim never answers, and still takes a late win", async () => {
+    const { result, firstAnswers } = await overlappingReclaims();
+
+    await beat();
+    await waitFor(() => expect(result.current.state.status).toBe("taken-over"));
+
+    // The earlier reclaim's win arrives after all: it was this editor's own.
+    await firstAnswers("t2");
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+  });
+
   it.each([
     [
       "the browser says it is online",

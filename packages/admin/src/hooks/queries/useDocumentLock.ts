@@ -395,6 +395,15 @@ export function useDocumentLock({
     // expired cannot free the slot of the one after it.
     let lapsedAsk: number | null = null;
     let lapsedAsks = 0;
+    // 🔴 Reclaims of `lapsed` still unanswered, whose slots may have expired.
+    // One of them may have won a new claim the server holds, so a refusal
+    // arriving meanwhile can be this editor's own new claim, not a
+    // colleague's: it waits in `deferredHolder` for them, at most a beat.
+    let reclaimsOut = 0;
+    let deferredHolder: DocumentLockHolder | null = null;
+    // The lapsed token whose reclaim may still answer after its refusal was
+    // reported: that late win was this editor's own, and is taken.
+    let adoptable: string | null = null;
     // Whether a colleague's claim has been reported since this editor last
     // held the document, and whether it has held it at all in this run. A
     // claim won after the first, and never the second, is a gain.
@@ -485,6 +494,8 @@ export function useDocumentLock({
       if (!repairNeeded) pending = null;
       // Whatever claim was lost before is this one now.
       lapsed = null;
+      deferredHolder = null;
+      adoptable = null;
       // Winning the document ends the ask: nobody waits for what they hold. The
       // server clears its own mark on the same event, so neither side is left
       // telling somebody that this editor is queueing for its own claim.
@@ -681,17 +692,42 @@ export function useDocumentLock({
      * nobody's: see "A claim lost to silence asks again". A failure, or no
      * answer within a beat, leaves it lost, to be asked again.
      */
+    /** Report a refusal of the reclaim as the claim of whoever holds it. */
+    const reportReclaimRefused = (holder: DocumentLockHolder) => {
+      lapsed = null;
+      deferredHolder = null;
+      setState({ status: "taken-over", holder });
+    };
+
+    /**
+     * Whether a reclaim's win may be taken: the one asked about, or a late
+     * one after its refusal was reported, while nothing else (the person
+     * taking it back, a claim of the beat) has claimed since.
+     */
+    const mayTake = (asked: string) =>
+      inFlight === null &&
+      token === null &&
+      (lapsed === asked || (lapsed === null && adoptable === asked));
+
     const askAboutLapsed = () => {
       const asked = lapsed;
       if (cancelled || asked === null || lapsedAsk !== null) return;
+      // A refusal waited a beat for an earlier reclaim that has not answered:
+      // it is reported now, and that reclaim's win is still taken if it comes.
+      if (deferredHolder !== null) {
+        reportReclaimRefused(deferredHolder);
+        return;
+      }
       const seq = (lapsedAsks += 1);
       lapsedAsk = seq;
+      reclaimsOut += 1;
+      adoptable = asked;
       const freeSlot = () => {
         if (lapsedAsk === seq) lapsedAsk = null;
       };
       // 🔴 Bounded as a claim's slot is: a request that never answers must
       // not stop every later beat and wake-up from asking again. Its reply,
-      // if it comes, is still read under the fence below.
+      // if it comes, is still read under the fences below.
       const slotExpiry = setTimeout(
         freeSlot,
         DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS
@@ -706,25 +742,38 @@ export function useDocumentLock({
         })
       )
         .then(item => {
-          // Answered already, the person is taking it back themselves, or the
-          // editor has gone: a claim this won is handed back. Released by its
-          // own token, it deletes nothing that replaced it.
-          if (cancelled || lapsed !== asked || inFlight !== null) {
-            if (item.status === "acquired") release(item.claimToken);
-            return;
-          }
-          lapsed = null;
+          reclaimsOut -= 1;
           if (item.status === "acquired") {
+            // Taken back. Otherwise the person took it back themselves, or
+            // the editor has gone: the claim is handed back, by its own
+            // token, which deletes nothing that replaced it.
+            if (cancelled || !mayTake(asked)) {
+              release(item.claimToken);
+              return;
+            }
             installAcquired(item.claimToken, sentAt);
             tell(item.changed, true);
             return;
           }
-          setState({ status: "taken-over", holder: item.holder });
+          if (cancelled || lapsed !== asked) return;
+          // Refused while an earlier reclaim is out: perhaps by the claim
+          // that one won. It waits for it, at most a beat.
+          if (reclaimsOut > 0) {
+            deferredHolder = item.holder;
+            return;
+          }
+          reportReclaimRefused(item.holder);
         })
         .catch(() => {
+          reclaimsOut -= 1;
           // Still unreachable, and still lost: the next beat, or the next
           // wake-up, asks again. Never `unavailable`, which would let the
-          // editor save without a claim.
+          // editor save without a claim. A refusal waiting on this one is
+          // reported once nothing else can answer for it.
+          if (cancelled || lapsed !== asked) return;
+          if (reclaimsOut === 0 && deferredHolder !== null) {
+            reportReclaimRefused(deferredHolder);
+          }
         })
         .finally(() => {
           clearTimeout(slotExpiry);
