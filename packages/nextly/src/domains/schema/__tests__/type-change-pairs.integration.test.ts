@@ -69,7 +69,8 @@ const OPTIONS = [
   { label: "Twelve", value: "12" },
 ];
 const text: Field = { type: "text" };
-const lines: Field = { type: "textarea" };
+/** A text an entry write keeps the line breaks of, which it makes spaces of in the others. */
+const lines: Field = { type: "code" };
 const email: Field = { type: "email" };
 const select: Field = { type: "select", options: OPTIONS };
 const richText: Field = { type: "richText" };

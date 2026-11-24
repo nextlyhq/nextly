@@ -321,7 +321,7 @@ describe.each(getConfiguredTestDialects())(
       "converts a text field into a rich text in its translations table, a document of its lines",
       async () => {
         const t = await boot(dialect);
-        await createPosts([{ name: "v", type: "textarea" }]);
+        await createPosts([{ name: "v", type: "code" }]);
         await write(t, "a", { v: "one\ntwo" });
 
         await save(t, [{ name: "v", type: "richText" }]);
