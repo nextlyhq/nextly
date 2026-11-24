@@ -71,6 +71,7 @@ import { testSendRecipientOf } from "../../domains/email/test-send-recipient";
 import { writtenDocumentSchema } from "../../domains/email/written/document";
 import type { UserService } from "../../domains/users/services/user-service";
 import { NextlyError } from "../../errors/nextly-error";
+import type { EmailTemplateRecord } from "../../schemas/email-templates/types";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
 import type { EmailService } from "../../services/email/email-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
@@ -725,8 +726,16 @@ const EMAIL_TEMPLATE_METHODS: Record<
     // One record's values for the preview, by variable name. Read for this
     // answer and kept nowhere.
     execute: async (svc, p) => {
-      const { source, caller } = await sampleRecordsFor(svc, p.templateId);
-      const variables = await loadSampleRecord(source, p.recordId, caller);
+      const { source, caller, declared } = await sampleRecordsFor(
+        svc,
+        p.templateId
+      );
+      const variables = await loadSampleRecord(
+        source,
+        p.recordId,
+        caller,
+        declared
+      );
       // The values fill the preview exactly as the loader gave them: a date
       // is never rewritten in the installation's timezone on the way.
       const response = respondDoc({ id: p.recordId, variables });
@@ -737,9 +746,11 @@ const EMAIL_TEMPLATE_METHODS: Record<
 };
 
 /**
- * The real records a template's running owner offers for its test data, and
- * the caller as the access decision reads them, which the sample-records
- * module asks before the owner's loader runs.
+ * The real records a template's running owner offers for its test data, the
+ * caller as the access decision reads them, which the sample-records module
+ * asks before the owner's loader runs, and the variables the template
+ * declares now: the site's own where it overrides its owner's, as the editor
+ * shows them.
  */
 async function sampleRecordsFor(
   svc: EmailTemplateServices,
@@ -747,6 +758,7 @@ async function sampleRecordsFor(
 ): Promise<{
   source: EmailSampleRecords | undefined;
   caller: SampleRecordCaller;
+  declared: EmailTemplateRecord["variables"];
 }> {
   const user = requireAuthenticatedUser();
   const template = await svc.templateService.getTemplate(templateId);
@@ -757,6 +769,7 @@ async function sampleRecordsFor(
       userId: user.id,
       scope: readAuthenticatedScope(),
     },
+    declared: template.variables,
   };
 }
 

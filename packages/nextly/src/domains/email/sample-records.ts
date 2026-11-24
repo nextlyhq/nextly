@@ -10,8 +10,8 @@
  * entries is refused rather than shown entries past it, and so is every
  * caller of a collection whose fields carry a read rule, which is judged per
  * entry and per caller where the loader reads as the system. What a
- * loader answers is checked for shape, bounded, and handed back for the
- * preview; it is never stored.
+ * loader answers is checked for shape, bounded, cut to the variables the
+ * template declares, and handed back for the preview; it is never stored.
  *
  * @module domains/email/sample-records
  */
@@ -26,6 +26,7 @@ import {
 } from "../../auth/entity-read-access";
 import { canReadSystemResource } from "../../auth/resource-readable";
 import { container } from "../../di/container";
+import { getService, isServicesRegistered } from "../../di/service-access";
 import { NextlyError } from "../../errors";
 import {
   anyFieldGroupHasAccessRule,
@@ -62,7 +63,10 @@ export interface EmailSampleRecords {
   list(args: { limit: number }): Promise<SampleRecordSummary[]>;
   /**
    * One record's values for the template's variables, by variable name; null
-   * for a record the loader no longer has.
+   * for a record the loader no longer has. Only the variables the template
+   * declares are handed on. What each holds, nested values included, is the
+   * loader's to choose: it reads as the system, so leave out whatever a reader
+   * of the collection should not see, such as a hidden field.
    */
   load(id: string): Promise<Record<string, unknown> | null>;
 }
@@ -138,10 +142,19 @@ async function mayRead(
  * it or in a component it reaches. A schema that cannot be read answers no.
  *
  * Field rules live in code, so the collection's own are answered from the
- * registry; the schema is read only where some field group carries a read
- * rule, which is when a component the collection reaches might.
+ * registry a read of it runs its rules from; the schema is read only where
+ * some field group carries a read rule, which is when a component the
+ * collection reaches might. That registry is filled before registration
+ * finishes, so nothing is answered from it until then, and it answers for
+ * collections alone: a slug naming no collection (a Single's, or none) is
+ * refused.
  */
 async function noFieldReadRules(collection: string): Promise<boolean> {
+  if (!isServicesRegistered()) return false;
+  const record = await getService(
+    "collectionRegistryService"
+  ).getCollectionBySlugForRead(collection);
+  if (!record) return false;
   if (hasFieldAccessRule("collection", collection, "read")) return false;
   if (!anyFieldGroupHasAccessRule("read")) return true;
   const fields = await tryResolveCurrentFields("collection", collection);
@@ -205,7 +218,8 @@ export async function listSampleRecords(
 
 /**
  * One record's values for the preview, as plain JSON data, read and handed
- * back, never stored.
+ * back, never stored: those of the variables the template `declared`, by
+ * their names, and no others.
  *
  * @throws {NextlyError} `NOT_FOUND` when no loader is offered or the record is
  *   gone; `FORBIDDEN` when the caller may not read it; `VALIDATION_ERROR` for
@@ -214,7 +228,8 @@ export async function listSampleRecords(
 export async function loadSampleRecord(
   source: EmailSampleRecords | undefined,
   id: string,
-  caller: SampleRecordCaller
+  caller: SampleRecordCaller,
+  declared: ReadonlyArray<{ name: string }> | null | undefined
 ): Promise<Record<string, unknown>> {
   const loader = await offered(source, caller);
   const recordId = RECORD_ID.safeParse(id);
@@ -231,7 +246,17 @@ export async function loadSampleRecord(
       logContext: { reason: "sample-record-gone" },
     });
   }
-  return plainRecord(record);
+  const values = plainRecord(record);
+  // A stored row can hold anything, so an entry without a name declares nothing.
+  const names = new Set(
+    (Array.isArray(declared) ? declared : []).flatMap(
+      (variable: { name?: unknown } | null) =>
+        typeof variable?.name === "string" ? [variable.name] : []
+    )
+  );
+  return Object.fromEntries(
+    Object.entries(values).filter(([name]) => names.has(name))
+  );
 }
 
 /**

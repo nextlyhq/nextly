@@ -81,6 +81,14 @@ const shippedTemplate = {
       if (id === "gone") return null;
       // Under 64 KB in UTF-16 code units, over it in the UTF-8 bytes sent.
       if (id === "large") return { customer: "数".repeat(25_000) };
+      // More than the template declares, and an object where it declares text.
+      if (id === "extra") {
+        return {
+          orderNumber: "O-9",
+          customer: { name: "Ada", note: "kept" },
+          internalNote: "never declared",
+        };
+      }
       return { orderNumber: id.toUpperCase(), customer: "Ada" };
     },
   },
@@ -512,6 +520,20 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(none.status, none.text).toBe(404);
     });
 
+    it("answers only the variables the template declares, each as the loader gave it", async () => {
+      const one = await get(
+        `email-templates/${shippedId}/sample-records/extra`,
+        reader
+      );
+      expect(one.status, one.text).toBe(200);
+      // What a declared variable holds is the loader's to choose.
+      expect(one.body.variables).toEqual({
+        orderNumber: "O-9",
+        customer: { name: "Ada", note: "kept" },
+      });
+      expect(one.text).not.toContain("never declared");
+    });
+
     it("stores nothing of a record it reads", async () => {
       const before = await t.nextly.emailTemplates.findBySlug({
         slug: SHIPPED,
@@ -520,6 +542,25 @@ for (const dialect of getConfiguredTestDialects()) {
       const after = await t.nextly.emailTemplates.findBySlug({ slug: SHIPPED });
       expect(after).toEqual(before);
       expect(JSON.stringify(after)).not.toContain("O-2");
+    });
+
+    // Last: it leaves the shop's template overridden.
+    it("follows the site's own declarations on a template it overrides", async () => {
+      const templates = t.getService(
+        "emailTemplateService"
+      ) as unknown as EmailTemplateService;
+      await templates.overrideTemplate(shippedId);
+      await templates.updateTemplate(shippedId, {
+        variables: [
+          { name: "orderNumber", description: "The order", required: true },
+        ],
+      });
+      const one = await get(
+        `email-templates/${shippedId}/sample-records/extra`,
+        reader
+      );
+      expect(one.status, one.text).toBe(200);
+      expect(one.body.variables).toEqual({ orderNumber: "O-9" });
     });
   });
 }

@@ -274,7 +274,9 @@ export interface PluginEmailTemplate {
    * or `{ collection }`), and a `list` and `load` that answer them. Nextly
    * calls the loader only for a person allowed to read what `reads` names, and
    * stores nothing it answers; `load` answers a record's values by variable
-   * name, or null for a record that is gone.
+   * name, or null for a record that is gone. Only the variables the template
+   * declares are handed on; what each holds, nested values included, is the
+   * loader's responsibility.
    */
   sampleRecords?: EmailSampleRecords;
   /**

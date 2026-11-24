@@ -18,8 +18,15 @@ import { realUserRecords } from "../real-user-records";
 afterEach(() => findById.mockReset());
 
 describe("core's real user", () => {
-  it("fills the name and address of the user it loads", async () => {
-    findById.mockResolvedValue({ id: "u-1", name: "Ada", email: "a@x.test" });
+  it("fills the name and address of the user it loads, and nothing else of theirs", async () => {
+    findById.mockResolvedValue({
+      id: "u-1",
+      name: "Ada",
+      email: "a@x.test",
+      image: "ada.png",
+      roles: ["editor"],
+      salary: 1,
+    });
     await expect(realUserRecords.load("u-1")).resolves.toEqual({
       userName: "Ada",
       userEmail: "a@x.test",
