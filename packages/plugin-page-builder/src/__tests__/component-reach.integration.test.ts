@@ -46,6 +46,7 @@ import {
   type UsageHealthService,
 } from "../usage-health-service";
 import { componentUsageIndex } from "../component-usage";
+import { settleDefaultLayout } from "./settle-default-layout";
 
 const SLUGS = {
   layouts: LAYOUTS_SLUG,
@@ -75,11 +76,12 @@ describe.each(getConfiguredTestDialects())(
         plugins: [plugin],
         seedPublic: true,
       });
-      await ensureDefaultLayout({
-        nextly: current.nextly,
-        slugs: SLUGS,
-        warn: () => {},
-      });
+      // The boot's own seed waited out, and the default then settled, so
+      // every case starts from it (`settleDefaultLayout`).
+      const t = current;
+      await settleDefaultLayout(() =>
+        ensureDefaultLayout({ nextly: t.nextly, slugs: SLUGS, warn: () => {} })
+      );
       return current;
     }
 

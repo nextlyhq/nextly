@@ -67,6 +67,7 @@ import {
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import { compileAndPublishExtensionSchema } from "../domains/schema/extension/publish";
 import { registerExtensionTables } from "../domains/schema/extension/register-tables";
+import { pluginCollectionSources } from "../domains/schema/migrate/plugin/plugin-collection-sources";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { hasRelationSwitches } from "../domains/schema/pipeline/companion-shape-switches";
@@ -108,8 +109,10 @@ import {
   type RecordedAtStart,
 } from "../domains/schema/pipeline/recorded-fields";
 import {
+  configTheCodeOwns,
   isCodeOwned,
   mergeRegisteredCollectionsSafely,
+  withoutHandedToBuilder,
 } from "../domains/schema/pipeline/registered-collections";
 import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector";
 import type {
@@ -453,6 +456,7 @@ interface CollectionRegistrySurface {
       status?: boolean;
       localized?: boolean;
       source?: string;
+      configPath?: string | null;
     }>
   >;
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
@@ -591,12 +595,25 @@ async function defaultResolver(name: string): Promise<unknown> {
 // post-DDL sync and the metadata-only (no-DDL) HMR path so a change to
 // registry-only metadata (versions/localized/status/labels/description) reaches
 // the registry too, not just schema (DDL) changes.
-function buildCollectionSyncPayload(collections: CollectionDef[]) {
+//
+// Each collection carries its origin, by the rule a start gives it (`pluginCollectionSources`): a
+// slug a plugin contributes is `plugin:<name>`, any other the app's own `code`. Required, so no
+// route sends a plugin's collection as the app's: a record the reload creates keeps the origin it
+// is created with, and a plugin's collection over a record the Schema Builder was handed is the
+// plugin's to write, which only its origin tells (`builderOwnsDeclared`).
+function buildCollectionSyncPayload(
+  collections: CollectionDef[],
+  plugins: SourcedPlugins | undefined
+) {
+  const sources = pluginCollectionSources(plugins ?? []);
   // The projection every sync route shares; see `toCodeFirstCollectionConfig`.
   return collections
     .filter((c): c is CollectionDef & { slug: string } => !!c.slug)
-    .map(c => toCodeFirstCollectionConfig(c));
+    .map(c => toCodeFirstCollectionConfig(c, sources.get(c.slug) ?? "code"));
 }
+
+/** The plugins a configuration declares, as far as which collections each contributes. */
+type SourcedPlugins = Parameters<typeof pluginCollectionSources>[0];
 
 // Build the code-first registry-sync payload for singles (see above).
 function buildSingleSyncPayload(singles: SingleDef[]) {
@@ -674,6 +691,7 @@ async function syncCodeFirstMetadataOnly(
     collections?: CollectionDef[];
     singles?: SingleDef[];
     fieldGroups?: ComponentDef[];
+    plugins?: SourcedPlugins;
   },
   logger?: LoggerLike,
   // Whether this is a start's reload, which may leave seeding to the start.
@@ -700,7 +718,10 @@ async function syncCodeFirstMetadataOnly(
     const registry = (await resolve(
       "collectionRegistryService"
     )) as CollectionRegistrySurface;
-    const payload = buildCollectionSyncPayload(newConfig.collections ?? []);
+    const payload = buildCollectionSyncPayload(
+      newConfig.collections ?? [],
+      newConfig.plugins
+    );
     // 🔴 The RESULT decides, not merely the absence of a throw. This sync
     // reports a per-collection failure by resolving a `SyncResult` carrying
     // `errors[]`, exactly as the singles sync below does -- so awaiting it and
@@ -2247,7 +2268,7 @@ async function applyReloadHolding(
       );
     }
     publishCollectionDbOptions(
-      buildCollectionSyncPayload(newConfig.collections ?? [])
+      buildCollectionSyncPayload(newConfig.collections ?? [], newConfig.plugins)
     );
     previousDeclared = publishDeclaredEntities(newConfig);
     declaredPublished = true;
@@ -2306,6 +2327,30 @@ async function applyReloadHolding(
   // reload changes anything: a collection, Single or field group added while `next dev` runs is a
   // new address like one added before a start. A refused reload keeps the previous configuration.
   // `AdapterLike` is a narrow view of the registered adapter, which is a `DrizzleAdapter` at runtime.
+  // The registry's collections, read once for the whole reload: whether a collection was handed to
+  // the Schema Builder is answered from these rows alone, by the checks below, the desired schema's
+  // filter and the merge, and the passes that read the configuration's entities themselves. Two
+  // reads could disagree, and a read that failed for one would leave a handed-over collection
+  // ignored by some of them and not others. A registry that cannot be resolved or read rejects it,
+  // which leaves every entry in and which the merge below reports as before.
+  const registeredCollections = Promise.resolve()
+    .then(() => resolve("collectionRegistryService"))
+    .then(resolved => {
+      const registry = resolved as CollectionRegistrySurface | undefined;
+      return typeof registry?.getAllCollections === "function"
+        ? registry.getAllCollections()
+        : [];
+    });
+  // The configuration as code still owns it: a collection a demote handed to the Schema Builder
+  // left out (`configTheCodeOwns`). For the checks of new addresses and sibling fields below, and
+  // for the passes that read the configuration's entities themselves (the translations tables
+  // and the fields leaving translation): a handed-over entry refuses nothing, and its `localized`
+  // setting provisions, restores or moves nothing the Builder's collection keeps.
+  const ownedConfig = configTheCodeOwns(
+    newConfig,
+    await registeredCollections.catch(() => [])
+  );
+
   const liveAdapter = adapter as unknown as DrizzleAdapter;
   let refusedAddresses: Awaited<ReturnType<typeof refusedConfiguredAddresses>>;
   // The reloaded configuration's new pairs of sibling fields, judged as a start judges them.
@@ -2313,12 +2358,14 @@ async function applyReloadHolding(
     ReturnType<typeof refusedConfiguredSiblingFields>
   >;
   try {
+    const registered = await loadBuilderEntities(liveAdapter);
+    // A collection a demote handed to the Schema Builder is judged by its record alone: its code
+    // entry, which this reload's apply ignores, refuses nothing (`ownedConfig`).
     const reloaded = {
-      collections: (newConfig.collections ?? []).filter(hasSlug),
+      collections: (ownedConfig.collections ?? []).filter(hasSlug),
       singles: (newConfig.singles ?? []).filter(hasSlug),
       fieldGroups: (newConfig.fieldGroups ?? []).filter(hasSlug),
     };
-    const registered = await loadBuilderEntities(liveAdapter);
     refusedAddresses = await refusedConfiguredAddresses(
       reloaded,
       registered,
@@ -2454,7 +2501,16 @@ async function applyReloadHolding(
     localized?: boolean;
     indexes?: DesiredCollection["indexes"];
   }> = [];
-  for (const c of newConfig.collections ?? []) {
+  // A collection a demote handed to the Schema Builder, while its entry is still in the
+  // configuration, is built from the Builder's registry row (merged in below), not from that entry.
+  // A registry that cannot be read leaves every entry in: the merge below reports it and falls back
+  // to the configuration alone, as before.
+  const configuredCollections = withoutHandedToBuilder(
+    newConfig.collections ?? [],
+    await registeredCollections.catch(() => []),
+    pluginCollectionSources(newConfig.plugins ?? [])
+  );
+  for (const c of configuredCollections) {
     if (!c.slug) continue;
     targets.push({
       slug: c.slug,
@@ -2655,7 +2711,7 @@ async function applyReloadHolding(
     identifierCase = await readIdentifierCaseRules(adapter);
     leaving = await prepareFieldsLeavingOnReload(
       adapter as unknown as DrizzleAdapter,
-      newConfig,
+      ownedConfig,
       fieldGroupTables,
       message => logger?.error(message)
     );
@@ -3090,7 +3146,7 @@ async function applyReloadHolding(
     // excluded from it, so `hasChanges` stays false and this is the only pass that repairs it.
     const noDdlProvisioning = await ensureLocalizedCompanionsForReload(
       adapter,
-      newConfig,
+      ownedConfig,
       fieldGroupTables,
       deferredEntities
     );
@@ -3246,17 +3302,11 @@ async function applyReloadHolding(
     desiredCollections,
     await mergeRegisteredCollectionsSafely(
       desiredCollections,
-      async () => {
-        const collectionRegistry = (await resolve(
-          "collectionRegistryService"
-        )) as CollectionRegistrySurface;
-        return typeof collectionRegistry?.getAllCollections === "function"
-          ? withoutRemovedFromCode(
-              await collectionRegistry.getAllCollections(),
-              declaredCollections
-            )
-          : [];
-      },
+      async () =>
+        withoutRemovedFromCode(
+          await registeredCollections,
+          declaredCollections
+        ),
       logger
         ? { warn: (m: string) => logger.warn(`[Nextly HMR] ${m}`) }
         : undefined
@@ -3403,7 +3453,7 @@ async function applyReloadHolding(
     () =>
       ensureLocalizedCompanionsForReload(
         adapter,
-        newConfig,
+        ownedConfig,
         fieldGroupTables,
         deferredEntities,
         "beforeApply"
@@ -3460,7 +3510,7 @@ async function applyReloadHolding(
     // its main table, which a brand-new entity does not have before it.
     const postApply = await ensureLocalizedCompanionsForReload(
       adapter,
-      newConfig,
+      ownedConfig,
       fieldGroupTables,
       deferredEntities
     );
@@ -3482,7 +3532,7 @@ async function applyReloadHolding(
         adapter: adapter as unknown as DrizzleAdapter,
         entries: leaving.entries,
         deferred: deferredEntities,
-        config: newConfig,
+        config: ownedConfig,
         blockedBy: postApply.restoreFailed,
         // The live snapshot the pipeline reuses predates the first apply, so it is dropped first.
         push: () => {
@@ -3533,7 +3583,8 @@ async function applyReloadHolding(
         "collectionRegistryService"
       )) as CollectionRegistrySurface;
       const codeFirstConfigs = buildCollectionSyncPayload(
-        (newConfig.collections ?? []).filter(notHeld("collection"))
+        (newConfig.collections ?? []).filter(notHeld("collection")),
+        newConfig.plugins
       );
       const collectionSync = await registry.syncCodeFirstCollections(
         codeFirstConfigs,
@@ -4068,6 +4119,7 @@ async function restoreHeldRows(
     collections?: CollectionDef[];
     singles?: SingleDef[];
     fieldGroups?: ComponentDef[];
+    plugins?: SourcedPlugins;
   },
   resolve: ServiceResolver
 ): Promise<string[]> {
@@ -4100,9 +4152,10 @@ async function restoreHeldRows(
         (await resolve(
           "collectionRegistryService"
         )) as CollectionRegistrySurface
-      ).syncCodeFirstCollections(buildCollectionSyncPayload(collections), {
-        seedPermissions: false,
-      });
+      ).syncCodeFirstCollections(
+        buildCollectionSyncPayload(collections, newConfig.plugins),
+        { seedPermissions: false }
+      );
       failed.push(
         ...unwrittenSlugs(result).map(slug => named("collection", slug))
       );

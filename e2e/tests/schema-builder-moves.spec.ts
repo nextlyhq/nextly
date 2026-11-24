@@ -1,10 +1,11 @@
 /**
  * Moving fields in a real Builder: by drag (one field at a time, whatever its
  * width), by key, by Move to… and by Duplicate, each judged by the one move
- * rule and announced. A move into or out of a group or repeating rows is
- * refused for now, saying it is not available yet, until a save keeps a
- * field's values when it changes container; reorders within a container go
- * ahead and are saved.
+ * rule and announced. A saved field moves into and out of a group, and the
+ * save keeps every entry's value; a move into or out of repeating rows is
+ * refused for now, saying it is not available yet, and a move the save
+ * refuses is marked at its field. Reorders within a container go ahead and
+ * are saved.
  *
  * The collection is made at runtime, since the playground's own collections
  * are code-first and open read-only.
@@ -15,6 +16,7 @@ import { gotoAdmin } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
 import { LOCK } from "./support/locks";
 import {
+  createEntry,
   createRuntimeCollection,
   removeRuntimeCollection,
 } from "./support/runtime-collection";
@@ -27,7 +29,7 @@ test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
 const API = "/admin/api";
 
 const NOT_YET =
-  "Moving a field into or out of a group or repeating rows is not available yet.";
+  "Moving a saved field into or out of repeating rows is not available yet. It can move into and out of named groups.";
 
 /** Stored as a field the Builder made is stored, its flags written out. */
 const plain = (
@@ -93,6 +95,47 @@ async function drag(
   if (drop) await page.mouse.up();
 }
 
+/** One entry as the API reads it back. */
+async function readEntry(
+  page: Page,
+  slug: string,
+  id: string
+): Promise<Record<string, unknown>> {
+  const read = await page.request.get(
+    `${API}/collections/${slug}/entries/${id}`
+  );
+  const body = (await read.json()) as Record<string, unknown>;
+  return (body.item ?? body) as Record<string, unknown>;
+}
+
+/**
+ * Save the draft, confirming the review: it names each move as kept. Waits for
+ * the save's last write, the collection's settings, which lands after the
+ * fields show as saved: one still on its way holds the schema, and the next
+ * change (the test's own clean-up among them) would be refused meanwhile.
+ */
+async function saveConfirming(
+  page: Page,
+  slug: string,
+  move?: string
+): Promise<void> {
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  const review = page.getByRole("alertdialog");
+  await expect(review).toBeVisible();
+  if (move) await expect(review).toContainText(move);
+  const settingsSaved = page.waitForResponse(
+    response =>
+      response.request().method() === "PATCH" &&
+      new URL(response.url()).pathname === `${API}/collections/${slug}`
+  );
+  await review.getByRole("button").last().click();
+  expect((await settingsSaved).ok()).toBe(true);
+  await expect(review).toHaveCount(0);
+  await expect(
+    page.getByText("No unsaved changes", { exact: true })
+  ).toBeVisible();
+}
+
 /**
  * The collection's stored top-level field names, in order, less the built-in
  * fields the server keeps ahead of them.
@@ -110,7 +153,10 @@ test.describe("moving fields in the Builder outline", () => {
 
   test.beforeEach(async ({ page }) => {
     await createRuntimeCollection(page.request, slug, [
-      plain("summary_a", "Summary A"),
+      // Kept once for every language, so it moves into a group: a text field
+      // is translatable by default, kept per language, and does not move into
+      // a group yet (the save says why).
+      plain("summary_a", "Summary A", { localized: false }),
       plain("summary_b", "Summary B"),
       plain("half_left", "Half left", { admin: { width: "50%" } }),
       plain("half_right", "Half right", { admin: { width: "50%" } }),
@@ -165,25 +211,81 @@ test.describe("moving fields in the Builder outline", () => {
     ]);
   });
 
-  test("a drag into a group says why it is refused, and nothing moves", async ({
+  test("a drag into a group and back out keeps every entry's value", async ({
     page,
   }) => {
+    const id = await createEntry(page.request, slug, {
+      title: "Kept",
+      summary_a: "the value before the moves",
+    });
+    await gotoAdmin(page, `/builder/collections/${slug}`);
+    await expect(row(page, "sections")).toBeVisible();
+    // A level to the right of the group's row: into the group.
+    await drag(page, "summary_a", "meta", { levels: 1 });
+    await expect(row(page, "meta/summary_a")).toBeVisible();
+    await saveConfirming(
+      page,
+      slug,
+      "summary_a is moved to meta.summary_a. Its values are kept."
+    );
+    await expect
+      .poll(async () => (await readEntry(page, slug, id)).meta)
+      .toMatchObject({ summary_a: "the value before the moves" });
+
+    // And back out, to the top level.
+    await row(page, "meta/summary_a").focus();
+    await page.keyboard.press("Alt+ArrowLeft");
+    await expect(row(page, "summary_a")).toBeVisible();
+    await saveConfirming(
+      page,
+      slug,
+      "meta.summary_a is moved to summary_a. Its values are kept."
+    );
+    await expect
+      .poll(async () => (await readEntry(page, slug, id)).summary_a)
+      .toBe("the value before the moves");
+  });
+
+  test("a move the save refuses is marked at its field, and nothing is saved", async ({
+    page,
+  }) => {
+    await gotoAdmin(page, `/builder/collections/${slug}`);
+    await expect(row(page, "sections")).toBeVisible();
+    // Summary B is translatable, kept per language: the outline lets it into
+    // the group, and the save refuses the move, which would lose languages.
+    await drag(page, "summary_b", "meta", { levels: 1 });
+    await expect(row(page, "meta/summary_b")).toBeVisible();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    // The server's reason, as written, is the field's error: on its row, and
+    // counted beside Save.
+    await expect(
+      row(page, "meta/summary_b").getByText("Has an error", { exact: true })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "1 error: show the next" })
+    ).toBeVisible();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    expect(await storedOrder(page, slug)).toContain("summary_b");
+  });
+
+  test("a drag into repeating rows says why it is refused, and nothing moves", async ({
+    page,
+  }) => {
+    // Tall enough to draw every row, the repeating rows' last among them: a
+    // drag reaches only a row on screen, as a person's does.
+    await page.setViewportSize({ width: 1280, height: 1200 });
     await gotoAdmin(page, `/builder/collections/${slug}`);
     // Read once the outline is drawn, so it is the order a drag starts from.
     await expect(row(page, "sections")).toBeVisible();
     const before = await topLevel(page);
     expect(before).toHaveLength(6);
-    // A level to the right of the group's row: into the group.
-    await drag(page, "summary_a", "meta", { levels: 1, drop: false });
+    // A level to the right of the repeating rows' row: into them.
+    await drag(page, "summary_a", "sections", { levels: 1, drop: false });
     await expect(page.getByText(NOT_YET, { exact: true })).toBeVisible();
     await page.mouse.up();
     await says(page, `${NOT_YET} Nothing moved.`);
     expect(await topLevel(page)).toEqual(before);
-    await expect(row(page, "meta/summary_a")).toHaveCount(0);
-    // Nothing to save: the refused drop left no change behind.
-    await expect(
-      page.getByText("No unsaved changes", { exact: true })
-    ).toBeVisible();
+    await expect(row(page, "sections/summary_a")).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: "Save", exact: true })
     ).toBeDisabled();
@@ -197,27 +299,27 @@ test.describe("moving fields in the Builder outline", () => {
     await page.keyboard.press("Alt+ArrowUp");
     await says(page, "Moved Caption up, position 1 of 2.");
     await expect(row(page, "meta/caption")).toBeFocused();
-    // Out of the group is not available yet, and is said so.
-    await page.keyboard.press("Alt+ArrowLeft");
-    await says(page, `${NOT_YET} Nothing moved.`);
-    await expect(row(page, "meta/caption")).toBeFocused();
     // The keys are named in the row's description.
     await expect(row(page, "meta/caption")).toHaveAccessibleDescription(
       /Alt\+Up and Alt\+Down move the field/
     );
+    // Out of the group, to the level holding it, with focus kept.
+    await page.keyboard.press("Alt+ArrowLeft");
+    await expect(row(page, "caption")).toBeFocused();
   });
 
-  test("Move to… within its own place, saying why other places are not offered yet", async ({
+  test("Move to… offers a group but not repeating rows, saying why", async ({
     page,
   }) => {
     await gotoAdmin(page, `/builder/collections/${slug}`);
-    await row(page, "sections").focus();
+    await row(page, "summary_b").focus();
     await page.keyboard.press("Shift+F10");
     await page.getByRole("menuitem", { name: "Move to…" }).click();
     const dialog = page.getByRole("dialog");
-    const meta = dialog.getByRole("radio", { name: /^Meta/ });
-    await expect(meta).toBeDisabled();
-    await expect(meta).toHaveAccessibleDescription(NOT_YET);
+    await expect(dialog.getByRole("radio", { name: /^Meta/ })).toBeEnabled();
+    const sections = dialog.getByRole("radio", { name: /^Sections/ });
+    await expect(sections).toBeDisabled();
+    await expect(sections).toHaveAccessibleDescription(NOT_YET);
     for (const scheme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme: scheme });
       await expectNoAxeViolations(page, { include: '[role="dialog"]' });
@@ -225,9 +327,9 @@ test.describe("moving fields in the Builder outline", () => {
     await dialog.getByLabel("Position").selectOption({ label: "At the start" });
     await dialog.getByRole("button", { name: "Move" }).click();
     await expect(dialog).toHaveCount(0);
-    await says(page, "Moved Sections, position 1 of 6.");
-    await expect(row(page, "sections")).toBeFocused();
-    expect((await topLevel(page))[0]).toBe("sections");
+    await says(page, "Moved Summary B, position 1 of 6.");
+    await expect(row(page, "summary_b")).toBeFocused();
+    expect((await topLevel(page))[0]).toBe("summary_b");
   });
 
   test("duplicates right after the original", async ({ page }) => {

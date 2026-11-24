@@ -61,6 +61,7 @@ import {
 import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { fieldGroupCreatePayload } from "@admin/lib/builder/create-request";
+import { draftMovesOf } from "@admin/lib/builder/draft-moves";
 import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
 import { fieldGroupEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import {
@@ -371,9 +372,12 @@ export default function FieldGroupBuilderEditPage({
     [settings, entitySlug]
   );
 
-  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
+  const schemaSave = useSchemaSave({
     slug,
     missingSlugMessage: "Field group slug is missing",
+    // Wired as each kind's Builder page wires the one save hook, to its own service: the options
+    // read alike by design, as the pages do.
+    // fallow-ignore-next-line code-duplication
     label: displayLabel(settings, entitySlug),
     confirmation,
     // Judged against the fields as last saved, so a draft that changes a
@@ -384,11 +388,16 @@ export default function FieldGroupBuilderEditPage({
     // The i18n flag, as for the other kinds: the preview reports what a field
     // leaving translation moves to the archive, which depends on it. An
     // unsaved field group's review is its create, built here.
-    preview: fields =>
+    preview: (fields, hints) =>
       unsaved
         ? Promise.resolve(createPreview(fields))
-        : fieldGroupApi.previewSchemaChanges(entitySlug, fields, localized),
-    apply: (fields, version, resolutions, renames, acknowledged) =>
+        : fieldGroupApi.previewSchemaChanges(
+            entitySlug,
+            fields,
+            localized,
+            hints
+          ),
+    apply: (fields, version, resolutions, renames, acknowledged, hints) =>
       unsaved
         ? createUnsaved(fields)
         : fieldGroupApi.applySchemaChanges(
@@ -398,7 +407,8 @@ export default function FieldGroupBuilderEditPage({
             resolutions,
             renames,
             localized,
-            acknowledged
+            acknowledged,
+            hints
           ),
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
@@ -460,7 +470,7 @@ export default function FieldGroupBuilderEditPage({
         groupsFirst.release();
       }}
       savedFieldIds={savedFieldIds}
-      onSave={handleSave}
+      onSave={schemaSave.handleSave}
       settings={settings}
       onSettingsChange={onSettingsChange}
       unsavedAddress={unsavedAddress}
@@ -523,6 +533,8 @@ export default function FieldGroupBuilderEditPage({
       // Save waits while an unsaved entity's new address is checked.
       saveHeld={saveHeld}
       savingLabel="Saving field group changes…"
+      // A move the server refused is marked at its field.
+      refusedMoves={schemaSave.refusedMoves}
     >
       <ReconcileFieldGroupDialog
         open={reconcileOpen}
@@ -533,12 +545,13 @@ export default function FieldGroupBuilderEditPage({
 
       <BuilderSchemaChangeDialogs
         draftRenames={draftRenamesOf(pending.changes)}
+        draftMoves={draftMovesOf(pending.changes).moves}
         confirmation={confirmation}
         kind={FIELD_GROUP_BUILDER_CONFIG.kind}
         entityName={slug}
-        onConfirm={confirmApply}
+        onConfirm={schemaSave.confirmApply}
         creating={unsaved !== undefined}
-        settingChanges={reviewedSettingChanges}
+        settingChanges={schemaSave.reviewedSettingChanges}
         fieldGroupCreates={groupsFirst.creates}
       />
     </BuilderPageLayout>
