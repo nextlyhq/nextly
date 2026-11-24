@@ -8,6 +8,7 @@
  * What separates the right answer from a plausible wrong one: a road with no hold answers the write
  * as stored, then overwrites it with the value it copied, or leaves an inserted row empty.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,9 +95,11 @@ interface Ended {
 
 /** Start `write` as the column is emptied, giving it a moment to end before the change goes on. */
 function during(write: () => Promise<unknown>): Promise<Ended> {
+  // Run as another request runs: outside the save's async context, whose hold lets its own writes by.
+  const outside = AsyncLocalStorage.snapshot();
   return new Promise<Ended>(resolve => {
     atCopyBack.hook = async () => {
-      const ended = write().then(
+      const ended = outside(write).then(
         (): Ended => ({ stored: true }),
         (error: unknown): Ended => ({
           stored: false,
@@ -183,7 +186,11 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
         }
       );
     const update = (t: TestNextly, id: string) => () =>
-      t.nextly.update({ collection: SLUG, id, data: { v: "34" } } as never);
+      t.nextly.update({
+        collection: SLUG,
+        id,
+        data: { v: "34", _overwrite: true },
+      } as never);
     const insert = (t: TestNextly) => () =>
       t.nextly.create({
         collection: SLUG,
@@ -356,7 +363,7 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
         t.nextly.update({
           collection: SLUG,
           id,
-          data: { box: { v: "34" } },
+          data: { box: { v: "34" }, _overwrite: true },
         } as never)
       );
       await saveBox(t);
