@@ -20,9 +20,11 @@ const { canFor } = vi.hoisted(() => ({
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (slug: string) => canFor(slug),
 }));
-const { reviews } = vi.hoisted(() => ({ reviews: { value: false } }));
+
+// The reader reviews somewhere: the global waiting scope says so. It decides nothing here, since
+// whether moves are offered on a collection is judged on that collection's own steps.
 vi.mock("@admin/hooks/queries/useWaitingForMe", () => ({
-  useWaitingScope: () => ({ data: { reviews: reviews.value, stages: 0 } }),
+  useWaitingScope: () => ({ data: { reviews: true, stages: 1 } }),
 }));
 
 /** A caller holding exactly these permission slugs. */
@@ -41,7 +43,6 @@ const notes: CollectionForColumns = { slug: "notes", fields: [] };
 beforeEach(() => {
   canFor.mockReset();
   holding();
-  reviews.value = false;
 });
 
 describe("useEntryBulkActions", () => {
@@ -113,10 +114,23 @@ describe("useEntryBulkActions", () => {
     expect(result.current.any).toBe(false);
   });
 
-  it("offers the workflow's moves on a collection a workflow holds, to an editor or a reviewer alone", () => {
+  it("offers the workflow's moves on a collection a workflow holds, to an editor or a reviewer of it alone", () => {
     const held: CollectionForColumns = {
       ...posts,
-      workflow: { slug: "review", label: "Review" },
+      workflow: {
+        slug: "review",
+        label: "Review",
+        steps: [
+          { name: "submit", label: "Submit", kind: "submit", action: "update" },
+          { name: "clear", label: "Clear", kind: "approve", action: "approve" },
+          {
+            name: "bounce",
+            label: "Send back",
+            kind: "request-changes",
+            action: "sign-off",
+          },
+        ],
+      },
     };
     holding("read-posts");
     expect(
@@ -129,12 +143,18 @@ describe("useEntryBulkActions", () => {
       renderHook(() => useEntryBulkActions(held)).result.current
     ).toMatchObject({ workflowMoves: true, any: true });
 
-    // A reviewer who may take some review step, and edits nothing.
-    holding("read-posts");
-    reviews.value = true;
+    // A reviewer who may send work back on this collection, and edits nothing.
+    holding("read-posts", "sign-off-posts");
     expect(
       renderHook(() => useEntryBulkActions(held)).result.current
     ).toMatchObject({ workflowMoves: true, any: true });
+
+    // A reviewer of another collection only: no step here is theirs, so no checkbox leads them
+    // to moves every document would refuse.
+    holding("read-posts", "sign-off-pages");
+    expect(
+      renderHook(() => useEntryBulkActions(held)).result.current
+    ).toMatchObject({ workflowMoves: false, any: false });
 
     // No workflow, no moves, whatever the reader holds.
     holding("read-posts", "update-posts");

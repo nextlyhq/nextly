@@ -81,4 +81,62 @@ describe("useWaitingForMe", () => {
     await waitFor(() => expect(result.current.error).not.toBeNull());
     expect(result.current.rows).toEqual([]);
   });
+
+  it("walks to the next page by the cursor the server handed back, past where page numbers reach", async () => {
+    // The server reads a bounded number of review states per request: past that, a page number
+    // finds nothing, and the next page is read from the cursor the page before gave.
+    api.fetchWaitingForMe.mockReset();
+    api.fetchWaitingForMe.mockImplementation(
+      ({ before }: { before?: string }) =>
+        Promise.resolve(
+          before === undefined
+            ? {
+                items: [item(null)],
+                meta: {
+                  total: 1000,
+                  totalCapped: true,
+                  page: 1,
+                  limit: 50,
+                  totalPages: 20,
+                  hasNext: true,
+                  hasPrev: false,
+                  nextBefore: "cursor-2",
+                },
+              }
+            : {
+                items: [item("es")],
+                meta: {
+                  total: 1,
+                  page: 1,
+                  limit: 50,
+                  totalPages: 1,
+                  hasNext: false,
+                  hasPrev: true,
+                },
+              }
+        )
+    );
+    const { result, rerender } = renderHook(
+      ({ page }: { page: number }) => useWaitingForMe({ page, limit: 50 }),
+      { wrapper, initialProps: { page: 1 } }
+    );
+    await waitFor(() => expect(result.current.rows).toHaveLength(1));
+
+    rerender({ page: 2 });
+    await waitFor(() =>
+      expect(api.fetchWaitingForMe).toHaveBeenLastCalledWith({
+        page: 1,
+        limit: 50,
+        before: "cursor-2",
+      })
+    );
+    await waitFor(() =>
+      expect(result.current.rows[0]?.where).toBe("Posts (es)")
+    );
+    // The count is the list's, as its first page read it, not the window this page returned.
+    expect(result.current.total).toBe(1000);
+    expect(result.current.totalCapped).toBe(true);
+    expect(result.current.hasPrev).toBe(true);
+    expect(result.current.hasNext).toBe(false);
+  });
 });

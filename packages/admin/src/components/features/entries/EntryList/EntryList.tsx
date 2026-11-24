@@ -103,7 +103,10 @@ import { useDeclaredRowActions } from "./useDeclaredRowActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import type { EntryRow, EntryVersions } from "./useEntrySelection";
 import { useListCreateDialog } from "./useListCreateDialog";
-import { workflowListFilters } from "./workflow-list-filters";
+import {
+  choosesReviewFilter,
+  workflowListFilters,
+} from "./workflow-list-filters";
 
 // ============================================================================
 // Types
@@ -305,10 +308,16 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
     isPending: pluginFiltersPending,
     isUnavailable: pluginFiltersUnavailable,
   } = useBrandingStatus();
-  const choosesPluginFilter = pluginFilterParamValues(searchParams).length > 0;
-  // A review filter is offered from the collection, so a choice waits for it too.
+  // A review filter is offered from the collection, not the plugins' meta: a choice of one waits
+  // for the collection alone, and is never lost with the meta. A plugin's filter waits for both.
+  const chosenParams = pluginFilterParamValues(searchParams);
+  const choosesPluginFilter = chosenParams.some(
+    param => !choosesReviewFilter(param)
+  );
+  const choosesAnyFilter = chosenParams.length > 0;
   const awaitsPluginFilters =
-    (pluginFiltersPending || collectionLoading) && choosesPluginFilter;
+    (pluginFiltersPending && choosesPluginFilter) ||
+    (collectionLoading && choosesAnyFilter);
   const lostPluginFilters =
     !pluginFiltersPending && pluginFiltersUnavailable && choosesPluginFilter;
   // The page returns to the first whenever the choice changes, however it

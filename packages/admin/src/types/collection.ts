@@ -276,7 +276,15 @@ export interface Collection extends RemovedFromCodeMark {
     /** Its stages in order, by name and the label the code gives them. */
     stages?: { name: string; label: string }[];
     /** Its steps, each by name, label and kind, as the schema read summarises them. */
-    steps?: { name: string; label: string; kind: WorkflowStepKind }[];
+    steps?: {
+      name: string;
+      label: string;
+      kind: WorkflowStepKind;
+      /** Whether the step needs a comment: a list taking it in bulk asks for one first. */
+      commentRequired?: boolean;
+      /** The action taking it needs (`sign-off` → `sign-off-<slug>`): who reviews this collection. */
+      action?: string;
+    }[];
   } | null;
   /**
    * Why drafts are off, when the configuration asked for them. With
