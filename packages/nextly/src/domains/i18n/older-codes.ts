@@ -190,6 +190,22 @@ async function underscoredCodesIn(
 }
 
 /**
+ * Each of `codes` that has a part after its language, lower-cased, mapped to the code: what a
+ * stored spelling is looked up by once read as the conversion reads it (`standardLanguageCode`,
+ * every underscore a hyphen). Empty where no code has such a part, and then no row can be stored
+ * under an older spelling of a configured language.
+ */
+export function olderSpellingsOf(
+  codes: readonly string[]
+): Map<string, string> {
+  return new Map(
+    codes
+      .filter(code => code.includes("-"))
+      .map(code => [code.toLowerCase(), code] as const)
+  );
+}
+
+/**
  * The older spellings of `codes` that rows are still stored under, found from the rows rather than
  * the configuration: a configuration already corrected to the standard code no longer names them.
  * Read from every column the conversion rewrites (`tablesHoldingCode`'s), the translation tables
@@ -202,12 +218,7 @@ export async function storedOlderSpellings(
   translationTables: readonly string[],
   codes: readonly string[]
 ): Promise<StoredOlderSpelling[]> {
-  // Each configured code that has a part after its language, in any letter case.
-  const byLowered = new Map(
-    codes
-      .filter(code => code.includes("-"))
-      .map(code => [code.toLowerCase(), code] as const)
-  );
+  const byLowered = olderSpellingsOf(codes);
   if (byLowered.size === 0) return [];
   // MySQL compares codes without regard to letter case, so there `pt_BR` and `PT_br` are one
   // spelling: one conversion rewrites the rows of both, and two would be taken for two spellings

@@ -19,6 +19,11 @@ interface Template {
    * so no template copy (cc or bcc) may ever be added to it.
    */
   carriesSecret?: true;
+  /**
+   * Variables the email carries that its body does not use, declared so a
+   * site editing its copy can use them too.
+   */
+  alsoCarries?: string[];
 }
 
 /**
@@ -113,6 +118,27 @@ const TEMPLATES: Record<Kind, Template> = {
     subject: "Your password changed",
     html: `<p>Your account's password changed. If you didn't do this, reset it now.</p>`,
   },
+  invitation: {
+    name: "An invitation",
+    description:
+      "Sent when the site invites an address that has no account, with the link that makes one.",
+    sentBy: ["The site invites someone to make an account"],
+    carriesSecret: true,
+    subject: "You're invited to make an account",
+    // Greets by name and says when the link stops working, and reads
+    // plainly too where the email holds neither, as one queued before
+    // invitations carried them does.
+    html: `<p>{% if name %}Hello {{name}},{% else %}Hello,{% endif %}</p><p>You're invited to make an account with this address. <a href="{{link}}">Choose a password</a> to start.{% if expiresAtText %} The link works until {{expiresAtText}} ({{timeZone}}).{% endif %}</p><p>If you weren't expecting this, you can ignore this email.</p>`,
+    alsoCarries: ["expiresAt"],
+  },
+  "invitation-has-account": {
+    name: "An invitation to an address that has an account",
+    description:
+      "Sent when the site invites an address that already has an account, which signs in instead.",
+    sentBy: ["The site invites someone whose address already has an account"],
+    subject: "You're invited to sign in",
+    html: `<p>You're invited to use your account here, and this address already has one. <a href="{{signInLink}}">Sign in</a>, or <a href="{{resetLink}}">reset your password</a> if you've forgotten it. If your account was closed, contact us.</p>`,
+  },
 };
 
 /**
@@ -154,6 +180,18 @@ const VARIABLE_PRESENTATION: Record<
     label: "Sign-in link",
     example: "https://example.com/account/sign-in?token=sample",
   },
+  name: { type: "text", label: "Name", example: "Ayesha Khan" },
+  expiresAt: {
+    type: "text",
+    label: "Link expiry (ISO 8601, UTC)",
+    example: "2026-11-30T12:00:00.000Z",
+  },
+  expiresAtText: {
+    type: "text",
+    label: "Link expiry",
+    example: "30 November 2026, 5:00 PM",
+  },
+  timeZone: { type: "text", label: "Time zone", example: "Asia/Karachi" },
 };
 
 /** The slug an email kind's template is registered under. */
@@ -172,7 +210,10 @@ export function accountsEmailTemplates(): PluginEmailTemplate[] {
       ...(template.carriesSecret ? { carriesSecret: true } : {}),
       subject: template.subject,
       htmlContent: template.html,
-      variables: variablesIn(template.html).map(name => ({
+      variables: [
+        ...variablesIn(template.html),
+        ...(template.alsoCarries ?? []),
+      ].map(name => ({
         name,
         required: true,
         ...VARIABLE_PRESENTATION[name],
@@ -181,11 +222,20 @@ export function accountsEmailTemplates(): PluginEmailTemplate[] {
   );
 }
 
-/** An email's fields as its template's variables: everything but its kind, its account and its recipient. */
-export function emailVariables(email: AccountsEmail): Record<string, string> {
+/** What an email holds that is never one of its template's variables. */
+const NOT_VARIABLES = new Set(["kind", "accountId", "to", "refs"]);
+
+/**
+ * An email's fields as its template's variables: everything but its kind,
+ * its account, its recipient and the refs its secrets are sent by. Takes the
+ * email a send rebuilt from its queued form as well as one a flow built.
+ */
+export function emailVariables(
+  email: AccountsEmail | Readonly<Record<string, unknown>>
+): Record<string, string> {
   const variables: Record<string, string> = {};
   for (const [name, value] of Object.entries(email)) {
-    if (name === "kind" || name === "accountId" || name === "to") continue;
+    if (NOT_VARIABLES.has(name)) continue;
     variables[name] = String(value);
   }
 

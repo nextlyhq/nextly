@@ -5,13 +5,14 @@ import {
 } from "../storage/accounts";
 
 import { HOUR, MINUTE, type FlowDeps } from "./deps";
-import { pageLink } from "./links";
 import { PURPOSES } from "./purposes";
+import { secretFields } from "./secret-fields";
 
+/** A verification email's secrets, each with the ref its queued email is sent by. */
 export interface MintedVerification {
-  link: { token: string };
-  code: { code: string };
-  notMe: { token: string };
+  link: { token: string; ref: string };
+  code: { code: string; ref: string };
+  notMe: { token: string; ref: string };
 }
 
 /** A verification email's secrets: its link, its code (voiding any earlier code) and its "this wasn't me" link. */
@@ -69,9 +70,11 @@ export async function queueVerification(
     kind: "verify-address",
     accountId: account.id,
     to: account.address,
-    link: pageLink(deps.settings, "verify", minted.link.token),
-    code: minted.code.code,
-    notMeLink: pageLink(deps.settings, "notMe", minted.notMe.token),
+    ...secretFields(deps.settings, "verify-address", {
+      link: minted.link,
+      code: minted.code,
+      notMeLink: minted.notMe,
+    }),
   });
 }
 

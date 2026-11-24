@@ -119,9 +119,8 @@ export function classUsageIndexCollection(): CollectionConfig {
     // of the admin's navigation; the access rules below are what keep it out of
     // everything else.
     internal: true,
-    // Every text value here is the plugin's own bookkeeping (keys, ids, languages,
-    // paths, states, actors), never translated: each says `localized: false`, so its
-    // column stays on the main table, where a lookup by it finds it in every language.
+    // Kept once for every language (`localized: false`): each field is an
+    // id, key or language code the index writes, never translated text.
     fields: [
       text({ name: "scope", localized: false, label: "Scope" }),
       text({ name: "entity", localized: false, label: "Entity" }),

@@ -985,14 +985,16 @@ export function formsCollection(
       },
     }),
 
-    // The key a site embeds and finds the form by: never translated, so it says
-    // `localized: false` and its column stays on the main table.
+    // Shared by every language. A form is found by its slug in the visitor's
+    // language, and a unique field kept per language is read in that language
+    // alone, never filled from the default: a form with no French translation
+    // would not be found for a French visitor at all.
     text({
       name: "slug",
-      localized: false,
       label: "Slug",
       required: true,
       unique: true,
+      localized: false,
       admin: {
         description: "URL-friendly identifier. Used in API: /api/forms/{slug}",
       },

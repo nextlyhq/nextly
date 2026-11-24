@@ -136,6 +136,10 @@
       "samples": 16,
       "compiled": 10
     },
+    "docs/guides/private-files.mdx": {
+      "samples": 2,
+      "compiled": 2
+    },
     "docs/guides/production-migrations.mdx": {
       "samples": 3,
       "compiled": 2
@@ -143,6 +147,10 @@
     "docs/guides/routing-and-seo.mdx": {
       "samples": 17,
       "compiled": 15
+    },
+    "docs/guides/upgrading.mdx": {
+      "samples": 1,
+      "compiled": 1
     },
     "docs/jobs/index.mdx": {
       "samples": 5,
@@ -205,8 +213,12 @@
       "compiled": 3
     },
     "docs/permissions/index.mdx": {
-      "samples": 11,
-      "compiled": 7
+      "samples": 14,
+      "compiled": 10
+    },
+    "docs/plugins/accounts.mdx": {
+      "samples": 1,
+      "compiled": 1
     },
     "docs/plugins/admin-ui.mdx": {
       "samples": 34,
@@ -248,8 +260,12 @@
       "samples": 7,
       "compiled": 3
     },
+    "docs/plugins/mcp.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
     "docs/plugins/permissions.mdx": {
-      "samples": 3,
+      "samples": 4,
       "compiled": 1
     },
     "docs/plugins/proxy.mdx": {
@@ -269,8 +285,8 @@
       "compiled": 7
     },
     "docs/plugins/security-helpers.mdx": {
-      "samples": 6,
-      "compiled": 5
+      "samples": 7,
+      "compiled": 6
     },
     "docs/plugins/security.mdx": {
       "samples": 5,
@@ -281,11 +297,11 @@
       "compiled": 20
     },
     "docs/plugins/services.mdx": {
-      "samples": 19,
-      "compiled": 3
+      "samples": 20,
+      "compiled": 7
     },
     "docs/plugins/signed-in-people.mdx": {
-      "samples": 10,
+      "samples": 11,
       "compiled": 5
     },
     "docs/plugins/testing.mdx": {
@@ -356,6 +372,10 @@
       "samples": 2,
       "compiled": 2
     },
+    "packages/plugin-accounts/README.md": {
+      "samples": 6,
+      "compiled": 4
+    },
     "packages/plugin-commerce/README.md": {
       "samples": 3,
       "compiled": 3
@@ -414,8 +434,7 @@
     "packages/builder/README.md": 1,
     "docs/api-reference/direct-api.mdx": 3,
     "docs/database/mysql.mdx": 3,
-    "docs/guides/isr-caching.mdx": 1,
-    "docs/plugins/services.mdx": 7
+    "docs/guides/isr-caching.mdx": 1
   },
   "findings": {
     "docs/getting-started/build-a-blog.mdx": {
@@ -477,18 +496,6 @@
       "uninstalled #5 error TS2307: Cannot find module '@nextly-config' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
-    },
-    "docs/plugins/services.mdx": {
-      "#14 error TS2304: Cannot find name 'ctx'.": 3,
-      "#5 error TS2304: Cannot find name 'ctx'.": 2,
-      "#5 error TS2304: Cannot find name 'slug'.": 2,
-      "context #8 error TS2304: Cannot find name 'ctx'.": 2,
-      "context #8 error TS2304: Cannot find name 'id'.": 1,
-      "context #8 error TS18004: No value exists in scope for the shorthand property 'id'. Either declare one or provide an initializer.": 1,
-      "context #8 error TS2304: Cannot find name 'layout'.": 1,
-      "context #4 error TS2304: Cannot find name 'ctx'.": 1,
-      "context #4 error TS2304: Cannot find name 'slug'.": 1,
-      "implicit-any #14 error TS7006: Parameter 'tx' implicitly has an 'any' type.": 1
     },
     "docs/getting-started/index.mdx": {
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,

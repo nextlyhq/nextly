@@ -87,15 +87,14 @@ export function templatesCollection(): CollectionConfig {
   return defineCollection({
     slug: TEMPLATES_SLUG,
     labels: { singular: "Collection template", plural: "Collection templates" },
-    // Its keys, ids, states and actors are bookkeeping, never translated: each says
-    // `localized: false`, so its column stays on the main table, where a lookup by it
-    // finds it in every language. Its editorial text is translated as any field is.
     fields: [
       // Bounded on every write path, so a long title is refused alike on every
       // dialect rather than fitting one database's column and not another's.
       text({ name: "title", required: true, maxLength: 255 }),
       text({
         name: TEMPLATE_COLLECTION_FIELD,
+        // Kept once for every language, as each names one collection,
+        // entry or address whatever the language read in.
         localized: false,
         label: "Collection",
         // Not required of the field, since an entry's own design leaves it

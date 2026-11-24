@@ -18,6 +18,7 @@
  * `{ id, code, message }` keyed by canonical NextlyErrorCode.
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { z } from "zod";
 
 import {
@@ -70,6 +71,11 @@ import {
   refuseMovesOffTheFile,
   type PushReason,
 } from "../../domains/schema/field-moves/moves-road";
+import {
+  parseFieldRenameAnswers,
+  withFieldRenameAnswers,
+  withoutRenameAnswers,
+} from "../../domains/schema/field-rename-answers";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type {
   BrowserRenameResolution,
@@ -431,12 +437,14 @@ function confirmedDeletionsAnswer(
 }
 
 /**
- * The counts the person confirmed, compared just before the schema pipeline's push deletes the
- * removed fields' values, where no save writer runs the save: with nothing held, as a push the
- * writer runs compares them (`DeletionHold.compare`). Refuses where a count changed.
+ * The schema pipeline's push (`push`), where no save writer runs the save, with the counts the
+ * person confirmed compared just before it deletes the removed fields' values: refused where a
+ * count changed. On MySQL the collection is held from before the count until the push has ended,
+ * as a push the writer runs is held (`countedThroughApply`).
  */
-async function comparedBeforePipelinePush(args: {
-  dialect: Parameters<typeof deletionHoldOf>[0]["dialect"];
+async function pipelinePushCounted<T>(args: {
+  adapter: DrizzleAdapter;
+  slug: string;
   tableName: string;
   localized: boolean;
   previous: readonly unknown[] | undefined;
@@ -444,17 +452,27 @@ async function comparedBeforePipelinePush(args: {
   /** The rename answers: a field renamed keeps its values, so it is not compared. */
   renames: readonly BrowserRenameResolution[] | undefined;
   confirmed: readonly ConfirmedDeletion[] | undefined;
-  db: unknown;
-}): Promise<void> {
-  await deletionHoldOf({
-    dialect: args.dialect,
+  push: () => Promise<T>;
+}): Promise<T> {
+  const { countedThroughApply } = await import(
+    "../../domains/schema/builder-save/collection-save"
+  );
+  const hold = deletionHoldOf({
+    dialect: args.adapter.getCapabilities().dialect,
     tableName: args.tableName,
     localized: args.localized,
     previous: (args.previous ?? []) as unknown as FieldDefinition[],
     next: args.next,
     renamed: renamedFieldsOf(args.renames ?? []),
     confirmed: args.confirmed,
-  })?.compare(args.db);
+  });
+  return countedThroughApply(
+    args.adapter,
+    args.slug,
+    hold,
+    args.push,
+    consoleLogger
+  );
 }
 
 function parseTogetherParam(value: string | undefined): string[] {
@@ -487,6 +505,17 @@ async function withFieldsAsStored(
     ...body,
     fields: fieldsAsStored(sent, collection, [], { keepBuiltIns: true }),
   };
+}
+
+/**
+ * The API key the request was made with, by id: the acting identity an API key's request carries
+ * (as the workflows routes read it), else undefined for a person's or a trusted call.
+ */
+function requestApiKeyId(): string | undefined {
+  const actor = readAuthenticatedActor();
+  return readAuthenticatedScope() !== undefined && actor?.type === "apiKey"
+    ? actor.id
+    : undefined;
 }
 
 /**
@@ -854,9 +883,19 @@ const COLLECTIONS_METHODS: Record<
       if (updatedFields !== undefined) {
         assertValidPluginFieldOptions(updatedFields);
       }
-      const result = await svc.updateCollection(
-        { collectionName: p.collectionName },
-        await withFieldsAsStored(p.collectionName, body)
+      // The request's answers for a field leaving and another arriving: the change runs with
+      // them, so a pair it doesn't answer is refused, not taken for a rename.
+      const renames = parseFieldRenameAnswers(
+        (body as { renames?: unknown }).renames
+      );
+      const result = await withFieldRenameAnswers(renames, async () =>
+        svc.updateCollection(
+          { collectionName: p.collectionName },
+          await withFieldsAsStored(
+            p.collectionName,
+            withoutRenameAnswers(body as Record<string, unknown>)
+          )
+        )
       );
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
@@ -1529,23 +1568,22 @@ const COLLECTIONS_METHODS: Record<
               ? (fields as unknown as FieldDefinition[])
               : written.fields;
           // Without a save writer, the pipeline's push deletes the removed fields' values: the counts
-          // the person confirmed are compared just before it (`comparedBeforePipelinePush`).
-          if (written === undefined) {
-            await comparedBeforePipelinePush({
-              dialect,
-              tableName,
-              localized: wasLocalized,
-              previous: collection.fields,
-              next: fields as unknown as FieldDefinition[],
-              renames: renameResolutions,
-              confirmed: confirmedDeletions,
-              db: adapter.getDrizzle(),
-            });
-          }
+          // the person confirmed are compared just before it, and on MySQL the collection held until
+          // it has ended (`pipelinePushCounted`).
           const result =
             written !== undefined
               ? { summary: pushedSummary }
-              : await applyCollectionSchemaChange(change);
+              : await pipelinePushCounted({
+                  adapter,
+                  slug: p.collectionName,
+                  tableName,
+                  localized: wasLocalized,
+                  previous: collection.fields,
+                  next: fields as unknown as FieldDefinition[],
+                  renames: renameResolutions,
+                  confirmed: confirmedDeletions,
+                  push: () => applyCollectionSchemaChange(change),
+                });
 
           // pipeline.apply mutates the live DB (renamed/added/dropped
           // columns) but does NOT persist the updated `fields` JSON on
@@ -1697,6 +1735,8 @@ const COLLECTIONS_METHODS: Record<
         // permissions of the user that owns it, so a super-admin-owned key
         // cannot read past its scope by inheriting the session bypass.
         authenticatedScope: readAuthenticatedScope(),
+        // The key itself, which `_waitingForMe` names its caller by.
+        apiKeyId: requestApiKeyId(),
         page: p.page !== undefined ? parseInt(String(p.page), 10) : undefined,
         limit:
           rawLimit !== undefined ? parseInt(String(rawLimit), 10) : undefined,
@@ -1717,6 +1757,8 @@ const COLLECTIONS_METHODS: Record<
         translationStatus: isTruthyParam(p["translation-status"]),
         // `?source-locales=1` attaches `_sources`, each translatable value's language.
         sourceLocales: isTruthyParam(p["source-locales"]),
+        // Each row's review state, when the list asks for it (the admin's Review column).
+        reviewState: isTruthyParam(p.reviewState),
         // `?translations=all` attaches every language's values (`_allLocales`).
         translations: parseTranslationsParam(p.translations),
         // `?count=capped` counts the total no further than the list shows.
@@ -1764,6 +1806,7 @@ const COLLECTIONS_METHODS: Record<
         // Same scope judgement as listEntries: a count that ignored the key's
         // own grant would disclose how many rows exist beyond it.
         authenticatedScope: readAuthenticatedScope(),
+        apiKeyId: requestApiKeyId(),
         search: p.search,
         where: parseWhereParam(p.where, p.whereBrackets),
         status,

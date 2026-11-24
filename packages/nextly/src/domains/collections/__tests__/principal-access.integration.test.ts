@@ -7,7 +7,8 @@
  * the Public role grants, which a person never holds, and a rule written for
  * any signed-in staff user refuses them too. Field rules and hooks see the
  * person, and a write made as one never stores their id where a staff user's
- * goes.
+ * goes. A rule may also answer the person a filter, and then every read and
+ * write made as them reaches only the rows it matches.
  *
  * @module domains/collections/__tests__/principal-access.integration.test
  */
@@ -16,7 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { grantPublic } from "../../../__tests__/helpers/public-role";
 import { runAsPrincipal } from "../../../auth/principal-scope";
 import { defineCollection } from "../../../collections/config/define-collection";
-import { text } from "../../../collections/fields";
+import { relationship, text } from "../../../collections/fields";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import type { Principal } from "../../../plugins/principals/types";
 import { runPluginRoute } from "../../../plugins/routes/dispatch";
@@ -40,6 +41,15 @@ afterEach(async () => {
 const KIND = "accounts:account";
 const isMember = ({ principal }: { principal: Principal | null }) =>
   principal?.kind === KIND;
+
+/**
+ * A rule that answers a person of the kind a filter, the rows they own, and
+ * everyone else `false`. Read, update and delete share it.
+ */
+const ownRows = ({ principal }: { principal: Principal | null }) =>
+  principal?.kind === KIND
+    ? { owner: { equals: principal.id } }
+    : (false as const);
 
 /** Who the resolver and the lookup know: an id, and whether they verified. */
 const PEOPLE: Record<string, { verified: boolean }> = {
@@ -148,6 +158,37 @@ async function boot(
         slug: "staff_rule",
         access: { read: ({ user }) => !!user },
         fields: [text({ name: "title" })],
+      }),
+      // Rows a person owns, by the `owner` each row names.
+      defineCollection({
+        slug: "owned_items",
+        access: {
+          read: ownRows,
+          create: isMember,
+          update: ownRows,
+          delete: ownRows,
+        },
+        fields: [text({ name: "title" }), text({ name: "owner" })],
+      }),
+      // Readable by every person of the kind, writable only by its owner.
+      defineCollection({
+        slug: "shared_items",
+        access: {
+          read: isMember,
+          update: ownRows,
+          delete: ownRows,
+        },
+        fields: [text({ name: "title" }), text({ name: "owner" })],
+      }),
+      // Owned the same way, each linking to an item that may be someone else's.
+      defineCollection({
+        slug: "owned_orders",
+        access: { read: ownRows },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "owner" }),
+          relationship({ name: "item", relationTo: "owned_items" }),
+        ],
       }),
     ],
     singles: [
@@ -482,6 +523,331 @@ describe.each(getConfiguredTestDialects())(
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({ found: 1, counted: 1 });
       expect(resolve).toHaveBeenCalledTimes(1);
+    });
+  }
+);
+
+/** A row in a filtered collection, owned by `owner`, written as the server. */
+async function own(
+  t: TestNextly,
+  collection: "owned_items" | "owned_orders" | "shared_items",
+  owner: string,
+  title: string,
+  item?: string
+): Promise<string> {
+  const created = await t.nextly.create({
+    collection,
+    data: { title, owner, ...(item === undefined ? {} : { item }) },
+  });
+  return String((created.item as { id: string }).id);
+}
+
+/** Every title in `collection`, read as the server, sorted. */
+async function titlesOf(t: TestNextly, collection: string): Promise<string[]> {
+  const all = await t.nextly.find({ collection, limit: 100 });
+  return all.items.map(row => String((row as { title: unknown }).title)).sort();
+}
+
+/**
+ * What a refusal tells the caller: the error's kind, status and both
+ * messages. Two refusals that agree on all of it cannot be told apart.
+ */
+async function refusalOf(attempt: Promise<unknown>): Promise<unknown> {
+  const error: unknown = await attempt.then(
+    () => {
+      throw new Error("expected a refusal");
+    },
+    (caught: unknown) => caught
+  );
+  const { name, code, statusCode, message, publicMessage } = error as Record<
+    string,
+    unknown
+  >;
+  return { name, code, statusCode, message, publicMessage };
+}
+
+describe.each(getConfiguredTestDialects())(
+  "a rule that answers a person a filter (%s)",
+  dialect => {
+    /** m1 owns two items, m2 one. */
+    async function bootOwned(): Promise<{
+      t: TestNextly;
+      member: Principal;
+      mine: string;
+      theirs: string;
+    }> {
+      const t = await boot(dialect);
+      const mine = await own(t, "owned_items", "m1", "m1-first");
+      await own(t, "owned_items", "m1", "m1-second");
+      const theirs = await own(t, "owned_items", "m2", "m2-only");
+      return { t, member: await person(t, "m1"), mine, theirs };
+    }
+
+    it("lists only the rows the filter matches, and counts the same rows", async () => {
+      const { t, member } = await bootOwned();
+      const found = await t.nextly.find({
+        collection: "owned_items",
+        principal: member,
+      });
+      expect(
+        found.items.map(row => (row as { title: string }).title).sort()
+      ).toEqual(["m1-first", "m1-second"]);
+      expect(found.meta.total).toBe(2);
+      const counted = await t.nextly.count({
+        collection: "owned_items",
+        principal: member,
+      });
+      expect(counted.total).toBe(2);
+
+      // The caller's own where is added to the filter, never in place of it:
+      // asking for another person's rows by name finds none of them.
+      const asked = await t.nextly.find({
+        collection: "owned_items",
+        where: { owner: { equals: "m2" } },
+        principal: member,
+      });
+      expect(asked.items).toEqual([]);
+      const askedCount = await t.nextly.count({
+        collection: "owned_items",
+        where: { owner: { equals: "m2" } },
+        principal: member,
+      });
+      expect(askedCount.total).toBe(0);
+
+      // The control: the server sees every row.
+      expect(await titlesOf(t, "owned_items")).toEqual([
+        "m1-first",
+        "m1-second",
+        "m2-only",
+      ]);
+    });
+
+    it("reads its own row by id, and is answered about another's exactly as about a missing one", async () => {
+      const { t, member, mine, theirs } = await bootOwned();
+      const row = (await t.nextly.findByID({
+        collection: "owned_items",
+        id: mine,
+        principal: member,
+      })) as Record<string, unknown>;
+      expect(row.title).toBe("m1-first");
+
+      const missing = "00000000-0000-0000-0000-000000000000";
+      const refused = await refusalOf(
+        t.nextly.findByID({
+          collection: "owned_items",
+          id: theirs,
+          principal: member,
+        })
+      );
+      expect(refused).toMatchObject({ statusCode: 404, code: "NOT_FOUND" });
+      expect(refused).toEqual(
+        await refusalOf(
+          t.nextly.findByID({
+            collection: "owned_items",
+            id: missing,
+            principal: member,
+          })
+        )
+      );
+      // Asked not to throw, both answer nothing.
+      for (const id of [theirs, missing]) {
+        expect(
+          await t.nextly.findByID({
+            collection: "owned_items",
+            id,
+            principal: member,
+            disableErrors: true,
+          })
+        ).toBeNull();
+      }
+    });
+
+    it("populates a related row the filter matches, and never another's", async () => {
+      const { t, member, mine, theirs } = await bootOwned();
+      await own(t, "owned_orders", "m1", "order-of-mine", mine);
+      await own(t, "owned_orders", "m1", "order-of-theirs", theirs);
+
+      const found = await t.nextly.find({
+        collection: "owned_orders",
+        depth: 1,
+        principal: member,
+      });
+      const byTitle = new Map(
+        found.items.map(row => [
+          (row as { title: string }).title,
+          (row as { item: unknown }).item,
+        ])
+      );
+      expect(byTitle.get("order-of-mine")).toMatchObject({
+        id: mine,
+        title: "m1-first",
+      });
+      // The other person's item stays the id the reader's own row holds,
+      // as a related row any caller may not read does: none of its fields.
+      expect(byTitle.get("order-of-theirs")).toBe(theirs);
+      expect(JSON.stringify(found.items)).not.toContain("m2-only");
+      expect(JSON.stringify(found.items)).not.toContain('"m2"');
+
+      // The same by id, at a depth past the first.
+      const order = (await t.nextly.findByID({
+        collection: "owned_orders",
+        id: String(
+          (
+            found.items.find(
+              row => (row as { title: string }).title === "order-of-theirs"
+            ) as { id: string }
+          ).id
+        ),
+        depth: 2,
+        principal: member,
+      })) as Record<string, unknown>;
+      expect(order.item).toBe(theirs);
+    });
+
+    it("updates only its own rows, by id and by where", async () => {
+      const { t, member, mine, theirs } = await bootOwned();
+      await t.nextly.update({
+        collection: "owned_items",
+        id: mine,
+        data: { title: "m1-renamed", _overwrite: true },
+        principal: member,
+      });
+
+      // Another's row by id: answered as missing, as a read of it is, and
+      // left as it was.
+      expect(
+        await refusalOf(
+          t.nextly.update({
+            collection: "owned_items",
+            id: theirs,
+            data: { title: "taken", _overwrite: true },
+            principal: member,
+          })
+        )
+      ).toMatchObject({ statusCode: 404, code: "NOT_FOUND" });
+
+      // An update by where writes the one row it matches. A where naming
+      // another's row matches nothing under the filter: answered as missing,
+      // and nothing written.
+      await expect(
+        t.nextly.update({
+          collection: "owned_items",
+          where: { title: { equals: "m2-only" } },
+          data: { title: "taken", _overwrite: true },
+          principal: member,
+        })
+      ).rejects.toMatchObject({ statusCode: 404, code: "NOT_FOUND" });
+      await t.nextly.update({
+        collection: "owned_items",
+        where: { title: { equals: "m1-second" } },
+        data: { title: "m1-also-renamed", _overwrite: true },
+        principal: member,
+      });
+      expect(await titlesOf(t, "owned_items")).toEqual([
+        "m1-also-renamed",
+        "m1-renamed",
+        "m2-only",
+      ]);
+
+      // An update by where names one row: a where the filter leaves two rows
+      // for is refused, and nothing written.
+      await expect(
+        t.nextly.update({
+          collection: "owned_items",
+          where: { title: { exists: true } },
+          data: { title: "bulk", _overwrite: true },
+          principal: member,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(await titlesOf(t, "owned_items")).toEqual([
+        "m1-also-renamed",
+        "m1-renamed",
+        "m2-only",
+      ]);
+
+      // An update may not move a row out of the filter: refused, unchanged.
+      await expect(
+        t.nextly.update({
+          collection: "owned_items",
+          id: mine,
+          data: { owner: "m2", _overwrite: true },
+          principal: member,
+        })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      const kept = (await t.nextly.findByID({
+        collection: "owned_items",
+        id: mine,
+      })) as Record<string, unknown>;
+      expect(kept.owner).toBe("m1");
+    });
+
+    it("is refused a write to a row it may read but the filter does not match", async () => {
+      // The read admits every person of the kind, so the row is not hidden:
+      // the write is refused as forbidden, not answered as missing.
+      const t = await boot(dialect);
+      const theirs = await own(t, "shared_items", "m2", "m2-shared");
+      const member = await person(t, "m1");
+      expect(
+        (
+          (await t.nextly.findByID({
+            collection: "shared_items",
+            id: theirs,
+            principal: member,
+          })) as Record<string, unknown>
+        ).title
+      ).toBe("m2-shared");
+      await expect(
+        t.nextly.update({
+          collection: "shared_items",
+          id: theirs,
+          data: { title: "taken", _overwrite: true },
+          principal: member,
+        })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      await expect(
+        t.nextly.delete({
+          collection: "shared_items",
+          id: theirs,
+          principal: member,
+        })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(await titlesOf(t, "shared_items")).toEqual(["m2-shared"]);
+    });
+
+    it("deletes only its own rows, by id and by where", async () => {
+      const { t, member, mine, theirs } = await bootOwned();
+      expect(
+        await refusalOf(
+          t.nextly.delete({
+            collection: "owned_items",
+            id: theirs,
+            principal: member,
+          })
+        )
+      ).toMatchObject({ statusCode: 404, code: "NOT_FOUND" });
+      expect(await titlesOf(t, "owned_items")).toEqual([
+        "m1-first",
+        "m1-second",
+        "m2-only",
+      ]);
+
+      await t.nextly.delete({
+        collection: "owned_items",
+        id: mine,
+        principal: member,
+      });
+      expect(await titlesOf(t, "owned_items")).toEqual([
+        "m1-second",
+        "m2-only",
+      ]);
+
+      // A where that names every row removes only the rows the filter matches.
+      await t.nextly.delete({
+        collection: "owned_items",
+        where: { title: { exists: true } },
+        principal: member,
+      });
+      expect(await titlesOf(t, "owned_items")).toEqual(["m2-only"]);
     });
   }
 );

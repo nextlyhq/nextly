@@ -15,8 +15,10 @@ import {
   type DataStepsDeps,
 } from "../data-steps";
 import { runConvertZonedDates } from "../i18n-convert-zoned-dates";
-import { LOCALISATION_DATA_STEPS } from "../upgrade-steps";
-import { versionPasswordsStep } from "../upgrade-steps/version-passwords";
+import {
+  LOCALISATION_DATA_STEPS,
+  versionPasswordsStep,
+} from "../upgrade-steps";
 import { planWithStoredData } from "../stored-data-of-run";
 import {
   NOTHING_CHANGED,

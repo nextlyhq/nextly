@@ -20,7 +20,7 @@ export const LOCALIZATION_INTENT_HEADER = "-- Localization:";
  * Absence of the field is different, and does mean verbatim — that is what every file written
  * before this existed looks like.
  */
-export const LOCALIZATION_INTENT_VERSION = 7;
+export const LOCALIZATION_INTENT_VERSION = 8;
 
 /**
  * Every payload version this build has a parser for.
@@ -31,7 +31,7 @@ export const LOCALIZATION_INTENT_VERSION = 7;
  * comes out and its files start refusing instead of being silently misread.
  */
 const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([
-  1, 2, 3, 4, 5, 6, 7,
+  1, 2, 3, 4, 5, 6, 7, 8,
 ]);
 
 /**
@@ -65,6 +65,9 @@ const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([
  *   main migration, so no column they key on goes first, and its creates after every other file.
  * - `adds` adds the companion columns of translated fields added to an entity that is already
  *   translated (`field-added-to-translation.ts`), and its DOWN drops them.
+ * - `retypes` gives the companion columns of fields translated before and after a change the type
+ *   their new field type makes (`plan-companion-type-change.ts`). It runs before the main
+ *   migration, so the change is judged, in every language, before either runs.
  */
 export const LOCALIZATION_MIGRATION_KINDS = [
   "enable",
@@ -75,15 +78,20 @@ export const LOCALIZATION_MIGRATION_KINDS = [
   "joins",
   "unique",
   "adds",
+  "retypes",
 ] as const;
 
 export type LocalizationMigrationKind =
   (typeof LOCALIZATION_MIGRATION_KINDS)[number];
 
+/** The kinds versions 5 to 7 declare: every kind before `retypes`. */
+const KINDS_BEFORE_RETYPES: readonly LocalizationMigrationKind[] =
+  LOCALIZATION_MIGRATION_KINDS.filter(kind => kind !== "retypes");
+
 /**
- * The kinds each payload version can declare. Version 6 added no kind but the spec's `settings`
- * (`SETTINGS_INTENT_VERSION`), 5 `adds`, 4 `unique`, 3 `joins`, version 2 `archive` and `shared`;
- * version 1 has only the whole-entity transitions.
+ * The kinds each payload version can declare. Version 8 added `retypes`; 7 added no kind but the
+ * spec's `liveness`, 6 its `settings` (`SETTINGS_INTENT_VERSION`); 5 `adds`, 4 `unique`, 3
+ * `joins`, version 2 `archive` and `shared`; version 1 has only the whole-entity transitions.
  */
 const KINDS_BY_VERSION: ReadonlyMap<
   number,
@@ -104,9 +112,10 @@ const KINDS_BY_VERSION: ReadonlyMap<
       "unique",
     ],
   ],
-  [5, LOCALIZATION_MIGRATION_KINDS],
-  [6, LOCALIZATION_MIGRATION_KINDS],
-  [7, LOCALIZATION_MIGRATION_KINDS],
+  [5, KINDS_BEFORE_RETYPES],
+  [6, KINDS_BEFORE_RETYPES],
+  [7, KINDS_BEFORE_RETYPES],
+  [8, LOCALIZATION_MIGRATION_KINDS],
 ]);
 
 /**
@@ -191,6 +200,11 @@ export function formatLocalizationIntent(
         ? {}
         : {
             unique: s.unique.map(u => ({ field: u.field, column: u.column })),
+          }),
+      ...(s.retyped === undefined
+        ? {}
+        : {
+            retyped: s.retyped.map(r => ({ field: r.field, column: r.column })),
           }),
       ...(s.settings === undefined
         ? {}
@@ -366,6 +380,13 @@ function isIntentShape(value: unknown): value is LocalizationMigrationIntent {
     return false;
   if (s.status !== undefined && typeof s.status !== "boolean") return false;
   if (s.unique !== undefined && !isFieldColumnList(s.unique)) return false;
+  // The retyped fields arrived with their kind: a header of another kind carrying them was not
+  // written by a generator.
+  if (
+    s.retyped !== undefined &&
+    !(v.kind === "retypes" && isFieldColumnList(s.retyped))
+  )
+    return false;
   // The ranking arrived with its version, as the settings did.
   if (
     s.liveness !== undefined &&

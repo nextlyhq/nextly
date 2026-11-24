@@ -42,9 +42,6 @@ function trustedSubmittedAt(context: HookContext): boolean {
 
 /** The unique index one response per person rests on. */
 const RESPONSE_KEY_INDEX = {
-  // Its keys, ids, states and actors are bookkeeping, never translated: each says
-  // `localized: false`, so its column stays on the main table, where a lookup by it
-  // finds it in every language. Its editorial text is translated as any field is.
   fields: ["form", "responseKey"],
   unique: true,
 };
@@ -66,15 +63,22 @@ function sameIndex(
  * and by what tells the admin which fields are the host's own.
  */
 function builtInSubmissionFields(formSlug: string): FieldConfig[] {
+  // Every field here describes the submission (who sent it, from where, how
+  // it was handled), not content written in a language, so each text field
+  // is `localized: false`: kept once for every language on the main table.
   return [
     // ============================================================
     // Form Relationship
     // ============================================================
+    // Every submission belongs to a form, and the plugin's write seam
+    // refuses one without it (`prepareSubmissionForWrite`). It is not
+    // `required` here because that would make the column NOT NULL, and an
+    // installation from a release that kept it nullable could hold a row
+    // without one: its upgrade would then be refused.
     relationship({
       name: "form",
       label: "Form",
       relationTo: formSlug,
-      required: true,
       admin: {
         readOnly: true,
         description: "The form this submission belongs to",
@@ -213,8 +217,10 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
     // never the value itself. Written by the plugin at the write seam, never
     // taken from a caller, and empty when the form allows several responses
     // or the submission is spam. Unique per form (see `indexes`), so two
-    // submissions with the same value cannot both be stored. A key, never
-    // translated, so its column stays on the main table the index is on.
+    // submissions with the same value cannot both be stored.
+    // Shared by every language: the unique index above is built on the main
+    // table, and one person's response is one response whatever language
+    // they answered in.
     text({
       name: "responseKey",
       label: "One-response key",

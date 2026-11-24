@@ -63,7 +63,9 @@ describe("filesWithinStep", () => {
     );
 
     expect(names(within.run)).toEqual(["archive", "main:docs", "shared"]);
-    expect(within.continued).toBe('"body" in collection "docs"');
+    expect(within.continued).toBe(
+      'a move between translated and shared ("body" in collection "docs")'
+    );
   });
 
   it("goes on through a field joining translation, from its joins file to the main file", () => {
@@ -74,6 +76,32 @@ describe("filesWithinStep", () => {
     );
 
     expect(names(within.run)).toEqual(["joins", "main:docs"]);
+  });
+
+  // A translated field's type change writes its translations column's new type ahead of the main
+  // file: a run goes on through both, and says what it went on for, which moves nothing between
+  // translated and shared.
+  it("goes on through a translated field's type change, from its retypes file to the main file, naming it as one", () => {
+    const within = filesWithinStep(
+      pending([companion("retypes"), main("docs"), main("notes")]),
+      1,
+      "up"
+    );
+
+    expect(names(within.run)).toEqual(["retypes", "main:docs"]);
+    expect(within.continued).toBe(
+      'a translated field\'s type change ("body" in collection "docs")'
+    );
+  });
+
+  it("rolls back through a translated field's type change, from the main file to its retypes file", () => {
+    const within = filesWithinStep(
+      pending([main("notes"), main("docs"), companion("retypes")]),
+      2,
+      "down"
+    );
+
+    expect(names(within.run)).toEqual(["main:notes", "main:docs", "retypes"]);
   });
 
   it("finishes a move an earlier run left open", () => {
@@ -100,7 +128,9 @@ describe("filesWithinStep", () => {
     );
 
     expect(names(within.run)).toEqual(["shared", "main:docs"]);
-    expect(within.continued).toBe('"body" in collection "docs"');
+    expect(within.continued).toBe(
+      'a move between translated and shared ("body" in collection "docs")'
+    );
   });
 
   it("rolls back through a field joining translation, from the main file to its joins file", () => {
@@ -112,7 +142,9 @@ describe("filesWithinStep", () => {
     );
 
     expect(names(within.run)).toEqual(["main:docs", "joins"]);
-    expect(within.continued).toBe('"body" in collection "docs"');
+    expect(within.continued).toBe(
+      'a move between translated and shared ("body" in collection "docs")'
+    );
   });
 
   it("keeps to the step at a newer main file than the one a joins file pairs with", () => {

@@ -17,8 +17,11 @@
 
 import type { UpgradeStep } from "../upgrade-step";
 
-import { storedPasswordsStep } from "./stored-passwords";
-import { VERSION_SNAPSHOTS, versionPasswordsStep } from "./version-passwords";
+/**
+ * What the version history's password removal repairs (`UpgradeStep.group`): the values pending
+ * changes and versions hold, which a step splitting or comparing them reads (`UpgradeStep.reads`).
+ */
+const VERSION_SNAPSHOTS = "version snapshots";
 
 /**
  * What the localisation steps repair (`UpgradeStep.group`): each reads what the ones before it
@@ -26,6 +29,25 @@ import { VERSION_SNAPSHOTS, versionPasswordsStep } from "./version-passwords";
  * version history's password removal changes; the others read neither that nor anything else.
  */
 const LOCALISATION = "localisation";
+
+/** Hashing the passwords an earlier release stored as given. */
+const storedPasswordsStep: UpgradeStep = {
+  title: "hash passwords stored before this release",
+  pending: async context =>
+    (await import("./stored-passwords")).storedPasswordsWork.pending(context),
+  run: async context =>
+    (await import("./stored-passwords")).storedPasswordsWork.run(context),
+};
+
+/** Removing the passwords an earlier release kept in version history. */
+export const versionPasswordsStep: UpgradeStep = {
+  group: VERSION_SNAPSHOTS,
+  title: "remove passwords kept in version history",
+  pending: async context =>
+    (await import("./version-passwords")).versionPasswordsWork.pending(context),
+  run: async context =>
+    (await import("./version-passwords")).versionPasswordsWork.run(context),
+};
 
 /** Converting roles that hold a retired `manage-` permission. */
 const retiredManageStep: UpgradeStep = {

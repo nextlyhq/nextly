@@ -96,6 +96,10 @@ import type {
 import { entitySaveDeps } from "../../schema/builder-save/entity-save-deps";
 import { entityRelations } from "../../schema/builder-save/single-relations";
 import { singleEntity } from "../../schema/builder-save/stored-entity";
+import {
+  declinedRename,
+  refuseUnansweredRename,
+} from "../../schema/field-rename-answers";
 import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import { writeRegistryRowsWith } from "../../schema/schema-version";
 import {
@@ -1099,6 +1103,7 @@ export class SingleMetadataService {
     // A field renamed onto a column that is already there is refused here, before anything
     // changes: the archive write of a field leaving translation, just below, is the first write a
     // save makes.
+    await this.refuseUnansweredRename(input);
     await this.refuseRenameOntoTakenColumn(input);
 
     // The history checks a Builder save makes, before that first write, where a writer is set up.
@@ -1420,7 +1425,15 @@ export class SingleMetadataService {
       wasStored: input.wasLocalized,
       isStored: input.isLocalized,
       statusChanges: input.wasStatus !== input.hasStatus,
-      renamed: companion?.rename,
+      // A companion rename the request declined moves no value: it is dropped and added.
+      renamed:
+        companion !== undefined &&
+        !declinedRename({
+          from: { name: companion.rename.from },
+          to: { name: companion.rename.to },
+        })
+          ? companion.rename
+          : undefined,
       liveTable: async () =>
         (
           await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
@@ -1636,6 +1649,75 @@ export class SingleMetadataService {
   }
 
   /**
+   * Refuse a schema change, on a road that takes the request's answers, that removes a field and
+   * adds another of the same type with no answer for the pair (`refuseUnansweredRename`): it is
+   * never taken for a rename by guesswork. Asked before anything changes.
+   */
+  private async refuseUnansweredRename(
+    input: UpdateSingleSchemaInput
+  ): Promise<void> {
+    if (input.fields === undefined) return;
+    const { schema, candidates } = await this.renameCandidatesOf(
+      input,
+      input.fields
+    );
+    refuseUnansweredRename(
+      `The Single "${input.slug}"`,
+      candidates,
+      field => schema.storageNameOf(input.existing.tableName, field),
+      {
+        // A stored field without a name names nothing an answer could refer to.
+        before: (input.existing.fields ?? []).flatMap(f =>
+          typeof f.name === "string" ? [f.name] : []
+        ),
+        after: input.fields.map(f => f.name),
+      }
+    );
+    schema.refuseRenameJoiningTranslation(
+      `The Single "${input.slug}"`,
+      candidates,
+      { was: input.wasLocalized, is: input.isLocalized }
+    );
+  }
+
+  /**
+   * The translated field the request answered as a drop and an add, from the same candidates the
+   * refusal asks about (`translatedFieldDroppedByAnswer`), or none.
+   */
+  private async translatedFieldDroppedByAnswer(
+    input: UpdateSingleSchemaInput
+  ): Promise<string | undefined> {
+    if (input.fields === undefined) return undefined;
+    const { schema, candidates } = await this.renameCandidatesOf(
+      input,
+      input.fields
+    );
+    return schema.translatedFieldDroppedByAnswer(
+      candidates,
+      input.wasLocalized
+    );
+  }
+
+  /** The pairs this change could be renaming (`renameCandidatesOf`), with the service that read them. */
+  private async renameCandidatesOf(
+    input: UpdateSingleSchemaInput,
+    fields: FieldDefinition[]
+  ) {
+    const { DynamicCollectionSchemaService } = await import(
+      "../../dynamic-collections/services/dynamic-collection-schema-service"
+    );
+    const schema = new DynamicCollectionSchemaService(undefined, this.dialect);
+    return {
+      schema,
+      candidates: schema.renameCandidatesOf(
+        (input.existing.fields ?? []) as unknown as FieldDefinition[],
+        fields,
+        { was: input.wasLocalized, is: input.isLocalized }
+      ),
+    };
+  }
+
+  /**
    * The first step of a field leaving translation (`archiveFieldsLeavingTranslation`), for a
    * save whose flags were derived inside the exclusion. Nothing is asked when the save sends no
    * fields or the Single is translated neither before nor after it; a save that turns translation
@@ -1696,7 +1778,20 @@ export class SingleMetadataService {
       newFields: input.fields,
       wasLocalized: input.wasLocalized,
       isLocalized: input.isLocalized,
+      // The translated field the request answered as a drop and an add: that removal, and only
+      // that one, is the request's.
+      ...(await this.droppedByAnswerArgs(input)),
     });
+  }
+
+  /** What the translated-field preflight is told of a drop the request answered for, if any. */
+  private async droppedByAnswerArgs(
+    input: UpdateSingleSchemaInput
+  ): Promise<{ renamed?: null; droppedByAnswer?: string }> {
+    const droppedByAnswer = await this.translatedFieldDroppedByAnswer(input);
+    return droppedByAnswer === undefined
+      ? {}
+      : { renamed: null, droppedByAnswer };
   }
 
   private async refreshForUpdate(

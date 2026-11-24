@@ -15,7 +15,7 @@
  */
 
 import { fetcher } from "../lib/api/fetcher";
-import type { ListResponse } from "../lib/api/response-types";
+import type { ListResponse, MutationResponse } from "../lib/api/response-types";
 
 /**
  * Where a provider came from: a stored one, one set in the app's code, a
@@ -280,6 +280,43 @@ export function getQueuedEmailDetail(id: string): Promise<QueuedEmailDetail> {
   return fetcher<QueuedEmailDetail>(
     `/email-deliveries/queued/${encodeURIComponent(id)}`,
     {},
+    true
+  );
+}
+
+/** A queued email as a retry or cancel answers it: its id, and the state it stood in before. */
+export interface QueuedEmailActionResult {
+  id: string;
+  state: string;
+}
+
+/**
+ * Try a queued email again now: a waiting or retrying one's next attempt is
+ * made due, and a failed one waits again with fresh attempts. Refused, saying
+ * why, while an attempt is with the provider and for one sent, cancelled or
+ * whose message was cleared. Needs `manage-email-deliveries`.
+ */
+export function retryQueuedEmail(
+  id: string
+): Promise<MutationResponse<QueuedEmailActionResult>> {
+  return fetcher<MutationResponse<QueuedEmailActionResult>>(
+    `/email-deliveries/queued/${encodeURIComponent(id)}/retry`,
+    { method: "POST" },
+    true
+  );
+}
+
+/**
+ * Cancel a queued email. During an attempt with the provider it is a
+ * request: it ends cancelled if that attempt fails, and sent if it succeeds.
+ * Needs `manage-email-deliveries`.
+ */
+export function cancelQueuedEmail(
+  id: string
+): Promise<MutationResponse<QueuedEmailActionResult>> {
+  return fetcher<MutationResponse<QueuedEmailActionResult>>(
+    `/email-deliveries/queued/${encodeURIComponent(id)}/cancel`,
+    { method: "POST" },
     true
   );
 }

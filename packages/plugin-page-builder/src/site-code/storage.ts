@@ -104,9 +104,9 @@ export function siteCodeSingle(): SingleConfig {
       beforeValidate: [refuseUnmarkedWrite],
       beforeChange: [refuseUnmarkedWrite],
     },
-    // Its keys, ids, states and actors are bookkeeping, never translated: each says
-    // `localized: false`, so its column stays on the main table, where a lookup by it
-    // finds it in every language. Its editorial text is translated as any field is.
+    // Kept once for every language (`localized: false`): the site's code
+    // is one for the whole site, as its judged entries (`head`, `body`) are,
+    // and `changedBy` is an id.
     fields: [
       // What the person wrote for the head, as it was judged: shown again for
       // editing, never rendered.

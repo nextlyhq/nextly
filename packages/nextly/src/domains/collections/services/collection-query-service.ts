@@ -179,6 +179,7 @@ import {
   localizationNow,
 } from "../../i18n/localization-source";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { provenanceFieldsOf } from "../../i18n/provenance/field-status";
 import { translationProvenancePresent } from "../../i18n/provenance/record-provenance";
 import {
   ALL_LOCALES_KEY,
@@ -245,6 +246,9 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
+import { assignedToCondition } from "../../workflows/assigned-to-condition";
+import { changedSinceApprovedCondition } from "../../workflows/changed-since-approved-condition";
+import type { ReviewAssignee } from "../../workflows/review-state-repository";
 import { strandedStageCondition } from "../../workflows/stranded-stage-condition";
 import {
   componentTableNamesFor,
@@ -279,10 +283,14 @@ import {
   windowRowsEnd,
 } from "../query/timeseries-interval";
 import {
+  ASSIGNED_TO_ME_KEY,
+  CHANGED_SINCE_APPROVED_KEY,
   extractWorkflowFilter,
   IN_RELEASE_KEY,
   PENDING_CHANGE_KEY,
+  STAGE_KEY,
   STRANDED_STAGE_KEY,
+  WAITING_FOR_ME_KEY,
   type WorkflowFilter,
 } from "../query/workflow-filter";
 
@@ -657,6 +665,39 @@ type SettledRead = { readonly denied: null; readonly filter?: RuleFilter };
  */
 const SETTLED_ACCESS = Symbol("settled read access");
 
+/**
+ * How many waiting parts `_waitingForMe` reads at most for one list. More
+ * than this and the list keeps the documents of those it read, its total
+ * marked a floor (`totalCapped`), as the waiting list's own is.
+ */
+const WAITING_FILTER_CAP = 1000;
+
+/**
+ * Ids bound per `IN` list: SQLite allows 999 bound values in a statement, the
+ * lowest of the supported dialects, so a longer list is split.
+ */
+const IDS_PER_IN = 500;
+
+/**
+ * The scope of an API key's request, or undefined for anyone else's: a person's session carries a
+ * scope too (`actorType: "user"`), and stands for the person, never for a key.
+ */
+function keyScopeOf(
+  scope: AuthenticatedScope | undefined
+): AuthenticatedScope | undefined {
+  return scope?.actorType === "apiKey" ? scope : undefined;
+}
+
+/** The condition keeping the rows whose id is one of `ids`; none for no ids. */
+function idsCondition(idColumn: SQLWrapper, ids: readonly string[]): SQL {
+  if (ids.length === 0) return sql`1 = 0`;
+  const chunks: string[][] = [];
+  for (let at = 0; at < ids.length; at += IDS_PER_IN) {
+    chunks.push(ids.slice(at, at + IDS_PER_IN));
+  }
+  return or(...chunks.map(chunk => inArray(idColumn, chunk))) ?? sql`1 = 0`;
+}
+
 /** A list's settled access, as only this module can hand it to a count. */
 interface SettledAccessToken {
   readonly [SETTLED_ACCESS]: SettledRead;
@@ -773,6 +814,12 @@ interface FilteredReadParams {
    * counts exactly the rows it can list.
    */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * The API key behind `authenticatedScope`, by id: what the waiting list
+   * names a key's caller by. Passed through only to build that caller for
+   * `_waitingForMe`; a scope with no key id keeps nothing there.
+   */
+  apiKeyId?: string;
   /**
    * Draft/Published filter override (only effective when collection.status === true).
    * See listEntries for full semantics.
@@ -1171,6 +1218,11 @@ function readCallerOf(params: {
 }
 
 export class CollectionQueryService extends BaseService {
+  /** Each `_waitingForMe` filter's waiting read, so a list and its count read it once. */
+  private readonly waitingReads = new WeakMap<
+    WorkflowFilter,
+    Promise<{ ids: string[]; capped: boolean }>
+  >();
   /** The site's languages as they are now: the source may be the language registry. */
   private get localization(): SanitizedLocalizationConfig | undefined {
     return localizationNow(this.localizationSource);
@@ -1421,7 +1473,7 @@ export class CollectionQueryService extends BaseService {
           scopeKind: "collection" as const,
           scopeSlug: collectionName,
           dialect: this.adapter.dialect,
-          fields: companion.localizedFields.map(field => field.name),
+          ...provenanceFieldsOf(companion.localizedFields),
         }
       : undefined;
     await populateTranslationStatus({
@@ -1904,7 +1956,7 @@ export class CollectionQueryService extends BaseService {
             provenance: {
               scopeKind: "collection" as const,
               scopeSlug: args.collectionName,
-              fields: companion.localizedFields.map(field => field.name),
+              ...provenanceFieldsOf(companion.localizedFields),
             },
           }
         : {}),
@@ -2561,6 +2613,8 @@ export class CollectionQueryService extends BaseService {
      */
     user?: UserContext;
     authenticatedScope?: AuthenticatedScope;
+    /** The key behind `authenticatedScope`, for `_waitingForMe` alone. */
+    apiKeyId?: string;
     schema: DynamicSchema;
     companion: CompanionSchema | null;
     localeChain: string[] | null;
@@ -2726,10 +2780,12 @@ export class CollectionQueryService extends BaseService {
           collectionName: params.collectionName,
           filter: workflowFilter,
           idColumn: schema.id,
+          statusColumn: schema.status,
           now: params.releaseNow,
           overrideAccess: params.overrideAccess,
           accessUser: params.accessUser,
           authenticatedScope: params.authenticatedScope,
+          apiKeyId: params.apiKeyId,
         }))
       );
     }
@@ -2791,10 +2847,13 @@ export class CollectionQueryService extends BaseService {
     collectionName: string;
     filter: WorkflowFilter;
     idColumn: SQLWrapper | undefined;
+    /** The lifecycle column, which a part's stage reads its liveness from. */
+    statusColumn?: SQLWrapper;
     now: Date;
     overrideAccess?: boolean;
     accessUser?: UserContext;
     authenticatedScope?: AuthenticatedScope;
+    apiKeyId?: string;
   }): Promise<SQL[]> {
     const { filter, idColumn } = params;
     if (filter.inRelease !== null) {
@@ -2817,11 +2876,7 @@ export class CollectionQueryService extends BaseService {
     // read, so it must not keep a row either. A trusted read judged nobody, and
     // a site with no languages has only unlocalized rows, so both consider
     // every language.
-    const ruleLocales = currentRuleLanguage().locales;
-    const locales =
-      params.overrideAccess === true || ruleLocales.length === 0
-        ? null
-        : ruleLocales;
+    const locales = this.judgedLocales(params.overrideAccess);
     const conditions: SQL[] = [];
     if (filter.pendingChange) {
       conditions.push(
@@ -2843,6 +2898,49 @@ export class CollectionQueryService extends BaseService {
         })
       );
     }
+    if (filter.assignedToMe === true) {
+      conditions.push(
+        assignedToCondition({
+          dialect,
+          collectionName: params.collectionName,
+          entryId: idColumn,
+          locales,
+          holders: await this.readerHolders(params),
+        })
+      );
+    }
+    if (filter.waitingForMe === true) {
+      const waiting = await this.waitingFor(filter, {
+        collectionName: params.collectionName,
+        overrideAccess: params.overrideAccess,
+        accessUser: params.accessUser,
+        authenticatedScope: params.authenticatedScope,
+        apiKeyId: params.apiKeyId,
+      });
+      conditions.push(idsCondition(idColumn, waiting.ids));
+    }
+    if (filter.stage !== undefined) {
+      conditions.push(
+        await this.stageFilterCondition({
+          collectionName: params.collectionName,
+          stage: filter.stage,
+          idColumn,
+          statusColumn: params.statusColumn,
+          now: params.now,
+          locales,
+        })
+      );
+    }
+    if (filter.changedSinceApproved === true) {
+      conditions.push(
+        changedSinceApprovedCondition({
+          dialect,
+          collectionName: params.collectionName,
+          entryId: idColumn,
+          locales,
+        })
+      );
+    }
     if (filter.inRelease !== null) {
       conditions.push(
         inReleaseCondition({
@@ -2856,6 +2954,191 @@ export class CollectionQueryService extends BaseService {
       );
     }
     return conditions;
+  }
+
+  /**
+   * The languages this read's access rules were judged for: the language it
+   * reads and its fallback chain, or every language where it reads them all.
+   * A part in any other language is withheld from this read. A trusted read
+   * judged nobody, and a site with no languages has only unlocalized rows, so
+   * both consider every language (`null`).
+   */
+  private judgedLocales(
+    overrideAccess: boolean | undefined
+  ): readonly string[] | null {
+    const ruleLocales = currentRuleLanguage().locales;
+    return overrideAccess === true || ruleLocales.length === 0
+      ? null
+      : ruleLocales;
+  }
+
+  /**
+   * Each row's review state under `_review`, for a read that asks for it
+   * (`reviewState`), as the document's own review read places each part:
+   * read for the page at once (`rowReviewStatesOf`), among the parts the read
+   * may see. Only for a trusted read or a reader the read names: a visitor's
+   * rows carry no review key at all, nor do the rows of a collection no
+   * workflow holds.
+   */
+  private async attachReviewStates(
+    rows: Record<string, unknown>[],
+    params: {
+      collectionName: string;
+      overrideAccess?: boolean;
+      accessUser?: UserContext;
+    }
+  ): Promise<void> {
+    if (params.overrideAccess !== true && !params.accessUser) return;
+    // Loaded when asked: the workflows domain reaches the services this module is read by.
+    const { rowReviewStatesOf } = await import(
+      "../../workflows/row-review-states"
+    );
+    const ids = rows
+      .map(row => row.id)
+      .filter((id): id is string | number => id !== undefined && id !== null)
+      .map(String);
+    const reviews = await rowReviewStatesOf(
+      this.adapter,
+      params.collectionName,
+      ids,
+      this.judgedLocales(params.overrideAccess)
+    );
+    for (const row of rows) {
+      const parts = reviews.get(String(row.id));
+      if (parts) row._review = { parts };
+    }
+  }
+
+  /**
+   * The documents of a collection with a part waiting for this read's caller,
+   * by the waiting list's own read (`waitingEntryIds`), read once per filter:
+   * a list's rows and the count beside them carry the same filter object, so
+   * both keep the same documents. A trusted read stands for no one, and a
+   * key's scope that names no key builds no caller: both keep nothing.
+   */
+  private waitingFor(
+    filter: WorkflowFilter,
+    params: {
+      collectionName: string;
+      overrideAccess?: boolean;
+      accessUser?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+      apiKeyId?: string;
+    }
+  ): Promise<{ ids: string[]; capped: boolean }> {
+    const known = this.waitingReads.get(filter);
+    if (known) return known;
+    const read = (async () => {
+      const user = params.accessUser;
+      const userId = user?.id;
+      if (
+        params.overrideAccess === true ||
+        !user ||
+        typeof userId !== "string" ||
+        userId === ""
+      ) {
+        return { ids: [], capped: false };
+      }
+      const scope = keyScopeOf(params.authenticatedScope);
+      const keyId = params.apiKeyId;
+      if (scope !== undefined && !keyId) {
+        return { ids: [], capped: false };
+      }
+      // Loaded when asked: the workflows API reaches the services this module is read by.
+      const { waitingEntryIds } = await import("../../../api/workflows");
+      return waitingEntryIds(
+        scope === undefined || !keyId
+          ? // A person, a session's request included: judged as the person, as the waiting
+            // list's own route judges them.
+            { user, scope: undefined, caller: { kind: "user", userId } }
+          : { user, scope, caller: { kind: "key", keyId, userId, scope } },
+        params.collectionName,
+        WAITING_FILTER_CAP
+      );
+    })();
+    this.waitingReads.set(filter, read);
+    return read;
+  }
+
+  /**
+   * Whether the waiting read behind `filter`, if it carries `_waitingForMe`,
+   * stopped before reading everything, so a list's total is a floor.
+   */
+  private async waitingCapped(filter: WorkflowFilter | null): Promise<boolean> {
+    if (filter?.waitingForMe !== true) return false;
+    return (await this.waitingReads.get(filter))?.capped === true;
+  }
+
+  /**
+   * `_stage`'s condition: each part's stage as a step reads it, its liveness
+   * decided by the versions domain's one condition over the inputs read here
+   * once for the whole list (the due releases of the scope and its translation
+   * rows). A collection gone from the registry keeps nothing.
+   */
+  private async stageFilterCondition(params: {
+    collectionName: string;
+    stage: string;
+    idColumn: SQLWrapper;
+    statusColumn: SQLWrapper | undefined;
+    now: Date;
+    locales: readonly string[] | null;
+  }): Promise<SQL> {
+    const { entityOf } = await import("../../workflows/implicit-stage");
+    const { partLivenessInputs } = await import("../../versions/part-liveness");
+    const { stageCondition } = await import("../../workflows/stage-condition");
+    const entity = await entityOf({
+      scopeKind: "collection",
+      scopeSlug: params.collectionName,
+    });
+    if (entity === null) return sql`1 = 0`;
+    const localization = this.localization;
+    return stageCondition({
+      dialect: this.groupDialect(),
+      collectionName: params.collectionName,
+      entryId: params.idColumn,
+      status: params.statusColumn,
+      stage: params.stage,
+      locales: params.locales,
+      localized: entity.localized === true,
+      configuredLocales: (localization?.locales ?? []).map(l => l.code),
+      defaultLocale: localization?.defaultLocale ?? null,
+      liveness: await partLivenessInputs({
+        adapter: this.adapter,
+        scopeKind: "collection",
+        entity,
+        withLanguages: entity.localized === true,
+        now: params.now,
+      }),
+    });
+  }
+
+  /**
+   * The people and roles the reader stands for when work is assigned (`holdersOf`): a person as
+   * themselves and their roles, a key as its roles alone. A trusted read stands for no one, so
+   * "assigned to me" keeps nothing on it.
+   */
+  private async readerHolders(params: {
+    overrideAccess?: boolean;
+    accessUser?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<ReviewAssignee[]> {
+    const userId = params.accessUser?.id;
+    if (
+      params.overrideAccess === true ||
+      typeof userId !== "string" ||
+      userId === ""
+    ) {
+      return [];
+    }
+    // Loaded when asked: the workflow holders read the role services, which reach this module.
+    const { holdersOf } = await import("../../workflows/holders");
+    const keyScope = keyScopeOf(params.authenticatedScope);
+    return holdersOf(
+      this.adapter,
+      keyScope === undefined
+        ? { kind: "user", userId }
+        : { kind: "key", userId, scope: keyScope }
+    );
   }
 
   /**
@@ -2910,9 +3193,15 @@ export class CollectionQueryService extends BaseService {
   }): Promise<void> {
     if (!isPlainObject(params.where)) return;
     const where = params.where;
-    const used = [PENDING_CHANGE_KEY, IN_RELEASE_KEY, STRANDED_STAGE_KEY].find(
-      key => Object.prototype.hasOwnProperty.call(where, key)
-    );
+    const used = [
+      PENDING_CHANGE_KEY,
+      IN_RELEASE_KEY,
+      STRANDED_STAGE_KEY,
+      ASSIGNED_TO_ME_KEY,
+      CHANGED_SINCE_APPROVED_KEY,
+      STAGE_KEY,
+      WAITING_FOR_ME_KEY,
+    ].find(key => Object.prototype.hasOwnProperty.call(where, key));
     if (used === undefined) return;
     const denied = await this.denyCollectionRead({
       collectionName: params.collectionName,
@@ -3854,6 +4143,17 @@ export class CollectionQueryService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
     /**
+     * The API key behind `authenticatedScope`, by id: what the waiting list
+     * names a key's caller by. Passed through only to build that caller for
+     * `_waitingForMe`; a scope with no key id keeps nothing there.
+     */
+    apiKeyId?: string;
+    /**
+     * Give each row its review state under `_review`, each part where it
+     * stands, for a collection a workflow holds; a visitor's rows get none.
+     */
+    reviewState?: boolean;
+    /**
      * Draft/Published filter override. Only takes effect when the collection
      * has Draft/Published enabled (collection.status === true).
      * - 'published' (default for public callers): only published rows
@@ -4112,6 +4412,7 @@ export class CollectionQueryService extends BaseService {
         accessUser,
         user: params.fieldAccessUser ?? params.user,
         authenticatedScope: params.authenticatedScope,
+        apiKeyId: params.apiKeyId,
         schema,
         companion,
         localeChain,
@@ -4159,6 +4460,9 @@ export class CollectionQueryService extends BaseService {
                 nonText: companion.localizedFields.some(
                   field => field.column === named.column && field.nonText
                 ),
+                // An untranslated collection's empty string is its value,
+                // as it was on the collection's own row.
+                blankIsValue: collection.localized !== true,
               }),
               // A missing translation reads as NULL.
               nullable: true,
@@ -4607,6 +4911,14 @@ export class CollectionQueryService extends BaseService {
         ...readCallerOf(params),
       });
 
+      if (params.reviewState === true) {
+        await this.attachReviewStates(finalData, {
+          collectionName: params.collectionName,
+          overrideAccess: params.overrideAccess,
+          accessUser,
+        });
+      }
+
       // Build paginated response with all metadata
       const paginatedResponse = buildPaginatedResponse(finalData, {
         total: totalDocs,
@@ -4619,6 +4931,11 @@ export class CollectionQueryService extends BaseService {
       // "more than this many", and its pages beyond the cap stay reachable.
       if (totalCapped && cappedAt !== undefined) {
         paginatedResponse.totalDocs = cappedAt;
+        paginatedResponse.totalCapped = true;
+      }
+      // A `_waitingForMe` read that stopped before reading everything keeps
+      // the documents it read: more may wait, so the total is a floor.
+      if (await this.waitingCapped(workflowFilter)) {
         paginatedResponse.totalCapped = true;
       }
 
@@ -4995,6 +5312,7 @@ export class CollectionQueryService extends BaseService {
       accessUser,
       user: params.fieldAccessUser ?? params.user,
       authenticatedScope: params.authenticatedScope,
+      apiKeyId: params.apiKeyId,
       schema,
       companion,
       localeChain,

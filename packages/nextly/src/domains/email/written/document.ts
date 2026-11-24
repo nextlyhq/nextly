@@ -46,6 +46,15 @@ const variablePath = z
     "That name is Nextly's own. Use another."
   );
 
+/**
+ * Whether a written email can store `path` for a chip, a link, a condition or
+ * a list: the same check its document's schema makes, read from that schema,
+ * so an editor offers only what a save accepts.
+ */
+export function storableVariablePath(path: string): boolean {
+  return variablePath.safeParse(path).success;
+}
+
 /** Where a link or an image may point: the web, and for a link a mail client. */
 const linkUrl = z
   .string()

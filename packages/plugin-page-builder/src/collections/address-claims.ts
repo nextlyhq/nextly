@@ -31,9 +31,10 @@ export function addressClaimsCollection(): CollectionConfig {
     // of the admin's navigation, and the access rules below keep it off the
     // wire.
     internal: true,
-    // Every text value here is the plugin's own bookkeeping (keys, ids, languages,
-    // paths, states, actors), never translated: each says `localized: false`, so its
-    // column stays on the main table, where a lookup by it finds it in every language.
+    // Every field is kept once for all languages (`localized: false`): a
+    // claim is one fact about one address, and the store's reads and locks
+    // judge these columns on the claim's own row. Kept per language, MySQL
+    // read them from a snapshot under a locked read and missed a waiter.
     fields: [
       text({
         name: "claimKey",

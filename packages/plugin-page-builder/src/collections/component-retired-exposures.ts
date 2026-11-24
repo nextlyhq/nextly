@@ -78,9 +78,8 @@ export function componentRetiredCollection(): CollectionConfig {
     // authored. `internal` keeps it out of the admin's navigation; the access
     // rules below keep it out of everything else.
     internal: true,
-    // Every text value here is the plugin's own bookkeeping (keys, ids, languages,
-    // paths, states, actors), never translated: each says `localized: false`, so its
-    // column stays on the main table, where a lookup by it finds it in every language.
+    // Kept once for every language (`localized: false`): each field is an
+    // id or key the plugin writes, never text an editor translates.
     fields: [
       // Not `key`, which is a reserved word in SQL and refused as a field name.
       text({

@@ -375,6 +375,7 @@ describeEachDialect(
         preCleanupExecutor: new RealPreCleanupExecutor(),
         migrationJournal: noopMigrationJournal,
         notifier: noopNotifier,
+        adapter: undefined,
       }).apply({
         desired,
         db,

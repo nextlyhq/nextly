@@ -63,7 +63,9 @@ export function componentsCollection(
     labels: { singular: "Component", plural: "Components" },
     fields: [
       text({ name: "title", required: true }),
-      text({ name: "slug", required: true, unique: true }),
+      // Kept once for every language: an identifier code and other documents
+      // name, not a translated address as a page's slug is.
+      text({ name: "slug", localized: false, required: true, unique: true }),
       textarea({ name: "description" }),
       text({ name: "category" }),
       // Which area of a header & footer set this component suits, if any,

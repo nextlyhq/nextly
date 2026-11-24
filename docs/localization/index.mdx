@@ -47,9 +47,12 @@ A locale is either a bare code or an object. The object form carries:
 
 ### Or keep the list out of your code
 
-Leave the `localization` block out, and the site's languages are stored in its database instead,
-managed through the languages API. The admin has no screen for them yet. A site starts with one
-language, English, and nothing is stored until a change is made.
+Leave the `localization` block out, and the site's languages are stored in its database instead.
+An admin manages them under **Settings → Languages** (`/admin/settings/languages`): adds, renames,
+reorders and removes languages, and makes one the default after reading what that changes. The
+languages API below does the same. A site starts with one language, English, and nothing is
+stored until a change is made. Where the `localization` block sets the languages, the same screen
+shows them read-only and says where they are set.
 
 | Request                                | What it does                                                                              |
 | -------------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -72,6 +75,8 @@ A `localization` block in `nextly.config.ts` always wins: the list is then read-
 API. A language added on one server is served by every other server within a second.
 
 ## Choose what gets translated
+
+Every site keeps its translatable fields per language, a site with one language included. An existing site moves its values when it upgrades: see [Upgrading an existing site](/docs/guides/upgrading).
 
 Mark a whole collection localized, then opt individual fields out:
 

@@ -127,8 +127,10 @@ function addButton(): HTMLElement {
 }
 
 function openPicker(): void {
-  if (addButton().getAttribute("aria-expanded") !== "true") {
-    fireEvent.click(addButton());
+  // Found once: a role query names every button on the tab.
+  const button = addButton();
+  if (button.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(button);
   }
 }
 
@@ -332,9 +334,16 @@ describe("+ Add CSS property", () => {
 
   it("says when nothing that applies is left", () => {
     mount();
-    // Each offered property added in turn, until none is.
+    // Each offered property added in turn, until none is. The button is found
+    // by its name again only once the one found before has left the page: a
+    // role query names every button on the tab, and asking it each round was
+    // most of this test's time.
+    let button = addButton();
     for (let round = 0; round < 60; round += 1) {
-      openPicker();
+      if (!button.isConnected) button = addButton();
+      if (button.getAttribute("aria-expanded") !== "true") {
+        fireEvent.click(button);
+      }
       const [next] = screen.queryAllByRole("option");
       if (next === undefined) break;
       fireEvent.click(next);

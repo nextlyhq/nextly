@@ -74,16 +74,17 @@ export function submissionSendsCollection(): CollectionConfig {
       update: nobody,
       delete: nobody,
     },
-    // Every text value here is the plugin's own bookkeeping (keys, ids, languages,
-    // paths, states, actors), never translated: each says `localized: false`, so its
-    // column stays on the main table, where a lookup by it finds it in every language.
     fields: [
-      // The ids the indexes below are on are keys, never translated, so their
-      // columns stay on the main table the indexes are built on.
-      // The submission's id, as stored: the one deletions look up by.
+      // The submission's id, as stored: the one deletions look up by. These
+      // ids, and the form and notification ids below, are indexed, and an
+      // index is built on the main table, so they are kept once for every
+      // language rather than per language.
       text({ name: "submission", required: true, localized: false }),
       text({ name: "queuedId", required: true, localized: false }),
-      text({ name: "sendKey", localized: false, required: true }),
+      // Everything else a send records describes the send itself, not
+      // content written in a language, so it is kept once for every language
+      // too, on the main table beside the ids.
+      text({ name: "sendKey", required: true, localized: false }),
       // Which form and notification sent it, by id, and the notification's
       // name as it was then, so a renamed or deleted one still reads.
       // Empty on a send recorded before these were kept.
@@ -140,8 +141,10 @@ export function submissionResendsCollection(): CollectionConfig {
       delete: nobody,
     },
     fields: [
-      // A key the index below is on, never translated: kept on the main table.
+      // Indexed, so kept once for every language on the main table.
       text({ name: "submission", required: true, localized: false }),
+      // Which notification, and who asked: a record of the request, kept
+      // once for every language.
       text({ name: "notification", required: true, localized: false }),
       text({ name: "requestedBy", localized: false }),
       // The digests of the recipients ticked to send again, those left out

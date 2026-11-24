@@ -100,9 +100,26 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
     expect(written.success, JSON.stringify(written)).toBe(true);
   }
 
-  /** The Builder's schema save, as the dispatcher makes it. */
-  function save(fields: Record<string, unknown>[]): Promise<unknown> {
-    return dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields });
+  /**
+   * The Builder's schema save, as the dispatcher makes it, with the renames it answers: the
+   * settings save renames a field only when the request says so.
+   */
+  function save(
+    fields: Record<string, unknown>[],
+    renames: { from: string; to: string }[] = []
+  ): Promise<unknown> {
+    return dispatchSingles(
+      "updateSingleSchema",
+      { slug: "hero" },
+      {
+        fields,
+        ...(renames.length === 0
+          ? {}
+          : {
+              renames: renames.map(pair => ({ ...pair, choice: "rename" })),
+            }),
+      }
+    );
   }
 
   /**
@@ -289,13 +306,14 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
         { name: "headline", type: "text" },
         { name: "views", type: "number", unique: true },
       ];
+      const renamed = [{ from: "heading", to: "headline" }];
 
-      const refused = await refusal(save(fields));
+      const refused = await refusal(save(fields, renamed));
       expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
       expect(await columnsOf("single_hero")).not.toContain("headline");
 
       await query(`DROP INDEX ${q(blocking)} ON ${q("single_hero")}`);
-      await save(fields);
+      await save(fields, renamed);
 
       expect((await registeredFields()).map(f => f.name)).toEqual([
         "headline",
@@ -331,13 +349,14 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
         { name: "sku", type: "number" },
         { name: "views", type: "number", index: true },
       ];
+      const renamed = [{ from: "code", to: "sku" }];
 
-      const refused = await refusal(save(fields));
+      const refused = await refusal(save(fields, renamed));
       expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
       expect(await columnsOf("single_hero")).not.toContain("sku");
 
       await query(`DROP INDEX ${q(blocking)} ON ${q("single_hero")}`);
-      await save(fields);
+      await save(fields, renamed);
 
       expect(
         (await registeredFields()).map(f => [f.name, f.unique === true])

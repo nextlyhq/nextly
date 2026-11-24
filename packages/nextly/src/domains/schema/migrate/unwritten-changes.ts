@@ -31,6 +31,12 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { CliError } from "../../../cli/errors";
 import {
+  movedColumnNote,
+  perLanguageDriftNext,
+  perLanguageMoveWhy,
+  type PerLanguageMove,
+} from "../../i18n/per-language-move-guidance";
+import {
   appMigrationInputs,
   type AppMigrationInputsArgs,
 } from "../migrate-create/app-migration-inputs";
@@ -55,6 +61,7 @@ import {
   buildDesiredSnapshotFromConfig,
   type MinimalConfigEntity,
 } from "../migrate-create/generate";
+import { perLanguageMovesIn } from "../migrate-create/per-language-moves";
 import {
   EMPTY_SNAPSHOT,
   type SnapshotFile,
@@ -104,6 +111,11 @@ export interface UnwrittenChanges {
   permissions: readonly Extract<PermissionChange, { kind: "owner" }>[];
   /** Whether the folder holds no snapshot at all. */
   noSnapshot: boolean;
+  /**
+   * The text-like fields whose column drops in `tables` are moves to their per-language table,
+   * not values removed (`perLanguageMovesIn`). Absent or empty, no drop is such a move.
+   */
+  perLanguageMoves?: readonly PerLanguageMove[];
 }
 
 /** Whether `changes` names nothing. */
@@ -142,11 +154,13 @@ export function compareWithNewestSnapshot(args: {
     ),
     tables: args.appStream,
   });
+  const tables = diffSnapshots(stream.previous, stream.desired);
   return {
-    tables: diffSnapshots(stream.previous, stream.desired),
+    tables,
     settings: settingsDifferences(entities, latest, args.recorded),
     permissions: permissionDifferences(args.permissions, latest, args.recorded),
     noSnapshot: latest === null,
+    perLanguageMoves: perLanguageMovesIn(tables, entities, args.dialect),
   };
 }
 
@@ -257,20 +271,30 @@ export function livePermissionsByOwner(
   return { app, plugins };
 }
 
-/** A table change as a line: `+` added, `-` removed, `~` changed. */
-function tableLine(op: Operation): string {
+/**
+ * A table change as a line: `+` added, `-` removed, `~` changed. A column drop that is a field
+ * moving to its per-language table says where it moves, so it does not read as data loss.
+ */
+function tableLine(
+  op: Operation,
+  moves: readonly PerLanguageMove[] = []
+): string {
   const sign = op.type.startsWith("add_")
     ? "+"
     : op.type.startsWith("drop_")
       ? "-"
       : "~";
-  return `${sign} ${describeOp(op)}`;
+  const note =
+    op.type === "drop_column"
+      ? movedColumnNote(moves, op.tableName, op.columnName)
+      : "";
+  return `${sign} ${describeOp(op)}${note}`;
 }
 
 /** Every difference as a line, tables first, then settings, then permissions. */
 export function unwrittenChangeLines(changes: UnwrittenChanges): string[] {
   return [
-    ...changes.tables.map(tableLine),
+    ...changes.tables.map(op => tableLine(op, changes.perLanguageMoves)),
     ...changes.settings.map(
       change => `~ settings ${describeSettingsChange(change)}`
     ),
@@ -310,6 +334,17 @@ export function unwrittenChangesError(
   ].join("\n");
   const settingsOnly =
     changes.tables.length === 0 && changes.permissions.length === 0;
+  const moves = changes.perLanguageMoves ?? [];
+  if (moves.length > 0) {
+    return new CliError("SCHEMA_DRIFT", {
+      what: `${count} change${count === 1 ? "" : "s"} in the configuration with no migration.`,
+      why: [why, perLanguageMoveWhy(moves)].join("\n"),
+      // The two safe ways forward replace a bare "create a migration", which would read as
+      // consent to drop the columns; any other change listed still needs one.
+      next: perLanguageDriftNext(moves, count, CREATE_MIGRATION),
+      context: { lines },
+    });
+  }
   return settingsOnly
     ? new CliError("SETTINGS_CHANGE_WITHOUT_MIGRATION", {
         what: `${count} entit${count === 1 ? "y's" : "ies'"} settings changed with no migration.`,

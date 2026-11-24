@@ -17,7 +17,7 @@ import {
   parseLocalizationIntent,
 } from "./migration-intent";
 import {
-  writeCompanionMigrationFile,
+  prepareCompanionMigrationFile,
   writeLocalizationMigrationFile,
 } from "./write-migration-file";
 import type { CompanionMigrationSpec } from "./types";
@@ -38,8 +38,17 @@ afterEach(() => {
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
+/** The companion file prepared and put at its own name, as its writer does. */
+async function placedCompanion(
+  ...args: Parameters<typeof prepareCompanionMigrationFile>
+): Promise<string> {
+  const file = await prepareCompanionMigrationFile(...args);
+  await file.place();
+  return file.path;
+}
+
 describe("writeLocalizationMigrationFile", () => {
-  it("writes a timestamped .sql with UP/DOWN and NO snapshot", () => {
+  it("writes a timestamped .sql with UP/DOWN and NO snapshot", async () => {
     dir = mkdtempSync(join(tmpdir(), "i18n-mig-"));
     const path = writeLocalizationMigrationFile(dir, spec, {
       direction: "enable",
@@ -58,7 +67,7 @@ describe("writeLocalizationMigrationFile", () => {
     expect(downSql).toContain(`DROP TABLE "dc_pages_locales"`);
   });
 
-  it("for direction=disable, UP is the disable direction and DOWN re-enables", () => {
+  it("for direction=disable, UP is the disable direction and DOWN re-enables", async () => {
     dir = mkdtempSync(join(tmpdir(), "i18n-mig-"));
     const path = writeLocalizationMigrationFile(dir, spec, {
       direction: "disable",
@@ -86,9 +95,9 @@ describe("declared intent in the written header", () => {
 
   // The two sides are only useful together: a header the writer emits and the parser cannot read
   // would leave the apply path silently falling back to verbatim SQL.
-  it("writes an intent the parser can read back", () => {
+  it("writes an intent the parser can read back", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nextly-intent-"));
-    const path = writeCompanionMigrationFile(dir, intentSpec, {
+    const path = await placedCompanion(dir, intentSpec, {
       kind: "enable",
       entity: "collection",
       upSql: "SELECT 1;",
@@ -107,9 +116,9 @@ describe("declared intent in the written header", () => {
 
   // The kind is half the transition record's key, so a single and a collection sharing a slug
   // must not produce files that name the same record.
-  it("records the entity kind it was given", () => {
+  it("records the entity kind it was given", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nextly-intent-"));
-    const path = writeCompanionMigrationFile(dir, intentSpec, {
+    const path = await placedCompanion(dir, intentSpec, {
       kind: "create-only",
       entity: "fieldGroup",
       upSql: "SELECT 1;",
@@ -124,9 +133,9 @@ describe("declared intent in the written header", () => {
   });
 
   // Header lines live before `-- UP`, which is what keeps the JSON out of the statement splitter.
-  it("keeps the intent out of the UP section", () => {
+  it("keeps the intent out of the UP section", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nextly-intent-"));
-    const path = writeCompanionMigrationFile(dir, intentSpec, {
+    const path = await placedCompanion(dir, intentSpec, {
       kind: "enable",
       entity: "collection",
       upSql: "SELECT 1;",
@@ -160,9 +169,11 @@ describe("the companion header names the entity by its kind", () => {
     collection: "shared_slug",
   };
 
-  function headerFor(entity: "collection" | "single" | "fieldGroup"): string {
+  async function headerFor(
+    entity: "collection" | "single" | "fieldGroup"
+  ): Promise<string> {
     const dir = mkdtempSync(join(tmpdir(), "nextly-companion-kind-"));
-    const path = writeCompanionMigrationFile(dir, sharedSlugSpec, {
+    const path = await placedCompanion(dir, sharedSlugSpec, {
       kind: "create-only",
       entity,
       upSql: "SELECT 1;",
@@ -172,22 +183,22 @@ describe("the companion header names the entity by its kind", () => {
     return readFileSync(path, "utf-8");
   }
 
-  it("files a single under Singles, not Collections", () => {
-    const content = headerFor("single");
+  it("files a single under Singles, not Collections", async () => {
+    const content = await headerFor("single");
     expect(content).toContain("-- Singles: shared_slug");
     expect(content).not.toContain("-- Collections:");
   });
 
-  it("files a field group under Field groups, not Collections", () => {
-    const content = headerFor("fieldGroup");
+  it("files a field group under Field groups, not Collections", async () => {
+    const content = await headerFor("fieldGroup");
     expect(content).toContain("-- Field groups: shared_slug");
     expect(content).not.toContain("-- Collections:");
   });
 
-  it("still files a collection under Collections", () => {
+  it("still files a collection under Collections", async () => {
     // The control: without it, a writer that emitted no entity header at all
     // would satisfy both exclusions above.
-    const content = headerFor("collection");
+    const content = await headerFor("collection");
     expect(content).toContain("-- Collections: shared_slug");
   });
 });

@@ -101,3 +101,21 @@ export function collectModules(
   }
   return out;
 }
+
+/**
+ * A module's path beneath `from`, written with "/" whatever the platform.
+ *
+ * The guards compare these paths with lists written as `canvas/canvas.tsx`. On
+ * Windows `relative` answers with "\\", so no listed path would ever match: an
+ * allowance would exempt nothing and a membership check would find nothing.
+ * `relative` and the separator are injected for the reason `collectModules`
+ * takes its reads: this module imports nothing.
+ */
+export function modulePath(
+  from: string,
+  file: string,
+  relative: (from: string, to: string) => string,
+  separator: string
+): string {
+  return relative(from, file).split(separator).join("/");
+}

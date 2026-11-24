@@ -71,9 +71,8 @@ export function usageBackfillStateCollection(): CollectionConfig {
     labels: { singular: "Usage backfill", plural: "Usage backfill" },
     // Bookkeeping the plugin maintains, never authored.
     internal: true,
-    // Every text value here is the plugin's own bookkeeping (keys, ids, languages,
-    // paths, states, actors), never translated: each says `localized: false`, so its
-    // column stays on the main table, where a lookup by it finds it in every language.
+    // Kept once for every language (`localized: false`): a scope key and a
+    // generation, never translated text.
     fields: [
       // Indexed because every pass filters on it: a pass reads the recorded
       // keys to decide what is outstanding, and that read happens on every

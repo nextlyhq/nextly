@@ -24,7 +24,7 @@ import { isUniqueViolation } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
-import { readsOnTransaction } from "../../../shared/lib/read-transaction-scope";
+import { asksOnTransaction } from "../../../shared/lib/read-transaction-scope";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import {
   readIndexUniqueness,
@@ -1236,7 +1236,11 @@ export async function companionTableExists(
   // Inside a read routed to a transaction, asked of the catalog: on
   // PostgreSQL a statement naming a missing table aborts the transaction it
   // runs in, and the read's caller holds that transaction open for its write.
-  if (readsOnTransaction(adapter) && hasTableExists(adapter)) {
+  // The same while the calling flow holds a transaction open on the adapter:
+  // a read inside a plugin's transaction (a Single's runtime table resolved
+  // there) reaches this through the adapter itself, and its statement lands
+  // on that transaction's connection.
+  if (asksOnTransaction(adapter) && hasTableExists(adapter)) {
     return adapter.tableExists(companionTableName);
   }
   const q =
@@ -2224,8 +2228,7 @@ async function createOrCompleteCompanionTable(
       );
       return false;
     }
-    // Ordered ahead of every statement below. See `recordTransition`.
-    claimToken = await args.recordTransition?.();
+    // Planned before anything is recorded: planning only reads the database.
     const statements =
       (await buildSeedingCreateStatements(adapter, args, newLocalized)) ??
       buildCompanionReconcileStatements({
@@ -2238,6 +2241,13 @@ async function createOrCompleteCompanionTable(
         status: args.status === true,
         companionExists: false,
       });
+    // An entity with nothing to keep per language (no translatable field, no per-language
+    // status) has no translations table to make, so there is no transition to record. A
+    // finished one recorded for it would never match a table, and the next run, finding the
+    // table still absent, would try to begin it again and be refused.
+    if (statements.length === 0) return false;
+    // Ordered ahead of every statement below. See `recordTransition`.
+    claimToken = await args.recordTransition?.();
     await runStatementsInOrder(adapter, statements, () => {
       created = true;
     });

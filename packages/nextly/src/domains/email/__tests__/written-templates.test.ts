@@ -189,9 +189,18 @@ describe("the same written email, wherever it is rendered", () => {
     );
 
     expect(previewed).toEqual({ subject: sent.subject, html: sent.html });
-    // A draft's preview also reads back its inbox line and its From line;
-    // this draft has neither.
-    expect(drafted).toEqual({ ...sent, preheader: "", from: null });
+    // A draft's preview also reads back its inbox line and its From line,
+    // which this draft has neither of, and the code its blocks compile to,
+    // which is the code the saved template stores.
+    expect(drafted).toEqual({
+      ...sent,
+      preheader: "",
+      from: null,
+      source: {
+        html: created.htmlContent,
+        text: created.plainTextContent ?? "",
+      },
+    });
     // The control: it is the written body, in the layout.
     expect(sent.html).toContain(">Thanks, Priya.</p>");
     expect(sent.html).toContain("<!DOCTYPE html>");
@@ -452,6 +461,7 @@ describe("a written draft's preview", () => {
       ...(await service.renderStored(saved, {})),
       preheader: "",
       from: null,
+      source: { html: saved.htmlContent, text: saved.plainTextContent ?? "" },
     });
   });
 });

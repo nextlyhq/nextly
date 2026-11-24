@@ -7,6 +7,11 @@ import {
 import { changePassword } from "../flows/change-password";
 import { deleteOwnAccount } from "../flows/delete-account";
 import { DAY, type FlowDeps } from "../flows/deps";
+import {
+  acceptInvitation,
+  invite,
+  withdrawInvitation,
+} from "../flows/invitations";
 import { removeUnverifiedAccount } from "../flows/not-me";
 import { resendVerification } from "../flows/resend";
 import { completePasswordReset } from "../flows/reset";
@@ -30,6 +35,7 @@ import {
   withKnownToken,
 } from "../http/cookies";
 import { assertSameOrigin, safeReturnPath } from "../http/guard";
+import { appAccountAction } from "../http/staff";
 
 import type {
   AccountCookie,
@@ -61,6 +67,7 @@ export const ACCOUNT_MESSAGES = {
   confirmAddressChange: "Your email address is changed.",
   cancelAddressChange: "The change of address is cancelled.",
   deleteAccount: "Your account is deleted.",
+  acceptInvitation: "Your account is ready.",
 } as const;
 
 /**
@@ -230,6 +237,69 @@ export function accountsService(deps: () => FlowDeps): AccountsServer {
       if (visitor.sessionToken === null) return null;
 
       return sessionAccount(deps(), { sessionToken: visitor.sessionToken });
+    },
+
+    async invite({ address, name, data, sendEmail = true, visitor }) {
+      const issued = unlessRefused(
+        await invite(deps(), {
+          address,
+          name,
+          data,
+          sendEmail,
+          client: visitor?.client ?? null,
+        })
+      );
+
+      return {
+        token: issued.token,
+        link: issued.link,
+        expiresAt: issued.expiresAt,
+      };
+    },
+
+    async withdrawInvitation({ address }) {
+      return { withdrawn: await withdrawInvitation(deps(), { address }) };
+    },
+
+    async acceptInvitation({ visitor, token, password, address }) {
+      const flow = deps();
+      const accepted = unlessRefused(
+        await acceptInvitation(flow, {
+          token,
+          password,
+          ...(address === undefined ? {} : { address }),
+        })
+      );
+
+      return {
+        ...outcome("acceptInvitation", [
+          set("session", accepted.session.token, accepted.session.expiresAt),
+          knownBrowser(flow, visitor, accepted.knownBrowserToken),
+        ]),
+        account: accepted.account,
+        data: accepted.data,
+      };
+    },
+
+    async endAccountSessions({ accountId }) {
+      return {
+        message: await appAccountAction(deps(), "end-sessions", accountId),
+        cookies: [],
+      };
+    },
+
+    async deactivateAccount({ accountId }) {
+      return {
+        message: await appAccountAction(deps(), "deactivate", accountId),
+        cookies: [],
+      };
+    },
+
+    async reactivateAccount({ accountId }) {
+      return {
+        message: await appAccountAction(deps(), "reactivate", accountId),
+        cookies: [],
+      };
     },
 
     visitorFrom(from) {

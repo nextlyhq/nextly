@@ -138,6 +138,9 @@ export type ByteMeasurement =
   | { bytes: number; exceeded: false }
   | { bytes: number; exceeded: true; reason: "over-limit" | "unwritable" };
 
+/** {@link refusedByWriter}'s answer for each object it has been asked about. */
+const WRITER_REFUSES = new WeakMap<object, boolean>();
+
 /**
  * A value `JSON.stringify` REFUSES, rather than writes or drops.
  *
@@ -183,12 +186,25 @@ function refusedByWriter(value: unknown): boolean {
   // object, which is the price of asking a question the value cannot answer
   // dishonestly; the count is bounded by the byte cap that admits those objects
   // in the first place.
+  //
+  // The answer is kept per object, because it cannot change: an object gets
+  // its BigInt slot when it is created or never, and nothing sets or clears it
+  // afterwards. An editor's documents share every part an edit did not touch,
+  // so a cap check that falls back to this measurement would otherwise pay
+  // the exception again for each of those parts on every edit. A `WeakMap`
+  // looks an object up by identity alone, running no trap of a Proxy, and lets
+  // a part go when its document does.
+  const known = WRITER_REFUSES.get(value);
+  if (known !== undefined) return known;
+  let refused: boolean;
   try {
     BigInt.prototype.valueOf.call(value);
-    return true;
+    refused = true;
   } catch {
-    return false;
+    refused = false;
   }
+  WRITER_REFUSES.set(value, refused);
+  return refused;
 }
 
 /** Serialized size of a non-object value, bounded like everything else here. */
