@@ -164,8 +164,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         fields: [text({ name: "body" })],
       }),
-      // Translated, its translated group holding a password: both are kept on
-      // the translations row.
+      // Translated: its heading and its group's text kept on the translations
+      // row (the group's overlay), the group's password in its one structure.
       defineFieldGroup({
         slug: "vault",
         localized: true,
@@ -173,7 +173,6 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "heading" }),
           group({
             name: "box",
-            localized: true,
             fields: [text({ name: "b" }), password({ name: "pin" })],
           }),
         ],
