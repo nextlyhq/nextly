@@ -5,6 +5,7 @@
  * nothing; writes of other fields go on; a read is answered, never with a database error; and after
  * the settle the writes are accepted.
  */
+import { appendFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
@@ -841,6 +842,243 @@ describe.each(LEFT_SAVE_SUITES)(
             id: firstId,
             note: "n",
           });
+        }
+      },
+      600_000
+    );
+
+    it.runIf(dialect === "mysql")(
+      "refuses publishing a held draft that sets a field a committed change made required, naming it, with the live entry unchanged",
+      async () => {
+        const t = await boot({ drafts: true });
+        const created = (await t.nextly.create({
+          collection: slug,
+          data: {
+            title: "Live",
+            slug: "live",
+            heading: "h",
+            note: "live note",
+            status: "published",
+          },
+        } as never)) as { item?: { id?: unknown } };
+        const id = String(created.item?.id);
+        await t.nextly.update({
+          collection: slug,
+          id,
+          data: { note: "held note", _overwrite: true },
+        } as never);
+        await killRequired(t);
+        expect(await noteMayBeEmpty(t), `killed at ${killedAt}`).toBe("NO");
+        const before = await rows(t);
+
+        const published = { status: "published", _overwrite: true };
+        for (const refused of await fromAnotherProcess([
+          { kind: "update", via: "rest", id, data: published },
+          { kind: "update", via: "api", id, data: published },
+        ])) {
+          expectRefused(refused, "note");
+        }
+        expect(await rows(t), "nothing of either publish is written").toEqual(
+          before
+        );
+      },
+      600_000
+    );
+
+    it.runIf(dialect === "mysql")(
+      "refuses a Single's write that sets a field a committed change made required, over REST and the Direct API, changing nothing; lets one of another field through; reads it; and accepts the write once settled",
+      async () => {
+        const t = await boot();
+        await dispatchSingles(
+          "createSingle",
+          {},
+          { slug: hero, label: hero, fields: [field("heading"), field("note")] }
+        );
+        await t.nextly.updateSingle({
+          slug: hero,
+          data: { heading: "h", note: "n", _overwrite: true },
+        } as never);
+        const schemaVersion = await versionOf(t, "dynamic_singles", hero);
+        await killSave(t, afterStatement(restates), () =>
+          dispatchSingles(
+            "applySingleSchemaChanges",
+            { slug: hero },
+            {
+              fields: [field("heading"), { ...field("note"), required: true }],
+              confirmed: true,
+              schemaVersion,
+            }
+          )
+        );
+        const stored = () =>
+          t.adapter.executeQuery(`SELECT * FROM single_${hero}`);
+        const before = await stored();
+
+        const set = { note: "set", _overwrite: true };
+        for (const refused of await fromAnotherProcess([
+          { kind: "single-write", via: "rest", slug: hero, data: set },
+          { kind: "single-write", via: "api", slug: hero, data: set },
+        ])) {
+          expectRefused(refused, "note");
+        }
+        expect(await stored(), "nothing changed").toEqual(before);
+
+        const [restOther, apiOther, restRead, apiRead] =
+          await fromAnotherProcess([
+            {
+              kind: "single-write",
+              via: "rest",
+              slug: hero,
+              data: { heading: "over REST", _overwrite: true },
+            },
+            {
+              kind: "single-write",
+              via: "api",
+              slug: hero,
+              data: { heading: "through the API", _overwrite: true },
+            },
+            { kind: "single-read", via: "rest", slug: hero },
+            { kind: "single-read", via: "api", slug: hero },
+          ]);
+        for (const through of [restOther!, apiOther!]) {
+          expect.soft(through.ok, JSON.stringify(through)).toBe(true);
+        }
+        for (const read of [restRead!, apiRead!]) {
+          expect.soft(databaseError(read), JSON.stringify(read)).toBe(false);
+          expect
+            .soft(read.item?.heading, JSON.stringify(read))
+            .toBe("through the API");
+        }
+
+        await settle(t);
+        for (const accepted of await fromAnotherProcess([
+          {
+            kind: "single-write",
+            via: "rest",
+            slug: hero,
+            data: { note: "x", _overwrite: true },
+          },
+          {
+            kind: "single-write",
+            via: "api",
+            slug: hero,
+            data: { note: "y", _overwrite: true },
+          },
+        ])) {
+          expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
+        }
+      },
+      600_000
+    );
+
+    it.runIf(dialect === "mysql")(
+      "answers a list and one filtered by a field a committed change made required, over REST and the Direct API, never with a database error",
+      async () => {
+        const t = await boot();
+        await killRequired(t);
+        for (const read of await fromAnotherProcess([
+          { kind: "read", via: "rest" },
+          { kind: "read", via: "api" },
+          { kind: "read", via: "rest", query: "where[note][equals]=n" },
+          { kind: "read", via: "api", where: { note: { equals: "n" } } },
+          { kind: "read", via: "rest", query: "sort=note" },
+        ])) {
+          expect.soft(databaseError(read), JSON.stringify(read)).toBe(false);
+          expect.soft(read.ok, JSON.stringify(read)).toBe(true);
+          expect
+            .soft(
+              read.items?.some(item => item.slug === "first"),
+              JSON.stringify(read)
+            )
+            .toBe(true);
+        }
+      },
+      600_000
+    );
+
+    // Only the settle lifts the refusal: a settle the history refuses leaves it as it is.
+    it.runIf(dialect === "mysql")(
+      "leaves the refusal in place where a settle is refused by the migration history",
+      async () => {
+        const t = await boot({ numeric: true });
+        const applied = readdirSync(join(basePath, MIGRATIONS)).find(file =>
+          file.endsWith(".sql")
+        )!;
+        await killRetype(t);
+        expect(await headingType(t), `killed at ${killedAt}`).toBe("text");
+        // An applied file edited since: the settle's own history checks stop before its first write.
+        appendFileSync(join(basePath, MIGRATIONS, applied), "\n-- edited\n");
+
+        await expect(settle(t)).rejects.toThrow();
+        for (const refused of await fromAnotherProcess([
+          {
+            kind: "write",
+            via: "rest",
+            data: { title: "R1", slug: "r1", heading: 8 },
+          },
+          {
+            kind: "write",
+            via: "api",
+            data: { title: "A1", slug: "a1", heading: 8 },
+          },
+        ])) {
+          expectRefused(refused);
+        }
+      },
+      600_000
+    );
+
+    // PostgreSQL and SQLite run a file in one transaction, so a kill finds none or all of the change:
+    // killed before the file ran, the write that sets the field is as it ever was.
+    it.runIf(dialect !== "mysql" && !perLanguage).each([
+      ["changes its type", { numeric: true }, "heading", "8"],
+      ["makes it required", {}, "note", "set"],
+    ] as const)(
+      "refuses no write where a save that %s was killed before its file ran",
+      async (_what, options, set, value) => {
+        const t = await boot(options);
+        const schemaVersion = await versionOf(t);
+        await killSave(
+          t,
+          point => point.startsWith("unit:"),
+          () =>
+            dispatchCollections(
+              {} as ServiceContainer,
+              "applySchemaChanges",
+              { collectionName: slug },
+              {
+                fields:
+                  set === "heading"
+                    ? [field("heading"), field("note")]
+                    : [field("heading"), { ...field("note"), required: true }],
+                confirmed: true,
+                schemaVersion,
+              }
+            )
+        );
+        for (const accepted of await fromAnotherProcess([
+          {
+            kind: "write",
+            via: "rest",
+            data: {
+              title: "R1",
+              slug: "r1",
+              [set]: set === "heading" ? Number(value) : value,
+            },
+          },
+          {
+            kind: "write",
+            via: "api",
+            data: {
+              title: "A1",
+              slug: "a1",
+              [set]: set === "heading" ? Number(value) : value,
+            },
+          },
+          { kind: "read", via: "rest" },
+          { kind: "read", via: "api" },
+        ])) {
+          expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
         }
       },
       600_000
