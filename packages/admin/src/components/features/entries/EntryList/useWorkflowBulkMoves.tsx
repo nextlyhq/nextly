@@ -76,8 +76,8 @@ const reasonOf = (message: string): string => message.replace(/\.+$/, "");
 
 export function useWorkflowBulkMoves(args: {
   collection: CollectionForColumns;
-  /** Whether the reader is offered the moves at all (`useEntryBulkActions`). */
-  offered: boolean;
+  /** Which moves the reader is offered: the steps, assignment (`useEntryBulkActions`). */
+  offered: { steps: boolean; assign: boolean };
   rows: readonly EntryRow[];
   /** A row's title as the list shows it, for a refusal to name. */
   titleOf: (row: EntryRow | undefined, id: string) => string;
@@ -180,11 +180,17 @@ export function useWorkflowBulkMoves(args: {
   };
 
   const movesFor: WorkflowBulkMoves["movesFor"] = selected => {
-    if (!offered || !collection.workflow || selected.length === 0) {
+    if (
+      !(offered.steps || offered.assign) ||
+      !collection.workflow ||
+      selected.length === 0
+    ) {
       return undefined;
     }
     const ids = [...selected];
-    const submitStep = steps.submit;
+    // Only the moves the reader may take: an approve-only reviewer assigns, and takes no step.
+    const submitStep = offered.steps ? steps.submit : undefined;
+    const sendBackOffered = offered.steps && steps.sendBack !== undefined;
     return {
       pending,
       ...(submitStep
@@ -196,8 +202,8 @@ export function useWorkflowBulkMoves(args: {
               : () => submitWith(submitStep, ids, undefined),
           }
         : {}),
-      assign: () => setAssigning(ids),
-      ...(steps.sendBack ? { sendBack: () => setSendingBack(ids) } : {}),
+      ...(offered.assign ? { assign: () => setAssigning(ids) } : {}),
+      ...(sendBackOffered ? { sendBack: () => setSendingBack(ids) } : {}),
     };
   };
 

@@ -20,6 +20,9 @@ const { canFor } = vi.hoisted(() => ({
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (slug: string) => canFor(slug),
 }));
+vi.mock("@admin/hooks/useHasPermission", () => ({
+  useHasPermission: () => (slug: string) => canFor(slug),
+}));
 
 // The reader reviews somewhere: the global waiting scope says so. It decides nothing here, since
 // whether moves are offered on a collection is judged on that collection's own steps.
@@ -54,6 +57,7 @@ describe("useEntryBulkActions", () => {
       publish: false,
       unpublish: false,
       workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
       any: false,
     });
   });
@@ -66,6 +70,7 @@ describe("useEntryBulkActions", () => {
       publish: false,
       unpublish: false,
       workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
       any: true,
     });
   });
@@ -78,6 +83,7 @@ describe("useEntryBulkActions", () => {
       publish: false,
       unpublish: true,
       workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
       any: true,
     });
   });
@@ -90,6 +96,7 @@ describe("useEntryBulkActions", () => {
       publish: false,
       unpublish: false,
       workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
       any: false,
     });
   });
@@ -104,6 +111,7 @@ describe("useEntryBulkActions", () => {
       publish: true,
       unpublish: false,
       workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
       any: true,
     });
   });
@@ -161,5 +169,64 @@ describe("useEntryBulkActions", () => {
     expect(
       renderHook(() => useEntryBulkActions(posts)).result.current
     ).toMatchObject({ workflowMoves: false });
+  });
+
+  it("offers Assign… to a reader who may take a stage's primary step, and the steps to one who may take them", () => {
+    // In review, the primary step is Clear (`approve`): holding it lets a reader assign a part
+    // there, as the server judges, though neither bulk step (submit, send back) is theirs. One who
+    // may only send back takes that step and assigns nowhere, since no stage leads with it.
+    const held: CollectionForColumns = {
+      ...posts,
+      workflow: {
+        slug: "review",
+        label: "Review",
+        stages: [
+          { name: "draft", label: "Draft", primaryAction: "update" },
+          { name: "review", label: "In review", primaryAction: "approve" },
+          { name: "done", label: "Done" },
+        ],
+        steps: [
+          { name: "submit", label: "Submit", kind: "submit", action: "update" },
+          { name: "clear", label: "Clear", kind: "approve", action: "approve" },
+          {
+            name: "bounce",
+            label: "Send back",
+            kind: "request-changes",
+            action: "sign-off",
+          },
+        ],
+      },
+    };
+    holding("read-posts", "approve-posts");
+    expect(
+      renderHook(() => useEntryBulkActions(held)).result.current
+    ).toMatchObject({
+      workflowMoves: true,
+      workflowMoveKinds: { steps: false, assign: true },
+      any: true,
+    });
+
+    holding("read-posts", "sign-off-posts");
+    expect(
+      renderHook(() => useEntryBulkActions(held)).result.current
+    ).toMatchObject({
+      workflowMoves: true,
+      workflowMoveKinds: { steps: true, assign: false },
+    });
+
+    // The approve permission of another collection assigns nothing here.
+    holding("read-posts", "approve-pages");
+    expect(
+      renderHook(() => useEntryBulkActions(held)).result.current
+    ).toMatchObject({
+      workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
+    });
+
+    // An editor takes the steps and assigns.
+    holding("read-posts", "update-posts");
+    expect(
+      renderHook(() => useEntryBulkActions(held)).result.current
+    ).toMatchObject({ workflowMoveKinds: { steps: true, assign: true } });
   });
 });

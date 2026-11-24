@@ -273,8 +273,12 @@ export interface Collection extends RemovedFromCodeMark {
   workflow?: {
     slug: string;
     label: string;
-    /** Its stages in order, by name and the label the code gives them. */
-    stages?: { name: string; label: string }[];
+    /**
+     * Its stages in order, by name and the label the code gives them, each with the action of its
+     * primary step where it has one: that action's permission here lets a reader assign a part in
+     * the stage, as `update` does.
+     */
+    stages?: { name: string; label: string; primaryAction?: string }[];
     /** Its steps, each by name, label and kind, as the schema read summarises them. */
     steps?: {
       name: string;

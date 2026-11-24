@@ -12,7 +12,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { container } from "../../di/container";
 
 import { attachedWorkflowSummary, workflowAttachedTo } from "./registry";
-import { stepAction } from "./steps";
+import { primaryAction, stepAction } from "./steps";
 import type { Workflow } from "./types";
 import {
   readWorkflowSettings,
@@ -61,8 +61,16 @@ export async function readStagePresentation(
 /** A workflow's summary as a schema read names it. */
 type AttachedSummary = NonNullable<ReturnType<typeof attachedWorkflowSummary>>;
 
-/** That summary, each step with the action it needs. */
-type ShownWorkflowSummary = Omit<AttachedSummary, "steps"> & {
+/** That summary, each step with the action it needs and each stage with its primary step's. */
+type ShownWorkflowSummary = Omit<AttachedSummary, "steps" | "stages"> & {
+  stages: (AttachedSummary["stages"][number] & {
+    /**
+     * The action of the stage's primary step (`primaryAction`), absent for a stage with no step
+     * out of it. Its permission on the collection or Single lets a caller assign a part in the
+     * stage, as `update` does (`assignerPermissions`).
+     */
+    primaryAction?: string;
+  })[];
   steps: (AttachedSummary["steps"][number] & {
     /**
      * The action a caller needs to take it on this collection or Single, as Settings names it
@@ -98,7 +106,12 @@ export async function shownWorkflowSummary(
       action: resolved ? stepAction(workflow, resolved) : "update",
     };
   });
-  if (!container.has("adapter")) return { ...summary, steps };
+  // Each stage with its primary step's action, from the one rule assigning is judged by.
+  const stages = summary.stages.map(stage => {
+    const action = primaryAction(workflow, stage.name);
+    return action === null ? stage : { ...stage, primaryAction: action };
+  });
+  if (!container.has("adapter")) return { ...summary, steps, stages };
   const shown = await readStagePresentation(
     container.get<DrizzleAdapter>("adapter"),
     workflow
@@ -106,7 +119,7 @@ export async function shownWorkflowSummary(
   return {
     ...summary,
     steps,
-    stages: summary.stages.map(stage => ({
+    stages: stages.map(stage => ({
       ...stage,
       label: shown(stage.name).label,
     })),

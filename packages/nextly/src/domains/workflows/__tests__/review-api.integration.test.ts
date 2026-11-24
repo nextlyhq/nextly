@@ -98,6 +98,17 @@ const EDITORIAL_ACTIONS: Record<string, string> = {
   fastTrack: "publish",
 };
 
+/**
+ * The action of each editorial stage's primary step: the one marked primary, or a stage's only
+ * step out (Cleared's Send back). Its permission lets a reader assign a part in the stage.
+ */
+const EDITORIAL_PRIMARY: Record<string, string> = {
+  writing: "update",
+  legal: "sign-off",
+  hold: "update",
+  cleared: "sign-off",
+};
+
 const HASH = workflowDefinitionHash(editorial);
 const PAGES = "pages";
 const POSTS = "posts";
@@ -791,7 +802,8 @@ describe.each(getConfiguredTestDialects())(
             id: "carol",
           });
 
-          // Its stages by name and label, which a list filters by, and its steps by name, label,
+          // Its stages by name and label, which a list filters by, each with its primary step's
+          // action, whose permission lets a reader assign there; and its steps by name, label,
           // kind and whether each needs a comment: a list takes the workflow's one step of a kind
           // in bulk (Submit for review, Send back), asking first for a comment one needs, and
           // never an approval.
@@ -801,6 +813,7 @@ describe.each(getConfiguredTestDialects())(
             stages: editorial.stages.map(stage => ({
               name: stage.name,
               label: stage.label,
+              primaryAction: EDITORIAL_PRIMARY[stage.name],
             })),
             steps: editorial.steps.map(step => ({
               name: step.name,
@@ -830,7 +843,11 @@ describe.each(getConfiguredTestDialects())(
             (relabelled.workflow as { stages: Doc[] }).stages.find(
               stage => stage.name === "legal"
             )
-          ).toEqual({ name: "legal", label: "Lawyers" });
+          ).toEqual({
+            name: "legal",
+            label: "Lawyers",
+            primaryAction: "sign-off",
+          });
 
           // A visitor is refused the read, so the workflow is never named to one.
           const anonymous = await createDynamicHandlers().GET(
@@ -866,6 +883,7 @@ describe.each(getConfiguredTestDialects())(
             stages: editorial.stages.map(stage => ({
               name: stage.name,
               label: stage.label,
+              primaryAction: EDITORIAL_PRIMARY[stage.name],
             })),
             steps: editorial.steps.map(step => ({
               name: step.name,
@@ -892,6 +910,7 @@ describe.each(getConfiguredTestDialects())(
             stages: editorial.stages.map(stage => ({
               name: stage.name,
               label: stage.label,
+              primaryAction: EDITORIAL_PRIMARY[stage.name],
             })),
             steps: editorial.steps.map(step => ({
               name: step.name,
