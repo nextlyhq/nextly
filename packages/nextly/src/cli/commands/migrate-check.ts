@@ -91,7 +91,6 @@ import {
   settingsAlone,
   type UnwrittenChanges,
   unwrittenChangeLines,
-  unwrittenChangesError,
   unwrittenChangesOf,
 } from "../../domains/schema/migrate/unwritten-changes";
 import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
@@ -127,6 +126,7 @@ import {
   migrationFileEdited,
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
+  permissionChangeWithoutMigration,
   schemaChangeWithoutMigration,
   settingsChangeWithoutMigration,
   snapshotWithoutMigration,
@@ -605,7 +605,7 @@ export async function runChecks(args: {
  * The changes not yet in a migration as this check ends on them, or undefined where there are none:
  * the one list every surface reports (`unwrittenChangeLines`), in the check's own words, since it
  * reads no database and changes nothing. Settings alone are named as their own change, and
- * permissions alone as `nextly migrate` names them.
+ * permissions alone as theirs.
  */
 function checkDriftError(changes: UnwrittenChanges): CliError | undefined {
   if (nothingUnwritten(changes)) return undefined;
@@ -615,10 +615,10 @@ function checkDriftError(changes: UnwrittenChanges): CliError | undefined {
       changes.settings.map(change => `~ ${describeSettingsChange(change)}`)
     );
   }
-  if (changes.permissions.length === unwrittenChangeLines(changes).length) {
-    return unwrittenChangesError(changes);
-  }
   const lines = unwrittenChangeLines(changes);
+  if (changes.permissions.length === lines.length) {
+    return permissionChangeWithoutMigration(lines.length, lines);
+  }
   return schemaChangeWithoutMigration(
     lines.length,
     lines,

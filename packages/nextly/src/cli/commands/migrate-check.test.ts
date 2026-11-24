@@ -1152,6 +1152,93 @@ describe("runChecks (F11 PR 4)", () => {
       expect(said).not.toContain("The database is not reported");
     });
 
+    describe("permissions alone", () => {
+      const ofOwner = (owner: string, ...added: string[]) => ({
+        kind: "owner" as const,
+        owner,
+        added,
+        removed: [],
+      });
+
+      /** What the check prints over these changes, with no table or file among them. */
+      const said = async (
+        permissions: UnwrittenChanges["permissions"],
+        settings: UnwrittenChanges["settings"] = []
+      ) => {
+        printed.mockClear();
+        const logger = makeLogger();
+        await runChecks({
+          migrationsDir,
+          unwritten: () =>
+            Promise.resolve({
+              tables: [],
+              beside: [],
+              settings,
+              permissions,
+              noSnapshot: false,
+            }),
+          logger: logger as unknown as Parameters<
+            typeof runChecks
+          >[0]["logger"],
+        });
+        return printed.mock.calls.flat().join("\n");
+      };
+
+      /** The listed lines, whose number is the count said. */
+      const listed = (text: string) =>
+        [...text.matchAll(/([+~-] permissions .*)$/gm)].map(([, line]) => line);
+
+      it("counts one change in the singular", async () => {
+        const text = await said([ofOwner("@acme/reports", "export")]);
+
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(text).toContain("(SCHEMA_DRIFT)");
+        expect(text).toContain("1 pending permission change detected.");
+        expect(listed(text)).toEqual([
+          expect.stringContaining("@acme/reports: + export"),
+        ]);
+      });
+
+      it("counts each owner's line, and two in the plural", async () => {
+        const text = await said([
+          ofOwner("@acme/reports", "export"),
+          ofOwner("@acme/forms", "archive"),
+        ]);
+
+        expect(text).toContain("2 pending permission changes detected.");
+        expect(listed(text)).toHaveLength(2);
+      });
+
+      it("counts one owner's two permissions once, as the one line it lists them in", async () => {
+        const text = await said([
+          ofOwner("@acme/reports", "export", "archive"),
+        ]);
+
+        expect(text).toContain("1 pending permission change detected.");
+        expect(listed(text)).toEqual([
+          expect.stringContaining("@acme/reports: + export, + archive"),
+        ]);
+      });
+
+      it("says nothing of a database, which the check does not read", async () => {
+        const text = await said([ofOwner("@acme/reports", "export")]);
+
+        expect(text).not.toContain("The database is not reported");
+        expect(text).not.toContain("run `nextly migrate` again");
+        expect(text).not.toContain("schema change");
+      });
+
+      it("keeps the schema text where settings changed with them", async () => {
+        const text = await said(
+          [ofOwner("@acme/reports", "export")],
+          [{ kind: "collection", slug: "posts", changes: ["description"] }]
+        );
+
+        expect(text).toContain("2 pending schema change(s) detected.");
+        expect(text).not.toContain("pending permission change");
+      });
+    });
+
     it("lists a file beside the main migration with the settings it comes from, labelled", async () => {
       const logger = makeLogger();
       await runChecks({

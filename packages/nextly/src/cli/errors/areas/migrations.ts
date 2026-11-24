@@ -22,8 +22,8 @@ import {
   MIGRATION_PLACE_STATED_TWICE_REASON,
 } from "../../../domains/schema/migrate/history-line-names";
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
-import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-repeats-advice";
 import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
+import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-repeats-advice";
 import {
   WRITER_HOLD_HELD_REASON,
   WRITER_HOLD_LOST_REASON,
@@ -1461,6 +1461,22 @@ export function schemaChangeWithoutMigration(
   }
   return new CliError("SCHEMA_DRIFT", {
     what: `${count} pending schema change(s) detected.`,
+    why: lines.join("\n"),
+    next: CREATE_MIGRATION,
+  });
+}
+
+/**
+ * Permission changes no migration holds, where nothing else is pending: each owner's as one line of
+ * the drift list, so the count is the number of lines. A permission is not a schema change, and the
+ * check that says this reads no database.
+ */
+export function permissionChangeWithoutMigration(
+  count: number,
+  lines: readonly string[]
+): CliError {
+  return new CliError("SCHEMA_DRIFT", {
+    what: `${count} pending permission change${count === 1 ? "" : "s"} detected.`,
     why: lines.join("\n"),
     next: CREATE_MIGRATION,
   });

@@ -206,6 +206,9 @@ describe("an app with no migration yet whose plugin declares permissions", () =>
     const checked = await check(appWith(["export"]));
     expect(checked.code).toBe(1);
     expect(saidBy(checked)).toContain("export-reports");
+    expect(saidBy(checked)).toContain("1 pending permission change detected.");
+    // The check reads no database, so it says nothing of one.
+    expect(saidBy(checked)).not.toContain("The database is not reported");
 
     expect((await create(appWith(["export"]))).code).toBeUndefined();
     expect(sqlFiles()).toHaveLength(1);
