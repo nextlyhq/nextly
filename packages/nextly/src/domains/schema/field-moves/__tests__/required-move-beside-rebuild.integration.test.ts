@@ -145,7 +145,10 @@ async function save(
   clearRegistryRowCache();
 }
 
-/** `nextly migrate:down` of the newest migration on `t`'s database, reading the files the saves wrote. */
+/**
+ * `nextly migrate:down` of the newest migration on `t`'s database, or of the newest `step`, reading
+ * the files the saves wrote.
+ */
 async function migrateDown(t: TestNextly, step = 1): Promise<void> {
   const adapter = t.adapter as unknown as DrizzleAdapter;
   const migrationsDir = join(basePath, "migrations");
