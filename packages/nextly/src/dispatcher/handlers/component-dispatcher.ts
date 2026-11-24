@@ -49,6 +49,7 @@ import {
   FirstQuestionWatch,
   landingPush,
 } from "../../domains/schema/builder-save/landing-push";
+import { settleKeptPerLanguage } from "../../domains/schema/builder-save/per-language-answers";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
   renamedFieldsOf,
@@ -963,7 +964,8 @@ export const COMPONENTS_METHODS: Record<
               fields: {
                 tableName,
                 builtBy: "fieldGroup",
-                oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
+                oldFields: (component.fields ??
+                  []) as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
                 wasLocalized,
                 isLocalized,
@@ -1045,10 +1047,35 @@ export const COMPONENTS_METHODS: Record<
               isStored
             );
           };
+          // The push, then the answers for fields kept per language, which the push's questions, asked
+          // of the main table's columns, never reach: settled once the translations table is in
+          // step, as a Single's push settles its own. A field group's push states no row fills.
+          const pushThenSettle = async () => {
+            const pushed = await pushAndReconcileCompanion(
+              push,
+              desired,
+              "component",
+              companion
+            );
+            await settleKeptPerLanguage(
+              { db: adapter.getDrizzle(), dialect, entity: "field group" },
+              {
+                tableName,
+                localized: isLocalized,
+                oldFields: component.fields,
+                newFields: fields as unknown as FieldDefinition[],
+                eventResolutions,
+                legacy: legacyBundle,
+                fills: undefined,
+                rowFills: undefined,
+                renameResolutions,
+              }
+            );
+            return pushed;
+          };
           const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
-            () =>
-              pushAndReconcileCompanion(push, desired, "component", companion),
+            pushThenSettle,
             {
               kind: "fieldGroup",
               slug,

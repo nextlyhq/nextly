@@ -187,13 +187,14 @@ function perLanguageSettleStatements(
 /**
  * The push's settle of its answers for fields kept per language (`perLanguageSettleStatements`),
  * run as one change (`applyMigrationWhole`) where there is any, once the push has brought the
- * translations table in step: what the collection's push and a Single's push run last.
+ * translations table in step: what the collection's push, a Single's push and a field group's push
+ * run last.
  */
 export async function settleKeptPerLanguage(
   target: {
     db: DatabaseInstance;
     dialect: SupportedDialect;
-    entity: "collection" | "single";
+    entity: "collection" | "single" | "field group";
   },
   args: PushAnswers
 ): Promise<void> {

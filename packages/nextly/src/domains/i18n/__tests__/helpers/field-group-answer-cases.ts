@@ -1,14 +1,12 @@
 /**
- * A field group's save that makes a text field required, answered with a fill for the instances
- * that hold no value for it, on per-language storage: the review counts the instances, and the
- * save's push, which applies it, settles them.
+ * A field group's save that makes a text field required, answered for the instances that hold no
+ * value for it, on per-language storage: the review counts the instances, and the save's push,
+ * which applies it, settles them, filling them or deleting them as the answer says.
  *
  * A field group's save takes its push outside development for every change, and in development
  * where another change in the same save carries values (a number field turned to text here). The
- * two cases for a road are told apart: the first holds what the case is built on (the review, the
- * save's answer and the instances before it); the second, marked as waiting (`it.fails`), is the
- * instance's value after it, which the push leaves as it was today. A fixture that broke would fail
- * the first.
+ * first case for a road holds what the others are built on: the review, the save's answer and the
+ * instances before it.
  *
  * Run on the layout the suite sets; a field group is kept per language under per-language storage
  * and not on the earlier one, so the suite is the per-language one.
@@ -39,6 +37,26 @@ import {
 import { _resetEnvCache } from "../../../../shared/lib/env";
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
+
+interface Entries {
+  createEntry(
+    params: {
+      collectionName: string;
+      overrideAccess?: boolean;
+      locale?: string;
+    },
+    data: Record<string, unknown>
+  ): Promise<{ success: boolean; data: unknown }>;
+  updateEntry(
+    params: {
+      collectionName: string;
+      entryId: string;
+      overrideAccess?: boolean;
+      locale?: string;
+    },
+    data: Record<string, unknown>
+  ): Promise<{ success: boolean; message?: string }>;
+}
 
 /** Where the save's push applies the change: outside development, and in it, where it carries values. */
 const ROADS = [
@@ -109,22 +127,54 @@ export function fieldGroupAnswerCases(prefix: string): void {
         return current;
       }
 
-      /** Each instance's note in English, by entry. */
-      async function notesOf(): Promise<Record<string, unknown>> {
-        const rows = await adapter.executeQuery<{ id: unknown; note: unknown }>(
-          `SELECT ${q("_parent")} AS id, ${q("note")} AS note FROM ${q(`comp_${prefix}_card_locales`)} WHERE ${q("_locale")} = 'en'`
+      /** An instance's values in one language. */
+      type LanguageRow = { heading: unknown; note: unknown };
+
+      /** The instances' rows in each language, by instance and language. */
+      async function languageRows(): Promise<Record<string, LanguageRow>> {
+        const rows = await adapter.executeQuery<
+          { id: unknown; locale: unknown } & LanguageRow
+        >(
+          `SELECT ${q("_parent")} AS id, ${q("_locale")} AS locale, ${q("heading")} AS heading, ${q("note")} AS note FROM ${q(`comp_${prefix}_card_locales`)}`
         );
         return Object.fromEntries(
-          rows.map(row => [String(row.id), row.note ?? null])
+          rows.map(row => [
+            `${String(row.id)} ${String(row.locale)}`,
+            { heading: row.heading ?? null, note: row.note ?? null },
+          ])
         );
       }
 
-      /** The save `road` reaches, with the answer; what the review and the save answered. */
-      async function answered(road: (typeof ROADS)[number]): Promise<{
+      /** Each instance's own row, as the number its `views` reads as, whichever type holds it. */
+      async function viewsOf(): Promise<Record<string, number>> {
+        const rows = await adapter.executeQuery<{
+          id: unknown;
+          views: unknown;
+        }>(
+          `SELECT ${q("id")} AS id, ${q("views")} AS views FROM ${q(`comp_${prefix}_card`)}`
+        );
+        return Object.fromEntries(
+          rows.map(row => [String(row.id), Number(row.views)])
+        );
+      }
+
+      async function pageCount(): Promise<number> {
+        const rows = await adapter.executeQuery<{ id: unknown }>(
+          `SELECT ${q("id")} AS id FROM ${q(`dc_${prefix}_pages`)}`
+        );
+        return rows.length;
+      }
+
+      /** The save `road` reaches, with `answer`; what the review and the save answered. */
+      async function answered(
+        road: (typeof ROADS)[number],
+        answer: "fill" | "delete" = "fill"
+      ): Promise<{
         notices: string[];
         applied: boolean;
-        before: Record<string, unknown>;
+        before: Record<string, LanguageRow>;
         empty: string;
+        kept: string;
       }> {
         const slug = `${prefix}_card`;
         await start();
@@ -150,15 +200,57 @@ export function fieldGroupAnswerCases(prefix: string): void {
             ],
           }),
         ]);
-        const write = async (one: Record<string, unknown>) =>
-          app.nextly.create({
-            collection: `${prefix}_pages` as never,
-            data: { title: "P", one } as never,
-          });
-        await write({ heading: "A", note: "kept", views: 1 });
-        await write({ heading: "B", views: 2 });
-        const before = await notesOf();
-        const empty = Object.keys(before).find(id => before[id] === null)!;
+        const entries = (
+          app.getService("collectionsHandler") as unknown as {
+            getEntryService(): Entries;
+          }
+        ).getEntryService();
+        const collectionName = `${prefix}_pages`;
+        const write = async (
+          english: Record<string, unknown>,
+          spanish: Record<string, unknown>
+        ) => {
+          const created = await entries.createEntry(
+            { collectionName, overrideAccess: true, locale: "en" },
+            { title: "P", one: english }
+          );
+          expect(created.success, JSON.stringify(created)).toBe(true);
+          const translated = await entries.updateEntry(
+            {
+              collectionName,
+              entryId: String((created.data as { id: unknown }).id),
+              overrideAccess: true,
+              locale: "es",
+            },
+            // The language's first write: nothing earlier of it to have lost.
+            { one: spanish, _overwrite: true }
+          );
+          expect(translated.success, JSON.stringify(translated)).toBe(true);
+        };
+        await write(
+          { heading: "A", note: "kept", views: 1 },
+          { heading: "Hola", note: "guardada", views: 1 }
+        );
+        // A note in Spanish alone: the default language is the one that needs it.
+        await write(
+          { heading: "B", views: 2 },
+          { heading: "Adios", note: "nota", views: 2 }
+        );
+        const before = await languageRows();
+        const idWith = (heading: string) =>
+          Object.keys(before)
+            .find(key => before[key]?.heading === heading)
+            ?.split(" ")[0] ?? "";
+        const kept = idWith("A");
+        const empty = idWith("B");
+        // What each case stands on: two instances, each in both languages, one with no note in the
+        // default language.
+        expect(before).toEqual({
+          [`${kept} en`]: { heading: "A", note: "kept" },
+          [`${kept} es`]: { heading: "Hola", note: "guardada" },
+          [`${empty} en`]: { heading: "B", note: null },
+          [`${empty} es`]: { heading: "Adios", note: "nota" },
+        });
 
         const carriesValues = road !== "outside development";
         const version = (await app
@@ -176,9 +268,10 @@ export function fieldGroupAnswerCases(prefix: string): void {
           schemaVersion: version.schemaVersion,
           eventResolutions: [
             {
-              kind: "provide_default",
               eventId: `add_not_null_with_nulls:comp_${slug}.note`,
-              value: "filled",
+              ...(answer === "fill"
+                ? { kind: "provide_default", value: "filled" }
+                : { kind: "delete_nonconforming" }),
             },
           ],
         };
@@ -202,6 +295,7 @@ export function fieldGroupAnswerCases(prefix: string): void {
           applied: applied.ok,
           before,
           empty,
+          kept,
         };
       }
 
@@ -213,21 +307,30 @@ export function fieldGroupAnswerCases(prefix: string): void {
             "This save fills 1 row with 'filled' in note.",
           ]);
           expect(result.applied).toBe(true);
-          // What the case stands on: two instances, one with no note, and its value is known.
-          expect(Object.keys(result.before)).toHaveLength(2);
-          expect(result.before[result.empty]).toBeNull();
         }, 120_000);
 
-        // Waiting: the push settles no answer of a field group today.
-        it.fails(
-          `fills the instance the review named (${road})`,
-          async () => {
-            const { empty } = await answered(road);
+        it(`fills the instance the review named, and no other (${road})`, async () => {
+          const { before, empty } = await answered(road);
 
-            expect((await notesOf())[empty]).toBe("filled");
-          },
-          120_000
-        );
+          expect(await languageRows()).toEqual({
+            ...before,
+            [`${empty} en`]: { heading: "B", note: "filled" },
+          });
+        }, 120_000);
+
+        it(`deletes the instance with no value, and no other (${road})`, async () => {
+          const { applied, before, kept } = await answered(road, "delete");
+
+          expect(applied).toBe(true);
+          // The instance's own row, then its language rows; the kept instance's stay, as do the
+          // pages both were on.
+          expect(await viewsOf()).toEqual({ [kept]: 1 });
+          expect(await languageRows()).toEqual({
+            [`${kept} en`]: before[`${kept} en`],
+            [`${kept} es`]: before[`${kept} es`],
+          });
+          expect(await pageCount()).toBe(2);
+        }, 120_000);
       }
     }
   );
