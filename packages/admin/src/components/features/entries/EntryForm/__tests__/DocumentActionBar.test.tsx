@@ -277,7 +277,7 @@ describe("an action that cannot be used", () => {
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
-  it("names the arrow for what it holds: publishing where Publish leads, the document's actions where Save does", () => {
+  it("names the arrow for what it holds: publishing where it holds a way to publish, the document's actions where it holds none", () => {
     // A collection with no publish lifecycle leads with Save, and its arrow
     // holds the preview and the document's views: nothing that publishes.
     const { unmount } = render(
@@ -296,6 +296,28 @@ describe("an action that cannot be used", () => {
       screen.queryByRole("button", { name: "More ways to publish" })
     ).toBeNull();
     unmount();
+    // Save leading over a way to publish (Schedule… on a clean live
+    // document): the arrow holds publishing, and says so.
+    const scheduled = render(
+      <DocumentActionBar
+        actions={[
+          { id: "save", label: "Save", placement: "primary" },
+          {
+            id: "schedule-publish",
+            label: "Schedule…",
+            placement: "publish-menu",
+          },
+        ]}
+        bindings={{
+          save: { onSelect: vi.fn() },
+          "schedule-publish": { onSelect: vi.fn() },
+        }}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: "More ways to publish" })
+    ).toBeInTheDocument();
+    scheduled.unmount();
     // The control: where Publish leads, the arrow says so.
     render(
       <DocumentActionBar
