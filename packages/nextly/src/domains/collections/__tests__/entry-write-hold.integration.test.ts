@@ -13,6 +13,7 @@
  * MySQL only: on PostgreSQL and SQLite the deleting save's own transaction keeps writes off the
  * table, and an entry write takes nothing.
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
@@ -26,6 +27,7 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import { consoleLogger } from "../../../shared/types";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { holdEntityInProcess } from "../../dynamic-collections/services/entity-hold";
+import { namedCollectionLockNames } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
 import {
   holdEntityForWrite,
@@ -340,6 +342,51 @@ describe.each(getConfiguredTestDialects())(
 
     // A write made for a collection deleted before it held it finds no row under the slug, and is
     // refused as not found, never written into what a create of the same slug makes next.
+    // MySQL's hold is two names, the old release's and the new one. A write's wait is one time over
+    // both: waited for one after the other, the second would be given the whole wait again, and the
+    // write would wait twice as long as it says. Each name is held by a session of its own, and the
+    // first let go part way.
+    onMysql(
+      "waits one time over both its names, the second for what the first left",
+      async () => {
+        const t = await boot();
+        const adapter = t.adapter as unknown as DrizzleAdapter;
+        const [row] = (await t.adapter.executeQuery(
+          "SELECT DATABASE() AS name"
+        )) as { name: string }[];
+        const [first, second] = namedCollectionLockNames(row.name, [SLUG]);
+        const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+        await adapter.withSession(holdsFirst =>
+          adapter.withSession(async holdsSecond => {
+            await holdsFirst.execute(`SELECT GET_LOCK('${first}', 0)`);
+            await holdsSecond.execute(`SELECT GET_LOCK('${second}', 0)`);
+            const began = Date.now();
+            const seeking = t.adapter
+              .transaction(tx =>
+                registry.holdCollectionsIn(tx, [SLUG], "share", {
+                  waitMs: 4_000,
+                })
+              )
+              .then(
+                () => "held",
+                (error: unknown) => error
+              );
+            await new Promise(resolve => setTimeout(resolve, 2_500));
+            await holdsFirst.execute(`SELECT RELEASE_LOCK('${first}')`);
+            expect(await seeking).toMatchObject({
+              code: "COLLECTION_BEING_CHANGED",
+            });
+            const waited = Date.now() - began;
+            // It waited for the second after the first was let go, and not the whole wait again,
+            // which would end 6.5 seconds on.
+            expect(waited).toBeGreaterThan(2_500);
+            expect(waited).toBeLessThan(5_800);
+          })
+        );
+      },
+      30_000
+    );
+
     it("refuses a write whose collection was deleted after it loaded it, as not found", async () => {
       const t = await boot();
       const loaded = await loadedNow(t, { note: "made for the deleted one" });
@@ -377,7 +424,11 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       const setsNote = await loadedNow(t, { title: "t", note: "n" });
       const setsTitle = await loadedNow(t, { title: "t" });
-      const createsTitle = await loadedNow(t, { title: "t" }, { insertsOnly: true });
+      const createsTitle = await loadedNow(
+        t,
+        { title: "t" },
+        { insertsOnly: true }
+      );
       expect(setsNote?.setsFields).toEqual(["title", "note"]);
       // The save's registry write: the definition without `note`, its version moved.
       const registry = new DynamicCollectionService(t.adapter, consoleLogger);
@@ -509,7 +560,9 @@ describe.each(getConfiguredTestDialects())(
             expect.objectContaining({
               path: `fields.${name}`,
               code: "FIELD_CHANGED",
-              message: expect.stringContaining("changed while this write waited for a change"),
+              message: expect.stringContaining(
+                "changed while this write waited for a change"
+              ),
             }),
           ],
         },
@@ -550,11 +603,7 @@ describe.each(getConfiguredTestDialects())(
         `UPDATE dynamic_collections SET status = ${dialect === "postgresql" ? "true" : "1"} WHERE slug = '${SLUG}'`
       );
       const updates = await loadedNow(t, { title: "t" });
-      const creates = await loadedNow(
-        t,
-        { title: "t" },
-        { insertsOnly: true }
-      );
+      const creates = await loadedNow(t, { title: "t" }, { insertsOnly: true });
       await t.adapter.executeQuery(
         `UPDATE dynamic_collections SET status = ${dialect === "postgresql" ? "false" : "0"}, schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
       );
@@ -635,10 +684,15 @@ describe.each(getConfiguredTestDialects())(
       // Straight to the table, as a save in another process leaves it: this process keeps its row.
       await t.adapter.executeQuery(
         `UPDATE dynamic_collections SET fields = '${JSON.stringify(
-          ((await registry.getCollection(SLUG)) as {
-            fields: Array<{ name: string }>;
-          }).fields.filter(field => field.name !== "note")
-        ).replace(/'/g, "''")}', schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+          (
+            (await registry.getCollection(SLUG)) as {
+              fields: Array<{ name: string }>;
+            }
+          ).fields.filter(field => field.name !== "note")
+        ).replace(
+          /'/g,
+          "''"
+        )}', schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
       );
       // Still the kept row: the property the refusal is held to change.
       expect(await names()).toContain("note");
