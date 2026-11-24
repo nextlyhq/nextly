@@ -273,7 +273,9 @@ import {
   createOwnerRegistry,
   ownerRecordKey,
 } from "../../domains/schema/ownership/owner-registry";
+import { withoutRecordedPluginElements } from "../../domains/schema/ownership/recorded-drift";
 import {
+  readingOthersElements,
   refuseRunRemovingOthersElements,
   removedElementsSourcesOn,
 } from "../../domains/schema/ownership/removed-elements";
@@ -5458,12 +5460,15 @@ export async function runFileMigrations(args: {
     schemaOwnersTableExists,
     tableOwnersByName,
   } = await import("../../domains/schema/ownership/schema-owners-repository");
-  const registryExists = await schemaOwnersTableExists(
-    adapter as unknown as { listTables: () => Promise<string[]> }
+  // A record there that cannot be read refuses the run, before its first file: what another owner
+  // built on the app's tables is then unknown.
+  const fileOwnerRows = await readingOthersElements("The database", async () =>
+    (await schemaOwnersTableExists(
+      adapter as unknown as { listTables: () => Promise<string[]> }
+    ))
+      ? new OwnersRepoForFiles(db, dialect).read()
+      : []
   );
-  const fileOwnerRows = registryExists
-    ? await new OwnersRepoForFiles(db, dialect).read()
-    : [];
   const fileOwners = tableOwnersByName(fileOwnerRows);
 
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;
@@ -5665,10 +5670,19 @@ export async function runFileMigrations(args: {
           // On a table the file itself creates they stay: a table that is there already, with
           // them, is the file's own end, as where a migration written to record a merge
           // creates a table an earlier one of the merge made.
-          live: withoutAdoptedIndexes(
-            await introspectLiveSnapshot(db, dialect, managed),
-            adoptedOnTablesOf(before, adoption.adopted)
-          ),
+          // And without what the owner record says a plugin built there and the file leaves alone,
+          // which the app's history never describes (`recorded-drift.ts`).
+          live: withoutRecordedPluginElements({
+            live: withoutAdoptedIndexes(
+              await introspectLiveSnapshot(db, dialect, managed),
+              adoptedOnTablesOf(before, adoption.adopted)
+            ),
+            rows: fileOwnerRows,
+            before,
+            target,
+            statements: upStatements,
+            dialect,
+          }),
           contributions: mergeContributions(
             beforeContributions,
             targetFile?.contributions ?? {}

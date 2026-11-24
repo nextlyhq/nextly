@@ -318,35 +318,49 @@ export function withoutOthersElements(
         )
         .map(element => fold(element.name))
     );
-  const keep = <T extends { name: string }>(
-    list: T[] | undefined,
-    gone: ReadonlySet<string>
-  ): T[] | undefined =>
-    list === undefined || gone.size === 0
-      ? list
-      : list.filter(each => !gone.has(fold(each.name)));
   return {
     ...snapshot,
     tables: snapshot.tables.map(table => {
       const hidden = named(table, "column");
-      const onHidden = (on: { columns?: readonly string[] }) =>
-        (on.columns ?? []).some(column => hidden.has(fold(column)));
-      const columns = keep(table.columns, hidden) ?? [];
-      const indexes = keep(table.indexes, named(table, "index"))?.filter(
-        index => !onHidden(index)
-      );
-      const foreignKeys = keep(table.foreignKeys, named(table, "fk"))?.filter(
-        key => !onHidden(key)
-      );
-      const checks = keep(table.checks, named(table, "check"));
-      return {
-        ...table,
-        columns,
-        ...(indexes === undefined ? {} : { indexes }),
-        ...(foreignKeys === undefined ? {} : { foreignKeys }),
-        ...(checks === undefined ? {} : { checks }),
+      const recorded = {
+        column: hidden,
+        index: named(table, "index"),
+        fk: named(table, "fk"),
+        check: named(table, "check"),
       };
+      return tableWithout(
+        table,
+        (kind, element) =>
+          recorded[kind].has(fold(element.name)) ||
+          // An index or foreign key on a column left out goes with it.
+          ((kind === "index" || kind === "fk") &&
+            (element.columns ?? []).some(column => hidden.has(fold(column))))
+      );
     }),
+  };
+}
+
+/** `table` without the elements `gone` says to leave out, kinds it does not track left as they are. */
+export function tableWithout(
+  table: TableSpec,
+  gone: (
+    kind: ElementOnTable["kind"],
+    element: { name: string; columns?: readonly string[] }
+  ) => boolean
+): TableSpec {
+  const keep = <T extends { name: string; columns?: readonly string[] }>(
+    kind: ElementOnTable["kind"],
+    list: T[] | undefined
+  ): T[] | undefined => list?.filter(each => !gone(kind, each));
+  const indexes = keep("index", table.indexes);
+  const foreignKeys = keep("fk", table.foreignKeys);
+  const checks = keep("check", table.checks);
+  return {
+    ...table,
+    columns: keep("column", table.columns) ?? [],
+    ...(indexes === undefined ? {} : { indexes }),
+    ...(foreignKeys === undefined ? {} : { foreignKeys }),
+    ...(checks === undefined ? {} : { checks }),
   };
 }
 
