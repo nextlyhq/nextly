@@ -416,15 +416,15 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /**
-     * The plugin's own column on the collection's table, with its index, as its migration makes and
+     * The plugin's own column on `main`, with its index, as its migration makes and
      * records them, and one row there holding a value in it.
      */
-    async function plantMarker(url: string): Promise<void> {
+    async function plantMarker(url: string, main = TABLE): Promise<void> {
       const q = (name: string) =>
         dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-      const snapshot = await snapshotOf(url, [TABLE]);
+      const snapshot = await snapshotOf(url, [main]);
       const columns =
-        snapshot.tables.find(each => each.name === TABLE)?.columns ?? [];
+        snapshot.tables.find(each => each.name === main)?.columns ?? [];
       // A value for each column a row cannot leave out.
       const required = columns.filter(
         column => !column.nullable && column.default === undefined
@@ -433,16 +433,16 @@ describe.each(getConfiguredTestDialects())(
         /int|real|numeric|double|decimal|float/i.test(type) ? "1" : "'row-1'";
       await on(url, async adapter => {
         await adapter.executeQuery(
-          `INSERT INTO ${q(TABLE)} (${required.map(column => q(column.name)).join(", ")}) VALUES (${required.map(column => value(column.type)).join(", ")})`
+          `INSERT INTO ${q(main)} (${required.map(column => q(column.name)).join(", ")}) VALUES (${required.map(column => value(column.type)).join(", ")})`
         );
         await adapter.executeQuery(
-          `ALTER TABLE ${q(TABLE)} ADD COLUMN ${q(MARKER)} ${dialect === "mysql" ? "varchar(64)" : "text"}`
+          `ALTER TABLE ${q(main)} ADD COLUMN ${q(MARKER)} ${dialect === "mysql" ? "varchar(64)" : "text"}`
         );
         await adapter.executeQuery(
-          `CREATE INDEX ${q(MARKER_INDEX)} ON ${q(TABLE)} (${q(MARKER)})`
+          `CREATE INDEX ${q(MARKER_INDEX)} ON ${q(main)} (${q(MARKER)})`
         );
         await adapter.executeQuery(
-          `UPDATE ${q(TABLE)} SET ${q(MARKER)} = 'kept by the plugin'`
+          `UPDATE ${q(main)} SET ${q(MARKER)} = 'kept by the plugin'`
         );
         await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert(
           (
@@ -451,7 +451,7 @@ describe.each(getConfiguredTestDialects())(
               ["index", MARKER_INDEX],
             ] as const
           ).map(([elementKind, elementName]) => ({
-            tableName: TABLE,
+            tableName: main,
             elementKind,
             elementName,
             ownerKind: "plugin" as const,
@@ -465,19 +465,19 @@ describe.each(getConfiguredTestDialects())(
       });
     }
 
-    /** The plugin's index and its column's values on the collection's table. */
-    async function markerOf(url: string) {
+    /** The plugin's index and its column's values on `main`. */
+    async function markerOf(url: string, main = TABLE) {
       const q = (name: string) =>
         dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-      const snapshot = await snapshotOf(url, [TABLE]);
+      const snapshot = await snapshotOf(url, [main]);
       return {
         index: snapshot.tables
-          .find(each => each.name === TABLE)
+          .find(each => each.name === main)
           ?.indexes?.find(index => index.name === MARKER_INDEX)?.columns,
         values: await on(url, async adapter =>
           (
             await adapter.executeQuery<{ v: unknown }>(
-              `SELECT ${q(MARKER)} AS v FROM ${q(TABLE)}`
+              `SELECT ${q(MARKER)} AS v FROM ${q(main)}`
             )
           ).map(row => row.v)
         ),
@@ -702,6 +702,37 @@ describe.each(getConfiguredTestDialects())(
           expect((await shapeOf(url, TABLE)).columns).not.toContain(gone);
         }
         expect(await markerOf(url)).toEqual(before);
+      }
+    );
+
+    it.each(LAYOUTS)(
+      "migrate:create and nextly migrate apply removing a field group's field on $layout, keeping the plugin's column, its index and its values on the shared table",
+      async ({ earlier }) => {
+        if (earlier) setPerLanguageStorage(false);
+        const url = await emptyDatabase();
+        use(url);
+        expect(
+          (await migrateCreate("add_cards", groupConfigWith(true))).code
+        ).toBe(undefined);
+        expect((await migrate(groupConfigWith(true))).code).toBe(undefined);
+        await plantMarker(url, GROUP_TABLE);
+        const before = await markerOf(url, GROUP_TABLE);
+        expect(before).toEqual({
+          index: [MARKER],
+          values: ["kept by the plugin"],
+        });
+        expect((await shapeOf(url, GROUP_TABLE)).columns).toContain("rank");
+
+        const created = await migrateCreate(
+          "remove_rank",
+          groupConfigWith(false)
+        );
+        expect(created.code, created.said).toBe(undefined);
+        const migrated = await migrate(groupConfigWith(false));
+        expect(migrated.code, migrated.said).toBe(undefined);
+
+        expect((await shapeOf(url, GROUP_TABLE)).columns).not.toContain("rank");
+        expect(await markerOf(url, GROUP_TABLE)).toEqual(before);
       }
     );
 

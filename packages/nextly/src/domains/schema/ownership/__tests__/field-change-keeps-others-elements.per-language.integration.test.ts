@@ -28,7 +28,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../../../__tests__/helpers/fresh-database";
 import { perLanguageStorageSuite } from "../../../../__tests__/storage-layout";
-import { defineCollection, number, text } from "../../../../config";
+import { defineCollection, group, number, text } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
@@ -350,7 +350,16 @@ describe.each(getConfiguredTestDialects())(
       await t.adapter.executeQuery(
         `INSERT INTO ${q(CARDS_TABLE)} (${["id", "_parent_id", "_parent_table", "_parent_field", "rank"].map(q).join(", ")}) VALUES ('card-1', 'entry-1', '${KEPT_TABLE}', 'card', 1)`
       );
-      for (const table of markedTables) {
+      await plantMarkers(t, markedTables);
+      return t;
+    }
+
+    /** The plugin's own column, with its index and a value in every row, on each of `tables`. */
+    async function plantMarkers(
+      t: TestNextly,
+      tables: readonly string[]
+    ): Promise<void> {
+      for (const table of tables) {
         await t.adapter.executeQuery(
           `ALTER TABLE ${q(table)} ADD COLUMN ${q(MARKER)} ${dialect === "mysql" ? "varchar(64)" : "text"}`
         );
@@ -365,7 +374,7 @@ describe.each(getConfiguredTestDialects())(
         (t.adapter as unknown as DrizzleAdapter).getDrizzle(),
         dialect
       ).upsert(
-        markedTables.flatMap(tableName =>
+        tables.flatMap(tableName =>
           (
             [
               ["column", MARKER],
@@ -384,13 +393,12 @@ describe.each(getConfiguredTestDialects())(
           }))
         )
       );
-      return t;
     }
 
     /** The plugin's index and its column's values on each table, as the database has them. */
-    async function markersOf(t: TestNextly) {
+    async function markersOf(t: TestNextly, tables: readonly string[]) {
       const found = [];
-      for (const table of markedTables) {
+      for (const table of tables) {
         found.push({
           table,
           indexes: (await shapeOf(t, table)).indexes.filter(
@@ -404,6 +412,17 @@ describe.each(getConfiguredTestDialects())(
         });
       }
       return found;
+    }
+
+    /** Each table carries the plugin's index, and a value in at least one row. */
+    function expectPlanted(found: Awaited<ReturnType<typeof markersOf>>) {
+      for (const each of found) {
+        expect(each.indexes, each.table).toHaveLength(1);
+        expect(each.values.length, each.table).toBeGreaterThan(0);
+        expect(new Set(each.values), each.table).toEqual(
+          new Set(["kept by the plugin"])
+        );
+      }
     }
 
     const keptWithout = (name: string) =>
@@ -463,14 +482,8 @@ describe.each(getConfiguredTestDialects())(
       "applies $change where the plugin's column and index are elsewhere on the table, keeping them and their values",
       async ({ save: change, gone }) => {
         const t = await bootKept();
-        const before = await markersOf(t);
-        for (const each of before) {
-          expect(each.indexes, each.table).toHaveLength(1);
-          expect(each.values.length, each.table).toBeGreaterThan(0);
-          expect(new Set(each.values), each.table).toEqual(
-            new Set(["kept by the plugin"])
-          );
-        }
+        const before = await markersOf(t, markedTables);
+        expectPlanted(before);
         if (gone !== undefined) {
           expect((await shapeOf(t, gone[0]!)).columns).toContain(gone[1]);
         }
@@ -480,7 +493,7 @@ describe.each(getConfiguredTestDialects())(
         if (gone !== undefined) {
           expect((await shapeOf(t, gone[0]!)).columns).not.toContain(gone[1]);
         }
-        expect(await markersOf(t)).toEqual(before);
+        expect(await markersOf(t, markedTables)).toEqual(before);
       }
     );
 
@@ -566,6 +579,82 @@ describe.each(getConfiguredTestDialects())(
         files: await written(),
       }).toEqual(before);
     });
+
+    // The push of a change nothing of the plugin's is built on: its own column, index and values stay
+    // on the collection's table and on its per-language table.
+    it.each([
+      {
+        change: "removing a number field",
+        after: { rank: false, grouped: false, localized: false },
+        gone: "rank" as string | undefined,
+      },
+      {
+        change: "moving a number field into a group",
+        after: { rank: true, grouped: true, localized: false },
+        gone: "rank" as string | undefined,
+      },
+      {
+        change: "turning translation on",
+        after: { rank: true, grouped: false, localized: true },
+        gone: undefined,
+      },
+    ])(
+      "applies a development push $change, keeping the plugin's column, its index and its values",
+      async ({ after, gone }) => {
+        const fieldsOf = (shape: { rank: boolean; grouped: boolean }) => [
+          text({ name: "note" }),
+          ...(shape.rank && !shape.grouped ? [number({ name: "rank" })] : []),
+          group({
+            name: "meta",
+            fields: [
+              text({ name: "summary" }),
+              ...(shape.grouped ? [number({ name: "rank" })] : []),
+            ],
+          }),
+        ];
+        const t = await start([
+          defineCollection({
+            slug: CODED,
+            fields: fieldsOf({ rank: true, grouped: false }),
+          }),
+        ]);
+        await t.nextly.create({
+          collection: CODED,
+          data: { note: "n", rank: 1 },
+        } as never);
+        const tables = [CODED_TABLE, companionTableOf(CODED_TABLE)];
+        await plantMarkers(t, tables);
+        const before = await markersOf(t, tables);
+        expectPlanted(before);
+        vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", `${CODED_TABLE}.rank`);
+        if (gone !== undefined) {
+          expect((await shapeOf(t, CODED_TABLE)).columns).toContain(gone);
+        }
+
+        const pushed = await applyDesiredSchema(
+          {
+            collections: {
+              [CODED]: {
+                slug: CODED,
+                tableName: CODED_TABLE,
+                fields: fieldsOf(after),
+                ...(after.localized ? { localized: true } : {}),
+              },
+            },
+            singles: {},
+            components: {},
+          },
+          "code",
+          { promptChannel: "terminal" }
+        );
+
+        expect(pushed.success, JSON.stringify(pushed)).toBe(true);
+        if (gone !== undefined) {
+          expect((await shapeOf(t, CODED_TABLE)).columns).not.toContain(gone);
+        }
+        expect(await markersOf(t, tables)).toEqual(before);
+      }
+    );
 
     it("refuses a development push removing a number field whose column a plugin's index is built on, changing nothing", async () => {
       const coded = (withRank: boolean) =>
