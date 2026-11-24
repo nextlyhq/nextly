@@ -860,14 +860,24 @@ export function requiredTextFieldCases(
                 fields: fields(false),
               });
               expect(created.success, JSON.stringify(created)).toBe(true);
-              const entry = await handler()
-                .getEntryService()
-                .createEntry(
-                  { collectionName: slug, overrideAccess: true, locale: "en" },
-                  { heading: "Undated" }
+              const write = async (data: Record<string, unknown>) => {
+                const entry = await handler().getEntryService().createEntry(
+                  {
+                    collectionName: slug,
+                    overrideAccess: true,
+                    locale: "en",
+                  },
+                  data
                 );
-              expect(entry.success, JSON.stringify(entry)).toBe(true);
-              const id = String((entry.data as { id: unknown }).id);
+                expect(entry.success, JSON.stringify(entry)).toBe(true);
+                return String((entry.data as { id: unknown }).id);
+              };
+              const undated = await write({ heading: "Undated" });
+              // The same moment, as an ordinary write of the field stores it.
+              const dated = await write({
+                heading: "Dated",
+                published: answer.value,
+              });
 
               await through(road, slug, translated, answer, {
                 fields: fields(true),
@@ -876,10 +886,17 @@ export function requiredTextFieldCases(
                 without: 1,
               });
 
-              const read = await readIn(slug, id, "en");
-              const moment = new Date(String(read.published));
-              expect(Number.isNaN(moment.getTime())).toBe(false);
-              expect(moment.toISOString().slice(0, 10)).toBe("2026-01-15");
+              // The stored form, not the value an API read makes of it: a read accepts an ISO text
+              // too.
+              const stored = async (id: string) => {
+                const [row] = await query<{ value: unknown }>(
+                  `SELECT ${quote(dialect, "published")} AS value FROM ${quote(dialect, `dc_${slug}_locales`)} WHERE ${quote(dialect, "_parent")} = '${id}' AND ${quote(dialect, "_locale")} = 'en'`
+                );
+                const value = row?.value;
+                return value instanceof Date ? value.toISOString() : value;
+              };
+              expect(await stored(dated)).toBeDefined();
+              expect(await stored(undated)).toEqual(await stored(dated));
             });
           }
 
