@@ -176,16 +176,7 @@ export async function applyMigrationWhole(args: {
         : runRebuilding(rebuild, statements, progress));
     }
   } catch (error: unknown) {
-    // Tries that ran out say so themselves: the table, what holds it, and that nothing changed.
-    if (NextlyError.is(error) && error.code === "NEXTLY_TABLE_BUSY")
-      throw error;
-    // A refusal of the rebuild's own (a table it can't reproduce, a reference left dangling) says
-    // why, as it is.
-    if (rebuild !== undefined && error instanceof NextlyError) throw error;
-    // Nor does a judgement's made before them.
-    if (args.before !== undefined && NextlyError.isValidation(error)) {
-      throw error;
-    }
+    if (saysWhyItself(error, args, rebuild)) throw error;
     throw migrationRefused(
       error,
       progress.ran,
@@ -194,6 +185,22 @@ export async function applyMigrationWhole(args: {
       args.entity
     );
   }
+}
+
+/**
+ * Whether a failure is thrown as it is rather than as a refused statement's: tries that ran out, which
+ * say the table, what holds it and that nothing changed; a refusal of the rebuild's own (a table it
+ * can't reproduce, a reference left dangling); and a judgement's made before the statements.
+ */
+function saysWhyItself(
+  error: unknown,
+  args: { before?: (db: unknown) => Promise<void> },
+  rebuild: SqliteNullability | undefined
+): boolean {
+  if (!(error instanceof NextlyError)) return false;
+  if (error.code === "NEXTLY_TABLE_BUSY") return true;
+  if (rebuild !== undefined) return true;
+  return args.before !== undefined && NextlyError.isValidation(error);
 }
 
 /** How a Builder save's statements wait for a busy table: the adapter they run on, and where each try's notice goes. */
