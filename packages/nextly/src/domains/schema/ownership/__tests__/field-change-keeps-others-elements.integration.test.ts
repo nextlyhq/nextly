@@ -12,10 +12,10 @@
  * taken for drift on any dialect. A record of other owners' elements that cannot be read refuses the
  * change, never counting them as none.
  *
- * As a person meets it: the Schema Builder makes the collection and the field group, a plugin's
- * migrations build on their tables (a schema hook cannot: an entity the Builder made is not known
- * when hooks run), and the record of other owners' elements keeps what they built, as the
- * migration run records it. Then the Builder's save. On SQLite, PostgreSQL and MySQL, because what
+ * The Schema Builder makes the collection and the field group; the plugin's elements are then made by
+ * their DDL and recorded in the owner rows, as a development push writes them. The rows are the test's:
+ * a schema hook cannot add to an entity the Builder made, and no migration run writes element rows for
+ * an entity's table. Then the Builder's save. On SQLite, PostgreSQL and MySQL, because what
  * a drop takes with it differs between them: PostgreSQL drops an index on a dropped column
  * silently, MySQL narrows or drops it, SQLite refuses part-way.
  */
@@ -85,7 +85,7 @@ const CARDS_FIELDS: Field[] = [
   { name: "note", type: "text" },
 ];
 
-/** An element the plugin's migrations built on another owner's table. */
+/** An element of the plugin's on another owner's table. */
 interface Built {
   table: string;
   kind: "index" | "column";
@@ -305,7 +305,7 @@ describe.each(getConfiguredTestDialects())(
         ...(await readIndexNames(t.adapter.getDrizzle(), dialect, table)),
       ].sort();
 
-    /** Records each element as the plugin's migration run records it. */
+    /** Records each element as the plugin's, in the rows a development push writes. */
     async function record(
       t: TestNextly,
       elements: readonly {
@@ -332,7 +332,7 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
-    /** Builds each element as the plugin's migration does, and records it as that run records it. */
+    /** Makes each element by its DDL, and records it as the plugin's (`record`). */
     async function build(t: TestNextly, ...elements: Built[]): Promise<void> {
       for (const element of elements) {
         await t.adapter.executeQuery(
@@ -353,7 +353,7 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /**
-     * The plugin's migration adds its own column to POSTS with a foreign key on it pointing at
+     * The plugin's own column on POSTS, with a foreign key on it pointing at
      * `references`, and records both. MySQL takes the key as a constraint of its own; SQLite adds
      * one only with its column.
      */

@@ -8,7 +8,7 @@
  * values. A reload holds a moved field back before it reaches the push (`init/code-first-moves.ts`);
  * the push itself, which `db:sync` and a restart run, reads it as the column's removal.
  *
- * An index a plugin's migration built is judged from the owner record even where the push's first
+ * An index recorded as a plugin's is judged from the owner record even where the push's first
  * read of it gave nothing, as when the question whether the record exists went unanswered: the
  * check asks again, and refuses rather than count none. A field renamed, answered as a rename, is
  * no removal: its column keeps what stands on it. A refused push records no owner row for what the
@@ -64,7 +64,7 @@ vi.mock("../kept-elements", async importOriginal => {
 const SLUG = "rk_posts";
 const TABLE = `dc_${SLUG}`;
 const PLUGIN = "@test/code-indexer";
-/** An index on `code` a plugin's migration built, as its run records it. */
+/** An index on `code` recorded as a plugin's. */
 const MIGRATED_INDEX = "rk_migrated_code_idx";
 /** A column of the plugin's own, and the index on it. */
 const MARKER = "marker";
@@ -204,7 +204,7 @@ async function pushAnsweringRenames(
   });
 }
 
-/** Builds the index on `column` as the plugin's migration does, and records it as that run does. */
+/** Makes the index on `column` by its DDL, and records it as the plugin's, as a push writes it. */
 async function buildMigratedIndex(
   instance: TestNextly,
   dialect: TestDialect,
@@ -235,7 +235,7 @@ async function buildMigratedIndex(
 }
 
 /**
- * The plugin's own column on `table`, with its index, as its migration makes and records them, and
+ * The plugin's own column on `table`, with its index, recorded as a push writes them, and
  * a value in every row there.
  */
 async function plantMarker(
@@ -525,7 +525,7 @@ describeEachDialect(
       expect(now.kept).toEqual(before.kept);
     });
 
-    it("refuses removing a field a plugin's migration indexed where the push's first read of the owner record gave nothing", async () => {
+    it("refuses removing a field a plugin's recorded index stands on where the push's first read of the owner record gave nothing", async () => {
       handle = await createTestNextly({
         dialect,
         collections: [defineCollection({ slug: SLUG, fields: fields(true) })],
@@ -581,7 +581,7 @@ describeEachDialect(
       expect(await shapeOf(handle, dialect)).toEqual(before);
     });
 
-    it("refuses removing a field group's field whose column in its shared table a plugin's migration indexed", async () => {
+    it("refuses removing a field group's field whose column in its shared table a plugin's recorded index stands on", async () => {
       const GROUP = "rk_cards";
       const groupTable = resolveComponentTableName(GROUP);
       const group = (withCode: boolean) =>
@@ -684,7 +684,7 @@ describeEachDialect(
       ).toEqual([MIGRATED_INDEX]);
     });
 
-    it("renames a field a plugin's migration indexed, answered as a rename, keeping the index", async () => {
+    it("renames a field a plugin's recorded index stands on, answered as a rename, keeping the index", async () => {
       handle = await createTestNextly({
         dialect,
         collections: [defineCollection({ slug: SLUG, fields: fields(true) })],

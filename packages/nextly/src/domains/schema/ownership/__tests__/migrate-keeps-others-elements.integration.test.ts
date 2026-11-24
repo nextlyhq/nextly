@@ -12,9 +12,10 @@
  * per-language table's already). What the plugin built elsewhere on the table stops none of these,
  * and is kept with its values once `nextly migrate` has run the file.
  *
- * As it happens: the app declares a collection in code and migrates; a plugin's migration builds an
- * index on one of its columns and records it as the plugin's; then the app removes that field,
- * either before writing the file or after the file was written elsewhere. The commands run for
+ * The app declares a collection in code and migrates; an index of a plugin's is made on one of its
+ * columns and recorded as the plugin's in the row a development push writes (`nextly migrate` writes
+ * none for an entity's table: the last case is that one). Then the app removes that field, either
+ * before writing the file or after the file was written elsewhere. The commands run for
  * real, as `nextly migrate:create` and `nextly migrate` do, on SQLite, PostgreSQL and MySQL, and on
  * per-language storage, as every installation stores translatable fields. The field is a number,
  * whose column is the entity's own in either layout: an untranslated text field's per-language
@@ -44,6 +45,7 @@ import {
   text,
 } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
+import { definePlugin } from "../../../../plugins/plugin-context";
 import { shutdownServices } from "../../../../di/register";
 import {
   getConfiguredTestDialects,
@@ -91,7 +93,7 @@ vi.mock("../../../../cli/utils/config-loader", async importOriginal => {
 const SLUG = "mko-posts";
 const TABLE = "dc_mko_posts";
 const PLUGIN = "@test/mko-indexer";
-/** The index the plugin's migration built on `code`. */
+/** The plugin's index on `code`. */
 const INDEX = "mko_code_idx";
 /** The consent to delete what the change deletes, as `--accept-data-loss` alone gives it. */
 const CONSENT = { acceptDataLoss: true };
@@ -136,6 +138,42 @@ const configWith = (withCode: boolean, withExtra = false) =>
           ...(withCode ? [number({ name: "code" })] : []),
           text({ name: "note" }),
           ...(withExtra ? [number({ name: "extra" })] : []),
+        ],
+      }),
+    ],
+    db: { migrationsDir: "./migrations" },
+  });
+
+/** The index a plugin's schema hook declares on the app's own collection's `code`. */
+const DECLARED_INDEX = "idx_mko_declared";
+const declaring = definePlugin({
+  name: PLUGIN,
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  contributes: {
+    schema: {
+      extend: [
+        ({ schema }) => {
+          schema.extendTable(TABLE, {
+            indexes: [{ columns: ["code"], name: DECLARED_INDEX }],
+          });
+        },
+      ],
+    },
+  },
+});
+
+/** The app's configuration with the plugin or without it, and with `code` or without it. */
+const pluggedWith = (withPlugin: boolean, withCode: boolean) =>
+  defineConfig({
+    ...(withPlugin ? { plugins: [declaring] } : {}),
+    collections: [
+      defineCollection({
+        slug: SLUG,
+        access: { read: () => true },
+        fields: [
+          text({ name: "title" }),
+          ...(withCode ? [number({ name: "code" })] : []),
         ],
       }),
     ],
@@ -370,9 +408,9 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /**
-     * Builds the index on `code` where the database holds it (the collection's table, or its
-     * per-language table) as the plugin's migration does, records it as that run records it, and
-     * names that table.
+     * Makes the plugin's index on `code` by its DDL where the database holds it (the collection's
+     * table, or its per-language table), records it as a development push writes it, and names that
+     * table.
      */
     async function buildIndex(
       url: string,
@@ -416,8 +454,7 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /**
-     * The plugin's own column on `main`, with its index, as its migration makes and
-     * records them, and one row there holding a value in it.
+     * The plugin's own column on `main`, with its index, recorded as a push writes it, and one row there holding a value in it.
      */
     async function plantMarker(url: string, main = TABLE): Promise<void> {
       const q = (name: string) =>
@@ -507,7 +544,7 @@ describe.each(getConfiguredTestDialects())(
       }
     }
 
-    it("migrate:create refuses removing a field a plugin's migration indexed, writing nothing", async () => {
+    it("migrate:create refuses removing a field a plugin's recorded index stands on, writing nothing", async () => {
       const url = await emptyDatabase();
       use(url);
       expect((await migrateCreate("add_posts", configWith(true))).code).toBe(
@@ -573,7 +610,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await shapeOf(url, table)).toEqual(before);
     });
 
-    it("migrate:create refuses removing a field group's field whose column in its shared table a plugin's migration indexed, writing nothing", async () => {
+    it("migrate:create refuses removing a field group's field whose column in its shared table a plugin's recorded index stands on, writing nothing", async () => {
       const url = await emptyDatabase();
       use(url);
       expect(
@@ -735,6 +772,33 @@ describe.each(getConfiguredTestDialects())(
         expect(await markerOf(url, GROUP_TABLE)).toEqual(before);
       }
     );
+
+    // WAITING, not yet decided how: `nextly migrate` writes no owner row for what a schema hook adds to
+    // an entity's table, and once the plugin has left the configuration nothing else says the index
+    // is its, so the removal is not refused and takes it.
+    it("migrate:create refuses removing a field a removed plugin's index stands on, put there by migrate alone, writing nothing", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      // The control: the plugin's index is made by the app's migration, which records no row for it.
+      expect(
+        (await migrateCreate("add_posts", pluggedWith(true, true))).code
+      ).toBe(undefined);
+      expect((await migrate(pluggedWith(true, true))).code).toBe(undefined);
+      expect((await shapeOf(url, TABLE)).indexes).toContain(DECLARED_INDEX);
+      const written = files();
+
+      const created = await migrateCreate(
+        "remove_code",
+        pluggedWith(false, false)
+      );
+
+      expect(created.code, created.said).not.toBe(undefined);
+      for (const part of ["code", PLUGIN, DECLARED_INDEX, TABLE]) {
+        expect(created.said).toContain(part);
+      }
+      expect(files()).toEqual(written);
+      expect((await shapeOf(url, TABLE)).indexes).toContain(DECLARED_INDEX);
+    });
 
     it("migrate:create writes the file and says it was not checked where no database is there", async () => {
       use(absentDatabase());

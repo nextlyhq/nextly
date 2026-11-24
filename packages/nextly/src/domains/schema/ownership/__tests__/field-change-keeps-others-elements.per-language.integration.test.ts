@@ -166,8 +166,8 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /**
-     * Builds the index on `column` of `table` as the plugin's migration does, and records it as that
-     * run records it. MySQL indexes a text column only by a prefix, which a plugin writes.
+     * Makes the index on `column` of `table` by its DDL, and records it as the plugin's in the row a
+     * development push writes. MySQL indexes a text column only by a prefix, which a plugin writes.
      */
     async function buildIndex(
       t: TestNextly,
