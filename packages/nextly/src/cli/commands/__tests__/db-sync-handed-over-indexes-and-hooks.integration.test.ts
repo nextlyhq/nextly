@@ -316,6 +316,8 @@ for (const dialect of getConfiguredTestDialects()) {
           (error: unknown) => error
         );
 
+        // Compiled and pushed, the run would end without a refusal.
+        expect(refused).toBeDefined();
         expect(
           JSON.stringify((refused as { publicData?: unknown })?.publicData)
         ).toContain('names the column \\"code\\"');

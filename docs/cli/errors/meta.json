@@ -53,6 +53,7 @@
     "data-loss-consent-required",
     "data-loss-declined",
     "demote-collection-not-found",
+    "demote-loses-unique-index",
     "demote-plugin-collection",
     "drop-of-foreign-table",
     "field-group-backup-not-confirmed",

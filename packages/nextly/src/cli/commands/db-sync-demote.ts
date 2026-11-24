@@ -8,6 +8,7 @@
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { IndexConfig } from "../../collections/config/define-collection";
 import type { SupportedDialect } from "../../database/schema-registry";
 import {
   toCodeFirstCollectionConfig,
@@ -18,6 +19,9 @@ import { mainTableFields } from "../../domains/i18n/per-language-storage";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { pluginCollectionSources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
 import { DEMOTED_FROM_CODE } from "../../domains/schema/pipeline/demoted-from-code";
+import { desiredCollectionTable } from "../../domains/schema/pipeline/desired-collection-table";
+import { keyedIndexes } from "../../domains/schema/pipeline/diff/index-util";
+import { isHandedToBuilder } from "../../domains/schema/pipeline/registered-collections";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
 import {
   fieldsStoredOnRow,
@@ -32,6 +36,7 @@ import { reportDryRun, type DryRunPlan } from "../dry-run";
 import { CliError, exitWithError } from "../errors";
 import {
   demoteCollectionNotFound,
+  demoteLosesUniqueIndex,
   demotePluginCollection,
   syncConfirmationRequired,
 } from "../errors/areas/sync";
@@ -125,6 +130,7 @@ export async function demoteCollection(
   const fields = collection.fields ?? [];
 
   const confirmed = await registry.getCollectionBySlug(slug);
+  assertNoUniqueIndexLost(collection, confirmed, args.adapter.dialect);
   const note = droppedOnDemoteNote(collection, args.adapter.dialect);
   const preview = [
     serializeCollection({ slug, fields: fields as never[] }),
@@ -247,6 +253,72 @@ async function assertDemotedWriteAllowed(
 }
 
 /**
+ * Refuses a demote that would lose a unique index the collection declares in `indexes`: no registry
+ * record holds one, so the next schema sync drops it and accepts duplicates from then on. Asked
+ * before the confirmation, so no answer (nor `--yes`) goes ahead with it.
+ *
+ * Not asked of a collection already handed to the Schema Builder: its schema syncs leave the code
+ * entry out already, so this demote loses nothing more.
+ */
+function assertNoUniqueIndexLost(
+  collection: DemotedCollection,
+  current: Awaited<
+    ReturnType<CollectionRegistryService["getCollectionBySlug"]>
+  >,
+  dialect: SupportedDialect
+): void {
+  if (current && isHandedToBuilder(current)) return;
+  const lost = uniqueIndexesLost(collection, dialect);
+  if (lost.length > 0) throw demoteLosesUniqueIndex(collection.slug, lost);
+}
+
+/**
+ * Each unique index declared in `indexes` that the Schema Builder's table for the collection lacks,
+ * by its fields as declared. Both tables come from the builder the schema pipeline describes a
+ * collection's table with (`desiredCollectionTable`), matched by the key its diff pairs indexes on
+ * (`keyedIndexes`), so this names exactly what a sync would drop: one that `unique: true` on the
+ * field declares too is the Builder's to keep.
+ */
+function uniqueIndexesLost(
+  collection: DemotedCollection,
+  dialect: SupportedDialect
+): string[][] {
+  const declared = (
+    Array.isArray(collection.indexes)
+      ? (collection.indexes as IndexConfig[])
+      : []
+  ).filter(index => index.unique === true);
+  if (declared.length === 0) return [];
+  const keysWith = (indexes: IndexConfig[], builderOwned: boolean) => {
+    const table = desiredCollectionTable(
+      {
+        slug: collection.slug,
+        tableName: resolveCollectionTableName(
+          collection.slug,
+          collection.dbName
+        ),
+        fields: (collection.fields ?? []) as never,
+        status: collection.status === true,
+        localized: collection.localized === true,
+        builderOwned,
+        indexes,
+      },
+      dialect
+    );
+    return new Set(keyedIndexes(table.indexes ?? [], table.columns).keys());
+  };
+  const kept = keysWith([], true);
+  return declared
+    .filter(index => {
+      const without = keysWith([], false);
+      return [...keysWith([index], false)].some(
+        key => !without.has(key) && !kept.has(key)
+      );
+    })
+    .map(index => [...index.fields]);
+}
+
+/**
  * The lines that go with a demote: what changes for the collection that the Schema Builder's
  * record cannot say. None where nothing does.
  *
@@ -254,7 +326,9 @@ async function assertDemotedWriteAllowed(
  *   without them, so they stop applying once its code entry is removed.
  * - Its compound indexes: every schema sync ignores the code entry of a collection handed to the
  *   Builder (`withoutHandedToBuilder`), so the indexes it declares are dropped at the next sync,
- *   whether or not the entry is still there.
+ *   whether or not the entry is still there. So they are by a Schema Builder save of any
+ *   collection, which applies every collection the Builder owns. A unique one is refused instead
+ *   (`assertNoUniqueIndexLost`).
  * - Its columns the Builder's column rules describe differently (`builderRulesChangeColumns`),
  *   which the next sync changes, on the database's dialect when the run knows it.
  */
@@ -279,7 +353,7 @@ export function droppedOnDemoteNote(
     ...(!Array.isArray(collection.indexes) || collection.indexes.length === 0
       ? []
       : [
-          "Its compound indexes are dropped at the next schema sync (db:sync, or a reload under next dev): the Schema Builder cannot hold them.",
+          "Its compound indexes are dropped at the next schema sync (db:sync, a reload under next dev, or a Schema Builder save, of another collection too): the Schema Builder cannot hold them.",
         ]),
     ...(changed.length === 0
       ? []
@@ -374,6 +448,7 @@ async function previewDemotion(args: {
       logger: args.logger,
       action: "db:sync --demote",
     });
+    assertNoUniqueIndexLost(args.collection, current, args.adapter.dialect);
     const write = demotedWrite(args.collection, current);
     await assertDemotedWriteAllowed(args.registry, write);
     const note = droppedOnDemoteNote(args.collection, args.adapter.dialect);

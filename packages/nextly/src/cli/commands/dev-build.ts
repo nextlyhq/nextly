@@ -11,7 +11,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { configTheCodeOwnsIn } from "../../di/load-dynamic-tables";
+import {
+  configTheCodeOwnsIn,
+  configWithRecordedHandOversIn,
+} from "../../di/load-dynamic-tables";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { dashboardPinsPresent } from "../../domains/dashboard/dashboard-pins";
@@ -194,7 +197,12 @@ export async function publishExtensionSchema(
         }),
     dialect: capabilities.dialect,
     plugins: configResult.config.plugins ?? [],
-    config: configResult.config,
+    // A collection handed to the Schema Builder as its record has it, so a hook on its table is
+    // judged by the columns the push keeps, not by the code entry the push ignores.
+    config: await configWithRecordedHandOversIn(
+      adapter as unknown as DrizzleAdapter,
+      configResult.config
+    ),
     // The connected server's limits: a push that declares a check or
     // expression index the server cannot hold is refused before applying.
     server: capabilities,

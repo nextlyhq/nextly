@@ -244,6 +244,8 @@ interface SeedFields {
   localized?: boolean;
   /** A collection's compound indexes, by field. */
   indexes?: DeclaredIndex[];
+  /** Set for a collection handed to the Schema Builder (`configWithRecordedHandOvers`). */
+  builderOwned?: boolean;
 }
 
 /** A seed's columns, and its own indexes where it has any. */
@@ -382,6 +384,7 @@ export async function compileExtensionSchema(
             ? { localized: entity.localized }
             : {}),
           ...(entity.indexes !== undefined ? { indexes: entity.indexes } : {}),
+          ...(entity.builderOwned === true ? { builderOwned: true } : {}),
         },
         input.dialect
       )

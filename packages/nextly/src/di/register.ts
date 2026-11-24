@@ -387,6 +387,7 @@ import {
 } from "./layout-scan-entities";
 import {
   type LoadedBuilderEntity,
+  configWithRecordedHandOversIn,
   loadBuilderEntities,
   loadDynamicTables,
 } from "./load-dynamic-tables";
@@ -1136,7 +1137,8 @@ async function registerServicesOnce(
     adapter,
     transformedConfig,
     transformedPlugins,
-    resolvedLogger
+    resolvedLogger,
+    structure.productionStart
   );
 
   // Before the migrations and the hold below, and touching no database: the
@@ -2034,7 +2036,8 @@ async function prepareBootSchema(
   adapter: DrizzleAdapter,
   transformedConfig: NextlyServiceConfig,
   transformedPlugins: PluginDefinition[],
-  logger: Logger
+  logger: Logger,
+  productionStart: boolean
 ): Promise<ExtensionSchema | undefined> {
   // The dialect is read defensively because an adapter that cannot report one
   // is a boot that is going to fail regardless, and it must fail at the step
@@ -2076,12 +2079,21 @@ async function prepareBootSchema(
   const { declaredFieldGroupStorage } = await import(
     "../domains/field-groups/services/field-group-stored-tables"
   );
-  const fieldGroups = declaresExtensionSchema({
+  const declared = declaresExtensionSchema({
     plugins: transformedPlugins,
     config: transformedConfig,
-  })
+  });
+  const fieldGroups = declared
     ? await declaredFieldGroupStorage(adapter, transformedConfig.fieldGroups)
     : undefined;
+  // A development start compiles as `db:sync` and a reload do: a collection handed to the Schema
+  // Builder by its record, not by the code entry they ignore, so a hook one of them accepted does
+  // not stop the next start. A production start follows the entry, as the migrations it runs on
+  // were written from it, and makes no read for this.
+  const seededConfig =
+    declared && !productionStart
+      ? await configWithRecordedHandOversIn(adapter, transformedConfig)
+      : transformedConfig;
   return compileAndPublishExtensionSchema({
     ...(fieldGroups === undefined
       ? {}
@@ -2095,7 +2107,7 @@ async function prepareBootSchema(
     // development push, `ctx.db`, production migrations and the CLI must all
     // see the same set.
     plugins: transformedPlugins,
-    config: transformedConfig,
+    config: seededConfig,
     // The connected server's limits, so a declared check it will not enforce
     // or an expression index it cannot build is refused at the compile,
     // before the push applies anything.
