@@ -310,7 +310,8 @@ describe("the route's answer for a field found by its path", () => {
     const stars = { type: "stars", label: "Stars", storage: "number" } as const;
     registerFieldType({
       ...stars,
-      validate: value => (Number(value) <= 5 ? true : "At most five stars."),
+      validate: (value: unknown) =>
+        Number(value) <= 5 ? true : "At most five stars.",
     } as unknown as PluginFieldType);
     registerFieldType({
       ...stars,
