@@ -32,9 +32,10 @@ let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "nextly-pending-translated-"));
   vi.stubEnv("CI", "");
-  // Neither command connects; each needs only the dialect.
+  // Neither command connects: the URL names a file never opened, so these cases need nothing of
+  // a run without one (`migrate-check-no-database.test.ts`).
   vi.stubEnv("DB_DIALECT", "sqlite");
-  vi.stubEnv("DATABASE_URL", "");
+  vi.stubEnv("DATABASE_URL", `file:${join(dir, "unused.db")}`);
   _resetEnvCache();
 });
 

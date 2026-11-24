@@ -85,6 +85,9 @@ function dialectHeaders(): string[] {
     );
 }
 
+/** A PostgreSQL address nothing listens on: named, never opened. */
+const UNOPENED_POSTGRES = "postgres://nobody@127.0.0.1:1/none";
+
 /** The environment a run sees: only the names given are set. */
 function environment(env: { DB_DIALECT?: string; DATABASE_URL?: string }) {
   vi.stubEnv("DB_DIALECT", env.DB_DIALECT ?? "");
@@ -136,7 +139,7 @@ describe("with no DATABASE_URL", () => {
 
 describe("the order the dialect is read in", () => {
   it("takes the newest migration's dialect over DB_DIALECT and DATABASE_URL", async () => {
-    environment({ DB_DIALECT: "postgresql" });
+    environment({ DB_DIALECT: "postgresql", DATABASE_URL: UNOPENED_POSTGRES });
     expect((await create(project("title"))).code).toBeUndefined();
 
     environment({
@@ -149,7 +152,7 @@ describe("the order the dialect is read in", () => {
   });
 
   it("takes --dialect over the history and the environment", async () => {
-    environment({ DB_DIALECT: "postgresql" });
+    environment({ DB_DIALECT: "postgresql", DATABASE_URL: UNOPENED_POSTGRES });
     expect((await create(project("title"))).code).toBeUndefined();
 
     // Over a PostgreSQL history the project has nothing pending; compared as MySQL, every text
