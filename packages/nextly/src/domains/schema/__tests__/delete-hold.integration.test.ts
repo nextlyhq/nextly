@@ -796,10 +796,17 @@ describe.each(getConfiguredTestDialects())(
       slowRegistry.ms = 1_500;
       release();
       expect(await applying).toBe("applied");
+      // Refused by the hold's own check, naming the field: not a database error a write into the
+      // dropped column would end with.
       expect(await writing).toMatchObject({
         code: "VALIDATION_ERROR",
         publicData: {
-          errors: [expect.objectContaining({ path: "fields.note" })],
+          errors: [
+            expect.objectContaining({
+              path: "fields.note",
+              code: "FIELD_REMOVED",
+            }),
+          ],
         },
       });
       expect(await hasNoteColumn(t)).toBe(false);
@@ -1500,9 +1507,13 @@ describe.each(getConfiguredTestDialects())(
 
     /**
      * The app on a database another process can open (a file on SQLite, a scratch database
-     * elsewhere), with its collection, three notes, and an editor signed in for the REST API.
+     * elsewhere), with its collection, three notes, and an editor signed in for the REST API. With
+     * `perLanguage`, on the per-language layout, which the other copy then runs on too
+     * (`childLayoutArgs`).
      */
-    async function bootShared(): Promise<{
+    async function bootShared(
+      options: { perLanguage?: boolean } = {}
+    ): Promise<{
       t: TestNextly;
       url: string;
       cookie: string;
@@ -1527,6 +1538,7 @@ describe.each(getConfiguredTestDialects())(
         adapter: (await createAdapter({ type: dialect, url } as Parameters<
           typeof createAdapter
         >[0])) as never,
+        ...(options.perLanguage === true ? { perLanguageStorage: true } : {}),
         db: {
           migrationsDir: "./database/history",
           uiSchemaFile: "./schema/builder.json",
@@ -1539,7 +1551,17 @@ describe.each(getConfiguredTestDialects())(
         {},
         { name: SLUG, label: "Note", fields: NOTED }
       );
-      for (const note of ["a", "b", "c"]) await insert(t, note);
+      for (const note of ["a", "b", "c"]) {
+        // Per language, the translatable values go to the translations table, as a person writes them.
+        if (options.perLanguage === true) {
+          await t.nextly.create({
+            collection: SLUG,
+            data: { label: "l", note },
+          } as never);
+        } else {
+          await insert(t, note);
+        }
+      }
       const editor = "dh-race-editor";
       await superAdminUser(t, editor);
       const cookie = `nextly_session=${await signAccessToken(
@@ -1581,6 +1603,8 @@ describe.each(getConfiguredTestDialects())(
           SLUG,
           way,
           JSON.stringify({ label: "from the other copy", note: "raced" }),
+          // Sets only the field the save keeps, so the notes it counts stay three.
+          JSON.stringify({ label: "warming up" }),
         ],
         {
           cwd: join(__dirname, "..", "..", "..", ".."),
@@ -1686,7 +1710,12 @@ describe.each(getConfiguredTestDialects())(
               if (!(dialect === "sqlite" && way === "rest")) {
                 expect(outcome, JSON.stringify(outcome)).toMatchObject({
                   code: "VALIDATION_ERROR",
-                  errors: [expect.objectContaining({ path: "fields.note" })],
+                  errors: [
+                    expect.objectContaining({
+                      path: "fields.note",
+                      code: "FIELD_REMOVED",
+                    }),
+                  ],
                 });
               }
             } finally {
@@ -1700,6 +1729,64 @@ describe.each(getConfiguredTestDialects())(
         );
       }
     }
+
+    // On per-language storage the collection's translatable values are in its translations table,
+    // and the registry row is written after the file, once that table is brought in step: a write
+    // from another copy, sent after the count, waits until that row is written, never landing
+    // between the file and the row. Raced across processes, since a write there waits at the
+    // database's own hold. On SQLite the save holds the collection in its own process alone after
+    // the file's transaction, a stated limit.
+    it.skipIf(dialect === "sqlite")(
+      "holds a write from another copy until a per-language save on the file road is recorded, then refuses its value for the removed field",
+      async () => {
+        const shared = await bootShared({ perLanguage: true });
+        try {
+          const writer = await otherCopy(shared, "direct");
+          const { paused, release } = gated(afterCount);
+          const applying = apply(shared.t, 3, REMAINING, {
+            note: { action: "confirm_drop" },
+          }).then(
+            () => "applied",
+            (error: unknown) => error
+          );
+          const reached = await Promise.race([
+            paused.then(() => true),
+            applying.then(() => false),
+          ]);
+          expect(reached || (await applying)).toBe(true);
+
+          writer.go();
+          await new Promise(resolve => setTimeout(resolve, 1_500));
+          const heldBack = !writer.settled();
+          // The span between the file and the registry row, made long enough to land in.
+          slowRegistry.ms = 1_500;
+          release();
+          expect(heldBack).toBe(true);
+          expect(await applying).toBe("applied");
+          const outcome = await writer.outcome;
+          expect(outcome, JSON.stringify(outcome)).toMatchObject({
+            code: "VALIDATION_ERROR",
+            errors: [
+              expect.objectContaining({
+                path: "fields.note",
+                code: "FIELD_REMOVED",
+              }),
+            ],
+          });
+          const [rows] = await sql<{ n: number | string }>(
+            shared.t,
+            `SELECT COUNT(*) AS n FROM ${q(TABLE)}`
+          );
+          expect(Number(rows?.n)).toBe(3);
+        } finally {
+          await instance?.destroy();
+          instance = undefined;
+          await shared.drop();
+          _resetEnvCache();
+        }
+      },
+      120_000
+    );
   }
 );
 
@@ -1841,13 +1928,127 @@ describe.each(getConfiguredTestDialects())(
         release();
         expect(heldBack).toBe(true);
         expect(await applying).toBe("applied");
+        // Refused by the hold's own check, naming the field: not a database error a write into the
+        // dropped column would end with, which a hold let go before the registry write leaves.
         expect(await writing).toMatchObject({
           code: "VALIDATION_ERROR",
           publicData: {
-            errors: [expect.objectContaining({ path: "fields.note" })],
+            errors: [
+              expect.objectContaining({
+                path: "fields.note",
+                code: "FIELD_REMOVED",
+              }),
+            ],
           },
         });
         expect(await translatedNotes(t)).toBe("gone");
+      }, 60_000);
+    }
+  }
+);
+
+// A PostgreSQL app whose pool keeps one connection, as a serverless deploy often configures it. The
+// save's hold is kept on a connection for as long as the save holds the collection, so it is opened
+// beside the pool: kept on the pool's one connection, the save's count and statements would wait
+// for a second one that never comes.
+describe.runIf(getConfiguredTestDialects().includes("postgresql"))(
+  "a save that removes a field, on a PostgreSQL pool of one connection",
+  () => {
+    let drop: (() => Promise<void>) | undefined;
+    afterEach(async () => {
+      await instance?.destroy();
+      instance = undefined;
+      await drop?.();
+      drop = undefined;
+    });
+
+    async function bootOnPoolOfOne(): Promise<TestNextly> {
+      vi.stubEnv("NODE_ENV", "development");
+      const scratch = await createScratchDatabase(
+        "postgresql",
+        "nextly_dh_pool1"
+      );
+      drop = scratch.drop;
+      vi.stubEnv("DB_DIALECT", "postgresql");
+      vi.stubEnv("DATABASE_URL", scratch.url);
+      _resetEnvCache();
+      const t = await createTestNextly({
+        adapter: (await createAdapter({
+          type: "postgresql",
+          url: scratch.url,
+          // A wait for a connection the pool cannot give ends here, rather than the case's own
+          // time limit.
+          pool: { max: 1, connectionTimeoutMs: 10_000 },
+        } as Parameters<typeof createAdapter>[0])) as never,
+        db: {
+          migrationsDir: "./database/history",
+          uiSchemaFile: "./schema/builder.json",
+        },
+      });
+      instance = t;
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: SLUG, label: "Note", fields: NOTED }
+      );
+      for (const note of ["a", "b"]) {
+        await t.nextly.create({
+          collection: SLUG,
+          data: { label: "l", note },
+        } as never);
+      }
+      return t;
+    }
+
+    const query = <T>(t: TestNextly, text: string): Promise<T[]> =>
+      (
+        t.adapter as unknown as {
+          executeQuery<R>(statement: string): Promise<R[]>;
+        }
+      ).executeQuery<T>(text);
+
+    /** The `note` values the table holds, or `"gone"` once its column is. */
+    async function notes(t: TestNextly): Promise<number | "gone"> {
+      try {
+        const [row] = await query<{ n: number | string }>(
+          t,
+          `SELECT COUNT(*) AS n FROM "${TABLE}" WHERE "note" IS NOT NULL`
+        );
+        return Number(row?.n);
+      } catch {
+        return "gone";
+      }
+    }
+
+    for (const road of ["file", "push"] as const) {
+      it(`applies a save on the ${road} road that deletes the count confirmed`, async () => {
+        const t = await bootOnPoolOfOne();
+        expect(await notes(t)).toBe(2);
+        pushRoad.forced = road === "push";
+        const [row] = await query<{ v: number | string | null }>(
+          t,
+          `SELECT "schema_version" AS v FROM "dynamic_collections" WHERE "slug" = '${SLUG}'`
+        );
+
+        const outcome = await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: SLUG },
+          {
+            fields: REMAINING,
+            confirmed: true,
+            schemaVersion: Number(row?.v ?? 1),
+            resolutions: { note: { action: "confirm_drop" } },
+            confirmedDeletions: [{ field: "note", count: 2 }],
+          }
+        ).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+
+        expect(outcome).toBe("applied");
+        expect(await notes(t)).toBe("gone");
       }, 60_000);
     }
   }

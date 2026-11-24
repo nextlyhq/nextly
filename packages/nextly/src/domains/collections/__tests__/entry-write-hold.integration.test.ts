@@ -365,7 +365,9 @@ describe.each(getConfiguredTestDialects())(
 
     // A save that removed a field while the write waited moves the definition's version: a field the
     // write sets that the held definition no longer has is refused by name, before anything is
-    // written. A write that sets only fields the definition keeps goes on.
+    // written. A write that sets only fields the definition keeps was still made from the earlier
+    // definition, whose removed column it would read, so it is refused as made for a definition
+    // that changed, to be made again from the new one.
     it("refuses, by name, a field the write sets that a save removed after it loaded the definition", async () => {
       const t = await boot();
       const setsNote = await loadedNow(t, { title: "t", note: "n" });
@@ -394,6 +396,32 @@ describe.each(getConfiguredTestDialects())(
           ],
         },
       });
+      await expect(heldFor(t, setsTitle)).rejects.toMatchObject({
+        code: "COLLECTION_BEING_CHANGED",
+      });
+      // Made from the definition as the save left it, the write goes on.
+      await expect(
+        heldFor(t, await loadedNow(t, { title: "t" }))
+      ).resolves.toBeUndefined();
+    }, 30_000);
+
+    // A save that only adds a field moves the version too, but every field the write was made from
+    // is still there: the write goes on.
+    it("lets a write go on when a save since only added a field", async () => {
+      const t = await boot();
+      const setsTitle = await loadedNow(t, { title: "t" });
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      const row = (await registry.getCollection(SLUG)) as {
+        fields: Array<{ name: string }>;
+      };
+      const grown = JSON.stringify([
+        ...row.fields,
+        { name: "extra", type: "text" },
+      ]);
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET fields = '${grown.replace(/'/g, "''")}', schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+      );
+
       await expect(heldFor(t, setsTitle)).resolves.toBeUndefined();
     }, 30_000);
 
