@@ -55,6 +55,7 @@ import {
 import { KEPT_AS_DEFAULT } from "../layout-removal/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import { settleDefaultLayout } from "./settle-default-layout";
 
 const SLUGS = {
   layouts: LAYOUTS_SLUG,
@@ -136,9 +137,11 @@ describe.each(getConfiguredTestDialects())(
         seedPublic: true,
       });
       // The boot starts its own seed without awaiting it (`onReady` runs
-      // before the Direct API serves). A run started now joins that one, so
-      // every case begins from the settled seed rather than racing it.
-      await ensure(current);
+      // before the Direct API serves). It is waited out and the default then
+      // settled (`settleDefaultLayout`), so every case begins from the
+      // settled seed rather than racing it.
+      const t = current;
+      await settleDefaultLayout(() => ensure(t));
       return current;
     }
 

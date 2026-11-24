@@ -404,7 +404,8 @@ describe("confirmApply", () => {
 
     await waitFor(() => expect(onApplied).toHaveBeenCalledWith(FIELDS));
     // The version applied is the one the user was shown, not a re-read.
-    expect(applyFn).toHaveBeenCalledWith(FIELDS, 9, {}, [], [], []);
+    // No field moved: nothing to hint.
+    expect(applyFn).toHaveBeenCalledWith(FIELDS, 9, {}, [], [], undefined, []);
     expect(startRestart).toHaveBeenCalledTimes(1);
     expect(stopRestart).toHaveBeenCalledWith(
       true,
@@ -452,6 +453,7 @@ describe("confirmApply", () => {
         {},
         [],
         ["dc_posts", "body"],
+        undefined,
         []
       )
     );
@@ -499,6 +501,8 @@ describe("confirmApply", () => {
         {},
         [],
         [],
+        // No field moved: nothing to hint.
+        undefined,
         [
           { field: "note", count: 3 },
           { field: "empty", count: 0 },
@@ -893,8 +897,9 @@ describe("a rename the Builder made", () => {
           choice: "rename",
         },
       ],
-      // No conversion to confirm.
+      // No conversion to confirm, and no field moved.
       [],
+      undefined,
       // No removed field whose count to confirm.
       []
     );
@@ -924,8 +929,9 @@ describe("a rename the Builder made", () => {
           choice: "rename",
         },
       ],
-      // No conversion to confirm.
+      // No conversion to confirm, and no field moved.
       [],
+      undefined,
       // No removed field whose count to confirm.
       []
     );

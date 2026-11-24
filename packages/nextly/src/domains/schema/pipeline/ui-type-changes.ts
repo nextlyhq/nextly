@@ -9,6 +9,12 @@
  * field the save renames is judged once the renames are answered (`refuseRenamedUiTypeChanges`),
  * since only the answers say which old column the new field's values come from.
  *
+ * A code-first apply (a reload under `next dev`, `nextly db:sync`, a development start) states its
+ * old fields too, from each entity's registry row. Its type changes that plan no statement, a field
+ * held inside a group's or a repeater's JSON and a field whose column keeps its type, are judged by
+ * the same judgement in the same words (`configuredTypeChangeRefusals`), since nothing else judges
+ * them. A change of a column's type is the code-first rule's, which the classifier asks.
+ *
  * @module domains/schema/pipeline/ui-type-changes
  */
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -23,9 +29,13 @@ import {
 import {
   entityLabel,
   type EntityTypeChangeInput,
+  type FieldTypeChange,
+  fieldTypeChangeRefusals,
+  fieldTypeChangesOf,
   perLanguageAfter,
   perLanguageBefore,
   refuseFieldTypeChanges,
+  type TypeChangeRefusal,
 } from "../value-conversion/type-change/field-type-changes";
 
 import { introspectLiveSnapshot } from "./diff/introspect-live";
@@ -48,8 +58,14 @@ interface SavedEntity {
   next: FieldDefinition[];
 }
 
-/** The entities the save states its old fields for and may change: none of code's. */
-function builderSaved(desired: DesiredSchema): SavedEntity[] {
+/**
+ * The entities an apply states its old fields for and may change: a Schema Builder save's (none of
+ * code's, which are locked), or a code-first apply's (none of the Builder's), as `owner` says.
+ */
+function savedEntities(
+  desired: DesiredSchema,
+  owner: "builder" | "configured"
+): SavedEntity[] {
   const all: { kind: EntityKind; entity: SavedEntity["entity"] }[] = [
     ...Object.values(desired.collections).map(entity => ({
       kind: "collection" as const,
@@ -64,8 +80,10 @@ function builderSaved(desired: DesiredSchema): SavedEntity[] {
       entity,
     })),
   ];
+  const changes = (entity: SavedEntity["entity"]): boolean =>
+    owner === "builder" ? entity.locked !== true : entity.builderOwned !== true;
   return all.flatMap(({ kind, entity }) =>
-    entity.recordedFields === undefined || entity.locked === true
+    entity.recordedFields === undefined || !changes(entity)
       ? []
       : [
           {
@@ -106,12 +124,12 @@ function entityInput(
  * @throws {NextlyError} a validation error naming each refused field of the first entity that has
  *   one
  */
-export async function refuseUiTypeChanges(
+async function refuseUiTypeChanges(
   desired: DesiredSchema,
   db: unknown,
   dialect: SupportedDialect
 ): Promise<void> {
-  for (const saved of builderSaved(desired)) {
+  for (const saved of savedEntities(desired, "builder")) {
     const input = entityInput(saved);
     const renamed = await landedRenames(saved, input, db, dialect);
     await refuseFieldTypeChanges(db, dialect, {
@@ -121,6 +139,136 @@ export async function refuseUiTypeChanges(
       ...(renamed.size > 0 ? { renamed } : {}),
     });
   }
+}
+
+/** One code-first entity's refused field type changes. */
+export interface ConfiguredTypeChangeRefusals {
+  kind: EntityKind;
+  slug: string;
+  refusals: TypeChangeRefusal[];
+}
+
+/**
+ * Each code-first entity's field type changes that the code-first rule never sees, judged as a
+ * Schema Builder save judges them, over the values they hold, with each refusal in the Builder's
+ * words (`fieldTypeChangeRefusals`). The code-first rule judges a change of a column's type, which
+ * plans a statement; a field inside a group's or a repeater's JSON, and a field whose column keeps
+ * its name and its type, plan none, so nothing else judges them, and nothing converts or clears
+ * their values: a lossy change of one is refused whatever consent is given.
+ */
+export async function configuredTypeChangeRefusals(
+  desired: DesiredSchema,
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<ConfiguredTypeChangeRefusals[]> {
+  const refused: ConfiguredTypeChangeRefusals[] = [];
+  for (const saved of savedEntities(desired, "configured")) {
+    const input = configuredInput(saved, dialect);
+    if (input === null) continue;
+    const refusals = await fieldTypeChangeRefusals(db, dialect, input);
+    if (refusals.length > 0) {
+      refused.push({ kind: saved.kind, slug: saved.entity.slug, refusals });
+    }
+  }
+  return refused;
+}
+
+/**
+ * Refuse an apply's refused field type changes before it plans anything: a Schema Builder save's
+ * (`refuseUiTypeChanges`), or a code-first apply's that the code-first rule never sees
+ * (`configuredTypeChangeRefusals`), entity by entity.
+ *
+ * @throws {NextlyError} a validation error naming each refused field of the first entity that has
+ *   one
+ */
+export async function refuseTypeChangesBeforeApply(
+  source: "ui" | "code",
+  desired: DesiredSchema,
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<void> {
+  if (source === "ui") {
+    await refuseUiTypeChanges(desired, db, dialect);
+    return;
+  }
+  for (const saved of savedEntities(desired, "configured")) {
+    const input = configuredInput(saved, dialect);
+    if (input !== null) await refuseFieldTypeChanges(db, dialect, input);
+  }
+}
+
+/**
+ * What the judgement reads of one code-first entity: its fields before and after the apply, narrowed
+ * to the changes the code-first rule never sees (`unseenByCodeFirstRule`). Null where it has none.
+ */
+function configuredInput(
+  saved: SavedEntity,
+  dialect: SupportedDialect
+): EntityTypeChangeInput | null {
+  return unseenByCodeFirstRule(
+    { ...entityInput(saved), previous: saved.previous, next: saved.next },
+    dialect
+  );
+}
+
+/**
+ * `input` narrowed to the pairs of fields whose type change the code-first rule never sees, a
+ * renamed pair paired by its rename: each container whose fields inside its JSON change type, and
+ * each field whose column keeps its type (`plansNoStatement`). Null where there are none.
+ */
+function unseenByCodeFirstRule(
+  input: EntityTypeChangeInput,
+  dialect: SupportedDialect
+): EntityTypeChangeInput | null {
+  const previous: FieldDefinition[] = [];
+  const next: FieldDefinition[] = [];
+  const taken = new Set<string>();
+  for (const change of fieldTypeChangesOf({
+    previous: input.previous,
+    next: input.next,
+    ...(input.renamed !== undefined ? { renamed: input.renamed } : {}),
+    dialect,
+    builtBy: input.builtBy,
+    ...(input.componentRow === true ? { componentRow: true } : {}),
+    nested: true,
+  })) {
+    const pair =
+      change.within?.container ??
+      (plansNoStatement(change, dialect, input) ? change : undefined);
+    if (pair === undefined || taken.has(pair.to.name)) continue;
+    taken.add(pair.to.name);
+    previous.push(pair.from);
+    next.push(pair.to);
+  }
+  return next.length === 0 ? null : { ...input, previous, next };
+}
+
+/**
+ * Whether a type change plans no statement: its column keeps its type on the database, each read
+ * where the entity keeps its fields (`at`: a field group's on its own rows), whatever a rename does
+ * to its name. Never a relationship becoming another: a change of how it keeps its links is planned
+ * as a conversion of its own (a reference list) even where its column's type stays, as on SQLite,
+ * and is the code-first rule's. A relationship becoming a field of another kind, or one becoming a
+ * relationship, plans none where the column stays, and is judged here.
+ */
+function plansNoStatement(
+  change: FieldTypeChange,
+  dialect: SupportedDialect,
+  at: ColumnAt
+): boolean {
+  if (
+    change.fromType.family === "relationship" &&
+    change.toType.family === "relationship"
+  ) {
+    return false;
+  }
+  const from = columnDescriptorAt(change.from, dialect, at);
+  const to = columnDescriptorAt(change.to, dialect, at);
+  return (
+    from !== null &&
+    to !== null &&
+    from.dialectType.toLowerCase() === to.dialectType.toLowerCase()
+  );
 }
 
 /**
@@ -174,7 +322,10 @@ export interface ConfirmedColumnRename {
  * Refuse the blocked and unconsented lossy type changes of fields the save renames, judged once
  * the renames are answered and before anything runs: the rename carries the old column's values to
  * the new name, where the new type then reads them. Only the renamed fields are judged here; the
- * rest were judged before the push planned anything (`refuseUiTypeChanges`).
+ * rest were judged before the push planned anything (`refuseTypeChangesBeforeApply`). A code-first
+ * apply's renamed fields are judged so too where the code-first rule never sees their change (a
+ * renamed container whose fields inside its JSON change type, a renamed column that keeps its type,
+ * `unseenByCodeFirstRule`).
  *
  * @throws {NextlyError} a validation error naming each refused field of the first entity that has
  *   one
@@ -186,9 +337,11 @@ export async function refuseRenamedUiTypeChanges(
   db: unknown,
   dialect: SupportedDialect
 ): Promise<void> {
-  // A code-first apply's type changes are judged by its own rule, in the classifier.
-  if (source !== "ui" || renames.length === 0) return;
-  for (const saved of builderSaved(desired)) {
+  if (renames.length === 0) return;
+  for (const saved of savedEntities(
+    desired,
+    source === "ui" ? "builder" : "configured"
+  )) {
     const input = entityInput(saved);
     const columnOf = (field: FieldDefinition) =>
       columnDescriptorAt(field, dialect, input)?.name.toLowerCase();
@@ -203,12 +356,16 @@ export async function refuseRenamedUiTypeChanges(
     const renamed = renamedFieldsOf(previous, next, renames, tables, columnOf);
     if (renamed.size === 0) continue;
     const newNames = new Set(renamed.values());
-    await refuseFieldTypeChanges(db, dialect, {
+    const judged: EntityTypeChangeInput = {
       ...input,
       previous: previous.filter(f => renamed.has(f.name)),
       next: next.filter(f => newNames.has(f.name)),
       renamed,
-    });
+    };
+    // A code-first apply's other renamed changes are the code-first rule's, which the classifier asks.
+    const asked =
+      source === "ui" ? judged : unseenByCodeFirstRule(judged, dialect);
+    if (asked !== null) await refuseFieldTypeChanges(db, dialect, asked);
   }
 }
 

@@ -222,7 +222,7 @@ import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
 import {
   refuseRenamedUiTypeChanges,
-  refuseUiTypeChanges,
+  refuseTypeChangesBeforeApply,
 } from "./ui-type-changes";
 import { uniqueColumnLookup } from "./unique-columns";
 import { currentWithheldScopeFields } from "./withheld-scope-fields";
@@ -2313,9 +2313,9 @@ export class PushSchemaPipeline {
       // before anything is planned or run: a blocked or lossy change refuses the save here, naming
       // each field (`refuseUiTypeChanges`). Asked once, before the first try; a value written
       // between this read and the statement that converts its column is not judged again here.
-      if (source === "ui") {
-        await refuseUiTypeChanges(args.desired, db, dialect);
-      }
+      // A code-first apply's changes that plan no statement (a field inside JSON, a column that keeps
+      // its type) are judged so too; a change of a column's type is the classifier's rule.
+      await refuseTypeChangesBeforeApply(source, args.desired, db, dialect);
 
       // MySQL keeps what a try committed, so each try plans the apply again from the live
       // database, which shows it; SQLite's tries plan again too, where a try that changed the table
