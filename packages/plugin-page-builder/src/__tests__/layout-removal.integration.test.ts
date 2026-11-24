@@ -69,6 +69,7 @@ import {
 } from "../layout-removal/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import { settleDefaultLayout } from "./settle-default-layout";
 
 const SLUGS = {
   layouts: LAYOUTS_SLUG,
@@ -242,7 +243,10 @@ describe.each(getConfiguredTestDialects())(
         plugins: [pageBuilder(), probePlugin(probe), ...extra],
         seedPublic: true,
       });
-      await ensure(current);
+      // The boot's own seed waited out, and the default then settled
+      // (`settleDefaultLayout`).
+      const t = current;
+      await settleDefaultLayout(() => ensure(t));
       return current;
     }
 
@@ -944,15 +948,17 @@ describe.each(getConfiguredTestDialects())(
         const table = await tableOf(t, LAYOUTS_SLUG);
         // Right after the removal reads its copy, an edit lands that changes
         // only the extension field and leaves the stored timestamp as it was.
+        // A text field is translatable, and every installation keeps those in
+        // the per-language table, so the edit lands on the Layout's row there.
         let edited = false;
         t.hooks.register("afterRead", LAYOUTS_SLUG, async () => {
           if (edited) return;
           if ((await fence().removalOf(other))?.step !== "checked") return;
           edited = true;
           await t.adapter.update(
-            table,
+            `${table}_locales`,
             { tagline: "Edited meanwhile" },
-            { and: [{ column: "id", op: "=", value: other }] }
+            { and: [{ column: "_parent", op: "=", value: other }] }
           );
         });
         // A promotion racing the delete, so the Layout comes back from the
@@ -2354,11 +2360,15 @@ describe.each(getConfiguredTestDialects())(
           layout: other,
           status: "published",
         });
-        // A save without a status: the working draft names it beside the live row.
+        // A save without a status: the working draft names it beside the live
+        // row. A page's held edit is kept by part, its title in the language's
+        // draft and its Layout in the shared one, so the save names the Layout
+        // too: the shared draft then holds it, as the draft of an author who
+        // chose it does.
         await t.nextly.update({
           collection: PAGES_SLUG,
           id: edited,
-          data: { title: "Edited again", _overwrite: true },
+          data: { title: "Edited again", layout: other, _overwrite: true },
           overrideAccess: true,
         });
         // POPULATION CONTROL: the edit is held as a draft, not live.

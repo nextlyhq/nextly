@@ -35,6 +35,15 @@ const PERSON_OPERATIONS: ReadonlySet<string> = new Set([
   "findSingles",
 ]);
 
+/**
+ * The namespace methods that take a person themselves, checking them as a
+ * person call is checked: `files.download` opens a file for whoever the call
+ * names, a signed-in person included.
+ */
+const PERSON_NAMESPACE_OPERATIONS: ReadonlySet<string> = new Set([
+  "files.download",
+]);
+
 /** Whether any argument is an options object naming a person. */
 function namesPrincipal(args: readonly unknown[]): boolean {
   return args.some(
@@ -121,6 +130,19 @@ function guardNamespace(
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver) as unknown;
       const path = `${name}.${String(prop)}`;
+      if (
+        typeof value === "function" &&
+        PERSON_NAMESPACE_OPERATIONS.has(path)
+      ) {
+        const method = value as (...args: unknown[]) => unknown;
+        return (...args: unknown[]) => {
+          // A named query reads only through the reader it is handed, so
+          // this method is refused inside one as every other is.
+          const insideQuery = refusedInsideNamedQuery(path);
+          if (insideQuery !== undefined) return Promise.reject(insideQuery);
+          return runWithAccessMemo(() => method.apply(target, args));
+        };
+      }
       if (typeof value === "function") {
         return refusingPrincipal(
           value as (...args: unknown[]) => unknown,

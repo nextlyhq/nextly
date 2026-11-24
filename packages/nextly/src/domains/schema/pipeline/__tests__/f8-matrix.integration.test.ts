@@ -124,6 +124,7 @@ function makePipeline(promptDispatcher: PromptDispatcher) {
     preCleanupExecutor: new RealPreCleanupExecutor(),
     migrationJournal: noopMigrationJournal,
     notifier: noopNotifier,
+    adapter: undefined,
   });
 }
 
@@ -602,6 +603,7 @@ describe("F8 matrix — PostgreSQL — NOT-NULL coercion via provide_default", (
       preCleanupExecutor: new RealPreCleanupExecutor(),
       migrationJournal: noopMigrationJournal,
       notifier: noopNotifier,
+      adapter: undefined,
     });
 
     const result = await pipeline.apply({

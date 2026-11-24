@@ -125,6 +125,28 @@ describe("builderFieldErrors", () => {
     );
   });
 
+  it("marks a field whose move the server refused, unless it has an error of its own", () => {
+    const fields: BuilderField[] = [
+      baseField({ id: "moved", name: "moved" }),
+      baseField({ id: "choice", name: "choice", type: "select", options: [] }),
+    ];
+    const errors = builderFieldErrors(
+      fields,
+      fields,
+      new Map([
+        ["moved", "Moved cannot move yet."],
+        ["choice", "Choice cannot move yet."],
+      ])
+    );
+    expect(errors.get("moved")).toEqual({
+      kind: "refused-move",
+      message: "Moved cannot move yet.",
+    });
+    expect(errors.get("choice")?.message).toBe(
+      'Select/Radio field "choice" must have at least one option'
+    );
+  });
+
   it("refuses a save with the first error the outline marks", () => {
     const fields: BuilderField[] = [
       baseField({ id: "choice", name: "choice", type: "select", options: [] }),

@@ -2,12 +2,6 @@
 // so a key added there is kept at the top level here without a second edit.
 import { isReservedTopLevelKey } from "nextly/reserved-filter-keys";
 
-/** Translation-status list filter: keep entries in a given state for a locale. */
-export interface TranslationListFilter {
-  locale: string;
-  state: "missing" | "translated" | "draft" | "published";
-}
-
 export interface EntryFilterState {
   whereParam?: string | null;
   status?: string;
@@ -15,13 +9,11 @@ export interface EntryFilterState {
   createdTo?: string;
   updatedFrom?: string;
   updatedTo?: string;
-  /** The active language filter, if any. */
-  translated?: TranslationListFilter | null;
   /**
    * Whether the user may read every language's translation state, which a
-   * filter by it reads. Without it no such filter is sent, the list's own or
-   * a link's, since the server refuses the whole list for one. Defaults to
-   * true.
+   * language filter (`_translated`) reads. Without it no such filter is sent,
+   * a chosen one or a link's, since the server refuses the whole list for one.
+   * Defaults to true.
    */
   readsTranslationState?: boolean;
   /**
@@ -108,21 +100,18 @@ function joinedFilters(
 }
 
 /**
- * The top-level keys the list sends: the linked ones, then the language
- * filter, which wins over a linked `_translated`. Neither language filter is
- * sent for a user who may not read every language's translation state.
+ * Top-level keys as the list sends them: all of them, except that no language
+ * filter (`_translated`) is sent for a user who may not read every language's
+ * translation state.
  */
 function topLevelKeys(
-  linked: Record<string, unknown>,
-  translated: TranslationListFilter | null,
+  keys: Record<string, unknown>,
   readsTranslationState: boolean
 ): Record<string, unknown> {
-  if (!readsTranslationState) {
-    return Object.fromEntries(
-      Object.entries(linked).filter(([key]) => key !== "_translated")
-    );
-  }
-  return { ...linked, ...(translated ? { _translated: translated } : {}) };
+  if (readsTranslationState) return keys;
+  return Object.fromEntries(
+    Object.entries(keys).filter(([key]) => key !== "_translated")
+  );
 }
 
 export function buildEntryWhereFilter({
@@ -132,7 +121,6 @@ export function buildEntryWhereFilter({
   createdTo = "",
   updatedFrom = "",
   updatedTo = "",
-  translated = null,
   readsTranslationState = true,
   pluginWheres = [],
 }: EntryFilterState): Record<string, unknown> | undefined {
@@ -152,9 +140,10 @@ export function buildEntryWhereFilter({
   ].filter((f): f is Record<string, unknown> => f !== undefined);
 
   // The top-level-only keys go back at the TOP level, never nested inside
-  // `and`; a chosen filter's after a link's, so the toolbar's choice wins.
+  // `and`; a chosen filter's after a link's, so the toolbar's choice wins
+  // (the language filter's `_translated` over a link's among them).
   const topLevel = {
-    ...topLevelKeys(linked.topLevel, translated, readsTranslationState),
+    ...topLevelKeys(linked.topLevel, readsTranslationState),
     // Held to the same rule as a link's: no language filter for a user who
     // may not read every language's translation state.
     ...topLevelKeys(
@@ -162,7 +151,6 @@ export function buildEntryWhereFilter({
         string,
         unknown
       >,
-      null,
       readsTranslationState
     ),
   };

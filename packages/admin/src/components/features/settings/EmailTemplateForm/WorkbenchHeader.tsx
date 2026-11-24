@@ -26,6 +26,7 @@ import {
 import {
   ArrowLeft,
   Braces,
+  Code,
   Copy,
   History,
   Loader2,
@@ -55,6 +56,8 @@ export interface WorkbenchMenu {
   onDuplicate?: () => void;
   onReview?: () => void;
   onReset?: () => void;
+  /** Turns a written email into a coded one, which cannot be undone. */
+  onConvert?: () => void;
   onDelete?: () => void;
   /** Why Delete isn't offered, when the email can't be deleted. */
   deleteRefusal?: string;
@@ -310,6 +313,12 @@ function MoreMenu({ menu, owner }: { menu: WorkbenchMenu; owner: string }) {
       <DropdownMenuItem key="reset" onSelect={menu.onReset}>
         <RotateCcw className="h-4 w-4" />
         Reset to {owner}&apos;s version
+      </DropdownMenuItem>
+    ),
+    menu.onConvert && (
+      <DropdownMenuItem key="convert" onSelect={menu.onConvert}>
+        <Code className="h-4 w-4" />
+        Convert to code…
       </DropdownMenuItem>
     ),
   ].filter(Boolean);

@@ -12,6 +12,11 @@
  * A safe change, a lossy one its consent covers and a widening go on into the apply, which judges
  * them again on the rows as they are then.
  *
+ * The type changes that rule never sees, since they plan no statement (a field inside a group's or a
+ * repeater's JSON, a field whose column keeps its type), are judged as a Schema Builder save judges
+ * them (`configuredTypeChangeRefusals`), and an entity with a refused one is held with its refusals
+ * in the Builder's words, beside the rule's own reasons.
+ *
  * @module init/code-first-type-changes
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -31,6 +36,7 @@ import type {
   TableSpec,
 } from "../domains/schema/pipeline/diff/types";
 import type { DesiredSchema } from "../domains/schema/pipeline/types";
+import { configuredTypeChangeRefusals } from "../domains/schema/pipeline/ui-type-changes";
 import { consentForColumn } from "../domains/schema/repair-columns/consent";
 import type { NextlyError } from "../errors/nextly-error";
 
@@ -88,7 +94,32 @@ export async function typeChangesHeldBack(args: {
     env: args.env,
     honours: ["NEXTLY_ALLOW_CODE_FIRST_DROPS"],
   });
-  const held: HeldBackTypeChange[] = [];
+  // The type changes the rule below never sees, which plan no statement (a field inside a group's
+  // or a repeater's JSON, a column that keeps its type), judged first as a Schema Builder save
+  // judges them and held in its words, beside the rule's own reasons: only stricter.
+  const held = new Map<string, HeldBackTypeChange>();
+  const hold = (
+    kind: HeldBackTypeChange["kind"],
+    slug: string,
+    reasons: readonly string[]
+  ): void => {
+    if (reasons.length === 0) return;
+    const key = `${kind}:${slug}`;
+    const entry = held.get(key) ?? { kind, slug, reasons: [] };
+    entry.reasons.push(...reasons);
+    held.set(key, entry);
+  };
+  for (const { kind, slug, refusals } of await configuredTypeChangeRefusals(
+    args.schema,
+    args.db,
+    args.dialect
+  )) {
+    hold(
+      kind,
+      slug,
+      refusals.map(refusal => refusal.message)
+    );
+  }
   for (const entity of args.entities) {
     const judge = typeChangeJudge({
       db: args.db,
@@ -106,11 +137,9 @@ export async function typeChangesHeldBack(args: {
         ...reasonsToHold(op, judged.judgement, consent, args.dialect)
       );
     }
-    if (reasons.length > 0) {
-      held.push({ kind: entity.kind, slug: entity.slug, reasons });
-    }
+    hold(entity.kind, entity.slug, reasons);
   }
-  return held;
+  return [...held.values()];
 }
 
 /** Why one judged type change is held back, or nothing where it goes on into the apply. */

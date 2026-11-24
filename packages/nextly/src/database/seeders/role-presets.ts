@@ -17,10 +17,18 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import {
+  formatPresetReachNotice,
+  presetDeclarationsOf,
+  presetReachNotice,
+  presetReachOf,
+  type PresetDeclarationSource,
+} from "../../auth/preset-reach";
+import {
   ROLE_PRESETS,
   resolvePreset,
   type PresetContext,
   type PresetPermission,
+  type PresetReach,
   type RolePreset,
 } from "../../auth/role-presets";
 import type { RolePermissionService } from "../../domains/auth/services/role-permission-service";
@@ -43,6 +51,7 @@ export {
   resolvePreset,
   type PresetContext,
   type PresetPermission,
+  type PresetReach,
   type RolePreset,
 };
 
@@ -70,21 +79,37 @@ export {
  */
 export async function seedRolePresets(
   adapter: DrizzleAdapter,
-  logger: Logger
+  logger: Logger,
+  /**
+   * The configuration whose collections' `grants.presets`, declared
+   * permissions' `presets` and `presetGrants` open them to the presets.
+   * Without one, nothing is opened by configuration: every collection the
+   * grandfather record does not keep is closed to the presets.
+   */
+  declared: PresetDeclarationSource = {}
 ): Promise<void> {
   // Loaded when the presets are seeded, not by importing this module: the
   // container imports every core service.
   const container = await serviceContainerFor(adapter);
   const recording = presetGrantsRecording();
   if (recording !== undefined) {
-    await setPresetGrantsRecorded(adapter, container, recording, logger);
+    await setPresetGrantsRecorded(
+      adapter,
+      container,
+      recording,
+      logger,
+      declared
+    );
     return;
   }
   const roleService = container.roles;
   const rolePermissionService = container.rolePermissions;
 
   for (const { preset, permissionIds } of await resolvePresetGrants(
-    container
+    adapter,
+    container,
+    logger,
+    declared
   )) {
     try {
       // Returns the row, not the id, despite the name.
@@ -154,10 +179,70 @@ interface PresetGrants {
 /**
  * Each preset with the permissions it resolves to over the stored ones: the
  * one resolution both ways of seeding set the roles from.
+ *
+ * A collection's permissions reach a preset only where the configuration
+ * opens the collection to it, or the grandfather record keeps it open
+ * (`auth/preset-reach`). The record is written here, before any grant is set,
+ * where this database has none yet: set by difference first, the presets
+ * would lose every existing collection's grants at the first run after the
+ * upgrade.
  */
 async function resolvePresetGrants(
-  container: ServiceContainer
+  adapter: DrizzleAdapter,
+  container: ServiceContainer,
+  logger: Logger,
+  declared: PresetDeclarationSource
 ): Promise<PresetGrants[]> {
+  const [
+    { CollectionRegistryService },
+    { MetaService },
+    { grandfatheredPresetGrants },
+  ] = await Promise.all([
+    import("../../domains/collections/services/collection-registry-service"),
+    import("../../domains/meta/services/meta-service"),
+    import("../../domains/meta/preset-grants-grandfathered"),
+  ]);
+  // As stored: the grants are written from them.
+  const collectionSlugs = (
+    await new CollectionRegistryService(adapter, logger).getAllLabels({
+      forWrite: true,
+    })
+  ).map(({ slug }) => String(slug));
+  const collections = new Set(collectionSlugs);
+  const presetRoleIds = async () => {
+    const found: Array<{ slug: string; id: string }> = [];
+    for (const { slug } of ROLE_PRESETS) {
+      const role = await container.roles.findRoleIdBySlug(slug);
+      if (role) found.push({ slug, id: String(role.id) });
+    }
+    return found;
+  };
+  const grandfathered = await grandfatheredPresetGrants({
+    meta: new MetaService(adapter, logger),
+    presetRolesExist: async () => (await presetRoleIds()).length > 0,
+    presetHoldings: async () => {
+      const holdings = new Map<string, string[]>();
+      for (const { slug, id } of await presetRoleIds()) {
+        for (const {
+          resource,
+        } of await container.rolePermissions.listRolePermissions(id)) {
+          if (!collections.has(resource)) continue;
+          const presets = holdings.get(resource) ?? [];
+          if (!presets.includes(slug)) presets.push(slug);
+          holdings.set(resource, presets);
+        }
+      }
+      return holdings;
+    },
+  });
+  const inputs = {
+    collectionSlugs,
+    declarations: presetDeclarationsOf(declared),
+    grandfathered,
+  };
+  tellPresetReach(formatPresetReachNotice(presetReachNotice(inputs)), logger);
+  const reach = presetReachOf(inputs);
+
   const all = await container.permissions.listPermissions({ limit: 100000 });
   const permissions = all.data.map(p => ({
     id: String(p.id),
@@ -182,7 +267,7 @@ async function resolvePresetGrants(
     attached(p) || isWorkflowSeededRow(p);
 
   return ROLE_PRESETS.map(preset => {
-    const matched = resolvePreset(preset, permissions, isWorkflow);
+    const matched = resolvePreset(preset, permissions, reach, isWorkflow);
     return {
       preset,
       permissionIds: permissions
@@ -216,7 +301,8 @@ async function setPresetGrantsRecorded(
   adapter: DrizzleAdapter,
   container: ServiceContainer,
   recording: PresetGrantsRecording,
-  logger: Logger
+  logger: Logger,
+  declared: PresetDeclarationSource
 ): Promise<void> {
   // Loaded here, as the container is: a start that imports this module and
   // records nothing never loads them.
@@ -241,7 +327,12 @@ async function setPresetGrantsRecorded(
   const roleService: RoleService = container.roles;
   const rolePermissionService: RolePermissionService =
     container.rolePermissions;
-  const resolved = await resolvePresetGrants(container);
+  const resolved = await resolvePresetGrants(
+    adapter,
+    container,
+    logger,
+    declared
+  );
   const settled = async (): Promise<boolean> => {
     for (const { preset, permissionIds } of resolved) {
       const existing = await roleService.findRoleIdBySlug(preset.slug);
@@ -323,4 +414,19 @@ async function setPresetGrantsRecorded(
     }
     if (changed.length > 0) await afterGrantsChanged();
   });
+}
+
+/**
+ * Logs which collections the preset roles reach only by the grandfather
+ * record (a warning, since they close the day the configuration says nothing
+ * and the record is gone) and which they reach not at all (for information).
+ * Said at each seeding, which is each development start and each `nextly
+ * migrate`, so it is seen until the configuration speaks for each one.
+ */
+function tellPresetReach(
+  { kept, closed }: { kept: string | null; closed: string | null },
+  logger: Logger
+): void {
+  if (kept !== null) logger.warn?.(kept);
+  if (closed !== null) logger.info?.(closed);
 }

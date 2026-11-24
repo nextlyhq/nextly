@@ -1,5 +1,5 @@
 import { MUST_CHANGE_PASSWORD_CHALLENGE } from "../auth/pipeline/pending-token";
-import { collectPluginAuditKinds } from "../domains/audit/plugin-audit";
+import { collectPluginAuditKinds } from "../domains/audit/plugin-audit-kinds";
 import {
   assertModuleKeysFit,
   assertModuleNames,

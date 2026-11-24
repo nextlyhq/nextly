@@ -179,6 +179,7 @@ import {
   localizationNow,
 } from "../../i18n/localization-source";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { provenanceFieldsOf } from "../../i18n/provenance/field-status";
 import { translationProvenancePresent } from "../../i18n/provenance/record-provenance";
 import {
   ALL_LOCALES_KEY,
@@ -1472,7 +1473,7 @@ export class CollectionQueryService extends BaseService {
           scopeKind: "collection" as const,
           scopeSlug: collectionName,
           dialect: this.adapter.dialect,
-          fields: companion.localizedFields.map(field => field.name),
+          ...provenanceFieldsOf(companion.localizedFields),
         }
       : undefined;
     await populateTranslationStatus({
@@ -1955,7 +1956,7 @@ export class CollectionQueryService extends BaseService {
             provenance: {
               scopeKind: "collection" as const,
               scopeSlug: args.collectionName,
-              fields: companion.localizedFields.map(field => field.name),
+              ...provenanceFieldsOf(companion.localizedFields),
             },
           }
         : {}),
@@ -4459,6 +4460,9 @@ export class CollectionQueryService extends BaseService {
                 nonText: companion.localizedFields.some(
                   field => field.column === named.column && field.nonText
                 ),
+                // An untranslated collection's empty string is its value,
+                // as it was on the collection's own row.
+                blankIsValue: collection.localized !== true,
               }),
               // A missing translation reads as NULL.
               nullable: true,

@@ -352,6 +352,7 @@ export type {
   QueuedEmail,
   QueuedEmailState,
   CancelQueuedEmailArgs,
+  RetryQueuedEmailArgs,
   // The Email hub's Activity reads, `nextly.emailDeliveries.*`
   // (experimental).
   FindEmailActivityArgs,
@@ -1232,6 +1233,12 @@ export type {
   AddressableField,
   UnvalidatedAddressableField,
 } from "./shared/addressable-fields";
+
+// The dates every entry holds by itself (created, last saved, first published),
+// by the names responses publish them under. Exported because a plugin reading
+// an entry's own dates would otherwise keep a second list of core's system
+// columns, which drifts the day a column is added.
+export { entryDateFieldNames } from "./lib/system-columns";
 
 // Which `locale` values are selectors rather than languages. Exported because
 // a plugin route that forwards `?locale=` has to tell a visitor's language

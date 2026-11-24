@@ -44,6 +44,7 @@ import {
   type Actor,
   type SystemActor,
 } from "./actor";
+import { isClosedToSuperAdmin } from "./closed-to-super-admin";
 import {
   RETIRED_MANAGE_PLAIN_ACTIONS,
   isRetiredManage,
@@ -93,6 +94,9 @@ export type RefusalReason =
   | "principal-cannot-publish"
   | "principal-without-rule"
   | "no-permission"
+  // A super-admin, or a key with super-admin authority, asked a collection
+  // marked closed to super-admin.
+  | "closed-to-super-admin"
   | "rule-refused"
   | "rule-threw"
   // A rule answered a filter that is not well formed.
@@ -278,7 +282,13 @@ function beforeRules(
   if (actor.kind === "visitor" && isLifecycle(action)) {
     return refuse("visitor-cannot-publish");
   }
-  if (isSuperAdmin(actor)) return ALLOW;
+  // Super-admin authority passes every rule, except on a collection marked
+  // closed to super-admin, which refuses it whatever else the caller holds.
+  if (isSuperAdmin(actor)) {
+    return target.kind === "collection" && isClosedToSuperAdmin(target.slug)
+      ? refuse("closed-to-super-admin")
+      : ALLOW;
+  }
   return permissionRefusal(actor, action, target);
 }
 

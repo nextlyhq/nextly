@@ -74,6 +74,10 @@ import {
 } from "../../domains/schema/builder-save/single-row-fills";
 import { singleEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseMovesOffTheFile } from "../../domains/schema/field-moves/moves-road";
+import {
+  parseFieldRenameAnswers,
+  withFieldRenameAnswers,
+} from "../../domains/schema/field-rename-answers";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
@@ -1323,6 +1327,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         | undefined;
 
       if (!b) throw new Error("Update data is required");
+      // The request's answers for a field leaving and another arriving, read before anything
+      // else: the change runs with them, so a pair it doesn't answer is refused, not guessed.
+      const renames = parseFieldRenameAnswers(
+        (body as { renames?: unknown }).renames
+      );
 
       // As stored, past the registry row cache: the write below decides from it.
       const existing = await svc.registry.getSingleForWrite(slug);
@@ -1380,24 +1389,26 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The schema change and the registry row are written by one service call, because a lock has
       // to cover both and cannot do that from here: the DDL would already have run by the time a
       // lock taken inside the registry service was acquired.
-      const saved = await svc.metadata.updateSingleSchema({
-        slug,
-        existing,
-        updateData,
-        fields: schemaFields,
-        isLocalized,
-        wasLocalized,
-        // Whether the request SET the toggle, mirroring `statusRequested`. The service re-reads
-        // the record inside its exclusion and needs to tell an explicit `localized: false` from
-        // this handler having filled in the value it read.
-        localizedRequested: b.localized !== undefined,
-        hasStatus,
-        wasStatus,
-        // Whether the request SET the toggle, which is not the same as changing it: saving it at
-        // its current value still reaches the companion, and that is what repairs a localized
-        // single whose companion `_status` was never provisioned.
-        statusRequested: b.status !== undefined,
-      });
+      const saved = await withFieldRenameAnswers(renames, () =>
+        svc.metadata.updateSingleSchema({
+          slug,
+          existing,
+          updateData,
+          fields: schemaFields,
+          isLocalized,
+          wasLocalized,
+          // Whether the request SET the toggle, mirroring `statusRequested`. The service re-reads
+          // the record inside its exclusion and needs to tell an explicit `localized: false` from
+          // this handler having filled in the value it read.
+          localizedRequested: b.localized !== undefined,
+          hasStatus,
+          wasStatus,
+          // Whether the request SET the toggle, which is not the same as changing it: saving it at
+          // its current value still reaches the companion, and that is what repairs a localized
+          // single whose companion `_status` was never provisioned.
+          statusRequested: b.status !== undefined,
+        })
+      );
 
       return respondMutation(schemaSaveAnswer(slug, saved), saved.record);
     },
@@ -1833,6 +1844,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             builderSchemaPush({
               dialect,
               db,
+              adapter,
               databaseName,
               slug,
               kind: "single",

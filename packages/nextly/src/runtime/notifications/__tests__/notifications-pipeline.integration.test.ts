@@ -77,6 +77,7 @@ describe("Notifications pipeline — real-PG integration", () => {
         preCleanupExecutor: new RealPreCleanupExecutor(),
         migrationJournal: noopMigrationJournal,
         notifier,
+        adapter: undefined,
       },
       {
         // Stub pushSchema so the test isolates the pipeline +
@@ -156,6 +157,7 @@ describe("Notifications pipeline — real-PG integration", () => {
         preCleanupExecutor: new RealPreCleanupExecutor(),
         migrationJournal: noopMigrationJournal,
         notifier,
+        adapter: undefined,
       },
       {
         _kitOverride: {
@@ -249,6 +251,7 @@ describe("Notifications pipeline — real-PG integration", () => {
         preCleanupExecutor: new RealPreCleanupExecutor(),
         migrationJournal: noopMigrationJournal,
         notifier,
+        adapter: undefined,
       },
       {
         _kitOverride: {

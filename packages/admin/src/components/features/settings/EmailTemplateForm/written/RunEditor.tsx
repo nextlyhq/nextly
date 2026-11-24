@@ -175,7 +175,10 @@ function MarksToolbar({ label }: { label: string }): JSX.Element {
           if (!open) setLinking(null);
         }}
         link={linking?.link}
-        choices={view.paths.map(path => ({ path, name: view.name(path) }))}
+        choices={view.addressPaths.map(path => ({
+          path,
+          name: view.name(path),
+        }))}
         onSave={saveLink}
       />
     </div>

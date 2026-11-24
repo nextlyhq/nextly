@@ -46,7 +46,8 @@ import {
   type RevealRequest,
   type SheetPanel,
 } from "./WorkbenchLayout";
-import { WrittenBody, type InsertVariable } from "./written/WrittenBody";
+import { LazyWrittenBody } from "./written/LazyWrittenBody";
+import type { InsertVariable } from "./written/WrittenBody";
 
 // ============================================================
 // EmailTemplateForm — the template workbench
@@ -139,7 +140,7 @@ function ContentColumn({
       <div className="flex min-h-105 flex-1 flex-col overflow-hidden rounded-lg border border-border">
         {written && blocks ? (
           // A written email's body is its blocks, in place of the code editor.
-          <WrittenBody
+          <LazyWrittenBody
             value={blocks}
             readOnly={!owns || isPending}
             variables={variables}
@@ -504,6 +505,7 @@ export function EmailTemplateForm({
         <WorkbenchDialogs
           template={template}
           acts={acts}
+          source={derived.previewSource}
           onDiscardEdits={() => form.reset(templateToFormValues(template))}
         />
       ) : null}

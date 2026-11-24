@@ -15,8 +15,10 @@
  * @module domains/schema/pipeline/registered-collections
  */
 
+import { pluginCollectionSources } from "../migrate/plugin/plugin-collection-sources";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 
+import { DEMOTED_FROM_CODE } from "./demoted-from-code";
 import type { DesiredCollection } from "./types";
 
 /**
@@ -49,6 +51,95 @@ export interface RegisteredCollectionRow {
   locked?: boolean;
   /** `code`, `plugin:<name>`, or the UI source. Read only to corroborate `locked`. */
   source?: string;
+  /**
+   * The configuration file a code row came from, or {@link DEMOTED_FROM_CODE} on a row a demote
+   * handed to the Schema Builder (`isHandedToBuilder`).
+   */
+  configPath?: string | null;
+}
+
+/**
+ * Whether a registry row is a collection `nextly db:sync --demote` handed to the Schema Builder:
+ * the Builder's by its source, with the demote's mark. A collection made in the Builder carries no
+ * mark, so a code entry that later takes its address is applied to it as before.
+ *
+ * The one answer to this question, for the registry's own sync and `nextly migrate`'s registry
+ * write as much as for the roads that build a desired schema (`withoutHandedToBuilder`).
+ */
+export function isHandedToBuilder(
+  row: Pick<RegisteredCollectionRow, "source" | "configPath">
+): boolean {
+  return row.source === "ui" && row.configPath === DEMOTED_FROM_CODE;
+}
+
+/**
+ * The configuration's collections without those a demote handed to the Schema Builder, so a road
+ * that builds a desired schema from code takes the Builder's row for that address instead
+ * (`mergeRegisteredCollections` adds it as any registry-only collection).
+ *
+ * Until its entry is removed from `nextly.config.ts`, that entry would otherwise win the merge: a
+ * field the Builder added would read as unwanted, and an edit to the entry would still change the
+ * table. A plugin's collection (`pluginSlugs`) is never left out: a plugin registers its own again
+ * at every start, so no demote hands it over.
+ */
+export function withoutHandedToBuilder<T>(
+  configured: readonly T[],
+  registered: readonly RegisteredCollectionRow[],
+  pluginSlugs: Pick<ReadonlySet<string>, "has">
+): T[] {
+  const handedOver = new Set(
+    registered.filter(isHandedToBuilder).map(row => row.slug)
+  );
+  return configured.filter(entry => {
+    const slug = slugOf(entry);
+    return slug === undefined || !handedOver.has(slug) || pluginSlugs.has(slug);
+  });
+}
+
+/**
+ * A configured entry's slug, or undefined for one without a string slug. Read from an entry of any
+ * shape, since some configurations type their collections loosely (`readonly unknown[]`).
+ */
+function slugOf(entry: unknown): string | undefined {
+  return typeof entry === "object" &&
+    entry !== null &&
+    "slug" in entry &&
+    typeof entry.slug === "string"
+    ? entry.slug
+    : undefined;
+}
+
+/**
+ * `config` as code still owns it: its collections without those a demote handed to the Schema
+ * Builder (`withoutHandedToBuilder`), with a plugin's kept by the rule a start gives a collection
+ * its origin by (`pluginCollectionSources`), and every other part as it is.
+ *
+ * For the passes that read the configuration's entities themselves: the translations-table passes
+ * and the checks of new addresses and sibling fields. Each then ignores such an entry as the schema
+ * roads do, as if it had been removed: its `localized` setting provisions or restores no
+ * translations table the Builder's collection keeps, and a pair of fields added to it refuses
+ * nothing.
+ *
+ * Not for building a desired schema: there the configuration still has to name the collection, or
+ * the Builder's row merged in for its address would read as one removed from code. Those roads
+ * filter the collections themselves (`withoutHandedToBuilder`).
+ */
+export function configTheCodeOwns<
+  C extends {
+    collections?: readonly unknown[];
+    plugins?: Parameters<typeof pluginCollectionSources>[0];
+  },
+>(config: C, registered: readonly RegisteredCollectionRow[]): C {
+  if (config.collections === undefined) return config;
+  const collections = withoutHandedToBuilder(
+    config.collections,
+    registered,
+    pluginCollectionSources(config.plugins ?? [])
+  );
+  // A copy with the collections replaced, typed as the configuration it was given (`C & ...`).
+  return collections.length === config.collections.length
+    ? config
+    : Object.assign({}, config, { collections });
 }
 
 /**

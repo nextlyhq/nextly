@@ -96,6 +96,8 @@ export function pageBuilderSettingsSingle(): SingleConfig {
       beforeValidate: [refuseUnmarkedWrite],
       beforeChange: [refuseUnmarkedWrite],
     },
+    // `defaultLayoutChangedBy` is an id, kept once for every language
+    // (`localized: false`), as the relationships beside it are.
     fields: [
       // Nullable: a site whose default is unset draws its pages with no
       // regions until the repair seeds one.
@@ -121,6 +123,7 @@ export function pageBuilderSettingsSingle(): SingleConfig {
       // one is credited with a choice they did not make.
       text({
         name: "defaultLayoutChangedBy",
+        localized: false,
         label: "Default changed by",
         admin: { readOnly: true, hidden: true },
       }),

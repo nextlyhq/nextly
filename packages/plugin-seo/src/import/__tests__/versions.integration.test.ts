@@ -135,7 +135,17 @@ function apply(
 /** A site, its content types each holding the old group. */
 async function boot(
   dialect: TestDialect,
-  options: { languages: boolean; domains?: boolean; titleUnread?: boolean }
+  options: {
+    languages: boolean;
+    domains?: boolean;
+    titleUnread?: boolean;
+    /**
+     * Whether the importer may publish the types that keep drafts: writing a
+     * published version of one names its published state, which needs the
+     * publish permission. Yes unless asked.
+     */
+    publishes?: boolean;
+  }
 ): Promise<{ t: TestNextly; key: string }> {
   const t = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
@@ -278,12 +288,25 @@ async function boot(
   const singles = options.languages
     ? ["read-home", "update-home"]
     : ["read-about", "update-about"];
-  const ids = [...content, ...singles, MANAGE_SEO_PERMISSION].map(slug => {
+  // The types keeping drafts, whose published versions the import writes.
+  const publishing =
+    options.publishes === false
+      ? []
+      : options.languages
+        ? ["publish-articles"]
+        : ["publish-notes", "publish-about"];
+  const ids = [
+    ...content,
+    ...singles,
+    ...publishing,
+    MANAGE_SEO_PERMISSION,
+  ].map(slug => {
     const found = seeded.items.find(item => item.slug === slug);
     if (found === undefined) throw new Error(`${slug} is not seeded`);
     return found.id;
   });
-  // Changing content, and the site's SEO, but never publishing.
+  // Changing content and the site's SEO, and, unless asked otherwise,
+  // publishing the types that keep drafts.
   const role = await t.nextly.roles.create({
     data: { name: "Importer", slug: "importer", permissionIds: ids },
   });
@@ -429,6 +452,30 @@ function engineOf(): ImportEngine {
 describe.each(getConfiguredTestDialects())(
   "the SEO import, for every version of a page (%s)",
   dialect => {
+    it("refuses to import into a published version for someone who may not publish it, importing nothing", async () => {
+      const { t, key } = await boot(dialect, {
+        languages: false,
+        publishes: false,
+      });
+      const pricing = await create(t, "notes", {
+        title: "Pricing",
+        slug: "pricing",
+        status: "published",
+        meta: { seoTitle: "Plans and prices" },
+      });
+
+      const run = await dryRun(key);
+      expect(rowOf(run, "Pricing", "published")).toMatchObject({
+        outcome: "set",
+      });
+      const refused = await apply(key, run.plan);
+      expect(refused.status).toBe(403);
+      expect(await refused.text()).toContain(
+        "Importing into the published version of “Pricing” needs permission to publish it. Nothing was imported."
+      );
+      expect(typedTitle(await version(t, "notes", pricing))).toBe("");
+    });
+
     it("imports into a published page and its working draft, keeping an editor's draft value", async () => {
       const { t, key } = await boot(dialect, { languages: false });
       const pricing = await create(t, "notes", {

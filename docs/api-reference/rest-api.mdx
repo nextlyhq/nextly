@@ -180,6 +180,7 @@ When an error carries `error.data.retryAfterSeconds` the runtime also sets `Retr
 | `403`  | `ACTION_NOT_AVAILABLE`                        | A plugin's action asked of an entry its rule does not hold for, or outside its collections.                                                                                                                                                                                         |
 | `404`  | `NOT_FOUND`                                   | Resource does not exist.                                                                                                                                                                                                                                                            |
 | `409`  | `STALE_VERSION`                               | The document changed since the `_rev` you sent. See [Versions and conflicts](#versions-and-conflicts).                                                                                                                                                                              |
+| `409`  | `COLLECTION_BEING_CHANGED`                    | Another change to the same collection (a collection delete, or a Schema Builder save that deletes a field's values) held it past 30 seconds, so the request waited and was refused; nothing was written. Safe to try again in a moment.                                             |
 | `409`  | `CONFLICT`, `DUPLICATE`                       | A state that refuses the request, a duplicate email, etc.                                                                                                                                                                                                                           |
 | `409`  | `WORKFLOW_NO_SUBMIT_STEP`                     | A submit for review naming no step, for a part whose stage no submit step leaves (`data.part`, `data.stage`).                                                                                                                                                                       |
 | `409`  | `NEXTLY_MIGRATION_HISTORY_REFUSED`            | A Schema Builder save refused by the migration history checks `nextly migrate` runs first; nothing was written. The message names what to settle.                                                                                                                                   |
@@ -190,6 +191,7 @@ When an error carries `error.data.retryAfterSeconds` the runtime also sets `Retr
 | `422`  | `INVALID_INPUT`                               | Semantic validation failed.                                                                                                                                                                                                                                                         |
 | `429`  | `RATE_LIMITED`                                | Per-IP or per-key rate limit. `Retry-After` is set.                                                                                                                                                                                                                                 |
 | `500`  | `INTERNAL_ERROR`, `DATABASE_ERROR`            | Server-side failure.                                                                                                                                                                                                                                                                |
+| `500`  | `NEXTLY_MIGRATION_PARTIALLY_APPLIED`          | A Schema Builder save that stopped after part of it applied (MySQL runs a save's files one by one). The message says what stayed and what to do next; `data` may name each change (`changes`) or the refusal that stopped it (`refused`: `code`, and `errors` for a changed count). |
 | `503`  | `SERVICE_UNAVAILABLE`                         | Health probe / dependency outage.                                                                                                                                                                                                                                                   |
 | `503`  | `DATABASE_BUSY`                               | The request waited `pool.connectionTimeoutMs` for a database connection and none was free, or a SQLite file stayed locked past `busyTimeout`. The statement or transaction that waited did not run; anything the request committed before it stays committed. `Retry-After` is set. |
 
@@ -693,6 +695,24 @@ curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries" \
   -H "Content-Type: application/json" \
   -d '{"where":{"status":{"equals":"draft"}},"data":{"status":"archived","_overwrite":true}}'
 ```
+
+### Schema changes that replace a field
+
+A schema change sent to `PATCH /admin/api/collections/{slug}` or `PATCH /admin/api/singles/{slug}/schema` that removes one field and adds another of the same type is never taken for a rename by guesswork. The request says which it is, in `renames`, by field name:
+
+```json
+{
+  "fields": [{ "name": "headline", "type": "text" }],
+  "renames": [{ "from": "heading", "to": "headline", "choice": "rename" }]
+}
+```
+
+- `"rename"` keeps the field's values under its new name.
+- `"drop_and_add"` drops the old field and its values and adds the new one empty.
+
+A change that makes such a pair without answering it is refused before anything is written, with `FIELD_RENAME_UNANSWERED`, naming both fields. A rename is one field at a time: a `"rename"` answer for two fields replaced at once is refused with `FIELD_RENAME_NOT_OFFERED`, a change answering `"rename"` for two pairs with `FIELD_RENAME_ONE_AT_A_TIME`, and a shared field can't be renamed into a translated one in the same change, translation turned on in it included (`FIELD_RENAME_JOINS_TRANSLATION`). `"drop_and_add"` is refused for two fields stored in one place, one column or one many-to-many junction table both name (`FIELD_RENAME_SAME_COLUMN`).
+
+A field group's rows are kept when its field is removed, or dropped with `"drop_and_add"`: they remain until the field group or the entity is deleted.
 
 ### Singles
 

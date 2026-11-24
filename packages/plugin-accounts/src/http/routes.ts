@@ -1,9 +1,9 @@
-import { pluginAdminSlug, type PluginRoute } from "@nextlyhq/plugin-sdk";
+import type { PluginRoute } from "@nextlyhq/plugin-sdk";
 
 import type { FlowDeps } from "../flows/deps";
-import { PLUGIN_NAME } from "../schema/definition";
 
 import {
+  acceptInvitationEndpoint,
   cancelAddressEndpoint,
   changeAddressEndpoint,
   changePasswordEndpoint,
@@ -22,10 +22,7 @@ import {
   verifyEndpoint,
   type Endpoint,
 } from "./handlers";
-import { ACCOUNT_KIND } from "./principal";
-
-/** The plugin's kind of signed-in person, as a route names it: `<plugin>:account`. */
-export const ACCOUNT_PRINCIPAL: string = `${pluginAdminSlug(PLUGIN_NAME)}:${ACCOUNT_KIND}`;
+import { ACCOUNT_PRINCIPAL } from "./principal";
 
 /**
  * The plugin's REST endpoints. Those a visitor uses before signing in are
@@ -60,6 +57,7 @@ export function accountsRoutes(deps: () => FlowDeps): PluginRoute[] {
     route("POST", "/reset/request", resetRequestEndpoint),
     route("POST", "/reset", resetEndpoint),
     route("POST", "/address/cancel", cancelAddressEndpoint),
+    route("POST", "/invitation/accept", acceptInvitationEndpoint),
     route("GET", "/me", meEndpoint),
     route("POST", "/sign-out/everywhere", signOutEverywhereEndpoint, true),
     route("POST", "/password", changePasswordEndpoint, true),

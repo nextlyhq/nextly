@@ -161,12 +161,18 @@ describe.each(getConfiguredTestDialects())(
             ...drafts,
             workflow: reviewWorkflow(),
             fields: [text({ name: "title" })],
+            // Opened to the presets, so this asks only what a workflow seeds.
+            grants: { presets: ["admin", "editor", "author", "viewer"] },
           }),
         ],
       });
       await seedAllPermissions();
       // The presets are seeded after the permissions, as boot seeds them.
-      await seedRolePresets(current.adapter, current.getService("logger"));
+      await seedRolePresets(
+        current.adapter,
+        current.getService("logger"),
+        current.getService("config")
+      );
 
       const services = new ServiceContainer(current.adapter);
       for (const preset of ["admin", "editor", "author"]) {
@@ -193,6 +199,8 @@ describe.each(getConfiguredTestDialects())(
             status: true,
             versions: { drafts: true },
             fields: [text({ name: "title" })],
+            // Opened to the presets, so this asks only what a workflow left.
+            grants: { presets: ["admin", "editor", "author", "viewer"] },
           }),
         ],
       });
@@ -220,7 +228,11 @@ describe.each(getConfiguredTestDialects())(
         "export-posts"
       );
 
-      await seedRolePresets(current.adapter, current.getService("logger"));
+      await seedRolePresets(
+        current.adapter,
+        current.getService("logger"),
+        current.getService("config")
+      );
 
       const services = new ServiceContainer(current.adapter);
       for (const preset of ["admin", "editor", "author"]) {

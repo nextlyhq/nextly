@@ -14,6 +14,10 @@ import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { waitingForWords } from "@admin/components/features/entries/review/review-words";
 import { useEveryNavCollection } from "@admin/hooks/queries/useCollections";
 import { useEverySingle } from "@admin/hooks/queries/useSingles";
+import {
+  useWorkflowEntities,
+  workflowMayHold,
+} from "@admin/hooks/useWorkflowEntities";
 import { documentAddress } from "@admin/lib/navigation/document-address";
 import {
   fetchWaitingForMe,
@@ -29,18 +33,40 @@ export const waitingKeys = {
     ["workflow-waiting", "page", page, limit] as const,
 };
 
+/** The scope of a reader no workflow can hold anything for, as the route would answer it. */
+const NOTHING_WAITS: { reviews: boolean; stages: number } = {
+  reviews: false,
+  stages: 0,
+};
+
+/** Reads any scope held from before the last workflow was detached as nothing waiting. */
+const asNothingWaits = (): { reviews: boolean; stages: number } =>
+  NOTHING_WAITS;
+
 /**
  * Whether anything can ever wait for the reader's review: how many stages' next step they may take.
  * Kept for five minutes, as the navigation lists are: it changes only with grants and workflows.
+ * Not asked where the server's workspace answer says no workflow holds anything this reader may
+ * read: nothing can wait for them then, and it is answered so, as the route would answer it, over
+ * any scope held from before the last workflow was detached, so the panel and the list show no
+ * review link or move.
  */
 export function useWaitingScope(): UseQueryResult<
   { reviews: boolean; stages: number },
   Error
 > {
+  const entities = useWorkflowEntities();
+  const asked = workflowMayHold(entities);
+  // Known: the server said which entities a workflow holds, and there are none.
+  const nothingHeld = !asked && typeof entities === "object";
   return useQuery({
     queryKey: waitingKeys.scope(),
     queryFn: fetchWaitingScope,
     staleTime: 5 * 60 * 1000,
+    enabled: asked,
+    ...(nothingHeld
+      ? { placeholderData: NOTHING_WAITS, select: asNothingWaits }
+      : {}),
   });
 }
 

@@ -84,7 +84,8 @@ function formsPlugin(newer: boolean) {
 function appEntities(newer: boolean) {
   const fields = [
     text({ name: "title" }),
-    ...(newer ? [text({ name: "subtitle" })] : []),
+    // At most 5 characters, so a save of it is seen to be judged by its rules.
+    ...(newer ? [text({ name: "subtitle", maxLength: 5 })] : []),
   ];
   return {
     collections: [defineCollection({ slug: "pssm_posts", fields })],
@@ -389,6 +390,29 @@ describe.each(getConfiguredTestDialects())(
         slug: "pssm_banner",
         data: { title: "Banner", subtitle: "Kept", _overwrite: true },
       } as never);
+      // Judged by the rules the configuration declares for it, as any field of the Single is:
+      // refused for its length, not as a key the Single does not have.
+      const tooLong = (await nextly
+        .updateSingle({
+          slug: "pssm_banner",
+          data: { subtitle: "Too long", _overwrite: true },
+        } as never)
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        )) as
+        | {
+            code?: string;
+            publicData?: { errors?: { path?: string; code?: string }[] };
+          }
+        | undefined;
+      expect(tooLong?.code).toBe("VALIDATION_ERROR");
+      expect(tooLong?.publicData?.errors?.map(e => e.path)).toContain(
+        "subtitle"
+      );
+      expect(tooLong?.publicData?.errors?.map(e => e.code)).not.toContain(
+        "UNKNOWN_FIELD"
+      );
 
       // Another copy's registry write moves the stored version; once the read interval has passed
       // this copy follows it, loading the definitions again.

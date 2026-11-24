@@ -43,6 +43,8 @@ afterEach(async () => {
 // own slugs.
 const POSTS = "lockchg_posts";
 const BANNER = "lockchg_banner";
+/** A collection not marked translated, whose text is kept per language all the same. */
+const ARTICLES = "lockchg_articles";
 /** The holder: may read and update both documents. */
 const EDITOR = "lockchg-editor";
 /** A holder who may update the posts but not read them. */
@@ -57,9 +59,15 @@ const ORIGIN = "http://localhost";
 
 type Doc = Record<string, unknown>;
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  { perLanguageStorage = false }: { perLanguageStorage?: boolean } = {}
+): Promise<TestNextly> {
   const t = await createTestNextly({
     dialect,
+    // Where a test asks for it, the layout every installation runs; this
+    // file's other tests run the earlier one (`__tests__/storage-layout`).
+    ...(perLanguageStorage ? { perLanguageStorage: true } : {}),
     collections: [
       defineCollection({
         slug: POSTS,
@@ -68,6 +76,10 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "title", localized: true }),
           text({ name: "note" }),
         ],
+      }),
+      defineCollection({
+        slug: ARTICLES,
+        fields: [text({ name: "summary" })],
       }),
     ],
     singles: [
@@ -79,8 +91,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   // A PostgreSQL or MySQL leg that silently booted SQLite would prove nothing
   // about those databases.
   expect(t.adapter.dialect).toBe(dialect);
-  await userWhoMay(t, EDITOR, "update", [POSTS, BANNER]);
-  await grantTo(t, EDITOR, "read", [POSTS, BANNER]);
+  await userWhoMay(t, EDITOR, "update", [POSTS, BANNER, ARTICLES]);
+  await grantTo(t, EDITOR, "read", [POSTS, BANNER, ARTICLES]);
   await userWhoMay(t, WRITER, "update", [POSTS]);
   const now = new Date();
   await t.adapter.insert("users", {
@@ -227,6 +239,57 @@ describe.each(getConfiguredTestDialects())(
       expect(told).not.toContain("Ana's change");
       expect(told).not.toContain(ANA.email);
       expect(told).not.toContain(ANA.id);
+    });
+
+    it("reports someone else's save of an untranslated collection's text, kept per language", async () => {
+      const t = await boot(dialect, { perLanguageStorage: true });
+      const created = await handlerOf(t).createEntry(
+        { collectionName: ARTICLES, overrideAccess: true },
+        { summary: "first" }
+      );
+      const id = String((created.data as Doc).id);
+      // Read as the editor's form reads it: in no language, which is the
+      // site's default.
+      const articleRev = async () =>
+        String(
+          (
+            (await t.nextly.findByID({
+              collection: ARTICLES as never,
+              id,
+              overrideAccess: true,
+            } as never)) as Doc
+          )._rev
+        );
+      const startedFrom = await articleRev();
+      const ref = { scopeKind: "collection", slug: ARTICLES, entryId: id };
+      const claim = await itemOf(
+        lockCall(EDITOR, "POST", { ...ref, _rev: startedFrom })
+      );
+      expect(claim.status).toBe("acquired");
+
+      // The text lives in the default language's row, so this save moves
+      // that row's counter and not the article's own.
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: ARTICLES,
+          entryId: id,
+          overrideAccess: true,
+          user: ANA as never,
+        },
+        { summary: "Ana's change", _rev: startedFrom }
+      );
+      const item = await itemOf(
+        lockCall(EDITOR, "PATCH", {
+          ...ref,
+          claimToken: String(claim.claimToken),
+          _rev: startedFrom,
+        })
+      );
+      expect(item.status).toBe("renewed");
+      expect(item.changed).toMatchObject({
+        currentVersion: await articleRev(),
+        changedBy: { kind: "person", name: ANA.name },
+      });
     });
 
     it("reports nothing to a renewal that holds the current version", async () => {

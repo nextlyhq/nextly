@@ -4,17 +4,21 @@
  */
 import type { Command } from "commander";
 
+import { DATABASE_LINE, declareFirstLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 export function registerMigrateCheckCommand(program: Command): void {
-  program
-    .command("migrate:check")
-    .description(
-      "Verify migration file integrity and config drift (CI-friendly; no DB connection)"
-    )
-    .action(
-      lazyAction(
-        async () => (await import("./migrate-check")).migrateCheckAction
+  declareFirstLine(
+    program
+      .command("migrate:check")
+      .description(
+        "Verify migration file integrity and config drift (CI-friendly; no DB connection)"
       )
-    );
+      .action(
+        lazyAction(
+          async () => (await import("./migrate-check")).migrateCheckAction
+        )
+      ),
+    DATABASE_LINE
+  );
 }

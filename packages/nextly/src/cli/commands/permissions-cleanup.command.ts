@@ -6,6 +6,7 @@ import { Command } from "commander";
 
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { withDryRun } from "../dry-run";
+import { DATABASE_LINE, declareFirstLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -28,5 +29,6 @@ export function createPermissionsCleanupCommand(): Command {
       )
     );
 
+  declareFirstLine(command, DATABASE_LINE);
   return command;
 }

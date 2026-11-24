@@ -10,8 +10,12 @@ import type { SupportedDialect } from "../../../services/field-column-descriptor
 import { reasonClass } from "../../judge-column";
 import type { ConversionClass, StoredValue } from "../../types";
 import { decodeStored } from "../decode-stored";
-import { fieldTypeOnDialect } from "../field-type";
-import { collectTypeChange, fieldAccepts } from "../judge-stored";
+import { fieldTypeInJson, fieldTypeOnDialect } from "../field-type";
+import {
+  collectNestedTypeChange,
+  collectTypeChange,
+  fieldAccepts,
+} from "../judge-stored";
 
 const typeOf = (dialect: SupportedDialect, type: string, extra: object = {}) =>
   fieldTypeOnDialect(
@@ -560,5 +564,83 @@ describe("a type change collected over its stored values", () => {
         ]);
       }
     }
+  });
+});
+
+describe("a type change of a field held inside JSON, collected over its rows", () => {
+  /** A field's type as a value held inside a group's or a repeater's JSON reads. */
+  const inJson = (type: string, extra: object = {}) =>
+    fieldTypeInJson(
+      { name: "f", type, ...extra } as FieldDefinition,
+      "postgresql",
+      "collection"
+    );
+
+  async function* rows(
+    ...valuesOfRows: unknown[][]
+  ): AsyncGenerator<{ key: { id: string }; values: unknown[] }> {
+    let id = 0;
+    for (const values of valuesOfRows) {
+      id += 1;
+      yield { key: { id: String(id) }, values };
+    }
+  }
+
+  it("keeps only a value the new field reads as it is stored: one it would rewrite stays in its old form", async () => {
+    // The text "5" reads as the number 5 only once rewritten as a JSON number, which a type change
+    // does not do inside JSON; "abc" no number reads; a missing value is no value.
+    const result = await collectNestedTypeChange(
+      inJson("text"),
+      inJson("number"),
+      rows(["5"], ["abc"], [null])
+    );
+    expect(result.judgement.class).toBe("blocked");
+    expect(
+      Object.fromEntries(
+        result.judgement.reasons.map(r => [r.kind, r.rows?.first])
+      )
+    ).toEqual({
+      "needs-rewrite": [{ id: "1" }],
+      "not-a-number": [{ id: "2" }],
+    });
+    // An email is kept as the text it is stored as: nothing to rewrite.
+    const kept = await collectNestedTypeChange(
+      inJson("text"),
+      inJson("email"),
+      rows(["a@b.co"])
+    );
+    expect(kept.judgement.class).toBe("safe");
+    expect(kept.counts).toMatchObject({ kept: 1 });
+  });
+
+  it("compares a value held inside JSON as JSON, whatever its keys' order", async () => {
+    // Rich text and JSON both keep the object as it is: only the order of its keys differs from the
+    // reading's, which is no rewrite.
+    const result = await collectNestedTypeChange(
+      inJson("richText"),
+      inJson("json"),
+      rows([{ root: { type: "root", children: [] }, a: 1 }])
+    );
+    expect(result.judgement.class).toBe("safe");
+    expect(result.counts.blocked).toBe(0);
+  });
+
+  it("asks the new field's validation of every value of a row before naming the row by its worst", async () => {
+    // Both of the first row's emails are kept by the rules; only the second is longer than the new
+    // field allows.
+    const result = await collectNestedTypeChange(
+      inJson("text"),
+      inJson("email"),
+      rows(["a@b.co", "long.name@example.com"], ["c@d.co"]),
+      async readsAs => readsAs.length <= 10
+    );
+    expect(result.judgement.reasons).toEqual([
+      {
+        kind: "field-refuses",
+        class: reasonClass("field-refuses"),
+        rows: { first: [{ id: "1" }], count: 1 },
+      },
+    ]);
+    expect(result.counts).toMatchObject({ kept: 1, lost: 1 });
   });
 });

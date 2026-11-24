@@ -205,8 +205,6 @@ defineCollection({
   follows the collection's decision.
 - Related media in a row a person may read reaches them as it reaches an
   anonymous visitor; a related staff user, role or permission never does.
-- A rule that limits a read to the rows a person owns is not offered yet. Check
-  ownership in your own code.
 
 Run an operation as the person by passing them as `principal`. Access rules always
 apply:
@@ -235,6 +233,45 @@ server. It is not a wall against code that reaches past it on purpose, such as t
 operation out of the `Nextly` instance with `Object.getOwnPropertyDescriptor` and calling it
 directly. That code is your own server code, which can run the operation as the server
 anyway by naming nobody.
+
+### Limit a person to their own rows
+
+A `read`, `update` or `delete` rule may answer a person with a filter, written as
+a list's `where` is, instead of `true`. The person then reaches only the rows the
+filter matches. This is the
+[filter a rule answers staff with](/docs/permissions#a-read-rule-that-answers-with-a-filter-experimental)
+(experimental), and it works the same way for a person:
+
+```ts
+defineCollection({
+  slug: "orders",
+  access: {
+    read: ({ principal }) =>
+      principal?.kind === "acme-accounts:account"
+        ? { account: { equals: principal.id } }
+        : false,
+    update: ({ principal }) =>
+      principal?.kind === "acme-accounts:account"
+        ? { account: { equals: principal.id } }
+        : false,
+  },
+  fields: [text({ name: "account", index: true }) /* ... */],
+});
+```
+
+- A list and its count hold only the matching rows, and a `where` the call
+  passes is added to the filter, never used instead of it.
+- A read by id of a row the filter does not match is answered exactly as a
+  read of an id that does not exist.
+- A populated relationship to a row the person may not read stays the related
+  row's id, with none of its fields.
+- An update or delete reaches only the matching rows, by id or by `where`. A
+  row outside the filter is left as it was, and answered as missing where the
+  person may not read it either (with a 403 where they may). An update that
+  would move a row out of the filter, such as one changing `account`, is
+  refused.
+
+Index the fields the filter names, since it is part of every read.
 
 ## Record what a person does
 

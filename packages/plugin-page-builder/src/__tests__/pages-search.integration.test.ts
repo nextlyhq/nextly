@@ -132,7 +132,7 @@ interface Direct {
   create(args: {
     collection: string;
     data: Record<string, unknown>;
-  }): Promise<{ item: { id: string | number } }>;
+  }): Promise<{ item: { id: string | number; _rev?: unknown } }>;
   find(args: { collection: string }): Promise<{ items: unknown[] }>;
 }
 
@@ -201,6 +201,12 @@ describe.each(getConfiguredTestDialects())(
     let bodyBlind = "";
     let alphaPageId = "";
     let alphaArticleId = "";
+    /**
+     * Each Alpha document's version as its create answered it: the opaque
+     * `_rev` a rename sends back, which the search must hand on unchanged.
+     */
+    let alphaPageRev = "";
+    let alphaArticleRev = "";
 
     beforeAll(async () => {
       t = await createTestNextly({
@@ -283,22 +289,24 @@ describe.each(getConfiguredTestDialects())(
 
       const idOf = (created: { item: { id: string | number } }) =>
         String(created.item.id);
-      alphaPageId = idOf(
-        await direct.create({
-          collection: PAGES,
-          data: { title: "Alpha page", slug: "alpha", status: "published" },
-        })
-      );
+      const revOf = (created: { item: { _rev?: unknown } }) =>
+        String(created.item._rev);
+      const alphaPage = await direct.create({
+        collection: PAGES,
+        data: { title: "Alpha page", slug: "alpha", status: "published" },
+      });
+      alphaPageId = idOf(alphaPage);
+      alphaPageRev = revOf(alphaPage);
       await direct.create({
         collection: PAGES,
         data: { title: "Beta page", slug: "beta", status: "draft" },
       });
-      alphaArticleId = idOf(
-        await direct.create({
-          collection: ARTICLES,
-          data: { headline: "Alpha article" },
-        })
-      );
+      const alphaArticle = await direct.create({
+        collection: ARTICLES,
+        data: { headline: "Alpha article" },
+      });
+      alphaArticleId = idOf(alphaArticle);
+      alphaArticleRev = revOf(alphaArticle);
       for (let i = 0; i < FILLER; i += 1) {
         await direct.create({
           collection: ARTICLES,
@@ -352,7 +360,7 @@ describe.each(getConfiguredTestDialects())(
             collectionPluralLabel: "Articles",
             field: "body",
             title: "Alpha article",
-            rev: "1",
+            rev: alphaArticleRev,
           },
           {
             id: alphaPageId,
@@ -362,7 +370,7 @@ describe.each(getConfiguredTestDialects())(
             field: "content",
             title: "Alpha page",
             status: "published",
-            rev: "1",
+            rev: alphaPageRev,
           },
         ]);
         expect(answer.meta.total).toBe(2);

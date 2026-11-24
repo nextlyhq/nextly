@@ -146,6 +146,40 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * schema push runs in, the app's password digester, plugins' startup reads, a
  * field rewrite across versions, a Single read's column plan); 1,390 holds
  * whether CI measures a few fewer.
+ * Both rose, to 107 and 1,520, after two weeks of features: CI measured 117
+ * and 1,497 on the code before this pin, against 63 when the last one was
+ * measured. Four edges had loaded large parts of the service graph into files
+ * that never boot, and each now has a module of its own: a reload of the
+ * dynamic tables registered the configuration's tables through
+ * `di/register` (`di/register-config-tables`); the deletion of an entity's
+ * shared rows read migration snapshots through the rollback's bookkeeping,
+ * which loads the commands' services, about 195 modules into every
+ * `migrate`, `migrate:check` and `migrate:create` test
+ * (`migrate/migration-snapshot-file`); four services took
+ * `affectedRowCount` through the auth service's re-export
+ * (`shared/lib/affected-row-count`); and a configuration's resolution loaded
+ * the plugin audit writer and its principals for the check of the audit
+ * kinds a plugin declares (`audit/plugin-audit-kinds`). Thirteen files went
+ * back under the heavy line: 104 and 1,485 measured. The rest is growth on
+ * chains the files already held, through lazy imports at run time: 38 files
+ * of widget declarations, content routes, previews and the CLI's error
+ * registry crossed it with the graph the registry reaches, which grew by the
+ * same 66 modules for each, so no file gained a new edge; two new tests boot
+ * the registry by design (every command's configuration check, and a boot's
+ * refusal of configuration problems); and the configuration reload's test
+ * crossed it at 1,049. The tail mean's pin is the lower measurement plus its
+ * margin, which also holds CI's.
+ * The heavy files' pin rose to 112 when five files that sat just under the
+ * line crossed it with no new edge: the widget layout and widget query routes'
+ * tests, the CLI's `add` and `migrate` command tests, and the plugin schema
+ * cache's test, at 1,004 to 1,038 modules. None of them loads the registry
+ * or a dialect's schema bundle. Each gained 7 to 12 modules, all of them new
+ * features' modules on chains the files already held: private files (the
+ * collection's file fields, its checked uploads and downloads, and the audit
+ * kinds they record), per-language moves and type changes, a demoted
+ * collection's code, the settling of a left Builder save at migrate, and the
+ * CLI's first line. CI and a local run both measured 109 and 1,508; the tail
+ * mean's pin holds.
  * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
@@ -153,7 +187,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 65, tailMeanModules: 1_390 };
+export const BUDGET = { heavyFiles: 112, tailMeanModules: 1_520 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",

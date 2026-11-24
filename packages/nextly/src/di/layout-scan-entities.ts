@@ -90,7 +90,9 @@ function declaredLaidOutEntities(
  */
 export async function declaredLaidOutEntitiesAsStored(
   adapter: DrizzleAdapter,
-  config: DeclaringConfig
+  config: DeclaringConfig,
+  /** The registries a production start read once, when it is one (`di/start-reads`). */
+  registry?: StartRegistry
 ): Promise<LaidOutEntity[]> {
   if ((config.fieldGroups ?? []).length === 0) {
     return declaredLaidOutEntities(config);
@@ -99,7 +101,12 @@ export async function declaredLaidOutEntitiesAsStored(
   const { readStoredFieldGroupTables, storedOrNewTableName } = await import(
     "../domains/field-groups/services/field-group-stored-tables"
   );
-  const stored = await readStoredFieldGroupTables(adapter);
+  const stored = await readStoredFieldGroupTables(
+    adapter,
+    registry === undefined
+      ? undefined
+      : async table => (await registry.read(table)).rows()
+  );
   const names = stored.usable
     ? stored
     : { tables: new Map<string, string>(), naming: "legacy" as const };

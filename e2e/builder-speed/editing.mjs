@@ -409,7 +409,12 @@ async function fontSizeControl(page) {
     .getByTestId("inspector")
     .getByRole("tab", { name: "Style" })
     .click();
-  const section = page.getByRole("button", { name: /^Typography/ }).first();
+  // The Style tab's section holding the type settings is called Text; its
+  // heading's name may carry "has changes" after the word.
+  const section = page
+    .getByTestId("inspector")
+    .getByRole("button", { name: /^Text\b/ })
+    .first();
   if ((await section.getAttribute("aria-expanded")) !== "true")
     await section.click();
   const field = page
