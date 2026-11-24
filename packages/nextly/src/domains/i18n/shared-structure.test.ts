@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   assembleSharedStructure,
+  componentStructureShape,
   pruneOverlay,
   sharedStructureShape,
   splitSharedStructure,
@@ -301,5 +302,43 @@ describe("pruneOverlay", () => {
     );
     expect(changed).toBe(false);
     expect(overlay).toEqual(kept);
+  });
+});
+
+describe("componentStructureShape", () => {
+  const fieldsOf = (slug: string) =>
+    slug === "hero"
+      ? [{ name: "title", type: "text" }]
+      : slug === "cta"
+        ? [{ name: "label", type: "text" }]
+        : undefined;
+
+  // A field offering several component types holds one instance unless it is repeatable: its
+  // value is an object, so its shape is a group's, and the instance's text is the language's.
+  it("reads a component field offering several types but not repeatable as one instance", () => {
+    const shape = componentStructureShape(
+      { name: "lead", type: "component", components: ["hero", "cta"] },
+      fieldsOf
+    );
+    expect(shape?.kind).toBe("group");
+    const { structure, overlay } = splitSharedStructure(
+      { _componentType: "hero", title: "Hello" },
+      shape!
+    );
+    expect(overlay).toEqual({ title: "Hello" });
+    expect(structure).toEqual({ _componentType: "hero" });
+  });
+
+  it("reads a repeatable one as a list of instances", () => {
+    const shape = componentStructureShape(
+      {
+        name: "layout",
+        type: "component",
+        components: ["hero", "cta"],
+        repeatable: true,
+      },
+      fieldsOf
+    );
+    expect(shape?.kind).toBe("repeater");
   });
 });
