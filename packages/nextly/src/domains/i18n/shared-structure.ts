@@ -195,39 +195,46 @@ function shapeOfLevel(
         }
         continue;
       }
-      if (components && componentSlugsOf(child).length > 0) {
-        const nested = componentStructureShape(
-          child,
-          components.fieldsOf,
-          components.open
-        );
-        if (nested) inner[child.name] = nested;
-        continue;
-      }
-      if (isStructureContainer(child)) {
-        // A container inside keeps the one structure too, whatever its own flag says: no level
-        // of a shared structure has rows of its own per language.
-        if (open.has(child) || neverTranslatable(child)) continue;
-        open.add(child);
-        const nested = shapeOfLevel(
-          child.type,
-          child.fields ?? [],
-          open,
-          components
-        );
-        open.delete(child);
-        if (nested) inner[child.name] = nested;
-        continue;
-      }
-      // The rule a top-level field of a translated entity is classified by.
-      if (isFieldLocalized({ ...child, name: child.name }, true)) {
-        texts.push(child.name);
-      }
+      const added = childShape(child, child.name, open, components);
+      if (added === "text") texts.push(child.name);
+      else if (added !== null) inner[child.name] = added;
     }
   };
   visit(fields);
   if (texts.length === 0 && Object.keys(inner).length === 0) return null;
   return { kind, texts, inner };
+}
+
+/**
+ * What one named field of a level adds to the level's shape: the shape of what it translates
+ * inside (a component it places, or a container inside), `"text"` where it is translatable text
+ * of the level itself, or `null` where it translates nothing.
+ */
+function childShape(
+  child: StructuredField,
+  name: string,
+  open: WeakSet<object>,
+  components: ComponentReach | undefined
+): SharedStructureShape | "text" | null {
+  if (components && componentSlugsOf(child).length > 0) {
+    return componentStructureShape(child, components.fieldsOf, components.open);
+  }
+  if (isStructureContainer(child)) {
+    // A container inside keeps the one structure too, whatever its own flag says: no level of a
+    // shared structure has rows of its own per language.
+    if (open.has(child) || neverTranslatable(child)) return null;
+    open.add(child);
+    const nested = shapeOfLevel(
+      child.type,
+      child.fields ?? [],
+      open,
+      components
+    );
+    open.delete(child);
+    return nested;
+  }
+  // The rule a top-level field of a translated entity is classified by.
+  return isFieldLocalized({ ...child, name }, true) ? "text" : null;
 }
 
 /** The components a field places: one, or a dynamic zone's several; none for any other field. */
