@@ -672,8 +672,9 @@ describe.each(getConfiguredTestDialects())(
     fills(
       "writes the fill into a deploy's own empty rows, before the file makes the column required, under its consent alone",
       async () => {
-        // Every mark the file's one line could be split or ended by, and the escape it is kept under.
-        const fill = 'a, b\'s "c"\n-- UP\n50% %2C %0A;';
+        // Every mark the file's one line could be split or ended by, and two escapes that stay as they
+        // are written: read as escapes, they would write another value instead of refusing the file.
+        const fill = 'a, b\'s "c"\n-- UP\n50%25 %2C;';
         const created = await savedWithFill(
           [{ name: "v", type: "chips" }],
           { v: [] },

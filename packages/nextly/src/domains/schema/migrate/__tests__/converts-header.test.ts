@@ -26,6 +26,7 @@ describe("a migration file's converted columns", () => {
     "two\nlines\r\nand \u2028 a separator",
     "-- UP",
     "%20 fill, x.y",
+    "50% %0A",
     "עברית 😀",
     ["a", "b"],
     { root: { type: "root", children: [] } },
