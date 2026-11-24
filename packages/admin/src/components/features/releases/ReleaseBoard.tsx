@@ -19,7 +19,7 @@ import { useMemo, type JSX } from "react";
 import { Button, Skeleton } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
-import { useReleases } from "@admin/hooks/queries/useReleases";
+import { useReleaseBoardColumn } from "@admin/hooks/queries/useReleases";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import type { Release, ReleaseListTab } from "@admin/types/releases";
 
@@ -77,9 +77,9 @@ function BoardColumn({
   now: number;
   onShowTab: (tab: ReleaseListTab) => void;
 }) {
-  // The list's own read of this tab, polled on the list's speeds, so a
-  // release moves column on the board when it moves tab in the list.
-  const read = useReleases({ tab, limit: RELEASE_BOARD_LIMIT });
+  // The list's own read of this tab, every column on the fast cadence, so a
+  // release moves column on the board as soon as it moves tab in the list.
+  const read = useReleaseBoardColumn(tab, RELEASE_BOARD_LIMIT);
   const releases = read.data?.items ?? [];
   const total = read.data?.meta.total;
   const more =

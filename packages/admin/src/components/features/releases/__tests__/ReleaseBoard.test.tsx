@@ -219,3 +219,28 @@ describe("the Releases Board", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("the Releases Board, kept current", () => {
+  it("reads every column again on the fast cadence, an empty one too", async () => {
+    // A release crossing its moment leaves Scheduled for Needs attention;
+    // read on the slow cadence, an empty Needs attention would keep it off
+    // the board for minutes.
+    answers.attention = { items: [], total: 0 };
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<ReleaseBoard onShowTab={vi.fn()} />);
+      await screen.findByText("Autumn launch");
+      const asked = (tab: string) =>
+        fetchReleases.mock.calls.filter(
+          ([params]) => (params as ReleaseListParams).tab === tab
+        ).length;
+      const before = asked("attention");
+
+      await vi.advanceTimersByTimeAsync(61_000);
+
+      expect(asked("attention")).toBeGreaterThan(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
