@@ -304,11 +304,14 @@ describe.each(getConfiguredTestDialects())(
       expect(toCliError(refusal).why).toContain("Nothing was changed");
     }, 240_000);
 
-    it("under --step, which is not checked beforehand, refuses once the last migration has applied, and says so", async () => {
+    // A `--step` that takes every waiting migration reaches the data steps as a run without it
+    // does, so it is asked about the backup before its schema changes too, and refused with them
+    // unapplied. Broken (every `--step` left unchecked), the migrations apply first.
+    it("under a --step that takes every waiting migration, refuses before they apply", async () => {
       await siteHoldingAPlainPassword("plain-pin");
 
-      // Two migrations are waiting (the column and the per-language table it joins), so this run
-      // applies the last and reaches the data steps.
+      // Two migrations are waiting (the column and the per-language table it joins), and this
+      // run's window takes both.
       const refusal = await migrate({ step: 2 }).then(
         () => undefined,
         (error: unknown) => error
@@ -317,14 +320,12 @@ describe.each(getConfiguredTestDialects())(
       expect(messageOf(refusal)).toContain(
         "`nextly migrate --backup-confirmed`"
       );
-      // The refusal carries that the migrations had applied by then, which
-      // its printed form says in place of "Nothing was changed".
       expect((refusal as NextlyError).logContext).toMatchObject({
         reason: "data-steps-backup-not-confirmed",
-        afterMigrations: true,
+        afterMigrations: false,
       });
-      expect(toCliError(refusal).why).toContain("stay applied");
-      expect(await summaryColumnExists()).toBe(true);
+      expect(toCliError(refusal).why).toContain("Nothing was changed");
+      expect(await summaryColumnExists()).toBe(false);
       expect(await storedPin()).toBe("plain-pin");
 
       // The run the refusal names finishes the work.
