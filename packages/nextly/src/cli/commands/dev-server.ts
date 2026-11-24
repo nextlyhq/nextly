@@ -44,6 +44,7 @@ import {
 } from "../../domains/i18n/per-language-storage";
 import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
 import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-session";
+import { pluginCollectionSources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -52,7 +53,6 @@ import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/databa
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
 import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
-import { pluginCollectionSources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
 import { noopPreRenameExecutor } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
 import {

@@ -13,6 +13,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { loadBuilderEntities } from "../../di/load-dynamic-tables";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
+import { configTheCodeOwns } from "../../domains/schema/pipeline/registered-collections";
 import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import { describeError } from "../../errors/index";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
@@ -103,17 +104,18 @@ export function createDebouncedSync(
             // The configuration's new addresses, judged by the one address rule as a start judges
             // them, before this sync reads or writes any schema.
             // Its sibling fields too: a pair the registry row does not hold is new and refused.
+            // A handed-over collection's code entry is ignored here too (`configTheCodeOwns`).
             const liveAdapter = adapter as unknown as DrizzleAdapter;
             const registered = await loadBuilderEntities(liveAdapter);
-            await assertConfiguredAddresses(
+            const owned = configTheCodeOwns(
               configToSync.config,
-              registered,
-              table => liveAdapter.tableExists(table)
+              registered.collections
             );
-            await assertConfiguredSiblingFields(
-              configToSync.config,
-              registered,
-              table => liveAdapter.tableExists(table)
+            await assertConfiguredAddresses(owned, registered, table =>
+              liveAdapter.tableExists(table)
+            );
+            await assertConfiguredSiblingFields(owned, registered, table =>
+              liveAdapter.tableExists(table)
             );
 
             // A re-sync deletes orphans as the first sync does, so it takes

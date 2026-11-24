@@ -75,9 +75,13 @@ export function collectionRegistryOn(
  * - A held lock is waited for, about a minute, and then the command stops naming the holder.
  * - A field-group storage migration in flight refuses it with the error `db:sync` gives, because
  *   mid-run the registry describes storage neither configuration does.
- * - The lock tables are made only where the schema lock's is missing (`registryWriteMakingTheLock`),
- *   so a role with DML but no DDL rights keeps the command it had: on a database a run of this
- *   version has made the table on, and, where its rights refuse the creation, everywhere else.
+ * - The lock's tables are made where they are missing (`registryWriteMakingTheLock`), so the write
+ *   holds the lock's row on a database no run of this version has made them on.
+ * - On PostgreSQL and MySQL the table is asked for first, and where it is there the lock is taken
+ *   creating nothing: a database that refuses DDL (a role with DML rights only, a host that
+ *   forbids direct DDL) sees none, as before. On SQLite nothing is asked before the lock, whose
+ *   first access waits for a busy database in tries, where a question asked before it would meet
+ *   another connection's hold outside them; SQLite has no roles to refuse the tables.
  * - An interrupt does not hand the claim away while the write is still running: the snippet append
  *   and the registry write are not atomic, and a migration taking the row in between is the
  *   overlap the lock exists to prevent.
@@ -86,7 +90,10 @@ export async function withCollectionRegistryWrite<T>(
   args: RegistryWriteArgs,
   work: () => Promise<T>
 ): Promise<T> {
-  if (await args.adapter.tableExists(SCHEMA_LOCK_TABLE)) {
+  if (
+    args.adapter.getCapabilities().dialect !== "sqlite" &&
+    (await args.adapter.tableExists(SCHEMA_LOCK_TABLE))
+  ) {
     return registryWriteLocked(args, false, work);
   }
   return registryWriteMakingTheLock(args, work);
@@ -103,16 +110,15 @@ interface RegistryWriteArgs {
 }
 
 /**
- * The registry write on a database with no schema lock table, which no run of this version has
- * made. A run that may not make it holds no lock row there, so a development start or a sync
- * started beside the write, which makes the table and takes the row, would interleave with it:
- * the write makes the table first, as those runs do, and then holds the row.
+ * The registry write, holding the schema lock and making its tables where they are missing. A run
+ * that may not make them holds no lock row where they are missing, so a development start or a
+ * sync started beside it, which makes them and takes the row, would interleave with it.
  *
  * Where the database refuses the role the creation, before any of the work ran, the lock is taken
- * as such a role takes it, creating nothing: that holds the row where another run has made the
- * table meanwhile, and, where it is still missing, the earlier locks only, as before, which the
- * write says once. Any other failure (a busy database, a lost connection, a held lock) is thrown
- * as it came, so the write never runs without a lock it could have held.
+ * as such a role takes it, creating nothing: that holds the row where the table is there, and,
+ * where it is still missing, the earlier locks only, as before, which the write says once. Any
+ * other failure (a busy database, a lost connection, a held lock) is thrown as it came, so the
+ * write never runs without a lock it could have held.
  */
 async function registryWriteMakingTheLock<T>(
   args: RegistryWriteArgs,
@@ -176,7 +182,9 @@ function carriesRightsRefusal(error: object): boolean {
     logContext?: { dbCode?: unknown };
   };
   return [code, errno, logContext?.dbCode].some(
-    value => value !== undefined && RIGHTS_REFUSALS.has(String(value))
+    value =>
+      (typeof value === "string" || typeof value === "number") &&
+      RIGHTS_REFUSALS.has(String(value))
   );
 }
 

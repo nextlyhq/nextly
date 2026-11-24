@@ -169,6 +169,17 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * refusal of configuration problems); and the configuration reload's test
  * crossed it at 1,049. The tail mean's pin is the lower measurement plus its
  * margin, which also holds CI's.
+ * The heavy files' pin rose to 112 when five files that sat just under the
+ * line crossed it with no new edge: the widget layout and widget query routes'
+ * tests, the CLI's `add` and `migrate` command tests, and the plugin schema
+ * cache's test, at 1,004 to 1,038 modules. None of them loads the registry
+ * or a dialect's schema bundle. Each gained 7 to 12 modules, all of them new
+ * features' modules on chains the files already held: private files (the
+ * collection's file fields, its checked uploads and downloads, and the audit
+ * kinds they record), per-language moves and type changes, a demoted
+ * collection's code, the settling of a left Builder save at migrate, and the
+ * CLI's first line. CI and a local run both measured 109 and 1,508; the tail
+ * mean's pin holds.
  * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
@@ -176,7 +187,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 107, tailMeanModules: 1_520 };
+export const BUDGET = { heavyFiles: 112, tailMeanModules: 1_520 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
