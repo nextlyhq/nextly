@@ -26,7 +26,10 @@ import { dirname, resolve } from "node:path";
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { MIGRATION_TARGET } from "../../field-groups/migration/target";
-import type { FieldGroupNaming } from "../../field-groups/services/field-group-storage-names";
+import {
+  fieldGroupTableNameFor,
+  type FieldGroupNaming,
+} from "../../field-groups/services/field-group-storage-names";
 import { normalizeContributions } from "../pipeline/diff/contributions";
 import type {
   ContributedElements,
@@ -145,14 +148,20 @@ export interface SnapshotFile {
  * that name says nothing about the names.
  */
 export function snapshotFieldGroupNaming(
-  file: Pick<SnapshotFile, "fieldGroupStorage" | "snapshot" | "migration">
+  file: Pick<SnapshotFile, "fieldGroupStorage" | "snapshot" | "migration"> &
+    Partial<Pick<SnapshotFile, "entities">>
 ): FieldGroupNaming {
   if (file.fieldGroupStorage === "current") return "current";
   const groupTables = file.snapshot.tables.filter(table =>
     FIELD_GROUP_SYSTEM_COLUMNS.every(column => holdsColumn(table, column))
   );
+  const slugNamedCurrent = currentNamesOfRecordedGroups(file);
   const onCurrent = groupTables
-    .filter(table => holdsColumn(table, MIGRATION_TARGET.columnType))
+    .filter(
+      table =>
+        holdsColumn(table, MIGRATION_TARGET.columnType) ||
+        slugNamedCurrent.has(table.name)
+    )
     .map(table => table.name);
   if (onCurrent.length === 0) return "legacy";
   const onLegacy = groupTables
@@ -180,6 +189,22 @@ const FIELD_GROUP_SYSTEM_COLUMNS = [
   STORAGE_FORMAT.columns.parentField,
   STORAGE_FORMAT.columns.order,
 ];
+
+/**
+ * The current name (`fg_<slug>`) of each field group the snapshot's own settings record holds under
+ * its slug's name, with no table name its author chose. Such a table can only be on the current
+ * names, whatever its type column: storage that moved before the group existed, and an earlier
+ * release that then made it, leave `fg_<slug>` on the legacy column.
+ */
+function currentNamesOfRecordedGroups(
+  file: Partial<Pick<SnapshotFile, "entities">>
+): ReadonlySet<string> {
+  return new Set(
+    Object.entries(file.entities?.fieldGroups ?? {})
+      .filter(([, recorded]) => recorded.settings.dbName === undefined)
+      .map(([slug]) => fieldGroupTableNameFor("current", slug))
+  );
+}
 
 /** Whether `table` has a column named `column`. */
 function holdsColumn(

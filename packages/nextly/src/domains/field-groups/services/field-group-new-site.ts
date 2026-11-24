@@ -64,21 +64,27 @@ export function withFieldGroupRegistryFor(
  * carries, because nothing else was ever on the legacy names to move.
  *
  * The site has just been set up, so the process's resolution of the registry name is dropped as
- * well: anything read before the core tables existed resolved to the legacy name.
+ * well, even where the record fails: anything read before the core tables existed resolved to the
+ * legacy name.
  */
 export async function recordNewSiteOnCurrentNames(
   adapter: DrizzleAdapter,
   logger: Logger
 ): Promise<void> {
-  await settleMigration(new MetaService(adapter, logger), {
-    generation: "field-groups-v2",
-    appliedManifest: [
-      {
-        kind: "registry",
-        from: STORAGE_FORMAT.registryTable,
-        to: MIGRATION_TARGET.registryTable,
-      },
-    ],
-  });
-  forgetFieldGroupStorageNames(adapter);
+  try {
+    await settleMigration(new MetaService(adapter, logger), {
+      generation: "field-groups-v2",
+      appliedManifest: [
+        {
+          kind: "registry",
+          from: STORAGE_FORMAT.registryTable,
+          to: MIGRATION_TARGET.registryTable,
+        },
+      ],
+    });
+  } finally {
+    // Whether or not the record is written: the current registry exists either way, and a stale
+    // legacy name would address a registry the database does not have for the rest of the start.
+    forgetFieldGroupStorageNames(adapter);
+  }
 }
