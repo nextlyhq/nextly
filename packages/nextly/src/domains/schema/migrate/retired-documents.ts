@@ -57,7 +57,7 @@ import { endsTheRun, reachStopPoint } from "./stop-points";
 const KEY_PREFIX = "retired_documents:";
 
 /** The ids one stored row holds, so no row, read or transaction grows with the collection. */
-export const CHUNK = 500;
+const CHUNK = 500;
 
 /** The last part of a capture's head row's key. */
 const HEAD = "head";

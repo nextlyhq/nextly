@@ -721,24 +721,36 @@ function addedKeyIn(
 ): AddedForeignKey | undefined {
   clause.accept("ADD");
   const name = clause.accept("CONSTRAINT") ? clause.name() : undefined;
-  let columns: string[] = [];
+  const columns = keyColumnsIn(clause);
+  const referencesTable = referencedTableIn(clause, dialect);
+  return referencesTable === undefined
+    ? undefined
+    : { table, referencesTable, name, columns };
+}
+
+/**
+ * The columns a clause's key is made of: a `FOREIGN KEY [<index>] (<columns>)`'s list, or the
+ * column a column definition names.
+ */
+function keyColumnsIn(clause: StatementCursor): string[] {
   if (clause.accept("FOREIGN", "KEY")) {
     // MySQL's index name, written before the columns.
     if (!clause.isWord("(")) clause.name();
-    if (clause.accept("(")) columns = clause.names() ?? [];
-  } else {
-    clause.accept("COLUMN");
-    clause.acceptCondition();
-    const column = clause.name();
-    if (column !== undefined) columns = [column];
+    return clause.accept("(") ? (clause.names() ?? []) : [];
   }
+  clause.accept("COLUMN");
+  clause.acceptCondition();
+  const column = clause.name();
+  return column === undefined ? [] : [column];
+}
+
+/** The table the clause's `REFERENCES` names, read past whatever comes before it. */
+function referencedTableIn(
+  clause: StatementCursor,
+  dialect: SupportedDialect
+): string | undefined {
   while (!clause.done()) {
-    if (clause.accept("REFERENCES")) {
-      const referencesTable = localTableName(clause, dialect);
-      return referencesTable === undefined
-        ? undefined
-        : { table, referencesTable, name, columns };
-    }
+    if (clause.accept("REFERENCES")) return localTableName(clause, dialect);
     clause.at += 1;
   }
   return undefined;
@@ -793,21 +805,37 @@ export function postgresTableSpellings(
  */
 function postgresSpellingAt(cursor: StatementCursor): string | undefined {
   const parts: string[] = [];
-  for (let token = cursor.peek(); token !== undefined; token = cursor.peek()) {
-    if (typeof token === "string") {
-      // An unquoted `s.t` is one word.
-      if (!/^[A-Z_][A-Z0-9_$]*(\.[A-Z_][A-Z0-9_$]*)*$/i.test(token)) break;
-      parts.push(...token.toLowerCase().split("."));
-    } else if (token.kind === "name" && token.name !== undefined) {
-      parts.push(token.written ?? token.name);
-    } else {
-      break;
-    }
+  for (
+    let read = postgresNameParts(cursor.peek());
+    read !== undefined;
+    read = postgresNameParts(cursor.peek())
+  ) {
+    parts.push(...read.parts);
     cursor.at += 1;
-    if (!cursor.accept(".")) break;
+    if (!read.qualifies && !cursor.accept(".")) break;
   }
   if (parts.length === 1) return parts[0];
   return parts.length === 2 && parts[0] === "public" ? parts[1] : undefined;
+}
+
+/**
+ * The name parts one token spells on PostgreSQL: an unquoted word folded to lower case, split at
+ * its dots (an unquoted `s.t` is one word, and `s.` before a quoted name a word of its own, which
+ * `qualifies` the name after it), a quoted name as written; undefined for anything else.
+ */
+function postgresNameParts(
+  token: StatementToken | undefined
+): { parts: string[]; qualifies: boolean } | undefined {
+  if (typeof token === "string") {
+    if (!/^[A-Z_][A-Z0-9_$]*(\.[A-Z_][A-Z0-9_$]*)*\.?$/i.test(token)) {
+      return undefined;
+    }
+    const qualifies = token.endsWith(".");
+    const word = qualifies ? token.slice(0, -1) : token;
+    return { parts: word.toLowerCase().split("."), qualifies };
+  }
+  if (token?.kind !== "name" || token.name === undefined) return undefined;
+  return { parts: [token.written ?? token.name], qualifies: false };
 }
 
 /** A registry row a statement writes: the registry table and the row's slug. */

@@ -8,6 +8,8 @@ import { buildCollectionMetadataUpsert } from "../../ui-schema/metadata-sql";
 import {
   archiveWriteOf,
   columnsAddedBy,
+  foreignKeysAddedBy,
+  postgresTableSpellings,
   indexesDroppedBy,
   indexesRenamedBy,
   registryRowWrittenBy,
@@ -891,5 +893,139 @@ describe("renamesIn", () => {
     ["postgresql", `ALTER TABLE "dc_posts" RENAME COLUMN "a" TO "b" CASCADE`],
   ] as const)("reads nothing from %s's %s", (dialect, sql) => {
     expect(renamesIn(sql, dialect)).toBeUndefined();
+  });
+});
+
+describe("foreignKeysAddedBy", () => {
+  it("reads a column's inline reference, by the column it is on", () => {
+    expect(
+      foreignKeysAddedBy(
+        "ALTER TABLE pages ADD COLUMN post_id varchar(36) REFERENCES posts (id)",
+        "sqlite"
+      )
+    ).toEqual([
+      {
+        table: "pages",
+        referencesTable: "posts",
+        name: undefined,
+        columns: ["post_id"],
+      },
+    ]);
+  });
+
+  it("reads a named FOREIGN KEY's columns", () => {
+    expect(
+      foreignKeysAddedBy(
+        "ALTER TABLE pages ADD CONSTRAINT fk_post FOREIGN KEY (post_id, locale) REFERENCES posts (id, locale)",
+        "postgresql"
+      )
+    ).toEqual([
+      {
+        table: "pages",
+        referencesTable: "posts",
+        name: "fk_post",
+        columns: ["post_id", "locale"],
+      },
+    ]);
+  });
+
+  it("passes over MySQL's index name before the columns", () => {
+    expect(
+      foreignKeysAddedBy(
+        "ALTER TABLE pages ADD FOREIGN KEY idx_post (post_id) REFERENCES posts (id)",
+        "mysql"
+      )
+    ).toEqual([
+      {
+        table: "pages",
+        referencesTable: "posts",
+        name: undefined,
+        columns: ["post_id"],
+      },
+    ]);
+  });
+
+  it("reads each clause of a CREATE TABLE, and only those with a reference", () => {
+    expect(
+      foreignKeysAddedBy(
+        "CREATE TABLE IF NOT EXISTS pages (id varchar(36) PRIMARY KEY, post_id varchar(36) REFERENCES posts (id), CONSTRAINT fk_home FOREIGN KEY (home_id) REFERENCES home (id))",
+        "postgresql"
+      )
+    ).toEqual([
+      {
+        table: "pages",
+        referencesTable: "posts",
+        name: undefined,
+        columns: ["post_id"],
+      },
+      {
+        table: "pages",
+        referencesTable: "home",
+        name: "fk_home",
+        columns: ["home_id"],
+      },
+    ]);
+  });
+
+  it.each([
+    ["postgresql", "public.pages", "public.posts", ["pages", "posts"]],
+    ["postgresql", "archive.pages", "posts", undefined],
+    ["postgresql", "pages", "archive.posts", undefined],
+    ["sqlite", "main.pages", "main.posts", ["pages", "posts"]],
+    ["mysql", "shop.pages", "shop.posts", ["pages", "posts"]],
+  ] as const)(
+    "on %s, reads %s REFERENCES %s by the app's own schema",
+    (dialect, table, target, expected) => {
+      const keys = foreignKeysAddedBy(
+        `ALTER TABLE ${table} ADD CONSTRAINT k FOREIGN KEY (post_id) REFERENCES ${target} (id)`,
+        dialect
+      );
+      expect(keys.map(key => [key.table, key.referencesTable])[0]).toEqual(
+        expected
+      );
+    }
+  );
+
+  it("reads nothing from a statement that adds no key", () => {
+    expect(
+      foreignKeysAddedBy(
+        "ALTER TABLE pages ADD COLUMN title text",
+        "postgresql"
+      )
+    ).toEqual([]);
+    expect(foreignKeysAddedBy("DROP TABLE posts", "postgresql")).toEqual([]);
+    expect(
+      foreignKeysAddedBy("CREATE TABLE pages AS SELECT 1", "postgresql")
+    ).toEqual([]);
+  });
+});
+
+describe("postgresTableSpellings", () => {
+  it("folds unquoted names and keeps quoted ones as written", () => {
+    expect(
+      postgresTableSpellings([
+        'DROP TABLE IF EXISTS posts, "Topics", public."Pages" CASCADE',
+      ]).dropped
+    ).toEqual(new Set(["posts", "Topics", "Pages"]));
+  });
+
+  it("reads a table in another schema as neither dropped nor created", () => {
+    const spelled = postgresTableSpellings([
+      'DROP TABLE archive."Topics"',
+      "DROP TABLE ARCHIVE.POSTS",
+      'CREATE TABLE archive."Topics" (id int)',
+    ]);
+    expect(spelled.dropped).toEqual(new Set());
+    expect(spelled.created).toEqual(new Set());
+  });
+
+  it("reads a CREATE TABLE and a rename's target as created", () => {
+    const spelled = postgresTableSpellings([
+      'CREATE TABLE IF NOT EXISTS "Topics_new" (id int)',
+      'ALTER TABLE ONLY "Topics_new" RENAME TO "Topics"',
+      "ALTER TABLE pages ADD COLUMN title text",
+    ]);
+    expect(spelled.created).toEqual(new Set(["Topics_new", "Topics"]));
+    expect(spelled.dropped).toEqual(new Set());
   });
 });
