@@ -23,6 +23,7 @@ import type {
   TypeChangeRefusal,
 } from "../value-conversion/type-change/field-type-changes";
 
+import { namesColumn, sqliteReadersIn } from "./column-readers";
 import type { ConvertedColumn } from "./type-conversion";
 
 /** The column a conversion writes beside the one it converts, of the new type. */
@@ -185,7 +186,7 @@ async function overChecks(
     const naming = (
       live.tables.find(table => table.name === column.table)?.checks ?? []
     )
-      .filter(check => namesColumn(check.sql, column.column))
+      .filter(check => namesColumn(check.sql, column.column, dialect))
       .map(check => check.name);
     if (naming.length === 0) return [];
     const many = naming.length > 1;
@@ -209,12 +210,6 @@ function rewritesAnyValue(
       change.column === column.column &&
       change.result.counts.changed > 0
   );
-}
-
-/** Whether a CHECK's expression names `column`, its text literals aside. */
-function namesColumn(expression: string, column: string): boolean {
-  const named = new RegExp(`(?<![\\w$])${escapeRegExp(column)}(?![\\w$])`, "i");
-  return named.test(expression.replace(/'(?:[^']|'')*'/g, "''"));
 }
 
 /**
@@ -513,9 +508,8 @@ async function sqliteForeignKeys(
 }
 
 /**
- * Whether a CHECK constraint of a SQLite table, its column's own or one with no name, or a generated
- * column of it, reads `column`: SQLite states neither but in the table's own statement, and drops a
- * column's own CHECK with it without a word.
+ * What of a SQLite `table` reads `column` (`sqliteReadersIn`): SQLite states a CHECK and a generated
+ * column only in the table's own statement, and drops a column's own CHECK with it without a word.
  */
 async function sqliteReadersOf(
   db: unknown,
@@ -527,35 +521,7 @@ async function sqliteReadersOf(
     "sqlite",
     sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND lower(name) = ${table.toLowerCase()}`
   );
-  const statement = made?.sql ?? "";
-  const reads = (opening: RegExp) =>
-    expressionsAfter(statement, opening).some(expression =>
-      namesColumn(expression, column)
-    );
-  return [
-    ...(reads(/\bCHECK\s*\(/gi) ? [`a CHECK that reads ${column}`] : []),
-    ...(reads(/\bAS\s*\(/gi)
-      ? [`a generated column that reads ${column}`]
-      : []),
-  ];
-}
-
-/** The parenthesized expressions of `statement` that `opening` (ending at its parenthesis) begins. */
-function expressionsAfter(statement: string, opening: RegExp): string[] {
-  return [...statement.matchAll(opening)].map(match => {
-    const start = match.index + match[0].length;
-    let depth = 1;
-    let quoted = false;
-    let at = start;
-    for (; at < statement.length && depth > 0; at += 1) {
-      const character = statement[at];
-      if (character === "'") quoted = !quoted;
-      if (quoted) continue;
-      if (character === "(") depth += 1;
-      if (character === ")") depth -= 1;
-    }
-    return statement.slice(start, at);
-  });
+  return sqliteReadersIn(made?.sql ?? "", column);
 }
 
 /** `text` with every character a regular expression gives a meaning escaped. */

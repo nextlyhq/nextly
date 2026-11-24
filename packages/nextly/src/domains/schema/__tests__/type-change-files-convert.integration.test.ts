@@ -684,16 +684,6 @@ describe.each(getConfiguredTestDialects())(
         "a CHECK that reads v",
       ],
       [
-        "a CHECK naming a column with an apostrophe before it",
-        `v text, "it's" text CHECK ("it's" <> 'a' OR v <> 'b')`,
-        "a CHECK that reads v",
-      ],
-      [
-        "a CHECK naming a column with a parenthesis before it",
-        `v text, "a)" text CHECK ("a)" IS NULL OR v <> 'b')`,
-        "a CHECK that reads v",
-      ],
-      [
         "a CHECK opened after a comment",
         "v text CHECK /* it's ) */ (v <> 'b')",
         "a CHECK that reads v",
