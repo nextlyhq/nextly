@@ -23,7 +23,14 @@
  * whose column is the entity's own in either layout: an untranslated text field's per-language
  * column is kept when the field is removed, so removing one takes nothing.
  */
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -59,6 +66,7 @@ import { setPerLanguageStorage } from "../../../i18n/per-language-storage";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
 import { setNonInteractive } from "../../migrate/can-prompt";
 import { ownerRowsToRecord } from "../kept-elements";
+import type { OwnerRecord } from "../owner-registry";
 import { SchemaOwnersRepository } from "../schema-owners-repository";
 
 perLanguageStorageSuite();
@@ -196,6 +204,10 @@ const shaped = (
     inGroup?: readonly string[];
     without?: readonly string[];
     localized?: boolean;
+    /** Fields made required, which SQLite rebuilds the table for. */
+    required?: readonly string[];
+    /** A field of the app's own, named as the plugin's column is. */
+    ownMarker?: boolean;
   },
   type: typeof number | typeof text = number
 ) => {
@@ -212,7 +224,13 @@ const shaped = (
           text({ name: "title" }),
           ...all
             .filter(name => !inside.includes(name))
-            .map(name => type({ name })),
+            .map(name =>
+              type({
+                name,
+                ...(shape.required?.includes(name) ? { required: true } : {}),
+              })
+            ),
+          ...(shape.ownMarker === true ? [number({ name: MARKER })] : []),
           group({
             name: "meta",
             fields: [
@@ -226,6 +244,29 @@ const shaped = (
     db: { migrationsDir: "./migrations" },
   });
 };
+
+/** Changes of the app's own, each taking the app's own column off the table or none. */
+const CHANGES: {
+  change: string;
+  after: Parameters<typeof shaped>[0];
+  gone: string | undefined;
+}[] = [
+  {
+    change: "removing a field",
+    after: { without: ["extra"] },
+    gone: "extra",
+  },
+  {
+    change: "moving a field into a group",
+    after: { inGroup: ["extra"] },
+    gone: "extra",
+  },
+  {
+    change: "turning translation on",
+    after: { localized: true },
+    gone: undefined,
+  },
+];
 
 /** The layouts a site's tables may be on: the one every installation runs, and the earlier one. */
 const LAYOUTS = [
@@ -481,7 +522,11 @@ describe.each(getConfiguredTestDialects())(
     /**
      * The plugin's own column on `main`, with its index, recorded as a push writes it, and one row there holding a value in it.
      */
-    async function plantMarker(url: string, main = TABLE): Promise<void> {
+    async function plantMarker(
+      url: string,
+      main = TABLE,
+      recorded: (rows: OwnerRecord[]) => OwnerRecord[] = rows => rows
+    ): Promise<void> {
       const q = (name: string) =>
         dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
       const snapshot = await snapshotOf(url, [main]);
@@ -507,20 +552,22 @@ describe.each(getConfiguredTestDialects())(
           `UPDATE ${q(main)} SET ${q(MARKER)} = 'kept by the plugin'`
         );
         await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert(
-          ownerRowsToRecord(
-            (
-              [
-                ["column", MARKER],
-                ["index", MARKER_INDEX],
-              ] as const
-            ).map(([elementKind, elementName]) => ({
-              table: main,
-              elementKind,
-              elementName,
-              owner: { kind: "plugin" as const, id: PLUGIN },
-            })),
-            new Set(),
-            []
+          recorded(
+            ownerRowsToRecord(
+              (
+                [
+                  ["column", MARKER],
+                  ["index", MARKER_INDEX],
+                ] as const
+              ).map(([elementKind, elementName]) => ({
+                table: main,
+                elementKind,
+                elementName,
+                owner: { kind: "plugin" as const, id: PLUGIN },
+              })),
+              new Set(),
+              []
+            )
           )
         );
       });
@@ -691,24 +738,30 @@ describe.each(getConfiguredTestDialects())(
       expect(await shapeOf(url, table)).toEqual(before);
     });
 
+    // The control of the cases below: the same changes with nothing of a plugin's on the table.
+    it.each(CHANGES)(
+      "migrate:create and nextly migrate apply $change on per-language storage where nothing of a plugin's is on the table",
+      async ({ after, gone }) => {
+        const url = await emptyDatabase();
+        use(url);
+        wentThrough(await migrateCreate("add_posts", shaped({})));
+        wentThrough(await migrate(shaped({})));
+
+        const created = await migrateCreate("change_posts", shaped(after), {
+          acceptMoves: true,
+        });
+        expect(created.code, created.said).toBe(undefined);
+        const migrated = await migrate(shaped(after));
+        expect(migrated.code, migrated.said).toBe(undefined);
+
+        if (gone !== undefined) {
+          expect((await shapeOf(url, TABLE)).columns).not.toContain(gone);
+        }
+      }
+    );
+
     // Nothing of the plugin's is built on a column any of these takes off the table.
-    it.each([
-      {
-        change: "removing a field",
-        after: { without: ["extra"] },
-        gone: "extra" as string | undefined,
-      },
-      {
-        change: "moving a field into a group",
-        after: { inGroup: ["extra"] },
-        gone: "extra" as string | undefined,
-      },
-      {
-        change: "turning translation on",
-        after: { localized: true },
-        gone: undefined,
-      },
-    ])(
+    it.each(CHANGES)(
       "migrate:create and nextly migrate apply $change on per-language storage, keeping the plugin's column, its index and its values",
       async ({ after, gone }) => {
         const url = await emptyDatabase();
@@ -762,6 +815,190 @@ describe.each(getConfiguredTestDialects())(
 
       expect((await shapeOf(url, GROUP_TABLE)).columns).not.toContain("rank");
       expect(await markerOf(url, GROUP_TABLE)).toEqual(before);
+    });
+
+    it("migrate:create and nextly migrate apply removing a field group's field on per-language storage where nothing of a plugin's is on the shared table", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      wentThrough(await migrateCreate("add_cards", groupConfigWith(true)));
+      wentThrough(await migrate(groupConfigWith(true)));
+
+      wentThrough(await migrateCreate("remove_rank", groupConfigWith(false)));
+      const migrated = await migrate(groupConfigWith(false));
+
+      expect(migrated.code, migrated.said).toBe(undefined);
+      expect((await shapeOf(url, GROUP_TABLE)).columns).not.toContain("rank");
+    });
+
+    /** The app's own change of TABLE, run over the plugin's parts there, recorded as `recorded` says. */
+    async function changedOverTheParts(
+      options: {
+        recorded?: (rows: OwnerRecord[]) => OwnerRecord[];
+        after?: Parameters<typeof shaped>[0];
+        /** The file's UP, rewritten by hand before it runs. */
+        edit?: (up: string) => string;
+      } = {}
+    ) {
+      const url = await emptyDatabase();
+      use(url);
+      wentThrough(await migrateCreate("add_posts", shaped({})));
+      wentThrough(await migrate(shaped({})));
+      await plantMarker(url, TABLE, options.recorded);
+      await on(url, async adapter => {
+        await adapter.executeQuery(
+          dialect === "mysql"
+            ? `UPDATE \`${TABLE}\` SET \`extra\` = 1`
+            : `UPDATE "${TABLE}" SET "extra" = 1`
+        );
+      });
+      const before = {
+        marker: await markerOf(url),
+        shape: await shapeOf(url, TABLE),
+      };
+      const after = shaped(options.after ?? { without: ["extra"] });
+      const written = new Set(files());
+      wentThrough(
+        await migrateCreate("change_posts", after, { acceptMoves: true })
+      );
+      if (options.edit !== undefined) {
+        const name = files().find(each => !written.has(each))!;
+        const path = join(state.dir, "migrations", name);
+        writeFileSync(path, options.edit(readFileSync(path, "utf-8")));
+      }
+      return { url, before, migrated: await migrate(after) };
+    }
+
+    /** `nextly migrate` refused the file as drift over the plugin's parts, and changed nothing of TABLE. */
+    async function expectDrift(
+      ran: Awaited<ReturnType<typeof changedOverTheParts>>
+    ) {
+      expect(ran.migrated.code, ran.migrated.said).toBe(1);
+      expect(ran.migrated.said).toContain("schema drift detected");
+      expect(ran.migrated.said).toContain(`+ ${TABLE}.${MARKER} present in DB`);
+      expect(await markerOf(ran.url)).toEqual(ran.before.marker);
+      expect(await shapeOf(ran.url, TABLE)).toEqual(ran.before.shape);
+    }
+
+    // Left out of the comparison only where a row of another owner names the part exactly.
+    it.each([
+      { record: "no owner row names it", recorded: () => [] },
+      {
+        record: "the owner row is the app's",
+        recorded: (rows: OwnerRecord[]) =>
+          rows.map(row => ({
+            ...row,
+            ownerKind: "app" as const,
+            ownerId: "app",
+          })),
+      },
+      {
+        record: "the owner row names another table",
+        recorded: (rows: OwnerRecord[]) =>
+          rows.map(row => ({ ...row, tableName: "dc_mko_other" })),
+      },
+      {
+        record: "the owner row names another kind of part",
+        recorded: (rows: OwnerRecord[]) =>
+          rows.map(row => ({ ...row, elementKind: "check" as const })),
+      },
+      {
+        record: "the owner row spells its name in another case",
+        recorded: (rows: OwnerRecord[]) =>
+          rows.map(row => ({
+            ...row,
+            elementName: row.elementName?.toUpperCase(),
+          })),
+      },
+    ])(
+      "nextly migrate refuses a file as drift over a plugin's part where $record, changing nothing",
+      async ({ recorded }) => {
+        await expectDrift(await changedOverTheParts({ recorded }));
+      }
+    );
+
+    it("nextly migrate compares the app's own element of the same name, recorded as a plugin's or not", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      const owned = { ownMarker: true };
+      wentThrough(await migrateCreate("add_posts", shaped(owned)));
+      wentThrough(await migrate(shaped(owned)));
+      await on(url, async adapter => {
+        await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert(
+          ownerRowsToRecord(
+            [
+              {
+                table: TABLE,
+                elementKind: "column",
+                elementName: MARKER,
+                owner: { kind: "plugin", id: PLUGIN },
+              },
+            ],
+            new Set(),
+            []
+          )
+        );
+      });
+      const after = shaped({ ...owned, without: ["extra"] });
+      wentThrough(await migrateCreate("change_posts", after));
+
+      const migrated = await migrate(after);
+
+      expect(migrated.code, migrated.said).toBe(undefined);
+      const columns = (await shapeOf(url, TABLE)).columns;
+      expect(columns).toContain(MARKER);
+      expect(columns).not.toContain("extra");
+    });
+
+    it("nextly migrate refuses, before the first file runs, where the record of other owners' elements cannot be read", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      wentThrough(await migrateCreate("add_posts", shaped({})));
+      wentThrough(await migrate(shaped({})));
+      await plantMarker(url);
+      const before = {
+        marker: await markerOf(url),
+        shape: await shapeOf(url, TABLE),
+      };
+      const after = shaped({ without: ["extra"] });
+      wentThrough(await migrateCreate("change_posts", after));
+      await on(url, async adapter => {
+        await adapter.executeQuery(`DROP TABLE nextly_schema_owners`);
+        await adapter.executeQuery(
+          `CREATE TABLE nextly_schema_owners (unrelated integer)`
+        );
+      });
+
+      const migrated = await migrate(after);
+
+      expect(migrated.code, migrated.said).not.toBe(undefined);
+      expect(migrated.said).toContain("could not be read");
+      expect(await markerOf(url)).toEqual(before.marker);
+      expect(await shapeOf(url, TABLE)).toEqual(before.shape);
+    });
+
+    // SQLite makes a column required by rebuilding its table from what the app's history describes,
+    // so what the history does not describe goes with the old table.
+    it.runIf(dialect === "sqlite")(
+      "nextly migrate refuses a file that rebuilds a table as drift over a plugin's part on it, changing nothing",
+      async () => {
+        await expectDrift(
+          await changedOverTheParts({ after: { required: ["extra"] } })
+        );
+      }
+    );
+
+    it("nextly migrate refuses a file whose statements name a plugin's part as drift, changing nothing", async () => {
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const drop = [
+        ...(dialect === "mysql" ? [] : [`DROP INDEX ${q(MARKER_INDEX)};`]),
+        `ALTER TABLE ${q(TABLE)} DROP COLUMN ${q(MARKER)};`,
+      ].join("\n\n");
+      await expectDrift(
+        await changedOverTheParts({
+          edit: up => up.replace("-- DOWN", `${drop}\n\n-- DOWN`),
+        })
+      );
     });
 
     // WAITING, not yet decided how: `nextly migrate` writes no owner row for what a schema hook adds to
