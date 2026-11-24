@@ -1,0 +1,27 @@
+---
+title: REGISTRY_ROW_DIVERGED
+description: "A registry row is marked as diverged: its tables were changed and its stored definition was not, so the command could not tell what was last applied."
+---
+
+## Cause
+
+A registry row is marked as diverged: its tables were changed and its stored definition was not, so the command could not tell what was last applied.
+
+A schema change altered the entity's tables, and recording it failed, so the row still describes the previous shape. `nextly repair-columns` compares each column with the definition last applied, and here neither the row nor an older snapshot says what that is. Judging the columns by either could convert them back, so it stops and names every such row.
+
+## Fix
+
+- For a field group made in the Schema Builder: in development, open **Field Groups** in the admin and choose **Repair definition** on it. The Schema Builder's pages are not shown in production, or where `admin.branding.showBuilder` is `false`.
+- For a field group your configuration declares: in development, run `nextly db:sync` or start the app. Either repairs the row. `nextly migrate` and a production start do not.
+- For a collection or a Single, which Nextly does not mark this way: make the stored definition match its tables and set the row's `migration_status` to `synced`.
+
+Then run `nextly repair-columns` again.
+
+## Example
+
+```text
+✗ The registry row of the field group "card" is marked as diverged.
+  Why:  Its tables were changed and its stored definition still describes the previous shape, so what the database last had applied cannot be known.
+  Next: In development, open Field Groups in the admin and choose "Repair definition" on "card". Then run `nextly repair-columns` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/registry-row-diverged  (REGISTRY_ROW_DIVERGED)
+```

@@ -1,0 +1,23 @@
+---
+title: MIGRATION_SNAPSHOTS_UNREADABLE
+description: "The migration snapshots are there and could not be read from disk."
+---
+
+## Cause
+
+The migration snapshots are there and could not be read from disk.
+
+`nextly repair-columns` reads the snapshots in the migrations folder's `meta/` to learn what the database last had applied. That folder, the migrations folder, or the snapshot of an applied migration exists and could not be read. The command stops rather than judge columns by an older definition. A snapshot that opens and is not valid is [`INVALID_SNAPSHOT`](/docs/cli/errors/invalid-snapshot).
+
+## Fix
+
+Make the folder or file the message names readable by the user running the command, then run `nextly repair-columns` again. The Why line is the system's own reason.
+
+## Example
+
+```text
+✗ The migration snapshots in `/app/migrations/meta` could not be read.
+  Why:  EACCES: permission denied, scandir '/app/migrations/meta'
+  Next: Make the folder readable by the user running the command, then run `nextly repair-columns` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-snapshots-unreadable  (MIGRATION_SNAPSHOTS_UNREADABLE)
+```

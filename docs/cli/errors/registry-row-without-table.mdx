@@ -1,0 +1,23 @@
+---
+title: REGISTRY_ROW_WITHOUT_TABLE
+description: "A registry row names no table, so the command could not tell where its entity's columns are."
+---
+
+## Cause
+
+A registry row names no table, so the command could not tell where its entity's columns are.
+
+The registry holds a row for each collection, Single and field group, and the row's `table_name` says where its data is. Nextly writes it with the row, so an empty one was changed by hand or by another tool. `nextly repair-columns` stops rather than leave the entity out, which would report its columns as fine. It names every such row.
+
+## Fix
+
+Set `table_name` on each row the message names to the table that holds the entity's data. The message says which registry table the row is in. Then run `nextly repair-columns` again.
+
+## Example
+
+```text
+✗ The registry row of the collection "posts" names no table.
+  Why:  Its `table_name` in `dynamic_collections` is empty, so where the collection's columns are cannot be known.
+  Next: Set the row's `table_name` to the collection's table, then run `nextly repair-columns` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/registry-row-without-table  (REGISTRY_ROW_WITHOUT_TABLE)
+```
