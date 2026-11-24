@@ -295,7 +295,7 @@ describe.each(getConfiguredTestDialects())(
       await write(first, "kept", { v: "12" });
       await write(first, "lost", { v: "abc" });
       await save(first, [{ name: "v", type: "number" }], {
-        confirmedClears: [{ field: "v", count: 1 }],
+        confirmedTypeChanges: [{ field: "v", kept: 0, changed: 1, lost: 1 }],
       });
       expect(await read(first)).toEqual({ kept: 12, lost: null });
       await first.destroy();

@@ -91,7 +91,7 @@ import {
   checkBuilderSaveHistory,
   entityDialogQuestions,
   entityPushReason,
-  readConfirmedClears,
+  readConfirmedTypeChanges,
   reviewBuilderSchemaChange,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
@@ -711,7 +711,7 @@ export const COMPONENTS_METHODS: Record<
       // The fields the save moves, each kept by statements its migration file carries.
       const moves = readRequestedMoves(body);
       // The values the person confirmed clearing, read with the body's other answers.
-      const confirmedClears = readConfirmedClears(body);
+      const confirmedTypeChanges = readConfirmedTypeChanges(body);
 
       return withSchemaChangeExcluded(
         {
@@ -1077,7 +1077,9 @@ export const COMPONENTS_METHODS: Record<
                   : { acknowledgedConversions }),
                 // The values the person confirmed clearing, with each field's count, as the
                 // collection's apply reads them.
-                ...(confirmedClears === undefined ? {} : { confirmedClears }),
+                ...(confirmedTypeChanges === undefined
+                  ? {}
+                  : { confirmedTypeChanges }),
               },
               // What the push moves beside the table, as a collection's save writes it: a renamed
               // nested field group's rows moved to its new name, and any junction tables.

@@ -259,8 +259,25 @@ export type RefusedPartwayPublicData = {
   refused: { code: string; errors?: ValidationPublicData["errors"] };
 };
 
+/** A refusal that says the review must be taken again, and what was counted when it refused. */
+export interface ReviewAgainPublicData {
+  reviewAgain: true;
+  counts?: {
+    /** What a save would delete, by field: null where it could not be counted. */
+    deletions?: readonly { field: string; count: number | null }[];
+    /** A type change's numbers, by field. */
+    typeChanges?: readonly {
+      field: string;
+      kept: number;
+      changed: number;
+      lost: number;
+    }[];
+  };
+}
+
 export type PublicData =
   | ValidationPublicData
+  | ReviewAgainPublicData
   | StoppedSavePublicData
   | RefusedPartwayPublicData
   | StaleVersionPublicData

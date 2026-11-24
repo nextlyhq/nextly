@@ -622,8 +622,8 @@ export const MIGRATION_CASES = {
       field: "price",
       table: "dc_products",
       column: "price",
-      now: 2,
-      judged: 1,
+      now: { kept: 3, changed: 1, lost: 2 },
+      judged: { kept: 3, changed: 2, lost: 1 },
     }),
   CONVERSION_RULES_UNKNOWN: () => {
     try {

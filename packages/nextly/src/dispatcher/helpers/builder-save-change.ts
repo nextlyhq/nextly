@@ -328,57 +328,54 @@ export async function reviewBuilderSchemaChange(
  */
 export type BuilderSaveReview = Pick<
   CollectionSavePreview,
-  "notices" | "conversions" | "clears"
+  "notices" | "conversions" | "typeChanges"
 >;
 
 /** The review of a save with no writer: nothing beyond the change. */
 export const NOTHING_TO_REVIEW: BuilderSaveReview = {
   notices: [],
   conversions: [],
-  clears: [],
+  typeChanges: [],
 };
 
 /**
- * The review a save's preview gives, with the values each field type change that loses values
- * would clear (`clears`), which the Builder sends back as `confirmedClears` once confirmed.
+ * The review a save's preview gives, with how many values each field type change keeps, changes and
+ * loses (`typeChanges`), which the Builder sends back as `confirmedTypeChanges` once confirmed.
  */
 export function reviewOf(preview: CollectionSavePreview): BuilderSaveReview {
   return {
     notices: preview.notices,
     conversions: preview.conversions,
-    clears: preview.clears,
+    typeChanges: preview.typeChanges,
   };
 }
 
 /**
- * Counts by field a review confirmed, as an apply's body sends them: each field's name and a whole
- * number of values, at most 500. The one shape of a confirmed deletion's count and a confirmed
- * clear's, so the two are read alike.
+ * The counts the person confirmed for fields changing type, as an apply's body sends them: each
+ * field's name and how many of its values the change keeps, changes and loses, at most 500. Absent
+ * where the body sends none: a change that loses values is then refused as it always has been, and
+ * one that loses none goes ahead (`CollectionSave.confirmedTypeChanges`). One reading for the
+ * collection's, the Single's and the field group's apply, so the three take the same consent.
  */
-export const FieldCountsBody = z
-  .array(
-    z.object({
-      field: z.string().min(1),
-      count: z.number().int().min(0),
-    })
-  )
-  .max(500)
-  .optional();
+const ConfirmedTypeChangesBody = z.object({
+  confirmedTypeChanges: z
+    .array(
+      z.object({
+        field: z.string().min(1),
+        kept: z.number().int().min(0),
+        changed: z.number().int().min(0),
+        lost: z.number().int().min(0),
+      })
+    )
+    .max(500)
+    .optional(),
+});
 
-/**
- * The counts of values the person confirmed clearing for fields changing type, as an apply's body
- * sends them: each field's name and a whole number of values that cannot convert. Absent where the
- * body sends none, and a change that loses values is then refused as it always has been
- * (`CollectionSave.confirmedClears`). One reading for the collection's, the Single's and the field group's
- * apply, so the three take the same consent.
- */
-const ConfirmedClearsBody = z.object({ confirmedClears: FieldCountsBody });
-
-export function readConfirmedClears(
+export function readConfirmedTypeChanges(
   body: unknown
-): z.infer<typeof ConfirmedClearsBody>["confirmedClears"] {
+): z.infer<typeof ConfirmedTypeChangesBody>["confirmedTypeChanges"] {
   try {
-    return ConfirmedClearsBody.parse(body ?? {}).confirmedClears;
+    return ConfirmedTypeChangesBody.parse(body ?? {}).confirmedTypeChanges;
   } catch (error) {
     if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
     throw error;

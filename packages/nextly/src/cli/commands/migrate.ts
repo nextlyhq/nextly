@@ -2098,7 +2098,7 @@ async function previewJudgedChange(
   const judged = await judgeFileTypeChanges(db, source);
   for (const column of judged.conversions.flatMap(c => c.columns)) {
     logger.info(
-      `    ↻ ${source.filename} converts ${column.table}.${column.column} value by value, as ${column.field}'s new type reads each: ${String(column.converted)} converted, ${String(column.cleared)} that cannot convert cleared`
+      `    ↻ ${source.filename} converts ${column.table}.${column.column} value by value, as ${column.field}'s new type reads each: ${String(column.counts.kept + column.counts.changed)} converted, ${String(column.counts.lost)} that cannot convert cleared`
     );
   }
   for (const refusal of judged.refusals) {

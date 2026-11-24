@@ -1154,7 +1154,7 @@ async function previewDownConversion(
   const lines = [
     ...columns.map(
       column =>
-        `    ↻ converts ${column.table}.${column.column} back value by value, as ${column.field}'s earlier type reads each: ${String(column.converted)} converted, ${String(column.cleared)} that cannot convert cleared`
+        `    ↻ converts ${column.table}.${column.column} back value by value, as ${column.field}'s earlier type reads each: ${String(column.counts.kept + column.counts.changed)} converted, ${String(column.counts.lost)} that cannot convert cleared`
     ),
     ...(judged?.refusals ?? []).map(
       refusal => `    ✖ a real run would refuse it: ${refusal.message}`

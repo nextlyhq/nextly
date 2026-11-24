@@ -130,8 +130,7 @@ import {
 } from "../helpers/authenticated-user";
 import {
   NOTHING_TO_REVIEW,
-  FieldCountsBody,
-  readConfirmedClears,
+  readConfirmedTypeChanges,
   reviewOf,
   type BuilderSaveReview,
 } from "../helpers/builder-save-change";
@@ -367,7 +366,15 @@ const TogetherParam = z
  * and the save then deletes as it always has (`CollectionSave.confirmedDeletions`).
  */
 const ConfirmedDeletionsBody = z.object({
-  confirmedDeletions: FieldCountsBody,
+  confirmedDeletions: z
+    .array(
+      z.object({
+        field: z.string().min(1),
+        count: z.number().int().min(0),
+      })
+    )
+    .max(500)
+    .optional(),
 });
 
 function readConfirmedDeletions(
@@ -1139,8 +1146,8 @@ const COLLECTIONS_METHODS: Record<
       // The counts the person confirmed deleting, read with the rest of the request, before the
       // lock: a malformed one refuses the save before anything is read from the database.
       const confirmedDeletions = readConfirmedDeletions(body);
-      // The counts the person confirmed clearing for fields changing type, read the same way.
-      const confirmedClears = readConfirmedClears(body);
+      // The counts the person confirmed for fields changing type.
+      const confirmedTypeChanges = readConfirmedTypeChanges(body);
       assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: "under-lock",
@@ -1554,7 +1561,9 @@ const COLLECTIONS_METHODS: Record<
                 ? {}
                 : { acknowledgedConversions }),
               ...confirmedDeletionsAnswer(confirmedDeletions),
-              ...(confirmedClears === undefined ? {} : { confirmedClears }),
+              ...(confirmedTypeChanges === undefined
+                ? {}
+                : { confirmedTypeChanges }),
             },
           });
           // Thrown before the registry row is written: the row keeps the fields the database

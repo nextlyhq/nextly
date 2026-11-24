@@ -897,9 +897,10 @@ export const MIGRATION_CODES = defineCodes({
     from: [
       {
         // The conversion judges each value before any statement and again as it writes them; a
-        // count of values it clears that differs between the two was written in between.
+        // count of values it keeps, changes or loses that differs between the two was written in
+        // between.
         code: "VALIDATION_ERROR",
-        issue: "TYPE_CHANGE_CLEAR_COUNT_CHANGED",
+        issue: "TYPE_CHANGE_VALUES_CHANGED",
         describe: error => ({
           what: "A field's type change stopped before its column changed: its values were written to while they were converted.",
           why: issueLines(error).join("\n") || error.publicMessage,

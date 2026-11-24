@@ -14,6 +14,7 @@ import type {
   PublicData,
   ReleaseNotDeletablePublicData,
   ReleaseProblemsPublicData,
+  ReviewAgainPublicData,
   RuleCouldNotRunPublicData,
   SharedFieldsConflictPublicData,
   StaleVersionPublicData,
@@ -613,13 +614,18 @@ export class NextlyError extends Error {
 
   static validation(opts: {
     errors: ValidationPublicData["errors"];
+    /**
+     * Where the refusal changed nothing and is about counts a review confirmed: that the review is
+     * to be taken again, and the counts now, beside the errors.
+     */
+    review?: ReviewAgainPublicData;
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "VALIDATION_ERROR",
       publicMessage: "Validation failed.",
-      publicData: { errors: opts.errors },
+      publicData: { errors: opts.errors, ...opts.review },
       cause: opts.cause,
       logContext: opts.logContext,
     });

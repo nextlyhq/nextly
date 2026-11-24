@@ -206,7 +206,6 @@ import { loadUiSchema } from "../ui-schema/loader";
 import { uiToMinimal } from "../ui-schema/merge";
 import { mutateManifest, type ManifestKind } from "../ui-schema/mutate";
 import {
-  changedFieldName,
   entityLabel,
   fieldTypeChangesOf,
   judgeEntityTypeChanges,
@@ -244,9 +243,11 @@ import {
 } from "./stopped-save";
 import {
   clearedFieldsOf,
-  type ConfirmedClear,
-  refuseChangedClearCounts,
-} from "./type-change-clears";
+  refuseChangedCounts,
+  type ReviewedTypeChange,
+  reviewedTypeChanges,
+  type TypeChangeCounts,
+} from "./type-change-counts";
 import {
   isConversionRefusal,
   refuseConversionAsItStands,
@@ -316,12 +317,13 @@ export interface CollectionSave {
    */
   confirmedDeletions?: readonly ConfirmedDeletion[];
   /**
-   * How many values of each field changing type the person confirmed clearing, in the save's
-   * review: a change that loses values goes ahead only for a field named here, and only while the
-   * values it clears are still that many (`refuseChangedClearCounts`). Absent, such a change is
-   * refused as it always has been.
+   * How many values of each field changing type the person confirmed it keeps, changes and loses,
+   * in the save's review: the save goes ahead only while every field changing type is named here
+   * with the counts it still has (`refuseChangedCounts`), and clears values only where some were
+   * confirmed lost. Absent, a change that loses values is refused as it always has been, and any
+   * other goes ahead.
    */
-  confirmedClears?: readonly ConfirmedClear[];
+  confirmedTypeChanges?: readonly TypeChangeCounts[];
   /**
    * The registry row's migration status before the save, where the caller read the row: a field
    * type change while the definition still awaits its migration is refused, since the columns do
@@ -1513,10 +1515,11 @@ function overtakenSaveError(error: unknown, left: readonly string[]): unknown {
 /**
  * Refuse the save's blocked and lossy field type changes, judged over the values the entity's
  * table holds (`judgeSaveTypeChanges`), and answer the conversion of those it writes value by value
- * (`typeConversionOf`). A lossy change goes ahead only for a field whose clear the person
- * confirmed, with the count of values it clears still holding (`refuseChangedClearCounts`): here,
- * before anything is written, and again by the conversion where it runs, on the handle that writes
- * the values, so a value written in between is never cleared unseen.
+ * (`typeConversionOf`). A lossy change goes ahead only for a field whose lost values the person
+ * confirmed, and a change whose counts were confirmed only while they still hold
+ * (`refuseChangedCounts`): here, before anything is written, and again by the conversion where it
+ * runs, on the handle that writes the values, so a value written in between is never converted or
+ * cleared unseen.
  */
 async function refuseSaveTypeChanges(
   deps: CollectionSaveDeps,
@@ -1528,13 +1531,13 @@ async function refuseSaveTypeChanges(
   const judgement = await judgeSaveTypeChanges(deps, save, table, road);
   if (judgement === undefined) return undefined;
   throwTypeChangeRefusals(judgement.label, judgement.refusals);
-  refuseChangedClearCounts(judgement.judged, save.confirmedClears);
+  refuseChangedCounts(judgement.judged, save.confirmedTypeChanges);
   const dialect = deps.adapter.getCapabilities().dialect;
   const conversion = typeConversionOf({
     dialect,
     input: judgement.input,
     judged: judgement.judged,
-    consent: { kind: "review", confirmed: save.confirmedClears },
+    consent: { kind: "review", confirmed: save.confirmedTypeChanges },
   });
   if (conversion === undefined) return undefined;
   await refuseConversionAsItStands(
@@ -1554,25 +1557,17 @@ interface SaveConversion extends TypeConversion {
 }
 
 /**
- * The values each lossy field type change of the save would clear, by field: what the review shows
- * for the person to confirm (`confirmedClears`), judged as the save judges them.
+ * How many values each field type change of the save keeps, changes and loses, with the first rows
+ * of those not kept: what the review shows for the person to confirm (`confirmedTypeChanges`),
+ * judged as the save judges them.
  */
-async function clearsOfSave(
+async function typeChangesOfSave(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   table: string
-): Promise<ConfirmedClear[]> {
+): Promise<ReviewedTypeChange[]> {
   const judgement = await judgeSaveTypeChanges(deps, save, table);
-  return (judgement?.judged ?? []).flatMap(change =>
-    change.result.judgement.class === "lossy"
-      ? [
-          {
-            field: changedFieldName(change),
-            count: change.result.cleared.length,
-          },
-        ]
-      : []
-  );
+  return reviewedTypeChanges(judgement?.judged ?? []);
 }
 
 /**
@@ -1651,7 +1646,7 @@ async function judgeSaveTypeChanges(
     next,
     renamed,
     ...(await migrationStatusOf(deps, save, table)),
-    acknowledged: clearedFieldsOf(save.confirmedClears),
+    acknowledged: clearedFieldsOf(save.confirmedTypeChanges),
     // Where the save's file applies its change here (development), it writes each value of a
     // pair it converts as the new type reads it, in the transaction of the file that changes the
     // column (`typeConversionOf`), and marks the file so `nextly migrate` converts alike. A save a
@@ -1795,7 +1790,7 @@ export async function previewCollectionSave(
     return {
       adopts: plan.adoption !== null,
       conversions,
-      clears: await clearsOfSave(deps, save, plan.table),
+      typeChanges: await typeChangesOfSave(deps, save, plan.table),
       notices: [
         ...conversions.map(conversionNotice),
         ...(await settledRows(deps, save, plan.table)).map(resolutionNotice),
@@ -1839,10 +1834,10 @@ export interface CollectionSavePreview {
   /** Each column the save also converts, beyond the person's change. */
   conversions: ColumnConversion[];
   /**
-   * The values each field type change that loses values would clear, by field: what the person
-   * confirms, sent back with the save as its `confirmedClears`.
+   * How many values each field type change keeps, changes and loses, by field: what the person
+   * confirms, sent back with the save as its `confirmedTypeChanges`.
    */
-  clears: ConfirmedClear[];
+  typeChanges: ReviewedTypeChange[];
   /** One line per conversion, as the review shows it. */
   notices: string[];
   /** The files the save would write, in run order. */

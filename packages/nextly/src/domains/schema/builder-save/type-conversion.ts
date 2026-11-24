@@ -11,8 +11,8 @@
  * `nextly migrate` deploys the file to. A save its push applies converts nothing: the push's
  * statements run outside any transaction a conversion could share, so it keeps the cast. There
  * it judges every value it converts again, before any statement of its own: what was judged earlier
- * may have been written over since, so a value that now blocks the change, or a count of cleared
- * values other than the one consented to, refuses it with nothing changed (`run`). Only then are
+ * may have been written over since, so a value that now blocks the change, or counts of kept,
+ * changed and lost values other than those confirmed, refuse it with nothing changed (`run`). Only then are
  * the values written, read again a page at a time, so a table's values are never all held. Once
  * it has run the column already has its new type and its values, so the file's or the push's own
  * statement finds nothing left to change:
@@ -58,10 +58,12 @@ import type { Reading } from "../value-conversion/type-change/judge-stored";
 import type { RowKey } from "../value-conversion/types";
 
 import {
-  type ConfirmedClear,
   clearedFieldsOf,
-  refuseChangedClearCounts,
-} from "./type-change-clears";
+  refuseChangedCounts,
+  sameCounts,
+  type TypeChangeCounts,
+  typeChangeCountsOf,
+} from "./type-change-counts";
 
 /** How many rows one statement writes, so a large table is written in a few statements. */
 const ROWS_PER_STATEMENT = 200;
@@ -71,13 +73,13 @@ const BESIDE = "__nextly_converted";
 
 /**
  * How the road takes consent to clear the values that cannot convert:
- * - a save's review, by each field and the count of values it clears, which must still hold when
- *   the conversion runs (`refuseChangedClearCounts`);
+ * - a save's review, by each field and how many of its values it keeps, changes and loses, which
+ *   must still hold when the conversion runs (`refuseChangedCounts`);
  * - a run's consent, by the change, for a migration file deploying the change to a database whose
  *   own values no review counted (`--accept-data-loss`), with how the run's refusal asks for it.
  */
 export type ClearConsent =
-  | { kind: "review"; confirmed: readonly ConfirmedClear[] | undefined }
+  | { kind: "review"; confirmed: readonly TypeChangeCounts[] | undefined }
   | {
       kind: "run";
       covers: (change: JudgedFieldTypeChange) => boolean;
@@ -94,10 +96,8 @@ export interface ConvertedColumn {
   type: string;
   /** The kind of column the new type is (`ColumnKind`), by which a reading is stored in it. */
   kind?: ColumnDescriptor["kind"];
-  /** How many values the judgement before the run found it writes as the new type reads them. */
-  converted: number;
-  /** How many values the judgement before the run found it clears. */
-  cleared: number;
+  /** How many values the judgement before the run found it keeps, changes and loses. */
+  counts: { kept: number; changed: number; lost: number };
   /**
    * The column's table is rebuilt to the new type by nothing else on SQLite (a translations table,
    * which the push leaves out): the column beside, of the new type, takes its place there.
@@ -173,8 +173,7 @@ export function typeConversionOf(args: {
         field: change.to.name,
         type,
         ...(kind === undefined ? {} : { kind }),
-        converted: change.result.counts.kept + change.result.counts.changed,
-        cleared: change.result.cleared.length,
+        counts: countsOf(change),
         takesPlaceOnSqlite: translations,
         keepsType: was === type,
         changesKind:
@@ -213,11 +212,18 @@ export function typeConversionOf(args: {
   };
 }
 
+/** How many of the judged change's values are kept, changed and lost. */
+function countsOf(change: JudgedFieldTypeChange): ConvertedColumn["counts"] {
+  const { kept, changed } = change.result.counts;
+  return { kept, changed, lost: change.result.cleared.length };
+}
+
 /** The codes of a type change's refusals, which a conversion's refusal carries every issue under. */
 const REFUSAL_CODES: ReadonlySet<string> = new Set([
   "TYPE_CHANGE_BLOCKED",
   "TYPE_CHANGE_LOSES_VALUES",
-  "TYPE_CHANGE_CLEAR_COUNT_CHANGED",
+  "TYPE_CHANGE_COUNTS_CHANGED",
+  "TYPE_CHANGE_VALUES_CHANGED",
 ]);
 
 /**
@@ -357,8 +363,8 @@ interface PlannedColumn extends ConvertedColumn {
 
 /**
  * The columns of `only` judged again through `db`, before any statement: each refusal the
- * judgement gives, with the clearing consented to as the road takes it (`ClearConsent`); a count
- * of cleared values other than the one a review confirmed; a column left by a conversion that
+ * judgement gives, with the clearing consented to as the road takes it (`ClearConsent`); counts of
+ * kept, changed and lost values other than those a review confirmed; a column left by a conversion that
  * stopped part-way; a table whose rows fire update triggers, which the conversion's row-by-row
  * writes would set off (PostgreSQL's in-place change fires none, but its values are written into
  * the column beside it first); a CHECK constraint naming the column, written for its old type; and
@@ -385,12 +391,12 @@ async function judgedAgain(
     consent
   );
   throwTypeChangeRefusals(input.label, refusals);
-  if (consent.kind === "review") {
-    // The fields this pass judges, as each file converts its own tables.
-    const fields = new Set(judged.map(change => change.to.name));
-    refuseChangedClearCounts(
+  if (consent.kind === "review" && consent.confirmed !== undefined) {
+    // The counts the judgement before the run found were those confirmed, so they are what the
+    // columns of this pass still hold: each file converts its own tables.
+    refuseChangedCounts(
       judged,
-      consent.confirmed?.filter(clear => fields.has(clear.field))
+      only.map(column => ({ field: column.field, ...column.counts }))
     );
   }
   await refuseLeftColumns(db, dialect, input.label, only);
@@ -405,7 +411,7 @@ async function judgedAgain(
     const facts = await columnFactsOf(db, dialect, column.table, column.column);
     planned.push({
       ...column,
-      cleared: change.result.cleared.length,
+      counts: countsOf(change),
       facts,
       acknowledged,
       swaps: dialect === "sqlite" && swapsOnSqlite(column, facts),
@@ -878,14 +884,12 @@ async function convertColumn(
       }),
     }
   );
-  const cleared = judged.reduce(
-    (sum, change) => sum + change.result.cleared.length,
-    0
-  );
+  const [now = { field: planned.field, kept: 0, changed: 0, lost: 0 }] =
+    typeChangeCountsOf(judged);
   // A value written since the judgement before any statement may now block the change, or change
-  // how many it clears: either stops it before the column changes type.
+  // how many it keeps, changes or loses: either stops it before the column changes type.
   const { refusals } = consentedRefusals(input.label, judged, of.consent);
-  if (refusals.length > 0 || cleared !== planned.cleared) {
+  if (refusals.length > 0 || !sameCounts(now, planned.counts)) {
     // The column untouched, the columns this conversion made go before it stops: on MySQL, whose
     // schema statements commit on their own, they would stay and refuse the run tried again.
     await run(sql`ALTER TABLE ${table} DROP COLUMN ${beside}`);
@@ -895,39 +899,39 @@ async function convertColumn(
       field: planned.field,
       table: planned.table,
       column: planned.column,
-      now: cleared,
-      judged: planned.cleared,
+      now,
+      judged: planned.counts,
     });
   }
   // The column beside goes once the column has taken its values, unless it took the column's place.
-  if (!(await swapIn(db, dialect, planned, cleared > 0))) {
+  if (!(await swapIn(db, dialect, planned, now.lost > 0))) {
     await run(sql`ALTER TABLE ${table} DROP COLUMN ${beside}`);
   }
 }
 
 /**
  * The refusal of a conversion whose values were written to between their judgement and their
- * writing, so the count of values it clears changed (`now`, not `judged`): by a writer no hold
- * kept out. Thrown before the column changes type; the run is tried again once the writes end.
+ * writing, so how many it keeps, changes or loses changed (`now`, not `judged`): by a writer no
+ * hold kept out. Thrown before the column changes type; the run is tried again once the writes end.
  */
 export function valuesChangedWhileConverting(args: {
   label: string;
   field: string;
   table: string;
   column: string;
-  now: number;
-  judged: number;
+  now: ConvertedColumn["counts"];
+  judged: ConvertedColumn["counts"];
 }): NextlyError {
   return NextlyError.validation({
     errors: [
       {
         path: `fields.${args.field}`,
-        code: "TYPE_CHANGE_CLEAR_COUNT_CHANGED",
-        message: `${args.label}: ${args.field} was written to while its values were converted, and now holds ${String(args.now)} value(s) that cannot convert, not ${String(args.judged)}. Try again once its writes have finished.`,
+        code: "TYPE_CHANGE_VALUES_CHANGED",
+        message: `${args.label}: ${args.field} was written to while its values were converted: it now keeps ${String(args.now.kept)}, changes ${String(args.now.changed)} and loses ${String(args.now.lost)} of its values, not the ${String(args.judged.kept)}, ${String(args.judged.changed)} and ${String(args.judged.lost)} judged. Try again once its writes have finished.`,
       },
     ],
     logContext: {
-      reason: "type-change-clear-count-changed",
+      reason: "type-change-values-changed",
       table: args.table,
       column: args.column,
     },

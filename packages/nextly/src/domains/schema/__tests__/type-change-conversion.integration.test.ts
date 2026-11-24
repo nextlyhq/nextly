@@ -36,6 +36,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
+import { typeChangeCountsOf } from "../builder-save/type-change-counts";
 import { typeConversionOf } from "../builder-save/type-conversion";
 import {
   type EntityTypeChangeInput,
@@ -447,7 +448,7 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await save(t, asCheckbox, {
           localized: true,
-          confirmedClears: [{ field: "v", count: 1 }],
+          confirmedTypeChanges: [{ field: "v", kept: 0, changed: 1, lost: 1 }],
         })
       ).toBeUndefined();
       expect(await read(t, "v", "es")).toEqual({ a: true });
@@ -567,11 +568,11 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v")).toEqual({ kept: "12", lost: "abc" });
     });
 
-    // The count the person confirms is the review's, judged as the save judges it.
-    it("reviews the values a change would clear, by field, for the person to confirm", async () => {
+    // The counts the person confirms are the review's, judged as the save judges them.
+    it("reviews how many values a change keeps, changes and loses, by field, for the person to confirm", async () => {
       const t = await boot([{ name: "v", type: "text" }]);
-      await write(t, "kept", { v: "12" });
-      await write(t, "lost", { v: "abc" });
+      const kept = await write(t, "kept", { v: "12" });
+      const lost = await write(t, "lost", { v: "abc" });
 
       const answer = (await dispatchCollections(
         {} as ServiceContainer,
@@ -582,9 +583,27 @@ describe.each(getConfiguredTestDialects())(
       const json = (
         answer instanceof Response ? await answer.json() : answer
       ) as Record<string, unknown>;
-      const review = (json.data ?? json) as { clears?: unknown };
+      const review = (json.data ?? json) as {
+        typeChanges?: Array<{ reasons?: unknown }>;
+      };
 
-      expect(review.clears).toEqual([{ field: "v", count: 1 }]);
+      expect(review.typeChanges).toEqual([
+        expect.objectContaining({ field: "v", kept: 0, changed: 1, lost: 1 }),
+      ]);
+      // Each kind of value not kept, its count and the rows that hold it, by key alone.
+      expect(review.typeChanges?.[0]?.reasons).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "new-form",
+            rows: { first: [expect.objectContaining({ id: kept })], count: 1 },
+          }),
+          expect.objectContaining({
+            kind: "not-a-number",
+            rows: { first: [expect.objectContaining({ id: lost })], count: 1 },
+          }),
+        ])
+      );
+      expect(JSON.stringify(review.typeChanges)).not.toContain("abc");
     });
 
     it("clears only the values that cannot convert when the clear is confirmed with its count, and converts the rest", async () => {
@@ -594,7 +613,7 @@ describe.each(getConfiguredTestDialects())(
 
       expect(
         await save(t, [{ name: "v", type: "number" }], {
-          confirmedClears: [{ field: "v", count: 1 }],
+          confirmedTypeChanges: [{ field: "v", kept: 0, changed: 1, lost: 1 }],
         })
       ).toBeUndefined();
 
@@ -646,7 +665,7 @@ describe.each(getConfiguredTestDialects())(
 
       expect(
         await save(t, [{ name: "v", type: "number", defaultValue: 5 }], {
-          confirmedClears: [{ field: "v", count: 1 }],
+          confirmedTypeChanges: [{ field: "v", kept: 0, changed: 1, lost: 1 }],
         })
       ).toBeUndefined();
 
@@ -682,7 +701,7 @@ describe.each(getConfiguredTestDialects())(
 
       expect(
         await save(t, [{ name: "v", type: "number", required: true }], {
-          confirmedClears: [{ field: "v", count: 1 }],
+          confirmedTypeChanges: [{ field: "v", kept: 0, changed: 1, lost: 1 }],
         })
       ).toMatchObject(refusedSaying("required"));
 
@@ -781,7 +800,7 @@ describe.each(getConfiguredTestDialects())(
         { name: "v", type: "text" },
         { name: "kept", type: "text" },
       ]);
-      const { db, conversion } = await judgedThenConversion(t, 0);
+      const { db, conversion } = await judgedThenConversion(t, "unconfirmed");
       await addValidationCheck(t, `LENGTH(${q("kept")}) >= 2`);
       await write(t, "a", { v: "012", kept: "words" });
 
@@ -812,7 +831,7 @@ describe.each(getConfiguredTestDialects())(
      */
     async function judgedThenConversion(
       t: TestNextly,
-      confirmed: number,
+      confirms: "confirmed" | "unconfirmed",
       pair: { from: string; to: string } = { from: "text", to: "number" }
     ) {
       const adapter = t.adapter as unknown as DrizzleAdapter;
@@ -836,7 +855,8 @@ describe.each(getConfiguredTestDialects())(
         judged,
         consent: {
           kind: "review",
-          confirmed: [{ field: "v", count: confirmed }],
+          confirmed:
+            confirms === "confirmed" ? typeChangeCountsOf(judged) : undefined,
         },
       });
       if (conversion === undefined) throw new Error("nothing converts");
@@ -844,13 +864,12 @@ describe.each(getConfiguredTestDialects())(
     }
 
     // The conversion judges its values again on the handle that writes them, so a value written
-    // after the save judged them is converted with the rest: one carried over from the judgement
-    // alone would leave it empty.
-    it("converts a value written after the save judged the values, as the rest", async () => {
+    // after a save that confirmed no counts judged them is converted with the rest: one carried over
+    // from the judgement alone would leave it empty.
+    it("converts a value written after an unconfirmed save judged the values, as the rest", async () => {
       const t = await boot([{ name: "v", type: "text" }]);
       await write(t, "kept", { v: "12" });
-      await write(t, "lost", { v: "abc" });
-      const { db, conversion } = await judgedThenConversion(t, 1);
+      const { db, conversion } = await judgedThenConversion(t, "unconfirmed");
       await write(t, "late", { v: "34" });
 
       await conversion.run(db);
@@ -858,29 +877,34 @@ describe.each(getConfiguredTestDialects())(
       const after = await stored(t);
       expect(Number(after.late)).toBe(34);
       expect(Number(after.kept)).toBe(12);
-      expect(after.lost).toBeNull();
     });
 
-    it("refuses a conversion once a value written after the save's judgement changes the count to clear, and changes nothing", async () => {
-      const t = await boot([{ name: "v", type: "text" }]);
-      await write(t, "kept", { v: "12" });
-      await write(t, "lost", { v: "abc" });
-      const { db, conversion } = await judgedThenConversion(t, 1);
-      await write(t, "late", { v: "xyz" });
+    it.each([
+      ["changes", "34", "changes 2 and loses 1"],
+      ["loses", "xyz", "changes 1 and loses 2"],
+    ])(
+      "refuses a confirmed conversion once a value written after the save's judgement %s the counts, and changes nothing",
+      async (_, late, says) => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        await write(t, "kept", { v: "12" });
+        await write(t, "lost", { v: "abc" });
+        const { db, conversion } = await judgedThenConversion(t, "confirmed");
+        await write(t, "late", { v: late });
 
-      await expect(conversion.run(db)).rejects.toMatchObject({
-        publicData: {
-          errors: [
-            expect.objectContaining({
-              code: "TYPE_CHANGE_CLEAR_COUNT_CHANGED",
-              message: expect.stringContaining("2"),
-            }),
-          ],
-        },
-      });
+        await expect(conversion.run(db)).rejects.toMatchObject({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "TYPE_CHANGE_COUNTS_CHANGED",
+                message: expect.stringContaining(says),
+              }),
+            ],
+          },
+        });
 
-      expect(await stored(t)).toEqual({ kept: "12", lost: "abc", late: "xyz" });
-    });
+        expect(await stored(t)).toEqual({ kept: "12", lost: "abc", late });
+      }
+    );
 
     // A default the column carries of the old type need not cast to the new one: it goes before the
     // column changes type, as a field's column declares none. A save refuses such a column as drift
@@ -895,7 +919,7 @@ describe.each(getConfiguredTestDialects())(
           t,
           `ALTER TABLE ${q(`dc_${SLUG}`)} ALTER COLUMN ${q("v")} SET DEFAULT 'none'`
         );
-        const { db, conversion } = await judgedThenConversion(t, 0);
+        const { db, conversion } = await judgedThenConversion(t, "confirmed");
 
         await conversion.run(db);
 
@@ -916,7 +940,7 @@ describe.each(getConfiguredTestDialects())(
           t,
           `ALTER TABLE ${q(`dc_${SLUG}`)} ALTER COLUMN ${q("v")} SET DEFAULT 'x@y.co'`
         );
-        const { db, conversion } = await judgedThenConversion(t, 0, {
+        const { db, conversion } = await judgedThenConversion(t, "confirmed", {
           from: "email",
           to: "text",
         });
@@ -948,7 +972,7 @@ describe.each(getConfiguredTestDialects())(
           t,
           `CREATE TRIGGER ${q("tcc_hidden")} AFTER UPDATE ON ${q(`dc_${SLUG}`)} FOR EACH ROW SET @tcc_touched = 1`
         );
-        const { conversion } = await judgedThenConversion(t, 0);
+        const { conversion } = await judgedThenConversion(t, "confirmed");
         const url = new URL(process.env.DATABASE_URL ?? "");
         const database = url.pathname.replace(/^\//, "");
         await exec(t, `CREATE USER 'tcc_limited'@'%' IDENTIFIED BY 'limited'`);
@@ -1029,35 +1053,86 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v")).toEqual({ one: ["a"] });
     });
 
-    it("refuses a confirmed clear whose count no longer holds, naming the new count, and changes nothing", async () => {
-      const t = await boot([{ name: "v", type: "text" }]);
-      await write(t, "kept", { v: "12" });
-      await write(t, "lost", { v: "abc" });
-      // Written after the review counted one value to clear.
-      await write(t, "late", { v: "xyz" });
+    // The review opened over one value to change and one to lose; the rule changes another written
+    // after it, or loses it. Nothing converts, and the refusal carries the counts now, which a
+    // second confirmation then converts.
+    it.each([
+      ["a value the rule changes", "34", { kept: 0, changed: 2, lost: 1 }, 34],
+      ["a value the rule loses", "xyz", { kept: 0, changed: 1, lost: 2 }, null],
+    ])(
+      "refuses counts confirmed before %s was written, changes nothing, and converts once the new ones are confirmed",
+      async (_, late, now, reads) => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        await write(t, "kept", { v: "12" });
+        await write(t, "lost", { v: "abc" });
+        const reviewed = [{ field: "v", kept: 0, changed: 1, lost: 1 }];
+        await write(t, "late", { v: late });
+
+        expect(
+          await save(t, [{ name: "v", type: "number" }], {
+            confirmedTypeChanges: reviewed,
+          })
+        ).toMatchObject({
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: "fields.v",
+                code: "TYPE_CHANGE_COUNTS_CHANGED",
+              }),
+            ],
+            reviewAgain: true,
+            counts: { typeChanges: [{ field: "v", ...now }] },
+          },
+        });
+        expect(await read(t, "v")).toEqual({ kept: "12", lost: "abc", late });
+
+        expect(
+          await save(t, [{ name: "v", type: "number" }], {
+            confirmedTypeChanges: [{ field: "v", ...now }],
+          })
+        ).toBeUndefined();
+        expect(await read(t, "v")).toEqual({
+          kept: 12,
+          lost: null,
+          late: reads,
+        });
+      }
+    );
+
+    // A confirmation names every field whose type changes: one left out was never reviewed.
+    it("refuses a confirmation that leaves out a field changing type, and changes nothing", async () => {
+      const t = await boot([
+        { name: "v", type: "text" },
+        { name: "w", type: "text" },
+      ]);
+      await write(t, "a", { v: "12", w: "34" });
 
       expect(
-        await save(t, [{ name: "v", type: "number" }], {
-          confirmedClears: [{ field: "v", count: 1 }],
-        })
+        await save(
+          t,
+          [
+            { name: "v", type: "number" },
+            { name: "w", type: "number" },
+          ],
+          {
+            confirmedTypeChanges: [
+              { field: "v", kept: 0, changed: 1, lost: 0 },
+            ],
+          }
+        )
       ).toMatchObject({
-        code: "VALIDATION_ERROR",
         publicData: {
           errors: [
             expect.objectContaining({
-              path: "fields.v",
-              code: "TYPE_CHANGE_CLEAR_COUNT_CHANGED",
-              message: expect.stringContaining("2"),
+              path: "fields.w",
+              code: "TYPE_CHANGE_COUNTS_CHANGED",
             }),
           ],
+          reviewAgain: true,
         },
       });
-
-      expect(await read(t, "v")).toEqual({
-        kept: "12",
-        lost: "abc",
-        late: "xyz",
-      });
+      expect(await read(t, "v")).toEqual({ a: "12" });
     });
   }
 );
@@ -1220,7 +1295,7 @@ describe.each(getConfiguredTestDialects())(
           fields: [{ name: "v", type: "number" }],
           confirmed: true,
           schemaVersion: single?.schemaVersion ?? 1,
-          confirmedClears: [{ field: "v", count: 1 }],
+          confirmedTypeChanges: [{ field: "v", kept: 0, changed: 0, lost: 1 }],
         }
       ).then(
         () => undefined,
@@ -1341,7 +1416,7 @@ describe.each(getConfiguredTestDialects())(
           fields: [{ name: "v", type: "number" }],
           confirmed: true,
           schemaVersion: stored.schemaVersion,
-          confirmedClears: [{ field: "v", count: 1 }],
+          confirmedTypeChanges: [{ field: "v", kept: 0, changed: 1, lost: 1 }],
         }
       ).then(
         () => undefined,

@@ -232,7 +232,7 @@ describe.each(getConfiguredTestDialects())(
       await write(t, "lost", { v: "not an address" });
 
       await save(t, [email], {
-        confirmedClears: [{ field: "v", count: 1 }],
+        confirmedTypeChanges: [{ field: "v", kept: 1, changed: 0, lost: 1 }],
       });
 
       expect(await read(t)).toEqual({ kept: "a@b.co", lost: null });

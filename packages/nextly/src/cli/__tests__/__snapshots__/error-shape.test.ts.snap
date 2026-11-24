@@ -2072,7 +2072,7 @@ exports[`each code, as a command ends with it > TRANSLATIONS_UNRECORDED 1`] = `
 
 exports[`each code, as a command ends with it > TYPE_CHANGE_VALUES_CHANGED 1`] = `
 "✗ A field's type change stopped before its column changed: its values were written to while they were converted.
-  Why:  fields.price: Collection 'products' (migration 20261123_101500_products.sql): price was written to while its values were converted, and now holds 2 value(s) that cannot convert, not 1. Try again once its writes have finished.
+  Why:  fields.price: Collection 'products' (migration 20261123_101500_products.sql): price was written to while its values were converted: it now keeps 3, changes 1 and loses 2 of its values, not the 3, 2 and 1 judged. Try again once its writes have finished.
   Next: Run the command again once those writes have finished: the change converts the values as they then stand.
   Docs: https://nextlyhq.com/docs/cli/errors/type-change-values-changed  (TYPE_CHANGE_VALUES_CHANGED)"
 `;

@@ -517,6 +517,28 @@ describe.each(getConfiguredTestDialects())(
         }
         const before = await definition(t, dialect);
 
+        // What the review counts is what the person confirms, sent back as it was shown.
+        const answer = (await dispatchCollections(
+          {} as ServiceContainer,
+          "previewSchemaChanges",
+          { collectionName: SLUG },
+          { fields: fieldsWith(pair.to) }
+        )) as Response | Record<string, unknown>;
+        const json = (
+          answer instanceof Response ? await answer.json() : answer
+        ) as Record<string, unknown>;
+        const { typeChanges } = (json.data ?? json) as {
+          typeChanges: Array<{
+            field: string;
+            kept: number;
+            changed: number;
+            lost: number;
+          }>;
+        };
+        expect(typeChanges).toEqual([
+          expect.objectContaining({ field: "v", lost: pair.lost ?? 0 }),
+        ]);
+
         await dispatchCollections(
           {} as ServiceContainer,
           "applySchemaChanges",
@@ -525,9 +547,14 @@ describe.each(getConfiguredTestDialects())(
             fields: fieldsWith(pair.to),
             confirmed: true,
             schemaVersion: 1,
-            ...(pair.lost === undefined
-              ? {}
-              : { confirmedClears: [{ field: "v", count: pair.lost }] }),
+            confirmedTypeChanges: typeChanges.map(
+              ({ field, kept, changed, lost }) => ({
+                field,
+                kept,
+                changed,
+                lost,
+              })
+            ),
           }
         );
         clearRegistryRowCache();
