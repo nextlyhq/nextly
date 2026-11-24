@@ -155,6 +155,8 @@ function entryProblems<
   if (!Array.isArray(fields)) return [...validate(entry)];
   const { added, authored } = splitSystemFields(fields, judged.systemFields);
   const clashes = systemNameClashes(entry, fields, { added, authored }, judged);
+  // Nothing set aside and nothing at fault: its validator's own answer, in its own order.
+  if (added.length === 0 && clashes.length === 0) return [...validate(entry)];
   // Each rule is asked of the fields it is about. The rules about the author's own declarations
   // (`AUTHORED_RULES`) of the fields the author declared; every other rule, which resolves a
   // field by its name (an index, the title field, the address field), of the entity as the
@@ -177,6 +179,8 @@ interface JudgedEntity {
    * written as a plain object, a Builder's definition among them, keeps its own checks.
    */
   keepsSystemColumns: boolean;
+  /** Whether it is such a collection, the one kind that holds files (`holdsFiles`). */
+  mayHoldFiles: boolean;
   /** The entity as the app declared it, before any plugin's setup. */
   declared: unknown;
 }
@@ -201,9 +205,11 @@ function authoredProblems<P extends { code: string }>(
   const reported = new Set(clashes.map(clash => clash.field));
   return [
     ...problems.filter(problem => problem.code !== "FIELD_NAME_DUPLICATE"),
-    ...problemsOf(authored.filter(field => !reported.has(field))).filter(
-      problem => problem.code === "FIELD_NAME_DUPLICATE"
-    ),
+    // The fields as stored at the top level, so one a group with no name lays out is left out too;
+    // the rule reads the top level that way itself.
+    ...problemsOf(
+      fieldsStoredOnRow(authored).filter(field => !reported.has(field))
+    ).filter(problem => problem.code === "FIELD_NAME_DUPLICATE"),
   ];
 }
 
@@ -291,7 +297,7 @@ function systemNameClashes(
   judged: JudgedEntity
 ): NameClash[] {
   if (!judged.keepsSystemColumns) return [];
-  const names = reservedNames(entry, split);
+  const names = reservedNames(entry, split, judged);
   const system = new Set(split.added);
   const clashes: NameClash[] = [];
   for (const field of fieldsStoredOnRow(fields)) {
@@ -319,7 +325,8 @@ function systemNameClashes(
  */
 function reservedNames(
   entry: unknown,
-  split: { added: readonly unknown[]; authored: readonly unknown[] }
+  split: { added: readonly unknown[]; authored: readonly unknown[] },
+  judged: JudgedEntity
 ): ReadonlySet<unknown> {
   const names = new Set<unknown>(
     [
@@ -329,13 +336,17 @@ function reservedNames(
       ),
     ].map(field => (field as { name?: unknown }).name)
   );
-  if (holdsFiles(entry)) for (const name of FILE_FIELD_NAMES) names.add(name);
+  if (holdsFiles(entry, judged)) {
+    for (const name of FILE_FIELD_NAMES) names.add(name);
+  }
   return names;
 }
 
-/** Whether `entry` is a collection whose entries are files. */
-function holdsFiles(entry: unknown): boolean {
-  return (entry as { files?: unknown }).files !== undefined;
+/** Whether `entry` is a collection whose entries are files; a Single's `files` key means nothing. */
+function holdsFiles(entry: unknown, judged: JudgedEntity): boolean {
+  return (
+    judged.mayHoldFiles && (entry as { files?: unknown }).files !== undefined
+  );
 }
 
 /** What is reported of `field`, which takes the kept `name` without a column of its own. */
@@ -345,12 +356,35 @@ function nameClashMessage(
   entry: unknown,
   judged: JudgedEntity
 ): string {
-  const why =
-    holdsFiles(entry) && FILE_FIELD_NAMES.has(name)
-      ? `${FILE_NAME_REASON} Rename it.`
-      : `${systemNameReason(name, field)} Rename it, or declare '${name}' as a text field to replace Nextly's.`;
-  return `Field '${name}' stores no column of its own, so it cannot use the name '${name}': ${why}${fromSetup(name, judged.declared)}`;
+  const ofFiles = holdsFiles(entry, judged) && FILE_FIELD_NAMES.has(name);
+  const why = ofFiles ? FILE_NAME_REASON : systemNameReason(name, field);
+  return `Field '${name}' stores no column of its own, so it cannot use the name '${name}': ${why} ${nameAdvice(name, ofFiles, judged.declared)}`;
 }
+
+/**
+ * What to do about it. Where a plugin's setup left the field this way, the app's own declaration
+ * holds no column-less field of the name, so its author would look for it in vain, may declare the
+ * text field already, and cannot rename one Nextly needs: the plugin is what to change. The
+ * setups' result names no plugin, so this cannot.
+ */
+function nameAdvice(name: string, ofFiles: boolean, declared: unknown): string {
+  if (!declaresColumnLess(name, declared)) {
+    return "A plugin's setup left the field this way; the app's own configuration does not hold it. Change or remove that plugin.";
+  }
+  return ofFiles
+    ? "Rename it."
+    : `Rename it, or declare '${name}' as a text field to replace Nextly's.`;
+}
+
+/** Whether `declared`, the app's own entity, holds a column-less field named `name`. */
+function declaresColumnLess(name: string, declared: unknown): boolean {
+  const fields = (declared as { fields?: unknown } | null)?.fields;
+  const own = Array.isArray(fields) ? fieldsStoredOnRow(fields) : [];
+  const names: ReadonlySet<unknown> = new Set([name]);
+  return own.some(field => sharedSystemName(field, names, NO_FIELDS) !== null);
+}
+
+const NO_FIELDS: ReadonlySet<unknown> = new Set();
 
 /** Why a file field's name is kept: each is where Nextly records one thing about a stored file. */
 const FILE_NAME_REASON =
@@ -366,22 +400,6 @@ function systemNameReason(name: string, field: unknown): string {
     ? `the table keeps Nextly's own text column '${name}', and its type would be applied to that column's value.`
     : `the table keeps Nextly's own required text column '${name}', so no entry could be created and a stored '${name}' would be hidden.`;
 }
-
-/**
- * What is added where a plugin's setup left the field this way: the app's own declaration holds
- * no column-less field of the name, so its author would look for it in vain. The setups' result
- * names no plugin, so this cannot.
- */
-function fromSetup(name: string, declared: unknown): string {
-  const fields = (declared as { fields?: unknown } | null)?.fields;
-  const own = Array.isArray(fields) ? fieldsStoredOnRow(fields) : [];
-  const names: ReadonlySet<unknown> = new Set([name]);
-  return own.some(field => sharedSystemName(field, names, NO_FIELDS) !== null)
-    ? ""
-    : " A plugin's setup left the field this way; the app's own configuration does not hold it.";
-}
-
-const NO_FIELDS: ReadonlySet<unknown> = new Set();
 
 /** The kept name `field` takes without a column of its own, or null where it takes none. */
 function sharedSystemName(
@@ -554,6 +572,7 @@ export function configurationProblems(
       for (const error of entryProblems(entry, validate, {
         systemFields: record?.systemFields ?? [],
         keepsSystemColumns: byDefine && kind !== "fieldGroups",
+        mayHoldFiles: byDefine && kind === "collections",
         declared: declaredEntries[index],
       })) {
         problems.push({

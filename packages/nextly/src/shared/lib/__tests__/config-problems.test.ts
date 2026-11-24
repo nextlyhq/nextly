@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { systemFieldsBeside } from "../../../collections/config/declared-config";
 import { defineCollection } from "../../../collections/config/define-collection";
+import { validateCollectionConfig } from "../../../collections/config/validate-config";
 import { systemColumnsForFields } from "../../../domains/schema/services/field-column-descriptor";
 import { defineFieldGroup } from "../../../field-groups/config/define-field-group";
 import { setupTransformerInput } from "../../../plugins/plugin-consent";
@@ -657,9 +658,11 @@ describe("a define* entity a plugin's setup leaves with a column-less field of a
       }),
       fields => [...without(fields, "slug"), componentNamed("slug")]
     );
-    expect(configurationProblems(declared, effective)).toEqual(
-      reserved("collections[0].fields[1].name")
-    );
+    const problems = configurationProblems(declared, effective);
+    expect(problems).toEqual(reserved("collections[0].fields[1].name"));
+    // The author declares a text slug already, so that is not the advice.
+    expect(problems[0].message).toContain("Change or remove that plugin.");
+    expect(problems[0].message).not.toContain("declare 'slug'");
   });
 
   it("is refused where the author declared the component and the setup removed the system slug, with no word of a setup", () => {
@@ -794,21 +797,23 @@ describe("the names a define* entity's fields may not take without a column", ()
   ];
 
   for (const dialect of ["sqlite", "postgresql", "mysql"] as const) {
-    it.each(lists)(
-      `are the system columns %s leaves on ${dialect}`,
-      (_, fields) => {
-        const columns = systemColumnsForFields(fields as never, dialect, {
-          hasStatus: false,
-          isSingle: false,
-          builtBy: "codeFirst",
-        } as never)
-          .map(column => column.name)
-          .filter(name => name === "title" || name === "slug");
-        expect(
-          systemFieldsBeside(fields as never).map(field => field.name)
-        ).toEqual(columns);
-      }
-    );
+    for (const isSingle of [false, true]) {
+      it.each(lists)(
+        `are the system columns %s leaves on a ${isSingle ? "Single" : "collection"} on ${dialect}`,
+        (_, fields) => {
+          const columns = systemColumnsForFields(fields as never, dialect, {
+            hasStatus: false,
+            isSingle,
+            builtBy: "codeFirst",
+          })
+            .map(column => column.name)
+            .filter(name => name === "title" || name === "slug");
+          expect(
+            systemFieldsBeside(fields as never).map(field => field.name)
+          ).toEqual(columns);
+        }
+      );
+    }
   }
 });
 
@@ -829,7 +834,7 @@ describe("a define* collection of files whose file field takes no column", () =>
       path,
       code: "FIELD_NAME_RESERVED",
       message: expect.stringMatching(
-        /^Field 'storageKey' .*a collection of files keeps .*Rename it\./
+        /^Field 'storageKey' .*a collection of files keeps /
       ),
     }),
   ];
@@ -852,8 +857,31 @@ describe("a define* collection of files whose file field takes no column", () =>
         ran ? effective : undefined
       );
       expect(problems).toEqual(refused("collections[0].fields[13].name"));
-      expect(problems[0].message).not.toContain("to replace Nextly's");
+      expect(problems[0].message).toMatch(/Rename it\.$/);
       expect(problems[0].message).not.toContain(FROM_SETUP);
+    }
+  );
+
+  // A group with no name lays its fields out at the top level, where the name is one Nextly keeps.
+  it.each([false, true])(
+    "gets one answer inside a group with no name, beside the group's own (a setup ran: %s)",
+    ran => {
+      const { declared, effective } = afterSetup(
+        "collections",
+        docs([
+          { name: "body", type: "text" },
+          { type: "group", fields: [componentNamed("storageKey")] },
+        ]),
+        fields => fields
+      );
+      expect(
+        configurationProblems(declared, ran ? effective : undefined)
+          .map(problem => `${problem.path} ${problem.code}`)
+          .sort()
+      ).toEqual([
+        "collections[0].fields[13].fields[0].name FIELD_NAME_RESERVED",
+        "collections[0].fields[13].name FIELD_NAME_REQUIRED",
+      ]);
     }
   );
 
@@ -874,6 +902,9 @@ describe("a define* collection of files whose file field takes no column", () =>
     const problems = configurationProblems(declared, effective);
     expect(problems).toEqual(refused("collections[0].fields[6].name"));
     expect(problems[0].message).toContain(FROM_SETUP);
+    // Renaming Nextly's own field would break uploads: the plugin is what to change.
+    expect(problems[0].message).toContain("Change or remove that plugin.");
+    expect(problems[0].message).not.toContain("Rename it");
   });
 
   it("is accepted as declared, with and without a setup's copy", () => {
@@ -886,6 +917,15 @@ describe("a define* collection of files whose file field takes no column", () =>
     expect(configurationProblems(declared, effective)).toEqual([]);
   });
 
+  it("is accepted for the same name on a Single, which has no file fields whatever keys it carries", () => {
+    const entity = defineSingle({
+      slug: "home",
+      files: {},
+      fields: [componentNamed("size")],
+    } as never);
+    expect(configurationProblems({ singles: [entity] })).toEqual([]);
+  });
+
   it("is accepted for the same name on a collection with no files", () => {
     const entity = defineCollection({
       slug: "posts",
@@ -895,5 +935,25 @@ describe("a define* collection of files whose file field takes no column", () =>
       ],
     });
     expect(configurationProblems({ collections: [entity] })).toEqual([]);
+  });
+});
+
+describe("an entity with no system field set aside and no name at fault", () => {
+  it("has its problems in the order its validator lists them", () => {
+    const entity = {
+      slug: "posts",
+      fields: [
+        { name: "body", type: "text" },
+        { name: "body", type: "text" },
+      ],
+      indexes: [{ fields: ["missing"] }],
+    };
+    expect(
+      configurationProblems({ collections: [entity] }).map(
+        problem => problem.code
+      )
+    ).toEqual(
+      validateCollectionConfig(entity as never).errors.map(error => error.code)
+    );
   });
 });
