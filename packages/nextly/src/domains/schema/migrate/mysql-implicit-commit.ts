@@ -36,3 +36,79 @@ export function commitsOnMysql(statement: string): boolean {
     first === "CREATE" && INDEX_KINDS.has(second ?? "") ? third : second;
   return objects.has(object ?? "");
 }
+
+/** The first words of the statements that change rows, none of which commits MySQL's transaction. */
+const ROW_CHANGING = new Set(["INSERT", "UPDATE", "DELETE", "REPLACE"]);
+
+/** Whether `statement` changes rows on MySQL, read from its first word. */
+function changesRowsOnMysql(statement: string): boolean {
+  return ROW_CHANGING.has(leadingWords(statement, "mysql", 1)[0] ?? "");
+}
+
+/**
+ * Whether `statement` may commit MySQL's open transaction: one `commitsOnMysql` reads as committing,
+ * or a prepared statement's `EXECUTE`, whose text is not read here. Counting `EXECUTE` errs toward
+ * rows reported durable, never toward rows reported undone.
+ */
+function mayCommitOnMysql(statement: string): boolean {
+  return (
+    commitsOnMysql(statement) ||
+    leadingWords(statement, "mysql", 1)[0] === "EXECUTE"
+  );
+}
+
+/**
+ * How many of a unit's statements MySQL made durable by committing implicitly, where rows changed
+ * among them: told each statement as it starts and once it ran, it answers `kept`.
+ */
+export interface DurableRows {
+  starting(statement: string, index: number): void;
+  ran(statement: string, index: number): void;
+  /**
+   * The statements, from the first, that stay applied whatever happens after: undefined where no
+   * statement that changes rows is among them, or not on MySQL.
+   */
+  kept(): number | undefined;
+}
+
+/**
+ * The statements of a unit run in one transaction that MySQL made durable with rows among them. A
+ * statement that commits (`mayCommitOnMysql`) commits the open transaction before it runs, so a row
+ * statement before it stays applied from the moment it starts, and the committing statement itself
+ * once it ran. A try resumed at `from` starts past statements an earlier try kept, committed
+ * already. Only rows decide it: a unit whose committed statements change no row is judged from its
+ * tables, as before, and other dialects keep nothing here.
+ */
+export function durableRowsOf(
+  dialect: string,
+  statements: readonly string[],
+  from: number
+): DurableRows {
+  if (dialect !== "mysql") {
+    return {
+      starting: () => undefined,
+      ran: () => undefined,
+      kept: () => undefined,
+    };
+  }
+  let kept = statements.slice(0, from).some(changesRowsOnMysql)
+    ? from
+    : undefined;
+  // A row statement since the last commit, which the next committing statement makes durable.
+  let rowsOpen = false;
+  return {
+    starting(statement, index) {
+      if (!mayCommitOnMysql(statement)) return;
+      if (rowsOpen || kept !== undefined) kept = index;
+      rowsOpen = false;
+    },
+    ran(statement, index) {
+      if (mayCommitOnMysql(statement)) {
+        if (kept !== undefined) kept = index + 1;
+      } else if (changesRowsOnMysql(statement)) {
+        rowsOpen = true;
+      }
+    },
+    kept: () => kept,
+  };
+}
