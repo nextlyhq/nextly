@@ -1352,10 +1352,16 @@ describe.each(
 
     // A delete reads the row it removes, through this process's tables, and answers as a write that
     // sets no field: the save's own change is not in its way, and neither is a process that has
-    // read nothing of the collection before it. Each case deletes an entry first thing.
-    for (const change of ["rename", "drop"] as const) {
+    // read nothing of the collection before it. Each case deletes an entry first thing, through the
+    // Direct API or over REST as the signed-in editor.
+    for (const { change, via } of [
+      { change: "rename", via: "api" },
+      { change: "drop", via: "api" },
+      { change: "rename", via: "rest" },
+      { change: "drop", via: "rest" },
+    ] as const) {
       it.runIf(dialect === "mysql")(
-        `deletes an entry of a collection a committed ${change} changed, first thing in another process`,
+        `deletes an entry of a collection a committed ${change} changed, ${via === "rest" ? "over REST, " : ""}first thing in another process`,
         async () => {
           const t = await boot();
           const rows = (await t.adapter.executeQuery(
@@ -1385,7 +1391,7 @@ describe.each(
           );
 
           const [deleted] = await fromAnotherProcess([
-            { kind: "delete", via: "api", id },
+            { kind: "delete", via, id },
           ]);
 
           expect(deleted!.ok, JSON.stringify(deleted)).toBe(true);
@@ -1399,26 +1405,6 @@ describe.each(
         600_000
       );
     }
-
-    // The same, over REST as the signed-in editor.
-    it.runIf(dialect === "mysql")(
-      "deletes an entry of a collection a committed rename changed, over REST, first thing in another process",
-      async () => {
-        const t = await boot();
-        const rows = (await t.adapter.executeQuery(
-          `SELECT id FROM ${table} WHERE slug = 'first'`
-        )) as unknown as Array<{ id: unknown }>;
-        const id = String(rows[0]?.id);
-        await killRename(t, afterStatement(renames("heading")));
-
-        const [deleted] = await fromAnotherProcess([
-          { kind: "delete", via: "rest", id },
-        ]);
-
-        expect(deleted!.ok, JSON.stringify(deleted)).toBe(true);
-      },
-      600_000
-    );
 
     // A registry write anywhere moves the stored schema version, and the next request loads every
     // entity's tables again from the registry rows: what the guard left out of this process's
