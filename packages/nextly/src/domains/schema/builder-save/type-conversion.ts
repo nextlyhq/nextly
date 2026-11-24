@@ -41,7 +41,11 @@ import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import { readUpdateTriggers } from "../pipeline/live-table-facts";
 import { kindChanges } from "../repair-columns/conversion/carry";
-import type { ColumnOrigin } from "../services/field-column-descriptor";
+import type {
+  ColumnDescriptor,
+  ColumnOrigin,
+} from "../services/field-column-descriptor";
+import { fieldColumnDriverValue } from "../services/runtime-schema-generator";
 import { columnDescriptorAt } from "../value-conversion/type-change/field-type";
 import {
   type EntityTypeChangeInput,
@@ -88,6 +92,8 @@ export interface ConvertedColumn {
   field: string;
   /** The column's new type, as the database spells it. */
   type: string;
+  /** The kind of column the new type is (`ColumnKind`), by which a reading is stored in it. */
+  kind?: ColumnDescriptor["kind"];
   /** How many values the judgement before the run found it writes as the new type reads them. */
   converted: number;
   /** How many values the judgement before the run found it clears. */
@@ -152,6 +158,10 @@ export function typeConversionOf(args: {
       builtBy: input.builtBy,
     });
     if (type === undefined) return [];
+    const kind = columnDescriptorAt(change.to, dialect, {
+      builtBy: input.builtBy,
+      ...(input.componentRow === true ? { componentRow: true } : {}),
+    })?.kind;
     const was = columnTypeOf(change.from, dialect, input, {
       translations,
       builtBy: input.builtByBefore ?? input.builtBy,
@@ -162,6 +172,7 @@ export function typeConversionOf(args: {
         column: change.column,
         field: change.to.name,
         type,
+        ...(kind === undefined ? {} : { kind }),
         converted: change.result.counts.kept + change.result.counts.changed,
         cleared: change.result.cleared.length,
         takesPlaceOnSqlite: translations,
@@ -860,12 +871,10 @@ async function convertColumn(
       readingPages: () => ({
         size: ROWS_PER_STATEMENT,
         write: page =>
-          writeReadings(
-            run,
-            planned.table,
-            page,
-            dialect === "postgresql" ? type : undefined
-          ),
+          writeReadings(run, planned.table, page, {
+            stored: readsAs => storedForm(dialect, planned.kind, readsAs),
+            ...(dialect === "postgresql" ? { cast: type } : {}),
+          }),
       }),
     }
   );
@@ -1030,25 +1039,48 @@ async function replaceColumn(
 }
 
 /**
+ * A reading as the new column stores it, bound as a parameter. A reading is the value's writing in
+ * the new type's terms, which PostgreSQL's cast takes exactly (an instant with every digit of its
+ * second, `true`, a JSON value's text). MySQL and SQLite cast no such writing: there a date and a
+ * checkbox are stored as the field's own column stores one an entry sets (`fieldColumnDriverValue`),
+ * MySQL's timestamp or SQLite's seconds, and 1 or 0. Every other kind stores its writing.
+ */
+function storedForm(
+  dialect: SupportedDialect,
+  kind: ConvertedColumn["kind"],
+  readsAs: string
+): unknown {
+  if (dialect === "postgresql") return readsAs;
+  if (kind === "timestamp") {
+    return fieldColumnDriverValue(dialect, kind, new Date(readsAs));
+  }
+  if (kind === "boolean") {
+    return fieldColumnDriverValue(dialect, kind, readsAs === "true");
+  }
+  return readsAs;
+}
+
+/**
  * One page of readings written into the column beside the converted one (`BESIDE`), by its rows,
  * in one statement.
  *
- * @param cast the new type, where the database types each written value by it (PostgreSQL)
+ * @param as `stored`, a reading as the new column stores it (`storedForm`), and `cast`, the new
+ *   type, where the database types each written value by it (PostgreSQL)
  */
 async function writeReadings(
   run: (statement: SQL) => Promise<void>,
   table: string,
   page: readonly Reading[],
-  cast?: SQL
+  as: { stored: (readsAs: string) => unknown; cast?: SQL }
 ): Promise<void> {
   if (page.length === 0) return;
   const cases = sql.join(
-    page.map(row => sql`WHEN ${rowIs(row.key)} THEN ${row.readsAs}`),
+    page.map(row => sql`WHEN ${rowIs(row.key)} THEN ${as.stored(row.readsAs)}`),
     sql` `
   );
   const value = sql`CASE ${cases} END`;
   await run(
-    sql`UPDATE ${sql.identifier(table)} SET ${sql.identifier(BESIDE)} = ${cast === undefined ? value : sql`CAST(${value} AS ${cast})`} WHERE ${sql.join(
+    sql`UPDATE ${sql.identifier(table)} SET ${sql.identifier(BESIDE)} = ${as.cast === undefined ? value : sql`CAST(${value} AS ${as.cast})`} WHERE ${sql.join(
       page.map(row => sql`(${rowIs(row.key)})`),
       sql` OR `
     )}`

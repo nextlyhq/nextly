@@ -301,23 +301,21 @@ export interface JudgedFieldTypeChange extends FieldTypeChange {
 }
 
 /**
- * The families a save that rewrites the values converts between (`rewrites`): a text, an email, a
- * choice or a number from any of those, and a list into one of them, its one item. Any other pair
- * keeps the answer the database's cast gives, so a change this conversion does not write is judged
- * exactly as before, never written half way.
+ * The families a save that rewrites the values converts between (`rewrites`), each from any of them:
+ * every family whose values the rules read and write one by one. A relationship's links are carried
+ * by its own conversion, and a container, a password and a type no loaded plugin reads by none, so a
+ * pair with one of them keeps the answer it had, never written half way.
  */
-const REWRITTEN_FROM: ReadonlySet<Family> = new Set([
+const REWRITTEN: ReadonlySet<Family> = new Set([
   "text",
   "email",
   "choice",
   "number",
   "list",
-]);
-const REWRITTEN_TO: ReadonlySet<Family> = new Set([
-  "text",
-  "email",
-  "choice",
-  "number",
+  "date",
+  "checkbox",
+  "json",
+  "richText",
 ]);
 
 /**
@@ -369,7 +367,7 @@ function rewritesPair(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect
 ): boolean {
-  return REWRITTEN_FROM.has(from.family) && REWRITTEN_TO.has(to.family);
+  return REWRITTEN.has(from.family) && REWRITTEN.has(to.family);
 }
 
 /**

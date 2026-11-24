@@ -44,6 +44,8 @@ import { withMigrateLock } from "../pipeline/locks";
 
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 
+import { textsOf } from "./helpers/document-texts";
+
 perLanguageStorageSuite();
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
@@ -295,6 +297,35 @@ describe.each(getConfiguredTestDialects())(
       await migrateDown(second);
 
       expect(await read(second)).toEqual({ address: "c@d.co" });
+    });
+
+    // A text becoming a rich text stays translatable too: each language's text becomes a document
+    // of its lines in the translations table, a form the database's cast does not write.
+    it("converts a text field into a rich text in its translations table, a document of its lines", async () => {
+      const t = await boot(dialect);
+      await createPosts([{ name: "v", type: "text" }]);
+      await write(t, "a", { v: "one\ntwo" });
+
+      await save(t, [{ name: "v", type: "richText" }]);
+
+      expect(textsOf((await read(t)).a)).toEqual(["one", "two"]);
+    });
+
+    it("converts a deploy's own texts into rich texts when nextly migrate replays the file", async () => {
+      const first = await boot(dialect);
+      await createPosts([{ name: "v", type: "text" }]);
+      const created = await filesWritten();
+      await write(first, "a", { v: "one" });
+      await save(first, [{ name: "v", type: "richText" }]);
+      await first.destroy();
+      instance = undefined;
+
+      const second = await boot(dialect);
+      await migrateFolder(second, created);
+      await write(second, "b", { v: "three" });
+      await migrateFolder(second);
+
+      expect(textsOf((await read(second)).b)).toEqual(["three"]);
     });
   }
 );
