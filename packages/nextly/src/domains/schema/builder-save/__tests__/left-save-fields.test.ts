@@ -128,9 +128,9 @@ describe("the left-save guard's cost", () => {
     expect(counted.txUses()).toBeGreaterThan(0);
   });
 
-  // Inside a request, every check is answered by the one read it made first, over any entity, the
-  // check inside a transaction included. A later request reads again.
-  it("reads the records standing once per request on MySQL in development", async () => {
+  // Inside a request, a write's entry reads what stands again, and the checks after it, the one in
+  // its transaction included, use what it read, over any entity. A later request reads again.
+  it("reads the records standing at each write's entry and nowhere else in a request on MySQL in development", async () => {
     vi.stubEnv("NODE_ENV", "development");
     const counted = countingAdapter("mysql");
     await runWithAccessMemo(async () => {
@@ -141,11 +141,13 @@ describe("the left-save guard's cost", () => {
         slug: "settings",
       });
     });
-    expect(counted.statements()).toBe(1);
+    // Its write, and the comparison before its transaction, each an entry; the transaction's
+    // check and the reads after send none.
+    expect(counted.statements()).toBe(2);
     expect(counted.txUses()).toBe(0);
 
     await runWithAccessMemo(() => everyRoad(counted.adapter, counted.tx));
-    expect(counted.statements()).toBe(2);
+    expect(counted.statements()).toBe(4);
   });
 
   it("keeps no read that failed: the next check in the request reads again", async () => {

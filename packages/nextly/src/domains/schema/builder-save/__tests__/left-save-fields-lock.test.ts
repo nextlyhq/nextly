@@ -88,8 +88,8 @@ const adapter = {
   getDrizzle: () => ({}),
 } as unknown as DrizzleAdapter;
 const posts = { adapter, kind: "collection" as const, slug: "posts" };
-/** A transaction's handle, which the stubbed reads never use. */
-const tx = {};
+/** A transaction's handle, one for each case as each transaction has: what is read on it is kept by it. */
+let tx = {};
 
 /** A write of `data` to the collection, inside a transaction where `inTx`. */
 const write = (data: Record<string, unknown>, inTx = false) =>
@@ -102,6 +102,7 @@ beforeEach(() => {
   vi.stubEnv("NODE_ENV", "development");
   // A record of its own each case: a comparison is kept by the id of the record it was made under.
   made += 1;
+  tx = {};
   stubs.record = `record-${made}`;
   stubs.lock = [];
   stubs.compared = 0;

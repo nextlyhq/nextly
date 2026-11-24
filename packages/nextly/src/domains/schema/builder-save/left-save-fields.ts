@@ -16,8 +16,9 @@
  *
  * What it costs: nothing in production, where Builder saves never run, and nothing on PostgreSQL or
  * SQLite, where a save's change commits whole or not at all. On MySQL outside production, one read
- * of the standing records per request, whatever it reads and writes, and one per check outside a
- * request; where one stands over the entity, the comparison, kept per record id once the schema
+ * of the standing records at the entry of each write, which its transaction's checks use, and one
+ * for a request that only reads, whatever it reads; outside a request, one per check, and one for
+ * each transaction. A save that begins between a write's entry and its transaction is not seen; where one stands over the entity, the comparison, kept per record id once the schema
  * lock was free while it was made (a live save holds the lock, so its tables may still move; a
  * record standing with the lock free is a save no process runs).
  *
@@ -109,7 +110,8 @@ export async function refuseWriteOverLeftSave(args: {
   /** The handle of a transaction the write already runs in (`heldFieldsOf`). */
   tx?: unknown;
 }): Promise<void> {
-  const held = await heldFieldsOf(args);
+  // At a write's entry, what stands is read afresh and kept for its transaction's checks.
+  const held = await heldFieldsOf({ ...args, fresh: args.tx === undefined });
   if (held === undefined) return;
   const named = (key: string) =>
     [...held.fields].some(
@@ -155,16 +157,24 @@ async function heldFieldsOf(args: {
   kind: EntryKind;
   slug: string;
   tx?: unknown;
+  /** A write's entry: what the request kept is read again, not taken. */
+  fresh?: boolean;
 }): Promise<HeldFields | undefined> {
   if (isProductionRuntime()) return undefined;
   if (args.adapter.getCapabilities().dialect !== "mysql") return undefined;
+  const joins = args.tx === undefined && args.adapter.inTransaction();
+  // A write's entry outside any transaction reads what stands again, for itself and for every
+  // check its transaction makes: a save begun since the request's last read is met here.
+  if (args.fresh === true && !joins) delete keptForRequest().standing;
+  // Not read where the request knows already that no record stands and nothing is narrowed.
+  const known =
+    args.fresh === true ? undefined : await keptForRequest().standing;
+  if (known?.length === 0 && narrowedBy.size === 0) return undefined;
   // A check made inside a transaction it was not handed (a rule's own read, say) joins it, so
   // nothing it reads takes another connection while that one is held. Only what it found is
-  // handed out: the refusal is thrown by the caller, past the join. Not joined where the request
-  // knows already that no record stands, as nothing is then read.
-  const known = await keptForRequest().standing;
-  if (known?.length === 0 && narrowedBy.size === 0) return undefined;
-  if (args.tx === undefined && args.adapter.inTransaction()) {
+  // handed out: the refusal is thrown by the caller, past the join. A failure inside the join ends
+  // the transaction it joined, which MySQL joins flat.
+  if (joins) {
     return args.adapter.transaction(tx =>
       heldIn({ ...args, tx: tx.getDrizzle() })
     );
@@ -178,6 +188,7 @@ async function heldIn(args: {
   kind: EntryKind;
   slug: string;
   tx?: unknown;
+  fresh?: boolean;
 }): Promise<HeldFields | undefined> {
   const standing = await applyingRecordsOf(args);
   if (standing === undefined) {
@@ -207,6 +218,7 @@ async function applyingRecordsOf(args: {
   kind: EntryKind;
   slug: string;
   tx?: unknown;
+  fresh?: boolean;
 }): Promise<
   | { own: ReadRow | undefined; groups: ReadonlyArray<{ slug: string }> }
   | undefined
@@ -342,20 +354,21 @@ function keptForRequest(): { standing?: Promise<ReadRow[]> } {
 }
 
 /**
- * The records standing over the entity: the request's, read once for it, or read on the check's
- * transaction where that opened first. A read on a transaction, and one that fails, is never kept.
+ * The records standing over the entity: what the request kept (a write's entry reads it again),
+ * else read on the check's own transaction, once for it. A read that fails is never kept.
  */
 async function standingRecordsOf(args: {
   adapter: DrizzleAdapter;
   kind: EntryKind;
   slug: string;
   tx?: unknown;
+  fresh?: boolean;
 }): Promise<ReturnType<typeof savesStandingOver>> {
   const kept = keptForRequest();
-  if (kept.standing === undefined) {
-    if (args.tx !== undefined) {
+  if (kept.standing === undefined || (args.fresh && args.tx !== undefined)) {
+    if (typeof args.tx === "object" && args.tx !== null) {
       return savesStandingOver(
-        await standingOn(args.adapter, args.tx),
+        await standingOnTransaction(args.adapter, args.tx),
         args.kind,
         args.slug
       );
@@ -366,6 +379,28 @@ async function standingRecordsOf(args: {
     });
   }
   return savesStandingOver(await kept.standing, args.kind, args.slug);
+}
+
+/**
+ * The records standing as a check inside a transaction read them, by the transaction's handle: one
+ * read for a transaction the request read nothing before, a batch's among them. Each transaction
+ * has a handle of its own, so a later one never takes an earlier one's.
+ */
+const readOnTransaction = new WeakMap<object, Promise<ReadRow[]>>();
+
+/** The records standing, read on `tx` once for it. A read that fails is not kept. */
+function standingOnTransaction(
+  adapter: DrizzleAdapter,
+  tx: object
+): Promise<ReadRow[]> {
+  const kept = readOnTransaction.get(tx);
+  if (kept !== undefined) return kept;
+  const reading = standingOn(adapter, tx);
+  readOnTransaction.set(tx, reading);
+  reading.catch(() => {
+    readOnTransaction.delete(tx);
+  });
+  return reading;
 }
 
 /** Every record standing, read on `db`: none where the database's meta table is not made yet. */
@@ -509,7 +544,8 @@ export async function compareBeforeTransaction(args: {
   kind: EntryKind;
   slug: string;
 }): Promise<void> {
-  await heldFieldsOf(args);
+  // A write's entry: read afresh, as the write's own check is.
+  await heldFieldsOf({ ...args, fresh: true });
 }
 
 /** The entity's registry row, read on the write's transaction where it has one; null where none. */

@@ -1159,6 +1159,32 @@ describe.each(
         expect(second!.code, JSON.stringify(second)).toBe(
           "BUILDER_SAVE_FIELD_UNSETTLED"
         );
+        // Only the field it changed is named.
+        expect(second!.message, JSON.stringify(second)).toMatch(/"heading"/);
+        expect(second!.message, JSON.stringify(second)).not.toMatch(/"note"/);
+      },
+      600_000
+    );
+
+    // Only the field the save changed is held: the request's write of another field goes on.
+    it.runIf(dialect === "mysql")(
+      "lets a request's second write of another field through over a save another process began and left within the request",
+      async () => {
+        const t = await boot();
+
+        const [first, paused, second] = await aroundASecondWrite(
+          { title: "R2", slug: "r2", note: "only the note" },
+          async () => {
+            await killRename(t, afterStatement(renames("heading")));
+            expect(await liveColumns(t), `killed at ${killedAt}`).toContain(
+              "headline"
+            );
+          }
+        );
+
+        expect(first!.ok, JSON.stringify(first)).toBe(true);
+        expect(paused!.ok, JSON.stringify(paused)).toBe(true);
+        expect(second!.ok, JSON.stringify(second)).toBe(true);
       },
       600_000
     );
