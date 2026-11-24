@@ -71,7 +71,9 @@ const MARKER = "marker";
 const MARKER_INDEX = "rk_marker_idx";
 const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
 
-type FieldList = Parameters<typeof defineCollection>[0]["fields"];
+type FieldList = Parameters<
+  typeof applyDesiredSchema
+>[0]["collections"][string]["fields"];
 
 /** The plugin: an index on the collection's own `code` column. */
 const indexer = definePlugin({
