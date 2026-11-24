@@ -6,7 +6,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
-import { openWatchConnection } from "../watch-connection";
+import {
+  openPostgresBesidePool,
+  openWatchConnection,
+} from "../watch-connection";
 
 /** A stand-in for node-postgres's pool: `open` connections, `idle` of them free. */
 function pgAdapter(state: { max: number; open: number; idle: number }) {
@@ -38,6 +41,15 @@ function pgAdapter(state: { max: number; open: number; idle: number }) {
     idleCount: state.idle,
     Client,
   };
+  // What the client was made with, as its constructor receives it.
+  const made: { options: Record<string, unknown> }[] = [];
+  class MadeClient extends Client {
+    constructor(options: Record<string, unknown>) {
+      super();
+      made.push({ options });
+    }
+  }
+  pool.Client = MadeClient as unknown as typeof Client;
   const adapter = {
     getDrizzle: () => ({ $client: pool }),
     queryStatement: () => {
@@ -45,7 +57,7 @@ function pgAdapter(state: { max: number; open: number; idle: number }) {
       return Promise.resolve([]);
     },
   } as unknown as DrizzleAdapter;
-  return { adapter, ownConnections, own, asked };
+  return { adapter, ownConnections, own, asked, made, pool };
 }
 
 /** A stand-in for mysql2's promise pool around its core pool. */
@@ -66,6 +78,37 @@ function mysqlAdapter(state: { limit: number; open: number; free: number }) {
   } as unknown as DrizzleAdapter;
   return { adapter, sessions: () => sessions };
 }
+
+describe("openPostgresBesidePool", () => {
+  // pg-pool keeps its pool's password, and its TLS key, where a spread of its options loses them
+  // (they are not enumerable); a connection made from the spread alone then cannot sign in, or
+  // present the key. An app that gives the connection as separate options, rather than a URL that
+  // carries the password in its own text, signs in with the password given to the pool.
+  it("makes its connection with the pool's password and TLS key, which its options keep out of a spread", async () => {
+    const { adapter, made, pool } = pgAdapter({ max: 1, open: 1, idle: 0 });
+    const tls = Object.defineProperty({}, "key", {
+      value: "the key",
+      enumerable: false,
+    });
+    Object.defineProperty(pool.options, "password", {
+      value: "the password",
+      enumerable: false,
+    });
+    Object.assign(pool.options, { host: "db", user: "u", ssl: tls });
+
+    const connection = await openPostgresBesidePool(adapter, "a name");
+    await connection?.close();
+
+    expect(made).toHaveLength(1);
+    expect(made[0]?.options).toMatchObject({
+      host: "db",
+      user: "u",
+      password: "the password",
+      application_name: "a name",
+    });
+    expect((made[0]?.options.ssl as { key?: unknown }).key).toBe("the key");
+  });
+});
 
 describe("openWatchConnection", () => {
   // Its own PostgreSQL connection, once it reports an error, answers nothing more: the watch asks

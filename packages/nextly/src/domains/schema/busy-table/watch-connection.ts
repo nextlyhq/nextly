@@ -38,7 +38,7 @@ export interface WatchConnection {
 
 /** node-postgres's pool, as far as a connection beside it needs. */
 interface PgPoolLike {
-  options?: { max?: number };
+  options?: { max?: number; password?: unknown };
   /** The connections open, and of them those idle. */
   totalCount?: number;
   idleCount?: number;
@@ -191,8 +191,13 @@ export async function openPostgresBesidePool(
 ): Promise<ConnectionBesidePool | undefined> {
   const pgPool = driverPool(adapter) as PgPoolLike | undefined;
   if (pgPool?.Client === undefined) return undefined;
+  // The pool keeps its password out of its options' own properties (pg-pool hides it so it is
+  // never printed), so a spread of them loses it: given here, where one was set. A connection URL
+  // carries its own. Its TLS key is hidden on the options' `ssl` object, which the spread shares.
+  const password = pgPool.options?.password;
   const connection = new pgPool.Client({
     ...pgPool.options,
+    ...(password === undefined ? {} : { password }),
     application_name: applicationName,
   });
   // A connection that drops is reported as an event rather than through a query. Unheard, that

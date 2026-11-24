@@ -220,7 +220,10 @@ import {
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { transactionTableProbe } from "../../dashboard/table-presence";
 import type { DynamicCollectionService } from "../../dynamic-collections";
-import { shareEntityInProcess } from "../../dynamic-collections/services/entity-hold";
+import {
+  attemptWithoutWaitingInside,
+  shareEntityInProcess,
+} from "../../dynamic-collections/services/entity-hold";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   applyFieldGroupWriteAccessToDocument,
@@ -316,6 +319,7 @@ import {
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import { poolCanSpareOne } from "../../schema/busy-table/watch-connection";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import {
   fieldsStoredOnRow,
@@ -556,6 +560,7 @@ import {
   holdEntityForWrite,
   type LoadedRegistryRow,
   loadedRegistryRowOf,
+  type WhenHeld,
 } from "./entry-write-hold";
 import { publishCallerOf, publishGate, type PublishPart } from "./publish-gate";
 import { type PartsState, publishValueIssues } from "./publish-parts";
@@ -22967,11 +22972,36 @@ export class CollectionMutationService extends BaseService {
           slug: collectionName,
         })
       : undefined;
+    // On PostgreSQL a write whose transaction is its own gives it up where a save holds the
+    // collection, and waits with none open: kept through the wait, it would hold a connection of
+    // the pool the save needs to finish. A transaction the flow opened stays the flow's.
+    const leaves =
+      this.dialect === "postgresql" && !this.adapter.transactionOpenInFlow();
+    const entity = { kind: "collection", slug: collectionName } as const;
     try {
-      return await this.adapter.transaction(async tx => {
-        await this.holdForEntryWrite(tx, collectionName, loaded, sharesFirst);
-        return work(tx);
-      }, options);
+      if (!leaves) {
+        return await this.adapter.transaction(async tx => {
+          await this.holdForEntryWrite(tx, collectionName, loaded, {
+            sharedInProcess: sharesFirst,
+          });
+          return work(tx);
+        }, options);
+      }
+      return await attemptWithoutWaitingInside(entity, async () => {
+        const made: {
+          outcome: { held: true; value: T } | { held: false };
+        } = { outcome: { held: false } };
+        await this.adapter.transaction(async tx => {
+          if (
+            await this.holdForEntryWrite(tx, collectionName, loaded, {
+              whenHeld: "leave",
+            })
+          ) {
+            made.outcome = { held: true, value: (await work(tx)) as T };
+          }
+        }, options);
+        return made.outcome;
+      });
     } finally {
       release?.();
     }
@@ -23001,16 +23031,33 @@ export class CollectionMutationService extends BaseService {
     collectionName: string,
     /** The registry row the write was made for (`loadedRegistryRowOf`); undefined, not compared. */
     loaded?: LoadedRegistryRow,
-    /** Whether the write's SQLite share was taken before `tx` opened (`entryTransaction`). */
-    sharedInProcess = false
-  ): Promise<void> {
+    options: {
+      /** Whether the write's SQLite share was taken before `tx` opened (`entryTransaction`). */
+      sharedInProcess?: boolean;
+      /**
+       * What it does where a save holds the collection on PostgreSQL (`holdEntityForWrite`). A write
+       * on a transaction its caller opened cannot be given up and opened again: it waits in it where
+       * the pool can spare a connection, and is refused at once where it cannot, the save needing
+       * the pool's only connection to finish.
+       */
+      whenHeld?: WhenHeld;
+    } = {}
+  ): Promise<boolean> {
     return holdEntityForWrite(
       tx,
       { kind: "collection", slug: collectionName },
       this.collectionService,
       this.adapter,
       loaded,
-      { sharedInProcess }
+      {
+        ...options,
+        whenHeld:
+          options.whenHeld ??
+          (this.dialect === "postgresql" &&
+          !poolCanSpareOne(this.adapter, "postgresql")
+            ? "refuse"
+            : "wait"),
+      }
     );
   }
 

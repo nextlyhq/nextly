@@ -32,6 +32,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
@@ -48,6 +49,8 @@ import {
 } from "../../../plugins/test-nextly";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { ServiceContainer } from "../../../services";
+import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
+import type { CollectionsHandler } from "../../../services/collections-handler";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import { consoleLogger } from "../../../shared/types";
 import { holdEntityForWrite } from "../../collections/services/entry-write-hold";
@@ -311,6 +314,27 @@ function boxed(fields: readonly Record<string, unknown>[]): unknown[] {
       ? { type: "group", label: "Box", fields: [field] }
       : field
   );
+}
+
+/**
+ * One entry written on `tx`, a transaction the caller opened, as a plugin writes in a transaction
+ * of its own: `"created"`, or what its item was refused with.
+ */
+const TX_WRITER = "dh-tx-writer";
+async function createInCallersTransaction(
+  t: TestNextly,
+  tx: TransactionContext,
+  data: Record<string, unknown>
+): Promise<unknown> {
+  const entries = (
+    t.getService("collectionsHandler") as unknown as CollectionsHandler
+  ).getEntryService() as CollectionEntryService;
+  const result = await entries.createEntriesInTransaction(
+    tx,
+    { collectionName: SLUG, user: { id: TX_WRITER } },
+    [data]
+  );
+  return result.successful === 1 ? "created" : result.errors[0];
 }
 
 /** What a write ended with, as a failed assertion names it: the code, its log line, and its cause. */
@@ -1318,6 +1342,48 @@ describe.each(getConfiguredTestDialects())(
       expect(row?.label).toBe(id);
     }, 60_000);
 
+    // A write on a transaction its caller opened cannot be given up and opened again: where the pool
+    // can spare a connection, it waits in place until the save lets go, then goes on.
+    it.runIf(dialect === "postgresql")(
+      "keeps a write on a transaction the caller opened waiting until the save is over, where the pool can spare a connection",
+      async () => {
+        const t = await boot();
+        await superAdminUser(t, TX_WRITER);
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        pushRoad.forced = true;
+        const { paused, release } = gated(afterCount);
+        const applying = apply(t, 3, REMAINING, {
+          note: { action: "confirm_drop" },
+        }).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+        const reached = await Promise.race([
+          paused.then(() => true),
+          applying.then(() => false),
+        ]);
+        expect(reached || (await applying)).toBe(true);
+
+        let settled = false;
+        const writing = t.adapter
+          .transaction(tx =>
+            createInCallersTransaction(t, tx, { label: "in flow" })
+          )
+          .finally(() => {
+            settled = true;
+          });
+        await new Promise(resolve => setTimeout(resolve, 1_000));
+        const heldBack = !settled;
+        release();
+        expect(heldBack).toBe(true);
+        expect(await applying).toBe("applied");
+        const outcome = await writing;
+        expect(outcome, told(outcome)).toBe("created");
+        expect(await hasNoteColumn(t)).toBe(false);
+      },
+      60_000
+    );
+
     // An entry write holds the collection's registry row for share until it commits. One that
     // read the row before the save held the collection, and has not committed, is counted: the
     // save's hold waits for it.
@@ -2152,35 +2218,132 @@ describe.runIf(getConfiguredTestDialects().includes("postgresql"))(
       }
     }
 
+    /** A save removing `note`, its two values confirmed, as the admin sends it. */
+    async function save(t: TestNextly): Promise<unknown> {
+      const [row] = await query<{ v: number | string | null }>(
+        t,
+        `SELECT "schema_version" AS v FROM "dynamic_collections" WHERE "slug" = '${SLUG}'`
+      );
+      return dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: SLUG },
+        {
+          fields: REMAINING,
+          confirmed: true,
+          schemaVersion: Number(row?.v ?? 1),
+          resolutions: { note: { action: "confirm_drop" } },
+          confirmedDeletions: [{ field: "note", count: 2 }],
+        }
+      ).then(
+        () => "applied",
+        (error: unknown) => error
+      );
+    }
+
+    /** What `work` ends with, or "still waiting" where it has not ended `ms` later. */
+    const within = <T>(work: Promise<T>, ms: number) =>
+      Promise.race([
+        work,
+        new Promise<"still waiting">(resolve =>
+          setTimeout(() => resolve("still waiting"), ms)
+        ),
+      ]);
+
     for (const road of ["file", "push"] as const) {
       it(`applies a save on the ${road} road that deletes the count confirmed`, async () => {
         const t = await bootOnPoolOfOne();
         expect(await notes(t)).toBe(2);
         pushRoad.forced = road === "push";
-        const [row] = await query<{ v: number | string | null }>(
-          t,
-          `SELECT "schema_version" AS v FROM "dynamic_collections" WHERE "slug" = '${SLUG}'`
-        );
 
-        const outcome = await dispatchCollections(
-          {} as ServiceContainer,
-          "applySchemaChanges",
-          { collectionName: SLUG },
-          {
-            fields: REMAINING,
-            confirmed: true,
-            schemaVersion: Number(row?.v ?? 1),
-            resolutions: { note: { action: "confirm_drop" } },
-            confirmedDeletions: [{ field: "note", count: 2 }],
-          }
-        ).then(
-          () => "applied",
-          (error: unknown) => error
-        );
-
-        expect(outcome).toBe("applied");
+        expect(await save(t)).toBe("applied");
         expect(await notes(t)).toBe("gone");
       }, 60_000);
+
+      // A write sent while the save holds the collection waits without keeping the pool's one
+      // connection, which the save needs for the rest of its work: it ends when the save does, not
+      // when the write gives up.
+      it(`finishes a save on the ${road} road while a write sent during it waits`, async () => {
+        const t = await bootOnPoolOfOne();
+        pushRoad.forced = road === "push";
+        const { paused, release } = gated(afterCount);
+        const applying = save(t);
+        const reached = await Promise.race([
+          paused.then(() => true),
+          applying.then(() => false),
+        ]);
+        expect(reached || (await applying)).toBe(true);
+
+        let settled = false;
+        // On the file road the write cannot open its transaction until the file's, which keeps the
+        // pool's one connection, has ended: it is made from the definition the save left, so it
+        // sets only what that keeps. On the push road nothing of the save's keeps the connection, so
+        // the write is made from the earlier definition, and its value for the removed field is
+        // refused.
+        const writing = t.nextly
+          .create({
+            collection: SLUG,
+            data:
+              road === "push"
+                ? { label: "during", note: "late" }
+                : { label: "during" },
+          } as never)
+          .then(
+            () => "created",
+            (error: unknown) => error
+          )
+          .finally(() => {
+            settled = true;
+          });
+        await new Promise(resolve => setTimeout(resolve, 1_000));
+        const heldBack = !settled;
+        release();
+        expect(await within(applying, 15_000)).toBe("applied");
+        expect(heldBack).toBe(true);
+        const outcome = await writing;
+        if (road === "file") {
+          expect(outcome, told(outcome)).toBe("created");
+          return;
+        }
+        expect(outcome, told(outcome)).toMatchObject({
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: "fields.note",
+                code: "FIELD_REMOVED",
+              }),
+            ],
+          },
+        });
+      }, 60_000);
     }
+
+    // A write on a transaction its caller opened cannot be given up and opened again, and on a pool
+    // of one it keeps the connection the save needs: it is refused at once, with nothing written.
+    it("refuses at once a write on a transaction the caller opened while the save holds the collection", async () => {
+      const t = await bootOnPoolOfOne();
+      await superAdminUser(t, TX_WRITER);
+      pushRoad.forced = true;
+      const { paused, release } = gated(afterCount);
+      const applying = save(t);
+      const reached = await Promise.race([
+        paused.then(() => true),
+        applying.then(() => false),
+      ]);
+      expect(reached || (await applying)).toBe(true);
+
+      const outcome = await within(
+        t.adapter.transaction(tx =>
+          createInCallersTransaction(t, tx, { label: "in flow" })
+        ),
+        5_000
+      );
+      release();
+      expect(JSON.stringify(outcome)).toContain("being changed elsewhere");
+      expect(await within(applying, 15_000)).toBe("applied");
+    }, 60_000);
+
+
   }
 );
