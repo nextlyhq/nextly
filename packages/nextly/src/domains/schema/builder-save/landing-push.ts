@@ -257,7 +257,7 @@ function withoutReviewAgain(publicData: PublicData): PublicData {
     return publicData;
   }
   const { reviewAgain: _reviewAgain, counts: _counts, ...rest } = publicData;
-  return Object.keys(rest).length === 0 ? undefined : (rest as PublicData);
+  return Object.keys(rest).length === 0 ? undefined : rest;
 }
 
 /**
