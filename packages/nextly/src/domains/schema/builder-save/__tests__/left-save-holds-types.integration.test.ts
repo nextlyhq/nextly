@@ -77,10 +77,10 @@ describe.each(LEFT_SAVE_SUITES)(
           "applySchemaChanges",
           { collectionName: slug },
           {
-            fields: [
-              field("heading"),
-              languages ? text("note") : field("note"),
-            ],
+            // Shared, where the collection translates its text fields: its column is the main table's.
+            fields: languages
+              ? [{ ...text("heading"), localized: false }, text("note")]
+              : [field("heading"), field("note")],
             confirmed: true,
             schemaVersion,
           }
