@@ -812,6 +812,69 @@ describeEachDialect("one structure across languages", dialect => {
     BOOT_TIMEOUT
   );
 
+  // A create and an update answer with the document as a read of the language returns it: a
+  // repeater as its rows, a group as its value, never the text alone the translation row keeps.
+  it(
+    "answers a create and an update with each container as its rows and value, in the language written",
+    async () => {
+      const { nextly } = await site();
+      const created = await nextly.create({
+        collection: "articles",
+        locale: "en",
+        data: {
+          title: "Hello",
+          slides: [{ caption: "first", rank: 1 }],
+          seo: { headline: "Read me", weight: 5 },
+        },
+      });
+      const item = created.item as {
+        id: string;
+        slides: Slide[];
+        seo: { headline?: string; weight?: number };
+      };
+      expect(Array.isArray(item.slides)).toBe(true);
+      expect(item.slides).toEqual([
+        expect.objectContaining({ caption: "first", rank: 1 }),
+      ]);
+      expect(typeof item.slides[0]!.id).toBe("string");
+      expect(item.seo).toMatchObject({ headline: "Read me", weight: 5 });
+
+      const updated = await nextly.update({
+        collection: "articles",
+        id: item.id,
+        locale: "es",
+        data: {
+          slides: [{ id: item.slides[0]!.id, caption: "primero", rank: 1 }],
+          seo: { headline: "Léeme", weight: 5 },
+          _overwrite: true,
+        },
+      });
+      const es = updated.item as {
+        slides: Slide[];
+        seo: { headline?: string; weight?: number };
+      };
+      expect(es.slides).toEqual([
+        expect.objectContaining({
+          id: item.slides[0]!.id,
+          caption: "primero",
+          rank: 1,
+        }),
+      ]);
+      expect(es.seo).toMatchObject({ headline: "Léeme", weight: 5 });
+      // A list read says the same.
+      const listed = await nextly.find({
+        collection: "articles",
+        locale: "es",
+      });
+      expect(
+        (listed.items[0] as { slides: Slide[] }).slides.map(
+          slide => slide.caption
+        )
+      ).toEqual(["primero"]);
+    },
+    BOOT_TIMEOUT
+  );
+
   /** The paths of one document's live provenance records in `locale`, sorted. */
   async function livePaths(
     scope: { kind: string; slug: string; id: string },

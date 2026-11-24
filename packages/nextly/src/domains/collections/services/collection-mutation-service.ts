@@ -2224,6 +2224,39 @@ interface StructureSelect {
   };
 }
 
+/**
+ * Lay a write's translated values back onto the row it returns, by field name: each value as the
+ * translation row holds it, and for a repeater or group keeping one structure in every language,
+ * whose translation row holds its text alone (keyed by row id), the value as written, its rows
+ * and their ids with this language's text, as a read of the language returns it. `_status` is the
+ * translation row's own column, no field of the entry.
+ */
+function mergeWrittenTranslations(
+  row: Record<string, unknown>,
+  split: {
+    companionData: Record<string, unknown>;
+    localizedFieldValues?: Record<string, unknown>;
+    sharedStructures?: readonly SharedStructureWritten[];
+  }
+): void {
+  const structured = new Map(
+    (split.sharedStructures ?? []).map(written => [written.column, written])
+  );
+  for (const [column, value] of Object.entries(split.companionData)) {
+    if (column === "_status") continue;
+    const written = structured.get(column);
+    if (
+      written &&
+      split.localizedFieldValues &&
+      Object.hasOwn(split.localizedFieldValues, written.field)
+    ) {
+      row[written.field] = split.localizedFieldValues[written.field];
+      continue;
+    }
+    row[toCamelCase(column)] = value;
+  }
+}
+
 export class CollectionMutationService extends BaseService {
   /** The site's languages as they are now: the source may be the language registry. */
   private get localization(): SanitizedLocalizationConfig | undefined {
@@ -9671,15 +9704,9 @@ export class CollectionMutationService extends BaseService {
               }
             );
             // The localized values were split out of the main insert, so the
-            // returned main row lacks them. Merge them back (camelCase keys) so
-            // afterCreate hooks, events, and the response include them. `_status`
-            // is a companion-only column, not an entry field.
-            for (const [column, value] of Object.entries(
-              localizedWrite.companionData
-            )) {
-              if (column === "_status") continue;
-              entry[toCamelCase(column)] = value;
-            }
+            // returned main row lacks them. Merge them back so afterCreate
+            // hooks, events, and the response include them.
+            mergeWrittenTranslations(entry, localizedWrite);
           }
 
           // The version this create produced, read on its own transaction.
@@ -19988,17 +20015,13 @@ export class CollectionMutationService extends BaseService {
       }
 
       // The localized values were split out of the main update, so the re-fetched
-      // main row lacks them. Merge the written values back (camelCase keys) so
-      // afterUpdate hooks, events, and the response reflect them. `_status` is a
-      // companion-only column, not an entry field.
+      // main row lacks them. Merge the written values back so afterUpdate hooks,
+      // events, and the response reflect them.
       if (localizedUpdate) {
-        const updatedRow = updated as Record<string, unknown>;
-        for (const [column, value] of Object.entries(
-          localizedUpdate.companionData
-        )) {
-          if (column === "_status") continue;
-          updatedRow[toCamelCase(column)] = value;
-        }
+        mergeWrittenTranslations(
+          updated as Record<string, unknown>,
+          localizedUpdate
+        );
       }
 
       // Past the 404 guard the row exists and the transaction committed, so this
