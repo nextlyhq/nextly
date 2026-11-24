@@ -654,12 +654,23 @@ function measureConnect(args, where, probe) {
   return { connected: true };
 }
 
+/** Of `runs`, those that started a package manager, each with the names noted for it. */
+function startedPackageManagers(runs) {
+  return new Map(
+    runs
+      .map(run => [run, notesOf(run.ranIn.notes)])
+      .filter(([, names]) => names !== "")
+  );
+}
+
 /** Every command `connectInvocations` names, each timed to its connection: the failures. */
 function connectFailures({ timed, untimed }, where, probe) {
   console.log(
     `\nconnections: ${timed.length}, ${CODE_LOAD_RUNS} runs each to the line written once a command has connected (median); reported, no budget yet`
   );
-  assertStubsAnswer(connectWhere(where, "stubs"));
+  // Starts every stand-in, so what reads the notes is always given some to find.
+  const control = { args: [], ranIn: connectWhere(where, "stubs") };
+  assertStubsAnswer(control.ranIn);
   const runs = timed.map((args, index) => ({
     args,
     ranIn: connectWhere(where, index),
@@ -669,13 +680,17 @@ function connectFailures({ timed, untimed }, where, probe) {
   );
   const failures = results.flatMap(({ failure }) => failure ?? []);
   // Read once every run has ended: a run may start one that outlives it.
-  for (const { args, ranIn } of runs) {
-    const started = notesOf(ranIn.notes);
-    if (started !== "") {
-      failures.push(
-        `nextly ${args.join(" ")}: started a package manager (${started})`
-      );
-    }
+  const installers = startedPackageManagers([...runs, control]);
+  if (!installers.has(control)) {
+    failures.push(
+      "the package managers the pass started itself went unnoticed, so it would notice none"
+    );
+  }
+  for (const run of runs) {
+    if (!installers.has(run)) continue;
+    failures.push(
+      `nextly ${run.args.join(" ")}: started a package manager (${installers.get(run)})`
+    );
   }
   // A probe nothing reaches would otherwise read as commands that all ended early.
   if (!results.some(({ connected }) => connected)) {
