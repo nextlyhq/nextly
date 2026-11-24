@@ -3,7 +3,8 @@
  * migration, on each configured dialect, registered by a test file that chooses the storage layout
  * (`pending-changes*.integration.test.ts`).
  *
- * The edit adds a field, gives a translated field another column type and changes a description:
+ * The edit adds a number field, gives a translated field another column type and changes a
+ * description:
  * a table change, a change only a file beside the main migration carries on per-language storage,
  * and a settings change. `migrate:check` and `nextly migrate` both name it, `migrate:create`
  * writes it, and then neither names anything and `nextly migrate` applies it. What would separate
@@ -47,7 +48,9 @@ const configAt = (edited: boolean) =>
           edited
             ? { name: "price", type: "number" as const, localized: true }
             : { name: "price", type: "text" as const, localized: true },
-          ...(edited ? [{ name: "summary", type: "text" as const }] : []),
+          // A number stays on the main table: a text-like field of a translated collection is
+          // kept per language unless marked `localized: false`.
+          ...(edited ? [{ name: "views", type: "number" as const }] : []),
         ],
       }),
     ],
@@ -169,7 +172,7 @@ export function pendingChangesRoundTrip(loaded: Loaded, layout: string) {
           ["nextly migrate", refused],
         ] as const) {
           expect(ran.code, `${surface}: ${ran.said}`).toBe(1);
-          expect(ran.said, surface).toContain(`dc_${SLUG}.summary`);
+          expect(ran.said, surface).toContain(`add_column dc_${SLUG}.views`);
           expect(ran.said, surface).toMatch(
             new RegExp(
               `dc_${SLUG}(_locales)?\\.price|translations column types dc_${SLUG}`

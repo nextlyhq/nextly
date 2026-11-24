@@ -39,6 +39,8 @@ const READERS: Record<string, string> = {
     "reads through `discoverMigrationGroups`, so an old drop file names no removal",
   "domains/i18n/migration/companion-history.ts":
     "replays only files carrying the localization intent header or marker; an old Builder file carries neither, so it reads as `other`",
+  "cli/utils/project-dialect.ts":
+    "reads only each file's `-- Dialect:` header, to learn the dialect old Builder files are told apart by; an old Builder file's header names the dialect the project ran on, as any file in the folder does, and is never read as a migration",
 };
 
 /**
@@ -82,6 +84,10 @@ const MARKS: Record<string, { reads: string } | { without: string }> = {
   },
   "domains/i18n/migration/companion-history.ts": {
     without: "it reads only files a header marks, which no old Builder file is",
+  },
+  "cli/utils/project-dialect.ts": {
+    without:
+      "it reads only the dialect header, for commands that run with no database to read a ledger from",
   },
 };
 
