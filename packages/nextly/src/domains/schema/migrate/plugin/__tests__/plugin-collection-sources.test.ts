@@ -48,6 +48,22 @@ describe("the plugin a collection belongs to", () => {
     expect(sources.get("contact-forms")).toBe("plugin:@a/one");
   });
 
+  it("is found by the declared slug in a record from before the rename", () => {
+    // A registry written back from a migration's snapshot holds the slugs of that point.
+    const renamed = [plugin("@a/one", ["forms"], { forms: "contact-forms" })];
+    expect([
+      ...pluginCollectionSources(renamed, { forms: {}, pages: {} }),
+    ]).toEqual([["forms", "plugin:@a/one"]]);
+    // With both, the rename was already made: the vacated slug is the app's.
+    expect([
+      ...pluginCollectionSources(renamed, { forms: {}, "contact-forms": {} }),
+    ]).toEqual([["contact-forms", "plugin:@a/one"]]);
+    // With neither, the configuration's own answer.
+    expect([...pluginCollectionSources(renamed, { pages: {} })]).toEqual([
+      ["contact-forms", "plugin:@a/one"],
+    ]);
+  });
+
   it("reads a slug named like an object's own method from the map's own keys", () => {
     expect(
       pluginCollectionSources([

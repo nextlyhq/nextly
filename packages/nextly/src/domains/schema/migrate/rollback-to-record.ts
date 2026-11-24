@@ -576,16 +576,22 @@ export async function planRollbackBookkeeping(args: {
   const point = newestMigrationName(remaining.map(m => m.name)) ?? null;
   const judged = judgeRollbackPoint({ record, remaining, point });
   if (judged.kind === "refused") return { refusal: judged.refusal };
-  const writeDeps: RegistryWriteDeps = {
+  // What the rows are written back with, at the point they go back to: a plugin's collection is
+  // found by the slug that point records it under, which a rename since has changed in the
+  // configuration the rollback runs with.
+  const depsAt = (point: SnapshotFile): RegistryWriteDeps => ({
     adapter,
     logger: args.logger,
-    collectionSources: pluginCollectionSources(args.config.plugins ?? []),
-  };
+    collectionSources: pluginCollectionSources(
+      args.config.plugins ?? [],
+      point.entities?.collections
+    ),
+  });
   const perFile = await typeChangedRowsPerDown({
     metaDir,
     applied,
     rolledBack: args.rolledBack,
-    deps: writeDeps,
+    depsAt,
   });
   // Read only where a rollback has marks to judge.
   const judge = () => marksJudgeFor(adapter, args.config);
@@ -597,7 +603,8 @@ export async function planRollbackBookkeeping(args: {
         point,
         remaining: remaining.map(m => m.name),
         targets,
-        deps: writeDeps,
+        depsAt,
+        logger: args.logger,
         judge,
       })),
     };
@@ -627,7 +634,7 @@ async function typeChangedRowsPerDown(args: {
   metaDir: string;
   applied: ReadonlySet<string>;
   rolledBack: readonly string[];
-  deps: RegistryWriteDeps;
+  depsAt: (point: SnapshotFile) => RegistryWriteDeps;
 }): Promise<Map<string, (inFileTransaction: boolean) => Promise<void>>> {
   const perFile = new Map<
     string,
@@ -644,11 +651,13 @@ async function typeChangedRowsPerDown(args: {
       to = await readMigrationSnapshot(args.metaDir, earlier);
       if (to !== null) break;
     }
+    // With no earlier snapshot there is nothing to write the rows back to.
+    if (to === null) continue;
     const write = typeChangedRowsWriter({
       from,
       to,
       file: filename,
-      deps: args.deps,
+      deps: args.depsAt(to),
     });
     if (write !== undefined) perFile.set(filename, write);
   }
@@ -668,12 +677,14 @@ async function undoToOwnSource(args: {
   point: string | null;
   remaining: readonly string[];
   targets: ReadonlySet<string>;
-  deps: RegistryWriteDeps;
+  depsAt: (point: SnapshotFile) => RegistryWriteDeps;
+  logger: ServiceLogger;
   judge: () => Promise<MarksJudge>;
 }): Promise<Pick<RollbackBookkeeping, "restore" | "summary" | "removes">> {
   if (args.point === null) return {};
   const at = await readMigrationSnapshot(args.metaDir, args.point);
   if (at === null || !carriesRegistryMetadata(at)) return {};
+  const deps = args.depsAt(at);
   // The records the database stood at before the rollback: the rolled-back
   // migrations' and the applied ones' before the point, back to the first
   // that records nothing.
@@ -723,19 +734,19 @@ async function undoToOwnSource(args: {
         ? `The registry rows would go back to what ${named} records.`
         : `The registry rows and the rolled-back migrations' permission orphan marks would go back to what ${named} records, every grant kept.`,
     restore: async (inFileTransaction: boolean) => {
-      if (inFileTransaction) writesInFileTransaction(args.deps, named);
+      if (inFileTransaction) writesInFileTransaction(deps, named);
       const outcome = await writeRegistryRows(
-        args.deps.adapter,
+        deps.adapter,
         async () => ({
-          ...(await writeRegistryFromSource(source, args.deps, plan)),
+          ...(await writeRegistryFromSource(source, deps, plan)),
           // On the same registry write, so the marks commit with the rows.
           marks:
             decide === undefined
               ? 0
               : await rewriteOrphanMarksOnCommandConnection(
-                  args.deps.adapter,
+                  deps.adapter,
                   decide,
-                  args.deps.logger
+                  args.logger
                 ),
         }),
         {
@@ -758,7 +769,7 @@ async function undoToOwnSource(args: {
           },
         });
       }
-      args.deps.logger.info(
+      args.logger.info(
         `The registry rows are back to what ${named} records: ` +
           `${rewritten} row(s) written back, ${outcome.removed.length} removed, ` +
           `${outcome.marks} orphan mark(s) set or cleared.`

@@ -23,15 +23,27 @@ interface ContributingPlugin {
  * slug a rename vacated is free, so a collection the app declares there is the
  * app's. Any collection not listed is the app's own (`code`). Drives locking,
  * `nextly prune` and what `db:sync --remove-orphaned` deletes.
+ *
+ * `recorded`, where given, is a record of collections by slug that the registry
+ * is written back to, such as a migration's snapshot: a collection the host
+ * renamed since is found there by the slug the plugin declares. Where the
+ * record holds the new slug, the rename was already made, and the vacated one
+ * is the app's as in the configuration.
  */
 export function pluginCollectionSources(
-  plugins: readonly ContributingPlugin[]
+  plugins: readonly ContributingPlugin[],
+  recorded?: Readonly<Record<string, unknown>>
 ): Map<string, `plugin:${string}`> {
   const sources = new Map<string, `plugin:${string}`>();
   for (const plugin of plugins) {
     for (const contributed of plugin.contributes?.collections ?? []) {
+      const renamed = renamedSlug(plugin, contributed.slug);
+      const beforeRename =
+        recorded !== undefined &&
+        !Object.hasOwn(recorded, renamed) &&
+        Object.hasOwn(recorded, contributed.slug);
       sources.set(
-        renamedSlug(plugin, contributed.slug),
+        beforeRename ? contributed.slug : renamed,
         `plugin:${plugin.name}`
       );
     }
