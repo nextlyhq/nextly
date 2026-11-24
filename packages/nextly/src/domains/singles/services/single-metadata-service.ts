@@ -1118,6 +1118,7 @@ export class SingleMetadataService {
 
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
     const plan = await this.planUpdate(input);
+    if (plan) await this.refuseCompanionTakingOthersElements(input, plan);
 
     // 2. APPLY, then 3. RECORD. The apply returns a status rather than throwing, except for a
     // refusal (see below). Where a writer is set up, the update is written first as the Single's
@@ -2945,6 +2946,26 @@ export class SingleMetadataService {
     return rename ? { from: rename.from.name, to: rename.to.name } : undefined;
   }
 
+  /**
+   * Refuse, before anything of the save is written or run, what the companion reconcile after the
+   * main table's change would drop of another owner's (`removed-elements.ts`). Asked once the plan
+   * is made rather than in the apply: a save that runs its own migration file runs it first, so a
+   * refusal in the apply would come after the file had changed the main table.
+   */
+  private async refuseCompanionTakingOthersElements(
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan
+  ): Promise<void> {
+    const adapter = this.adapter;
+    if (!adapter) return;
+    const { refuseSingleCompanionTakingOthersElements } = await import(
+      "./reconcile-single-companion"
+    );
+    await refuseSingleCompanionTakingOthersElements(
+      await this.companionChange(input, plan, adapter)
+    );
+  }
+
   /** The companion's change in this save: what the reconcile applies, and what its drops are judged by. */
   private async companionChange(
     input: UpdateSingleSchemaInput,
@@ -3021,14 +3042,10 @@ export class SingleMetadataService {
       };
     }
 
-    // What the companion reconcile after the main table's change would drop of another owner's,
-    // refused before anything here runs (`removed-elements.ts`).
     const companion = await this.companionChange(input, plan, adapter);
-    const {
-      reconcileSingleCompanion,
-      refuseSingleCompanionTakingOthersElements,
-    } = await import("./reconcile-single-companion");
-    await refuseSingleCompanionTakingOthersElements(companion);
+    const { reconcileSingleCompanion } = await import(
+      "./reconcile-single-companion"
+    );
 
     // Before the try below, as the migration is: a failure here stops the save before the main
     // table changes.

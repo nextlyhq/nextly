@@ -6,7 +6,10 @@
  *   declares under the same name, and one the database no longer has stands on nothing;
  * - a foreign key pointing at several removed columns is its owner's own to remove only where every
  *   one of them is its owner's;
- * - names are compared as the databases compare them: ASCII letters folded, nothing else.
+ * - names are compared as the databases compare them: ASCII letters folded, nothing else;
+ * - a key on a table whose plugin no configuration names any more is that plugin's, by the table's
+ *   recorded owner;
+ * - a table a statement writes lower-cased is judged as the database's own spelling of it.
  *
  * The roads that run it, on SQLite, PostgreSQL and MySQL, are the integration tests beside this.
  */
@@ -33,6 +36,12 @@ function sources(live: {
   indexColumns?: Record<string, string[]>;
   indexNames?: string[];
   keysInto?: KeyInto[];
+  /** The table `keysInto` points at; the change's table unless given. */
+  keysIntoTable?: string;
+  /** Tables a plugin's owner row names, whether or not a configuration still names the plugin. */
+  tableOwners?: Record<string, { kind: "plugin"; id: string }>;
+  /** A table's live spellings, where the database spells it other than the change does. */
+  liveNames?: Record<string, string[]>;
   schema?: ExtensionSchemaRecord | null;
 }): RemovedElementsSources {
   return {
@@ -53,8 +62,19 @@ function sources(live: {
     foreignKeyColumns: () => Promise.resolve(new Map()),
     keysInto: table =>
       Promise.resolve(
-        table === TABLE ? (live.keysInto ?? []) : ([] as KeyInto[])
+        table === (live.keysIntoTable ?? TABLE)
+          ? (live.keysInto ?? [])
+          : ([] as KeyInto[])
       ),
+    tableOwners: tables =>
+      Promise.resolve(
+        new Map(
+          Object.entries(live.tableOwners ?? {}).filter(([table]) =>
+            tables.some(each => each.toLowerCase() === table.toLowerCase())
+          )
+        )
+      ),
+    liveNames: table => Promise.resolve(live.liveNames?.[table] ?? [table]),
   };
 }
 
@@ -211,5 +231,56 @@ describe("names compared as the databases compare them", () => {
     );
 
     expect(refused).toBeUndefined();
+  });
+});
+
+describe("a key on a table a plugin owns that no configuration names any more", () => {
+  const key: KeyInto = {
+    table: "plugin_notes",
+    name: "fk_notes",
+    columns: ["link_ref"],
+    referencesColumns: ["id"],
+  };
+  const gone = { kind: "plugin", id: "@t/gone" } as const;
+  const removingTheTable: Deletion[] = [
+    { kind: "table", table: "dc_posts__tags" },
+  ];
+
+  it("is refused into a removed table, by the table's recorded owner", async () => {
+    const refused = await judged(
+      removingTheTable,
+      sources({
+        keysInto: [key],
+        keysIntoTable: "dc_posts__tags",
+        tableOwners: { plugin_notes: gone },
+      })
+    );
+
+    expect(refused?.publicMessage).toContain('fk "fk_notes"');
+    expect(refused?.publicMessage).toContain("@t/gone");
+  });
+
+  it("leaves a key no record names, a relationship of Nextly's own, to go with the table", async () => {
+    const refused = await judged(
+      removingTheTable,
+      sources({ keysInto: [key], keysIntoTable: "dc_posts__tags" })
+    );
+
+    expect(refused).toBeUndefined();
+  });
+});
+
+describe("a table the change spells otherwise than the database", () => {
+  it("is judged by the database's own spelling of it, whatever case the statement wrote", async () => {
+    const refused = await judged(
+      columns("code"),
+      sources({
+        liveNames: { [TABLE]: ["Dc_Posts"] },
+        recorded: [{ ...recordedIndex, table: "Dc_Posts" }],
+        indexColumns: { idx_code: ["code"] },
+      })
+    );
+
+    expect(refused?.publicMessage).toContain('index "idx_code"');
   });
 });

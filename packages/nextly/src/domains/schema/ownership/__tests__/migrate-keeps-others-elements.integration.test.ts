@@ -2,7 +2,8 @@
  * `migrate:create` and `nextly migrate` never take with a removed field an index another owner
  * built on its column. `migrate:create` refuses before it writes anything, reading the database
  * `DATABASE_URL` names; `nextly migrate` refuses a file that removes it before the file's first
- * statement, so the column, the index and the record of applied files stay as they were. Each
+ * statement, so the column, the index and the record of applied files stay as they were. A run of
+ * several files is judged before the first of them, so a refused file leaves none applied. Each
  * refusal names the field, the plugin, the index and its table. Where `migrate:create` finds no
  * database to read, it writes the file and says it was not checked there.
  *
@@ -116,8 +117,8 @@ const groupConfigWith = (withRank: boolean) =>
     db: { migrationsDir: "./migrations" },
   });
 
-/** The app's configuration, with `code` or without it. */
-const configWith = (withCode: boolean) =>
+/** The app's configuration, with `code` or without it, and with an unrelated `extra` or without. */
+const configWith = (withCode: boolean, withExtra = false) =>
   defineConfig({
     collections: [
       defineCollection({
@@ -127,6 +128,7 @@ const configWith = (withCode: boolean) =>
           text({ name: "title" }),
           ...(withCode ? [number({ name: "code" })] : []),
           text({ name: "note" }),
+          ...(withExtra ? [number({ name: "extra" })] : []),
         ],
       }),
     ],
@@ -391,6 +393,32 @@ describe.each(getConfiguredTestDialects())(
       expect(before.columns).toContain("code");
 
       const migrated = await migrate(configWith(false));
+
+      expect(migrated.code, migrated.said).not.toBe(undefined);
+      expectNamesTheIndex(migrated.said, table);
+      expect(await shapeOf(url, table)).toEqual(before);
+    });
+
+    it("nextly migrate refuses a later file's removal before the first file runs, changing nothing", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      expect((await migrateCreate("add_posts", configWith(true))).code).toBe(
+        undefined
+      );
+      expect((await migrate(configWith(true))).code).toBe(undefined);
+      // Written before the plugin builds anything, as on another database: a file that adds a
+      // column, and one that removes the column the plugin will index.
+      expect(
+        (await migrateCreate("add_extra", configWith(true, true))).code
+      ).toBe(undefined);
+      expect(
+        (await migrateCreate("remove_code", configWith(false, true))).code
+      ).toBe(undefined);
+      const table = await buildIndex(url);
+      const before = await shapeOf(url, table);
+      expect(before.columns).not.toContain("extra");
+
+      const migrated = await migrate(configWith(false, true));
 
       expect(migrated.code, migrated.said).not.toBe(undefined);
       expectNamesTheIndex(migrated.said, table);

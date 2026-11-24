@@ -6,12 +6,14 @@
  * changed. So is removing an untranslated one, whose per-language column the save's companion
  * reconcile drops after the entity's own table changes: the reconcile's plan is judged before any
  * statement. A number field's column is on the entity's own table in either layout, and removing
- * it is refused through the Builder save and the development push.
+ * it is refused through the Builder save and the development push. A Single's own schema save
+ * (`updateSingleSchema`) is refused before its migration file is written or run: the file changes
+ * the Single's own table first, and its reconcile would drop the index only after.
  *
  * On SQLite, PostgreSQL and MySQL. The rest of the cases run on the earlier layout in
  * `field-change-keeps-others-elements.integration.test.ts` and `push-keeps-others-elements.integration.test.ts`.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,6 +25,7 @@ import { perLanguageStorageSuite } from "../../../../__tests__/storage-layout";
 import { defineCollection, number, text } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
   createTestNextly,
@@ -49,6 +52,8 @@ const INDEX = "plc_code_idx";
 /** The Builder's collection and the one declared in code. */
 const BUILT = "plc_posts";
 const BUILT_TABLE = `dc_${BUILT}`;
+const HOME = "plc_home";
+const HOME_TABLE = `single_${HOME}`;
 const CODED = "plc_coded";
 const CODED_TABLE = `dc_${CODED}`;
 
@@ -274,6 +279,47 @@ describe.each(getConfiguredTestDialects())(
 
       expectNamesTheIndex(refused, "code", table);
       expect(await shapeOf(t, table)).toEqual(before);
+    });
+
+    it("refuses a Single's schema save that removes a text field whose per-language column a plugin's index is built on, before its migration file is written or run", async () => {
+      const t = await start();
+      await dispatchSingles(
+        "createSingle",
+        {},
+        { slug: HOME, label: "Home", fields: FIELDS }
+      );
+      const table = await tableHolding(t, HOME_TABLE, "code");
+      expect(table).toBe(companionTableOf(HOME_TABLE));
+      await buildIndex(t, table, "code", true);
+      const written = async () =>
+        (
+          await readdir(join(basePath, "migrations"), { recursive: true })
+        ).sort();
+      const before = {
+        companion: await shapeOf(t, table),
+        main: await shapeOf(t, HOME_TABLE),
+        files: await written(),
+      };
+
+      const refused = await dispatchSingles(
+        "updateSingleSchema",
+        { slug: HOME },
+        {
+          fields: FIELDS.filter(
+            field => !["code", "rank"].includes(String(field.name))
+          ),
+        }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expectNamesTheIndex(refused, "code", table);
+      expect({
+        companion: await shapeOf(t, table),
+        main: await shapeOf(t, HOME_TABLE),
+        files: await written(),
+      }).toEqual(before);
     });
 
     it("refuses a development push removing a number field whose column a plugin's index is built on, changing nothing", async () => {

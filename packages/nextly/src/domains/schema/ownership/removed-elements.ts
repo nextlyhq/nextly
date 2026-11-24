@@ -65,7 +65,11 @@ import {
   type RecordedElementsAdapter,
 } from "./dependent-elements";
 import type { OwnerRecord } from "./owner-registry";
-import { SchemaOwnersRepository } from "./schema-owners-repository";
+import {
+  SchemaOwnersRepository,
+  schemaOwnersTableExists,
+  tableOwnersByName,
+} from "./schema-owners-repository";
 
 /**
  * An identifier as the check compares it: ASCII letters folded, nothing else, as SQLite folds a
@@ -93,6 +97,18 @@ export interface RemovedElementsSources {
   ): Promise<ReadonlyMap<string, readonly string[]>>;
   /** The foreign keys the database holds that point at the table, from any table. */
   keysInto(table: string): Promise<readonly KeyInto[]>;
+  /**
+   * The plugins the owner record names as owning these tables, by folded table name: a record
+   * outlives the configuration that named its plugin.
+   */
+  tableOwners(
+    tables: readonly string[]
+  ): Promise<ReadonlyMap<string, SchemaOwner>>;
+  /**
+   * The database's own spellings of a table the change names, whatever case it wrote: none where
+   * the database has no such table.
+   */
+  liveNames(table: string): Promise<readonly string[]>;
 }
 
 /** A foreign key pointing at a table: the table it is on, its name, its columns, and the columns it points at. */
@@ -116,13 +132,8 @@ export async function liveKeysInto(
   dialect: SupportedDialect,
   table: string
 ): Promise<KeyInto[]> {
-  const { introspectTableNames } = await import(
-    "../pipeline/diff/introspect-live"
-  );
   // A table that is not there has no key pointing at it.
-  if ((await introspectTableNames(db, dialect, [table])).length === 0) {
-    return [];
-  }
+  if ((await liveNamesOf(db, dialect, table)).length === 0) return [];
   if (dialect !== "sqlite") {
     return (await readReferencingKeys(db, dialect, { table })).map(key => ({
       table: key.childTable,
@@ -150,6 +161,34 @@ export async function liveKeysInto(
   );
 }
 
+/** The live spellings of `table`, whose name the change may have written in another case. */
+async function liveNamesOf(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string
+): Promise<string[]> {
+  const { introspectTableNames } = await import(
+    "../pipeline/diff/introspect-live"
+  );
+  return introspectTableNames(db, dialect, [table]);
+}
+
+/**
+ * The plugins `rows` record as owning a table, by folded name. A row of the app's own, or of an
+ * entity, says nothing a key is judged by.
+ */
+function pluginTableOwners(
+  rows: readonly OwnerRecord[]
+): Map<string, SchemaOwner> {
+  const owners = new Map<string, SchemaOwner>();
+  for (const [table, row] of tableOwnersByName(rows)) {
+    if (row.ownerKind === "plugin") {
+      owners.set(fold(table), { kind: "plugin", id: row.ownerId });
+    }
+  }
+  return owners;
+}
+
 /**
  * What a schema push or a migration run judges by: the compiled extension schema it applies, the
  * owner rows it already read, and the live catalog through `db`. Where it has none (`rows`
@@ -163,21 +202,36 @@ export function removedElementsSourcesOn(input: {
   rows: readonly OwnerRecord[] | undefined;
 }): RemovedElementsSources {
   const { db, dialect, rows } = input;
+  const ownerRows = async (
+    tables: readonly string[]
+  ): Promise<readonly OwnerRecord[]> => {
+    if (rows === undefined) return readOwnerRowsThrough(db, dialect, tables);
+    const wanted = new Set(tables.map(fold));
+    return rows.filter(row => wanted.has(fold(row.tableName)));
+  };
   return {
     extensionSchema: () => Promise.resolve(input.extensions),
-    recordedElements: tables =>
-      rows === undefined
-        ? readRecordedElementsThrough(db, dialect, tables)
-        : Promise.resolve(
-            elementsFromOwnerRows(
-              rows.filter(row => tables.includes(row.tableName))
-            )
-          ),
+    recordedElements: async tables =>
+      elementsFromOwnerRows(await ownerRows(tables)),
+    tableOwners: async tables => pluginTableOwners(await ownerRows(tables)),
     indexColumns: table => readIndexColumns(db, dialect, table),
     indexNames: table => readIndexNames(db, dialect, table),
     foreignKeyColumns: table => readForeignKeyColumns(db, dialect, table),
     keysInto: table => liveKeysInto(db, dialect, table),
+    liveNames: table => liveNamesOf(db, dialect, table),
   };
+}
+
+/** The owner rows `nextly_schema_owners` keeps for `tables`, read through `db`. */
+async function readOwnerRowsThrough(
+  db: unknown,
+  dialect: SupportedDialect,
+  tables: readonly string[]
+): Promise<OwnerRecord[]> {
+  if (tables.length === 0) return [];
+  const present = await liveNamesOf(db, dialect, SCHEMA_OWNERS_TABLE);
+  if (present.length === 0) return [];
+  return new SchemaOwnersRepository(db, dialect).read(tables);
 }
 
 /**
@@ -190,17 +244,7 @@ export async function readRecordedElementsThrough(
   dialect: SupportedDialect,
   tables: readonly string[]
 ): Promise<ElementOnTable[]> {
-  if (tables.length === 0) return [];
-  const { introspectTableNames } = await import(
-    "../pipeline/diff/introspect-live"
-  );
-  const present = await introspectTableNames(db, dialect, [
-    SCHEMA_OWNERS_TABLE,
-  ]);
-  if (present.length === 0) return [];
-  return elementsFromOwnerRows(
-    await new SchemaOwnersRepository(db, dialect).read(tables)
-  );
+  return elementsFromOwnerRows(await readOwnerRowsThrough(db, dialect, tables));
 }
 
 /**
@@ -216,6 +260,16 @@ export function databaseRemovedElementsSources(
     extensionSchema: () =>
       Promise.resolve().then(() => getActiveExtensionSchema(dialect)),
     recordedElements: tables => readRecordedElementsOn(adapter, tables),
+    tableOwners: async tables =>
+      tables.length > 0 && (await schemaOwnersTableExists(adapter))
+        ? pluginTableOwners(
+            await new SchemaOwnersRepository(
+              adapter.getDrizzle(),
+              dialect
+            ).read(tables)
+          )
+        : new Map(),
+    liveNames: table => liveNamesOf(adapter.getDrizzle(), dialect, table),
     indexColumns: table =>
       readIndexColumns(adapter.getDrizzle(), dialect, table),
     indexNames: table => readIndexNames(adapter.getDrizzle(), dialect, table),
@@ -325,26 +379,41 @@ export async function refuseRemovingOthersElements(args: {
 }): Promise<void> {
   const tablesRemoved = new Set<string>();
   const columnsRemoved = new Map<string, Set<string>>();
+  // Each table by its folded name, as the change wrote it.
+  const written = new Map<string, string>();
   for (const deletion of args.deletions) {
     if (deletion.core === true) continue;
-    if (deletion.kind === "table") tablesRemoved.add(deletion.table);
-    if (deletion.kind === "column") {
-      const columns = columnsRemoved.get(deletion.table) ?? new Set<string>();
+    if (deletion.kind !== "table" && deletion.kind !== "column") continue;
+    const table = fold(deletion.table);
+    written.set(table, deletion.table);
+    if (deletion.kind === "table") {
+      tablesRemoved.add(table);
+    } else {
+      const columns = columnsRemoved.get(table) ?? new Set<string>();
       columns.add(fold(deletion.column));
-      columnsRemoved.set(deletion.table, columns);
+      columnsRemoved.set(table, columns);
     }
   }
   for (const table of tablesRemoved) columnsRemoved.delete(table);
-  const tables = [...tablesRemoved, ...columnsRemoved.keys()];
-  if (tables.length === 0) return;
+  if (written.size === 0) return;
 
   const taken = await readingOthersElements(args.entity, async () => {
     const schema = await args.sources.extensionSchema();
+    const spellings = await tableSpellings(
+      args.sources,
+      [...tablesRemoved, ...columnsRemoved.keys()],
+      written
+    );
+    const tables = [...spellings.values()].flatMap(each => each.all);
     const all = distinctElements([
       ...(schema === null ? [] : await elementsAddedTo(schema, tables)),
       ...(await args.sources.recordedElements(tables)),
     ]);
-    const removedBy = removedOwners(all, schema);
+    const removedBy = removedOwners(
+      all,
+      schema,
+      await args.sources.tableOwners(tables)
+    );
     const found: Taken[] = [];
     for (const element of all) {
       if (element.owner.kind === "app") continue;
@@ -362,6 +431,7 @@ export async function refuseRemovingOthersElements(args: {
       ...(await keysTaken(args, schema, removedBy, found, {
         tablesRemoved,
         columnsRemoved,
+        spellings,
       }))
     );
     return found;
@@ -386,6 +456,71 @@ export async function refuseRemovingOthersElements(args: {
   });
 }
 
+/** How one table the change names is spelled, for the lookups each reads it by. */
+interface TableSpellings {
+  /** Every spelling an owner record or the compiled schema may give it. */
+  all: readonly string[];
+  /** The database's spellings, or the change's own where it has none. */
+  live: readonly string[];
+}
+
+/**
+ * The spellings of each removed table, by its folded name: as the change wrote it, and as the
+ * database has it (`posts` for a quoted `"Posts"`, say). A table the database lacks is asked by the
+ * change's own spelling.
+ */
+async function tableSpellings(
+  sources: RemovedElementsSources,
+  folded: readonly string[],
+  written: ReadonlyMap<string, string>
+): Promise<ReadonlyMap<string, TableSpellings>> {
+  const spellings = new Map<string, TableSpellings>();
+  for (const table of folded) {
+    const own = written.get(table) ?? table;
+    const live = await sources.liveNames(own);
+    spellings.set(table, {
+      all: [...new Set([own, ...live])],
+      live: live.length > 0 ? live : [own],
+    });
+  }
+  return spellings;
+}
+
+/**
+ * Refuse a migration run, before its first file, where one of its files removes what another owner
+ * built on the app's tables. The files are read as one list (`runDeletions`), each judged as the
+ * files before it leave the database, and the refusal names the file. Judging file by file as each
+ * comes up would leave the earlier ones applied and recorded when a later one is refused.
+ */
+export async function refuseRunRemovingOthersElements(args: {
+  /** The run's files, in run order: each one's name, and its statements. */
+  files: readonly { name: string; statements: readonly string[] }[];
+  db: unknown;
+  dialect: SupportedDialect;
+  sources: RemovedElementsSources;
+}): Promise<void> {
+  if (args.files.length === 0) return;
+  const { readDeletionFacts, runDeletions, runStatements } = await import(
+    "../migrate/file-deletions"
+  );
+  const lists = args.files.map(file => file.statements);
+  const perFile = runDeletions(
+    lists,
+    args.dialect,
+    await readDeletionFacts(args.db, args.dialect, runStatements(lists))
+  );
+  for (const [at, file] of args.files.entries()) {
+    await refuseRemovingOthersElements({
+      deletions: perFile[at] ?? [],
+      dialect: args.dialect,
+      entity: `Migration ${file.name}.sql`,
+      sources: args.sources,
+      // A file has the fields' columns, not their definitions: each column names its field.
+      fieldOf: (_table, column) => column,
+    });
+  }
+}
+
 /** Who a removed table or column belongs to, as the check compares it with an element's owner. */
 interface RemovedOwners {
   table(table: string): SchemaOwner | undefined;
@@ -394,22 +529,29 @@ interface RemovedOwners {
 
 /**
  * The owners of what the change removes. A column is its column element's owner where one names
- * it, else the app's: an entity's own field. A table is the owner the compiled schema gives it.
+ * it, else its table's: an entity's own field is the app's. A table is the owner the compiled
+ * schema gives it, or the plugin the owner record names (a plugin no configuration still names).
  */
 function removedOwners(
   all: readonly ElementOnTable[],
-  schema: ExtensionSchemaRecord | null
+  schema: ExtensionSchemaRecord | null,
+  recorded: ReadonlyMap<string, SchemaOwner>
 ): RemovedOwners {
-  const lower = (name: string) => fold(name);
+  const compiled = new Map(
+    [...(schema?.owners ?? [])].map(([name, owner]) => [fold(name), owner])
+  );
+  const tableOwner = (table: string) =>
+    compiled.get(fold(table)) ?? recorded.get(fold(table));
   return {
-    table: table => schema?.owners.get(table),
+    table: tableOwner,
     column: (table, column) =>
       all.find(
         element =>
           element.kind === "column" &&
-          lower(element.table) === lower(table) &&
-          lower(element.name) === lower(column)
-      )?.owner ?? { kind: "app" },
+          fold(element.table) === fold(table) &&
+          fold(element.name) === fold(column)
+      )?.owner ??
+      tableOwner(table) ?? { kind: "app" },
   };
 }
 
@@ -436,13 +578,13 @@ async function elementTaken(
   tablesRemoved: ReadonlySet<string>,
   columnsRemoved: ReadonlyMap<string, ReadonlySet<string>>
 ): Promise<Taken | undefined> {
-  if (tablesRemoved.has(element.table)) {
+  if (tablesRemoved.has(fold(element.table))) {
     return sameOwner(removedBy.table(element.table), element.owner)
       ? undefined
       : { element, ...fieldOf(args, element.table) };
   }
   const removed = new Set(
-    [...(columnsRemoved.get(element.table) ?? [])].filter(
+    [...(columnsRemoved.get(fold(element.table)) ?? [])].filter(
       column =>
         !sameOwner(removedBy.column(element.table, column), element.owner)
     )
@@ -487,10 +629,7 @@ async function keysTaken(
   schema: ExtensionSchemaRecord | null,
   removedBy: RemovedOwners,
   already: readonly Taken[],
-  removal: {
-    tablesRemoved: ReadonlySet<string>;
-    columnsRemoved: ReadonlyMap<string, ReadonlySet<string>>;
-  }
+  removal: Removal
 ): Promise<Taken[]> {
   const named = new Set(
     already
@@ -509,6 +648,13 @@ async function keysTaken(
   return found;
 }
 
+/** What the change removes, and how it spells the tables of it. */
+interface Removal {
+  tablesRemoved: ReadonlySet<string>;
+  columnsRemoved: ReadonlyMap<string, ReadonlySet<string>>;
+  spellings: ReadonlyMap<string, TableSpellings>;
+}
+
 /** A key by its table and name, as two readings of one key are matched. */
 function keyId(key: { table: string; name: string }): string {
   return fold(`${key.table}\u0000${key.name}`);
@@ -523,14 +669,15 @@ async function keysIntoTaken(
   schema: ExtensionSchemaRecord | null,
   removedBy: RemovedOwners,
   named: ReadonlySet<string>,
-  removal: {
-    tablesRemoved: ReadonlySet<string>;
-    columnsRemoved: ReadonlyMap<string, ReadonlySet<string>>;
-  },
+  removal: Removal,
   target: string
 ): Promise<Taken[]> {
   const removed = removal.columnsRemoved.get(target);
-  const keys = (await args.sources.keysInto(target)).filter(
+  const spelled = removal.spellings.get(target)?.live ?? [target];
+  const found: KeyInto[] = [];
+  for (const name of spelled)
+    found.push(...(await args.sources.keysInto(name)));
+  const keys = found.filter(
     key =>
       pointsAtRemoved(
         key,
@@ -545,13 +692,14 @@ async function keysIntoTaken(
     ...(schema === null ? [] : await elementsAddedTo(schema, on)),
     ...(await args.sources.recordedElements(on)),
   ]);
+  const tables = await args.sources.tableOwners(on);
   return keys.flatMap(key => {
-    const owner = ownerOfKey(key, known, schema);
+    const owner = ownerOfKey(key, known, schema, tables);
     if (!countsKeyOf(owner, removed)) return [];
     const pointed = pointedAt(key, removed);
     return ownsWhatItPointsAt(owner, target, pointed, removedBy)
       ? []
-      : [keyTaken(args, key, owner, target, pointed)];
+      : [keyTaken(args, key, owner, spelled[0] ?? target, pointed)];
   });
 }
 
@@ -642,12 +790,14 @@ function keyTaken(
 /**
  * Who built a key: the owner of the key element of its name, else of a column element it stands on
  * (SQLite keeps no key names, so a recorded key is told there by its column), else the plugin whose
- * table it is on. `null` where none says.
+ * table it is on, by the compiled schema or the owner record, which outlives the configuration that
+ * named the plugin. `null` where none says.
  */
 function ownerOfKey(
   key: KeyInto,
   known: readonly ElementOnTable[],
-  schema: ExtensionSchemaRecord | null
+  schema: ExtensionSchemaRecord | null,
+  recorded: ReadonlyMap<string, SchemaOwner>
 ): SchemaOwner | null {
   const lower = (name: string) => fold(name);
   const onItsTable = known.filter(
@@ -661,7 +811,7 @@ function ownerOfKey(
       element.kind === "column" &&
       key.columns.some(each => lower(each) === lower(element.name))
   );
-  const table = schema?.owners.get(key.table);
+  const table = schema?.owners.get(key.table) ?? recorded.get(fold(key.table));
   return (
     named?.owner ?? column?.owner ?? (table?.kind === "plugin" ? table : null)
   );
@@ -673,8 +823,8 @@ function goesWithItsColumns(
   tablesRemoved: ReadonlySet<string>,
   columnsRemoved: ReadonlyMap<string, ReadonlySet<string>>
 ): boolean {
-  if (tablesRemoved.has(key.table)) return true;
-  const removed = columnsRemoved.get(key.table);
+  if (tablesRemoved.has(fold(key.table))) return true;
+  const removed = columnsRemoved.get(fold(key.table));
   return (
     removed !== undefined &&
     key.columns.length > 0 &&

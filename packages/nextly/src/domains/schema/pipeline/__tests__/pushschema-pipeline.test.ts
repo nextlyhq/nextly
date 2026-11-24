@@ -65,6 +65,8 @@ vi.mock("../../ownership/removed-elements", async importOriginal => {
       indexNames: () => Promise.resolve(new Set()),
       foreignKeyColumns: () => Promise.resolve(new Map()),
       keysInto: () => Promise.resolve([]),
+      tableOwners: () => Promise.resolve(new Map()),
+      liveNames: table => Promise.resolve([table]),
     }),
   };
 });

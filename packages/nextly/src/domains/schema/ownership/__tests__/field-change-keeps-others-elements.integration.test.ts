@@ -579,6 +579,50 @@ describe.each(getConfiguredTestDialects())(
       expect(await keyedColumnsOf(t, POSTS_TABLE)).toContain("link_ref");
     });
 
+    it("refuses removing a many-to-many whose join table a key on a removed plugin's own table points at, where only the table is recorded, changing nothing", async () => {
+      const t = await boot(dialect);
+      const notes = "fco_removed_notes";
+      const id = dialect === "mysql" ? "varchar(36)" : "text";
+      // The plugin is in no configuration: its table stays, recorded as the plugin's, with the key
+      // its migration gave it and no row of its own for the key.
+      await t.adapter.executeQuery(
+        `CREATE TABLE ${q(notes)} (${q("id")} ${id} PRIMARY KEY, ${q("link_ref")} ${id}, CONSTRAINT ${q("fco_fk_removed")} FOREIGN KEY (${q("link_ref")}) REFERENCES ${q(LINKS_TABLE)} (${q("id")}))`
+      );
+      await new SchemaOwnersRepository(
+        (t.adapter as unknown as DrizzleAdapter).getDrizzle(),
+        dialect
+      ).upsert([
+        {
+          tableName: notes,
+          elementKind: "table",
+          elementName: "",
+          ownerKind: "plugin",
+          ownerId: "@t/fco-removed",
+          migratedBy: "plugin:@t/fco-removed",
+          ownerVersion: "1.0.0",
+          schemaVersion: 1,
+          state: "orphaned",
+        },
+      ]);
+      const before = await stateOf(t, POSTS_TABLE);
+      const links = await columnsOf(t, LINKS_TABLE);
+
+      const refused = await savePosts(
+        t,
+        without(await stored(t), "tags"),
+        dropping("tags")
+      );
+
+      expect(NextlyError.is(refused), String(refused)).toBe(true);
+      const message = (refused as NextlyError).publicMessage;
+      for (const part of ["tags", "@t/fco-removed", "fk", notes, LINKS_TABLE]) {
+        expect(message).toContain(part);
+      }
+      expect(await columnsOf(t, LINKS_TABLE)).toEqual(links);
+      expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
+      expect(await keyedColumnsOf(t, notes)).toContain("link_ref");
+    });
+
     it("applies a save that removes another field where a plugin's foreign key stands on its own column, keeping the key", async () => {
       const t = await boot(dialect);
       await buildKey(t, {

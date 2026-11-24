@@ -132,7 +132,6 @@ import {
   withEntityCoverage,
 } from "../../domains/schema/migrate/entity-shared-rows";
 import {
-  fileDeletions,
   readDeletionFacts,
   runDeletions,
   runStatements,
@@ -275,7 +274,7 @@ import {
   ownerRecordKey,
 } from "../../domains/schema/ownership/owner-registry";
 import {
-  refuseRemovingOthersElements,
+  refuseRunRemovingOthersElements,
   removedElementsSourcesOn,
 } from "../../domains/schema/ownership/removed-elements";
 import {
@@ -5492,6 +5491,27 @@ export async function runFileMigrations(args: {
     snapshotOf: name => loadTargetSnapshot(metaDir, name),
   });
 
+  // What the run's files remove takes no element another owner built on the app's tables: an
+  // index, foreign key or check on a column one drops, anything on a table one drops
+  // (`removed-elements.ts`). Every file is judged before the first runs, each as the files before
+  // it leave the database, so a refused file leaves none of them applied.
+  await refuseRunRemovingOthersElements({
+    files: all
+      .filter(m => plan.runs.has(m))
+      .map(m => ({
+        name: m.name,
+        statements: splitSqlStatements(m.upSql, dialect, m),
+      })),
+    db,
+    dialect,
+    sources: removedElementsSourcesOn({
+      db,
+      dialect,
+      extensions: args.extensionSchema ?? null,
+      rows: fileOwnerRows,
+    }),
+  });
+
   // The last file this run applied, which a run that lost the schema lock names, so the operator
   // knows where the database stands.
   let lastApplied: string | null = null;
@@ -5558,27 +5578,6 @@ export async function runFileMigrations(args: {
         liveTables: await readLiveTables(db, dialect, [upStatements]),
         liveIndexTables: await readLiveIndexTables(db, dialect, [upStatements]),
         columnOverrides: args.columnOverrides,
-      });
-      // What the file removes takes no element another owner built on the app's tables: an
-      // index, foreign key or check on a column it drops, anything on a table it drops
-      // (`removed-elements.ts`). Its deletions are the ones the data-loss consent reads, judged
-      // against the database as the files before it leave it, before its first statement.
-      await refuseRemovingOthersElements({
-        deletions: fileDeletions(
-          upStatements,
-          dialect,
-          await readDeletionFacts(db, dialect, upStatements)
-        ),
-        dialect,
-        entity: `Migration ${filename}`,
-        sources: removedElementsSourcesOn({
-          db,
-          dialect,
-          extensions: args.extensionSchema ?? null,
-          rows: fileOwnerRows,
-        }),
-        // A file has the fields' columns, not their definitions: each column names its field.
-        fieldOf: (_table, column) => column,
       });
       assertRunnableStatements(upStatements, dialect, filename, {
         transaction: m.transaction,
