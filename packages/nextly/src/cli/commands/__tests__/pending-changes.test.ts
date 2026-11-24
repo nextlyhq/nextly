@@ -22,6 +22,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig, text } from "../../../config";
+import { definePlugin } from "../../../plugins/plugin-context";
 import { _resetEnvCache } from "../../../shared/lib/env";
 
 import { pendingProject } from "./helpers/pending-project";
@@ -176,6 +177,37 @@ describe("a Schema Builder definition file", () => {
     expect(created.code).toBeUndefined();
     expect(saidBy(created)).not.toContain("ignored by git");
     expect((await check(builderProject)).code).toBeUndefined();
+  });
+});
+
+describe("an app with no migration yet whose plugin declares permissions", () => {
+  const appWith = (actions: string[]) =>
+    defineConfig({
+      collections: [],
+      plugins: [
+        definePlugin({
+          name: "@acme/reports",
+          version: "1.0.0",
+          nextly: ">=0.0.1",
+          contributes: {
+            permissions: actions.map(action => ({
+              action,
+              resource: "reports",
+            })),
+          },
+        }),
+      ],
+      db: { migrationsDir: "./migrations" },
+    });
+
+  it("fails migrate:check on the permissions migrate:create writes as the first migration, and passes once written", async () => {
+    const checked = await check(appWith(["export"]));
+    expect(checked.code).toBe(1);
+    expect(saidBy(checked)).toContain("export-reports");
+
+    expect((await create(appWith(["export"]))).code).toBeUndefined();
+    expect(sqlFiles()).toHaveLength(1);
+    expect((await check(appWith(["export"]))).code).toBeUndefined();
   });
 });
 

@@ -40,6 +40,7 @@
   "DATABASE_ADAPTER_MISSING": "The database adapter package for the dialect `DATABASE_URL` names is not installed.",
   "DATABASE_BEHIND_MIGRATIONS": "The database lacks a table or column that the migrations it records as applied created.",
   "DATABASE_CATALOG_UNREADABLE": "The database catalog could not be read, so the command could not tell which field-group registry table the database uses.",
+  "DATABASE_DIALECT_DIFFERS": "`DATABASE_URL` names a database of another dialect than the one the migrations are for, so `migrate:create --record-snapshot` would record another database's translation tables.",
   "DATABASE_DIALECT_INVALID": "`DB_DIALECT` names a database Nextly does not support.",
   "DATABASE_DIALECT_UNKNOWN": "The database type could not be told from `DATABASE_URL`, and `DB_DIALECT` is not set.",
   "DATABASE_NOT_BASELINED": "The database already has tables but no migration history, and the first migration starts from an empty database.",

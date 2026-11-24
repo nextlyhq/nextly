@@ -5,6 +5,7 @@
  */
 import {
   connectionFailure,
+  databaseDialectDiffers,
   dialectNotStated,
 } from "../../errors/areas/database";
 import { databaseEnvError } from "../../errors";
@@ -34,6 +35,7 @@ export const DATABASE_CASES = {
       else process.env.DB_DIALECT = previous;
     }
   },
+  DATABASE_DIALECT_DIFFERS: () => databaseDialectDiffers("mysql", "postgresql"),
   DIALECT_NOT_STATED: () => dialectNotStated(),
   DATABASE_UNREACHABLE: () =>
     connectionFailure(

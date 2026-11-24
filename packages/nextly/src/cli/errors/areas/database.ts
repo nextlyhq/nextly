@@ -28,6 +28,10 @@ export const DATABASE_CODES = defineCodes({
   DATABASE_DIALECT_INVALID: {
     cause: "`DB_DIALECT` names a database Nextly does not support.",
   },
+  DATABASE_DIALECT_DIFFERS: {
+    cause:
+      "`DATABASE_URL` names a database of another dialect than the one the migrations are for, so `migrate:create --record-snapshot` would record another database's translation tables.",
+  },
   DIALECT_NOT_STATED: {
     cause:
       "A command that reads no database could not tell which one its migrations are for: no `--dialect`, no migration file naming one, and no `DB_DIALECT` or `DATABASE_URL`.",
@@ -47,6 +51,22 @@ export const DATABASE_CODES = defineCodes({
 });
 
 const DIALECTS = "`postgresql`, `mysql` or `sqlite`";
+
+/**
+ * The refusal of `migrate:create --record-snapshot` where `DATABASE_URL` names a database of
+ * another dialect than the migrations are for: the snapshot it writes records the database it
+ * reads, so it must be one the migrations run on.
+ */
+export function databaseDialectDiffers(
+  migrations: SupportedDialect,
+  database: SupportedDialect
+): CliError {
+  return new CliError("DATABASE_DIALECT_DIFFERS", {
+    what: `\`DATABASE_URL\` names a ${DIALECT_NAMES[database]} database, and the migrations are for ${DIALECT_NAMES[migrations]}.`,
+    why: "`--record-snapshot` records the translation tables of the database it reads, in a migration written for the migrations' dialect.",
+    next: `Point \`DATABASE_URL\` at the ${DIALECT_NAMES[migrations]} database the migrations run on, or pass the \`--dialect\` they are for.`,
+  });
+}
 
 /**
  * The refusal of a command that reads no database (`migrate:check`, `migrate:create`) where nothing
