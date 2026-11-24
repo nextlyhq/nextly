@@ -1377,11 +1377,16 @@ export const MIGRATION_CODES = defineCodes({
   },
   FIELD_GROUP_ROLLBACK_REFUSED: {
     cause:
-      "`nextly migrate:field-groups --down` was run on a database whose applied migration history is on the current field-group names.",
+      "`nextly migrate:field-groups --down` was run on a database whose applied migration history is on the current field-group names, or that holds a field group created on them.",
     from: [
       {
         code: "VALIDATION_ERROR",
         reason: "field-group-rollback-under-current-history",
+        describe: error => sentenceParts(error),
+      },
+      {
+        code: "VALIDATION_ERROR",
+        reason: "field-group-rollback-groups-not-moved",
         describe: error => sentenceParts(error),
       },
     ],

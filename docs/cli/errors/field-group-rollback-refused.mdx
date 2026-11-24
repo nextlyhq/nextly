@@ -1,13 +1,15 @@
 ---
 title: FIELD_GROUP_ROLLBACK_REFUSED
-description: "`nextly migrate:field-groups --down` was run on a database whose applied migration history is on the current field-group names."
+description: "`nextly migrate:field-groups --down` was run on a database whose applied migration history is on the current field-group names, or that holds a field group created on them."
 ---
 
 ## Cause
 
-`nextly migrate:field-groups --down` was run on a database whose applied migration history is on the current field-group names.
+`nextly migrate:field-groups --down` was run on a database whose applied migration history is on the current field-group names, or that holds a field group created on them.
 
-The newest applied migration that has a snapshot records the field groups under the current names (`dynamic_field_groups`, `fg_<slug>`). Every migration after it is planned against those names, so moving the storage back would leave the database and its history on different names. Nothing was changed. A move back that was started earlier and stopped part-way is not refused: run the command again to finish it.
+The newest applied migration that has a snapshot records the field groups under the current names (`dynamic_field_groups`, `fg_<slug>`). Every migration after it is planned against those names, so moving the storage back would leave the database and its history on different names.
+
+A move back also undoes only what the recorded move holds. A field group created on the current names, as every group of a new site is, was never moved: its table would stay `fg_<slug>` beside a legacy registry, and the storage could then move neither way. Nothing was changed. A move back that was started earlier and stopped part-way is not refused: run the command again to finish it.
 
 ## Fix
 
