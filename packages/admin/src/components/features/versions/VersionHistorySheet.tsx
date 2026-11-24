@@ -938,6 +938,7 @@ export function VersionHistorySheet({
             rows={restoreRows}
             {...(editor.language ? { language: editor.language } : {})}
             {...(restoreOnly !== undefined ? { only: restoreOnly } : {})}
+            lifecycle={lifecycle}
             // Re-checked at confirm time: the restore trigger can vanish while
             // the dialog is open (a claim arriving mid-dialog), and an open
             // dialog must not restore past a refusal that arrived after it.

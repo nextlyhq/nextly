@@ -49,17 +49,26 @@ export interface RestoreFieldsDialogProps {
    * so the person can add them.
    */
   only?: string;
+  /**
+   * Whether the document has the Draft/Published lifecycle: with it, a saved
+   * restore reaches readers only once published; without it, a save is live.
+   */
+  lifecycle?: boolean;
   onConfirm: (names: string[]) => void;
 }
 
 /**
  * The fields chosen when the dialog opens: every one that may be restored, or
- * only the one asked for by name, where it may be.
+ * only the one asked for by name. A field asked for that cannot be chosen
+ * (the editor already holds its value, or the person may not change it)
+ * leaves nothing chosen, rather than every other field: the person asked for
+ * one field, and a restore of others is not what they asked for.
  */
 function initiallyChosen(rows: RestoreRow[], only?: string): Set<string> {
-  const asked =
-    only !== undefined && rows.some(row => row.name === only && row.chosen);
-  return initiallyChosenOrKept(rows, name => !asked || name === only);
+  return initiallyChosenOrKept(
+    rows,
+    name => only === undefined || name === only
+  );
 }
 
 /** The field's name as the form places it: "Search result › Meta title". */
@@ -97,6 +106,7 @@ export function RestoreFieldsDialog({
   rows,
   language,
   only,
+  lifecycle = true,
   onConfirm,
 }: RestoreFieldsDialogProps): JSX.Element {
   const [chosen, setChosen] = useState(() => initiallyChosen(rows, only));
@@ -248,7 +258,9 @@ export function RestoreFieldsDialog({
           ) : null}
           <li className="flex items-start gap-2">
             <Eye className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-            Readers see nothing change until you publish.
+            {lifecycle
+              ? "Readers see nothing change until you publish."
+              : "Readers see nothing change until you save."}
           </li>
           <li className="flex items-start gap-2">
             <History className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />

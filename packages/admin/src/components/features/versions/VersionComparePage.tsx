@@ -92,6 +92,12 @@ export interface VersionComparePageProps {
    */
   listCrumb?: { label: string; href: string };
   /**
+   * Whether the collection or Single is translated, from its schema: the
+   * Languages choice is offered by this, never by the versions loaded, since
+   * a page of shared-field saves holds no language to tell it by.
+   */
+  entityLocalized?: boolean;
+  /**
    * The pair from the URL. Either may be absent on a link that names none;
    * `from` may name the version before `to` in its language (`previous`).
    */
@@ -371,6 +377,7 @@ export function VersionComparePage({
   readOnlyHref,
   documentTitle,
   listCrumb,
+  entityLocalized = false,
   from,
   to,
   locale,
@@ -594,23 +601,35 @@ export function VersionComparePage({
 
   // The language the versions are listed in, as the history panel's filter.
   const { locales } = useLocalization();
-  const localized = versions.some(v => v.locale !== null);
   const chooseLocale = useCallback(
     (code: string) =>
       navigateTo(versionsHref(scope, undefined, code || undefined, view)),
     [scope, view]
   );
 
-  // The address names the comparison on screen, so it is the link to share.
+  // The link names the pair on screen by number, in its language: an address
+  // that left the pair to the page, or named a baseline such as "the version
+  // you last looked at", would open a different comparison after the next
+  // save, or for another reader.
   const copyLink = useCallback(() => {
-    const href = window.location.href;
+    const href = shown
+      ? new URL(
+          versionsHref(
+            scope,
+            { from: shown.from, to: shown.to },
+            seen?.locale ?? locale,
+            view
+          ),
+          window.location.origin
+        ).href
+      : window.location.href;
     void navigator.clipboard
       ?.writeText(href)
       .then(() => toast.success("Link copied. It opens this comparison."))
       .catch(() =>
         toast.error("Couldn't copy the link. Copy it from the address bar.")
       );
-  }, []);
+  }, [shown, scope, seen, locale, view]);
 
   // Hands the version on screen to the editor, as "Restore…" does: every
   // field it changed, or one field asked for by name.
@@ -777,7 +796,7 @@ export function VersionComparePage({
                 )}
               </select>
             </label>
-            {localized && locales.length > 1 ? (
+            {entityLocalized && locales.length > 1 ? (
               <label className="flex min-w-[12rem] flex-col gap-1.5 text-xs font-medium text-muted-foreground">
                 Languages
                 <select

@@ -46,18 +46,33 @@ function wordsOf(value: unknown): string | undefined {
   return undefined;
 }
 
+/** Whether a value holds nothing: what restoring it does is clear the field. */
+function isEmptyValue(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value).length === 0;
+  return false;
+}
+
 /**
  * The line the restore list shows for a value it puts back: the value quoted
- * and shortened to a line, "Clears the field" for an empty one, or `undefined`
- * where nothing reached the dialog to say (a hidden field's value never does).
+ * and shortened to a line, "Clears the field" for an empty one, a plain
+ * statement for a structure with nothing to quote it by, or `undefined` where
+ * nothing reached the dialog to say (a hidden field's value never does).
  */
 export function restoreValueText(
   value: unknown,
   present: boolean
 ): string | undefined {
   if (!present) return undefined;
+  if (isEmptyValue(value)) return "Clears the field";
   const words = wordsOf(value)?.replace(/\s+/g, " ").trim();
-  if (words === undefined || words === "") return "Clears the field";
+  // Something is put back, so it is never called a clearing; the comparison
+  // is where a value like this is read in full.
+  if (words === undefined || words === "") {
+    return "Puts back the version's value";
+  }
   const quoted =
     words.length > QUOTE_LENGTH
       ? `${words.slice(0, QUOTE_LENGTH).trimEnd()}…`

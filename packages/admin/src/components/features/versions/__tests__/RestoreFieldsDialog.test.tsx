@@ -262,6 +262,46 @@ describe("RestoreFieldsDialog", () => {
     ).toBeEnabled();
   });
 
+  it("never calls putting back a structure it cannot quote a clearing", () => {
+    renderDialog({
+      rows: [
+        { ...rows[0]!, value: { foo: "bar" } },
+        { ...rows[1]!, value: null },
+      ],
+    });
+
+    const title = screen.getByRole("checkbox", { name: /Title/ }).closest("li");
+    expect(
+      within(title as HTMLElement).getByText("Puts back the version's value")
+    ).toBeInTheDocument();
+    const views = screen.getByRole("checkbox", { name: /Views/ }).closest("li");
+    expect(
+      within(views as HTMLElement).getByText("Clears the field")
+    ).toBeInTheDocument();
+  });
+
+  it("chooses nothing when the one field asked for cannot be restored", () => {
+    // Asked for the hidden field: choosing every other field instead would
+    // restore what the person did not ask for.
+    renderDialog({ only: "secret" });
+
+    for (const box of screen.getAllByRole("checkbox")) {
+      expect(box).not.toBeChecked();
+    }
+    expect(
+      screen.getByRole("button", { name: "Restore 0 fields" })
+    ).toBeDisabled();
+  });
+
+  it("says a save is what readers see, where there is no publish step", () => {
+    renderDialog({ lifecycle: false });
+
+    expect(
+      screen.getByText("Readers see nothing change until you save.")
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/until you publish/)).toBeNull();
+  });
+
   it("asks a question naming the version", () => {
     renderDialog();
 

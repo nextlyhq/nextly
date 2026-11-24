@@ -394,6 +394,30 @@ describe("VersionComparePage, its choices", () => {
     });
   });
 
+  it("copies a link that names the two versions drawn, not the baseline that found them", async () => {
+    // "The version you last looked at" is the reader's own, and moves: a
+    // link carrying it opens another comparison for anyone else, or later.
+    baselineMock.mockReturnValue({
+      data: {
+        from: 3,
+        to: 5,
+        baseline: { name: "last-viewed", versionNo: 3 },
+      },
+      isLoading: false,
+      isError: false,
+    });
+    // user-event stands in for the clipboard, so what was copied is read back
+    // from it.
+    const user = userEvent.setup();
+    renderPage({ from: "last-viewed" });
+    await user.click(screen.getByRole("button", { name: "Copy link" }));
+
+    const copied = new URL(await navigator.clipboard.readText());
+    expect(copied.pathname).toBe("/admin/collections/posts/e1/versions");
+    expect(copied.searchParams.get("from")).toBe("3");
+    expect(copied.searchParams.get("to")).toBe("5");
+  });
+
   it("names the version it restores", () => {
     renderPage({ from: 4, to: 5 });
 

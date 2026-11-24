@@ -21,7 +21,7 @@ import {
 } from "@admin/components/features/versions/version-search-params";
 import { VersionComparePage } from "@admin/components/features/versions/VersionComparePage";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { useCollection } from "@admin/hooks/queries/useCollections";
+import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import type { PageProps } from "@admin/lib/routing";
 
@@ -45,10 +45,17 @@ export default function EntryVersionsPage({
   // The tab names the entry whose history this is, by the same name the
   // comparison's heading uses.
   useDocumentTitle(documentTitle);
-  // The trail leads with the collection, by the name its list goes by; its
-  // slug stands in until that arrives, so the trail never starts empty.
-  const collection = useCollection(slug || undefined);
-  const listLabel = collection.data?.labels?.plural || slug;
+  // The collection's schema, the read the editor makes too: the trail leads
+  // with the collection by the name its list goes by (its slug stands in
+  // until that arrives, so the trail never starts empty), and the schema says
+  // whether the collection is translated. It carries `localized`, which the
+  // admin's Collection type does not declare, so it is narrowed, not cast.
+  const collection = useCollectionSchema(slug || undefined).data;
+  const listLabel = collection?.labels?.plural || slug;
+  const entityLocalized =
+    collection !== undefined &&
+    "localized" in collection &&
+    collection.localized === true;
 
   return (
     <VersionComparePage
@@ -57,6 +64,7 @@ export default function EntryVersionsPage({
       documentTitle={documentTitle}
       // The entry list needs only `read-${slug}`, which reaching this page
       // already took, so it is a crumb every reader of the page may follow.
+      entityLocalized={entityLocalized}
       listCrumb={{
         label: listLabel,
         href: buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }),

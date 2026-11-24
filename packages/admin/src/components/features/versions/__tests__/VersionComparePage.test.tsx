@@ -70,6 +70,20 @@ vi.mock("@admin/hooks/useCan", () => ({
   useCan: (...a: unknown[]) => canMock(...a) as boolean,
 }));
 
+// Two languages configured, so whether the page offers Languages is the
+// document's to say.
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => ({
+    enabled: true,
+    defaultLocale: "en",
+    locales: [
+      { code: "en", label: "English" },
+      { code: "es", label: "Spanish" },
+    ],
+    getLocale: () => undefined,
+  }),
+}));
+
 vi.mock("@admin/lib/navigation", () => ({
   navigateTo: (...a: unknown[]) => navigateMock(...a),
 }));
@@ -641,5 +655,45 @@ describe("VersionComparePage — the language its address names", () => {
     ][];
     expect(calls.length).toBeGreaterThan(0);
     expect(calls[calls.length - 1][0].locale).toBeUndefined();
+  });
+});
+
+describe("VersionComparePage — whether it offers Languages", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    canMock.mockReturnValue(true);
+  });
+
+  it("offers Languages on a translated document, even when its versions loaded so far hold no language", () => {
+    // A page of shared-field saves carries no language to tell a translated
+    // document by; the document's own schema says.
+    useVersionsMock.mockReturnValue(listing([row(9), row(8)]));
+
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        entityLocalized
+      />
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: "Languages" })
+    ).toBeInTheDocument();
+  });
+
+  it("offers none on a document that is not translated, whatever its versions say", () => {
+    useVersionsMock.mockReturnValue(listing([row(9, "en"), row(8, "en")]));
+
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+      />
+    );
+
+    expect(screen.queryByRole("combobox", { name: "Languages" })).toBeNull();
   });
 });
