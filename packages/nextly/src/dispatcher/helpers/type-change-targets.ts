@@ -49,7 +49,10 @@ import {
 } from "../../domains/schema/value-conversion/type-change/pair-outcome";
 import { NextlyError } from "../../errors/nextly-error";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
-import { selectOptionValues } from "../../shared/lib/entry-validation";
+import {
+  numberRule,
+  selectOptionValues,
+} from "../../shared/lib/entry-validation";
 
 import { getAdapterFromDI } from "./di";
 import { toPaginationMeta } from "./service-envelope";
@@ -176,6 +179,49 @@ function translationRefusal(args: {
 }
 
 /**
+ * The rules that refuse a value below a bound, each with the bound that refuses none: no text is
+ * shorter than nothing, and no list holds fewer; a number has no least.
+ */
+const AT_LEAST: Readonly<Record<string, number>> = {
+  minLength: 0,
+  minRows: 0,
+  minChips: 0,
+  min: -Infinity,
+};
+
+/** The rules that refuse a value above a bound. */
+const AT_MOST = ["maxLength", "maxRows", "maxChips", "max"] as const;
+
+/** A field's pattern, stated on the field itself or under `validation`: none where it is empty. */
+function patternOf(field: FieldDefinition): string | undefined {
+  const stated = (field as unknown as Record<string, unknown>).pattern;
+  const pattern = stated === undefined ? field.validation?.pattern : stated;
+  return typeof pattern === "string" && pattern !== "" ? pattern : undefined;
+}
+
+/**
+ * Whether `to`'s own rules may refuse a value `from`'s allow: a bound added or tightened, or a
+ * pattern added or changed, since no pattern is known to allow all another does. The save asks the
+ * new field's rules of each stored value (`fieldAccepts`); which of them a rule refuses, only the
+ * values say. A rule carried over, loosened or dropped refuses none.
+ */
+function rulesTightened(from: FieldDefinition, to: FieldDefinition): boolean {
+  const pattern = patternOf(to);
+  return (
+    (pattern !== undefined && pattern !== patternOf(from)) ||
+    Object.entries(AT_LEAST).some(
+      ([rule, none]) =>
+        (numberRule(to, rule) ?? none) > (numberRule(from, rule) ?? none)
+    ) ||
+    AT_MOST.some(
+      rule =>
+        (numberRule(to, rule) ?? Infinity) <
+        (numberRule(from, rule) ?? Infinity)
+    )
+  );
+}
+
+/**
  * Each of `candidates` other than the field's own type, judged as a change from `field`, a field
  * as its entity stores it, on the database this runs on. `builtBy` and `componentRow` say where its
  * values are kept, as the save that would make the change reads them; `inJson`, that they are held
@@ -226,7 +272,9 @@ export function typeChangeTargets(args: {
         type,
         blocked: null,
         refusal: null,
-        outcome: pairOutcome(from, to),
+        outcome: rulesTightened(args.field, candidate)
+          ? "may-lose"
+          : pairOutcome(from, to),
       };
     });
 }
