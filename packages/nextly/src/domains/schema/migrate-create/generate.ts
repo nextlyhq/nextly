@@ -43,6 +43,7 @@ import { uniqueTranslatedColumns } from "../../i18n/migration/companion-unique-i
 import {
   companionSpecShell,
   deriveCompanionSpec,
+  keepsSharedStructures,
 } from "../../i18n/migration/derive-companion-spec";
 import { planFieldAddedToTranslationMigration } from "../../i18n/migration/field-added-to-translation";
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
@@ -96,6 +97,10 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import {
+  keepsTranslationsInside,
+  type StructuredField,
+} from "../../i18n/shared-structure";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import type { Deletion } from "../migrate/data-loss-consent";
 import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
@@ -2586,7 +2591,19 @@ function planCompanionMigrations(
       continue;
     }
 
-    if (!spec) continue;
+    if (!spec) {
+      // An entity whose only per-language content is the text inside its containers: its
+      // translations table holds their overlays alone.
+      const overlaysOnly = overlaysEntryFor(
+        c,
+        entityKind,
+        previousSnapshot.tables.find(t => t.name === c.tableName),
+        dialect,
+        defaultLocale
+      );
+      if (overlaysOnly) entries.push(overlaysOnly);
+      continue;
+    }
 
     const prevTable = previousSnapshot.tables.find(
       t => t.name === spec.mainTable
@@ -2659,6 +2676,15 @@ function planCompanionMigrations(
         )
       : undefined;
     if (adds) entries.push(adds);
+    // The overlay columns of its containers keeping text inside, after the table exists.
+    const overlays = overlaysEntryFor(
+      c,
+      entityKind,
+      prevTable,
+      dialect,
+      defaultLocale
+    );
+    if (overlays) entries.push(overlays);
   }
   return entries;
 }
@@ -3942,11 +3968,87 @@ function withLocalizedMarker(
   }).map(c =>
     c.kind === undefined ? c.column : { column: c.column, kind: c.kind }
   );
+  const overlays = overlayColumnsOf(entity, kind, dialect);
   return {
     ...table,
     localized: true,
     ...(spec ? { localizedColumns: spec.columns.map(c => c.name) } : {}),
     ...(unique.length > 0 ? { uniqueLocalizedColumns: unique } : {}),
+    ...(overlays.length > 0 ? { overlayColumns: overlays } : {}),
+  };
+}
+
+/**
+ * The containers of `entity` with an overlay column on its translations table: each repeater or
+ * group keeping one structure in every language with text inside (`keepsTranslationsInside`), by
+ * the same rule the runtime builds that table by (`deriveCompanionTableSpec`).
+ */
+function overlayContainersOf(
+  entity: MinimalConfigEntity
+): MinimalConfigEntity["fields"] {
+  if (!keepsSharedStructures(entity.tableName)) return [];
+  return entity.fields.filter(field =>
+    keepsTranslationsInside(field as StructuredField, true)
+  );
+}
+
+/** The overlay columns `entity`'s translations table holds, by name. */
+function overlayColumnsOf(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  dialect: SupportedDialect
+): string[] {
+  return overlayContainersOf(entity).flatMap(field => {
+    const column = fieldToLocalizedColumnSpec(
+      field,
+      dialect,
+      columnOriginOf(entity, kind)
+    );
+    return column ? [column.name] : [];
+  });
+}
+
+/**
+ * The file adding the overlay columns `entity`'s translations table gains in this run: each
+ * container that keeps text inside now and had no overlay column in the previous snapshot
+ * (`overlayColumns`), added empty, since no language has text there yet. Planned as a field added
+ * to translation is (`planFieldAddedToTranslationMigration`), whose column is added and nothing
+ * copied. Undefined when there is none.
+ */
+function overlaysEntryFor(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  prevTable: TableSpec | undefined,
+  dialect: SupportedDialect,
+  defaultLocale: string
+): CompanionPlanEntry | undefined {
+  const there = new Set(prevTable?.overlayColumns ?? []);
+  const builtBy = columnOriginOf(entity, kind);
+  const added = overlayContainersOf(entity).filter(field => {
+    const column = fieldToLocalizedColumnSpec(field, dialect, builtBy);
+    return column != null && !there.has(column.name);
+  });
+  if (added.length === 0) return undefined;
+  const planned = planFieldAddedToTranslationMigration({
+    slug: entity.slug,
+    kind,
+    tableName: entity.tableName,
+    dialect,
+    defaultLocale,
+    status: publishesPerLanguage(entity),
+    recorded: entity.fields.filter(f => isFieldLocalized(f, true)),
+    added,
+    builtBy,
+  });
+  return {
+    spec: planned.spec,
+    plan: {
+      kind: "adds",
+      spec: planned.spec,
+      upSql: planned.upSql,
+      downSql: planned.downSql,
+    },
+    entity: kind,
   };
 }
 
