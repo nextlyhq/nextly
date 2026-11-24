@@ -273,6 +273,22 @@ describe.each(getConfiguredTestDialects())(
       300_000
     );
 
+    // The fourth cell: the unwarmed request on a server that met the migration. It answers what the
+    // same request answers without one (above), or the migration is what changed it.
+    it("control: after the migration, a plugin's write on its own transaction (plugin-tx-save-unwarmed)", async () => {
+      const id = await openMigratedUnder();
+      const answers: string[] = [];
+      for (let tries = 0; tries < 3; tries++) {
+        answers.push(
+          await ask(server!, `plugin-tx-save-unwarmed ${id} from-plugin`)
+        );
+        if (answers.at(-1) === "OK") break;
+      }
+      console.log(
+        `[control] ${dialect} after, unwarmed: ${answers.map(each => each.slice(0, 200)).join(" / ")}`
+      );
+    }, 300_000);
+
     // A read follows a move by itself, so a server that reads first has found the new names by the
     // time it writes. Each of these is the first thing a server does after the migration, with only
     // the names it started with.
