@@ -33,7 +33,13 @@ export function stoppingRenames(actual: typeof FsPromises): typeof FsPromises {
       renames.reached?.();
     });
   };
-  return { ...actual, rename, default: { ...actual.default, rename } };
+  // The module's default export holds the same functions, so it stops too.
+  const { default: named } = actual as typeof actual & { default?: object };
+  return {
+    ...actual,
+    rename,
+    default: { ...named, rename },
+  } as typeof FsPromises;
 }
 
 /** Run `settle` and stop it after the rename `at` picks; resolves once it has stopped there. */
