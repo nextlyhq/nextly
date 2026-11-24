@@ -20,6 +20,7 @@ import {
   deriveCompanionSpec,
   deriveCompanionTableSpec,
 } from "./derive-companion-spec";
+import { disableKeepingOverlaysRefusal } from "./disable-keeping-overlays";
 import { storageDiffers } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
@@ -53,6 +54,42 @@ export interface CompanionFieldLike {
 /** A repeater or group keeping one structure in every language with its text in an overlay. */
 function keepsOverlay(field: CompanionFieldLike): boolean {
   return keepsTranslationsInside(field, true);
+}
+
+/**
+ * The refusal of turning translation off for an entity whose repeaters or groups keep their text
+ * per language (`disableKeepingOverlaysRefusal`): each container named by its overlay column on
+ * the translations table, as a migration file's refusal names it from the snapshot. Only a column
+ * the companion has (`liveCompanionColumns`, where read) is named, since one never made holds no
+ * text to lose. `undefined` where there is none. Asked before a Builder save changes anything
+ * (`archiveFieldsLeavingTranslation`), and again where the change is planned.
+ */
+export function disableDroppingOverlays(args: {
+  slug: string;
+  kind: I18nTransitionKind;
+  oldFields: readonly CompanionFieldLike[];
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+  liveCompanionColumns?: readonly string[];
+}): NextlyError | undefined {
+  const live =
+    args.liveCompanionColumns === undefined
+      ? undefined
+      : new Set(args.liveCompanionColumns);
+  const containers = args.oldFields.filter(keepsOverlay).flatMap(field => {
+    const column = fieldToLocalizedColumnSpec(
+      field,
+      args.dialect,
+      args.builtBy
+    );
+    return column && (live === undefined || live.has(column.name))
+      ? [column.name]
+      : [];
+  });
+  return disableKeepingOverlaysRefusal(
+    { kind: args.kind, slug: args.slug },
+    containers
+  );
 }
 
 /**
@@ -967,6 +1004,21 @@ export function buildCompanionTransitionStatements(
 
   // DISABLE — restore the default locale onto main, archive the rest, drop the companion.
   if (wasLocalized && !isLocalized) {
+    // Nothing brings a container's overlay home, so its text in every language would go with the
+    // companion: refused, as the save's own check before anything changed refuses it.
+    if (companionExists) {
+      const refusal = disableDroppingOverlays({
+        slug,
+        kind,
+        oldFields,
+        dialect,
+        builtBy,
+        ...(args.liveCompanionColumns === undefined
+          ? {}
+          : { liveCompanionColumns: args.liveCompanionColumns }),
+      });
+      if (refusal) throw refusal;
+    }
     const localizedOld = oldFields.filter(f => isFieldLocalized(f, true));
     const spec = deriveCompanionSpec({
       slug,

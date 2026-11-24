@@ -102,4 +102,27 @@ describe("a Builder field group's overlay columns", () => {
       }).some(s => s.includes(`DROP COLUMN "box"`))
     ).toBe(true);
   });
+
+  // Turning translation off drops the companion, and nothing brings a group's overlay home onto
+  // its structure: refused, naming the group by its overlay column. A group with no overlay on the
+  // companion loses nothing, so it is not named. Broken, the plan drops the companion.
+  it("refuses turning translation off while a group's overlay is on the companion", () => {
+    const off = (liveCompanionColumns: string[]) => () =>
+      statementsOf({
+        isLocalized: false,
+        oldFields: [heading, box],
+        newFields: [heading, box],
+        liveCompanionColumns,
+      });
+
+    expect(off(["heading", "box"])).toThrow(
+      expect.objectContaining({
+        logContext: expect.objectContaining({
+          reason: "disable-with-container-overlays",
+          containers: ["box"],
+        }),
+      })
+    );
+    expect(off(["heading"])).not.toThrow();
+  });
 });
