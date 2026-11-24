@@ -356,10 +356,12 @@ describe("pushCarriesValues", () => {
 
       it.each([
         [
-          "a type change it does not convert (a text becoming a checkbox)",
+          "a type change it does not convert (a text becoming a repeater)",
           {
-            oldFields: [shared("done")],
-            newFields: [field("done", { type: "checkbox", localized: false })],
+            oldFields: [shared("rows")],
+            newFields: [
+              field("rows", { type: "repeater", fields: [], localized: false }),
+            ],
           },
           true,
         ],

@@ -299,10 +299,9 @@ describe.each(getConfiguredTestDialects())(
 
     // `migrate:create` plans a translations column's new type from the folder's newest snapshot: one
     // that records the fields but not which columns the translations table keeps (a snapshot written
-    // before those were kept) gives the file no `retypes` step, so a change the database's cast
-    // converts (a checkbox becoming a number, which no save converts value by value) is refused as
-    // before, every value as it was. A change the save converts gives the column its new type itself.
-    it("refuses a translated change the cast converts where the newest snapshot keeps no record of the translations columns", async () => {
+    // before those were kept) gives the file no `retypes` step. A change the save converts needs
+    // none: it gives the column its new type itself, with every language's value in it.
+    it("converts a translated change where the newest snapshot keeps no record of the translations columns", async () => {
       const t = await boot([{ name: "v", type: "checkbox", localized: true }], {
         localized: true,
       });
@@ -333,10 +332,10 @@ describe.each(getConfiguredTestDialects())(
         await save(t, [{ name: "v", type: "number", localized: true }], {
           localized: true,
         })
-      ).toMatchObject(refusedAs("TYPE_CHANGE_BLOCKED", "kept per language"));
+      ).toBeUndefined();
 
-      expect(await read(t, "v", "en")).toEqual({ a: true });
-      expect(await read(t, "v", "es")).toEqual({ a: false });
+      expect(await read(t, "v", "en")).toEqual({ a: 1 });
+      expect(await read(t, "v", "es")).toEqual({ a: 0 });
     });
 
     // Holding no value is no exception: the translations table's column takes the new type, so a
@@ -391,44 +390,38 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v", "es")).toEqual({ a: "hola" });
     });
 
-    // The file the save writes changes the translations column as this database makes it: a
-    // checkbox's integer on SQLite is a number's column too, so a file written there changes
-    // nothing, and the column another database makes (boolean, tinyint) would keep the old type.
-    // Refused on SQLite; elsewhere the file changes the column.
-    it("changes a translated checkbox into a number where its column changes here, and refuses it on SQLite", async () => {
-      const t = await boot(
-        [
-          { name: "v", type: "checkbox", localized: true },
-          { name: "w", type: "text", localized: true },
-        ],
-        { localized: true }
-      );
-      await write(t, "a", { w: "x" }, "en");
+    // A checkbox's integer on SQLite is a number's column too, so the save's file changes no column
+    // there, and the column another database makes (boolean, tinyint) is given its new type by the
+    // conversion where the file deploys: the save goes ahead on every database, as it converts on
+    // each.
+    it("converts a translated checkbox into a number in every language", async () => {
+      const t = await boot([{ name: "v", type: "checkbox", localized: true }], {
+        localized: true,
+      });
+      const id = await write(t, "a", { v: true }, "en");
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        data: { v: false, _overwrite: true },
+        locale: "es",
+      } as never);
 
-      const outcome = await save(
-        t,
-        [
-          { name: "v", type: "number", localized: true },
-          { name: "w", type: "text", localized: true },
-        ],
-        { localized: true }
-      );
+      expect(
+        await save(t, [{ name: "v", type: "number", localized: true }], {
+          localized: true,
+        })
+      ).toBeUndefined();
 
-      if (dialect === "sqlite") {
-        expect(outcome).toMatchObject(
-          refusedAs("TYPE_CHANGE_BLOCKED", "kept per language")
-        );
-      } else {
-        expect(outcome).toBeUndefined();
-        await write(t, "b", { v: 3 }, "es");
-        expect(await read(t, "v", "es")).toMatchObject({ b: 3 });
-      }
+      expect(await read(t, "v", "en")).toEqual({ a: 1 });
+      expect(await read(t, "v", "es")).toEqual({ a: 0 });
+      await write(t, "b", { v: 3 }, "es");
+      expect(await read(t, "v", "es")).toMatchObject({ b: 3 });
     });
 
-    // The translations column is cast as the entity's own column is, so a value the cast would not
-    // read alike never reaches it: a text a checkbox reads only once rewritten ("TRUE") is refused
-    // in each language before anything runs, every value as it was.
-    it("refuses a translated text becoming a checkbox over a value it reads only once rewritten, and changes nothing", async () => {
+    // Each language's value is judged and written on its own: a text a checkbox reads only once
+    // rewritten ("TRUE") is written as it reads, and one that says neither is cleared only with the
+    // count confirmed, in the language that holds it.
+    it("converts a translated text into a checkbox, clearing a confirmed value one language holds", async () => {
       const t = await boot([{ name: "v", type: "text", localized: true }], {
         localized: true,
       });
@@ -439,17 +432,32 @@ describe.each(getConfiguredTestDialects())(
         data: { v: "TRUE", _overwrite: true },
         locale: "es",
       } as never);
+      const asCheckbox = [{ name: "v", type: "checkbox", localized: true }];
 
-      const refused = await save(
-        t,
-        [{ name: "v", type: "checkbox", localized: true }],
-        { localized: true }
-      );
-
-      expect(refused).toMatchObject(
-        refusedAs("TYPE_CHANGE_BLOCKED", "rewritten into its form")
-      );
+      expect(await save(t, asCheckbox, { localized: true })).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({ code: "TYPE_CHANGE_LOSES_VALUES" }),
+          ],
+        },
+      });
       expect(await read(t, "v", "es")).toEqual({ a: "TRUE" });
+
+      expect(
+        await save(t, asCheckbox, {
+          localized: true,
+          confirmedClears: [{ field: "v", count: 1 }],
+        })
+      ).toBeUndefined();
+      expect(await read(t, "v", "es")).toEqual({ a: true });
+      // Its own language holds none: read without another language standing in for it.
+      const en = (await t.nextly.find({
+        collection: SLUG,
+        locale: "en",
+        fallbackLocale: false,
+      } as never)) as { items: Array<{ v?: unknown }> };
+      expect(en.items[0]?.v ?? null).toBeNull();
     });
 
     // A save that stops translating the whole collection moves each language's value out of the

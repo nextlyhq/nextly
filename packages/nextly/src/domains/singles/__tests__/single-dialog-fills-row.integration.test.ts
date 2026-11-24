@@ -285,15 +285,16 @@ describeEachDialect(
       expect(await nullable("tagline")).toBe(false);
     });
 
-    // A save that also changes a column's type the push carries (a text becoming a checkbox, which
-    // the save does not convert value by value in its file) takes the push road, which offers no
-    // default for a unique column: the review asks about a required unique field there, as it did
-    // before the row was filled, and the person's answer is what the save applies.
+    // A save that also changes how a relationship keeps its links, which the push carries, takes
+    // the push road, which offers no default for a unique column: the review asks about a required
+    // unique field there, as it did before the row was filled, and the person's answer is what the
+    // save applies.
     it("asks, on the push road, about a required unique field stating a default", async () => {
-      await save([BODY, { name: "count", type: "text" }]);
+      const rel = { name: "rel", type: "relationship", relationTo: "users" };
+      await save([BODY, rel]);
       const fields: Field[] = [
         BODY,
-        { name: "count", type: "checkbox" },
+        { ...rel, hasMany: true },
         {
           name: "code",
           type: "text",
