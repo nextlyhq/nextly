@@ -29,6 +29,7 @@ import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { folderSnapshot } from "../../../../cli/__tests__/helpers/folder-snapshot";
+import { runBootTimeApplyIfDev } from "../../../../init/boot-apply";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import {
@@ -66,6 +67,34 @@ import {
   renames,
   stoppedAtRename,
 } from "./helpers/stop-at-rename";
+import { unwatchStart, watched } from "./helpers/watched-start";
+
+// A development start, whose migrate step the cases that start one watch.
+vi.mock("../../pipeline/locks", async original =>
+  (await import("./helpers/watched-start")).passingLocks(
+    await original<typeof import("../../pipeline/locks")>()
+  )
+);
+vi.mock("../../../../cli/utils/config-loader", async original =>
+  (await import("./helpers/watched-start")).readingFolder(
+    await original<typeof import("../../../../cli/utils/config-loader")>()
+  )
+);
+vi.mock("../../../../cli/utils/adapter", async original =>
+  (await import("./helpers/watched-start")).validEnvironment(
+    await original<typeof import("../../../../cli/utils/adapter")>()
+  )
+);
+vi.mock("../../../../cli/commands/migrate", async original =>
+  (await import("./helpers/watched-start")).countingMigrate(
+    await original<typeof import("../../../../cli/commands/migrate")>()
+  )
+);
+vi.mock("../../../../init/reload-config", async original =>
+  (await import("./helpers/watched-start")).finishedReload(
+    await original<typeof import("../../../../init/reload-config")>()
+  )
+);
 
 // A settle may be stopped at one of its renames, as a process killed there.
 vi.mock("node:fs/promises", async original =>
@@ -91,6 +120,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   letRenamesGo();
+  unwatchStart();
   release?.();
   release = undefined;
   await stopped;
@@ -579,6 +609,66 @@ describe.skipIf(!getConfiguredTestDialects().includes("mysql"))(
             ]);
           }, 300_000);
         }
+
+        /** A hand-written file no save wrote, pending until a start's migrate step runs it. */
+        function writePending(): void {
+          writeFileSync(
+            join(HISTORY_DIR(), "99990101_000000_000_start_ran.sql"),
+            "-- UP\nCREATE TABLE start_ran (id int);\n\n-- DOWN\nDROP TABLE start_ran;\n"
+          );
+        }
+
+        /** Whether a start's migrate step ran the pending file. */
+        const startRan = (t: TestNextly) => t.adapter.tableExists("start_ran");
+
+        /** A development start over the test's folder, its migrate step watched. */
+        async function start(): Promise<void> {
+          watched.on = true;
+          watched.folder = HISTORY_DIR();
+          await runBootTimeApplyIfDev({ caller: "watched start" });
+        }
+
+        // A start runs no pending migration over a save it could not settle, a stopped one put back
+        // for the check among them: watched by its migrate step's runs, against a start with
+        // nothing standing, which runs the file.
+        it("runs no pending migration at a start over a put-back file the history refuses", async () => {
+          const t = await boot();
+          const before = sqlFiles();
+          await killedAfterFirstAdd(t);
+          const [stoppedFile] = sqlFiles().filter(f => !before.includes(f));
+          await setAside({ migrationsDir: HISTORY_DIR() }, stoppedFile!);
+          const applied = join(HISTORY_DIR(), before[0]!);
+          writeFileSync(
+            applied,
+            `${readFileSync(applied, "utf-8")}\n-- edited\n`
+          );
+          writePending();
+          try {
+            await start();
+
+            expect(watched.runs, "the start's migrate step ran").toBe(0);
+            expect(await startRan(t), "the pending file ran").toBe(false);
+            expect(await recordRow(t), "the record stays").toBeDefined();
+            expect(asideNames(), "the stopped file stays aside").toHaveLength(
+              1
+            );
+          } finally {
+            await t.adapter.executeQuery("DROP TABLE IF EXISTS start_ran");
+          }
+        }, 300_000);
+
+        it("runs the pending migration at a start with nothing standing, as the control of the one above", async () => {
+          const t = await boot();
+          writePending();
+          try {
+            await start();
+
+            expect(watched.runs, "the start's migrate step never ran").toBe(1);
+            expect(await startRan(t), "the pending file ran").toBe(true);
+          } finally {
+            await t.adapter.executeQuery("DROP TABLE IF EXISTS start_ran");
+          }
+        }, 300_000);
 
         // Setting it aside again may fail too: the refusal the settle made is still the one said.
         it("says the history's refusal where the put-back file could not be set aside again", async () => {
