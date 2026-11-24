@@ -21,8 +21,6 @@
  *
  * @module cli/commands/upgrade-steps/localisation-structures
  */
-import { randomUUID } from "node:crypto";
-
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
@@ -48,6 +46,7 @@ import { isPlainObject } from "../../../shared/lib/plain-copy";
 import type { UpgradeReport, UpgradeStepContext } from "../upgrade-step";
 
 import { siteEntities, siteLanguages } from "./localisation-site";
+import { withPositionIds } from "./position-ids";
 
 /** The per-language table of an entity's main table. */
 const languagesTableOf = (tableName: string) => `${tableName}_locales`;
@@ -293,70 +292,6 @@ function judge(
     );
   }
   return { id, structure, overlays };
-}
-
-/**
- * Give the rows and instances an earlier release stored without an id (a component's instances
- * held inline in a row were never given one) the same id at the same place in every language, so
- * each language's text can be kept by it. Only where every language's list there is as long as the
- * default language's: a list that differs keeps no id, and its languages then compare unequal and
- * are refused (`judge`). A row that has an id keeps it. Returns each language's value, read from
- * its stored text, with those ids given.
- */
-function withPositionIds(
-  stored: ReadonlyMap<string, unknown>,
-  shape: SharedStructureShape,
-  defaultLocale: string
-): Map<string, unknown> {
-  const levels = [...stored.entries()].map(([locale, value]) => ({
-    locale,
-    value: parsedValue(value),
-  }));
-  alignLevel(
-    levels.map(level => level.value),
-    shape,
-    levels.findIndex(level => level.locale === defaultLocale)
-  );
-  return new Map(levels.map(level => [level.locale, level.value]));
-}
-
-/** {@link withPositionIds} at one level: the same container's value in each language. */
-function alignLevel(
-  inLanguages: unknown[],
-  shape: SharedStructureShape,
-  primary: number
-): void {
-  const recurse = (rows: Record<string, unknown>[]) => {
-    for (const [name, nested] of Object.entries(shape.inner)) {
-      alignLevel(
-        rows.map(row => row[name]),
-        nested,
-        primary
-      );
-    }
-  };
-  if (shape.kind === "group") {
-    if (inLanguages.every(isPlainObject)) {
-      recurse(inLanguages);
-    }
-    return;
-  }
-  if (!inLanguages.every(Array.isArray)) return;
-  const lists = inLanguages as unknown[][];
-  const length = lists[primary >= 0 ? primary : 0]?.length ?? 0;
-  if (lists.some(list => list.length !== length)) return;
-  for (let index = 0; index < length; index += 1) {
-    const rows = lists.map(list => list[index]);
-    if (!rows.every(isPlainObject)) continue;
-    const records = rows;
-    const ids = new Set(records.map(row => row.id));
-    // Every language without an id here: one is minted and given to all of them.
-    if (ids.size === 1 && (ids.has(undefined) || ids.has(""))) {
-      const id = randomUUID();
-      for (const row of records) row.id = id;
-    }
-    recurse(records);
-  }
 }
 
 /** Each field's findings, for every repeater or group that can hold content stored whole. */

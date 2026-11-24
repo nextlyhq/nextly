@@ -132,34 +132,41 @@ function textOntoLevel(
     // A group with no name lays its fields out at this level.
     if (child.type === "group" && !child.name) {
       out = textOntoLevel(out, source, childrenOf(child), documentLocalized);
-      continue;
-    }
-    if (!child.name) continue;
-    if (isComponent(child)) {
-      out[child.name] = componentTextFrom(
+    } else if (child.name) {
+      const value = fieldTextFrom(
         out[child.name],
         source[child.name],
         child,
         documentLocalized
       );
-      continue;
-    }
-    if (isContainer(child)) {
-      if (holdsTranslatedText(child, documentLocalized)) {
-        out[child.name] = withTextFrom(
-          out[child.name],
-          source[child.name],
-          child,
-          documentLocalized
-        );
-      }
-      continue;
-    }
-    if (translated(child, documentLocalized) && present(source[child.name])) {
-      out[child.name] = source[child.name];
+      if (value !== undefined) out[child.name] = value;
     }
   }
   return out;
+}
+
+/**
+ * One named field's value with its text taken from `source`'s: a component's instances and a
+ * container's rows matched by id, a translated value replaced where the source has one.
+ * `undefined` where the field keeps its value.
+ */
+function fieldTextFrom(
+  current: unknown,
+  source: unknown,
+  field: FieldShape,
+  documentLocalized: boolean
+): unknown {
+  if (isComponent(field)) {
+    return componentTextFrom(current, source, field, documentLocalized);
+  }
+  if (isContainer(field)) {
+    return holdsTranslatedText(field, documentLocalized)
+      ? withTextFrom(current, source, field, documentLocalized)
+      : undefined;
+  }
+  return translated(field, documentLocalized) && present(source)
+    ? source
+    : undefined;
 }
 
 /**
@@ -265,17 +272,23 @@ export function sourceValueAt(
     const index = /^\d+$/.test(segment) ? Number(segment) : undefined;
     if (index !== undefined && Array.isArray(at)) {
       const row: unknown = at[index];
-      const id = isRecord(row) ? row.id : undefined;
-      from = Array.isArray(from)
-        ? id !== undefined
-          ? from.find(candidate => isRecord(candidate) && candidate.id === id)
-          : from[index]
-        : undefined;
+      from = sourceRowFor(from, row, index);
       at = row;
-      continue;
+    } else {
+      from = isRecord(from) ? from[segment] : undefined;
+      at = isRecord(at) ? at[segment] : undefined;
     }
-    from = isRecord(from) ? from[segment] : undefined;
-    at = isRecord(at) ? at[segment] : undefined;
   }
   return from;
+}
+
+/**
+ * The row of `rows` (the source's list) that the form's `row` at `index` is: the one with its id,
+ * or the one at its place where it has none. `undefined` where `rows` is no list.
+ */
+function sourceRowFor(rows: unknown, row: unknown, index: number): unknown {
+  if (!Array.isArray(rows)) return undefined;
+  const id = isRecord(row) ? row.id : undefined;
+  if (id === undefined) return rows[index];
+  return rows.find(candidate => isRecord(candidate) && candidate.id === id);
 }

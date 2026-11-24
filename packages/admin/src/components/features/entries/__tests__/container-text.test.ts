@@ -8,7 +8,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { holdsTranslatedText, withTextFrom } from "../container-text";
+import {
+  holdsTranslatedText,
+  sourceValueAt,
+  withTextFrom,
+} from "../container-text";
 
 const SLIDES = {
   type: "repeater",
@@ -210,5 +214,61 @@ describe("a component inside a container's rows", () => {
         true
       )
     ).toEqual({ lead: { _componentType: "hero", title: "Hello" } });
+  });
+});
+
+describe("sourceValueAt", () => {
+  const source = {
+    slides: [
+      { id: "a", caption: "first" },
+      { id: "b", caption: "second" },
+    ],
+    plain: [{ caption: "only" }],
+  };
+
+  it("reads a row on the path by its id, wherever the form has moved it", () => {
+    const target = { slides: [{ id: "b" }, { id: "a" }] };
+    expect(sourceValueAt(source, target, "slides.0.caption")).toBe("second");
+    expect(sourceValueAt(source, target, "slides.1.caption")).toBe("first");
+  });
+
+  it("reads a row with no id by its place, and nothing where the source holds no list there", () => {
+    expect(
+      sourceValueAt(source, { plain: [{ caption: "" }] }, "plain.0.caption")
+    ).toBe("only");
+    expect(
+      sourceValueAt(
+        { slides: "none" },
+        { slides: [{ id: "a" }] },
+        "slides.0.caption"
+      )
+    ).toBeUndefined();
+    // A row the source does not hold has no source text.
+    expect(
+      sourceValueAt(source, { slides: [{ id: "new" }] }, "slides.0.caption")
+    ).toBeUndefined();
+  });
+});
+
+describe("withTextFrom, field by field", () => {
+  const CARD = {
+    type: "group",
+    name: "card",
+    fields: [
+      { type: "text", name: "title" },
+      { type: "number", name: "size" },
+      { type: "text", name: "code", localized: false },
+    ],
+  };
+
+  it("takes a translated value from the source, and keeps every other field's own", () => {
+    expect(
+      withTextFrom(
+        { title: "", size: 1, code: "x" },
+        { title: "Hello", size: 9, code: "y" },
+        CARD,
+        true
+      )
+    ).toEqual({ title: "Hello", size: 1, code: "x" });
   });
 });
