@@ -129,4 +129,87 @@ describe("generateMigration: overlay columns of containers keeping one structure
     // Nothing is copied into it: no language has text there yet.
     expect(added).not.toMatch(/INSERT INTO|UPDATE "dc_pages_locales"/);
   });
+
+  it("creates the translations table of an entity whose only text per language is inside a container", async () => {
+    const shows: MinimalConfigEntity = {
+      slug: "shows",
+      tableName: "dc_shows",
+      localized: true,
+      fields: [{ name: "views", type: "number" }, SLIDES],
+    };
+
+    await generateMigration({
+      name: "create_shows",
+      dialect: "sqlite",
+      migrationsDir,
+      defaultLocale: "en",
+      collections: [shows],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+    });
+
+    const sql = await companionSql(migrationsDir, "shows");
+    // The table is made, with the overlay, never only altered.
+    expect(sql).toContain(`CREATE TABLE IF NOT EXISTS "dc_shows_locales"`);
+    expect(sql).toMatch(/"slides"/);
+    expect(await snapshotColumns(migrationsDir, "dc_shows")).toContain(
+      "slides"
+    );
+  });
+
+  it("keeps the column of a container translated whole before as its overlay, adding none and moving nothing", async () => {
+    const before: MinimalConfigEntity = {
+      slug: "pages",
+      tableName: "dc_pages",
+      localized: true,
+      // As an earlier release allowed: the repeater translated whole, its column on the
+      // translations table.
+      fields: [
+        { name: "title", type: "text" },
+        { ...SLIDES, localized: true },
+      ],
+    };
+    await generateMigration({
+      name: "create_pages",
+      dialect: "sqlite",
+      migrationsDir,
+      defaultLocale: "en",
+      collections: [before],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+    });
+    const first = await companionSql(migrationsDir, "pages");
+    // The control: the whole repeater's column was made on the translations table.
+    expect(first).toMatch(/"slides"/);
+
+    await generateMigration({
+      name: "one_structure",
+      dialect: "sqlite",
+      migrationsDir,
+      defaultLocale: "en",
+      collections: [
+        { ...before, fields: [{ name: "title", type: "text" }, SLIDES] },
+      ],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: LATER,
+    });
+
+    const added = (await companionSql(migrationsDir, "pages")).slice(
+      first.length
+    );
+    // No second column of that name, and its values are not moved to the main table or dropped:
+    // the upgrade converts them in place.
+    expect(added).not.toMatch(/ADD COLUMN "slides"/);
+    expect(added).not.toMatch(/DROP COLUMN "slides"/);
+    // The structure's column on the main table, for every language.
+    expect(await snapshotColumns(migrationsDir, "dc_pages")).toContain(
+      "slides"
+    );
+  });
 });
