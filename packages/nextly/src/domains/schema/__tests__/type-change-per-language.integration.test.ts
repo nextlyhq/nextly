@@ -507,6 +507,7 @@ describe.each(getConfiguredTestDialects())(
             label: "Post",
             localized: true,
             fields: [
+              TRANSLATED_S,
               { name: "v", type: "text", localized: true, required: true },
             ],
           }
@@ -521,15 +522,19 @@ describe.each(getConfiguredTestDialects())(
             data: { title, v: en },
             locale: "en",
           } as never)) as { item?: { id?: string }; id?: string };
-          if (es === undefined) continue;
           await t.nextly.update({
             collection: SLUG,
             id: made.item?.id ?? made.id,
-            data: { v: es, _overwrite: true },
+            // A language with a row of its own that holds no value of it.
+            data:
+              es === undefined
+                ? { s: "es", _overwrite: true }
+                : { v: es, _overwrite: true },
             locale: "es",
           } as never);
         }
         const next = [
+          TRANSLATED_S,
           { name: "v", type: "email", localized: true, required: true },
         ];
 
@@ -539,7 +544,7 @@ describe.each(getConfiguredTestDialects())(
         await save(t, next, {
           localized: true,
           confirmedTypeChanges: [
-            { field: "v", kept: 3, changed: 0, lost: 2, fill: "x@y.co" },
+            { field: "v", kept: 4, changed: 0, lost: 2, fill: "x@y.co" },
           ],
         });
 
@@ -553,6 +558,7 @@ describe.each(getConfiguredTestDialects())(
           ["es", "en", "e@f.co"],
           ["es", "es", "x@y.co"],
           ["kept", "en", "a@b.co"],
+          ["kept", "es", null],
         ]);
       }
     );
