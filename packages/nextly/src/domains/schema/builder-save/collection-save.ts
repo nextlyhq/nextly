@@ -2087,100 +2087,138 @@ async function settledRows(
   await refuseRowFillsOutsideSingle(save, live);
   const settled: SettledRows[] = [];
   for (const resolution of save.resolutions ?? []) {
-    const field = answeredField(save, resolution.column);
-    if (field === undefined) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: resolution.column,
-            code: "RESOLUTION_FIELD_UNKNOWN",
-            message: `${resolution.column} is not a field of the saved collection.`,
-          },
-        ],
-      });
-    }
-    if (resolution.kind === "fill") {
-      // Unique by its Unique mark, or as a relationship stored one-to-one (`builderColumnIsUnique`):
-      // one value would repeat across the rows it fills either way.
-      if (builderColumnIsUnique(field)) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: resolution.column,
-              code: "FILL_ON_UNIQUE_FIELD",
-              message: `${resolution.column} is unique, so one value cannot fill its rows. Make it optional, or delete the rows that do not fit.`,
-            },
-          ],
-        });
-      }
-      const valid = validateDefaultValue(
-        { name: resolution.column, type: field.type },
-        resolution.value,
-        dialect
-      );
-      if (!valid.success) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: resolution.column,
-              code: "INVALID_DEFAULT_FOR_TYPE",
-              message: valid.error ?? "The fill value does not fit the field.",
-            },
-          ],
-        });
-      }
-    }
-    const column = toSnakeCase(resolution.column);
+    const field = answeredFieldOrRefuse(save, resolution.column);
+    refuseUnfitFill(field, resolution, dialect);
+    // Counted where the field's values are kept: its translations table's default-language rows
+    // for a field kept per language, its column of the main table otherwise.
     const perLanguage = perLanguageColumnOf(
       deps,
       save,
       table,
       resolution.column
     );
-    if (perLanguage !== undefined) {
-      settled.push({
-        column: resolution.column,
-        rows: await settledPerLanguage(deps, save, {
-          table,
-          exists,
-          column,
-          perLanguage,
-          resolution,
-        }),
-        resolution,
-      });
-      continue;
-    }
-    const liveColumn = live?.columns.find(c => c.name === column);
-    // An answer settles rows that do not fit a field this save makes
-    // required: one required now whose column is new, or nullable as it
-    // stands. Any other would delete or fill rows, and the generator would
-    // make the column NOT NULL, for a change the save does not make.
-    if (field.required !== true || liveColumn?.nullable === false) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: resolution.column,
-            code: "RESOLUTION_NOT_ASKED",
-            message: `This save does not make ${resolution.column} required, so it has no rows to fill or delete.`,
-          },
-        ],
-      });
-    }
-    const rows = exists
-      ? (
-          await countRowsBreakingNotNull(db, dialect, {
+    const rows =
+      perLanguage === undefined
+        ? await settledOnMainTable(deps, {
             table,
-            column: liveColumn === undefined ? null : column,
+            exists,
+            live,
+            field,
+            resolution,
           })
-        ).total
-      : 0;
+        : await settledPerLanguage(deps, save, {
+            table,
+            exists,
+            perLanguage,
+            resolution,
+          });
     if (resolution.kind === "delete_nonconforming") {
       assertDeleteWithinThreshold(rows);
     }
     settled.push({ column: resolution.column, rows, resolution });
   }
   return settled;
+}
+
+/** The saved collection's field an answer names; refused where it names none. */
+function answeredFieldOrRefuse(
+  save: CollectionSave,
+  column: string
+): UiSchemaEntity["fields"][number] {
+  const field = answeredField(save, column);
+  if (field === undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: column,
+          code: "RESOLUTION_FIELD_UNKNOWN",
+          message: `${column} is not a field of the saved collection.`,
+        },
+      ],
+    });
+  }
+  return field;
+}
+
+/** Refuses a fill one value cannot make: of a unique field, or of a value its type does not take. */
+function refuseUnfitFill(
+  field: UiSchemaEntity["fields"][number],
+  resolution: NonNullable<CollectionSave["resolutions"]>[number],
+  dialect: SupportedDialect
+): void {
+  if (resolution.kind !== "fill") return;
+  // Unique by its Unique mark, or as a relationship stored one-to-one (`builderColumnIsUnique`):
+  // one value would repeat across the rows it fills either way.
+  if (builderColumnIsUnique(field)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: resolution.column,
+          code: "FILL_ON_UNIQUE_FIELD",
+          message: `${resolution.column} is unique, so one value cannot fill its rows. Make it optional, or delete the rows that do not fit.`,
+        },
+      ],
+    });
+  }
+  const valid = validateDefaultValue(
+    { name: resolution.column, type: field.type },
+    resolution.value,
+    dialect
+  );
+  if (!valid.success) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: resolution.column,
+          code: "INVALID_DEFAULT_FOR_TYPE",
+          message: valid.error ?? "The fill value does not fit the field.",
+        },
+      ],
+    });
+  }
+}
+
+/** The refusal of an answer for field `name`, which the save does not ask. */
+function answerNotAsked(name: string): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: name,
+        code: "RESOLUTION_NOT_ASKED",
+        message: `This save does not make ${name} required, so it has no rows to fill or delete.`,
+      },
+    ],
+  });
+}
+
+/** How many rows of the main table an answer for a field with a column there settles. */
+async function settledOnMainTable(
+  deps: CollectionSaveDeps,
+  args: {
+    table: string;
+    exists: boolean;
+    live: TableSpec | undefined;
+    field: UiSchemaEntity["fields"][number];
+    resolution: NonNullable<CollectionSave["resolutions"]>[number];
+  }
+): Promise<number> {
+  const column = toSnakeCase(args.resolution.column);
+  const liveColumn = args.live?.columns.find(c => c.name === column);
+  // An answer settles rows that do not fit a field this save makes
+  // required: one required now whose column is new, or nullable as it
+  // stands. Any other would delete or fill rows, and the generator would
+  // make the column NOT NULL, for a change the save does not make.
+  if (args.field.required !== true || liveColumn?.nullable === false) {
+    throw answerNotAsked(args.resolution.column);
+  }
+  if (!args.exists) return 0;
+  return (
+    await countRowsBreakingNotNull(
+      deps.adapter.getDrizzle(),
+      deps.adapter.getCapabilities().dialect,
+      { table: args.table, column: liveColumn === undefined ? null : column }
+    )
+  ).total;
 }
 
 /**
@@ -2196,44 +2234,47 @@ async function settledPerLanguage(
   args: {
     table: string;
     exists: boolean;
-    column: string;
     perLanguage: PerLanguageColumn;
     resolution: NonNullable<CollectionSave["resolutions"]>[number];
   }
 ): Promise<number> {
   const name = args.resolution.column;
-  if (
-    !madeRequired(save.previous?.fields ?? [], save.entity?.fields ?? [], name)
-  ) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: name,
-          code: "RESOLUTION_NOT_ASKED",
-          message: `This save does not make ${name} required, so it has no rows to fill or delete.`,
-        },
-      ],
-    });
+  if (!madeRequired(save.previous?.fields, save.entity?.fields, name)) {
+    throw answerNotAsked(name);
   }
   if (!args.exists) return 0;
-  const dialect = deps.adapter.getCapabilities().dialect;
-  const db = deps.adapter.getDrizzle();
-  const { companionTable } = args.perLanguage;
-  const companion = (await deps.adapter.tableExists(companionTable))
-    ? (await introspectLiveSnapshot(db, dialect, [companionTable])).tables[0]
-    : undefined;
-  const rows = await countEntriesWithoutDefaultLanguageValue(db, dialect, {
-    table: args.table,
-    companionTable,
-    column: companion?.columns.some(c => c.name === args.column)
-      ? args.column
-      : null,
-    locale: args.perLanguage.locale,
-  });
-  if (args.resolution.kind === "delete_nonconforming") {
-    assertDeleteWithinThreshold(rows);
-  }
-  return rows;
+  const { companionTable, locale } = args.perLanguage;
+  return countEntriesWithoutDefaultLanguageValue(
+    deps.adapter.getDrizzle(),
+    deps.adapter.getCapabilities().dialect,
+    {
+      table: args.table,
+      companionTable,
+      column: await liveCompanionColumn(
+        deps,
+        companionTable,
+        toSnakeCase(name)
+      ),
+      locale,
+    }
+  );
+}
+
+/** `column` where translations table `companionTable` has it, else null. */
+async function liveCompanionColumn(
+  deps: CollectionSaveDeps,
+  companionTable: string,
+  column: string
+): Promise<string | null> {
+  if (!(await deps.adapter.tableExists(companionTable))) return null;
+  const live = (
+    await introspectLiveSnapshot(
+      deps.adapter.getDrizzle(),
+      deps.adapter.getCapabilities().dialect,
+      [companionTable]
+    )
+  ).tables[0];
+  return live?.columns.some(c => c.name === column) === true ? column : null;
 }
 
 /** Whether field `name` of the saved collection keeps its value as JSON. */
