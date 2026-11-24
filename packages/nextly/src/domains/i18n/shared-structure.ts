@@ -76,9 +76,9 @@ function isStructureContainer(
 
 /**
  * The shape of what `field` translates inside, or `null` where it translates nothing there: a
- * field that is no repeater or group, one translated whole (`localized: true`, whose value is kept
- * per language as it stands), one that is never translatable, or one holding no translatable
- * value at any depth. Read for a field of a translated entity.
+ * field that is no repeater or group, one carrying its own flag (translated whole, `localized:
+ * true`, or shared whole, `localized: false`), one that is never translatable, or one holding no
+ * translatable value at any depth. Read for a field of a translated entity.
  *
  * A component placed inside (its values held inline in the container's rows) is read through its
  * own fields with `components`; without, it is no value of the container's, as where its fields
@@ -89,7 +89,9 @@ export function sharedStructureShape(
   components?: ComponentFieldsOf
 ): SharedStructureShape | null {
   if (!isStructureContainer(field)) return null;
-  if (field.localized === true || neverTranslatable(field)) return null;
+  // A container saying it is not translated (`localized: false`) is shared whole, as a top-level
+  // field saying so is; `localized: true` on one is refused at load.
+  if (field.localized !== undefined || neverTranslatable(field)) return null;
   return shapeOfLevel(
     field.type,
     field.fields ?? [],
@@ -121,14 +123,14 @@ export function placesComponent(field: StructuredField): boolean {
  * translation table beside its structure on the main table: one holding translatable text, or
  * placing a component (whose text, if any, is known only from its own fields). Decided from the
  * entity's own definition, so its tables never depend on another entity's. False on an entity
- * that is not translated.
+ * that is not translated, and for a container carrying its own flag.
  */
 export function keepsTranslationsInside(
   field: StructuredField,
   entityLocalized: boolean
 ): boolean {
   if (!entityLocalized) return false;
-  if (field.localized === true || neverTranslatable(field)) return false;
+  if (field.localized !== undefined || neverTranslatable(field)) return false;
   return sharedStructureShape(field) !== null || placesComponent(field);
 }
 
@@ -216,6 +218,9 @@ function childShape(
   open: WeakSet<object>,
   components: ComponentReach | undefined
 ): SharedStructureShape | "text" | null {
+  // A field inside saying it is not translated, a container or a component among them, holds no
+  // text of any language's: shared whole with the rest of the structure.
+  if (child.localized === false) return null;
   if (components && componentSlugsOf(child).length > 0) {
     return componentStructureShape(child, components.fieldsOf, components.open);
   }

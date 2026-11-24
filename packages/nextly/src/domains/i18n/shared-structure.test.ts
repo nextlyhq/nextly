@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import {
   assembleSharedStructure,
   componentStructureShape,
+  keepsTranslationsInside,
   pruneOverlay,
   sharedStructureShape,
   splitSharedStructure,
@@ -340,5 +341,49 @@ describe("componentStructureShape", () => {
       fieldsOf
     );
     expect(shape?.kind).toBe("repeater");
+  });
+});
+
+describe("a container saying it is not translated", () => {
+  // `localized: false` on a repeater or group means what it means on a top-level field: nothing
+  // in it is translated, so it is shared whole and keeps no overlay.
+  it("is shared whole, its text inside the same in every language", () => {
+    expect(
+      sharedStructureShape({
+        name: "settings",
+        type: "group",
+        localized: false,
+        fields: [{ name: "visibility", type: "text" }],
+      })
+    ).toBeNull();
+    expect(
+      keepsTranslationsInside(
+        {
+          name: "settings",
+          type: "group",
+          localized: false,
+          fields: [{ name: "visibility", type: "text" }],
+        },
+        true
+      )
+    ).toBe(false);
+  });
+
+  it("adds nothing to the shape of the container it sits in", () => {
+    expect(
+      sharedStructureShape({
+        name: "page",
+        type: "group",
+        fields: [
+          { name: "heading", type: "text" },
+          {
+            name: "meta",
+            type: "group",
+            localized: false,
+            fields: [{ name: "code", type: "text" }],
+          },
+        ],
+      })
+    ).toEqual({ kind: "group", texts: ["heading"], inner: {} });
   });
 });
