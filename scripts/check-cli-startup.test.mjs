@@ -69,6 +69,20 @@ describe("a command's code load", () => {
       modules: { failure: "the counting run wrote no module count" },
     });
     expect(failure).toContain("wrote no module count");
+    expect(printed.join("\n")).toMatch(/^FAIL +1600 ms/);
+  });
+
+  it("gives both reasons where it is over the limit and was not counted", () => {
+    const failure = judged(allAt(3000), {
+      modules: { failure: "the counting run wrote no module count" },
+    });
+    expect(failure).toContain("over 2500 ms");
+    expect(failure).toContain("wrote no module count");
+  });
+
+  it("is judged by the time it reports, in whole milliseconds", () => {
+    expect(judged(allAt(2500.4))).toBeUndefined();
+    expect(judged(allAt(2500.6))).toContain("2501 ms");
   });
 
   it("leaves an inline action to the answer-only budget", () => {

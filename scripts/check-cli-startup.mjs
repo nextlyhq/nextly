@@ -98,9 +98,10 @@ const RUN_TIMEOUT_MS = 10_000;
 // A command's own code, timed to the line it writes once that code has loaded.
 const CODE_LOAD_RUNS = 5;
 // Temporary: it keeps commands from getting slower until the smaller budgets
-// they are meant for hold. The slowest command took 1.6 s on the Linux runner.
+// they are meant for hold. The slowest command has taken 1.3 to 2.0 s on the
+// Linux runner, the same code taking more on a slower machine.
 export const CODE_LOAD_LIMIT_MS = 2500;
-// One load that takes this long has hung: the heaviest takes a few seconds.
+// One load that takes this long has hung, as has one run to its connection.
 const CODE_LOAD_TIMEOUT_MS = 60_000;
 // The one dialect the connect pass runs on, whose database is a file of its own.
 const CONNECT_DIALECT = "sqlite";
@@ -509,17 +510,20 @@ export function measureCodeLoad(
   const name = `nextly ${args.join(" ")}`;
   const runs = measured.runs(args, where, probe);
   if (runs.failure) return `${name}: ${runs.failure}`;
-  const ms = median(runs.times);
+  // Judged as it is reported, so a time never reads as within what it is over.
+  const ms = Math.round(median(runs.times));
   if (runs.kind === "none") return inlineActionFailure(name, ms);
   const over = ms > CODE_LOAD_LIMIT_MS;
   const modules = measured.modules(args, where, probe);
   console.log(
-    `${over ? "FAIL" : "ok  "} ${ms.toFixed(0).padStart(5)} ms  ${String(modules.count ?? "?").padStart(5)} modules  ${name}`
+    `${over || modules.failure ? "FAIL" : "ok  "} ${ms.toFixed(0).padStart(5)} ms  ${String(modules.count ?? "?").padStart(5)} modules  ${name}`
   );
-  if (modules.failure) return `${name}: ${modules.failure}`;
-  return over
-    ? `${name}: its code loaded after ${ms.toFixed(0)} ms (median), over ${CODE_LOAD_LIMIT_MS} ms`
-    : undefined;
+  const reasons = [
+    over &&
+      `its code loaded after ${ms.toFixed(0)} ms (median), over ${CODE_LOAD_LIMIT_MS} ms`,
+    modules.failure,
+  ].filter(Boolean);
+  return reasons.length > 0 ? `${name}: ${reasons.join("; ")}` : undefined;
 }
 
 /** Every command that runs an action, each timed to its code loaded: the failures. */
