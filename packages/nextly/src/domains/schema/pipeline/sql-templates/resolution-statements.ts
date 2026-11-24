@@ -14,8 +14,24 @@ import { storedDateValue } from "../../utils/backfill-default";
 
 import { quoteIdent } from "./identifier-quoting";
 
-/** A column's rows that do not fit, and what is done with them. */
-export type ColumnResolution =
+/**
+ * Where a field's values are kept for each language: in `companionTable`, the entity's
+ * translations table, one row per entry (`_parent`, the main table's `id`) and language
+ * (`_locale`), with no column on the main table. A field required there needs its value in the
+ * default language (`locale`), which every other language falls back to, so an entry fits it
+ * where its row in that language holds a value.
+ */
+export interface PerLanguageColumn {
+  companionTable: string;
+  locale: string;
+}
+
+/**
+ * A column's rows that do not fit, and what is done with them. `tableName` is the entity's main
+ * table; where the field's values are kept for each language (`perLanguage`), the rows settled are
+ * the entries whose default-language value is missing, in the translations table.
+ */
+export type ColumnResolution = (
   | {
       tableName: string;
       columnName: string;
@@ -28,7 +44,8 @@ export type ColumnResolution =
        */
       json?: boolean;
     }
-  | { tableName: string; columnName: string; kind: "delete_nonconforming" };
+  | { tableName: string; columnName: string; kind: "delete_nonconforming" }
+) & { perLanguage?: PerLanguageColumn };
 
 /**
  * `value` written as a SQL literal for `dialect`. A string's quotes are
@@ -62,19 +79,81 @@ function sqlValueLiteral(value: unknown, dialect: SupportedDialect): string {
   });
 }
 
-/** The statement settling `resolution`'s rows. */
-export function resolutionStatement(
+/**
+ * The statements settling `resolution`'s rows, in the order they run: the one statement every
+ * road writes for a column of the main table, and for a field kept per language
+ * (`perLanguageStatements`) the statements over its translations table. Every road that settles
+ * rows, a save's migration file and the push that applies a change in development, writes them
+ * from here, so the two settle the same rows.
+ */
+export function resolutionStatements(
   resolution: ColumnResolution,
   dialect: SupportedDialect
-): string {
+): string[] {
+  if (resolution.perLanguage !== undefined) {
+    return perLanguageStatements(resolution, resolution.perLanguage, dialect);
+  }
   const table = quoteIdent(resolution.tableName, dialect);
   const column = quoteIdent(resolution.columnName, dialect);
   if (resolution.kind === "delete_nonconforming") {
-    return `DELETE FROM ${table} WHERE ${column} IS NULL;`;
+    return [`DELETE FROM ${table} WHERE ${column} IS NULL;`];
   }
+  return [
+    `UPDATE ${table} SET ${column} = ${fillLiteral(resolution, dialect)} WHERE ${column} IS NULL;`,
+  ];
+}
+
+/** A fill's value as the SQL literal its column takes: a JSON column's as its JSON text. */
+function fillLiteral(
+  resolution: Extract<ColumnResolution, { kind: "fill" }>,
+  dialect: SupportedDialect
+): string {
   const value =
     resolution.json === true ? jsonText(resolution.value) : resolution.value;
-  return `UPDATE ${table} SET ${column} = ${sqlValueLiteral(value, dialect)} WHERE ${column} IS NULL;`;
+  return sqlValueLiteral(value, dialect);
+}
+
+/**
+ * The statements settling the entries with no value for a field kept per language, in its
+ * default language: those whose row in that language holds NULL, or that have no row in it.
+ *
+ * - A delete removes every language's row of such an entry from the translations table first,
+ *   so no row is left naming an entry that is gone, then the entry itself.
+ * - A fill gives each default-language row holding NULL the value, then adds a default-language
+ *   row holding it for each entry that has none; the row's other columns take their defaults.
+ *
+ * No column is made NOT NULL: a translations table's columns stay nullable, since a language
+ * other than the default one may hold no value and fall back. Where a statement reads the table it
+ * changes, it reads it through a derived table of distinct rows, which MySQL materializes before
+ * the change, as it requires.
+ */
+function perLanguageStatements(
+  resolution: ColumnResolution,
+  perLanguage: PerLanguageColumn,
+  dialect: SupportedDialect
+): string[] {
+  const q = (name: string) => quoteIdent(name, dialect);
+  const main = q(resolution.tableName);
+  const companion = q(perLanguage.companionTable);
+  const column = q(resolution.columnName);
+  const parent = q("_parent");
+  const language = q("_locale");
+  const locale = sqlValueLiteral(perLanguage.locale, dialect);
+  const inDefaultLanguage = `${language} = ${locale}`;
+  // The entries whose default-language row holds a value: the ones that fit.
+  const fitting = `SELECT DISTINCT ${parent} FROM ${companion} WHERE ${inDefaultLanguage} AND ${column} IS NOT NULL`;
+  if (resolution.kind === "delete_nonconforming") {
+    return [
+      `DELETE FROM ${companion} WHERE ${parent} NOT IN (SELECT ${parent} FROM (${fitting}) AS ${q("fitting")});`,
+      `DELETE FROM ${main} WHERE ${q("id")} NOT IN (${fitting});`,
+    ];
+  }
+  const value = fillLiteral(resolution, dialect);
+  const withRow = `SELECT DISTINCT ${parent} FROM ${companion} WHERE ${inDefaultLanguage}`;
+  return [
+    `UPDATE ${companion} SET ${column} = ${value} WHERE ${inDefaultLanguage} AND ${column} IS NULL;`,
+    `INSERT INTO ${companion} (${parent}, ${language}, ${column}) SELECT ${q("id")}, ${locale}, ${value} FROM ${main} WHERE ${q("id")} NOT IN (SELECT ${parent} FROM (${withRow}) AS ${q("with_row")});`,
+  ];
 }
 
 /** `value` as the JSON text a JSON column stores; refused where it has none. */

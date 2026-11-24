@@ -62,6 +62,7 @@ import {
   landingPush,
   nextSteps,
 } from "../../domains/schema/builder-save/landing-push";
+import { perLanguageSettleStatements } from "../../domains/schema/builder-save/per-language-answers";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
   renamedFieldsOf,
@@ -85,6 +86,7 @@ import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prom
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
+import { applyMigrationWhole } from "../../domains/schema/services/apply-migration-statements";
 import {
   fieldsAsStored,
   recordedFieldsOf,
@@ -1859,7 +1861,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               fields: {
                 tableName,
                 builtBy: "collection",
-                oldFields: (single.fields ?? []) as unknown as FieldDefinition[],
+                oldFields: (single.fields ??
+                  []) as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
                 wasLocalized,
                 isLocalized,
@@ -1971,9 +1974,45 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               );
             }
           };
+          // The Single's fields kept per language that its push settles once the translations
+          // table is in step: each new field's stated default in the document's default-language
+          // row, and the person's answer for a field made required, as the save's file settles
+          // them (`perLanguageSettleStatements`).
+          const settles = layout.isStored
+            ? perLanguageSettleStatements({
+                tableName,
+                localized: isLocalized,
+                oldFields: single.fields ?? [],
+                newFields: fields as unknown as FieldDefinition[],
+                eventResolutions: eventResolutions ?? [],
+                ...(legacyBundle === undefined ? {} : { legacy: legacyBundle }),
+                ...(fileAnswers.rowFills === undefined
+                  ? {}
+                  : { rowFills: fileAnswers.rowFills }),
+                locale: appLocalization()?.defaultLocale ?? "en",
+                dialect,
+              })
+            : [];
+          const pushThenSettle = async () => {
+            const pushed = await pushAndReconcileCompanion(
+              push,
+              desired,
+              "single",
+              companion
+            );
+            if (settles.length > 0) {
+              await applyMigrationWhole({
+                db: adapter.getDrizzle(),
+                dialect,
+                migrationSQL: settles.join("\n--> statement-breakpoint\n"),
+                entity: "single",
+              });
+            }
+            return pushed;
+          };
           const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
-            () => pushAndReconcileCompanion(push, desired, "single", companion),
+            pushThenSettle,
             {
               kind: "single",
               slug,

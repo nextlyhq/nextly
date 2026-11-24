@@ -67,6 +67,7 @@ import {
   landingPush,
   type PushWatch,
 } from "../builder-save/landing-push";
+import { perLanguageSettleStatements } from "../builder-save/per-language-answers";
 import { pushCarriesValues } from "../builder-save/push-carries-values";
 import { renamedFieldsOf } from "../builder-save/schema-change-save";
 import { runStatement } from "../pipeline/_internal/run-statement";
@@ -110,6 +111,7 @@ import {
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
 
+import { applyMigrationWhole } from "./apply-migration-statements";
 import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
 import { withStoredRelationshipOptions } from "./editor-relationship-fields";
 import {
@@ -1049,6 +1051,33 @@ async function applyHoldingSchemaLock(
           })
         : undefined,
     });
+  }
+  // The person's answers for fields kept per language that the change makes required, which the
+  // push's own questions, asked of the main table's columns, never reach: settled on the
+  // translations table's default-language rows once it is in step, so a field the change adds has
+  // its column there. The same statements the save's migration file carries for them.
+  if (isLocalized) {
+    const settles = perLanguageSettleStatements({
+      tableName,
+      localized: change.isLocalized,
+      oldFields,
+      newFields: fields,
+      eventResolutions: change.eventResolutions,
+      ...(change.legacyResolutions === undefined
+        ? {}
+        : { legacy: change.legacyResolutions }),
+      ...(change.fills === undefined ? {} : { fills: change.fills }),
+      locale: defaultLocale,
+      dialect: adapter.dialect,
+    });
+    if (settles.length > 0) {
+      await applyMigrationWhole({
+        db: adapter.getDrizzle(),
+        dialect: adapter.dialect,
+        migrationSQL: settles.join("\n--> statement-breakpoint\n"),
+        entity: "collection",
+      });
+    }
   }
   // The unique index a field that stops being unique still has under a name the push does not
   // declare, as an older table carries, or one an earlier save took on as the field's: dropped,

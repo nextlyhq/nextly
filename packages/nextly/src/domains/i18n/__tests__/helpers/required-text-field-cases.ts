@@ -214,53 +214,83 @@ export function requiredTextFieldCases(
       const keptPerLanguage = (translated: boolean) =>
         layout === "per-language" || translated;
 
-      const FIELDS_REQUIRED = [
-        { name: "heading", type: "text" },
-        { name: "note", type: "text", required: true },
-      ];
+      /** A save's change, the field it settles, and how many entries hold no value for it. */
+      interface Change {
+        fields: Record<string, unknown>[];
+        field: string;
+        /** The event the dialog's typed answer names, as the main table's column. */
+        event: "add_not_null_with_nulls" | "add_required_field_no_default";
+        without: number;
+      }
+
+      /** `note` made required: the two entries without a note do not fit it. */
+      const NOTE_REQUIRED: Change = {
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "note", type: "text", required: true },
+        ],
+        field: "note",
+        event: "add_not_null_with_nulls",
+        without: 2,
+      };
+
+      /** A required `summary` added: no entry holds a value for it, so none fits it. */
+      const SUMMARY_ADDED: Change = {
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "note", type: "text" },
+          { name: "summary", type: "text", required: true },
+        ],
+        field: "summary",
+        event: "add_required_field_no_default",
+        without: 3,
+      };
 
       /** The answer as the dialog's typed resolution names it, by the main table's column. */
-      const resolutionOf = (slug: string, answer: Answer) => ({
-        eventId: `add_not_null_with_nulls:dc_${slug}.note`,
+      const resolutionOf = (slug: string, change: Change, answer: Answer) => ({
+        eventId: `${change.event}:dc_${slug}.${change.field}`,
         ...answer,
         ...(answer.kind === "fill"
           ? { kind: "provide_default", value: answer.value }
           : {}),
       });
 
-      /** The review's line for `answer`, over the two entries without a note. */
-      const noticeOf = (answer: Answer) =>
+      /** The review's line for `answer`, over the entries without a value. */
+      const noticeOf = (change: Change, answer: Answer) =>
         answer.kind === "fill"
-          ? `This save fills 2 rows with '${answer.value}' in note.`
-          : "This save also deletes 2 rows here, and the rows that don't fit on every database the migration reaches.";
+          ? `This save fills ${change.without} rows with '${answer.value}' in ${change.field}.`
+          : `This save also deletes ${change.without} rows here, and the rows that don't fit on every database the migration reaches.`;
 
-      /** The dialog's review and apply of `note` made required, answered with `answer`. */
+      /** The dialog's review and apply of `change`, answered with `answer`. */
       async function throughDialog(
         slug: string,
         translated: boolean,
-        answer: Answer
+        answer: Answer,
+        change: Change = NOTE_REQUIRED
       ): Promise<void> {
         const answers = {
-          eventResolutions: [resolutionOf(slug, answer)],
+          eventResolutions: [resolutionOf(slug, change, answer)],
         };
         const preview = (await dispatchCollections(
           {} as ServiceContainer,
           "previewSchemaChanges",
           { collectionName: slug },
-          { fields: FIELDS_REQUIRED, ...answers }
+          { fields: change.fields, ...answers }
         )) as unknown as Response;
         const reviewed = (await preview.json()) as {
           notices?: string[];
           data?: { notices?: string[] };
         };
-        expect((reviewed.data ?? reviewed).notices).toEqual([noticeOf(answer)]);
+        expect((reviewed.data ?? reviewed).notices).toEqual([
+          noticeOf(change, answer),
+        ]);
 
         const applied = (await dispatchCollections(
           {} as ServiceContainer,
           "applySchemaChanges",
           { collectionName: slug },
           {
-            fields: FIELDS_REQUIRED,
+            fields: change.fields,
             confirmed: true,
             ...(translated ? { localized: true } : {}),
             ...answers,
@@ -271,7 +301,11 @@ export function requiredTextFieldCases(
       }
 
       /** The same change as the save's own migration file, run as `nextly migrate` runs it. */
-      async function throughFile(slug: string, answer: Answer): Promise<void> {
+      async function throughFile(
+        slug: string,
+        answer: Answer,
+        change: Change = NOTE_REQUIRED
+      ): Promise<void> {
         const deps = builderSaveDeps();
         expect(deps).toBeDefined();
         if (deps === undefined) return;
@@ -287,14 +321,33 @@ export function requiredTextFieldCases(
           previous,
           entity: {
             ...previous,
-            fields: FIELDS_REQUIRED as UiSchemaEntity["fields"],
+            fields: change.fields as unknown as UiSchemaEntity["fields"],
           },
           change: "update",
-          resolutions: [{ column: "note", ...answer }],
+          resolutions: [{ column: change.field, ...answer }],
         };
         const review = await previewCollectionSave(deps, save);
-        expect(review.notices).toEqual([noticeOf(answer)]);
+        expect(review.notices).toEqual([noticeOf(change, answer)]);
         await writeCollectionSave(deps, save);
+      }
+
+      /**
+       * Each entry's value of `column` in the default language, by entry, as the tables hold it:
+       * its default-language row's where the values are kept per language, its row's otherwise.
+       */
+      async function defaultLanguageValues(
+        slug: string,
+        translated: boolean,
+        column: string
+      ): Promise<Record<string, unknown>> {
+        const rows = keptPerLanguage(translated)
+          ? await query<{ id: unknown; value: unknown }>(
+              `SELECT ${quote(dialect, "_parent")} AS id, ${quote(dialect, column)} AS value FROM ${quote(dialect, `dc_${slug}_locales`)} WHERE ${quote(dialect, "_locale")} = 'en'`
+            )
+          : await query<{ id: unknown; value: unknown }>(
+              `SELECT ${quote(dialect, "id")} AS id, ${quote(dialect, column)} AS value FROM ${quote(dialect, `dc_${slug}`)}`
+            );
+        return Object.fromEntries(rows.map(row => [String(row.id), row.value]));
       }
 
       /** The entries the collection's table holds, by id. */
@@ -355,6 +408,26 @@ export function requiredTextFieldCases(
             expect(await readIn(slug, ids.kept, "en")).toMatchObject({
               note: "kept",
             });
+          });
+
+          it(`fills a required field added to ${kind} collection in every entry's default language (${road})`, async () => {
+            const answer: Answer = { kind: "fill", value: "summed" };
+            const slug = `${slugOf(answer)}_new`;
+            const ids = await notesWithEntries(slug, translated);
+
+            if (road === "dialog")
+              await throughDialog(slug, translated, answer, SUMMARY_ADDED);
+            else await throughFile(slug, answer, SUMMARY_ADDED);
+
+            // Read from the tables: the save's own file, run on its own, leaves the running
+            // shape to the registry, which does not name the field yet.
+            expect(
+              await defaultLanguageValues(slug, translated, "summary")
+            ).toEqual(
+              Object.fromEntries(
+                [ids.kept, ids.empty, ids.bare].map(id => [id, "summed"])
+              )
+            );
           });
         }
       }

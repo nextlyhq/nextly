@@ -133,7 +133,7 @@ import { renderedType } from "../pipeline/sql-templates/create-table-body";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import {
-  resolutionStatement,
+  resolutionStatements,
   type ColumnResolution,
 } from "../pipeline/sql-templates/resolution-statements";
 import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-rebuild";
@@ -1363,7 +1363,11 @@ export async function generateMigration(
       )
     ),
     ...leftoverDrops,
-    ...(args.resolutions ?? []).map(r => resolutionStatement(r, args.dialect)),
+    // Each answer's statements, but an answer for a field kept per language whose translations
+    // table a companion file of this run changes: that file runs after this one, so it carries them.
+    ...(args.resolutions ?? [])
+      .filter(r => companionFileSettling(r, companionPlans) === undefined)
+      .flatMap(r => resolutionStatements(r, args.dialect)),
     ...generateStatements(
       settled.tighten,
       args.dialect,
@@ -1612,7 +1616,12 @@ export async function generateMigration(
         // `none` plans are filtered out by the planner, so the kind is always writable here.
         kind: plan.kind === "none" ? "create-only" : plan.kind,
         entity,
-        upSql: plan.upSql,
+        // After its own statements, the answers it settles (`companionFileSettling`): their column
+        // is there by then, added by this file where the field is new.
+        upSql: (args.resolutions ?? [])
+          .filter(r => companionFileSettling(r, companionPlans) === plan)
+          .flatMap(r => resolutionStatements(r, args.dialect))
+          .reduce(joinSql, plan.upSql),
         downSql: plan.downSql,
         now: new Date(now.getTime() + i + 1),
       },
@@ -2936,6 +2945,25 @@ interface CompanionRename {
 /** Two SQL texts as one, with the statement breakpoint between them. */
 const joinSql = (a: string, b: string) =>
   a === "" ? b : b === "" ? a : `${a}\n--> statement-breakpoint\n${b}`;
+
+/**
+ * The companion file of this run that settles `resolution`'s rows, or undefined where the main file
+ * does. An answer for a field kept per language settles rows of its translations table, so where a
+ * file of this run that runs after the main one changes that table (creates it, or adds the field's
+ * column), the answer runs at the end of that file, once the column is there; the last such file
+ * where there are several. Any other answer, and one whose translations table no file of this run
+ * changes, is the main file's, where it settles rows before its column is made required.
+ */
+function companionFileSettling(
+  resolution: ColumnResolution,
+  companionPlans: readonly CompanionPlanEntry[]
+): CompanionMigrationPlan | undefined {
+  if (resolution.perLanguage === undefined) return undefined;
+  return companionPlans.findLast(
+    ({ plan }) =>
+      plan.kind !== "disable" && plan.spec.mainTable === resolution.tableName
+  )?.plan;
+}
 
 /**
  * The statements renaming `renamed`'s columns in `table`, and the ones

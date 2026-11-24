@@ -162,6 +162,7 @@ import {
   WRITER_HOLD_LOST_REASON,
 } from "../migrate-create/writer-hold";
 import {
+  countEntriesWithoutDefaultLanguageValue,
   countRowsBreakingNotNull,
   querySqlRows,
 } from "../pipeline/classifier/count-helpers";
@@ -187,7 +188,10 @@ import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces
 import { builtByFor } from "../pipeline/registered-collections";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
-import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
+import type {
+  ColumnResolution,
+  PerLanguageColumn,
+} from "../pipeline/sql-templates/resolution-statements";
 import { identifierKey } from "../rename-target";
 import {
   classifyFieldKind,
@@ -220,6 +224,12 @@ import {
   isDeletionCountRefusal,
 } from "./deletion-counts";
 import { nextSteps, partlyAppliedChange } from "./landing-push";
+import {
+  defaultLanguage,
+  keptPerLanguage,
+  madeRequired,
+  perLanguageColumn,
+} from "./per-language-answers";
 import {
   openSaveRecords,
   recordSaveStarted,
@@ -2004,9 +2014,11 @@ async function refuseRowFillsOutsideSingle(
  * The fills and deletes a save's file writes between a column's creation and its NOT NULL: the
  * person's answers, and a Single's row fills (`CollectionSave.rowFills`) as fills, each a column
  * of `table`. A structured value (a JSON, chips or plugin JSON field's) is written as the JSON
- * text its column stores.
+ * text its column stores. A field kept per language settles its entries' default-language rows in
+ * the translations table instead (`perLanguageColumnOf`), and its column is made NOT NULL nowhere.
  */
 function fileResolutions(
+  deps: CollectionSaveDeps,
   save: CollectionSave,
   table: string
 ): { resolutions?: ColumnResolution[] } {
@@ -2025,15 +2037,40 @@ function fileResolutions(
   ];
   if (answers.length === 0) return {};
   return {
-    resolutions: answers.map(r => ({
-      ...r,
-      tableName: table,
-      columnName: toSnakeCase(r.column),
-      ...(r.kind === "fill" && storesJson(save, r.column)
-        ? { json: true }
-        : {}),
-    })),
+    resolutions: answers.map(r => {
+      const perLanguage = perLanguageColumnOf(deps, save, table, r.column);
+      return {
+        ...r,
+        tableName: table,
+        columnName: toSnakeCase(r.column),
+        ...(r.kind === "fill" && storesJson(save, r.column)
+          ? { json: true }
+          : {}),
+        ...(perLanguage === undefined ? {} : { perLanguage }),
+      };
+    }),
   };
+}
+
+/**
+ * Where an answer for field `name` settles rows, where the field is kept per language after the
+ * save (`keptPerLanguage`): the save's translations table, in the default language, whose value a
+ * required field kept per language needs. Undefined where the field's column is the main table's.
+ */
+function perLanguageColumnOf(
+  deps: Pick<CollectionSaveDeps, "config">,
+  save: CollectionSave,
+  table: string,
+  name: string
+): PerLanguageColumn | undefined {
+  if (save.entity === null) return undefined;
+  if (!keptPerLanguage(save.entity.localized, save.entity.fields).has(name)) {
+    return undefined;
+  }
+  return perLanguageColumn(
+    table,
+    defaultLanguage(deps.config.localization?.defaultLocale)
+  );
 }
 
 async function settledRows(
@@ -2094,6 +2131,26 @@ async function settledRows(
       }
     }
     const column = toSnakeCase(resolution.column);
+    const perLanguage = perLanguageColumnOf(
+      deps,
+      save,
+      table,
+      resolution.column
+    );
+    if (perLanguage !== undefined) {
+      settled.push({
+        column: resolution.column,
+        rows: await settledPerLanguage(deps, save, {
+          table,
+          exists,
+          column,
+          perLanguage,
+          resolution,
+        }),
+        resolution,
+      });
+      continue;
+    }
     const liveColumn = live?.columns.find(c => c.name === column);
     // An answer settles rows that do not fit a field this save makes
     // required: one required now whose column is new, or nullable as it
@@ -2124,6 +2181,59 @@ async function settledRows(
     settled.push({ column: resolution.column, rows, resolution });
   }
   return settled;
+}
+
+/**
+ * How many entries an answer for a field kept per language settles: those with no value in the
+ * default language (`countEntriesWithoutDefaultLanguageValue`), every entry where the translations
+ * table has no column for the field yet. Refused where the save does not make the field required
+ * (`madeRequired`): its translations column is nullable whatever the field says, so whether the
+ * answer is asked is read from the definition before and after the save.
+ */
+async function settledPerLanguage(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  args: {
+    table: string;
+    exists: boolean;
+    column: string;
+    perLanguage: PerLanguageColumn;
+    resolution: NonNullable<CollectionSave["resolutions"]>[number];
+  }
+): Promise<number> {
+  const name = args.resolution.column;
+  if (
+    !madeRequired(save.previous?.fields ?? [], save.entity?.fields ?? [], name)
+  ) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: name,
+          code: "RESOLUTION_NOT_ASKED",
+          message: `This save does not make ${name} required, so it has no rows to fill or delete.`,
+        },
+      ],
+    });
+  }
+  if (!args.exists) return 0;
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const db = deps.adapter.getDrizzle();
+  const { companionTable } = args.perLanguage;
+  const companion = (await deps.adapter.tableExists(companionTable))
+    ? (await introspectLiveSnapshot(db, dialect, [companionTable])).tables[0]
+    : undefined;
+  const rows = await countEntriesWithoutDefaultLanguageValue(db, dialect, {
+    table: args.table,
+    companionTable,
+    column: companion?.columns.some(c => c.name === args.column)
+      ? args.column
+      : null,
+    locale: args.perLanguage.locale,
+  });
+  if (args.resolution.kind === "delete_nonconforming") {
+    assertDeleteWithinThreshold(rows);
+  }
+  return rows;
 }
 
 /** Whether field `name` of the saved collection keeps its value as JSON. */
@@ -2344,7 +2454,7 @@ async function writeFiles(
     table: plan.table,
     now: new Date(now.getTime() + offset),
     ...(await movesOf(deps, save, plan.table)),
-    ...fileResolutions(save, plan.table),
+    ...fileResolutions(deps, save, plan.table),
     ...(save.keys === undefined
       ? {}
       : { newTableKeys: new Map([[plan.table, save.keys.after]]) }),
