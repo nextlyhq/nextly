@@ -103,6 +103,27 @@ interface RunnerOptions {
 type BusyTableWait = Omit<BusyTableRun, "appliedBefore">;
 
 /**
+ * Each field group's stored table and type column, as an extension compile takes them, so a
+ * contribution to a group is read against the table it is in: `fg_<slug>` on a site on the current
+ * names.
+ */
+async function storedFieldGroups(
+  adapter: DrizzleAdapter,
+  config: { fieldGroups?: readonly unknown[] }
+) {
+  const { declaredFieldGroupStorage } = await import(
+    "../../domains/field-groups/services/field-group-stored-tables"
+  );
+  const stored = await declaredFieldGroupStorage(adapter, config.fieldGroups);
+  return stored === undefined
+    ? {}
+    : {
+        fieldGroupTables: stored.tables,
+        fieldGroupTypeColumns: stored.typeColumns,
+      };
+}
+
+/**
  * The busy-table wait from the command's flags over the environment over the defaults. Throws
  * `INVALID_INPUT` for a value outside its range, so it is asked before anything is read or
  * changed. Each try's notice goes to standard error, as `nextly migrate` prints it, kept back
@@ -671,6 +692,7 @@ async function connect(
       "../../domains/schema/extension/publish"
     );
     const extensionSchema = await compileExtensionSchema({
+      ...(await storedFieldGroups(drizzleAdapter, config)),
       dialect,
       plugins: definitions,
       config,
@@ -989,6 +1011,7 @@ async function connect(
         "../../domains/schema/extension/publish"
       );
       const extensionSchema = await compileExtensionSchema({
+        ...(await storedFieldGroups(drizzleAdapter, config)),
         dialect,
         plugins: definitions,
         config,
