@@ -1795,6 +1795,25 @@ async function runStatementsInOrder(
   statements: readonly string[],
   afterEach?: () => void
 ): Promise<void> {
+  if (adapter.dialect === "sqlite") {
+    // One savepoint: SQLite's schema statements are transactional, so one it refuses part-way (a
+    // drop a view or a trigger still names) leaves nothing applied, rather than the columns
+    // dropped before it gone and the table half moved. A savepoint, not BEGIN, so it nests inside
+    // a transaction a caller holds.
+    await adapter.executeQuery("SAVEPOINT nextly_companion_move");
+    try {
+      for (const statement of statements) {
+        await adapter.executeQuery(statement);
+        afterEach?.();
+      }
+    } catch (error) {
+      await adapter.executeQuery("ROLLBACK TO SAVEPOINT nextly_companion_move");
+      await adapter.executeQuery("RELEASE SAVEPOINT nextly_companion_move");
+      throw error;
+    }
+    await adapter.executeQuery("RELEASE SAVEPOINT nextly_companion_move");
+    return;
+  }
   if (adapter.dialect !== "mysql") {
     for (const statement of statements) {
       await adapter.executeQuery(statement);
@@ -2052,9 +2071,11 @@ async function buildSeedingCreateStatements(
   // for exactly that case, so only bail when there is no readable status either.
   if (columnsOnMain.length === 0 && !statusOnMain) return null;
 
-  const { buildLocalizationUpStatements } = await import(
-    "../migration/generate-up"
-  );
+  const [{ buildLocalizationUpStatements }, { readTableIndexes }] =
+    await Promise.all([
+      import("../migration/generate-up"),
+      import("../../schema/pipeline/live-table-facts"),
+    ]);
   // Additive only: this runs unattended from boot and `db:sync`, where a dropped column is not
   // something the next boot can put back. The copies left on main are inert once reads resolve
   // through the companion, and `nextly migrate` removes them under supervision.
@@ -2067,6 +2088,17 @@ async function buildSeedingCreateStatements(
       // transition fails: the value now goes to the companion, so the main insert omits it.
       relaxColumns: onMain.filter(c => !c.nullable).map(c => c.name),
       statusOnMain,
+      // SQLite drops a required column it cannot relax, so its indexes are read: one standing on
+      // the column alone goes first, and any other is refused before anything runs.
+      ...(args.dialect === "sqlite"
+        ? {
+            mainIndexes: await readTableIndexes(
+              adapter.getDrizzle(),
+              args.dialect,
+              args.tableName
+            ),
+          }
+        : {}),
     }
   );
 }

@@ -404,6 +404,122 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     }
   });
 
+  // SQLite cannot make a column optional, so a required translatable column is dropped from the
+  // main table once its values are copied; an index on it would make SQLite refuse the drop part-way,
+  // with the columns dropped before it gone and the next start refused. The index goes first, and
+  // a second sync has nothing left to do. Broken, the sync stops on "no such column" in the index.
+  it.each([
+    ["an index", { index: true }],
+    ["a unique index", { unique: true }],
+  ] as const)(
+    "starts keeping a required field with %s per language, its main column and index gone, in one sync",
+    async (_label, indexed) => {
+      const config = defineConfig({
+        collections: [
+          defineCollection({
+            slug: "dbsync_indexed",
+            fields: [
+              text({ name: "title" }),
+              text({ name: "handle", required: true, ...indexed }),
+            ],
+          }),
+        ],
+      });
+      await runSync(config);
+      await adapter?.executeQuery(
+        `INSERT INTO "dc_dbsync_indexed" ("id", "slug", "title", "handle") VALUES ('row1', 'r1', 'Written before', 'first-handle')`
+      );
+
+      setPerLanguageStorage(true);
+      try {
+        await runSync(config);
+
+        const rows = await adapter?.executeQuery<{ handle: string }>(
+          `SELECT "handle" FROM "dc_dbsync_indexed_locales" WHERE "_locale" = 'en'`
+        );
+        expect(rows).toEqual([{ handle: "first-handle" }]);
+        const mainColumns = (
+          (await adapter?.executeQuery<{ name: string }>(
+            `SELECT name FROM pragma_table_info('dc_dbsync_indexed')`
+          )) ?? []
+        ).map(row => row.name);
+        expect(mainColumns).not.toContain("handle");
+        // Nothing is left half done for the next run.
+        await runSync(config);
+        if ("unique" in indexed) {
+          // Unique in each language, as the per-language table keys it.
+          const indexes = await adapter?.executeQuery<{ sql: string | null }>(
+            `SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'dc_dbsync_indexed_locales'`
+          );
+          expect(
+            (indexes ?? []).some(
+              row => row.sql?.includes("UNIQUE") && row.sql.includes("handle")
+            )
+          ).toBe(true);
+        }
+      } finally {
+        _resetPerLanguageStorage();
+      }
+    }
+  );
+
+  // Something else holding the required column that moves: an index on it with another column,
+  // which a drop would break, is refused before anything runs; a view naming it makes SQLite refuse
+  // the drop itself, and the move runs in one savepoint, so nothing of it applies. Either way the
+  // main table keeps the column and its values, and no translations table is left half filled.
+  // Broken, the index case drops the column under it, and the view case leaves a filled
+  // translations table beside a main table the next start refuses.
+  it.each([
+    [
+      "an index on it and another column",
+      "dbsync_held_index",
+      (table: string) =>
+        `CREATE INDEX "idx_two" ON "${table}" ("slug", "handle")`,
+    ],
+    [
+      "a view naming it",
+      "dbsync_held_view",
+      (table: string) =>
+        `CREATE VIEW "v_held" AS SELECT "handle" FROM "${table}"`,
+    ],
+  ] as const)(
+    "changes nothing where a required field's column is held by %s",
+    async (_label, slug, holder) => {
+      // A collection of its own per case: a refused move leaves the process remembering its slug.
+      const table = `dc_${slug}`;
+      const config = defineConfig({
+        collections: [
+          defineCollection({
+            slug,
+            fields: [
+              text({ name: "title" }),
+              text({ name: "handle", required: true }),
+            ],
+          }),
+        ],
+      });
+      await runSync(config);
+      await adapter?.executeQuery(
+        `INSERT INTO "${table}" ("id", "slug", "title", "handle") VALUES ('row1', 'r1', 'Written before', 'first-handle')`
+      );
+      await adapter?.executeQuery(holder(table));
+
+      setPerLanguageStorage(true);
+      try {
+        await expect(runSync(config)).rejects.toThrow();
+
+        const [row] =
+          (await adapter?.executeQuery<{ handle: string }>(
+            `SELECT "handle" FROM "${table}"`
+          )) ?? [];
+        expect(row?.handle).toBe("first-handle");
+        expect(await tableExists(`${table}_locales`)).toBe(false);
+      } finally {
+        _resetPerLanguageStorage();
+      }
+    }
+  );
+
   // Only a column whose values move to the per-language table is dropped without consent. A field
   // removed from the config in the same switch has nowhere its values go, so its drop still needs
   // the consent nobody can give here, and nothing is changed.

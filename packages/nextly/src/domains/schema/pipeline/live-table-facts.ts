@@ -892,7 +892,7 @@ export async function readIndexColumns(
 }
 
 /** One index of a live table, as the catalog describes it. */
-interface LiveIndex {
+export interface LiveIndex {
   name: string;
   columns: string[];
   unique: boolean;
@@ -983,6 +983,19 @@ export async function readPgColumnCollations(
       { schema: row.collation_schema, name: row.collation_name },
     ])
   );
+}
+
+/**
+ * Every index on `tableName` with what it covers (`LiveIndex`): what a change that drops one of
+ * the table's columns reads, to drop an index that stands on that column alone before it and to
+ * refuse one that stands on more.
+ */
+export function readTableIndexes(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<LiveIndex[]> {
+  return readIndexes(db, dialect, tableName);
 }
 
 /** Every index on `tableName`, read once from the catalog of the dialect. */

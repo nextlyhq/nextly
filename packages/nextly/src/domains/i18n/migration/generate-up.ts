@@ -1,6 +1,8 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { TableSpec } from "../../schema/pipeline/diff/types";
+import type { LiveIndex } from "../../schema/pipeline/live-table-facts";
 import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
 import { restatedColumn } from "../../schema/pipeline/sql-templates/mysql-live-restate";
 import {
@@ -288,6 +290,64 @@ export interface LocalizationUpOptions {
    * {@link buildSeedGuard} for why a migration file must not ask for it.
    */
   guardSeed?: boolean;
+  /**
+   * The main table's indexes as the database has them (`readTableIndexes`), where the caller
+   * read them. A column dropped here loses an index that stands on it alone, dropped first, since
+   * SQLite refuses to drop a column an index names. One standing on it with other columns, or on
+   * part of it, is refused before anything runs: dropping it would break the index or change what
+   * it keeps unique. Left out, nothing is read about the main table's indexes.
+   */
+  mainIndexes?: readonly Pick<
+    LiveIndex,
+    "name" | "columns" | "wholeColumns" | "droppableByName"
+  >[];
+}
+
+/**
+ * The statements dropping each index of `mainTable` that stands on one of `dropped` alone, run
+ * before the columns go; refused, naming each, where an index stands on one of them with other
+ * columns or on part of it, before anything runs.
+ */
+function indexDropsBeforeColumns(
+  spec: Pick<CompanionMigrationSpec, "dialect" | "mainTable" | "collection">,
+  dropped: readonly string[],
+  indexes: LocalizationUpOptions["mainIndexes"]
+): string[] {
+  if (indexes === undefined || dropped.length === 0) return [];
+  const { dialect, mainTable } = spec;
+  const going = new Set(dropped.map(name => name.toLowerCase()));
+  const drops: string[] = [];
+  const held: string[] = [];
+  for (const index of indexes) {
+    const covered = index.columns.filter(c => going.has(c.toLowerCase()));
+    if (covered.length === 0) continue;
+    if (
+      index.columns.length === 1 &&
+      index.wholeColumns &&
+      index.droppableByName
+    ) {
+      drops.push(
+        dialect === "mysql"
+          ? `DROP INDEX ${q(index.name, dialect)} ON ${q(mainTable, dialect)}`
+          : `DROP INDEX ${q(index.name, dialect)}`
+      );
+    } else {
+      held.push(`"${index.name}" (${index.columns.join(", ")})`);
+    }
+  }
+  if (held.length > 0) {
+    throw new NextlyError({
+      code: "NEXTLY_UPGRADE_COLUMN_HELD",
+      publicMessage:
+        `The translatable values of "${spec.collection}" move to its translations table, and ` +
+        `their columns leave ${mainTable}, but the index ${held.join(", ")} stands on one of ` +
+        `them with other columns, or on part of it, so dropping it would break the index or ` +
+        `change what it keeps unique. Nothing was changed. Drop that index, or make it stand on ` +
+        `the moving column alone, then run the command again.`,
+      logContext: { mainTable, held, columns: [...dropped] },
+    });
+  }
+  return drops;
 }
 
 /**
@@ -365,8 +425,20 @@ export function buildLocalizationUpStatements(
         c =>
           `ALTER TABLE ${q(mainTable, dialect)} DROP COLUMN ${q(c.name, dialect)}`
       );
+  // The columns this leaves the main table without: each one dropped, and on SQLite each required
+  // one it cannot relax. Their indexes go first (`indexDropsBeforeColumns`).
+  const droppedColumns = retaining
+    ? dialect === "sqlite"
+      ? constrained.map(c => c.name)
+      : []
+    : onMain.map(c => c.name);
+  const indexDrops = indexDropsBeforeColumns(
+    spec,
+    droppedColumns,
+    options.mainIndexes
+  );
 
-  return [create, ...seed, ...relaxations, ...drops];
+  return [create, ...seed, ...indexDrops, ...relaxations, ...drops];
 }
 
 /**
