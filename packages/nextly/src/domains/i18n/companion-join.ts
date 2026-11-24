@@ -769,7 +769,17 @@ export async function structuresBeside(
   db: unknown
 ): Promise<Record<string, unknown>> {
   if (!localizedFields.some(field => field.sharedStructure)) return {};
-  const refs = await withComponentShapes(localizedFields, db);
+  return structuresIn(source, await withComponentShapes(localizedFields, db));
+}
+
+/**
+ * {@link structuresBeside} by refs whose shapes already hold their components' fields
+ * (`withComponentShapes`): what a read of many rows takes, resolving the shapes once for them all.
+ */
+export function structuresIn(
+  source: Record<string, unknown>,
+  refs: readonly LocalizedFieldRef[]
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const field of refs) {
     if (!field.sharedStructure) continue;

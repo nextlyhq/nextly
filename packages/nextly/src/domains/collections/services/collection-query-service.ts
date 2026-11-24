@@ -167,7 +167,7 @@ import {
   populateCompanionFieldsAllLocales,
   populateTranslationStatus,
   selectEntryWithCompanion,
-  structuresBeside,
+  structuresIn,
   TRANSLATION_FILTER_STATES,
   TRANSLATION_OVERVIEW_KEY,
   type TranslationFilterState,
@@ -1398,13 +1398,16 @@ export class CollectionQueryService extends BaseService {
     // Read into copies keyed by id, then attached beside each row's own values:
     // the row keeps every field in its own language and type.
     // Each row's repeaters and groups keeping one structure carry it, for each language's text to
-    // be laid on (`structuresBeside`).
-    const everyLanguage = await Promise.all(
-      rows.map(async row => ({
-        id: row.id,
-        ...(await structuresBeside(row, companion.localizedFields, this.db)),
-      }))
-    );
+    // be laid on (`structuresIn`), by shapes whose components are read once for every row.
+    const shaped = companion.localizedFields.some(
+      field => field.sharedStructure
+    )
+      ? await withComponentShapes(companion.localizedFields, this.db)
+      : [];
+    const everyLanguage = rows.map(row => ({
+      id: row.id,
+      ...structuresIn(row, shaped),
+    }));
     await populateCompanionFieldsAllLocales({
       db: this.db as never,
       companionTable: companion.table,

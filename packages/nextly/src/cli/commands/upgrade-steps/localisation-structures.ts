@@ -284,7 +284,13 @@ function judge(
   }
   const overlays = new Map<string, unknown>();
   for (const [locale, value] of values) {
-    overlays.set(locale, splitSharedStructure(value, shape).overlay ?? {});
+    // A language holding no text inside is stored as no translation, as a write stores it
+    // (`splitSharedStructureWrite`), so every reader asking whether it is translated says no.
+    const { overlay } = splitSharedStructure(value, shape);
+    overlays.set(
+      locale,
+      overlay === undefined || sameShare(overlay, {}) ? null : overlay
+    );
   }
   return { id, structure, overlays };
 }

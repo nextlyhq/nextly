@@ -257,6 +257,37 @@ describeEachDialect(
     );
 
     it(
+      "stores no translation for a language whose text inside is all blank",
+      async () => {
+        await boot();
+        const id = await storedWhole({
+          en: {
+            ...sameRows(["first", "second"]),
+            seo: { headline: "Read", weight: 5 },
+          },
+          // Spanish has the rows, but no text in them: it is not translated.
+          es: { ...sameRows(["", ""]), seo: { headline: "", weight: 5 } },
+        });
+
+        await migrateData(database!.adapter, SITE, STRUCTURES_STEP);
+
+        const [row] = await database!.adapter.queryStatement<{
+          slides: unknown;
+          seo: unknown;
+        }>(
+          sql`SELECT ${sql.identifier("slides")} AS ${sql.identifier("slides")}, ${sql.identifier("seo")} AS ${sql.identifier("seo")} FROM ${sql.identifier(LANGUAGES_TABLE)} WHERE ${sql.identifier("_parent")} = ${id} AND ${sql.identifier("_locale")} = ${"es"}`
+        );
+        expect(row?.slides ?? null).toBeNull();
+        expect(row?.seo ?? null).toBeNull();
+        // English keeps its own text.
+        expect(
+          (await read(id, "en")).slides.map(slide => slide.caption)
+        ).toEqual(["first", "second"]);
+      },
+      BOOT_TIMEOUT
+    );
+
+    it(
       "refuses a document whose languages differ, naming it, and changes nothing",
       async () => {
         await boot();

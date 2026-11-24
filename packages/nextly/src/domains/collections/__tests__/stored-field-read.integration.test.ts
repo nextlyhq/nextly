@@ -1205,6 +1205,82 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       });
     });
 
+    // A held change to a group's structure alone sits in the shared draft, which holds no
+    // language's text: a draft read lays the language's live text on the pending structure.
+    it("reads a field inside a group with one structure from a held structure change, with the language's live text", async () => {
+      const plugin = definePlugin({
+        name: "@test/stored-read-held-structure",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: { fieldTypes: [probe, other] },
+      });
+      current = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        plugins: [plugin],
+        collections: [
+          {
+            slug: "framedheld",
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              {
+                name: "hero",
+                type: "group",
+                fields: [
+                  { name: "body", type: "probe", localized: true },
+                  { name: "note", type: "probe", localized: false },
+                ],
+              },
+            ],
+          } as unknown as CollectionConfig,
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const id = await created(current, "framedheld", {
+        hero: { body: { said: "en" }, note: { n: 1 } },
+        status: "published",
+      });
+      await current.nextly.update({
+        collection: "framedheld",
+        id,
+        locale: "de",
+        data: {
+          hero: { body: { said: "de" }, note: { n: 1 } },
+          status: "published",
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      } as never);
+      // English changes the shared value alone, held: a change to the structure.
+      await current.nextly.update({
+        collection: "framedheld",
+        id,
+        locale: "en",
+        data: {
+          hero: { body: { said: "en" }, note: { n: 2 } },
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      } as never);
+      const read = languagesReader(current, "probe");
+      const at = (field: string) =>
+        read({
+          collection: "framedheld",
+          id,
+          field,
+          form: "draft",
+          locale: "de",
+        } as never);
+
+      expect(await at("hero.note")).toEqual({ kind: "value", value: { n: 2 } });
+      expect(await at("hero.body")).toEqual({
+        kind: "value",
+        value: { said: "de" },
+      });
+    });
+
     it("tells a Single's validators the language the save is in", async () => {
       const t = await bootLanguages(dialect);
       await t.nextly.updateSingle({

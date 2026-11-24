@@ -245,7 +245,7 @@ function componentSlugsOf(field: StructuredField): string[] {
 
 /**
  * The shape of what a component field translates inside, or `null` where it translates nothing:
- * its instances (one, or a list for a repeatable component or a dynamic zone, each with its id)
+ * its instances (one, or a list for a repeatable one, each with its id)
  * keep one structure across languages, as a group's or a repeater's rows do, and the text inside
  * is each language's. Read through each component's own fields (`fieldsOf`), every component it
  * places in turn; a component that reaches itself stops there.
@@ -257,9 +257,9 @@ export function componentStructureShape(
 ): SharedStructureShape | null {
   const slugs = componentSlugsOf(field);
   if (slugs.length === 0) return null;
-  const { many } = extractFieldGroupReferences(field);
+  // A list of instances only where the field is repeatable: one offering several component types
+  // (`components`) holds one instance otherwise, stored as an object.
   const kind =
-    many !== undefined ||
     (field as { repeatable?: unknown }).repeatable === true
       ? "repeater"
       : "group";

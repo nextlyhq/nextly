@@ -164,8 +164,8 @@ function textOntoLevel(
 
 /**
  * A component's value inside a row, with the text its fields translate taken from `source`: each
- * instance from the source instance with the same id (a list), or the one instance (a single),
- * read by the fields of the component it is.
+ * instance from the source instance with the same id (a list), or the one instance where it is
+ * the same one (a single: `sameInstance`), read by the fields of the component it is.
  */
 function componentTextFrom(
   current: unknown,
@@ -195,9 +195,26 @@ function componentTextFrom(
       return from ? onto(instance, from) : instance;
     });
   }
-  return isRecord(current) && isRecord(source)
+  return isRecord(current) && isRecord(source) && sameInstance(current, source)
     ? onto(current, source)
     : current;
+}
+
+/**
+ * Whether a single component's value here and in the source are the same instance: the same
+ * component type, and the same id where both carry one. An instance changed to another component,
+ * or replaced, takes nothing from the one the source holds.
+ */
+function sameInstance(
+  current: Record<string, unknown>,
+  source: Record<string, unknown>
+): boolean {
+  if (readFieldGroupType(current) !== readFieldGroupType(source)) return false;
+  return (
+    current.id === undefined ||
+    source.id === undefined ||
+    current.id === source.id
+  );
 }
 
 /**

@@ -75,7 +75,10 @@ import {
   cachedCompanionReadiness,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
-import type { SharedStructureShape } from "../../i18n/shared-structure";
+import {
+  splitStoredValue,
+  type SharedStructureShape,
+} from "../../i18n/shared-structure";
 import { classifyFieldKind } from "../../schema/services/field-column-descriptor";
 import type { VersionsDbApi } from "../../versions/db-api";
 import {
@@ -609,13 +612,19 @@ function notStored(fields: readonly string[]): StoredFieldsRead {
   };
 }
 
-/** The fields kept per language whose value the shown draft does not carry. */
+/**
+ * The fields kept per language whose value the shown draft does not carry,
+ * and every group with one structure: a draft holding its structure may hold
+ * no text of the language's, which then reads from the live overlay.
+ */
 function fromLanguageRow(
   placed: readonly PlacedField[],
   draft: PendingDraft | undefined
 ): LanguageRowAsk["fields"] {
   return placed.flatMap(({ field, path, perLanguage }) =>
-    perLanguage === undefined || draftCarries(draft, path.column)
+    perLanguage === undefined ||
+    (draftCarries(draft, path.column) &&
+      perLanguage.field.sharedStructure === undefined)
       ? []
       : [{ field, kept: perLanguage }]
   );
@@ -631,17 +640,22 @@ function shownValues(
   const values = new Map<string, PluginStoredValue>();
   for (const { field, path, perLanguage } of placed) {
     const shape = perLanguage?.field.sharedStructure;
-    if (
-      perLanguage !== undefined &&
-      shape !== undefined &&
-      !draftCarries(draft, path.column)
-    ) {
+    if (perLanguage !== undefined && shape !== undefined) {
+      const live = translated.get(perLanguage.field.name);
+      // A draft holding the group is read as its structure with its own text,
+      // the language's live text where the draft holds none: a held change to
+      // the structure alone carries no text of the language's.
+      const snapshot = draft?.snapshot;
+      const drafted =
+        draftCarries(draft, path.column) && isRecord(snapshot)
+          ? splitStoredValue(snapshot[path.column], shape)
+          : undefined;
       values.set(
         field,
         storedValueOf(
           valueInSharedStructure({
-            structure: row[path.column],
-            overlay: translated.get(perLanguage.field.name),
+            structure: drafted ? drafted.structure : row[path.column],
+            overlays: drafted ? [drafted.overlay, live] : [live],
             shape,
             within: path.within,
           }),
@@ -666,7 +680,8 @@ function shownValues(
 
 /**
  * The value `within` leads to inside a group with one structure, as one
- * language holds it: a translated field from the language's own overlay, and
+ * language holds it: a translated field from the first of `overlays` (that
+ * language's own, a draft's before the live one) holding a value for it, and
  * no other language's, so a language that holds no text for it leaves it
  * without a value; any other field from the structure every language shares.
  * Only named groups are walked (`storedFieldPath`), so the shape is followed
@@ -674,7 +689,7 @@ function shownValues(
  */
 function valueInSharedStructure(at: {
   readonly structure: unknown;
-  readonly overlay: unknown;
+  readonly overlays: readonly unknown[];
   readonly shape: SharedStructureShape;
   readonly within: readonly string[];
 }): { value: unknown } | undefined {
@@ -683,9 +698,12 @@ function valueInSharedStructure(at: {
   const last = at.within.at(-1);
   const translated =
     level !== undefined && last !== undefined && level.texts.includes(last);
-  return translated
-    ? valueWithin(at.overlay, at.within)
-    : valueWithin(at.structure, at.within);
+  if (!translated) return valueWithin(at.structure, at.within);
+  for (const overlay of at.overlays) {
+    const reached = valueWithin(overlay, at.within);
+    if (reached !== undefined && reached.value !== null) return reached;
+  }
+  return undefined;
 }
 
 /**

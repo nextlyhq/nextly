@@ -172,4 +172,43 @@ describe("a component inside a container's rows", () => {
       },
     ]);
   });
+
+  // A single component offering several types: its text comes only from the same instance.
+  const SLOTS = {
+    type: "group",
+    name: "slot",
+    fields: [
+      {
+        type: "component",
+        name: "lead",
+        componentSchemas: {
+          hero: { fields: [{ type: "text", name: "title" }] },
+          cta: { fields: [{ type: "text", name: "title" }] },
+        },
+      },
+    ],
+  };
+
+  it("copies a single instance's text only from the source instance of the same type", () => {
+    const source = { lead: { _componentType: "hero", title: "Hello" } };
+
+    // Changed to another component here: nothing of the source's hero lands in it.
+    expect(
+      withTextFrom(
+        { lead: { _componentType: "cta", title: "" } },
+        source,
+        SLOTS,
+        true
+      )
+    ).toEqual({ lead: { _componentType: "cta", title: "" } });
+    // The same component: its text is copied.
+    expect(
+      withTextFrom(
+        { lead: { _componentType: "hero", title: "" } },
+        source,
+        SLOTS,
+        true
+      )
+    ).toEqual({ lead: { _componentType: "hero", title: "Hello" } });
+  });
 });
