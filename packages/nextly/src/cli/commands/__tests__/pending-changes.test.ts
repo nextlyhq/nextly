@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig, text } from "../../../config";
 import { definePlugin } from "../../../plugins/plugin-context";
+import { isNextlyOwnedDocumentColumn } from "../../../lib/system-columns";
 import { _resetEnvCache } from "../../../shared/lib/env";
 
 import { pendingProject } from "./helpers/pending-project";
@@ -209,6 +210,51 @@ describe("an app with no migration yet whose plugin declares permissions", () =>
     expect(sqlFiles()).toHaveLength(1);
     expect((await check(appWith(["export"]))).code).toBeUndefined();
   });
+});
+
+describe("a snapshot written before the per-document columns", () => {
+  // `nextly migrate` adds them to existing tables itself, so an upgrade never fails the check.
+  it.each(["sqlite", "postgresql", "mysql"] as const)(
+    "that lacks them leaves nothing pending for migrate:check and migrate:create on %s",
+    async dialect => {
+      vi.stubEnv("DB_DIALECT", dialect);
+      vi.stubEnv("DATABASE_URL", "");
+      _resetEnvCache();
+      const config = defineConfig({
+        collections: [
+          defineCollection({
+            slug: "posts",
+            fields: [text({ name: "headline" })],
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+      expect((await create(config)).code).toBeUndefined();
+
+      const meta = join(dir, "migrations", "meta");
+      const [name] = readdirSync(meta);
+      const file = JSON.parse(await readFile(join(meta, name), "utf-8")) as {
+        snapshot: { tables: { columns: { name: string }[] }[] };
+      };
+      let removed = 0;
+      for (const table of file.snapshot.tables) {
+        const kept = table.columns.filter(
+          column => !isNextlyOwnedDocumentColumn(column.name)
+        );
+        removed += table.columns.length - kept.length;
+        table.columns = kept;
+      }
+      // The case is about columns the snapshot held: stripping none would prove nothing.
+      expect(removed).toBeGreaterThan(0);
+      await rm(join(meta, name));
+      await writeFile(join(meta, name), JSON.stringify(file));
+
+      const checked = await check(config);
+      expect(checked.code, saidBy(checked)).toBeUndefined();
+      await create(config);
+      expect(sqlFiles()).toHaveLength(1);
+    }
+  );
 });
 
 describe("a snapshot written before snapshots recorded settings", () => {

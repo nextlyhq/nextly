@@ -55,7 +55,9 @@ import { _resetEnvCache } from "../../../shared/lib/env";
 import { consoleLogger } from "../../../shared/types";
 import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { setNonInteractive } from "../migrate/can-prompt";
+import { buildDesiredSnapshotFromConfig } from "../migrate-create/generate";
 import { writeSnapshot } from "../migrate-create/snapshot-io";
+import { unwrittenOver } from "../pending/__tests__/helpers/unwritten-over";
 
 /** The configuration the commands load. */
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
@@ -247,12 +249,32 @@ for (const dialect of getConfiguredTestDialects()) {
       checks += 1;
       const migrationsDir = join(projectRoot, `migrations-${String(checks)}`);
       await mkdir(join(migrationsDir, "meta"), { recursive: true });
-      const tables = {
-        tables: ["dc_articles", "dc_guides"].map(name => ({
-          name,
-          columns: [{ name: "id", type: "text", nullable: false }],
-        })),
-      };
+      const registry = new DynamicCollectionRegistryService(
+        database.adapter,
+        consoleLogger
+      );
+      const fieldsOf = async (slug: string) =>
+        ((await registry.getCollection(slug)) as { fields: unknown[] }).fields;
+      const collections = [
+        {
+          slug: "articles",
+          tableName: "dc_articles",
+          fields: (await fieldsOf("articles")) as never,
+        },
+        {
+          slug: "guides",
+          tableName: "dc_guides",
+          fields: (await fieldsOf("guides")) as never,
+        },
+      ];
+      // The tables as the entities make them, so the check's comparison, `migrate:create`'s own
+      // plan, finds nothing pending and only the sibling rule decides.
+      const tables = buildDesiredSnapshotFromConfig(
+        collections,
+        [],
+        [],
+        dialect
+      );
       await writeFile(
         join(migrationsDir, "20260101_120000_001_initial.sql"),
         "-- placeholder",
@@ -264,12 +286,6 @@ for (const dialect of getConfiguredTestDialects()) {
         tables,
         "-- placeholder"
       );
-      const registry = new DynamicCollectionRegistryService(
-        database.adapter,
-        consoleLogger
-      );
-      const fieldsOf = async (slug: string) =>
-        ((await registry.getCollection(slug)) as { fields: unknown[] }).fields;
       const exit = vi
         .spyOn(process, "exit")
         .mockImplementation((() => undefined) as never);
@@ -279,22 +295,8 @@ for (const dialect of getConfiguredTestDialects()) {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        entities: {
-          collections: [
-            {
-              slug: "articles",
-              tableName: "dc_articles",
-              fields: (await fieldsOf("articles")) as never,
-            },
-            {
-              slug: "guides",
-              tableName: "dc_guides",
-              fields: (await fieldsOf("guides")) as never,
-            },
-          ],
-          singles: [],
-          components: [],
-        },
+        entities: { collections, singles: [], components: [] },
+        unwritten: unwrittenOver({ migrationsDir, dialect, collections }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
       const outcome = {

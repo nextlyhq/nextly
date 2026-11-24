@@ -32,8 +32,12 @@ import {
   formatBlankFile,
   formatMigrationFile,
 } from "../../domains/schema/migrate-create/format-file";
-import type { MinimalConfigField } from "../../domains/schema/migrate-create/generate";
+import {
+  buildDesiredSnapshotFromConfig,
+  type MinimalConfigField,
+} from "../../domains/schema/migrate-create/generate";
 import { writeSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
+import { unwrittenOver } from "../../domains/schema/pending/__tests__/helpers/unwritten-over";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 
 import type { UnwrittenChanges } from "../../domains/schema/migrate/unwritten-changes";
@@ -59,19 +63,20 @@ function makeLogger() {
   };
 }
 
-const POSTS_TABLE = {
-  name: "dc_posts",
-  columns: [
-    { name: "id", type: "text", nullable: false },
-    { name: "created_at", type: "timestamp", nullable: true },
-    { name: "description", type: "text", nullable: false },
-    { name: "slug", type: "text", nullable: false },
-    { name: "title", type: "text", nullable: false },
-    { name: "updated_at", type: "timestamp", nullable: true },
-  ],
+/** `posts` as a configuration declares it. */
+const POSTS_ENTITY = {
+  slug: "posts",
+  tableName: "dc_posts",
+  fields: [{ name: "headline", type: "text" }],
 };
 
-const POSTS_DESIRED: NextlySchemaSnapshot = { tables: [POSTS_TABLE] };
+/** The tables `entities` make, as `migrate:create` records them. */
+const tablesOf = (
+  entities: Parameters<typeof buildDesiredSnapshotFromConfig>[0]
+): NextlySchemaSnapshot =>
+  buildDesiredSnapshotFromConfig(entities, [], [], "postgresql");
+
+const POSTS_DESIRED = tablesOf([POSTS_ENTITY]);
 
 /**
  * The changes not yet in a migration as the comparison answers them (`unwrittenChangesOf`),
@@ -89,6 +94,12 @@ const driftOf =
       noSnapshot,
     });
 const EMPTY_DESIRED: NextlySchemaSnapshot = { tables: [] };
+
+/**
+ * A comparison that names nothing, for the statement cases over a hand-written table no
+ * configuration declares, which a real one would name as dropped.
+ */
+const NOTHING_PENDING = driftOf([]);
 
 describe("runChecks (F11 PR 4)", () => {
   let migrationsDir: string;
@@ -130,7 +141,11 @@ describe("runChecks (F11 PR 4)", () => {
 
       const logger = makeLogger();
       await runChecks({
-        migrationsDir,
+        migrationsDir, // Compared for real: `migrate:create`'s own plan against the folder's snapshot.
+        unwritten: unwrittenOver({
+          migrationsDir,
+          collections: [POSTS_ENTITY],
+        }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -144,6 +159,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
       expect(exitSpy).not.toHaveBeenCalled();
@@ -167,13 +183,15 @@ describe("runChecks (F11 PR 4)", () => {
     }
 
     // The dialect defaults to PostgreSQL; a test of another dialect's statements passes its own.
-    // No comparison is asked, so no drift is reported.
+    // Compared for real, with nothing declared, unless a case's table is one no configuration makes.
     const run = async (
-      dialect: "postgresql" | "mysql" | "sqlite" = "postgresql"
+      dialect: "postgresql" | "mysql" | "sqlite" = "postgresql",
+      unwritten = unwrittenOver({ migrationsDir, dialect })
     ) => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten,
         dialect,
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
@@ -227,7 +245,7 @@ describe("runChecks (F11 PR 4)", () => {
         rebuildNotes(["id", "title"]),
         notesWith("id", "title")
       );
-      const logger = await run("sqlite");
+      const logger = await run("sqlite", NOTHING_PENDING);
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringMatching(
           /DESTRUCTIVE: 20260101_120000_002_drop_body\.sql \(UP\) deletes data: column notes\.body\. nextly migrate runs it only with --accept-data-loss/
@@ -250,7 +268,7 @@ describe("runChecks (F11 PR 4)", () => {
         rebuildNotes(["id", "title"]),
         notesWith("id", "title")
       );
-      const logger = await run("sqlite");
+      const logger = await run("sqlite", NOTHING_PENDING);
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringMatching(
           /DESTRUCTIVE: 20260101_120000_002_drop_body\.sql \(UP\) deletes data: column notes\.body\./
@@ -272,7 +290,7 @@ describe("runChecks (F11 PR 4)", () => {
           "-- UP\nALTER TABLE notes ADD COLUMN scratch text;\nALTER TABLE notes DROP COLUMN scratch;\n\n-- DOWN\n",
           notesWith("id", "title", "body")
         );
-        const logger = await run(dialect);
+        const logger = await run(dialect, NOTHING_PENDING);
         expect(logger.warn).not.toHaveBeenCalledWith(
           expect.stringContaining("DESTRUCTIVE")
         );
@@ -287,7 +305,7 @@ describe("runChecks (F11 PR 4)", () => {
         rebuildNotes(["id", "title", "body"]),
         notesWith("id", "title", "body")
       );
-      const logger = await run("sqlite");
+      const logger = await run("sqlite", NOTHING_PENDING);
       expect(logger.warn).not.toHaveBeenCalledWith(
         expect.stringContaining("DESTRUCTIVE")
       );
@@ -371,6 +389,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         // `admin` is a reserved slug, and with no migrations yet it is new.
         entities: {
           collections: [{ slug: "admin", tableName: "dc_admin", fields: [] }],
@@ -425,6 +444,10 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({
+          migrationsDir,
+          collections: [POSTS_ENTITY],
+        }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -447,6 +470,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -493,6 +517,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -531,6 +556,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -548,6 +574,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -567,6 +594,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -597,6 +625,10 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({
+          migrationsDir,
+          collections: [POSTS_ENTITY],
+        }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -620,6 +652,7 @@ describe("runChecks (F11 PR 4)", () => {
         const logger = makeLogger();
         await runChecks({
           migrationsDir,
+          unwritten: unwrittenOver({ migrationsDir }),
           logger: logger as unknown as Parameters<
             typeof runChecks
           >[0]["logger"],
@@ -642,6 +675,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -659,6 +693,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -690,6 +725,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -724,6 +760,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -758,6 +795,10 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({
+          migrationsDir,
+          collections: [POSTS_ENTITY],
+        }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -765,11 +806,12 @@ describe("runChecks (F11 PR 4)", () => {
       expect(exitSpy).not.toHaveBeenCalled();
     });
 
-    /** The checks over the folder as written; no comparison is asked. */
+    /** The checks over the folder as written, with no tables declared. */
     const check = async () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
     };
@@ -874,6 +916,10 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({
+          migrationsDir,
+          collections: [POSTS_ENTITY],
+        }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -903,6 +949,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -939,6 +986,7 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({ migrationsDir }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -964,6 +1012,10 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({
+          migrationsDir,
+          collections: [POSTS_ENTITY],
+        }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -980,7 +1032,10 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        unwritten: driftOf([POSTS_TABLE], true),
+        unwritten: unwrittenOver({
+          migrationsDir,
+          collections: [POSTS_ENTITY],
+        }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -1011,7 +1066,10 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        unwritten: driftOf([POSTS_TABLE]),
+        unwritten: unwrittenOver({
+          migrationsDir,
+          collections: [POSTS_ENTITY],
+        }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
@@ -1039,32 +1097,128 @@ describe("runChecks (F11 PR 4)", () => {
         sqlContent
       );
 
-      const manyTables: NextlySchemaSnapshot = {
-        tables: Array.from({ length: 15 }, (_, i) => ({
-          name: `dc_t${i.toString().padStart(2, "0")}`,
-          columns: [{ name: "id", type: "text", nullable: false }],
-        })),
-      };
+      const collections = Array.from({ length: 15 }, (_, i) => {
+        const slug = `t${i.toString().padStart(2, "0")}`;
+        return { slug, tableName: `dc_${slug}`, fields: [] };
+      });
 
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        unwritten: driftOf(manyTables.tables),
+        unwritten: unwrittenOver({ migrationsDir, collections }),
         logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(printed).toHaveBeenCalledWith(
-        expect.stringContaining("15 changes in the configuration")
+        expect.stringContaining("15 pending schema change(s) detected.")
       );
       expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("add_table dc_t14")
       );
+      // The check reads no database, so it says nothing of one, nor of running `nextly migrate`.
+      const said = printed.mock.calls.flat().join("\n");
+      expect(said).not.toContain("The database is not reported");
+      expect(said).not.toContain("run `nextly migrate` again");
+    });
+
+    it("names settings alone as settings, in its own words", async () => {
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        unwritten: () =>
+          Promise.resolve({
+            tables: [],
+            beside: [],
+            settings: [
+              { kind: "collection", slug: "posts", changes: ["description"] },
+            ],
+            permissions: [],
+            noSnapshot: false,
+          }),
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      const said = printed.mock.calls.flat().join("\n");
+      expect(said).toContain("(SETTINGS_CHANGE_WITHOUT_MIGRATION)");
+      expect(said).toContain("1 entity's settings changed with no migration.");
+      expect(said).toContain("~ posts: description");
+      expect(said).not.toContain("The database is not reported");
+    });
+
+    it("lists a file beside the main migration with the settings it comes from, labelled", async () => {
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        unwritten: () =>
+          Promise.resolve({
+            tables: [],
+            beside: [{ kind: "translations column types", table: "dc_posts" }],
+            settings: [
+              {
+                kind: "collection",
+                slug: "posts",
+                changes: ["fields.price.type"],
+              },
+            ],
+            permissions: [],
+            noSnapshot: false,
+          }),
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      const said = printed.mock.calls.flat().join("\n");
+      expect(said).toContain("(SCHEMA_DRIFT)");
+      expect(said).toContain("2 pending schema change(s) detected.");
+      expect(said).toContain("~ translations column types dc_posts");
+      expect(said).toContain("~ settings posts: fields.price.type");
+    });
+
+    it("asks a migration for the other change where several fields move from one table", async () => {
+      const move = {
+        table: "dc_posts",
+        localesTable: "dc_posts_locales",
+        columns: ["title", "summary"],
+        fields: [
+          { name: "title", type: "text" },
+          { name: "summary", type: "text" },
+        ],
+      };
+      const over = async (tables: UnwrittenChanges["tables"]) => {
+        printed.mockClear();
+        const logger = makeLogger();
+        await runChecks({
+          migrationsDir,
+          unwritten: () =>
+            Promise.resolve({
+              tables,
+              beside: [{ kind: "translations table", table: "dc_posts" }],
+              settings: [],
+              permissions: [],
+              noSnapshot: false,
+              perLanguageMoves: [move],
+            }),
+          logger: logger as unknown as Parameters<
+            typeof runChecks
+          >[0]["logger"],
+        });
+        return printed.mock.calls.flat().join("\n");
+      };
+
+      expect(
+        await over([
+          {
+            type: "add_column",
+            tableName: "dc_posts",
+            column: { name: "views", type: "int4", nullable: true },
+          },
+        ])
+      ).toContain("For the other changes listed");
+      expect(await over([])).not.toContain("For the other changes listed");
     });
   });
 
   describe("addresses, by the one address rule", () => {
-    const ADMIN_TABLE = { ...POSTS_TABLE, name: "dc_admin" };
     const entity = (slug: string, tableName: string) => ({
       slug,
       tableName,
@@ -1088,11 +1242,15 @@ describe("runChecks (F11 PR 4)", () => {
 
     it("warns once for an existing address the rule refuses, and passes", async () => {
       // A Builder collection made under `admin` before the rule: its table is in the snapshot.
-      await seed({ tables: [ADMIN_TABLE] });
+      await seed(tablesOf([entity("admin", "dc_admin")]));
 
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({
+          migrationsDir,
+          collections: [entity("admin", "dc_admin")],
+        }),
         entities: {
           collections: [entity("admin", "dc_admin")],
           singles: [],
@@ -1110,13 +1268,18 @@ describe("runChecks (F11 PR 4)", () => {
     });
 
     it("fails a new address the rule refuses, naming it and the reason, before the drift", async () => {
-      await seed(POSTS_DESIRED);
-      const CASCADE_TABLE = { ...POSTS_TABLE, name: "dc_cascade" };
+      await seed(tablesOf([entity("posts", "dc_posts")]));
 
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
-        unwritten: driftOf([CASCADE_TABLE]),
+        unwritten: unwrittenOver({
+          migrationsDir,
+          collections: [
+            entity("posts", "dc_posts"),
+            entity("cascade", "dc_cascade"),
+          ],
+        }),
         entities: {
           collections: [
             entity("posts", "dc_posts"),
@@ -1154,6 +1317,10 @@ describe("runChecks (F11 PR 4)", () => {
       slug: "posts",
       tableName: "dc_posts",
       fields,
+      settings: {
+        source: "code" as const,
+        settings: settingsOf({ slug: "posts", fields }, "code"),
+      },
     });
 
     /** The latest snapshot, recording `posts` with `fields` as declared. */
@@ -1167,7 +1334,7 @@ describe("runChecks (F11 PR 4)", () => {
       await writeSnapshot(
         join(migrationsDir, "meta"),
         "20260101_120000_001_initial",
-        POSTS_DESIRED,
+        tablesOf([postsWith(fields)]),
         sqlContent,
         undefined,
         {
@@ -1187,6 +1354,10 @@ describe("runChecks (F11 PR 4)", () => {
       const logger = makeLogger();
       await runChecks({
         migrationsDir,
+        unwritten: unwrittenOver({
+          migrationsDir,
+          collections: [postsWith(fields)],
+        }),
         entities: {
           collections: [postsWith(fields)],
           singles: [],

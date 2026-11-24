@@ -124,6 +124,40 @@ export function nothingUnwritten(changes: UnwrittenChanges): boolean {
   );
 }
 
+/** Whether `changes` names settings and nothing else, a refusal of its own. */
+export function settingsAlone(changes: UnwrittenChanges): boolean {
+  return (
+    changes.settings.length > 0 &&
+    changes.tables.length === 0 &&
+    changes.beside.length === 0 &&
+    changes.permissions.length === 0
+  );
+}
+
+/**
+ * Whether `changes` names anything besides its per-language moves: a move is the translations file
+ * of its table, or the drop of a column it moves where no file takes that drop.
+ */
+export function changesBesideMoves(changes: UnwrittenChanges): boolean {
+  const moves = changes.perLanguageMoves ?? [];
+  const tables = new Set(moves.map(move => move.table));
+  const columns = new Set(
+    moves.flatMap(move => move.columns.map(column => `${move.table}.${column}`))
+  );
+  return (
+    changes.settings.length > 0 ||
+    changes.permissions.length > 0 ||
+    changes.beside.some(
+      file => file.kind !== "translations table" || !tables.has(file.table)
+    ) ||
+    changes.tables.some(
+      op =>
+        op.type !== "drop_column" ||
+        !columns.has(`${op.tableName}.${op.columnName}`)
+    )
+  );
+}
+
 /**
  * The declared schema compared with the newest snapshot (`latest`, null where
  * the folder has none): the table changes as `migrate:create` plans them
@@ -308,10 +342,6 @@ export function unwrittenChangesError(
     "The database is not reported as up to date while the configuration holds changes no migration records. Nothing was changed.",
     ...lines,
   ].join("\n");
-  const settingsOnly =
-    changes.tables.length === 0 &&
-    changes.beside.length === 0 &&
-    changes.permissions.length === 0;
   const moves = changes.perLanguageMoves ?? [];
   if (moves.length > 0) {
     return new CliError("SCHEMA_DRIFT", {
@@ -319,11 +349,15 @@ export function unwrittenChangesError(
       why: [why, perLanguageMoveWhy(moves)].join("\n"),
       // The two safe ways forward replace a bare "create a migration", which would read as
       // consent to drop the columns; any other change listed still needs one.
-      next: perLanguageDriftNext(moves, count, CREATE_MIGRATION),
+      next: perLanguageDriftNext(
+        moves,
+        changesBesideMoves(changes),
+        CREATE_MIGRATION
+      ),
       context: { lines },
     });
   }
-  return settingsOnly
+  return settingsAlone(changes)
     ? new CliError("SETTINGS_CHANGE_WITHOUT_MIGRATION", {
         what: `${count} entit${count === 1 ? "y's" : "ies'"} settings changed with no migration.`,
         why,

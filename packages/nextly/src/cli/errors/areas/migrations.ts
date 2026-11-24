@@ -1448,13 +1448,15 @@ const CREATE_MIGRATION =
 export function schemaChangeWithoutMigration(
   count: number,
   lines: readonly string[],
-  moves: readonly PerLanguageMove[] = []
+  moves: readonly PerLanguageMove[] = [],
+  /** Whether `lines` names anything besides the moves (`changesBesideMoves`). */
+  others = false
 ): CliError {
   if (moves.length > 0) {
     return new CliError("SCHEMA_DRIFT", {
       what: `${count} pending schema change(s) detected.`,
       why: [...lines, perLanguageMoveWhy(moves)].join("\n"),
-      next: perLanguageDriftNext(moves, count, CREATE_MIGRATION),
+      next: perLanguageDriftNext(moves, others, CREATE_MIGRATION),
     });
   }
   return new CliError("SCHEMA_DRIFT", {

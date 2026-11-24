@@ -507,6 +507,47 @@ describe("unwrittenChangesError", () => {
       );
     });
 
+    // The moved fields of a table are one line of the list, its translations file, however many
+    // they are, so the lines cannot be counted against the columns to find the other changes. A
+    // snapshot that records settings names an added field twice, by its column and its settings.
+    it.each([
+      ["two fields move, over a snapshot that records settings", 2, true],
+      ["three fields move, over a snapshot that records settings", 3, true],
+      ["two fields move, over a snapshot that records no settings", 2, false],
+    ] as const)(
+      "asks a migration for the other change where %s",
+      async (_what, count, recordsSettings) => {
+        const texts = ["title", "summary", "body"]
+          .slice(0, count)
+          .map(name => ({ name, type: "text" }));
+        const before = entitiesOf(collection(texts));
+        const earlier = earlierSnapshot(before);
+        const latest = recordsSettings
+          ? earlier
+          : { ...earlier, data: { ...earlier.data, entities: undefined } };
+        const nextOver = async (entities: DeclaredEntities) =>
+          refusalOf(
+            await compareOver({
+              entities,
+              permissions: NO_PERMISSIONS,
+              latest,
+            })
+          ).next;
+
+        expect(
+          await nextOver(
+            entitiesOf(
+              collection([...texts, { name: "views", type: "number" }])
+            )
+          )
+        ).toContain("For the other changes listed");
+        // Nothing but the moves: no other change to ask for.
+        expect(await nextOver(before)).not.toContain(
+          "For the other changes listed"
+        );
+      }
+    );
+
     it("names a field removed from the config as a drop, with no move explained", async () => {
       const before = entitiesOf(
         collection([TITLE, { name: "views", type: "number" }])

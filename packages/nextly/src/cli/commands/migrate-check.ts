@@ -86,11 +86,16 @@ import {
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import {
+  changesBesideMoves,
+  nothingUnwritten,
+  settingsAlone,
   type UnwrittenChanges,
+  unwrittenChangeLines,
   unwrittenChangesError,
   unwrittenChangesOf,
 } from "../../domains/schema/migrate/unwritten-changes";
 import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
+import { describeSettingsChange } from "../../domains/schema/migrate-create/entity-settings";
 import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
 import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
 import {
@@ -118,11 +123,13 @@ import {
   exitWithError,
 } from "../errors";
 import {
+  builderDefinitionIgnored,
   migrationFileEdited,
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
+  schemaChangeWithoutMigration,
+  settingsChangeWithoutMigration,
   snapshotWithoutMigration,
-  builderDefinitionIgnored,
 } from "../errors/areas/migrations";
 import { createContext, type CommandContext } from "../program";
 import type { SupportedDialect } from "../utils/adapter";
@@ -401,9 +408,10 @@ export async function runChecks(args: {
   migrationsDir: string;
   /**
    * The changes not yet in a migration, as `migrate:create` plans them from the same inputs
-   * (`unwrittenChangesOf`). Omitted, none are checked.
+   * (`unwrittenChangesOf`). Required: a caller that left it out would pass a project whose
+   * changes nothing looked at.
    */
-  unwritten?: () => Promise<UnwrittenChanges>;
+  unwritten: () => Promise<UnwrittenChanges>;
   /**
    * The dialect the files will run on, for the statement check. Omitted, the
    * check is skipped.
@@ -568,20 +576,18 @@ export async function runChecks(args: {
     return exitWithError(logger, siblingClashesErrorFor(refusedSiblings));
   }
 
-  if (args.unwritten !== undefined) {
-    let changes: UnwrittenChanges;
-    try {
-      changes = await args.unwritten();
-    } catch (error) {
-      // A declaration `migrate:create` would refuse ends the check with its message.
-      return exitWithError(logger, error);
-    }
-    const drift = unwrittenChangesError(changes);
-    if (drift !== undefined) return exitWithError(logger, drift);
-    // Settings an earlier snapshot never recorded: a notice, as `migrate:create` gives it.
-    if (changes.settingsNotRecorded === true) {
-      logger.warn(SETTINGS_NOT_RECORDED_NOTICE);
-    }
+  let changes: UnwrittenChanges;
+  try {
+    changes = await args.unwritten();
+  } catch (error) {
+    // A declaration `migrate:create` would refuse ends the check with its message.
+    return exitWithError(logger, error);
+  }
+  const drift = checkDriftError(changes);
+  if (drift !== undefined) return exitWithError(logger, drift);
+  // Settings an earlier snapshot never recorded: a notice, as `migrate:create` gives it.
+  if (changes.settingsNotRecorded === true) {
+    logger.warn(SETTINGS_NOT_RECORDED_NOTICE);
   }
 
   try {
@@ -592,6 +598,32 @@ export async function runChecks(args: {
 
   logger.success(
     `migrate:check OK — ${sqlFiles.length} migration file(s), no drift.`
+  );
+}
+
+/**
+ * The changes not yet in a migration as this check ends on them, or undefined where there are none:
+ * the one list every surface reports (`unwrittenChangeLines`), in the check's own words, since it
+ * reads no database and changes nothing. Settings alone are named as their own change, and
+ * permissions alone as `nextly migrate` names them.
+ */
+function checkDriftError(changes: UnwrittenChanges): CliError | undefined {
+  if (nothingUnwritten(changes)) return undefined;
+  if (settingsAlone(changes)) {
+    return settingsChangeWithoutMigration(
+      changes.settings.length,
+      changes.settings.map(change => `~ ${describeSettingsChange(change)}`)
+    );
+  }
+  if (changes.permissions.length === unwrittenChangeLines(changes).length) {
+    return unwrittenChangesError(changes);
+  }
+  const lines = unwrittenChangeLines(changes);
+  return schemaChangeWithoutMigration(
+    lines.length,
+    lines,
+    changes.perLanguageMoves ?? [],
+    changesBesideMoves(changes)
   );
 }
 
