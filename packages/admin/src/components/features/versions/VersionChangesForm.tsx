@@ -13,6 +13,7 @@
  * @module components/features/versions/VersionChangesForm
  */
 
+import { RotateCcw } from "lucide-react";
 import type { FieldConfig } from "nextly/config";
 import { Fragment } from "react";
 import type { JSX } from "react";
@@ -22,6 +23,7 @@ import { Button } from "@admin/components/ui";
 import { addressableFieldsWithin } from "@admin/lib/plugins/document-view-registry";
 import { cn } from "@admin/lib/utils";
 
+import { FieldRowAction } from "./diff/diff-primitives";
 import { FieldDiffNode } from "./diff/FieldDiffNode";
 import type { RestoreRow } from "./restore-plan";
 import { UnchangedFieldsToggle } from "./UnchangedFieldsToggle";
@@ -176,8 +178,8 @@ export interface VersionFieldRestore {
 
 /**
  * The field's own restore, the same as "Restore…" for this field alone: a
- * button where it can be restored, its reason where it cannot, nothing where
- * the editor already holds the version's value.
+ * link in the field's heading row where it can be restored, its reason there
+ * where it cannot, nothing where the editor already holds the version's value.
  */
 function RestoreThisField({
   name,
@@ -191,20 +193,20 @@ function RestoreThisField({
   const row = restoreField.rowFor(name);
   if (!row) return null;
   if (row.disabled) {
-    return <p className="pb-3 text-xs text-muted-foreground">{row.reason}</p>;
+    return <p className="text-xs text-muted-foreground">{row.reason}</p>;
   }
   return (
-    <div className="pb-3">
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        aria-label={`Restore this field: ${label}`}
-        onClick={() => restoreField.restore(name)}
-      >
-        Restore this field
-      </Button>
-    </div>
+    <Button
+      type="button"
+      variant="link"
+      size="sm"
+      className="h-auto gap-1.5 px-0 text-xs"
+      aria-label={`Restore this field: ${label}`}
+      onClick={() => restoreField.restore(name)}
+    >
+      <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+      Restore this field
+    </Button>
   );
 }
 
@@ -236,14 +238,19 @@ function ChangedField({
         current && "ring-2 ring-ring ring-offset-2 ring-offset-background"
       )}
     >
-      <FieldDiffNode node={node} />
-      {restoreField ? (
-        <RestoreThisField
-          name={name}
-          label={label}
-          restoreField={restoreField}
-        />
-      ) : null}
+      <FieldRowAction
+        action={
+          restoreField ? (
+            <RestoreThisField
+              name={name}
+              label={label}
+              restoreField={restoreField}
+            />
+          ) : null
+        }
+      >
+        <FieldDiffNode node={node} />
+      </FieldRowAction>
     </section>
   );
 }

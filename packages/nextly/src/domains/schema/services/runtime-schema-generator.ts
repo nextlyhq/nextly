@@ -766,6 +766,30 @@ export function systemColumnDriverValue(
   name: string,
   value: unknown
 ): unknown {
+  return systemEncoderColumn(dialect, name).mapToDriverValue(value);
+}
+
+/**
+ * A value of system column `name` on `dialect` as the runtime table's own column reads it back
+ * from what the driver returned: the inverse of {@link systemColumnDriverValue}, from the same
+ * column, for a statement that selects the column itself rather than through that table.
+ */
+export function systemColumnFromDriverValue(
+  dialect: SupportedDialect,
+  name: string,
+  driverValue: unknown
+): unknown {
+  return systemEncoderColumn(dialect, name).mapFromDriverValue(driverValue);
+}
+
+/** The column system column `name` is on `dialect`, built from its descriptor, kept per process. */
+function systemEncoderColumn(
+  dialect: SupportedDialect,
+  name: string
+): {
+  mapToDriverValue(value: unknown): unknown;
+  mapFromDriverValue(value: unknown): unknown;
+} {
   const key = `${dialect}\u0000${name}`;
   let table = encoderTables.get(key);
   if (table === undefined) {
@@ -792,9 +816,12 @@ export function systemColumnDriverValue(
   }
   const columns = getColumns(table as never) as Record<
     string,
-    { mapToDriverValue(value: unknown): unknown }
+    {
+      mapToDriverValue(value: unknown): unknown;
+      mapFromDriverValue(value: unknown): unknown;
+    }
   >;
-  return columns.column.mapToDriverValue(value);
+  return columns.column;
 }
 
 /**

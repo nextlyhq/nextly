@@ -24,7 +24,10 @@ import {
 } from "@admin/components/features/versions/version-search-params";
 import { VersionComparePage } from "@admin/components/features/versions/VersionComparePage";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { useSingleDocument } from "@admin/hooks/queries/useSingles";
+import {
+  useSingleDocument,
+  useSingleSchema,
+} from "@admin/hooks/queries/useSingles";
 import type { PageProps } from "@admin/lib/routing";
 
 export default function SingleVersionsPage({
@@ -33,6 +36,10 @@ export default function SingleVersionsPage({
 }: PageProps): JSX.Element {
   const slug = typeof params?.slug === "string" ? params.slug : "";
   const document = useSingleDocument(slug);
+  // Whether the Single is translated, from its schema, the read its editor
+  // makes too.
+  const entityLocalized =
+    useSingleSchema(slug || undefined).data?.localized === true;
   const documentId = document.data?.id;
   // The language the address names, as an entry's comparison page honours it:
   // a link shared from a German history opens under the German title.
@@ -64,6 +71,7 @@ export default function SingleVersionsPage({
       scope={{ kind: "single", slug, documentId: String(documentId) }}
       documentHref={buildRoute(ROUTES.SINGLE_EDIT, { slug })}
       documentTitle={documentTitle}
+      entityLocalized={entityLocalized}
       // Reaching this page needs `read-${slug}`; the single's own editor needs
       // `update-${slug}`. `/admin/singles` is NOT the readable alternative it
       // looks like: it redirects straight to the first single the viewer can
