@@ -138,8 +138,15 @@ describe.each(getConfiguredTestDialects())(
       ).map(row => Number(row.n))[0];
 
     /** A running site with one entry holding the group, and what a caller asks of it. */
-    const openSite = async (options: { migrated?: boolean } = {}) => {
-      site = await openStorageGenerationSite({ dialect, loaded, legacy: true });
+    const openSite = async (
+      options: { migrated?: boolean; poolMax?: number } = {}
+    ) => {
+      site = await openStorageGenerationSite({
+        dialect,
+        loaded,
+        legacy: true,
+        ...(options.poolMax === undefined ? {} : { poolMax: options.poolMax }),
+      });
       let { nextly } = await site.developmentStart(declared);
       const created = await nextly.create({
         collection: "fgnm_posts" as never,
@@ -341,6 +348,28 @@ describe.each(getConfiguredTestDialects())(
       await tried(() => saveSingle("First"), [MOVING]);
       expect(await singleHeading()).toBe("First");
     });
+
+    // A transaction holds the pool's one connection, so anything asked on another waits for it
+    // until the wait gives up: the refusal, what follows it and the retry must ask nothing there.
+    it.runIf(dialect !== "sqlite")(
+      "refuses a first save to be retried, and saves it, on a pool of one connection",
+      async () => {
+        const { save, saveSingle, heading, singleHeading } = await openSite({
+          poolMax: 1,
+        });
+        // The control: a pool of one serves these saves with nothing moved.
+        expect([await save(), await saveSingle()]).toEqual(["ok", "ok"]);
+        await moveEverything();
+
+        await tried(() => saveSingle("First"), [MOVING]);
+        await tried(() => save("First"), [MOVING]);
+        expect([await singleHeading(), await heading()]).toEqual([
+          "First",
+          "First",
+        ]);
+      },
+      120_000
+    );
 
     it("refuses a restore of a Single's version meeting a moved table, and restores it on the retry", async () => {
       const { restoreSingle, draftHeading } = await openSite();

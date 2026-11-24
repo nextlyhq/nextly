@@ -79,6 +79,8 @@ export interface SiteOptions {
    * database (`StorageGenerationSite.url`). Server dialects are always reachable that way.
    */
   sqliteFile?: boolean;
+  /** Connections the site's own pool holds; a server dialect's default, unless given. */
+  poolMax?: number;
 }
 
 /**
@@ -154,6 +156,8 @@ export interface StorageGenerationSite {
   migrateStorage(options?: {
     dryRun?: boolean;
     direction?: "up" | "down";
+    /** The run's lease on the schema lock, in seconds; the production one, unless given. */
+    leaseSeconds?: number;
   }): Promise<{ reason?: string; ran: boolean }>;
   /** The storage migration's marker, as the migration reads it. */
   marker(): Promise<Awaited<ReturnType<typeof readMigrationState>>>;
@@ -162,7 +166,8 @@ export interface StorageGenerationSite {
 
 async function openDatabase(
   dialect: TestDialect,
-  sqliteFile = false
+  sqliteFile = false,
+  poolMax?: number
 ): Promise<{
   adapter: DrizzleAdapter;
   url: string | undefined;
@@ -209,7 +214,11 @@ async function openDatabase(
   const adapter = (await createAdapter({
     type: dialect,
     url: url.toString(),
-  })) as unknown as DrizzleAdapter;
+    // Bounded, so a read that waits for the connection its own transaction holds fails its case.
+    ...(poolMax === undefined
+      ? {}
+      : { pool: { max: poolMax, connectionTimeoutMs: 5000 } }),
+  } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
   return {
     adapter,
     url: url.toString(),
@@ -225,7 +234,11 @@ export async function openStorageGenerationSite(
   options: SiteOptions
 ): Promise<StorageGenerationSite> {
   const { dialect, loaded, localization, plugins } = options;
-  const database = await openDatabase(dialect, options.sqliteFile === true);
+  const database = await openDatabase(
+    dialect,
+    options.sqliteFile === true,
+    options.poolMax
+  );
   if (options.legacy === true) {
     await seedLegacyCoreTables(database.adapter, dialect);
   }
@@ -276,7 +289,11 @@ export async function openStorageGenerationSite(
       loaded.config = configOf(declared);
       await reloadNextlyConfig();
     },
-    async migrateStorage({ dryRun = false, direction = "up" } = {}) {
+    async migrateStorage({
+      dryRun = false,
+      direction = "up",
+      leaseSeconds,
+    } = {}) {
       const outcome = await runFieldGroupMigration({
         adapter: database.adapter,
         logger: SILENT as never,
@@ -284,6 +301,7 @@ export async function openStorageGenerationSite(
         dryRun,
         // The suite creates and drops this database itself.
         backupConfirmed: true,
+        ...(leaseSeconds === undefined ? {} : { leaseSeconds }),
       });
       // The process that migrated drops what it resolved before storage moved.
       forgetFieldGroupStorageNames();

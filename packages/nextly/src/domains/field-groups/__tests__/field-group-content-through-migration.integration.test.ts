@@ -260,34 +260,16 @@ describe.each(getConfiguredTestDialects())(
       return answers.at(-1)!;
     };
 
-    // The control for the plugin's write below: the same request with no migration at all, so what
-    // it answers there is told from what it answers on a server that met one.
+    // The control for the plugin's writes below: what they answer, and store, with no migration.
     it.each(["plugin-tx-save", "plugin-tx-save-unwarmed"])(
-      "control: before any migration, a plugin's write on its own transaction (%s)",
+      "control: before any migration, a plugin's write on its own transaction (%s) is stored whole",
       async command => {
         const id = await openMigratedUnder({ migrate: false });
-        const answer = await ask(server!, `${command} ${id} from-plugin`);
-        console.log(`[control] ${dialect} ${command}: ${answer.slice(0, 200)}`);
-        if (command === "plugin-tx-save") expect(answer).toBe("OK");
+        expect(await ask(server!, `${command} ${id} from-plugin`)).toBe("OK");
+        expect(await readHeading(server!, id)).toBe("from-plugin");
       },
       300_000
     );
-
-    // The fourth cell: the unwarmed request on a server that met the migration. It answers what the
-    // same request answers without one (above), or the migration is what changed it.
-    it("control: after the migration, a plugin's write on its own transaction (plugin-tx-save-unwarmed)", async () => {
-      const id = await openMigratedUnder();
-      const answers: string[] = [];
-      for (let tries = 0; tries < 3; tries++) {
-        answers.push(
-          await ask(server!, `plugin-tx-save-unwarmed ${id} from-plugin`)
-        );
-        if (answers.at(-1) === "OK") break;
-      }
-      console.log(
-        `[control] ${dialect} after, unwarmed: ${answers.map(each => each.slice(0, 200)).join(" / ")}`
-      );
-    }, 300_000);
 
     // A read follows a move by itself, so a server that reads first has found the new names by the
     // time it writes. Each of these is the first thing a server does after the migration, with only
@@ -317,7 +299,7 @@ describe.each(getConfiguredTestDialects())(
         expect(await legacyObjects(site!.adapter, dialect)).toEqual([]);
       }, 300_000);
 
-      it.each(["plugin-save", "plugin-tx-save"])(
+      it.each(["plugin-save", "plugin-tx-save", "plugin-tx-save-unwarmed"])(
         "is a plugin's write through its own context (%s), saves it on the retry it is told to make",
         async command => {
           const id = await openMigratedUnder();

@@ -7,7 +7,8 @@
  * stop point (`NEXTLY_TEST_KILL_AT`): during the content rewrite, after one batch has committed and
  * before its progress is recorded, and, on MySQL, where each rename commits on its own, between two
  * renames. A kill is what an operator's run meets when its process or host dies, and it leaves no
- * chance to record anything on the way out.
+ * chance to record anything on the way out. A dropped connection is the other way a run stops: it
+ * runs here, and from one of those points on, every other session of its database is ended.
  *
  * What separates a correct resume from a plausibly broken one:
  * - a resume that trusted the recorded step alone would skip the batch the kill interrupted, or
@@ -35,7 +36,12 @@ vi.mock("../../../../cli/utils/config-loader", async importOriginal => ({
   }),
 }));
 
-import { KILL_AT_VARIABLE } from "../../../schema/migrate/stop-points";
+import { recordStatements } from "../../../../__tests__/helpers/record-statements";
+import { createAdapter } from "../../../../database/factory";
+import {
+  KILL_AT_VARIABLE,
+  withStopPoints,
+} from "../../../schema/migrate/stop-points";
 import { startScript } from "../../../schema/pipeline/__tests__/helpers/schema-lock-world";
 import { getConfiguredTestDialects } from "../../../../plugins/test-nextly";
 import { perLanguageStorageEnabled } from "../../../i18n/per-language-storage";
@@ -86,6 +92,110 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
+type Dialect = "sqlite" | "postgresql" | "mysql";
+
+/** Where a stored document is kept: what the migration's content rewrite rewrites. */
+const DOCUMENTS = [
+  { table: "nextly_versions", column: "snapshot" },
+  { table: "nextly_events", column: "payload" },
+] as const;
+
+/** Every stored document, by ledger and row, as its parsed value. */
+async function documentsOf(
+  at: StorageGenerationSite,
+  dialect: Dialect
+): Promise<Map<string, unknown>> {
+  const quote = (name: string) =>
+    dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+  const found = new Map<string, unknown>();
+  for (const { table, column } of DOCUMENTS) {
+    const rows = await at.adapter.executeQuery<Record<string, unknown>>(
+      `SELECT ${quote("id")} AS id, ${quote(column)} AS document FROM ${quote(table)}`
+    );
+    for (const row of rows) {
+      const value = row.document;
+      found.set(
+        `${table}:${String(row.id)}`,
+        typeof value === "string" ? JSON.parse(value) : value
+      );
+    }
+  }
+  return found;
+}
+
+/** `document` as one complete rewrite leaves it: the wire key renamed wherever it stands. */
+function rewritten(document: unknown): unknown {
+  if (Array.isArray(document)) return document.map(rewritten);
+  if (document === null || typeof document !== "object") return document;
+  return Object.fromEntries(
+    Object.entries(document).map(([key, value]) => [
+      key === LEGACY_STORAGE_VOCABULARY.wireTypeKey
+        ? FIELD_GROUP_STORAGE_VOCABULARY.wireTypeKey
+        : key,
+      rewritten(value),
+    ])
+  );
+}
+
+/** Each document that held the wire key anywhere before the run. */
+const holdsWireKey = (document: unknown): boolean =>
+  JSON.stringify(document).includes(LEGACY_STORAGE_VOCABULARY.wireTypeKey);
+
+/**
+ * Finishes the stopped run, holding it to the whole of what a resume promises: it creates nothing,
+ * renames nothing that an earlier step already renamed, and leaves every document as one complete
+ * rewrite of what stood before the first run, with none lost and none added.
+ */
+async function finishesOnce(
+  at: StorageGenerationSite,
+  dialect: Dialect,
+  before: ReadonlyMap<string, unknown>
+): Promise<void> {
+  const standing = new Set(
+    (await at.adapter.listTables()).map(name => name.toLowerCase())
+  );
+  const recorder = await recordStatements(at.adapter, dialect);
+  let statements: string[];
+  try {
+    expect((await at.migrateStorage()).ran).toBe(true);
+  } finally {
+    statements = [...recorder.statements];
+    recorder.uninstall();
+  }
+  const renames = statements.flatMap(text => {
+    const named =
+      /ALTER TABLE\s+["`]?([\w$-]+)["`]?\s+RENAME\s+TO\s+["`]?([\w$-]+)/i.exec(
+        text
+      ) ??
+      /RENAME TABLE\s+["`]?([\w$-]+)["`]?\s+TO\s+["`]?([\w$-]+)/i.exec(text);
+    return named === null
+      ? []
+      : [{ from: named[1]!.toLowerCase(), to: named[2]!.toLowerCase() }];
+  });
+  const from = renames.map(each => each.from);
+  expect(new Set(from).size, "each table renamed at most once").toBe(
+    from.length
+  );
+  for (const each of renames) {
+    expect(standing, `${each.from} stood before the run`).toContain(each.from);
+    expect(standing, `${each.to} was not there already`).not.toContain(each.to);
+  }
+  expect(
+    statements.filter(
+      text =>
+        /^\s*CREATE TABLE/i.test(text) &&
+        /["`]?(fg_|comp_|dynamic_field_groups|dynamic_components)/i.test(text)
+    ),
+    "no field-group table or registry created"
+  ).toEqual([]);
+
+  const after = await documentsOf(at, dialect);
+  expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
+  for (const [key, document] of before) {
+    expect(after.get(key), key).toEqual(rewritten(document));
+  }
+}
+
 const cases = getConfiguredTestDialects().flatMap(dialect =>
   STOP_POINTS.filter(
     stop => stop.dialects === "all" || stop.dialects === dialect
@@ -120,6 +230,12 @@ describe.each(cases)(
         });
         headings.set(id, `kept-${n}`);
       }
+
+      const before = await documentsOf(site, dialect);
+      // The control for what the finished run is held to: there is something to rewrite.
+      expect([...before.values()].filter(holdsWireKey).length).toBeGreaterThan(
+        1
+      );
 
       // The run, killed at the point.
       vi.stubEnv(KILL_AT_VARIABLE, point);
@@ -156,8 +272,8 @@ describe.each(cases)(
         stopped: { direction: "up", step: expect.any(Number) },
       });
 
-      // The next --apply finishes from it.
-      expect((await site.migrateStorage()).ran).toBe(true);
+      // The next --apply finishes from it, once.
+      await finishesOnce(site, dialect, before);
       expect((await site.marker())?.status).toBe("settled");
       expect(await legacyObjects(site.adapter, dialect)).toEqual([]);
 
@@ -203,5 +319,94 @@ describe.each(cases)(
           })
       );
     }, 600_000);
+  }
+);
+
+describe.each(getConfiguredTestDialects().filter(each => each !== "sqlite"))(
+  "migrate:field-groups --apply whose connections drop (%s)",
+  dialect => {
+    // SQLite has no connection to drop: its database is a file in the process that runs.
+    it("stops, is reported by the next preview and finished once by the next --apply", async () => {
+      site = await openStorageGenerationSite({
+        dialect,
+        loaded,
+        legacy: true,
+        localization: LIVE_LOCALIZATION,
+      });
+      const first = await site.developmentStart(LIVE_DECLARED);
+      for (let n = 0; n < 6; n++) {
+        await first.nextly.create({
+          collection: LIVE_COLLECTION as never,
+          data: {
+            title: `P${n}`,
+            card: { heading: `kept-${n}`, tagline: `kept-${n}` },
+          } as never,
+        });
+      }
+      const before = await documentsOf(site, dialect);
+
+      // Another session, which ends every other one of this database, again and again from the
+      // point on: a run that asks for a fresh connection loses that one too.
+      const admin = await createAdapter({
+        type: dialect,
+        url: site.url!,
+        pool: { max: 1 },
+      } as Parameters<typeof createAdapter>[0]);
+      let ending: ReturnType<typeof setInterval> | undefined;
+      const endOthers = async (): Promise<void> => {
+        if (dialect === "postgresql") {
+          await admin.executeQuery(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()"
+          );
+          return;
+        }
+        const others = await admin.executeQuery<{ id: number | string }>(
+          "SELECT ID AS id FROM information_schema.PROCESSLIST WHERE DB = DATABASE() AND ID <> CONNECTION_ID()"
+        );
+        for (const { id } of others) {
+          await admin
+            .executeQuery(`KILL ${String(Number(id))}`)
+            .catch(() => {});
+        }
+      };
+      let stopped = "";
+      try {
+        await withStopPoints(
+          async point => {
+            if (point !== REWRITE_BATCH_COMMITTED || ending) return;
+            await endOthers();
+            ending = setInterval(() => {
+              void endOthers().catch(() => {});
+            }, 5);
+          },
+          () => site!.migrateStorage({ leaseSeconds: LEASE_SECONDS })
+        ).then(
+          () => {
+            stopped = "it ran to its end";
+          },
+          (error: unknown) => {
+            stopped = `stopped: ${String((error as { code?: unknown }).code ?? error)}`;
+          }
+        );
+      } finally {
+        if (ending) clearInterval(ending);
+        // Let an end still under way finish before the next session opens.
+        await new Promise(resolve => setTimeout(resolve, 200));
+        await admin.disconnect();
+      }
+      expect(stopped).toMatch(/^stopped: /);
+
+      await new Promise(resolve =>
+        setTimeout(resolve, (LEASE_SECONDS + 1) * 1000)
+      );
+      expect(await site.migrateStorage({ dryRun: true })).toMatchObject({
+        ran: false,
+        lock: { kind: "not-held" },
+        stopped: { direction: "up", step: expect.any(Number) },
+      });
+      await finishesOnce(site, dialect, before);
+      expect((await site.marker())?.status).toBe("settled");
+      expect(await legacyObjects(site.adapter, dialect)).toEqual([]);
+    }, 300_000);
   }
 );
