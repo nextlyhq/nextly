@@ -12,7 +12,7 @@ import { stripVTControlCharacters } from "node:util";
 
 import type { Command } from "commander";
 
-import { declaredFirstLine } from "../../first-line";
+import { declaredFirstLine, mayConnect } from "../../first-line";
 
 import { commandAt, commandPaths } from "./answer-only-invocations";
 
@@ -195,59 +195,35 @@ export function codeLoadInvocations(program: Command): string[][] {
 }
 
 /**
- * The commands that say what they start before they know whether they will
- * use a database: each declares a start line rather than the `Database: …`
- * line, and can connect all the same. `add` is not among them: it installs a
- * package before it connects.
- */
-export const CONNECTS_AFTER_START_LINE: readonly string[] = [
-  "build",
-  "media orphans",
-  "media reindex-usage",
-  "media remove-sizes",
-  "setup-token",
-  "webhooks:prune",
-];
-
-/**
- * The runs the start-up timing stops once their command has connected: every
- * command that declares the `Database: …` line, and those that connect after
- * a start line of their own (`CONNECTS_AFTER_START_LINE`), each with the
- * arguments its other timings use. `untimed` names the rest of the commands
- * with an action. They are not run: a command that connects to nothing would
- * run on to the end of its work, a package install among it. Throws naming an
- * entry of the list that no longer needs to be there.
+ * The runs the start-up timing stops once their command has connected, and
+ * the names of the commands it does not run: see `connectRunsOf`.
  */
 export function connectInvocations(program: Command): {
   timed: string[][];
   untimed: string[];
 } {
-  const runs = codeLoadInvocations(program).map(args => ({
-    args,
-    path: commandPathOf(program, args),
-  }));
-  const names = runs.map(({ path }) => path.join(" "));
-  const onDatabaseLine = ({ path }: { path: readonly string[] }) =>
-    declaredFirstLine(commandAt(program, path))?.kind === "database";
-  const stale = CONNECTS_AFTER_START_LINE.filter(
-    name =>
-      !names.includes(name) ||
-      onDatabaseLine({ path: runs[names.indexOf(name)].path })
-  );
-  if (stale.length > 0) {
-    throw new Error(
-      `CONNECTS_AFTER_START_LINE names ${stale.join(", ")}, which starts with the Database line or is no command.`
-    );
+  return connectRunsOf(program, codeLoadInvocations(program));
+}
+
+/**
+ * Of `runs`, those whose command may connect to a database, by the first line
+ * it declares: the `Database: …` line, or a start line said to come before a
+ * connection. `untimed` names the rest. They are not run: a command that
+ * connects to nothing would run on to the end of its work.
+ */
+export function connectRunsOf(
+  program: Command,
+  runs: readonly string[][]
+): { timed: string[][]; untimed: string[] } {
+  const timed: string[][] = [];
+  const untimed: string[] = [];
+  for (const args of runs) {
+    const path = commandPathOf(program, args);
+    const first = declaredFirstLine(commandAt(program, path));
+    if (first !== undefined && mayConnect(first)) timed.push(args);
+    else untimed.push(path.join(" "));
   }
-  const connects = (run: { path: readonly string[] }) =>
-    onDatabaseLine(run) ||
-    CONNECTS_AFTER_START_LINE.includes(run.path.join(" "));
-  return {
-    timed: runs.filter(connects).map(({ args }) => args),
-    untimed: runs
-      .filter(run => !connects(run))
-      .map(({ path }) => path.join(" ")),
-  };
+  return { timed, untimed };
 }
 
 /**

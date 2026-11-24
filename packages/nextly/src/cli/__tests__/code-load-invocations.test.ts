@@ -15,10 +15,15 @@
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 
-import { declareFirstLine, startLine } from "../first-line";
+import {
+  DATABASE_LINE,
+  declareFirstLine,
+  startLine,
+  type FirstLine,
+} from "../first-line";
 
 import { commandAt, commandPaths } from "./helpers/answer-only-invocations";
-import { hasAction } from "./helpers/first-line-invocations";
+import { connectRunsOf, hasAction } from "./helpers/first-line-invocations";
 // The list the start-up timing script loads, from the one module it loads it from.
 import {
   codeLoadInvocations,
@@ -48,7 +53,7 @@ describe("whether a command has an action of its own", () => {
   });
 
   it("decides the first line it is held to: its own, or its help", () => {
-    declareFirstLine(parentWithAction, startLine("Syncing..."));
+    declareFirstLine(parentWithAction, startLine("Syncing...", "no database"));
     const help = "Usage: nextly sync [options]";
     expect(wrongFirstLine(built, ["sync"], "Syncing...")).toBeUndefined();
     expect(wrongFirstLine(built, ["sync"], help)).toBeDefined();
@@ -82,7 +87,7 @@ describe("the runs timed to their connection", () => {
     commandPathOf(program, args).join(" ")
   );
 
-  it("are the commands that name a database, and those that connect after a line of their own", () => {
+  it("are the commands that name a database, and those that may connect after a line of their own", () => {
     expect(timedNames).toEqual(
       expect.arrayContaining([
         "migrate:status",
@@ -93,10 +98,34 @@ describe("the runs timed to their connection", () => {
     );
   });
 
+  it("follow what each command declares, with no list of their own", () => {
+    const built = new Command();
+    const declare = (name: string, first: FirstLine) =>
+      declareFirstLine(
+        built.command(name).action(() => {}),
+        first
+      );
+    // Named as the real commands are, for the arguments the table gives them.
+    for (const name of named) {
+      const [parent, child] = name.split(" ");
+      if (child === undefined) declare(parent, startLine("...", "no database"));
+    }
+    const at = (name: string) => commandAt(built, [name]);
+    declareFirstLine(at("init"), startLine("...", "may connect"));
+    declareFirstLine(at("migrate"), DATABASE_LINE);
+
+    const { timed: runs, untimed } = connectRunsOf(
+      built,
+      built.commands.map(command => [command.name()])
+    );
+    expect(runs.map(([name]) => name).sort()).toEqual(["init", "migrate"]);
+    expect(untimed).toContain("setup-token");
+  });
+
   it("leave out, by name, every other command, so none runs its work to the end", () => {
-    // Installing a package and scaffolding a project would do so.
+    // Scaffolding a project would do so.
     expect(connect.untimed).toEqual(
-      expect.arrayContaining(["add", "init", "generate:types"])
+      expect.arrayContaining(["init", "generate:types"])
     );
     expect([...timedNames, ...connect.untimed].sort()).toEqual(
       [...named].sort()

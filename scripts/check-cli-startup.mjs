@@ -38,8 +38,8 @@
  * answer-only budget, so code that action imports for itself cannot load
  * untimed.
  *
- * Last, every command that uses a database is timed until it has connected
- * (`connectInvocations`), by the probe's second point. Code a command imports
+ * Last, every command that declares it may reach a database is timed until it
+ * has connected (`connectInvocations`), by the probe's second point. Code a command imports
  * after its own module, on the way to its database, is in this time and not in
  * the one before, so moving an import past the first point does not read as a
  * saving. Each command runs in a copy of the project of its own, on that
@@ -602,7 +602,7 @@ function connectFailures({ timed, untimed }, where, probe) {
   }
   for (const name of untimed) {
     console.log(
-      `     not run      nextly ${name}  (starts with a line of its own)`
+      `     not run      nextly ${name}  (declares that it reaches no database)`
     );
   }
   return failures;

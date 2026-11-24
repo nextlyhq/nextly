@@ -39,6 +39,6 @@ export function registerSetupTokenCommand(
           (await import("./setup-token")).setupTokenAction(createContext)
         )
       ),
-    startLine("Setting up the setup token...")
+    startLine("Setting up the setup token...", "may connect")
   );
 }
