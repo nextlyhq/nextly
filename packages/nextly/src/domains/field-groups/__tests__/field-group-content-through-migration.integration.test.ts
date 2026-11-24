@@ -286,6 +286,29 @@ describe.each(getConfiguredTestDialects())(
         expect(await legacyObjects(site!.adapter, dialect)).toEqual([]);
       }, 300_000);
 
+      it.each(["plugin-save", "plugin-tx-save"])(
+        "is a plugin's write through its own context (%s), saves it on the retry it is told to make",
+        async command => {
+          const id = await openMigratedUnder();
+          await untilDone(`${command} ${id} from-plugin`);
+          expect(await readHeading(server!, id)).toBe("from-plugin");
+          expect(await legacyObjects(site!.adapter, dialect)).toEqual([]);
+        },
+        300_000
+      );
+
+      it("is a Single's read of every language, returns each one's values", async () => {
+        await openMigratedUnder();
+        const answer = await ask(server!, "read-single-all");
+        expect(answer).toMatch(/^OK /);
+        const read = JSON.parse(answer.slice(3)) as {
+          card?: unknown;
+          all?: { card?: Record<string, { tagline?: unknown } | null> };
+        };
+        expect(read.card).toMatchObject({ heading: "Kept", tagline: "Kept" });
+        expect(read.all?.card?.en, answer).toMatchObject({ tagline: "Kept" });
+      }, 300_000);
+
       it("is a Single's read, returns its group and its translation", async () => {
         await openMigratedUnder();
         expect(headingOf(await ask(server!, "read-single"))).toBe("Kept");

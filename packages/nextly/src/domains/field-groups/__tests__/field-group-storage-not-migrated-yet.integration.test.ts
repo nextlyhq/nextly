@@ -64,6 +64,16 @@ const declared = {
     }),
   ],
   singles: [
+    // With drafts, which a restore puts the version back as.
+    defineSingle({
+      slug: "fgnm_page",
+      status: true,
+      versions: true,
+      fields: [
+        text({ name: "title" }),
+        fieldGroup({ name: "card", component: "fgnm_card" }),
+      ],
+    }),
     defineSingle({
       slug: "fgnm_home",
       versions: true,
@@ -144,6 +154,17 @@ describe.each(getConfiguredTestDialects())(
           _overwrite: true,
         } as never,
       });
+      for (const heading of ["Kept", "Second"]) {
+        await nextly.updateSingle({
+          slug: "fgnm_page" as never,
+          data: {
+            title: "G",
+            card: { heading },
+            status: "published",
+            _overwrite: true,
+          } as never,
+        });
+      }
       if (options.migrated === true) {
         expect((await site.migrateStorage()).ran).toBe(true);
         ({ nextly } = await site.developmentStart(declared));
@@ -179,23 +200,33 @@ describe.each(getConfiguredTestDialects())(
         return (found as { card?: { heading?: unknown } }).card?.heading;
       };
       /** Puts the Single's first version back, as a person in the admin does. */
-      let admin: string | undefined;
       const restoreSingle = async () => {
         const found = (await nextly.findSingle({
-          slug: "fgnm_home" as never,
+          slug: "fgnm_page" as never,
         })) as { id?: string };
-        admin ??= await superAdminUser(site!.current!, "fgnm-admin");
-        const user = { id: admin, roles: ["super-admin"] };
-        return outcome(
-          restoreVersion({
-            scopeKind: "single",
-            slug: "fgnm_home",
-            entryId: found.id!,
-            versionNo: 1,
-            user: user as never,
-            version: { _overwrite: true },
-          })
-        );
+        // Read before the move, as the screen a person restores from has them.
+        const user = {
+          id: await superAdminUser(site!.current!, "fgnm-admin"),
+          roles: ["super-admin"],
+        };
+        return () =>
+          outcome(
+            restoreVersion({
+              scopeKind: "single",
+              slug: "fgnm_page",
+              entryId: found.id!,
+              versionNo: 1,
+              user: user as never,
+              version: { _overwrite: true },
+            })
+          );
+      };
+      const draftHeading = async () => {
+        const found = await nextly.findSingle({
+          slug: "fgnm_page" as never,
+          draft: true,
+        });
+        return (found as { card?: { heading?: unknown } }).card?.heading;
       };
       const bulkRemove = async () => {
         const made = await nextly.create({
@@ -219,6 +250,7 @@ describe.each(getConfiguredTestDialects())(
         saveSingle,
         singleHeading,
         restoreSingle,
+        draftHeading,
         bulkRemove,
       };
     };
@@ -287,7 +319,7 @@ describe.each(getConfiguredTestDialects())(
 
       await tried(() => save("First"), [MOVING]);
       expect(await heading()).toBe("First");
-      expect(await rowsIn(CURRENT)).toBe(2);
+      expect(await rowsIn(CURRENT)).toBe(3);
     });
 
     it("refuses a first save of a group that keeps its table name, whose column moved, and saves it on the retry", async () => {
@@ -298,7 +330,7 @@ describe.each(getConfiguredTestDialects())(
 
       await tried(() => save("First"), [MOVING]);
       expect(await heading()).toBe("First");
-      expect(await rowsIn(TABLE)).toBe(2);
+      expect(await rowsIn(TABLE)).toBe(3);
     });
 
     it("refuses a first save of a Single's group the whole migration moved, and saves it on the retry", async () => {
@@ -311,13 +343,12 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses a restore of a Single's version meeting a moved table, and restores it on the retry", async () => {
-      const { saveSingle, singleHeading, restoreSingle } = await openSite();
-      expect(await saveSingle("Second")).toBe("ok");
-      // The entry's row and the Single's id are read before the move, as a person's screen has them.
+      const { restoreSingle, draftHeading } = await openSite();
+      const restore = await restoreSingle();
       await moveEverything();
 
-      await tried(restoreSingle, [MOVING]);
-      expect(await singleHeading()).toBe("Kept");
+      await tried(restore, [MOVING]);
+      expect(await draftHeading()).toBe("Kept");
     });
 
     it("refuses a delete meeting a moved table, rather than leaving the group's rows behind", async () => {
@@ -325,7 +356,7 @@ describe.each(getConfiguredTestDialects())(
       await moveEverything();
 
       await tried(remove, [MOVING]);
-      expect(await rowsIn(CURRENT), "the Single's row alone").toBe(1);
+      expect(await rowsIn(CURRENT), "the two Singles' rows alone").toBe(2);
     });
 
     it("loses nothing to a rollback under a server on the current names, and saves on a retry", async () => {
@@ -337,11 +368,11 @@ describe.each(getConfiguredTestDialects())(
 
       await tried(async () => {
         const answer = await save("Back");
-        expect(await rowsIn(TABLE), "what the group held is there").toBe(2);
+        expect(await rowsIn(TABLE), "what the group held is there").toBe(3);
         return answer;
       }, [MOVING, "INTERNAL_ERROR"]);
       expect(await heading()).toBe("Back");
-      expect(await rowsIn(TABLE)).toBe(2);
+      expect(await rowsIn(TABLE)).toBe(3);
     });
 
     describe.runIf(dialect === "postgresql")(

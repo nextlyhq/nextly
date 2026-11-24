@@ -12,6 +12,8 @@
  * - `<id> save <entryId> <heading>` answers `OK` when the save succeeded, the heading saved as
  *   the group's translated tagline too.
  * - `<id> duplicate <entryId>` answers `OK <new entryId>`.
+ * - `<id> plugin-save <entryId> <heading>` and `plugin-tx-save` save through a plugin's context.
+ * - `<id> read-single-all` answers the Single's group and every language's values beside it.
  * - `<id> read-single` and `<id> save-single <heading>` do the same for the Single.
  *
  * Either answers `REFUSED <code> <message>` for an error a caller is meant to act on, and
@@ -20,6 +22,8 @@
  * @module domains/field-groups/__tests__/helpers/content-server-child
  */
 import { createInterface } from "node:readline";
+
+import type { CollectionService } from "../../../collections/services/collection-service";
 
 const [dialect, url, layout] = process.argv.slice(2) as [
   "sqlite" | "postgresql" | "mysql",
@@ -41,9 +45,29 @@ const { createTestNextly } = await import("../../../../plugins/test-nextly");
 const { LIVE_COLLECTION, LIVE_DECLARED, LIVE_LOCALIZATION, LIVE_SINGLE } =
   await import("./live-site-entities");
 
+const { definePlugin } = await import("../../../../plugins/plugin-context");
+
+// A plugin of the server's, which writes through its own context as an importer does: one save that
+// opens its own transaction, and one on a transaction the plugin opened.
+type PluginCollections = Pick<
+  CollectionService,
+  "updateEntry" | "updateEntryInTransaction" | "withTransaction"
+>;
+let pluginCollections: PluginCollections | undefined;
+const plugin = definePlugin({
+  name: "@test/content-server-child",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init(ctx) {
+    pluginCollections = ctx.services
+      .collections as unknown as PluginCollections;
+  },
+});
+
 const adapter = await createAdapter({ type: dialect, url } as never);
 const instance = await createTestNextly({
   adapter: adapter as never,
+  plugins: [plugin],
   collections: LIVE_DECLARED.collections,
   singles: LIVE_DECLARED.singles,
   fieldGroups: LIVE_DECLARED.fieldGroups,
@@ -116,12 +140,36 @@ async function answer(command: string, args: string[]): Promise<string> {
     });
     return "OK";
   }
+  if (command === "plugin-save" || command === "plugin-tx-save") {
+    if (!pluginCollections) return "ERROR NO_PLUGIN the plugin did not start";
+    const collections = pluginCollections;
+    const [id, heading] = args;
+    const data = {
+      card: { heading, tagline: heading },
+      _overwrite: true,
+    };
+    if (command === "plugin-save") {
+      await collections.updateEntry(LIVE_COLLECTION, id!, data, {});
+    } else {
+      await collections.withTransaction(tx =>
+        collections.updateEntryInTransaction(tx, LIVE_COLLECTION, id!, data, {})
+      );
+    }
+    return "OK";
+  }
+  if (command === "read-single-all") {
+    const read = (await instance.nextly.findSingle({
+      slug: LIVE_SINGLE as never,
+      translations: "all",
+    })) as { card?: unknown; _allLocales?: unknown };
+    return `OK ${JSON.stringify({ card: read.card, all: read._allLocales })}`;
+  }
   if (command === "duplicate") {
     const copied = await instance.nextly.duplicate({
       collection: LIVE_COLLECTION as never,
       id: args[0]!,
     });
-    return `OK ${(copied as { item: { id: string } }).item.id}`;
+    return `OK ${String(copied.item.id)}`;
   }
   if (command === "read-single") {
     const read = await instance.nextly.findSingle({
