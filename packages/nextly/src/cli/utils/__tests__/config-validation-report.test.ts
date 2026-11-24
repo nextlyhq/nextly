@@ -5,12 +5,13 @@
  * The configuration is a real file on disk, bundled by the loader every command uses, so what is
  * asserted is what esbuild reports for it, not a constructed failure.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { READ_ENTITIES } from "../../__tests__/helpers/commands-by-configuration";
 import {
   NEXTLY_RUN_TIMEOUT,
   runNextly,
@@ -404,4 +405,95 @@ describe("the loader, asked to refuse after a default was cached", () => {
       logContext: { reason: "config-missing" },
     });
   });
+});
+
+describe("a committed Builder definition file with problems", () => {
+  // The configuration is sound; the definitions beside it name one field twice, and use a type
+  // nothing offers. Each command that reads the entities is run as a command is.
+  const CONFIG = [
+    "export default {",
+    "  collections: [",
+    "    { slug: 'notes', fields: [{ name: 'body', type: 'text' }] },",
+    "  ],",
+    "};",
+    "",
+  ].join("\n");
+  const DEFINITIONS = {
+    collections: [
+      { slug: "fine", fields: [{ name: "body", type: "text" }] },
+      {
+        slug: "cases",
+        fields: [
+          { name: "body", type: "text" },
+          { name: "body", type: "text" },
+        ],
+      },
+    ],
+    singles: [],
+    components: [
+      { slug: "card", fields: [{ name: "score", type: "acme-rating" }] },
+    ],
+  };
+
+  it(
+    "an invalid Builder definition is reported alike by every command",
+    async () => {
+      writeFileSync(join(dir, "nextly.config.ts"), CONFIG);
+      writeFileSync(join(dir, "ui-schema.json"), JSON.stringify(DEFINITIONS));
+      // Every file in the project, in any folder: loading a configuration leaves the empty folder
+      // its bundle was in, and no file.
+      const files = () =>
+        readdirSync(dir, { recursive: true, withFileTypes: true })
+          .filter(entry => entry.isFile())
+          .map(entry => join(entry.parentPath, entry.name))
+          .sort();
+      const before = files();
+      const wrong: string[] = [];
+      const reports = new Map<string, string>();
+
+      // A few at a time: each run compiles the CLI from source.
+      const waiting = [...READ_ENTITIES];
+      const runNext = async (): Promise<void> => {
+        for (let args = waiting.shift(); args; args = waiting.shift()) {
+          const name = args.join(" ");
+          const ran = await runNextly([...args], dir, {
+            DB_DIALECT: "sqlite",
+            DATABASE_URL: `file:${join(dir, "unused.db")}`,
+            NO_COLOR: "1",
+          });
+          if (ran.status !== 1)
+            wrong.push(`${name}: exit ${String(ran.status)}`);
+          const at = ran.stderr.indexOf("✗");
+          reports.set(
+            name,
+            (at === -1 ? ran.stderr : ran.stderr.slice(at)).trim()
+          );
+        }
+      };
+      await Promise.all([runNext(), runNext(), runNext()]);
+
+      const [first = ""] = reports.values();
+      for (const [name, report] of reports) {
+        if (report !== first)
+          wrong.push(`${name}: a different report: ${report}`);
+      }
+      expect(wrong).toEqual([]);
+      expect(reports.size).toBe(READ_ENTITIES.length);
+      // Each problem, at its place in the file, in the file's order, and how many there are.
+      expect(first).toContain("CONFIG_INVALID");
+      const places = [
+        "ui-schema.json collections[1].fields",
+        "ui-schema.json components[0].score.type",
+      ].map(place => first.indexOf(place));
+      expect(
+        places.every(at => at >= 0),
+        first
+      ).toBe(true);
+      expect(places[0]).toBeLessThan(places[1] ?? -1);
+      expect(first).toMatch(/2 problems/);
+      // Nothing written, and no database made.
+      expect(files()).toEqual(before);
+    },
+    NEXTLY_RUN_TIMEOUT * 5
+  );
 });

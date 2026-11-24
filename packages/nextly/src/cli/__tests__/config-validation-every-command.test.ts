@@ -25,6 +25,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { clearConfigCache } from "../utils/config-loader";
 
+import {
+  LOAD_CONFIGURATION,
+  NOT_CHECKED,
+  READ_ENTITIES,
+} from "./helpers/commands-by-configuration";
+
 const exported = vi.hoisted(() => ({ config: {} as unknown }));
 
 vi.mock("../utils/config-bundler", () => ({
@@ -44,30 +50,6 @@ const { registerServices, shutdownServices } = await import(
   "../../di/register"
 );
 const { reloadNextlyConfig } = await import("../../init/reload-config");
-
-/** The commands that read the app's entities, each as it is typed after `nextly`. */
-const READ_ENTITIES: ReadonlyArray<readonly string[]> = [
-  ["generate:types"],
-  ["migrate:check"],
-  ["migrate:create", "--name", "add_notes"],
-  ["migrate:status"],
-  ["migrate"],
-  ["migrate:baseline"],
-  ["migrate:resolve", "--applied", "0001_init.sql"],
-  ["migrate:fresh"],
-  ["migrate:down"],
-  ["db:sync"],
-  ["build"],
-  ["prune"],
-  ["i18n:restore", "--collection", "notes"],
-  ["workflow:stranded"],
-  ["media", "reindex-usage"],
-  ["repair-columns"],
-  ["generate:types", "--check"],
-  ["db:sync", "--demote", "notes"],
-  ["plugins", "install", "@acme/seo"],
-  ["plugins", "uninstall", "@acme/seo"],
-];
 
 /** Three problems in two collections: a slug with a space, a field named twice, a type nothing offers. */
 const THREE_PROBLEMS = {
@@ -99,6 +81,8 @@ beforeEach(() => {
   vi.stubEnv("CI", "");
   vi.stubEnv("NO_COLOR", "1");
   vi.stubEnv("DB_DIALECT", "sqlite");
+  // What `users:create-admin` takes its password from; it is judged after the configuration.
+  vi.stubEnv("NEXTLY_ADMIN_PASSWORD", "Not-a-real-1-password");
   vi.stubEnv("DATABASE_URL", `file:${join(dir, "site.db")}`);
 });
 
@@ -171,7 +155,56 @@ async function run(
   return { status, stderr: written.join("") };
 }
 
-describe("an invalid configuration, given to every command that reads its entities", () => {
+describe("the commands the program registers", () => {
+  interface Registered {
+    name(): string;
+    commands: readonly Registered[];
+  }
+  /** Each command that does something, as it is typed: `plugins list`. */
+  const typed = (command: Registered, at: readonly string[]): string[] =>
+    command.commands.length === 0
+      ? [[...at, command.name()].join(" ")]
+      : command.commands.flatMap(each => typed(each, [...at, command.name()]));
+
+  it("are each checked for an invalid configuration, or left out with a reason, and once", () => {
+    const commands = (
+      createProgram() as unknown as Registered
+    ).commands.flatMap(each => typed(each, []));
+    // The command each line runs; a line that runs none names itself.
+    const run = (lines: ReadonlyArray<readonly string[]>) =>
+      new Set(
+        lines.map(
+          line =>
+            commands.find(
+              command =>
+                line.slice(0, command.split(" ").length).join(" ") === command
+            ) ?? line.join(" ")
+        )
+      );
+    const lists = [
+      run(READ_ENTITIES),
+      run(LOAD_CONFIGURATION),
+      new Set(NOT_CHECKED.keys()),
+    ];
+
+    const wrong: string[] = [];
+    for (const command of commands) {
+      const times = lists.filter(list => list.has(command)).length;
+      if (times !== 1) wrong.push(`${command}: in ${times} lists`);
+    }
+    for (const listed of lists.flatMap(list => [...list])) {
+      if (!commands.includes(listed)) wrong.push(`${listed}: not a command`);
+    }
+    for (const [command, why] of NOT_CHECKED) {
+      if (why === "") wrong.push(`${command}: no reason`);
+    }
+    expect(wrong).toEqual([]);
+    // The program's own commands were found at all.
+    expect(commands).toContain("plugins list");
+  });
+});
+
+describe("an invalid configuration, given to every command that loads it", () => {
   it("is refused alike by each, with the same report, writing nothing", async () => {
     writeFileSync(join(dir, "nextly.config.ts"), "export default {};\n");
     exported.config = THREE_PROBLEMS;
@@ -179,7 +212,7 @@ describe("an invalid configuration, given to every command that reads its entiti
     // Each departure is named, so one run shows every command that does not refuse alike.
     const wrong: string[] = [];
 
-    for (const args of READ_ENTITIES) {
+    for (const args of [...READ_ENTITIES, ...LOAD_CONFIGURATION]) {
       const ran = await run(args);
       const name = args.join(" ");
       const first = ran.stderr.trim().split("\n")[0] ?? "";
