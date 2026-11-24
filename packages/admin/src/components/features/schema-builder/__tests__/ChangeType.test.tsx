@@ -385,14 +385,14 @@ describe("Change type… on a saved field", () => {
       unique: false,
       options: [],
       validation: {},
-      own: {},
     });
     expect(
       await askedOf(saved, {
         ...drafted,
         options: [{ label: "A", value: "a" }],
         validation: { required: true, maxLength: 40 },
-        pluginOptions: { pattern: "^a" },
+        // A plugin's own options, under any name, are no rule of the field's.
+        pluginOptions: { pattern: "^a", max: 5 },
       })
     ).toEqual({
       hasMany: true,
@@ -400,7 +400,6 @@ describe("Change type… on a saved field", () => {
       localized: false,
       options: ["a"],
       validation: { required: true, maxLength: 40 },
-      own: { pattern: "^a" },
     });
   });
 
@@ -463,7 +462,6 @@ describe("Change type… on a saved field", () => {
       unique: false,
       options: [],
       validation: { required: true, maxLength: 40, message: "Too long" },
-      own: {},
     });
   });
 

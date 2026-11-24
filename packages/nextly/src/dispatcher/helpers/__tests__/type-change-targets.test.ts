@@ -358,7 +358,6 @@ describe("the route's answer for a field found by its path", () => {
       unique: false,
       options: [],
       validation: {},
-      own: {},
     };
     const ask = (stored: Record<string, unknown>, saved: unknown) => {
       container.registerSingleton("adapter", () => ({
@@ -400,11 +399,6 @@ describe("the route's answer for a field found by its path", () => {
         "a least bound, off since",
         { name: "v", type: "text" },
         { ...UNSET, validation: { minLength: 3 } },
-      ],
-      [
-        "a bound stated on the field itself",
-        { name: "v", type: "text", maxLength: 40 },
-        { ...UNSET, own: { maxLength: 100 } },
       ],
       [
         "its pattern",
@@ -485,10 +479,46 @@ describe("the route's answer for a field found by its path", () => {
           },
         },
       ],
+      // The Builder's save writes no rule on the field itself, so the page does not know one there.
       [
-        "with a rule stated on the field itself, which the page carries as its own",
+        "with a rule stated on the field itself",
         { name: "v", type: "text", maxLength: 40, pattern: "^a" },
-        { ...UNSET, own: { maxLength: 40, pattern: "^a" } },
+        UNSET,
+      ],
+      // A plugin's type keeps its own options in a container, under any name: none is a rule of core's.
+      [
+        "with a plugin's options named as rules are",
+        {
+          name: "v",
+          type: "text",
+          pluginOptions: {
+            max: 5,
+            pattern: "^a",
+            required: true,
+            unique: true,
+            hasMany: true,
+          },
+        },
+        {
+          ...UNSET,
+          own: {
+            max: 5,
+            pattern: "^a",
+            required: true,
+            unique: true,
+            hasMany: true,
+          },
+        },
+      ],
+      [
+        "with Required said one way on the field and another under its rules",
+        {
+          name: "v",
+          type: "text",
+          required: false,
+          validation: { required: true },
+        },
+        { ...UNSET, validation: { required: true } },
       ],
       [
         "with an empty pattern, no least length, and Required off, all said",
