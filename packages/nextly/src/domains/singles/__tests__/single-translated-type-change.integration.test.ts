@@ -32,6 +32,7 @@ import {
   resolveDataLossConsent,
 } from "../../schema/migrate/data-loss-consent";
 
+import { SingleMetadataService } from "../services/single-metadata-service";
 import { rewritesValuesOn } from "../../schema/value-conversion/type-change/field-type-changes";
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 
@@ -66,6 +67,7 @@ afterEach(async () => {
     await instance?.destroy();
   } finally {
     instance = undefined;
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await rm(project, { recursive: true, force: true });
   }
@@ -160,7 +162,10 @@ describe.each(getConfiguredTestDialects())(
     const isNumber = expect.stringMatching(/^(int|integer|bigint)/);
     const isText = expect.stringMatching(/text|char/);
 
-    it.each([true, false])(
+    // MySQL commits each schema statement, so its push retypes no translations column (below).
+    const pushes = it.skipIf(dialect === "mysql");
+
+    pushes.each([true, false])(
       "converts each language's value where the push applies the change (files written: %s)",
       async writer => {
         const t = await boot(
@@ -177,6 +182,24 @@ describe.each(getConfiguredTestDialects())(
         // A value written after is one of the new type.
         await write(t, { es: { v: 56 } });
         expect(await read(t)).toEqual({ en: 12, es: 56 });
+      }
+    );
+
+    // A save stopped between the two tables' statements would leave the translations apart from the
+    // Single's own table, with nothing to put them back: refused as it was, every value as it was.
+    it.runIf(dialect === "mysql")(
+      "refuses a change its push would apply where each statement commits on its own, and changes nothing",
+      async () => {
+        const t = await boot([text], { en: { v: "12" }, es: { v: "34" } });
+        const files = await written();
+
+        expect(JSON.stringify(await save([number]))).toMatch(
+          /kept per language/
+        );
+
+        expect(await columnType(t)).toEqual(isText);
+        expect(await read(t)).toEqual({ en: "12", es: "34" });
+        expect(await written()).toEqual(files);
       }
     );
 
@@ -253,7 +276,7 @@ describe.each(getConfiguredTestDialects())(
 
     // A shared field changing type in the same save: the Single's own table and its translations table
     // change together, and on SQLite the main table's rebuild judges both again in its transaction.
-    it("converts a translated and a shared field in one save", async () => {
+    pushes("converts a translated and a shared field in one save", async () => {
       const t = await boot([text, shared("text")], {
         en: { v: "12", n: "7" },
         es: { v: "34" },
@@ -266,27 +289,99 @@ describe.each(getConfiguredTestDialects())(
       expect(Number(main?.n)).toBe(7);
     });
 
-    // The translations column changes first. Where the main table's change is then refused, it is
-    // given back its type and its values, so the two stay as the registry records them.
-    it.skipIf(dialect === "mysql")(
-      "gives the column back its type where the main table's change is refused after it",
+    // Both tables change in one transaction. Where the main table's change is refused, the translations
+    // column is as it was, every value in its own writing: cast there and back, "5" would come back as
+    // "5.0" from SQLite's float column and " 12" without its space.
+    pushes(
+      "leaves every value in its own writing where the main table's change is refused",
       async () => {
         const t = await boot([text, shared("text")], {
-          en: { v: "12", n: "7" },
+          en: { v: "5", n: "7" },
           es: { v: "34" },
         });
+        await exec(
+          t,
+          `UPDATE ${q(`${TABLE}_locales`)} SET ${q("v")} = ' 12' WHERE ${q("_locale")} = 'es'`
+        );
         await exec(t, `CREATE VIEW stc_view AS SELECT n FROM ${q(TABLE)}`);
+        const float = { ...number, options: { format: "float" } };
 
-        expect(await save([number, shared("number")])).toBeInstanceOf(Error);
+        const refused = await save([float, shared("number")]);
+
+        // The main table's refusal, not the judgement's: every value is one the cast reads.
+        expect(refused).toBeInstanceOf(Error);
+        expect(JSON.stringify(refused)).not.toContain("TYPE_CHANGE_");
+        expect(await columnType(t)).toEqual(isText);
+        expect(await read(t)).toEqual({ en: "5", es: " 12" });
+        await exec(t, `DROP VIEW stc_view`);
+        // The control: with nothing in the way, the same save goes through.
+        expect(await save([float, shared("number")])).toBeUndefined();
+        expect(await read(t)).toEqual({ en: 5, es: 12 });
+      }
+    );
+
+    // A process that ended once the tables had changed, before the registry was written: the same save
+    // again finds them changed and finishes.
+    // A value written between the save's judgement and its statements is judged in their transaction:
+    // SQLite's cast would write it as 0, and say nothing.
+    pushes(
+      "judges a value written after the save was planned, and changes nothing over one the cast does not read",
+      async () => {
+        const t = await boot([text], { en: { v: "12" }, es: { v: "34" } });
+        const service = SingleMetadataService.prototype as unknown as {
+          applyMainMigrationOrUndo: (...args: unknown[]) => Promise<void>;
+        };
+        const apply = service.applyMainMigrationOrUndo;
+        vi.spyOn(service, "applyMainMigrationOrUndo").mockImplementation(
+          async function (this: unknown, ...args) {
+            await exec(
+              t,
+              `UPDATE ${q(`${TABLE}_locales`)} SET ${q("v")} = 'abc' WHERE ${q("_locale")} = 'es'`
+            );
+            return apply.apply(this, args);
+          }
+        );
+
+        expect(JSON.stringify(await save([number]))).toMatch(
+          /parent .* locale es/
+        );
 
         expect(await columnType(t)).toEqual(isText);
-        expect(await read(t)).toEqual({ en: "12", es: "34" });
-        await exec(t, `DROP VIEW stc_view`);
+        expect(await read(t)).toEqual({ en: "12", es: "abc" });
+      }
+    );
+
+    pushes.each([true, false])(
+      "finishes a save that stopped before the registry was written (files written: %s)",
+      async writer => {
+        const t = await boot(
+          [text],
+          { en: { v: "12" }, es: { v: "34" } },
+          { writer }
+        );
+        const [before] = await exec<{ fields: unknown; h: unknown }>(
+          t,
+          `SELECT fields, schema_hash AS h FROM dynamic_singles WHERE slug = '${SLUG}'`
+        );
+        expect(await save([number])).toBeUndefined();
+        const fields =
+          typeof before?.fields === "string"
+            ? before.fields
+            : JSON.stringify(before?.fields);
+        await exec(
+          t,
+          `UPDATE dynamic_singles SET fields = '${fields}', schema_hash = '${String(before?.h)}' WHERE slug = '${SLUG}'`
+        );
+
+        expect(await save([number])).toBeUndefined();
+
+        expect(await columnType(t)).toEqual(isNumber);
+        expect(await read(t)).toEqual({ en: 12, es: 34 });
       }
     );
 
     // A field unique within each language keeps its index, made again on the new column.
-    it("keeps a field unique within each language", async () => {
+    pushes("keeps a field unique within each language", async () => {
       const unique = (field: Field) => ({ ...field, unique: true });
       const t = await boot([unique(text)], {
         en: { v: "12" },
@@ -314,7 +409,7 @@ describe.each(getConfiguredTestDialects())(
 
     // Unique is turned on or off in the same save: the index the other step makes or drops is on the
     // column of the new type, never in the way of the change.
-    it.each([
+    pushes.each([
       ["turned on", {}, { unique: true }],
       ["turned off", { unique: true }, {}],
     ])("converts a field whose Unique is %s", async (_, from, next) => {
@@ -359,9 +454,14 @@ describe.each(getConfiguredTestDialects())(
       } as never);
     }
 
-    // The save writes its files in production too, for the databases its push does not reach.
+    // The save writes its files in production too, for the databases its push does not reach. On MySQL
+    // it is the development save's file that applied it here.
     it("leaves its files for nextly migrate, which finds them done here and converts another database's values", async () => {
-      const t = await boot([text], { en: { v: "12" }, es: { v: "34" } });
+      const t = await boot(
+        [text],
+        { en: { v: "12" }, es: { v: "34" } },
+        dialect === "mysql" ? { saves: "development" } : {}
+      );
       const before = (await written()).length;
       expect(await save([number])).toBeUndefined();
       expect((await written()).length).toBeGreaterThan(before);

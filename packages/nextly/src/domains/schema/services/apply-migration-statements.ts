@@ -148,6 +148,12 @@ export async function applyMigrationWhole(args: {
    * checked before it commits. Without it, the statements run once, as before.
    */
   busyTable?: BusyTableWait;
+  /**
+   * Run on each try before its first statement, on the handle the statements run on and inside their
+   * transaction: a judgement of what they change, whose refusal stops them with nothing changed and
+   * is thrown as it is. With `busyTable`, and not on MySQL, which holds no such transaction.
+   */
+  before?: (db: unknown) => Promise<void>;
 }): Promise<void> {
   // The one splitting rule: a separator is a line of its own, so its text inside a quoted value
   // stays part of the statement.
@@ -176,6 +182,10 @@ export async function applyMigrationWhole(args: {
     // A refusal of the rebuild's own (a table it can't reproduce, a reference left dangling) says
     // why, as it is.
     if (rebuild !== undefined && error instanceof NextlyError) throw error;
+    // Nor does a judgement's made before them.
+    if (args.before !== undefined && NextlyError.isValidation(error)) {
+      throw error;
+    }
     throw migrationRefused(
       error,
       progress.ran,
@@ -221,7 +231,8 @@ async function runInTries(
   unit: { source: string; transaction: boolean },
   passOver?: (error: unknown, statement: string) => boolean,
   after: (db: unknown) => Promise<void> = async () => {},
-  appliedBefore: () => readonly string[] = () => []
+  appliedBefore: () => readonly string[] = () => [],
+  before?: (db: unknown) => Promise<void>
 ): Promise<void> {
   // Loaded here, as the rebuild is: a save that changes no table loads neither.
   const [{ busyTableBounds }, { runUnitInTries }] = await Promise.all([
@@ -232,6 +243,7 @@ async function runInTries(
     bounds: busyTableBounds({ env: process.env }),
     notify: wait.notify,
     appliedBefore,
+    ...(before === undefined ? {} : { before }),
     ...(passOver === undefined ? {} : { passOver }),
   });
 }
@@ -248,6 +260,7 @@ async function runWholeInTries(
     dialect: SupportedDialect | undefined;
     entity: string;
     tolerateApplied?: boolean;
+    before?: (db: unknown) => Promise<void>;
   },
   wait: BusyTableWait,
   statements: readonly string[],
@@ -282,7 +295,9 @@ async function runWholeInTries(
       statements,
       { source, transaction: true },
       undefined,
-      after
+      after,
+      undefined,
+      args.before
     );
     progress.ran = statements.length;
     return;

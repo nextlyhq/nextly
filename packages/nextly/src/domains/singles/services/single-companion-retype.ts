@@ -1,19 +1,19 @@
 /**
  * The translations columns a Single's save gives their fields' new types, where its own statements
  * apply it (in production, and wherever the save carries values across its change): the statements
- * the save's migration file carries for every other database (`planCompanionTypeChange`), here and
- * back. Each language's value is judged by the database's cast before any of them runs
+ * the save's migration file carries for every other database (`planCompanionTypeChange`). Each
+ * language's value is judged by the database's cast before any of them runs
  * (`fieldTypeChangeRefusals`), so none reaches a column it cannot be read in.
  *
- * Run before the Single's own table changes: a column that does not take its type then fails the
- * save with nothing else changed, and one whose Single's table is refused after it is given back the
- * type and the values it had. A field's Unique setting is the companion reconcile's, after it: the
- * column keeps the index it had, made again on the new type.
+ * They run in the transaction of the statements that change the Single's own table, ahead of them, so
+ * the two tables change together or neither does, on PostgreSQL and SQLite. MySQL commits each schema
+ * statement as it runs: a Single's statements retype no translations column there. A field's Unique
+ * setting is the companion reconcile's, after them: the column keeps the index it had, made again on
+ * the new type.
  *
  * @module domains/singles/services/single-companion-retype
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { isTextKind } from "../../i18n/migration/companion-unique-indexes";
@@ -25,14 +25,12 @@ import {
 import { refusalsForUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
 import { splitSqlStatements } from "../../schema/migrate/split-sql";
 
-/** The columns a save's statements retype, and the statements, each way. */
+/** The columns a save's statements retype, and the statements. */
 export interface SingleCompanionRetype {
   /** The fields whose translations column takes a new type, by name. */
   fields: ReadonlySet<string>;
   /** The statements giving each column its new type, as one migration. */
-  upSql: string;
-  /** Those giving each back its type and its values. */
-  downSql: string;
+  sql: string;
 }
 
 /**
@@ -69,14 +67,15 @@ export function singleCompanionRetype(args: {
     ? undefined
     : {
         fields: new Set(retyped.map(column => column.field)),
-        upSql: asMigration(plan.upSql, dialect),
-        downSql: asMigration(plan.downSql, dialect),
+        sql: asMigration(splitSqlStatements(plan.upSql, dialect)),
       };
 }
 
-/** A file's statements as a Single's migration holds them, one after another at breakpoints. */
-function asMigration(sql: string, dialect: SupportedDialect): string {
-  return splitSqlStatements(sql, dialect).join("\n--> statement-breakpoint\n");
+/** Statements as a Single's migration holds them, one after another at breakpoints. */
+export function asMigration(statements: readonly string[]): string {
+  return statements
+    .filter(statement => statement !== "")
+    .join("\n--> statement-breakpoint\n");
 }
 
 /**
