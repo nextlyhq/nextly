@@ -342,6 +342,57 @@ describe.each(getConfiguredTestDialects())(
 
     // A write made for a collection deleted before it held it finds no row under the slug, and is
     // refused as not found, never written into what a create of the same slug makes next.
+    /**
+     * A write's hold sought within `waitMs` while two sessions each hold one of its two names: the
+     * first let go after 2.5 s, the second after `secondLetGoAfter`, or never. What came of it, and
+     * how long it took.
+     */
+    async function soughtBehindBothNames(
+      t: TestNextly,
+      waitMs: number,
+      secondLetGoAfter?: number
+    ): Promise<{ outcome: unknown; waited: number }> {
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      const [row] = (await t.adapter.executeQuery(
+        "SELECT DATABASE() AS name"
+      )) as { name: string }[];
+      const [first, second] = namedCollectionLockNames(row.name, [SLUG]);
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      const after = (ms: number) =>
+        new Promise(resolve => setTimeout(resolve, ms));
+      return adapter.withSession(holdsFirst =>
+        adapter.withSession(async holdsSecond => {
+          await holdsFirst.execute(`SELECT GET_LOCK('${first}', 0)`);
+          await holdsSecond.execute(`SELECT GET_LOCK('${second}', 0)`);
+          const began = Date.now();
+          const seeking = t.adapter
+            .transaction(tx =>
+              registry.holdCollectionsIn(tx, [SLUG], "share", { waitMs })
+            )
+            .then(
+              () => "held",
+              (error: unknown) => error
+            )
+            .then(outcome => ({ outcome, waited: Date.now() - began }));
+          const letGo = [
+            after(2_500).then(() =>
+              holdsFirst.execute(`SELECT RELEASE_LOCK('${first}')`)
+            ),
+            ...(secondLetGoAfter === undefined
+              ? []
+              : [
+                  after(secondLetGoAfter).then(() =>
+                    holdsSecond.execute(`SELECT RELEASE_LOCK('${second}')`)
+                  ),
+                ]),
+          ];
+          const sought = await seeking;
+          await Promise.all(letGo);
+          return sought;
+        })
+      );
+    }
+
     // MySQL's hold is two names, the old release's and the new one. A write's wait is one time over
     // both: waited for one after the other, the second would be given the whole wait again, and the
     // write would wait twice as long as it says. Each name is held by a session of its own, and the
@@ -350,39 +401,30 @@ describe.each(getConfiguredTestDialects())(
       "waits one time over both its names, the second for what the first left",
       async () => {
         const t = await boot();
-        const adapter = t.adapter as unknown as DrizzleAdapter;
-        const [row] = (await t.adapter.executeQuery(
-          "SELECT DATABASE() AS name"
-        )) as { name: string }[];
-        const [first, second] = namedCollectionLockNames(row.name, [SLUG]);
-        const registry = new DynamicCollectionService(t.adapter, consoleLogger);
-        await adapter.withSession(holdsFirst =>
-          adapter.withSession(async holdsSecond => {
-            await holdsFirst.execute(`SELECT GET_LOCK('${first}', 0)`);
-            await holdsSecond.execute(`SELECT GET_LOCK('${second}', 0)`);
-            const began = Date.now();
-            const seeking = t.adapter
-              .transaction(tx =>
-                registry.holdCollectionsIn(tx, [SLUG], "share", {
-                  waitMs: 4_000,
-                })
-              )
-              .then(
-                () => "held",
-                (error: unknown) => error
-              );
-            await new Promise(resolve => setTimeout(resolve, 2_500));
-            await holdsFirst.execute(`SELECT RELEASE_LOCK('${first}')`);
-            expect(await seeking).toMatchObject({
-              code: "COLLECTION_BEING_CHANGED",
-            });
-            const waited = Date.now() - began;
-            // It waited for the second after the first was let go, and not the whole wait again,
-            // which would end 6.5 seconds on.
-            expect(waited).toBeGreaterThan(2_500);
-            expect(waited).toBeLessThan(5_800);
-          })
+        const { outcome, waited } = await soughtBehindBothNames(t, 4_000);
+        expect(outcome).toMatchObject({ code: "COLLECTION_BEING_CHANGED" });
+        // Given the whole wait again it would end 6.5 s on; given none, as a server that does not
+        // read the rest of the wait as a number would give it, 2.5 s on.
+        expect(waited).toBeGreaterThan(3_300);
+        expect(waited).toBeLessThan(5_800);
+      },
+      30_000
+    );
+
+    // That the server takes the rest of the wait as a wait: the second name, let go within it, is
+    // had, at the time it is let go rather than at once or not at all.
+    onMysql(
+      "takes the second name where it is let go within what the first left",
+      async () => {
+        const t = await boot();
+        const { outcome, waited } = await soughtBehindBothNames(
+          t,
+          8_000,
+          4_000
         );
+        expect(outcome, String(outcome)).toBe("held");
+        expect(waited).toBeGreaterThan(3_700);
+        expect(waited).toBeLessThan(7_000);
       },
       30_000
     );
