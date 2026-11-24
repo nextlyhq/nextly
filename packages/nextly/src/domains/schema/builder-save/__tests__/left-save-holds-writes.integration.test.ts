@@ -163,6 +163,7 @@ type Outcome = {
     | "update"
     | "single-write"
     | "single-read"
+    | "delete"
     | "registry-moved"
     | "pause"
     | "request";
@@ -1185,6 +1186,71 @@ describe.each(
         expect(first!.ok, JSON.stringify(first)).toBe(true);
         expect(paused!.ok, JSON.stringify(paused)).toBe(true);
         expect(second!.ok, JSON.stringify(second)).toBe(true);
+      },
+      600_000
+    );
+
+    // A delete reads the row it removes, through this process's tables, and answers as a write that
+    // sets no field: the save's own change is not in its way, and neither is a process that has
+    // read nothing of the collection before it. Each case deletes an entry first thing.
+    for (const change of ["rename", "drop"] as const) {
+      it.runIf(dialect === "mysql")(
+        `deletes an entry of a collection a committed ${change} changed, first thing in another process`,
+        async () => {
+          const t = await boot();
+          const rows = (await t.adapter.executeQuery(
+            `SELECT id FROM ${table} WHERE slug = 'first'`
+          )) as unknown as Array<{ id: unknown }>;
+          const id = String(rows[0]?.id);
+          if (change === "rename") {
+            await killRename(t, afterStatement(renames("heading")));
+          } else {
+            const schemaVersion = await versionOf(t);
+            await killSave(t, afterStatement(dropsColumn("heading")), () =>
+              dispatchCollections(
+                {} as ServiceContainer,
+                "applySchemaChanges",
+                { collectionName: slug },
+                { fields: [field("note")], confirmed: true, schemaVersion }
+              )
+            );
+          }
+          expect(await liveColumns(t), `killed at ${killedAt}`).not.toContain(
+            "heading"
+          );
+
+          const [deleted] = await fromAnotherProcess([
+            { kind: "delete", via: "api", id },
+          ]);
+
+          expect(deleted!.ok, JSON.stringify(deleted)).toBe(true);
+          expect(
+            await t.adapter.executeQuery(
+              `SELECT id FROM ${table} WHERE slug = 'first'`
+            ),
+            "the entry is gone"
+          ).toEqual([]);
+        },
+        600_000
+      );
+    }
+
+    // The same, over REST as the signed-in editor.
+    it.runIf(dialect === "mysql")(
+      "deletes an entry of a collection a committed rename changed, over REST, first thing in another process",
+      async () => {
+        const t = await boot();
+        const rows = (await t.adapter.executeQuery(
+          `SELECT id FROM ${table} WHERE slug = 'first'`
+        )) as unknown as Array<{ id: unknown }>;
+        const id = String(rows[0]?.id);
+        await killRename(t, afterStatement(renames("heading")));
+
+        const [deleted] = await fromAnotherProcess([
+          { kind: "delete", via: "rest", id },
+        ]);
+
+        expect(deleted!.ok, JSON.stringify(deleted)).toBe(true);
       },
       600_000
     );

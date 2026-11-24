@@ -28,6 +28,7 @@ type Operation = {
     | "update"
     | "single-write"
     | "single-read"
+    | "delete"
     | "registry-moved"
     | "pause"
     | "request";
@@ -76,7 +77,7 @@ const handlers = createDynamicHandlers();
 
 /** A request to this process's admin API, as the signed-in editor. */
 async function send(
-  method: "GET" | "POST" | "PATCH",
+  method: "GET" | "POST" | "PATCH" | "DELETE",
   path: string,
   body?: unknown
 ): Promise<Response> {
@@ -182,6 +183,11 @@ function restOf(operation: Operation, target: string): Promise<Response> {
       return send("PATCH", `/singles/${target}`, operation.data);
     case "single-read":
       return send("GET", `/singles/${target}`);
+    case "delete":
+      return send(
+        "DELETE",
+        `/collections/${target}/entries/${operation.id ?? ""}`
+      );
     default:
       return send(
         "GET",
@@ -216,6 +222,12 @@ async function apiOf(operation: Operation, target: string): Promise<Outcome> {
     }
     case "registry-moved":
       await writeRegistryRows(copy.adapter, () => Promise.resolve());
+      return { ...operation, ok: true };
+    case "delete":
+      await copy.nextly.delete({
+        collection: target,
+        id: operation.id,
+      } as never);
       return { ...operation, ok: true };
     case "single-write":
       await copy.nextly.updateSingle({ slug: target, data } as never);

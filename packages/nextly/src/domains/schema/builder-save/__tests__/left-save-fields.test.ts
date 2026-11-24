@@ -150,6 +150,29 @@ describe("the left-save guard's cost", () => {
     expect(counted.statements()).toBe(4);
   });
 
+  // A batch through the service asks within one transaction, outside any request: its checks read
+  // what stands once for that transaction, and a later transaction reads for itself.
+  it("reads the records standing once for a transaction that asks twice, outside a request", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const counted = countingAdapter("mysql");
+    const other = countingAdapter("mysql");
+    const ask = (from: ReturnType<typeof countingAdapter>) =>
+      refuseWriteOverLeftSave({
+        adapter: from.adapter,
+        kind: "collection",
+        slug: "posts",
+        data: { title: "A post" },
+        tx: from.tx,
+      });
+
+    await ask(counted);
+    await ask(counted);
+    expect(counted.statements()).toBe(1);
+
+    await ask(other);
+    expect(other.statements()).toBe(1);
+  });
+
   it("keeps no read that failed: the next check in the request reads again", async () => {
     vi.stubEnv("NODE_ENV", "development");
     const counted = countingAdapter("mysql");
