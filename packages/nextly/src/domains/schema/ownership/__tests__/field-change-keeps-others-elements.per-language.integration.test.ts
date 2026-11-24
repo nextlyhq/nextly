@@ -12,9 +12,10 @@
  *
  * What the plugin built elsewhere on those tables stops no change and is kept: its own column, index
  * and values, on the collection's table, its per-language table and the field group's shared table,
- * through a field removed (a text one and a number one), a number field moved into a group,
- * translation turned on, and a field group's field removed. A text field's move into a group is not
- * among them: it is refused on this layout, as its values cannot be carried yet.
+ * through a field removed (a text one and a number one), a number field moved into a group, and a
+ * field group's field removed. So it is through translation turned on, on the push's tables and, for
+ * a Builder save, on the entity's own. A text field's move into a group is not among them: it is
+ * refused on this layout, as its values cannot be carried yet.
  *
  * On SQLite, PostgreSQL and MySQL. The rest of the cases run on the earlier layout in
  * `field-change-keeps-others-elements.integration.test.ts` and `push-keeps-others-elements.integration.test.ts`.
@@ -328,8 +329,8 @@ describe.each(getConfiguredTestDialects())(
     ];
     const markerIndex = (table: string) => `plc_${table}_marker_idx`;
 
-    /** KEPT and CARDS with a row each, and the plugin's own column, index and value on their tables. */
-    async function bootKept(): Promise<TestNextly> {
+    /** KEPT and CARDS with a row each, and the plugin's own column, index and value on `marked`. */
+    async function bootKept(marked = markedTables): Promise<TestNextly> {
       const t = await start();
       await dispatchCollections(
         {} as ServiceContainer,
@@ -350,7 +351,7 @@ describe.each(getConfiguredTestDialects())(
       await t.adapter.executeQuery(
         `INSERT INTO ${q(CARDS_TABLE)} (${["id", "_parent_id", "_parent_table", "_parent_field", "rank"].map(q).join(", ")}) VALUES ('card-1', 'entry-1', '${KEPT_TABLE}', 'card', 1)`
       );
-      await plantMarkers(t, markedTables);
+      await plantMarkers(t, marked);
       return t;
     }
 
@@ -429,7 +430,9 @@ describe.each(getConfiguredTestDialects())(
       KEPT_FIELDS.filter(field => field.name !== name);
 
     // Nothing of the plugin's is built on a column any of these removes. Turning translation on
-    // removes no column on this layout: a text field's is the per-language table's already.
+    // removes no column on this layout: a text field's is the per-language table's already. There the
+    // plugin's column is on the entity's own tables alone: a compiled extension schema knows no
+    // per-language table, so it records no element on one.
     it.each([
       {
         change: "removing a text field, whose column is per language",
@@ -466,6 +469,7 @@ describe.each(getConfiguredTestDialects())(
       {
         change: "turning translation on",
         gone: undefined,
+        marked: [KEPT_TABLE, CARDS_TABLE],
         save: (t: TestNextly) => saveKept(t, KEPT_FIELDS, { localized: true }),
       },
       {
@@ -480,9 +484,9 @@ describe.each(getConfiguredTestDialects())(
       },
     ])(
       "applies $change where the plugin's column and index are elsewhere on the table, keeping them and their values",
-      async ({ save: change, gone }) => {
-        const t = await bootKept();
-        const before = await markersOf(t, markedTables);
+      async ({ save: change, gone, marked = markedTables }) => {
+        const t = await bootKept(marked);
+        const before = await markersOf(t, marked);
         expectPlanted(before);
         if (gone !== undefined) {
           expect((await shapeOf(t, gone[0]!)).columns).toContain(gone[1]);
@@ -493,7 +497,7 @@ describe.each(getConfiguredTestDialects())(
         if (gone !== undefined) {
           expect((await shapeOf(t, gone[0]!)).columns).not.toContain(gone[1]);
         }
-        expect(await markersOf(t, markedTables)).toEqual(before);
+        expect(await markersOf(t, marked)).toEqual(before);
       }
     );
 
