@@ -129,6 +129,7 @@ const ASKS_THE_DECISION: ReadonlySet<Door> = new Set<Door>([
   "schema",
   "widget",
   "capabilities",
+  "sample",
 ]);
 
 const ANSWERS_FILE = join(__dirname, "answers-today.txt");

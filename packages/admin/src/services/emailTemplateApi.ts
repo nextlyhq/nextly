@@ -583,6 +583,55 @@ export interface TemplateEngine {
   reasons: Array<{ field: string; label: string; reason: string }>;
 }
 
+/** One real record a template's owner offers for its test data. */
+export interface SampleRecordSummary {
+  id: string;
+  /** What the record is called, such as "Order A-104". */
+  label: string;
+}
+
+/** The real records a template's owner offers, and what they are. */
+export interface SampleRecords {
+  /** What the records are, such as "A real order". */
+  label: string;
+  items: SampleRecordSummary[];
+}
+
+/**
+ * The real records a template's owner offers for its test data, newest first.
+ * Refused with 404 where the owner offers none, and 403 to a person who may
+ * not read what they are read from.
+ */
+export async function listSampleRecords(
+  templateId: string
+): Promise<SampleRecords> {
+  const result = await fetcher<{
+    items: SampleRecordSummary[];
+    meta: { label: string };
+  }>(
+    `/email-templates/${encodeURIComponent(templateId)}/sample-records`,
+    {},
+    true
+  );
+  return { label: result.meta.label, items: result.items };
+}
+
+/** One real record's values for the template's variables, by name. */
+export async function loadSampleRecord(
+  templateId: string,
+  recordId: string
+): Promise<Record<string, unknown>> {
+  const result = await fetcher<{
+    id: string;
+    variables: Record<string, unknown>;
+  }>(
+    `/email-templates/${encodeURIComponent(templateId)}/sample-records/${encodeURIComponent(recordId)}`,
+    {},
+    true
+  );
+  return result.variables;
+}
+
 export async function getTemplateEngine(
   templateId: string
 ): Promise<TemplateEngine> {

@@ -93,11 +93,18 @@ describe("the variables a template reads", () => {
 describe("what renders blank", () => {
   it("is a use written out with no fallback and no value", () => {
     const missing = missingValues(ORDER, {
-      order: { lines: [], note: "" },
+      order: { lines: [], note: "Leave it" },
     }).map(u => u.path);
-    // `customer.name` has a fallback; `order.note` has a value, even an empty
-    // one; `order.gift` is only tested. `currency` renders blank.
+    // `customer.name` has a fallback; `order.note` has a value; `order.gift`
+    // is only tested. `currency` renders blank.
     expect(missing).toEqual(["currency"]);
+    // A field cleared in the Data panel is an empty text: nothing is printed.
+    expect(
+      missingValues(ORDER, {
+        order: { lines: [], note: "" },
+        currency: "EUR",
+      }).map(u => u.path)
+    ).toEqual(["order.note"]);
   });
 
   it("leaves out the names it is told to ignore", () => {
@@ -126,6 +133,75 @@ describe("what renders blank", () => {
       )
     ).toEqual([]);
   });
+
+  it.each([
+    ["an explicit empty default", '{{ note | default: "" }}'],
+    ["an explicit nil default", "{{ note | default: nil }}"],
+    ["any text as a default", '{{ note | default: "none" }}'],
+    [
+      "an empty default after a variable",
+      '{{ note | default: b | default: "" }}',
+    ],
+  ])("takes %s as the author's say, whatever the value", (_what, source) => {
+    for (const data of [{}, { note: null }, { note: "" }, { note: false }]) {
+      expect(missingValues(source, data)).toEqual([]);
+    }
+  });
+
+  it("does not mark a variable only tested, or one the template never prints", () => {
+    expect(missingValues("{% if note %}Yes{% endif %}", { note: "" })).toEqual(
+      []
+    );
+    expect(missingValues("Hi", { note: "" })).toEqual([]);
+  });
+
+  const VALUES = [
+    undefined,
+    null,
+    "",
+    " ",
+    "x",
+    0,
+    false,
+    true,
+    [],
+    [""],
+    ["x"],
+  ];
+  it.each([
+    "{{ a }}",
+    "{{ a | default: b }}",
+    "{{ a | default: b, allow_false: true }}",
+    "{{ a | default: b, allow_false: false }}",
+    "{{ a | default: b | default: c }}",
+  ])("marks %s exactly where the engine prints nothing", source => {
+    const engine = new Liquid({ ownPropertyOnly: true });
+    for (const a of VALUES) {
+      for (const b of VALUES) {
+        for (const c of ["", "y"]) {
+          const data = { a, b, c };
+          expect(
+            missingValues(source, data).length > 0,
+            JSON.stringify({ source, data })
+          ).toBe(engine.parseAndRenderSync(source, data) === "");
+        }
+      }
+    }
+  });
+
+  it.each([
+    ["{{ a | upcase }}", true],
+    ['{{ a | append: "!" }}', false],
+    ["{{ a | append: suffix }}", false],
+    ['{{ a | prepend: "Dear " | upcase }}', false],
+  ])(
+    "judges an empty text in %s by what its filters print",
+    (source, blank) => {
+      expect(missingValues(source, { a: "", suffix: "" }).length > 0).toBe(
+        blank
+      );
+    }
+  );
 
   it("never judges a default argument on its own", () => {
     // A fallback variable is written to serve another use, never to render
@@ -157,6 +233,25 @@ describe("what renders blank", () => {
     expect(valueAt(data, ["order", "lines", "first", "title"])).toBe("Tea");
     expect(valueAt(data, ["order", "lines", 1, "title"])).toBe("Cake");
     expect(valueAt(data, ["order", "missing", "title"])).toBeUndefined();
+  });
+
+  it.each([
+    ["a text's size", "{{ a.size }}", { a: "Tea" }],
+    ["an empty text's size", "{{ a.size }}", { a: "" }],
+    ["a text's first", "{{ a.first }}", { a: "Tea" }],
+    ["an object's size", "{{ a.size }}", { a: { x: 1 } }],
+    ["an object's own size", "{{ a.size }}", { a: { size: "XL" } }],
+    ["an object's own first", "{{ a.first }}", { a: { first: "Ada" } }],
+    ["a list's size", "{{ a.size }}", { a: [] }],
+    ["a list's last", "{{ a.last }}", { a: ["x"] }],
+    ["a number's size", "{{ a.size }}", { a: 5 }],
+  ])("reads %s as the engine does", (_what, source, data) => {
+    // Marked exactly where the engine prints nothing.
+    const printed = new Liquid({ ownPropertyOnly: true }).parseAndRenderSync(
+      source,
+      data
+    );
+    expect(missingValues(source, data)).toHaveLength(printed === "" ? 1 : 0);
   });
 });
 
