@@ -75,9 +75,23 @@ export interface LoadedRegistryRow {
   readonly fields: readonly string[];
   readonly stored: readonly FieldDefinition[];
   readonly setsFields: readonly string[];
+  /** The fields the write names in what it stores: those it sets, and defaults nobody changed. */
+  readonly namesFields: readonly string[];
   readonly insertsOnly?: true;
   /** Whether the collection's Draft/Published lifecycle was on in the row loaded. */
   readonly lifecycle: boolean;
+  /** Told, under the hold, whether the definition has changed since (`WriteTries.compared`). */
+  readonly compared?: (changed: boolean) => void;
+}
+
+/** How a write is made from the row it loads (`loadedRegistryRowOf`). */
+export interface LoadedRegistryRowOptions {
+  /** A create, or a batch of them. */
+  insertsOnly?: boolean;
+  /** The fields `data` holds only as their own defaults, put there by the write itself. */
+  untouchedDefaults?: ReadonlySet<string>;
+  /** Told whether the definition has changed (`LoadedRegistryRow.compared`). */
+  compared?: (changed: boolean) => void;
 }
 
 /** An entry's data, or a batch's items, each an entry's data. */
@@ -88,13 +102,14 @@ type WrittenData =
 /**
  * The registry row `row` (a collection's, as `getCollection` answers it) as a write made from it
  * holds it: its id, its schema version, its definition's fields, and those of them that `data`
- * (an entry's data, or a batch's items) sets. With `insertsOnly`, for a create. Undefined where the
- * row carries no id, so nothing is compared.
+ * (an entry's data as its hooks left it, or a batch's items) names, of which it sets all but the
+ * defaults nobody changed. With `insertsOnly`, for a create. Undefined where the row carries no id,
+ * so nothing is compared.
  */
 export function loadedRegistryRowOf(
   row: unknown,
   data?: WrittenData,
-  options?: { insertsOnly?: boolean }
+  options?: LoadedRegistryRowOptions
 ): LoadedRegistryRow | undefined {
   const { id, schemaVersion, fields, status } = (row ?? {}) as {
     id?: unknown;
@@ -106,15 +121,37 @@ export function loadedRegistryRowOf(
   const version = Number(schemaVersion);
   const stored = storedFieldsOf(fields);
   const names = stored.map(field => field.name);
-  const sets = data === undefined ? [] : names.filter(setBy(data));
+  const written = data === undefined ? [] : names.filter(setBy(data));
   return {
     id: String(id),
     schemaVersion: Number.isFinite(version) ? version : undefined,
     fields: names,
     stored,
-    setsFields: sets,
+    setsFields: written.filter(
+      name => options?.untouchedDefaults?.has(name) !== true
+    ),
+    namesFields: written,
     lifecycle: isOn(status),
     ...(options?.insertsOnly === true ? { insertsOnly: true as const } : {}),
+    ...(options?.compared === undefined ? {} : { compared: options.compared }),
+  };
+}
+
+/**
+ * The fields of the definition `was` was made from that `now` no longer has, or keeps by name but
+ * stores differently, and the fields `now` has that it did not.
+ */
+export function fieldsMoved(
+  was: LoadedRegistryRow,
+  now: LoadedRegistryRow,
+  dialect: SupportedDialect
+): { gone: ReadonlySet<string>; added: ReadonlySet<string> } {
+  const different = storedDifferently(was, now.stored, dialect);
+  const kept = new Set(now.fields.filter(name => !different.has(name)));
+  const before = new Set(was.fields);
+  return {
+    gone: new Set(was.fields.filter(name => !kept.has(name))),
+    added: new Set(now.fields.filter(name => !before.has(name))),
   };
 }
 
@@ -307,12 +344,14 @@ async function refuseChanged(
   dialect: SupportedDialect,
   held: HeldRow
 ): Promise<void> {
-  if (!refuseUnlessSameRow(entity, loaded, held)) return;
-  const row = await tx.selectOne<HeldDefinitionRow>("dynamic_collections", {
-    columns: ["fields", "status"],
-    where: { and: [{ column: "slug", op: "=", value: entity.slug }] },
-  });
-  refuseMadeFromEarlier(entity, loaded, heldDefinitionOf(row), dialect);
+  if (refuseUnlessSameRow(entity, loaded, held)) {
+    const row = await tx.selectOne<HeldDefinitionRow>("dynamic_collections", {
+      columns: ["fields", "status"],
+      where: { and: [{ column: "slug", op: "=", value: entity.slug }] },
+    });
+    refuseMadeFromEarlier(entity, loaded, heldDefinitionOf(row), dialect);
+  }
+  loaded.compared?.(false);
 }
 
 /**
@@ -333,12 +372,7 @@ export async function refuseOnEarlierSnapshot(
   }
   const current = await currentRow(tx, entity);
   if (!refuseUnlessSameRow(entity, loaded, heldRowOf(current))) return;
-  refuseMadeFromEarlier(
-    entity,
-    loaded,
-    heldDefinitionOf(current),
-    "mysql"
-  );
+  refuseMadeFromEarlier(entity, loaded, heldDefinitionOf(current), "mysql");
 }
 
 /**
@@ -372,8 +406,12 @@ function refuseUnlessSameRow(
  * (`fieldsStoredDifferently`), is refused naming it; so is a write that reads the entry as it
  * stands, made from a definition with a field that is gone or stored differently, as one made for a
  * definition that changed (`COLLECTION_BEING_CHANGED`), since its read names that field's column.
- * A create reads no entry first and writes only the columns its data sets, so it goes on where
+ * A create reads no entry first and writes only the columns its data names, so it goes on where
  * none of those changed. A lifecycle that came or went changes what every write writes or reads.
+ *
+ * A write refused as made for a definition that changed is told so (`compared`): one that can be
+ * made again, from what its hooks left, is (`WriteTries`). A field it sets is named instead, since
+ * no try could write it.
  */
 function refuseMadeFromEarlier(
   entity: EntityRef,
@@ -386,9 +424,12 @@ function refuseMadeFromEarlier(
   clearRegistryRowCache();
   const set = setFieldsNotAsHeld(loaded, held.fields, dialect);
   if (set.length > 0) throw setFieldsChangedWhileHeld(entity.slug, set);
-  if (loaded.lifecycle !== held.lifecycle) throw changedWhileHeld(entity.slug);
-  if (loaded.insertsOnly === true) return;
-  if (madeFromWhatHolds(loaded, held.fields, dialect)) return;
+  if (loaded.lifecycle === held.lifecycle) {
+    const reads =
+      loaded.insertsOnly === true ? loaded.namesFields : loaded.fields;
+    if (madeFromWhatHolds(reads, loaded, held.fields, dialect)) return;
+  }
+  loaded.compared?.(true);
   throw changedWhileHeld(entity.slug);
 }
 
@@ -495,18 +536,20 @@ function storedDifferently(
 }
 
 /**
- * Whether a write that reads the entry first was made from a definition that still holds: each of
- * its fields is there, stored as it was. One that was taken out, or is stored differently, is not.
+ * Whether the fields a write names (`reads`: all its definition's where it reads the entry first,
+ * those it writes where it inserts) are there as they were. One that was taken out, or is stored
+ * differently, is not.
  */
 function madeFromWhatHolds(
+  reads: readonly string[],
   loaded: LoadedRegistryRow,
   held: readonly FieldDefinition[],
   dialect: SupportedDialect
 ): boolean {
   const names = new Set(held.map(field => field.name));
-  if (loaded.fields.some(name => !names.has(name))) return false;
+  if (reads.some(name => !names.has(name))) return false;
   const different = storedDifferently(loaded, held, dialect);
-  return !loaded.fields.some(name => different.has(name));
+  return !reads.some(name => different.has(name));
 }
 
 /** The refusal of a write that sets fields a save removed or stores differently, naming each. */

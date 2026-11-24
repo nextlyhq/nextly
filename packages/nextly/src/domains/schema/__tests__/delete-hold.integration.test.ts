@@ -1271,41 +1271,37 @@ describe.each(getConfiguredTestDialects())(
     // An entry write takes the collection's hold before it writes, which the save holds from its
     // count until its registry row records the new definition: on MySQL, whose schema statements
     // commit as they run, on the try's connection, as a collection delete holds it.
-    it(
-      "keeps an entry write waiting from the count until the save is over, then writes it to the new shape",
-      async () => {
-        const t = await boot();
-        for (const note of ["a", "b", "c"]) await insert(t, note);
-        const { paused, release } = gated(afterCount);
-        const applying = apply(t, 3).then(
-          () => "applied",
-          (error: unknown) => error
-        );
-        const reached = await Promise.race([
-          paused.then(() => true),
-          applying.then(() => false),
-        ]);
-        expect(reached).toBe(true);
+    it("keeps an entry write waiting from the count until the save is over, then writes it to the new shape", async () => {
+      const t = await boot();
+      for (const note of ["a", "b", "c"]) await insert(t, note);
+      const { paused, release } = gated(afterCount);
+      const applying = apply(t, 3).then(
+        () => "applied",
+        (error: unknown) => error
+      );
+      const reached = await Promise.race([
+        paused.then(() => true),
+        applying.then(() => false),
+      ]);
+      expect(reached).toBe(true);
 
-        // An entry write sent between the count and the drop: it waits for the collection.
-        let landed = false;
-        const writing = t.nextly
-          .create({ collection: SLUG, data: { label: "during" } })
-          .then(() => {
-            landed = true;
-          });
-        await new Promise(resolve => setTimeout(resolve, 1_000));
-        expect(landed).toBe(false);
+      // An entry write sent between the count and the drop: it waits for the collection.
+      let landed = false;
+      const writing = t.nextly
+        .create({ collection: SLUG, data: { label: "during" } })
+        .then(() => {
+          landed = true;
+        });
+      await new Promise(resolve => setTimeout(resolve, 1_000));
+      expect(landed).toBe(false);
 
-        release();
-        expect(await applying).toBe("applied");
-        // Once the save let go, the write goes on, onto the table without the field.
-        await writing;
-        expect(landed).toBe(true);
-        expect(await hasNoteColumn(t)).toBe(false);
-      },
-      60_000
-    );
+      release();
+      expect(await applying).toBe("applied");
+      // Once the save let go, the write goes on, onto the table without the field.
+      await writing;
+      expect(landed).toBe(true);
+      expect(await hasNoteColumn(t)).toBe(false);
+    }, 60_000);
 
     // MySQL commits each deleting statement as it runs, and the hold belongs to the save, not to
     // either: a write sent after the first statement has ended waits until the second has.
@@ -2678,7 +2674,5 @@ describe.runIf(getConfiguredTestDialects().includes("postgresql"))(
       expect(JSON.stringify(outcome)).toContain("being changed elsewhere");
       expect(await within(applying, 15_000)).toBe("applied");
     }, 60_000);
-
-
   }
 );

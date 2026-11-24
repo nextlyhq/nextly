@@ -1766,28 +1766,34 @@ export class CollectionBulkService extends BaseService {
       // REPEATABLE READ, would answer each later read from the snapshot the
       // batch's first read took. Opened through `entryTransaction`, so the batch holds the
       // collection once, before its first item, against a Builder save deleting its values.
-      await this.mutationService.entryTransaction(
-        params.collectionName,
-        async tx => {
-          await this.runCreateBatch(
-            tx,
-            params,
-            transitionAuth,
-            entries,
-            { batchSize, stopOnError, skipHooks },
-            state
-          );
-        },
-        { isolationLevel: "read committed" },
-        // Compared, under the hold, with the registry row the batch was made for: a field its
-        // entries set that a save removed while it waited is refused by name. Creates, so a save
-        // that took out other fields lets the batch go on.
-        await this.mutationService.loadedRegistryRowFor(
+      await this.mutationService.inWriteTries(async tries => {
+        await this.mutationService.entryTransaction(
           params.collectionName,
-          entries,
-          { insertsOnly: true }
-        )
-      );
+          async tx => {
+            await this.runCreateBatch(
+              tx,
+              params,
+              transitionAuth,
+              entries,
+              { batchSize, stopOnError, skipHooks },
+              state
+            );
+          },
+          { isolationLevel: "read committed" },
+          // Compared, under the hold, with the registry row the batch was made for: a field its
+          // entries set that a save removed while it waited is refused by name. Creates, so a save
+          // that took out other fields lets the batch go on. Opened again where the definition
+          // changed otherwise: no item, and no hook of one, has run before the hold.
+          await this.mutationService.loadedRegistryRowFor(
+            params.collectionName,
+            entries,
+            {
+              insertsOnly: true,
+              compared: changed => tries.compared(changed),
+            }
+          )
+        );
+      });
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case). Any outbox events an
       // item recorded before the abort were rolled back too, so clear the
@@ -2072,26 +2078,30 @@ export class CollectionBulkService extends BaseService {
       // change, though the batch holds that entry's lock. PostgreSQL already
       // reads committed, and SQLite runs one writer at a time. Opened through `entryTransaction`, so
       // the batch holds the collection once, before its first item.
-      await this.mutationService.entryTransaction(
-        params.collectionName,
-        async tx => {
-          await this.runUpdateBatch(
-            tx,
-            params,
-            transitionAuth,
-            entries,
-            { batchSize, stopOnError, skipHooks, rowGate, rowVerdicts },
-            state
-          );
-        },
-        { isolationLevel: "read committed" },
-        // Compared, under the hold, with the registry row the batch was made for: a field its
-        // entries set that a save removed while it waited is refused by name.
-        await this.mutationService.loadedRegistryRowFor(
+      await this.mutationService.inWriteTries(async tries => {
+        await this.mutationService.entryTransaction(
           params.collectionName,
-          entries.map(entry => entry.data)
-        )
-      );
+          async tx => {
+            await this.runUpdateBatch(
+              tx,
+              params,
+              transitionAuth,
+              entries,
+              { batchSize, stopOnError, skipHooks, rowGate, rowVerdicts },
+              state
+            );
+          },
+          { isolationLevel: "read committed" },
+          // Compared, under the hold, with the registry row the batch was made for: a field its
+          // entries set that a save removed while it waited is refused by name. Opened again where
+          // the definition changed otherwise: no item, and no hook of one, has run before the hold.
+          await this.mutationService.loadedRegistryRowFor(
+            params.collectionName,
+            entries.map(entry => entry.data),
+            { compared: changed => tries.compared(changed) }
+          )
+        );
+      });
       committed = true;
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case). Clear the aggregated
@@ -2409,21 +2419,26 @@ export class CollectionBulkService extends BaseService {
     try {
       // Opened through `entryTransaction`, so the batch holds the collection once, before its first
       // item, against a Builder save deleting its values.
-      await this.mutationService.entryTransaction(params.collectionName, async tx => {
-        try {
-          await this.runDeleteBatch(
-            tx,
-            params,
-            ids,
-            { batchSize, stopOnError, skipHooks, rowGate },
-            state
-          );
-        } catch (innerError) {
-          callbackThrew = true;
-          throw innerError;
-        }
-        // Compared, under the hold, with the registry row the batch was made for.
-      }, undefined, await this.mutationService.loadedRegistryRowFor(params.collectionName));
+      await this.mutationService.inWriteTries(async tries => {
+        await this.mutationService.entryTransaction(params.collectionName, async tx => {
+          try {
+            await this.runDeleteBatch(
+              tx,
+              params,
+              ids,
+              { batchSize, stopOnError, skipHooks, rowGate },
+              state
+            );
+          } catch (innerError) {
+            callbackThrew = true;
+            throw innerError;
+          }
+          // Compared, under the hold, with the registry row the batch was made for, and opened
+          // again where it changed: no item, and no hook of one, has run before the hold.
+        }, undefined, await this.mutationService.loadedRegistryRowFor(params.collectionName, [], {
+          compared: changed => tries.compared(changed),
+        }));
+      });
       committed = true;
     } catch (error: unknown) {
       // The shared transaction rolled back — either stopOnError tripped on a
