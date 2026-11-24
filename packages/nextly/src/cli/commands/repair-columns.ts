@@ -176,11 +176,13 @@ async function report(
     { dryRunReport },
     { applyRepairs },
     { compileExtensionSchema },
+    { declaredFieldGroupStorage },
   ] = await Promise.all([
     import("../../domains/schema/repair-columns/read-entities"),
     import("../../domains/schema/repair-columns/run-report"),
     import("../../domains/schema/repair-columns/apply"),
     import("../../domains/schema/extension/publish"),
+    import("../../domains/field-groups/services/field-group-stored-tables"),
   ]);
 
   const adapter = (await createCliAdapter({
@@ -196,7 +198,17 @@ async function report(
     // An apply reads them once it holds the schema lock; a dry run takes no lock and reads now.
     // The app's overrides of its entities' columns, from its schema hooks: a column it overrides is
     // judged against that storage, not the field's own.
+    const fieldGroups = await declaredFieldGroupStorage(
+      adapter,
+      config.fieldGroups
+    );
     const extensionSchema = await compileExtensionSchema({
+      ...(fieldGroups === undefined
+        ? {}
+        : {
+            fieldGroupTables: fieldGroups.tables,
+            fieldGroupTypeColumns: fieldGroups.typeColumns,
+          }),
       dialect,
       plugins: config.plugins ?? [],
       config,

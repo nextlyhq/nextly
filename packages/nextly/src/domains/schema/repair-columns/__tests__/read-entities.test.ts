@@ -352,6 +352,29 @@ describe("readRepairEntities: Builder entities as configured", () => {
   });
 });
 
+describe("readRepairEntities: a field group's table", () => {
+  // A configuration names no field group's table: the registry does, under the names the site is on.
+  it("is the one the registry stores it in, on a site on the current names", async () => {
+    registry.fieldGroups = [
+      {
+        slug: "card",
+        tableName: "fg_card",
+        fields: [{ name: "heading", type: "text" }],
+        source: "code",
+        migrationStatus: "synced",
+      },
+    ];
+    const [card] = await read(["dynamic_field_groups"], {
+      fieldGroups: [
+        { slug: "card", fields: [{ name: "heading", type: "text" }] },
+      ],
+    });
+    expect(card).toMatchObject({ slug: "card", table: "fg_card" });
+    // Not as an entity the next migration moves to another table.
+    expect(JSON.stringify(card)).not.toContain("comp_card");
+  });
+});
+
 describe("readRepairEntities: which plugin owns an entity", () => {
   it("names the plugin that contributed a collection, a Single or a field group", async () => {
     const entities = await read([], {
