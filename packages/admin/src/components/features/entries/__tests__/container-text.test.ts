@@ -114,3 +114,62 @@ describe("withTextFrom", () => {
     ).toEqual({ headline: "Read me", weight: 9 });
   });
 });
+
+// A component placed in a container's rows holds its values inline in the row, its text translated
+// with the row: the API hands its fields with it (`componentFields`).
+describe("a component inside a container's rows", () => {
+  const PANELS = {
+    type: "repeater",
+    name: "panels",
+    fields: [
+      { type: "number", name: "position" },
+      {
+        type: "component",
+        name: "cards",
+        repeatable: true,
+        componentFields: [
+          { type: "text", name: "label" },
+          { type: "number", name: "size" },
+        ],
+      },
+    ],
+  };
+
+  it("names the container as holding translated text", () => {
+    expect(holdsTranslatedText(PANELS, true)).toBe(true);
+  });
+
+  it("lays each instance's text from the source instance with the same id", () => {
+    const current = [
+      {
+        id: "p1",
+        position: 1,
+        cards: [
+          { id: "c2", label: "", size: 20 },
+          { id: "c1", label: "", size: 10 },
+        ],
+      },
+    ];
+    const source = [
+      {
+        id: "p1",
+        position: 9,
+        cards: [
+          { id: "c1", label: "one", size: 1 },
+          { id: "c2", label: "two", size: 2 },
+        ],
+      },
+    ];
+
+    expect(withTextFrom(current, source, PANELS, true)).toEqual([
+      {
+        id: "p1",
+        position: 1,
+        cards: [
+          { id: "c2", label: "two", size: 20 },
+          { id: "c1", label: "one", size: 10 },
+        ],
+      },
+    ]);
+  });
+});

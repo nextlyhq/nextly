@@ -152,4 +152,47 @@ describe("UseSourceButton", () => {
     // The other row keeps its own translation.
     expect(seen.other).toBe("primero");
   });
+
+  // A row the translator moved keeps its own source: the row of the same id, not the row that
+  // sits at its position in the source.
+  it("fills a moved row's text from the source row with the same id", async () => {
+    const seen: { caption?: unknown } = {};
+    function Harness() {
+      const form = useForm<Record<string, unknown>>({
+        defaultValues: {
+          // The target holds the rows in another order than the source.
+          slides: [
+            { id: "r2", caption: "" },
+            { id: "r1", caption: "primero" },
+          ],
+        },
+      });
+      seen.caption = form.watch("slides.0.caption");
+      return (
+        <FormProvider {...form}>
+          <TranslationFieldProvider
+            value={{
+              sourceValues: {
+                slides: [
+                  { id: "r1", caption: "first" },
+                  { id: "r2", caption: "second" },
+                ],
+              },
+              sourceLabel: "English",
+            }}
+          >
+            <UseSourceButton
+              fieldName="slides.0.caption"
+              fieldLabel="Caption"
+            />
+          </TranslationFieldProvider>
+        </FormProvider>
+      );
+    }
+    render(<Harness />);
+
+    await userEvent.click(screen.getByRole("button"));
+
+    expect(seen.caption).toBe("second");
+  });
 });

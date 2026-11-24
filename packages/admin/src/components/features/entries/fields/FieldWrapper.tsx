@@ -15,14 +15,14 @@ import { Globe, Lock } from "lucide-react";
 import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import type { JSX, ReactNode } from "react";
 import { useId } from "react";
-import { get } from "react-hook-form";
+import { useFormContext } from "react-hook-form";
 
 import { fieldLabel } from "@admin/lib/field-label";
 import { useLabelLandingCheck } from "@admin/lib/forms/label-landing";
 import { cn } from "@admin/lib/utils";
 
 import { useFieldWithheld } from "../../versions/withheld-fields-context";
-import { holdsTranslatedText } from "../container-text";
+import { holdsTranslatedText, sourceValueAt } from "../container-text";
 import { useEntryLocale } from "../EntryLocaleContext";
 import { UseSourceButton } from "../TranslationMode/UseSourceButton";
 
@@ -211,6 +211,39 @@ function useFieldLabelLandingCheck(
  * </FieldWrapper>
  * ```
  */
+/**
+ * The default language's value of the field at `formPath`, shown beside it while translating:
+ * each row on the way matched by its id in the source (`sourceValueAt`), so a row this form has
+ * moved still shows its own source text. Only primitive (text/number) values render. Outside a
+ * form, where nothing can have moved, the path is read as it stands.
+ */
+function SourceHint({
+  source,
+  formPath,
+}: {
+  source: Record<string, unknown>;
+  formPath: string;
+}): JSX.Element | null {
+  // `null` outside a form, where the hook finds no provider.
+  const form = useFormContext() as ReturnType<typeof useFormContext> | null;
+  const raw = sourceValueAt(source, form?.getValues() ?? source, formPath);
+  const text =
+    typeof raw === "string" && raw.trim() !== ""
+      ? raw
+      : typeof raw === "number"
+        ? String(raw)
+        : null;
+  if (text === null) return null;
+  return (
+    <p
+      dir="auto"
+      className="text-xs leading-relaxed text-muted-foreground border-l-2 border-muted pl-2"
+    >
+      <span className="font-medium">Default:</span> {text}
+    </p>
+  );
+}
+
 export function FieldWrapper({
   field,
   error,
@@ -345,30 +378,18 @@ export function FieldWrapper({
   // a translatable field so the translator always has the source text (spec §10 — the validated,
   // cheap alternative to a full side-by-side editor). Only primitive (text/number) sources render;
   // structural values (relationships, richText objects) are skipped.
-  // Read at the field's form path: a text inside a repeater's row is the same row's in the
-  // source, since every language keeps the same rows in the same order.
+  // Read at the field's form path, each row on the way matched by its id in the source: every
+  // language keeps one structure, wherever this form has moved a row (`sourceValueAt`). Outside a
+  // form nothing can have moved, and the path is read as it stands.
+  // Drawn only where a hint can show, so a field in the default language never reads the form.
   const formPath = fieldPath ?? fieldName;
-  const rawSource: unknown =
+  const sourceHint =
     isLocalizedField &&
     entryLocale.isNonDefaultLocale &&
     formPath != null &&
-    entryLocale.sourceValues
-      ? get(entryLocale.sourceValues, formPath)
-      : undefined;
-  const sourceText =
-    typeof rawSource === "string" && rawSource.trim() !== ""
-      ? rawSource
-      : typeof rawSource === "number"
-        ? String(rawSource)
-        : null;
-  const sourceHint = sourceText ? (
-    <p
-      dir="auto"
-      className="text-xs leading-relaxed text-muted-foreground border-l-2 border-muted pl-2"
-    >
-      <span className="font-medium">Default:</span> {sourceText}
-    </p>
-  ) : null;
+    entryLocale.sourceValues ? (
+      <SourceHint source={entryLocale.sourceValues} formPath={formPath} />
+    ) : null;
 
   // In translation mode the source is already on screen in its own pane, so the
   // field offers the ACTION rather than repeating the text: fill this one field
