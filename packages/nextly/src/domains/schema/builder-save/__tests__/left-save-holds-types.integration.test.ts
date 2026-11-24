@@ -19,6 +19,7 @@ import {
   leftSaveSuite,
   LEFT_SAVE_SUITES,
   MIGRATIONS,
+  text,
   type Outcome,
 } from "./helpers/left-save-fixture";
 
@@ -61,8 +62,14 @@ describe.each(LEFT_SAVE_SUITES)(
     const retypes = (statement: string) =>
       /^\s*ALTER\s+TABLE\b.*MODIFY\s+COLUMN\s+`?heading`?/is.test(statement);
 
-    /** Start the save that makes `heading` text, a number until then, and kill it once its column is. */
-    async function killRetype(t: TestNextly): Promise<void> {
+    /**
+     * Start the save that makes `heading` text, a number until then, and kill it once its column is;
+     * `note` is translated with `languages`.
+     */
+    async function killRetype(
+      t: TestNextly,
+      { languages = false }: { languages?: boolean } = {}
+    ): Promise<void> {
       const schemaVersion = await versionOf(t);
       await killSave(t, afterStatement(retypes), () =>
         dispatchCollections(
@@ -70,7 +77,10 @@ describe.each(LEFT_SAVE_SUITES)(
           "applySchemaChanges",
           { collectionName: slug },
           {
-            fields: [field("heading"), field("note")],
+            fields: [
+              field("heading"),
+              languages ? text("note") : field("note"),
+            ],
             confirmed: true,
             schemaVersion,
           }
@@ -90,6 +100,14 @@ describe.each(LEFT_SAVE_SUITES)(
     async function rows(t: TestNextly): Promise<string[]> {
       const found = (await t.adapter.executeQuery(
         `SELECT * FROM ${table} ORDER BY slug`
+      )) as unknown as Array<Record<string, unknown>>;
+      return found.map(row => JSON.stringify(row));
+    }
+
+    /** Every translation the collection's companion holds. */
+    async function translations(t: TestNextly): Promise<string[]> {
+      const found = (await t.adapter.executeQuery(
+        `SELECT * FROM ${table}_locales ORDER BY _parent, _locale`
       )) as unknown as Array<Record<string, unknown>>;
       return found.map(row => JSON.stringify(row));
     }
@@ -174,6 +192,127 @@ describe.each(LEFT_SAVE_SUITES)(
             kind: "write",
             via: "api",
             data: { title: "A3", slug: "a3", heading: "x" },
+          },
+        ])) {
+          expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
+        }
+      },
+      600_000
+    );
+
+    it.runIf(dialect === "mysql")(
+      "on a collection translated in two languages, refuses a create and an update that set the field in either language, keeping both translations; lets another field through in each; and reads each",
+      async () => {
+        const t = await boot({ numeric: true, languages: true });
+        const [first] = (await t.adapter.executeQuery(
+          `SELECT id FROM ${table} WHERE slug = 'first'`
+        )) as unknown as Array<{ id: unknown }>;
+        const id = String(first?.id);
+        await killRetype(t, { languages: true });
+        expect(await headingType(t), `killed at ${killedAt}`).toBe("text");
+        const before = await rows(t);
+        const translated = await translations(t);
+        expect(
+          translated.length,
+          "the entry is written in both languages"
+        ).toBeGreaterThanOrEqual(2);
+
+        const held = await fromAnotherProcess([
+          {
+            kind: "update",
+            via: "rest",
+            id,
+            locale: "es",
+            data: { heading: 8, _overwrite: true },
+          },
+          {
+            kind: "update",
+            via: "api",
+            id,
+            locale: "es",
+            data: { heading: 8, _overwrite: true },
+          },
+          {
+            kind: "write",
+            via: "rest",
+            locale: "es",
+            data: { title: "R1", slug: "r1", heading: 8 },
+          },
+          {
+            kind: "write",
+            via: "api",
+            locale: "es",
+            data: { title: "A1", slug: "a1", heading: 8 },
+          },
+        ]);
+        for (const refused of held) expectRefused(refused);
+        expect(await rows(t), "no row changed").toEqual(before);
+        expect(await translations(t), "no translation changed").toEqual(
+          translated
+        );
+
+        const through = await fromAnotherProcess([
+          {
+            kind: "update",
+            via: "rest",
+            id,
+            locale: "es",
+            data: { note: "nota nueva", _overwrite: true },
+          },
+          {
+            kind: "update",
+            via: "api",
+            id,
+            locale: "en",
+            data: { note: "only english", _overwrite: true },
+          },
+          {
+            kind: "write",
+            via: "api",
+            locale: "es",
+            data: { title: "A2", slug: "a2", note: "hola" },
+          },
+        ]);
+        for (const outcome of through) {
+          expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+        }
+
+        const [esRest, esApi, enRest, enApi] = await fromAnotherProcess([
+          { kind: "read", via: "rest", locale: "es" },
+          { kind: "read", via: "api", locale: "es" },
+          { kind: "read", via: "rest", locale: "en" },
+          { kind: "read", via: "api", locale: "en" },
+        ]);
+        const noteOf = (read: Outcome) =>
+          read.items?.find(item => item.slug === "first")?.note;
+        for (const read of [esRest!, esApi!, enRest!, enApi!]) {
+          expect(databaseError(read), JSON.stringify(read)).toBe(false);
+          expect(read.ok, JSON.stringify(read)).toBe(true);
+        }
+        expect([noteOf(esRest!), noteOf(esApi!)]).toEqual([
+          "nota nueva",
+          "nota nueva",
+        ]);
+        expect([noteOf(enRest!), noteOf(enApi!)]).toEqual([
+          "only english",
+          "only english",
+        ]);
+
+        await settle(t);
+        for (const accepted of await fromAnotherProcess([
+          {
+            kind: "update",
+            via: "rest",
+            id,
+            locale: "es",
+            data: { heading: "x", _overwrite: true },
+          },
+          {
+            kind: "update",
+            via: "api",
+            id,
+            locale: "en",
+            data: { heading: "y", _overwrite: true },
           },
         ])) {
           expect(accepted.ok, JSON.stringify(accepted)).toBe(true);

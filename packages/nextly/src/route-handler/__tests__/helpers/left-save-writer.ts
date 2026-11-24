@@ -8,8 +8,9 @@
  * not a build. Arguments: the dialect, the database URL, the app's folder, the collection's slug,
  * and the operations as JSON: `{ kind: "write" | "read" | "update" | "single-write" |
  * "single-read"; via: "rest" | "api"; data?; id?; slug?; depth? }`, an update naming the entry it
- * changes, `slug` another collection or a Single to send it to, and a read's `depth` how far it
- * populates relationships. `registry-moved` moves the stored schema version, as a registry write
+ * changes, `slug` another collection or a Single to send it to, a read's `depth` how far it
+ * populates relationships, and `locale` the language it is sent in. The site's languages are the
+ * environment's (`NEXTLY_TEST_LOCALES`, the default one first). `registry-moved` moves the stored schema version, as a registry write
  * anywhere does, so the next request loads every definition again from the registry rows. `request`
  * makes its `within` operations in one request, and `pause` stops until the test lets it go on.
  */
@@ -45,6 +46,8 @@ type Operation = {
   slug?: string;
   /** How far a read populates relationships. */
   depth?: number;
+  /** The language the operation is sent in. */
+  locale?: string;
 };
 
 /** What one operation came to: whether it went through, and what it said. */
@@ -72,7 +75,16 @@ if (!dialect || !url || !basePath || !slug || !operations) {
 const adapter = await createAdapter({ type: dialect, url } as Parameters<
   typeof createAdapter
 >[0]);
-const copy = await createTestNextly({ adapter: adapter as never, basePath });
+const locales = (process.env.NEXTLY_TEST_LOCALES ?? "")
+  .split(",")
+  .filter(Boolean);
+const copy = await createTestNextly({
+  adapter: adapter as never,
+  basePath,
+  ...(locales.length === 0
+    ? {}
+    : { localization: { locales, defaultLocale: locales[0] as string } }),
+});
 const handlers = createDynamicHandlers();
 
 /** A request to this process's admin API, as the signed-in editor. */
@@ -170,13 +182,19 @@ function fromError(operation: Operation, error: unknown): Outcome {
 
 /** The REST request an operation makes, to `target`. */
 function restOf(operation: Operation, target: string): Promise<Response> {
+  const inLanguage =
+    operation.locale === undefined ? "" : `?locale=${operation.locale}`;
   switch (operation.kind) {
     case "write":
-      return send("POST", `/collections/${target}/entries`, operation.data);
+      return send(
+        "POST",
+        `/collections/${target}/entries${inLanguage}`,
+        operation.data
+      );
     case "update":
       return send(
         "PATCH",
-        `/collections/${target}/entries/${operation.id ?? ""}`,
+        `/collections/${target}/entries/${operation.id ?? ""}${inLanguage}`,
         operation.data
       );
     case "single-write":
@@ -192,11 +210,17 @@ function restOf(operation: Operation, target: string): Promise<Response> {
       return send(
         "GET",
         `/collections/${target}/entries${
-          operation.depth === undefined ? "" : `?depth=${operation.depth}`
+          operation.depth === undefined
+            ? inLanguage
+            : `?depth=${operation.depth}`
         }`
       );
   }
 }
+
+/** The language an operation is sent in, as the Direct API takes it. */
+const languageOf = (operation: Operation) =>
+  operation.locale === undefined ? {} : { locale: operation.locale };
 
 /** The Direct API call an operation makes, to `target`, and what it answered. */
 async function apiOf(operation: Operation, target: string): Promise<Outcome> {
@@ -207,10 +231,15 @@ async function apiOf(operation: Operation, target: string): Promise<Outcome> {
         collection: target,
         id: operation.id,
         data,
+        ...languageOf(operation),
       } as never);
       return { ...operation, ok: true };
     case "write":
-      await copy.nextly.create({ collection: target, data } as never);
+      await copy.nextly.create({
+        collection: target,
+        data,
+        ...languageOf(operation),
+      } as never);
       return { ...operation, ok: true };
     case "pause": {
       writeFileSync(operation.reached ?? "", "reached");
@@ -244,6 +273,7 @@ async function apiOf(operation: Operation, target: string): Promise<Outcome> {
       const found = (await copy.nextly.find({
         collection: target,
         ...(operation.depth === undefined ? {} : { depth: operation.depth }),
+        ...languageOf(operation),
       } as never)) as { items: Array<Record<string, unknown>> };
       return { ...operation, ok: true, items: found.items };
     }

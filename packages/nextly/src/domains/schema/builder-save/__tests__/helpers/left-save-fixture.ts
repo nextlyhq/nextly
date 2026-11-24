@@ -71,6 +71,8 @@ const WRITER = join(
 );
 export const MIGRATIONS = "./database/history";
 const DEFINITION = "./schema/builder.json";
+/** The site's languages where a suite boots with them, the default one first. */
+const LOCALES = ["en", "es"];
 const EDITOR = "left-save-editor";
 
 export type Field = Record<string, unknown>;
@@ -118,6 +120,8 @@ export type Outcome = {
   slug?: string;
   /** How far a read populates relationships. */
   depth?: number;
+  /** The language the operation is sent in. */
+  locale?: string;
   ok: boolean;
   status?: number;
   code?: string;
@@ -192,6 +196,7 @@ export function leftSaveSuite({
   const table = `dc_${slug}`;
   let url: string;
   let cookie: string;
+  let languages = false;
 
   /** A Single of the suite's, and the field group its collection may embed. */
   const hero = `held_hero_${dialect.slice(0, 2)}`;
@@ -204,7 +209,8 @@ export function leftSaveSuite({
    * with `headingDefault`, `heading` given that default; with `card`, a field `card` holding
    * the field group `card`; with `translatable`, `heading` translatable and left empty, so its
    * column is the translations table's where values are kept per language; with `numeric`,
-   * `heading` a number, so a save that makes it text changes its column's type.
+   * `heading` a number, so a save that makes it text changes its column's type; with `languages`,
+   * English and Spanish, `note` translated and the entry written in both.
    */
   async function boot(
     options: {
@@ -214,6 +220,7 @@ export function leftSaveSuite({
       card?: boolean;
       translatable?: boolean;
       numeric?: boolean;
+      languages?: boolean;
     } = {}
   ): Promise<TestNextly> {
     if (dialect === "sqlite") {
@@ -234,7 +241,11 @@ export function leftSaveSuite({
       basePath,
       db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION },
       perLanguageStorage: perLanguage,
+      ...(options.languages === true
+        ? { localization: { locales: LOCALES, defaultLocale: LOCALES[0]! } }
+        : {}),
     });
+    languages = options.languages === true;
     await superAdminUser(current, EDITOR);
     cookie = `nextly_session=${await signAccessToken(
       buildClaims({
@@ -269,7 +280,7 @@ export function leftSaveSuite({
                 ? { ...field("heading"), type: "number" }
                 : field("heading")
             : { ...field("heading"), defaultValue: options.headingDefault },
-          field("note"),
+          options.languages === true ? text("note") : field("note"),
           ...(options.card === true
             ? [{ name: "card", type: "component", component: card }]
             : []),
@@ -277,6 +288,7 @@ export function leftSaveSuite({
         ...(options.drafts === true || options.status === true
           ? { status: true }
           : {}),
+        ...(options.languages === true ? { localized: true } : {}),
       }
     );
     if (options.drafts === true) {
@@ -299,6 +311,17 @@ export function leftSaveSuite({
           : { heading: options.numeric === true ? 7 : "h" }),
       },
     } as never);
+    if (options.languages === true) {
+      const made = (await current.adapter.executeQuery(
+        `SELECT id FROM ${table} WHERE slug = 'first'`
+      )) as unknown as Array<{ id: unknown }>;
+      await current.nextly.update({
+        collection: slug,
+        id: String(made[0]?.id),
+        locale: "es",
+        data: { note: "nota", _overwrite: true },
+      } as never);
+    }
     return current;
   }
 
@@ -504,6 +527,7 @@ export function leftSaveSuite({
           DB_DIALECT: dialect,
           DATABASE_URL: url,
           NEXTLY_TEST_COOKIE: cookie,
+          ...(languages ? { NEXTLY_TEST_LOCALES: LOCALES.join(",") } : {}),
         },
         timeout: 150_000,
         maxBuffer: 64 * 1024 * 1024,
