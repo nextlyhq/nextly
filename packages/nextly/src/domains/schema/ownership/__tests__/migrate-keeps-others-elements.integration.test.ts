@@ -9,7 +9,9 @@
  *
  * So is moving that field into a group, on both storage layouts, and turning translation on where it
  * moves the field's column (the earlier layout: on per-language storage a text field's column is the
- * per-language table's already). What the plugin built elsewhere on the table stops none of these,
+ * per-language table's already). On that layout the set-up's `nextly migrate` applies its file, then
+ * ends on the upgrade's data step, which would move the values per language and asks for a backup
+ * first. On per-language storage, what the plugin built elsewhere on the table stops none of these,
  * and is kept with its values once `nextly migrate` has run the file.
  *
  * The app declares a collection in code and migrates; an index of a plugin's is made on one of its
@@ -381,6 +383,22 @@ describe.each(getConfiguredTestDialects())(
       expect(ran.code, ran.said).toBe(undefined);
     }
 
+    /**
+     * The set-up's `nextly migrate` went through, or on the earlier layout applied its file and then
+     * ended on the upgrade's data step, for want of a confirmed backup, and nothing else: the
+     * collection's text column is still on its own table.
+     */
+    async function applied(
+      url: string,
+      earlier: boolean,
+      ran: { code: number | undefined; said: string }
+    ) {
+      if (!earlier) return wentThrough(ran);
+      expect(ran.code, ran.said).toBe(1);
+      expect(ran.said).toContain("DATA_STEPS_BACKUP_NOT_CONFIRMED");
+      expect((await shapeOf(url, TABLE)).columns).toContain("title");
+    }
+
     /** The migration files written so far. */
     const files = () =>
       readdirSync(join(state.dir, "migrations")).filter(name =>
@@ -632,7 +650,7 @@ describe.each(getConfiguredTestDialects())(
         const url = await emptyDatabase();
         use(url);
         wentThrough(await migrateCreate("add_posts", shaped({})));
-        wentThrough(await migrate(shaped({})));
+        await applied(url, earlier, await migrate(shaped({})));
         const table = await buildIndex(url);
         const before = await shapeOf(url, table);
         const written = files();
@@ -655,7 +673,7 @@ describe.each(getConfiguredTestDialects())(
       const url = await emptyDatabase();
       use(url);
       wentThrough(await migrateCreate("add_posts", shaped({}, text)));
-      wentThrough(await migrate(shaped({}, text)));
+      await applied(url, true, await migrate(shaped({}, text)));
       const table = await buildIndex(url);
       expect(table).toBe(TABLE);
       const before = await shapeOf(url, table);
@@ -673,32 +691,25 @@ describe.each(getConfiguredTestDialects())(
     });
 
     // Nothing of the plugin's is built on a column any of these takes off the table.
-    it.each(
-      LAYOUTS.flatMap(layout => [
-        {
-          ...layout,
-          change: "removing a field",
-          after: { without: ["extra"] },
-          gone: "extra" as string | undefined,
-        },
-        {
-          ...layout,
-          change: "moving a field into a group",
-          after: { inGroup: ["extra"] },
-          gone: "extra" as string | undefined,
-        },
-        {
-          ...layout,
-          change: "turning translation on",
-          after: { localized: true },
-          // Of text fields, the title's column, where the earlier layout holds it on this table.
-          gone: layout.earlier ? "title" : undefined,
-        },
-      ])
-    )(
-      "migrate:create and nextly migrate apply $change on $layout, keeping the plugin's column, its index and its values",
-      async ({ earlier, after, gone }) => {
-        if (earlier) setPerLanguageStorage(false);
+    it.each([
+      {
+        change: "removing a field",
+        after: { without: ["extra"] },
+        gone: "extra" as string | undefined,
+      },
+      {
+        change: "moving a field into a group",
+        after: { inGroup: ["extra"] },
+        gone: "extra" as string | undefined,
+      },
+      {
+        change: "turning translation on",
+        after: { localized: true },
+        gone: undefined,
+      },
+    ])(
+      "migrate:create and nextly migrate apply $change on per-language storage, keeping the plugin's column, its index and its values",
+      async ({ after, gone }) => {
         const url = await emptyDatabase();
         use(url);
         wentThrough(await migrateCreate("add_posts", shaped({})));
@@ -727,34 +738,30 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
-    it.each(LAYOUTS)(
-      "migrate:create and nextly migrate apply removing a field group's field on $layout, keeping the plugin's column, its index and its values on the shared table",
-      async ({ earlier }) => {
-        if (earlier) setPerLanguageStorage(false);
-        const url = await emptyDatabase();
-        use(url);
-        wentThrough(await migrateCreate("add_cards", groupConfigWith(true)));
-        wentThrough(await migrate(groupConfigWith(true)));
-        await plantMarker(url, GROUP_TABLE);
-        const before = await markerOf(url, GROUP_TABLE);
-        expect(before).toEqual({
-          index: [MARKER],
-          values: ["kept by the plugin"],
-        });
-        expect((await shapeOf(url, GROUP_TABLE)).columns).toContain("rank");
+    it("migrate:create and nextly migrate apply removing a field group's field on per-language storage, keeping the plugin's column, its index and its values on the shared table", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      wentThrough(await migrateCreate("add_cards", groupConfigWith(true)));
+      wentThrough(await migrate(groupConfigWith(true)));
+      await plantMarker(url, GROUP_TABLE);
+      const before = await markerOf(url, GROUP_TABLE);
+      expect(before).toEqual({
+        index: [MARKER],
+        values: ["kept by the plugin"],
+      });
+      expect((await shapeOf(url, GROUP_TABLE)).columns).toContain("rank");
 
-        const created = await migrateCreate(
-          "remove_rank",
-          groupConfigWith(false)
-        );
-        expect(created.code, created.said).toBe(undefined);
-        const migrated = await migrate(groupConfigWith(false));
-        expect(migrated.code, migrated.said).toBe(undefined);
+      const created = await migrateCreate(
+        "remove_rank",
+        groupConfigWith(false)
+      );
+      expect(created.code, created.said).toBe(undefined);
+      const migrated = await migrate(groupConfigWith(false));
+      expect(migrated.code, migrated.said).toBe(undefined);
 
-        expect((await shapeOf(url, GROUP_TABLE)).columns).not.toContain("rank");
-        expect(await markerOf(url, GROUP_TABLE)).toEqual(before);
-      }
-    );
+      expect((await shapeOf(url, GROUP_TABLE)).columns).not.toContain("rank");
+      expect(await markerOf(url, GROUP_TABLE)).toEqual(before);
+    });
 
     // WAITING, not yet decided how: `nextly migrate` writes no owner row for what a schema hook adds to
     // an entity's table, and once the plugin has left the configuration nothing else says the index
