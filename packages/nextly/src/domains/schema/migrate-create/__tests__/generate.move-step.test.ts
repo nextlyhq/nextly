@@ -47,7 +47,7 @@ const posts = (fields: Fields) => [
     fields: [text({ name: "title" }), ...fields],
   }),
 ];
-const meta = (fields: Fields) => group({ name: "meta", fields });
+const meta = (fields: Fields) => group({ name: "meta", fields: [...fields] });
 const note = text({ name: "note", ...shared });
 const summary = text({ name: "summary", ...shared });
 
@@ -76,6 +76,12 @@ function generate(
 const files = async () =>
   (await readdir(migrationsDir)).filter(f => f.endsWith(".sql")).sort();
 
+/** The snapshots beside them: a language table's file has none. */
+const snapshotNames = async () =>
+  (await readdir(join(migrationsDir, "meta")))
+    .filter(f => f.endsWith(".snapshot.json"))
+    .sort();
+
 /** One file's statements each way, and its snapshot. */
 async function read(file: string) {
   const sections = parseSqlSections(
@@ -100,6 +106,11 @@ const columnIn = (snapshot: SnapshotFile, name: string) =>
     ?.columns.find(column => column.name === name);
 const fieldsIn = (snapshot: SnapshotFile) =>
   snapshot.entities?.collections.posts?.settings.fields;
+/**
+ * A statement that writes rows of the posts. Anchored: MySQL rebuilds a column's definition in a
+ * statement whose text names UPDATE too (`ON UPDATE`).
+ */
+const WRITES = new RegExp(`^\\s*UPDATE\\s+\`${TABLE}\``, "i");
 const mentions = (statements: readonly string[], what: RegExp) =>
   statements.some(statement => what.test(statement));
 
@@ -143,10 +154,14 @@ describe("a field moved into a group, on MySQL", () => {
       nullable: true,
     });
     // Back: the values first, then NOT NULL.
-    const copied = step.down.findIndex(s => /UPDATE/i.test(s));
-    const tightened = step.down.findLastIndex(s => /NOT NULL/i.test(s));
+    const copied = step.down.findIndex(s => WRITES.test(s));
+    const tightened = step.down.flatMap((statement, at) =>
+      /`summary`.*NOT NULL/is.test(statement) ? [at] : []
+    );
     expect(copied).toBeGreaterThanOrEqual(0);
-    expect(tightened).toBeGreaterThan(copied);
+    expect(tightened.length).toBeGreaterThan(0);
+    // None before the copy, which a column already NOT NULL would refuse an empty value from.
+    expect(Math.min(...tightened)).toBeGreaterThan(copied);
   });
 });
 
@@ -184,7 +199,8 @@ describe("a field moved out of a group, on MySQL", () => {
     expect(columnIn(rest.snapshot, "summary")).toMatchObject({
       nullable: false,
     });
-    expect(mentions(rest.up, /UPDATE/i)).toBe(false);
+    // It carries no value: the copy and the cleared key are the first file's.
+    expect(rest.up.filter(statement => WRITES.test(statement))).toEqual([]);
   });
 });
 
@@ -208,17 +224,14 @@ describe("the two files together", () => {
   it("neither is written where the run is refused", async () => {
     await generate(posts([summary, meta([note])]));
     const before = await files();
+    const snapshots = await snapshotNames();
     await expect(
       generate(posts([meta([note, summary])]), {
         judgeDeletions: () => Promise.reject(new Error("refused")),
       })
     ).rejects.toThrow("refused");
     expect(await files()).toEqual(before);
-    expect(
-      (await readdir(join(migrationsDir, "meta"))).filter(f =>
-        f.endsWith(".snapshot.json")
-      )
-    ).toHaveLength(before.length);
+    expect(await snapshotNames()).toEqual(snapshots);
   });
 
   it("a dry run names both and writes neither", async () => {
