@@ -109,13 +109,14 @@
  * able to vouch for it, most often because the connection dropped or the
  * computer slept past the deadline. So the beat goes on asking, with the
  * token the claim had, on every beat and at once when the browser says it is
- * online or the tab is shown again. Refused by a live claim, anyone's (the
- * same person's other tab included), it reports who took it, and then waits
- * for the person as any takeover does. Otherwise nobody else holds it, and a
- * plain claim, which displaces nobody, takes it back under a new token: the
- * release sent with the old one may still land. Asked by renewal first, not
- * by a claim, because the server hands a person's own live claim to any
- * claim of theirs: a claim would take the document from their other tab.
+ * online or the tab is shown again, with a claim that names the token it
+ * had. The server lets that claim replace only the claim it names, or none,
+ * in one transaction: refused by a live claim of anyone else's (the same
+ * person's other tab included, which a plain claim of theirs would take), it
+ * reports who holds it and waits for the person as any takeover does.
+ * Otherwise the claim comes back under a new token, so the release sent with
+ * the old one deletes nothing when it lands. Until then the claim stays lost,
+ * however the asks fail.
  *
  * ## The beat also says whether the document changed
  *
@@ -676,8 +677,9 @@ export function useDocumentLock({
     };
 
     /**
-     * Ask whether the claim lost to silence is still this editor's: see "A
-     * claim lost to silence asks again". A failure leaves it to ask again.
+     * Take back the claim lost to silence, if it is still this editor's or
+     * nobody's: see "A claim lost to silence asks again". A failure, or no
+     * answer within a beat, leaves it lost, to be asked again.
      */
     const askAboutLapsed = () => {
       const asked = lapsed;
@@ -694,34 +696,35 @@ export function useDocumentLock({
         freeSlot,
         DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS
       );
-      void protectedApi
-        .patch<MutationResponse<RenewDocumentLockOutcome>>(
-          "/document-lock",
-          withVersion({ ...ref, claimToken: asked })
-        )
-        .then(({ item }) => {
-          // Answered already, or the person took it back meanwhile.
-          if (cancelled || lapsed !== asked) return;
-          // 🔴 A live claim of someone else's: theirs, and the person decides.
-          // Anything else is a claim nobody else holds: still this editor's
-          // own, or gone. Either way it is taken with a plain claim and a NEW
-          // token, never by keeping the old one: the release sent with the
-          // old token when it was lost may still be on its way, and landing
-          // after a reinstall it would delete the claim this editor relies on.
-          const theirs =
-            item.status !== "renewed" &&
-            item.holder !== undefined &&
-            item.holder.expiresInSeconds > 0;
-          lapsed = null;
-          if (theirs) {
-            setState({ status: "taken-over", holder: item.holder });
+      const sentAt = Date.now();
+      void sendClaim(
+        withVersion({
+          ...ref,
+          takeover: false,
+          requestAccess: false,
+          reclaimToken: asked,
+        })
+      )
+        .then(item => {
+          // Answered already, the person is taking it back themselves, or the
+          // editor has gone: a claim this won is handed back. Released by its
+          // own token, it deletes nothing that replaced it.
+          if (cancelled || lapsed !== asked || inFlight !== null) {
+            if (item.status === "acquired") release(item.claimToken);
             return;
           }
-          surrendered = false;
-          void acquire(false);
+          lapsed = null;
+          if (item.status === "acquired") {
+            installAcquired(item.claimToken, sentAt);
+            tell(item.changed, true);
+            return;
+          }
+          setState({ status: "taken-over", holder: item.holder });
         })
         .catch(() => {
-          // Still unreachable: the next beat, or the next wake-up, asks again.
+          // Still unreachable, and still lost: the next beat, or the next
+          // wake-up, asks again. Never `unavailable`, which would let the
+          // editor save without a claim.
         })
         .finally(() => {
           clearTimeout(slotExpiry);

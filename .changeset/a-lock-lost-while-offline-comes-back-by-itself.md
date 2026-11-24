@@ -29,4 +29,4 @@
 "@nextlyhq/plugin-commerce": patch
 ---
 
-An editor that lost its claim on a document because the connection dropped or the computer slept now takes it back by itself once the connection returns, as long as nobody else took it. If someone did, the editor now says who, instead of saying a colleague may be editing.
+An editor that lost its claim on a document because the connection dropped or the computer slept now takes it back by itself once the connection returns, as long as nobody else took it. If someone did, the editor now says who, instead of saying a colleague may be editing. Claiming a document through the lock API can now name the claim token it takes back (`reclaimToken`), which never displaces anyone else's live claim, the same person's other tabs included.
