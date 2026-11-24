@@ -13,6 +13,7 @@
  * `DATABASE_URL` as an app's would: a file on SQLite, a scratch database on the servers.
  */
 import {
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -22,6 +23,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -140,7 +142,8 @@ async function connect(
 /** A development start of the project over the database at `url`. */
 async function developmentStart(
   dialect: TestDialect,
-  url: string
+  url: string,
+  declared: Partial<typeof DECLARED> = DECLARED
 ): Promise<void> {
   await shutdownServices().catch(() => {});
   clearServices();
@@ -148,7 +151,7 @@ async function developmentStart(
   forgetFieldGroupStorageNames();
   await createTestNextly({
     adapter: (await connect(dialect, url)) as never,
-    ...DECLARED,
+    ...declared,
     db: DB,
     basePath: dir,
   } as Parameters<typeof createTestNextly>[0]);
@@ -303,6 +306,64 @@ describe.each(getConfiguredTestDialects())(
         const adapter = await connect(dialect, url);
         expect(await hasTable(adapter, "dynamic_field_groups")).toBe(true);
         expect(await hasTable(adapter, "dynamic_components")).toBe(false);
+      }, 180_000);
+    }
+
+    /**
+     * The blog template's own migration in the project's folder, as a visual blog is scaffolded with
+     * it: as it ships, or as it shipped before it could say which names it is on.
+     */
+    function templateHistory(ships: "now" | "before"): void {
+      const from = fileURLToPath(
+        new URL("../../../../../../templates/blog/migrations/", import.meta.url)
+      );
+      const to = join(dir, "migrations");
+      mkdirSync(join(to, "meta"));
+      for (const file of readdirSync(from).filter(f => f.endsWith(".sql"))) {
+        copyFileSync(join(from, file), join(to, file));
+      }
+      const [meta] = readdirSync(join(from, "meta"));
+      const snapshot = JSON.parse(
+        readFileSync(join(from, "meta", meta), "utf-8")
+      ) as Record<string, unknown>;
+      expect(snapshot.fieldGroupStorage).toBe("current");
+      if (ships === "before") delete snapshot.fieldGroupStorage;
+      writeFileSync(join(to, "meta", meta), JSON.stringify(snapshot, null, 2));
+    }
+
+    for (const [ships, prefix, registry] of [
+      ["now", "fg_", "dynamic_field_groups"],
+      ["before", "comp_", "dynamic_components"],
+    ] as const) {
+      it(`starts a blog template's project, as it ships ${ships}, on ${registry}, and a Builder save and nextly migrate go on`, async () => {
+        const url = await emptyDatabase(dialect);
+        templateHistory(ships);
+        // The template's project declares nothing in code: its schema is its migration's.
+        loaded.config = defineConfig({ db: DB });
+        const set = await migrate();
+        expect(set.exit, set.said).toBeUndefined();
+        const adapter = await connect(dialect, url);
+        expect(await hasTable(adapter, registry)).toBe(true);
+
+        await developmentStart(dialect, url, {});
+        await builderCreate("fdh_banner");
+        expect(await hasTable(adapter, `${prefix}fdh_banner`)).toBe(true);
+
+        await shutdownServices().catch(() => {});
+        const after = await migrate();
+        expect(after.exit, after.said).toBeUndefined();
+        expect(await hasTable(adapter, `${prefix}fdh_banner`)).toBe(true);
+      }, 180_000);
+
+      it(`starts a blog template's empty database, as it ships ${ships}, on ${registry} by a development start`, async () => {
+        const url = await emptyDatabase(dialect);
+        templateHistory(ships);
+
+        await developmentStart(dialect, url);
+
+        const adapter = await connect(dialect, url);
+        expect(await hasTable(adapter, registry)).toBe(true);
+        expect(await hasTable(adapter, `${prefix}fdh_card`)).toBe(true);
       }, 180_000);
     }
 

@@ -36,7 +36,9 @@ import {
   fieldGroup,
   text,
 } from "../../../config";
+import { loadDialectTables } from "../../../database/dialect-tables";
 import { createAdapter } from "../../../database/factory";
+import { getDialectTables } from "../../../database/index";
 import { clearServices, shutdownServices } from "../../../di/register";
 import { hashManifest } from "../../../domains/field-groups/migration/manifest";
 import { runFieldGroupMigration } from "../../../domains/field-groups/migration/run";
@@ -46,6 +48,7 @@ import { MetaService } from "../../../domains/meta/services/meta-service";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { refuseRollbackUnderCurrentHistory } from "../../../domains/schema/migrate/field-group-rollback";
 import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
+import { freshPushSchema } from "../../../domains/schema/pipeline/fresh-push";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -56,6 +59,7 @@ import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
+import { runMigrateBaseline } from "../migrate-baseline";
 import { runMigrateCheck } from "../migrate-check";
 import { runMigrateFieldGroups } from "../migrate-field-groups";
 import { runMigrateCreate } from "../migrate-create";
@@ -415,6 +419,9 @@ describe.each(getConfiguredTestDialects())(
       const checked = await check();
       expect(checked.exit, checked.said).toBeUndefined();
       expect(checked.said).toMatch(/no drift/);
+      expect(checked.said).not.toMatch(
+        /\bcomp_|dynamic_components|_component_type/
+      );
 
       // A code-first edit after the move is planned against the current names.
       loaded.config = configOf(WITH_SUBTITLE);
@@ -812,9 +819,10 @@ describe.each(getConfiguredTestDialects())(
       ).resolves.toBeUndefined();
     }, 120_000);
 
-    // A new site has no history to be on either names, and is not refused. Its recorded move holds
-    // the registry alone, which is all a move back undoes.
-    it("moves a new site with no history back, and its groups still read", async () => {
+    // A move back undoes only what the recorded move holds. A new site's holds the registry alone:
+    // its groups' tables would stay on the current names beside a legacy registry, and the storage
+    // could then move neither way.
+    it("refuses to move a new site back, whose groups were created on the current names", async () => {
       const url = await openDatabase(dialect);
       loaded.config = configOf(FIRST);
       const first = await start(dialect, url, FIRST);
@@ -824,17 +832,98 @@ describe.each(getConfiguredTestDialects())(
       });
       await shutdownServices().catch(() => {});
 
-      const down = await storageDown({ apply: true, backupConfirmed: true });
+      const refused = await storageDown({ apply: true, backupConfirmed: true });
 
-      expect(down.exit, down.said).toBeUndefined();
+      expect(refused.exit, refused.said).not.toBeUndefined();
+      expect(refused.said).toContain("fh_card was created on the current ones");
       const adapter = await connect(dialect, url);
-      expect(await adapter.tableExists("dynamic_components")).toBe(true);
-      expect(await adapter.tableExists("dynamic_field_groups")).toBe(false);
+      expect(await adapter.tableExists("dynamic_field_groups")).toBe(true);
+      expect(await adapter.tableExists("dynamic_components")).toBe(false);
       const app = await start(dialect, url, FIRST);
       const [post] = (
         await app.nextly.find({ collection: "fh_posts" as never })
       ).items as Array<{ card?: { heading?: string } }>;
       expect(post.card?.heading).toBe("H");
     }, 180_000);
+
+    it("refuses to move a site back once a group was created after its move, in a preview too", async () => {
+      const url = await legacyProject();
+      await migrateStorage(dialect, url);
+      const later = {
+        ...FIRST,
+        fieldGroups: [
+          ...FIRST.fieldGroups,
+          defineFieldGroup({
+            slug: "fh_later",
+            fields: [text({ name: "note" })],
+          }),
+        ],
+      };
+      const app = await start(dialect, url, later);
+      expect(await app.adapter.tableExists("fg_fh_later")).toBe(true);
+      await shutdownServices().catch(() => {});
+
+      for (const options of [{}, { apply: true, backupConfirmed: true }]) {
+        const refused = await storageDown(options);
+        expect(refused.exit, refused.said).not.toBeUndefined();
+        expect(refused.said).toContain(
+          "fh_later was created on the current ones"
+        );
+      }
+      const adapter = await connect(dialect, url);
+      expect(await adapter.tableExists("fg_fh_card")).toBe(true);
+    }, 180_000);
+
+    // A baseline writes the history of a database that has none: on the names it keeps its field
+    // groups under, so the next file is planned against the tables it holds.
+    for (const naming of ["current", "legacy"] as const) {
+      it(`baselines a database on the ${naming} names as on them, and the next file follows`, async () => {
+        const url = await openDatabase(dialect);
+        loaded.config = configOf(FIRST);
+        if (naming === "legacy") {
+          const adapter = await connect(dialect, url);
+          await loadDialectTables(dialect);
+          await freshPushSchema(
+            dialect,
+            adapter.getDrizzle(),
+            getDialectTables(dialect)
+          );
+        }
+        await start(dialect, url, FIRST);
+        await shutdownServices().catch(() => {});
+
+        setNonInteractive(true);
+        const baseline = await run(context =>
+          runMigrateBaseline({ cwd: dir }, context)
+        );
+
+        expect(baseline.exit, baseline.said).toBeUndefined();
+        const [file] = readdirSync(join(dir, "migrations", "meta"));
+        const snapshot = JSON.parse(
+          await readFile(join(dir, "migrations", "meta", file!), "utf-8")
+        ) as {
+          version: number;
+          fieldGroupStorage?: string;
+          snapshot: { tables: Array<{ name: string }> };
+        };
+        expect(snapshot.version).toBe(naming === "current" ? 2 : 1);
+        expect(snapshot.fieldGroupStorage).toBe(
+          naming === "current" ? "current" : undefined
+        );
+        const group = naming === "current" ? "fg_fh_card" : "comp_fh_card";
+        expect(snapshot.snapshot.tables.map(t => t.name)).toContain(group);
+
+        loaded.config = configOf(WITH_SUBTITLE);
+        const edit = await create("add_subtitle");
+        expect(edit.exit, edit.said).toBeUndefined();
+        const sql = await readFile(written("add_subtitle").sql, "utf-8");
+        expect(sql).toContain(group);
+        expect(sql).not.toContain(
+          naming === "current" ? "comp_fh_card" : "fg_fh_card"
+        );
+        const applied = await migrate();
+        expect(applied.exit, applied.said).toBeUndefined();
+      }, 180_000);
+    }
   }
 );
