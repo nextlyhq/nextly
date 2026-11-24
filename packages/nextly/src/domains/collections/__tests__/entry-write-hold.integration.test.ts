@@ -326,11 +326,16 @@ describe.each(getConfiguredTestDialects())(
     /** The registry row as a write made now would load it, `data` the write's. */
     async function loadedNow(
       t: TestNextly,
-      data?: Record<string, unknown>
+      data?: Record<string, unknown>,
+      options?: { insertsOnly?: boolean }
     ): Promise<LoadedRegistryRow | undefined> {
       clearRegistryRowCache();
       const registry = new DynamicCollectionService(t.adapter, consoleLogger);
-      return loadedRegistryRowOf(await registry.getCollection(SLUG), data);
+      return loadedRegistryRowOf(
+        await registry.getCollection(SLUG),
+        data,
+        options
+      );
     }
 
     // A write made for a collection deleted before it held it finds no row under the slug, and is
@@ -372,6 +377,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       const setsNote = await loadedNow(t, { title: "t", note: "n" });
       const setsTitle = await loadedNow(t, { title: "t" });
+      const createsTitle = await loadedNow(t, { title: "t" }, { insertsOnly: true });
       expect(setsNote?.setsFields).toEqual(["title", "note"]);
       // The save's registry write: the definition without `note`, its version moved.
       const registry = new DynamicCollectionService(t.adapter, consoleLogger);
@@ -399,9 +405,25 @@ describe.each(getConfiguredTestDialects())(
       await expect(heldFor(t, setsTitle)).rejects.toMatchObject({
         code: "COLLECTION_BEING_CHANGED",
       });
+      // A create reads no entry through the earlier definition and writes only what it sets.
+      await expect(heldFor(t, createsTitle)).resolves.toBeUndefined();
       // Made from the definition as the save left it, the write goes on.
       await expect(
         heldFor(t, await loadedNow(t, { title: "t" }))
+      ).resolves.toBeUndefined();
+    }, 30_000);
+
+    // The held definition's version is read as the registry keeps it: where it is the one the write
+    // loaded, nothing more is compared, so a write goes on whatever its loaded fields hold. A version
+    // read as no number would compare every write's fields against the held definition, a read per
+    // write, and refuse one made from a definition the cache still held.
+    it("compares nothing further where the definition's version is the one the write loaded", async () => {
+      const t = await boot();
+      const loaded = await loadedNow(t, { title: "t" });
+      expect(loaded).toBeDefined();
+
+      await expect(
+        heldFor(t, loaded && { ...loaded, fields: [...loaded.fields, "ghost"] })
       ).resolves.toBeUndefined();
     }, 30_000);
 

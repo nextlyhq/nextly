@@ -194,6 +194,14 @@ vi.mock("../builder-save/push-carries-values", async importOriginal => {
 // A pause before each registry write a save makes once its change applied (`writeRegistryRows`), while
 // `ms` is set: the span a hold let go before the registry write would leave a write to land in.
 const slowRegistry = vi.hoisted(() => ({ ms: 0 }));
+// A gate before the next such registry write, while armed: the save waits there, its change made
+// and its row not yet written, until the case lets it go.
+const registryWrite = vi.hoisted(() => ({
+  armed: false,
+  paused: undefined as undefined | (() => void),
+  release: undefined as undefined | Promise<void>,
+  letGo: undefined as undefined | (() => void),
+}));
 vi.mock("../schema-version", async importOriginal => {
   const real = await importOriginal<typeof import("../schema-version")>();
   return {
@@ -203,6 +211,11 @@ vi.mock("../schema-version", async importOriginal => {
     ) => {
       if (slowRegistry.ms > 0) {
         await new Promise(resolve => setTimeout(resolve, slowRegistry.ms));
+      }
+      if (registryWrite.armed) {
+        registryWrite.armed = false;
+        registryWrite.paused?.();
+        await registryWrite.release;
       }
       return real.writeRegistryRows(...args);
     },
@@ -271,9 +284,11 @@ afterEach(async () => {
   releaseFails.refused = 0;
   fileStart.armed = false;
   afterCount.armed = false;
+  registryWrite.armed = false;
   // A save a failed case left at a gate goes on, so its transaction ends before the app does.
   fileStart.letGo?.();
   afterCount.letGo?.();
+  registryWrite.letGo?.();
   vi.unstubAllEnvs();
   await instance?.destroy();
   instance = undefined;
@@ -296,6 +311,22 @@ function boxed(fields: readonly Record<string, unknown>[]): unknown[] {
       ? { type: "group", label: "Box", fields: [field] }
       : field
   );
+}
+
+/** What a write ended with, as a failed assertion names it: the code, its log line, and its cause. */
+function told(outcome: unknown): string {
+  const error = outcome as {
+    code?: unknown;
+    logMessage?: unknown;
+    logContext?: unknown;
+    cause?: { message?: unknown };
+  };
+  return JSON.stringify({
+    code: error?.code,
+    logMessage: error?.logMessage,
+    logContext: error?.logContext,
+    cause: error?.cause?.message,
+  });
 }
 
 /** A gate's pause, its release, and whether the save reached it before it ended. */
@@ -1191,10 +1222,10 @@ describe.each(getConfiguredTestDialects())(
       60_000
     );
 
-    // MySQL commits a schema statement as it runs, so no transaction holds the table from the
-    // count to the drop: the save holds the collection on the try's connection, as a collection
-    // delete does, and an entry write takes the collection's hold before it writes.
-    it.runIf(dialect === "mysql")(
+    // An entry write takes the collection's hold before it writes, which the save holds from its
+    // count until its registry row records the new definition: on MySQL, whose schema statements
+    // commit as they run, on the try's connection, as a collection delete holds it.
+    it(
       "keeps an entry write waiting from the count until the save is over, then writes it to the new shape",
       async () => {
         const t = await boot();
@@ -1229,6 +1260,63 @@ describe.each(getConfiguredTestDialects())(
       },
       60_000
     );
+
+    // An update sent between the count and the drop, setting only a field the save keeps, was made
+    // from the definition with the removed field, which its read of the entry as it stands names.
+    // It waits for the collection, and once the save let go it is refused as made for a definition
+    // that changed, with nothing written, to be made again from the new one: never failed by the
+    // database on the removed column.
+    it("keeps an update of a kept field waiting from the count until the save is over, then refuses it as made for the earlier definition", async () => {
+      const t = await boot();
+      for (const note of ["a", "b", "c"]) await insert(t, note);
+      const [first] = await sql<{ id: unknown }>(
+        t,
+        `SELECT ${q("id")} AS id FROM ${q(TABLE)} ORDER BY ${q("id")}`
+      );
+      const id = String(first?.id);
+      const { paused, release } = gated(afterCount);
+      const applying = apply(t, 3).then(
+        () => "applied",
+        (error: unknown) => error
+      );
+      const reached = await Promise.race([
+        paused.then(() => true),
+        applying.then(() => false),
+      ]);
+      expect(reached || (await applying)).toBe(true);
+
+      let settled = false;
+      const writing = t.nextly
+        .update({
+          collection: SLUG,
+          id,
+          // Written over whatever the entry holds now, as an editor saving over it does.
+          data: { label: "changed", _overwrite: true },
+        } as never)
+        .then(
+          () => "updated",
+          (error: unknown) => error
+        )
+        .finally(() => {
+          settled = true;
+        });
+      await new Promise(resolve => setTimeout(resolve, 1_000));
+      const heldBack = !settled;
+      release();
+      expect(heldBack).toBe(true);
+      expect(await applying).toBe("applied");
+      const outcome = await writing;
+      // Refused as made for a definition that changed, not as held past the hold's wait.
+      expect(outcome, told(outcome)).toMatchObject({
+        code: "COLLECTION_BEING_CHANGED",
+        message: expect.stringContaining("changed while this write waited"),
+      });
+      const [row] = await sql<{ label: unknown }>(
+        t,
+        `SELECT ${q("label")} AS label FROM ${q(TABLE)} WHERE ${q("id")} = '${id}'`
+      );
+      expect(row?.label).toBe(id);
+    }, 60_000);
 
     // An entry write holds the collection's registry row for share until it commits. One that
     // read the row before the save held the collection, and has not committed, is counted: the
@@ -1895,6 +1983,49 @@ describe.each(getConfiguredTestDialects())(
         },
       });
       expect(await translatedNotes(t)).toBe(4);
+    }, 60_000);
+
+    // The span between the save's file and its registry row, held open: the row is written after
+    // the file here, once the translations table is in step. A write sent in that span, setting the
+    // removed field, waits until the row is written, on every database, and nothing of it lands. On
+    // MySQL the file's own try lets the collection go with the file, so the save holds it beside the
+    // file until the row is written. This process's own definition already lacks the field once the
+    // file has run, so the write cannot name it as a field of its collection: it fails on the
+    // column instead, with nothing written. A write from another process, made from the definition
+    // it loaded, is refused naming it (below).
+    it("keeps an entry write sent between the file and its registry row waiting, and lets nothing of it land", async () => {
+      const t = await bootPerLanguage();
+      for (const note of ["a", "b", "c"]) await write(t, note);
+      const { paused, release } = gated(registryWrite);
+      const applying = save(t, 3);
+      const reached = await Promise.race([
+        paused.then(() => true),
+        applying.then(() => false),
+      ]);
+      expect(reached || (await applying)).toBe(true);
+
+      let settled = false;
+      const writing = write(t, "written between the file and the row")
+        .then(
+          () => "created",
+          (error: unknown) => error
+        )
+        .finally(() => {
+          settled = true;
+        });
+      await new Promise(resolve => setTimeout(resolve, 1_000));
+      const heldBack = !settled;
+      release();
+      expect(heldBack).toBe(true);
+      expect(await applying).toBe("applied");
+      const outcome = await writing;
+      expect(outcome, told(outcome)).not.toBe("created");
+      expect(await translatedNotes(t)).toBe("gone");
+      const [rows] = await query<{ n: number | string }>(
+        t,
+        `SELECT COUNT(*) AS n FROM ${q(TABLE)}`
+      );
+      expect(Number(rows?.n)).toBe(3);
     }, 60_000);
 
     // An entry write sent after the save's count, setting the removed field: on either road it
