@@ -3245,23 +3245,33 @@ function addedStatements(
     save.keys === undefined || save.entity === null || save.previous === null
       ? emptyAdded()
       : keyChanges(deps.adapter.getCapabilities().dialect, table, save.keys);
-  // A move's copy into a group leads the file, before any drop; its copy out of one ends it,
-  // after every add; each way down the other way round.
+  // The moves' stops lead the file, then a move's copy into a group, before any drop; its copy out
+  // of one ends it, after every add; each way down the other way round.
   return {
     up: {
-      first: [...moves.up.first, ...keys.up.first, ...junctions.up.first],
+      first: [
+        ...moves.up.stops,
+        ...moves.up.first,
+        ...keys.up.first,
+        ...junctions.up.first,
+      ],
       last: [...junctions.up.last, ...keys.up.last, ...moves.up.last],
     },
     down: {
-      first: [...moves.down.first, ...keys.down.first, ...junctions.down.first],
+      first: [
+        ...moves.down.stops,
+        ...moves.down.first,
+        ...keys.down.first,
+        ...junctions.down.first,
+      ],
       last: [...junctions.down.last, ...keys.down.last, ...moves.down.last],
     },
   };
 }
 
 const NO_MOVES: EntityMoves = {
-  up: { first: [], last: [] },
-  down: { first: [], last: [] },
+  up: { stops: [], first: [], last: [] },
+  down: { stops: [], first: [], last: [] },
   movedColumns: [],
   refilledColumns: [],
 };

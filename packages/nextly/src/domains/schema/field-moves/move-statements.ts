@@ -669,9 +669,10 @@ function guardedStop(
  * Each value the key `keys` of `column` holds in more than one entry of `target`'s table, as a
  * query: what a field moved out of the group into a unique column would repeat there. Values are
  * compared as that column's unique index compares them once copied: through the copy's own
- * conversion (`fromJson`), so the same instant written at two offsets, or 1 and 1.00 in a decimal,
- * count as one value (`asTheIndexCompares` for MySQL's text). An entry holding no value, or JSON
- * null, repeats nothing, as a unique index leaves NULL free on every dialect. The save counts these
+ * conversion (`fromJson`) and as the column then keeps and compares it (`asTheIndexCompares`), so
+ * the same instant written at two offsets, 1 and 1.00 in a decimal, or on SQLite 1 and "1", count
+ * as one value. An entry holding no value, or JSON null, repeats nothing, as a unique index leaves
+ * NULL free on every dialect. The save counts these
  * rows before it writes anything, once every value is one the column keeps; the file stops over
  * the first (`repeatedValuesStop`), after its stop on a value the column would not keep.
  */
@@ -688,18 +689,42 @@ export function repeatedValuesAt(
 }
 
 /**
- * A value as `target`'s column compares it for its unique index. On MySQL a text column takes its
- * table's collation, which is the one its other text columns were made with, and the text read out
- * of JSON compares byte by byte: it is read through the table's `id` column, whose collation the
- * whole expression takes (the id itself is never the result), so the values compare as the new
- * column will, whatever collation the table has on the database the statement runs on. A table
- * whose default was changed without converting its columns compares by the older one. PostgreSQL
- * and SQLite compare text as written, and every other kind compares as the value it is.
+ * A value as `target`'s column compares it for its unique index, held to the column itself for
+ * every kind by a test. PostgreSQL's copy casts to the column's own type, which is how it compares.
  */
 function asTheIndexCompares(target: MoveColumn, value: string): string {
-  return target.dialect === "mysql" && TEXT_KINDS.has(target.kind)
-    ? `IF(0, ${quoteIdent("id", target.dialect)}, ${value})`
-    : value;
+  if (target.dialect === "sqlite") return asSqliteKeeps(target, value);
+  if (target.dialect === "mysql") return asMysqlCompares(target, value);
+  return value;
+}
+
+/**
+ * A value read out of JSON as SQLite's column keeps it: the copy writes it as it is, and the
+ * column's declared type then makes one value of 1 and "1". A text column keeps a number as its
+ * text. A numeric one keeps as a number every text that is written as one, and any other text as
+ * it is, which a CAST alone would read as 0: a comparison with the cast asks SQLite which it is,
+ * since it reads the text as that type would before comparing.
+ */
+function asSqliteKeeps(target: MoveColumn, value: string): string {
+  if (target.columnType === "text") return `CAST(${value} AS TEXT)`;
+  const kept = target.columnType === "real" ? "REAL" : "NUMERIC";
+  return `CASE WHEN CAST(${value} AS NUMERIC) = ${value} THEN CAST(${value} AS ${kept}) ELSE ${value} END`;
+}
+
+/**
+ * A value read out of JSON as MySQL's column compares it. A text column, a relationship's ids among
+ * them, takes its table's collation, which is the one its other text columns were made with, and
+ * the text read out of JSON compares byte by byte: it is read through the table's `id` column,
+ * whose collation the whole expression takes (the id itself is never the result), so the values
+ * compare as the new column will, whatever collation the table has on the database the statement
+ * runs on. A table whose default was changed without converting its columns compares by the older
+ * one. A double's 0 and -0 are one value to an index and two to a GROUP BY, until 0 is added.
+ */
+function asMysqlCompares(target: MoveColumn, value: string): string {
+  if (TEXT_KINDS.has(target.kind) || target.kind === "fkSingle") {
+    return `IF(0, ${quoteIdent("id", target.dialect)}, ${value})`;
+  }
+  return target.kind === "double" ? `(${value} + 0)` : value;
 }
 
 /**

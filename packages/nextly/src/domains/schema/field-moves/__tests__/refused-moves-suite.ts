@@ -776,6 +776,36 @@ export function describeRefusedMoves(): void {
             "person is unique where it moves to, and 1 of its values is held by more than one entry in the group it moves out of. Give each entry its own value, or clear the repeats, then move it."
           );
         });
+
+        // MySQL's key column folds case, so one target's id in two cases is one value there: both
+        // entries name the same target, and the API takes both. PostgreSQL's and SQLite's do not.
+        it.runIf(dialect === "mysql")(
+          "is refused, nothing changed, while two entries name one target in two cases",
+          async () => {
+            const t = await boot();
+            await createEntities(t, GROUPED);
+            const ann = await someone(t, "ann");
+            await post(t, {
+              title: "P",
+              slug: "p",
+              headline: "H",
+              meta: { person: ann },
+            });
+            await post(t, {
+              title: "Q",
+              slug: "q",
+              headline: "I",
+              meta: { person: ann.toUpperCase() },
+            });
+
+            await expectRefused(
+              t,
+              ON_ROW,
+              OUT,
+              "person is unique where it moves to, and 1 of its values is held by more than one entry in the group it moves out of. Give each entry its own value, or clear the repeats, then move it."
+            );
+          }
+        );
       });
     }
   );

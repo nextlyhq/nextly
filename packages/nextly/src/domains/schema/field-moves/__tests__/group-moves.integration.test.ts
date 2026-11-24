@@ -1754,6 +1754,25 @@ describe.each(getConfiguredTestDialects())(
           field: { name: "price", type: "number", dbType: "decimal" },
           held: ["1", "1.00"],
         },
+        {
+          what: "one whole number written as a number and as text",
+          field: { name: "rank", type: "number" },
+          held: ["1", '"1"'],
+        },
+        {
+          what: "one fraction written as a number and as text",
+          field: {
+            name: "ratio",
+            type: "number",
+            options: { format: "float" },
+          },
+          held: ["1.5", '"1.50"'],
+        },
+        {
+          what: "one text written as a number and as text",
+          field: { name: "label", type: "text" },
+          held: ["1", '"1"'],
+        },
       ] as const;
 
       it.each(SAME_STORED)(
@@ -1939,6 +1958,83 @@ describe.each(getConfiguredTestDialects())(
           expect(await storedGroups(t)).toEqual(groups);
         }
       );
+
+      // Every stop of a file comes before any move's writes, each way, so a run the file stops has
+      // changed nothing whatever ran it: one outside a transaction keeps every statement before it.
+      it("stops a replay before any move of the same save has written, whichever move is first", async () => {
+        const tag: Field = { name: "tag", type: "text" };
+        const summary: Field = { name: "summary", type: "text" };
+        const before = [
+          summary,
+          group("meta", [NOTE, code]),
+          group("seo", [NOTE, tag]),
+        ];
+        const after = [
+          uniqueCode,
+          group("meta", [NOTE, summary, tag]),
+          group("seo", [NOTE]),
+        ];
+        const moves = [
+          { from: ["summary"], to: ["meta", "summary"] },
+          { from: ["seo", "tag"], to: ["meta", "tag"] },
+          { from: ["meta", "code"], to: ["code"] },
+        ];
+        const first = await boot(dialect);
+        await createPosts(first, SLUG, { fields: before });
+        const created = await filesWritten();
+        const seedAll = async (t: TestNextly, codes: readonly string[]) => {
+          for (const [i, value] of codes.entries()) {
+            await t.nextly.create({
+              collection: SLUG,
+              data: {
+                title: `P${i}`,
+                slug: `p${i}`,
+                summary: `S${i}`,
+                meta: { note: "n", code: value },
+                seo: { note: "n", tag: `T${i}` },
+              },
+            });
+          }
+        };
+        await seedAll(first, ["a", "b"]);
+        await save(first, after, moves);
+        const { upSql, downSql } = parseSqlSections(await newestFile());
+        for (const [way, sql] of [
+          ["up", upSql],
+          ["down", downSql],
+        ] as const) {
+          const lastStop = Math.max(
+            -1,
+            ...[...sql.matchAll(/nextly_(repeated|unkept|unfilled)_/g)].map(
+              stop => stop.index
+            )
+          );
+          const firstWrite = sql.search(/^UPDATE /m);
+          expect(firstWrite, way).toBeGreaterThanOrEqual(0);
+          expect(lastStop, way).toBeLessThan(firstWrite);
+        }
+        expect(upSql).toContain("nextly_repeated_code");
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await seedAll(second, ["a", "a"]);
+        const rows = () =>
+          run(second, `SELECT * FROM ${q(TABLE)} ORDER BY ${q("slug")}`);
+        const stood = await rows();
+
+        // The file drops the column `summary` leaves, which the run asks consent for.
+        await expect(
+          migrateFolder(
+            second,
+            undefined,
+            resolveDataLossConsent({ flag: true, env: {} })
+          )
+        ).rejects.toThrow(/two_entries_hold_one_code/);
+
+        expect(await rows()).toEqual(stood);
+      });
 
       // MySQL's text column folds case, as its database's default collation does; PostgreSQL's
       // and SQLite's compare text as written, so there the two are two values and move.
