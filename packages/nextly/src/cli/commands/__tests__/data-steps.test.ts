@@ -409,6 +409,41 @@ describe("the refusal asked of the steps before anything changes", () => {
     ).toBeUndefined();
   });
 
+  // Keying the pending changes rewrites only the version history's keys, which the values move
+  // never reads, so the move's refusal (values on both tables, nothing saying which is current) is
+  // made before anything applies. Broken, the localisation steps are one group, and that refusal
+  // waits for the run, after the migrations and the keying have applied.
+  it("judges the values move up front past the keying, and still after the code conversion", async () => {
+    const real = (title: string) => {
+      const found = LOCALISATION_DATA_STEPS.find(step =>
+        step.title.startsWith(title)
+      );
+      if (!found) throw new Error(`no step "${title}"`);
+      return found;
+    };
+    const withWork = (step: UpgradeStep): UpgradeStep => ({
+      ...step,
+      pending: () => Promise.resolve(1),
+    });
+    const refusingAs = (step: UpgradeStep): UpgradeStep => ({
+      ...step,
+      pending: refusing().pending,
+    });
+    const keys = withWork(real("give every pending change its key"));
+    const codes = withWork(real("convert language codes"));
+    const values = refusingAs(real("store translatable values per language"));
+
+    expect(await refusalOf([keys, values])).toMatchObject({
+      publicMessage: `Two saves at one moment. ${NOTHING_CHANGED}`,
+    });
+    // The code conversion renames what the move reads, so its refusal waits for it.
+    expect(await refusalOf([codes, values])).toBeUndefined();
+    // The draft split reads the keys, so it still waits for the keying.
+    expect(
+      await refusalOf([keys, refusingAs(real("split pending changes"))])
+    ).toBeUndefined();
+  });
+
   it("keeps a refusal made before anything applied as the step made it", async () => {
     await expect(runOf([refusing("translations")])).rejects.toMatchObject({
       publicMessage: `Two saves at one moment. ${NOTHING_CHANGED}`,
