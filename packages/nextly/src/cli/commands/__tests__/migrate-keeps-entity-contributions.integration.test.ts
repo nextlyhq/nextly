@@ -36,7 +36,7 @@ import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
 import type { TableSpec } from "../../../domains/schema/pipeline/diff/types";
 import { resolveSingleTableName } from "../../../domains/singles/services/resolve-single-table-name";
-import { resolveComponentTableName } from "../../../domains/schema/utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../../domains/field-groups/services/field-group-storage-names";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
@@ -63,7 +63,7 @@ vi.mock("../../utils/config-loader", async importOriginal => ({
 
 const POSTS_TABLE = "dc_mk_posts";
 const SITE_TABLE = resolveSingleTableName({ slug: "mk_site" });
-const SEO_TABLE = resolveComponentTableName("mk_seo");
+const SEO_TABLE = fieldGroupTableNameFor("current", "mk_seo");
 const TABLES = [POSTS_TABLE, SITE_TABLE, SEO_TABLE] as const;
 
 /** Each entity's own field, required in the first migration and optional after. */

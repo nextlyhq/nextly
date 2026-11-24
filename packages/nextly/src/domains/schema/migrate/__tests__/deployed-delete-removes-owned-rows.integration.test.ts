@@ -57,7 +57,7 @@ import { _resetEnvCache } from "../../../../shared/lib/env";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { ensureI18nArchive } from "../../../i18n/migration/ensure-archive";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
-import { resolveComponentTableName } from "../../utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../../field-groups/services/field-group-storage-names";
 import { setNonInteractive } from "../can-prompt";
 import { KILL_AT_VARIABLE, withStopPoints } from "../stop-points";
 
@@ -86,7 +86,7 @@ const OTHER = "dpr_other";
 const TAGS = "dpr_tags";
 const NOTES_TABLE = `dc_${NOTES}`;
 const OTHER_TABLE = `dc_${OTHER}`;
-const META_TABLE = resolveComponentTableName(META);
+const META_TABLE = fieldGroupTableNameFor("current", META);
 
 /**
  * The points a run reaches once the delete file is recorded, in order, as a stop names them after

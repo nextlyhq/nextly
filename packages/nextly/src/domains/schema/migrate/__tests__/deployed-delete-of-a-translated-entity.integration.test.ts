@@ -59,7 +59,7 @@ import { clearRegistryRowCache } from "../../../dynamic-collections/services/col
 import { ensureI18nArchive } from "../../../i18n/migration/ensure-archive";
 import type { SingleEntryService } from "../../../singles/services/single-entry-service";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
-import { resolveComponentTableName } from "../../utils/resolve-table-name";
+import { fieldGroupTableNameFor } from "../../../field-groups/services/field-group-storage-names";
 import { setNonInteractive } from "../can-prompt";
 
 /** The configuration the commands load. */
@@ -281,7 +281,7 @@ const KINDS: Kind[] = [
   },
   {
     word: "field group",
-    table: resolveComponentTableName(CARD),
+    table: fieldGroupTableNameFor("current", CARD),
     create: () =>
       dispatchComponents(
         "createComponent",
@@ -682,7 +682,7 @@ describe.each(getConfiguredTestDialects())(
   "what a deleted translated collection left, on a deployed database (%s)",
   dialect => {
     const KEPT = "dpl_kept";
-    const META_TABLE = resolveComponentTableName(META);
+    const META_TABLE = fieldGroupTableNameFor("current", META);
     const notes = KINDS[0]!;
 
     const q = (name: string) =>

@@ -82,6 +82,30 @@ const PROJECT = {
   localization: { locales: ["en", "de"], defaultLocale: "en" },
 };
 
+/** A collection and a field group whose `body` is translated, or shared. */
+const valueProject = (localized: boolean) =>
+  defineConfig({
+    localization: { locales: ["en", "de"], defaultLocale: "en" },
+    fieldGroups: [
+      defineFieldGroup({
+        slug: "sns_quote",
+        localized: true,
+        fields: [text({ name: "body", localized })],
+      }),
+    ],
+    collections: [
+      defineCollection({
+        slug: "sns_notes",
+        localized: true,
+        fields: [
+          text({ name: "title", localized: false }),
+          text({ name: "body", localized }),
+          fieldGroup({ name: "quote", component: "sns_quote" }),
+        ],
+      }),
+    ],
+  });
+
 let dir: string;
 let closers: Array<() => Promise<void>> = [];
 
@@ -178,11 +202,16 @@ describe.each(getConfiguredTestDialects())(
       expect(outcome).toMatchObject({ ran: false, reason: "already-migrated" });
     }, 120_000);
 
+    // Twice, because the sync that creates a group's table does not add a plugin's column to it;
+    // the next one does, as a development start's next boot does.
     it("compiles a plugin's contribution to a group's table on those names", async () => {
       const url = await openDatabase(dialect);
-      await sync(
-        defineConfig({ ...PROJECT, plugins: [markerPluginOn("fg_sns_card")] })
-      );
+      const config = defineConfig({
+        ...PROJECT,
+        plugins: [markerPluginOn("fg_sns_card")],
+      });
+      await sync(config);
+      await sync(config);
 
       const adapter = await connect(dialect, url);
       expect(await columnsOf(adapter, dialect, "fg_sns_card")).toContain(
@@ -198,6 +227,75 @@ describe.each(getConfiguredTestDialects())(
       const adapter = await connect(dialect, url);
       expect(await hasTable(adapter, "dynamic_field_groups")).toBe(true);
       expect(await legacyObjects(adapter, dialect)).toEqual([]);
+    }, 120_000);
+
+    // The registry records which field was translated, and the sync reads it under the names the
+    // site is on. Read under the legacy one it found no record, and the values were lost with the
+    // translations column.
+    it("keeps the values of a translated field made shared, in a collection and in a group", async () => {
+      const url = await openDatabase(dialect);
+      await sync(valueProject(true));
+
+      const adapter = await connect(dialect, url);
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const at = dialect === "sqlite" ? "0" : "CURRENT_TIMESTAMP";
+      const insert = (table: string, row: Record<string, string>) =>
+        adapter.executeQuery(
+          `INSERT INTO ${q(table)} (${Object.keys(row).map(q).join(", ")}) VALUES (${Object.values(row).join(", ")})`
+        );
+      const times = { created_at: at, updated_at: at };
+      await insert("dc_sns_notes", {
+        id: "'n1'",
+        title: "'One'",
+        slug: "'one'",
+        ...times,
+      });
+      await insert("fg_sns_quote", {
+        id: "'g1'",
+        _parent_id: "'n1'",
+        _parent_table: "'dc_sns_notes'",
+        _parent_field: "'quote'",
+        _order: "0",
+        ...times,
+      });
+      for (const [parent, table] of [
+        ["n1", "dc_sns_notes_locales"],
+        ["g1", "fg_sns_quote_locales"],
+      ] as const) {
+        for (const [locale, body] of [
+          ["en", "Hello"],
+          ["de", "Hallo"],
+        ] as const) {
+          await insert(table, {
+            _parent: `'${parent}'`,
+            _locale: `'${locale}'`,
+            body: `'${body}'`,
+          });
+        }
+      }
+
+      await sync(valueProject(false));
+
+      for (const [id, table] of [
+        ["n1", "dc_sns_notes"],
+        ["g1", "fg_sns_quote"],
+      ] as const) {
+        expect(
+          await adapter.executeQuery(
+            `SELECT ${q("body")} FROM ${q(table)} WHERE ${q("id")} = '${id}'`
+          ),
+          table
+        ).toEqual([{ body: "Hello" }]);
+      }
+      expect(
+        await adapter.executeQuery(
+          `SELECT ${q("locale")}, ${q("value")} FROM ${q("nextly_i18n_archive")}`
+        )
+      ).toEqual([
+        { locale: "de", value: "Hallo" },
+        { locale: "de", value: "Hallo" },
+      ]);
     }, 120_000);
 
     // The control: the core tables as an earlier release created them, with the legacy registry.

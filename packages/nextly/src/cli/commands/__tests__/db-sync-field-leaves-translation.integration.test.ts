@@ -165,7 +165,7 @@ async function recordedTranslated(
 }
 
 const GROUP = "dbsleavegrp";
-const GROUP_TABLE = `comp_${GROUP}`;
+const GROUP_TABLE = `fg_${GROUP}`;
 
 /** A translated field group whose `body` is translated, or shared and Required. */
 const groupConfigWith = (localized: boolean): LoadConfigResult["config"] =>
