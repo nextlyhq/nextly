@@ -76,6 +76,8 @@ export interface LoadedRegistryRow {
   readonly stored: readonly FieldDefinition[];
   readonly setsFields: readonly string[];
   readonly insertsOnly?: true;
+  /** Whether the collection's Draft/Published lifecycle was on in the row loaded. */
+  readonly lifecycle: boolean;
 }
 
 /** An entry's data, or a batch's items, each an entry's data. */
@@ -94,10 +96,11 @@ export function loadedRegistryRowOf(
   data?: WrittenData,
   options?: { insertsOnly?: boolean }
 ): LoadedRegistryRow | undefined {
-  const { id, schemaVersion, fields } = (row ?? {}) as {
+  const { id, schemaVersion, fields, status } = (row ?? {}) as {
     id?: unknown;
     schemaVersion?: unknown;
     fields?: unknown;
+    status?: unknown;
   };
   if (typeof id !== "string" && typeof id !== "number") return undefined;
   const version = Number(schemaVersion);
@@ -110,6 +113,7 @@ export function loadedRegistryRowOf(
     fields: names,
     stored,
     setsFields: sets,
+    lifecycle: isOn(status),
     ...(options?.insertsOnly === true ? { insertsOnly: true as const } : {}),
   };
 }
@@ -252,12 +256,15 @@ interface HeldRegistryRow {
   schemaVersion: unknown;
 }
 
-/** A row read, as `refuseChanged` compares it: whether it is there, its id and its version. */
-function heldRowOf(row: HeldRegistryRow | null | undefined): {
-  present: boolean;
-  id: string | undefined;
-  version: number | undefined;
-} {
+/** A registry row as held, as it is compared: whether it is there, its id and its version. */
+interface HeldRow {
+  readonly present: boolean;
+  readonly id: string | undefined;
+  readonly version: number | undefined;
+}
+
+/** A row read, as `refuseUnlessSameRow` compares it. */
+function heldRowOf(row: HeldRegistryRow | null | undefined): HeldRow {
   if (row === null || row === undefined) {
     return { present: false, id: undefined, version: undefined };
   }
@@ -290,25 +297,60 @@ async function heldRegistryRowOnMysql(
  * Refuses a write whose collection's registry row, as held, is not the one it was made for
  * (`loaded`): gone (`NOT_FOUND`), or another row under the same slug, made while the write waited
  * (`COLLECTION_BEING_CHANGED`). Where the row is the same and a save changed its definition since
- * (its schema version moved), a field the write sets that the held definition no longer has is
- * refused by name; and a write that reads the entry as it stands, made from a definition with a
- * field the held one no longer has, is refused as made for a definition that changed
- * (`COLLECTION_BEING_CHANGED`), since its read names that field's column; the same for a field
- * kept by name but stored differently (`fieldsStoredDifferently`). A create reads no entry first
- * and writes only the columns its data sets, so it is refused where one of those is removed or
- * stored differently, and otherwise goes on. Nothing of the write has run.
+ * (its schema version moved), it is compared with the definition held (`refuseMadeFromEarlier`).
+ * Nothing of the write has run.
  */
 async function refuseChanged(
   tx: TransactionContext,
   entity: EntityRef,
   loaded: LoadedRegistryRow,
   dialect: SupportedDialect,
-  held: {
-    present: boolean;
-    id: string | undefined;
-    version: number | undefined;
-  }
+  held: HeldRow
 ): Promise<void> {
+  if (!refuseUnlessSameRow(entity, loaded, held)) return;
+  const row = await tx.selectOne<HeldDefinitionRow>("dynamic_collections", {
+    columns: ["fields", "status"],
+    where: { and: [{ column: "slug", op: "=", value: entity.slug }] },
+  });
+  refuseMadeFromEarlier(entity, loaded, heldDefinitionOf(row), dialect);
+}
+
+/**
+ * On MySQL, a write on a transaction its caller opened and read in first (its snapshot older than
+ * the hold) reads its collection's definition from that snapshot, whatever the hold then found: so
+ * the definition the write was made from (`loaded`) is compared with the one that stands now,
+ * read once for the transaction and locked, past the snapshot (`currentRow`). Elsewhere a
+ * transaction's read is of the latest commit, and the write holds before it reads.
+ */
+export async function refuseOnEarlierSnapshot(
+  tx: TransactionContext,
+  entity: EntityRef,
+  adapter: HoldingAdapter,
+  loaded: LoadedRegistryRow | undefined
+): Promise<void> {
+  if (adapter.getCapabilities().dialect !== "mysql" || loaded === undefined) {
+    return;
+  }
+  const current = await currentRow(tx, entity);
+  if (!refuseUnlessSameRow(entity, loaded, heldRowOf(current))) return;
+  refuseMadeFromEarlier(
+    entity,
+    loaded,
+    heldDefinitionOf(current),
+    "mysql"
+  );
+}
+
+/**
+ * Whether the registry row `held` is the row `loaded` is made for, with its definition not yet
+ * compared: refused where it is gone, or another row was made under its slug while the write
+ * waited, with nothing of the write run. False where the same row's definition has not changed.
+ */
+function refuseUnlessSameRow(
+  entity: EntityRef,
+  loaded: LoadedRegistryRow,
+  held: HeldRow
+): boolean {
   if (!held.present) {
     throw NextlyError.notFound({
       message: "Collection not found.",
@@ -319,29 +361,98 @@ async function refuseChanged(
     });
   }
   if (held.id !== loaded.id) throw replacedWhileHeld(entity.slug);
-  if (
-    loaded.schemaVersion === undefined ||
-    held.version === loaded.schemaVersion
-  ) {
-    return;
-  }
-  const row = await tx.selectOne<{ fields: unknown }>("dynamic_collections", {
-    columns: ["fields"],
-    where: { and: [{ column: "slug", op: "=", value: entity.slug }] },
-  });
-  const heldFields = storedFieldsOf(row?.fields);
+  return (
+    loaded.schemaVersion !== undefined && held.version !== loaded.schemaVersion
+  );
+}
+
+/**
+ * Refuses a write made from `loaded`, a definition a save changed (`held`): a field the write sets
+ * that the held definition no longer has, or keeps by name but stores differently
+ * (`fieldsStoredDifferently`), is refused naming it; so is a write that reads the entry as it
+ * stands, made from a definition with a field that is gone or stored differently, as one made for a
+ * definition that changed (`COLLECTION_BEING_CHANGED`), since its read names that field's column.
+ * A create reads no entry first and writes only the columns its data sets, so it goes on where
+ * none of those changed. A lifecycle that came or went changes what every write writes or reads.
+ */
+function refuseMadeFromEarlier(
+  entity: EntityRef,
+  loaded: LoadedRegistryRow,
+  held: HeldDefinition,
+  dialect: SupportedDialect
+): void {
   // Made again from the definition as it stands, however it is refused: the rows this process
   // keeps of it are cleared, so a retry reads it rather than the one the write was made from.
   clearRegistryRowCache();
-  const set = setFieldsNotAsHeld(loaded, heldFields, dialect);
+  const set = setFieldsNotAsHeld(loaded, held.fields, dialect);
   if (set.length > 0) throw setFieldsChangedWhileHeld(entity.slug, set);
-  // A create reads no entry through the definition and writes only the columns its data sets: none
-  // of them changed, so it goes on.
+  if (loaded.lifecycle !== held.lifecycle) throw changedWhileHeld(entity.slug);
   if (loaded.insertsOnly === true) return;
-  // Any other write reads the entry through the definition it was made from.
-  if (madeFromWhatHolds(loaded, heldFields, dialect)) return;
+  if (madeFromWhatHolds(loaded, held.fields, dialect)) return;
   throw changedWhileHeld(entity.slug);
 }
+
+/** The columns a held definition is read from: its fields, and whether its lifecycle is on. */
+interface HeldDefinitionRow {
+  fields: unknown;
+  status: unknown;
+}
+
+/** A definition as held: its fields as the row stores them, and whether its lifecycle is on. */
+interface HeldDefinition {
+  readonly fields: readonly FieldDefinition[];
+  readonly lifecycle: boolean;
+}
+
+/** The definition `row` holds, or none of its fields where there is no row. */
+function heldDefinitionOf(
+  row: HeldDefinitionRow | null | undefined
+): HeldDefinition {
+  return {
+    fields: storedFieldsOf(row?.fields),
+    lifecycle: isOn(row?.status),
+  };
+}
+
+/** Whether a registry flag is on, as any database spells it. */
+function isOn(value: unknown): boolean {
+  return value === true || value === 1 || value === "1";
+}
+
+/**
+ * The registry row as it stands, with its definition, read with a locking read (MySQL: the latest
+ * commit, whatever the transaction's snapshot) once for a transaction and entity.
+ */
+function currentRow(
+  tx: TransactionContext,
+  entity: EntityRef
+): Promise<(HeldRegistryRow & HeldDefinitionRow) | null> {
+  let rows = currentIn.get(tx);
+  if (rows === undefined) {
+    rows = new Map();
+    currentIn.set(tx, rows);
+  }
+  const key = entityHoldKey(entity);
+  let reading = rows.get(key);
+  if (reading === undefined) {
+    reading = tx.selectOne<HeldRegistryRow & HeldDefinitionRow>(
+      "dynamic_collections",
+      {
+        columns: ["id", "schema_version", "fields", "status"],
+        where: { and: [{ column: "slug", op: "=", value: entity.slug }] },
+        forShare: true,
+      }
+    );
+    rows.set(key, reading);
+  }
+  return reading;
+}
+
+/** The current rows each open transaction has read (`currentRow`), by entity. */
+const currentIn = new WeakMap<
+  TransactionContext,
+  Map<string, Promise<(HeldRegistryRow & HeldDefinitionRow) | null>>
+>();
 
 /** A field a write sets, and what a save did to it: `"removed"`, or `"changed"` how it is stored. */
 interface SetField {

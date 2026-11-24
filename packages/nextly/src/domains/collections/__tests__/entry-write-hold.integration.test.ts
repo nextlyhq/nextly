@@ -541,6 +541,31 @@ describe.each(getConfiguredTestDialects())(
       );
     }, 30_000);
 
+    // Turning the Draft/Published lifecycle off takes its column out with the save: a write prepared
+    // while it was on would write or read it. It is refused as made for a definition that changed,
+    // a create among them, to be made again from the definition as it stands.
+    it("refuses a write made while the collection's lifecycle was on, after a save turned it off", async () => {
+      const t = await boot();
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET status = ${dialect === "postgresql" ? "true" : "1"} WHERE slug = '${SLUG}'`
+      );
+      const updates = await loadedNow(t, { title: "t" });
+      const creates = await loadedNow(
+        t,
+        { title: "t" },
+        { insertsOnly: true }
+      );
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET status = ${dialect === "postgresql" ? "false" : "0"}, schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+      );
+
+      for (const loaded of [updates, creates]) {
+        await expect(heldFor(t, loaded)).rejects.toMatchObject({
+          code: "COLLECTION_BEING_CHANGED",
+        });
+      }
+    }, 30_000);
+
     // Set together, a field a save removed and one it stores differently are named together, each
     // by what happened to it.
     it("refuses a write that sets a removed and a changed field, naming each", async () => {

@@ -560,6 +560,7 @@ import {
   holdEntityForWrite,
   type LoadedRegistryRow,
   loadedRegistryRowOf,
+  refuseOnEarlierSnapshot,
   type WhenHeld,
 } from "./entry-write-hold";
 import { publishCallerOf, publishGate, type PublishPart } from "./publish-gate";
@@ -22286,6 +22287,11 @@ export class CollectionMutationService extends BaseService {
           tx.getDrizzle()
         );
       writeRow = collection as Record<string, unknown>;
+      await this.refuseMadeFromEarlier(
+        tx,
+        params.collectionName,
+        loadedRegistryRowOf(collection, body, { insertsOnly: true })
+      );
 
       // Authorization is resolved once by the batch caller before this shared
       // transaction (or here when called directly), so no permission read runs
@@ -23023,6 +23029,25 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Refuses a write on a transaction its caller opened, on MySQL, that reads its collection's
+   * definition (`loaded`) from a snapshot older than a save's: compared, once for the transaction,
+   * with the definition that stands (`refuseOnEarlierSnapshot`). On the other databases a
+   * transaction's read is of the latest commit, and the write holds before it reads.
+   */
+  private refuseMadeFromEarlier(
+    tx: TransactionContext,
+    collectionName: string,
+    loaded: LoadedRegistryRow | undefined
+  ): Promise<void> {
+    return refuseOnEarlierSnapshot(
+      tx,
+      { kind: "collection", slug: collectionName },
+      this.adapter,
+      loaded
+    );
+  }
+
+  /**
    * Holds collection `collectionName` for an entry write in `tx` (`holdEntityForWrite`): before
    * the write's first row statement, once per transaction.
    */
@@ -23260,6 +23285,11 @@ export class CollectionMutationService extends BaseService {
       // read, and the gate a write asks and the write itself must read the same
       // body.
       body = { ...body };
+      await this.refuseMadeFromEarlier(
+        tx,
+        params.collectionName,
+        loadedRegistryRowOf(collection, body)
+      );
       // The lifecycle action this row's own gate asked and allowed, if any.
       let rowAllowed: "publish" | "unpublish" | undefined;
       // The filter the row's own gate answered: the row is matched against it
@@ -25030,6 +25060,11 @@ export class CollectionMutationService extends BaseService {
         tx.getDrizzle()
       );
       writeRow = collection as Record<string, unknown>;
+      await this.refuseMadeFromEarlier(
+        tx,
+        params.collectionName,
+        loadedRegistryRowOf(collection)
+      );
 
       const tableName = collectionTableName(collection, params.collectionName);
 

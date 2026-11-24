@@ -1342,6 +1342,63 @@ describe.each(getConfiguredTestDialects())(
       expect(row?.label).toBe(id);
     }, 60_000);
 
+    // MySQL's default isolation answers a transaction's plain reads from the snapshot its first read
+    // fixed. A transaction the caller opened that read anything before the save has the collection's
+    // definition as it was, and a write in it is made from that: the hold's own read is of the latest
+    // commit, and the write is compared with it, refused naming a field it sets that the save
+    // removed.
+    it.runIf(dialect === "mysql")(
+      "refuses a write on a transaction whose snapshot predates the save, naming the field it sets",
+      async () => {
+        const t = await boot();
+        await superAdminUser(t, TX_WRITER);
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+
+        let snapshotTaken: () => void = () => undefined;
+        const taken = new Promise<void>(resolve => {
+          snapshotTaken = resolve;
+        });
+        let saved: () => void = () => undefined;
+        const afterSave = new Promise<void>(resolve => {
+          saved = resolve;
+        });
+        const writing = t.adapter.transaction(async tx => {
+          // The read that fixes the snapshot, of the collection's row among others.
+          await tx.selectOne("dynamic_collections", {
+            columns: ["id"],
+            where: { and: [{ column: "slug", op: "=", value: SLUG }] },
+          });
+          snapshotTaken();
+          await afterSave;
+          const setsNote = await createInCallersTransaction(t, tx, {
+            label: "set",
+            note: "late",
+          });
+          const keepsNote = await createInCallersTransaction(t, tx, {
+            label: "kept",
+          });
+          return { setsNote, keepsNote };
+        });
+        await taken;
+        // Saved on connections of its own, the caller's transaction still open.
+        expect(
+          await apply(t, 3, REMAINING, {
+            note: { action: "confirm_drop" },
+          }).then(
+            () => "applied",
+            (error: unknown) => error
+          )
+        ).toBe("applied");
+        saved();
+
+        const { setsNote, keepsNote } = await writing;
+        expect(JSON.stringify(setsNote)).toContain("FIELD_REMOVED");
+        // One that sets only what the save keeps, made from the old snapshot, still lands.
+        expect(keepsNote).toBe("created");
+      },
+      60_000
+    );
+
     // A write on a transaction its caller opened cannot be given up and opened again: where the pool
     // can spare a connection, it waits in place until the save lets go, then goes on.
     it.runIf(dialect === "postgresql")(
