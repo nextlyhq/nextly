@@ -520,6 +520,8 @@ function isLayoutGroupName(
   ) {
     return false;
   }
+  // A Single's saves take none at its top level, so one there is reported.
+  if (/^singles\[\d+\]\.fields\[\d+\]\.name$/.test(problem.path)) return false;
   const field = entryAt(lists, problem.path.slice(0, -".name".length));
   return (
     typeof field === "object" &&

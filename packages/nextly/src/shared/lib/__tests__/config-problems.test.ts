@@ -740,3 +740,36 @@ describe("a Builder address each code of the address rule refuses", () => {
     ]);
   });
 });
+
+describe("a Builder group with no name, by the kind of entity it is in", () => {
+  // A Single's saves refuse one at its top level, so one there was written by hand; every other
+  // place is one the Builder saves.
+  it("is reported at a Single's top level alone", () => {
+    const text = { name: "body", type: "text" };
+    const laidOut = { type: "group", fields: [text] };
+    const named = (type: string) => ({
+      name: `in_${type}`,
+      type,
+      fields: [laidOut],
+    });
+
+    const problems = builderDefinitionProblems(
+      {
+        collections: [{ slug: "posts", fields: [laidOut] }],
+        singles: [
+          {
+            slug: "site",
+            fields: [named("group"), named("repeater"), laidOut],
+          },
+        ],
+        components: [{ slug: "card", fields: [laidOut] }],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(problems.map(problem => [problem.code, problem.path])).toEqual([
+      ["FIELD_NAME_REQUIRED", "ui-schema.json singles[0].fields[2].name"],
+    ]);
+  });
+});

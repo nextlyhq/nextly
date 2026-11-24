@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAdapter } from "../../../../database/factory";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
+import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -78,68 +80,168 @@ describe.each(getConfiguredTestDialects())(
     }
 
     const text = (name: string) => ({ name, type: "text" });
-    const create = (fields: unknown[]) =>
-      dispatchCollections(
-        {} as Container,
-        "createCollection",
-        {},
-        { name: "cases", label: "Cases", fields }
-      );
-    const change = (fields: unknown[]) =>
-      dispatchCollections(
-        {} as Container,
-        "applySchemaChanges",
-        { collectionName: "cases" },
-        { fields, confirmed: true, schemaVersion: 1 }
-      );
-    /** The definition file the saves wrote. */
-    const written = () =>
-      JSON.parse(readFileSync(join(basePath, DEFINITION), "utf8")) as {
-        collections: Array<{ slug: string; fields: unknown[] }>;
-      };
-    /** What a command that reads the entities would report of it. */
-    const reported = () =>
-      builderDefinitionProblems(written(), {}, DEFINITION).map(
-        problem => [problem.code, problem.path] as const
-      );
     const laidOut = { type: "group", fields: [text("subtitle")] };
 
-    it("take a field named by a SQL keyword when its fields change, and the file is not refused for it", async () => {
-      await boot();
-      await create([text("heading")]);
-
-      await change([text("heading"), text("select"), text("order")]);
-
-      expect(written().collections[0]?.fields).toEqual([
-        text("heading"),
-        text("select"),
-        text("order"),
-      ]);
-      expect(reported()).toEqual([]);
+    /** One kind of entity, through the entry points its Builder saves by. */
+    interface Kind {
+      list: "collections" | "singles" | "components";
+      create(fields: unknown[]): Promise<unknown>;
+      change(fields: unknown[]): Promise<unknown>;
+    }
+    const changed = (fields: unknown[]) => ({
+      fields,
+      confirmed: true,
+      schemaVersion: 1,
     });
+    const KINDS: Record<string, Kind> = {
+      collection: {
+        list: "collections",
+        create: fields =>
+          dispatchCollections(
+            {} as Container,
+            "createCollection",
+            {},
+            { name: "cases", label: "Cases", fields }
+          ),
+        change: fields =>
+          dispatchCollections(
+            {} as Container,
+            "applySchemaChanges",
+            { collectionName: "cases" },
+            changed(fields)
+          ),
+      },
+      Single: {
+        list: "singles",
+        create: fields =>
+          dispatchSingles(
+            "createSingle",
+            {},
+            { slug: "cases", label: "Cases", fields }
+          ),
+        change: fields =>
+          dispatchSingles(
+            "applySingleSchemaChanges",
+            { slug: "cases" },
+            changed(fields)
+          ),
+      },
+      "field group": {
+        list: "components",
+        create: fields =>
+          dispatchComponents(
+            "createComponent",
+            {},
+            { slug: "cases", label: "Cases", fields }
+          ),
+        // The version its editor loaded it at.
+        change: async fields => {
+          const loaded = await (instance as TestNextly)
+            .getService("fieldGroupRegistryService")
+            .getComponentBySlug("cases");
+          return dispatchComponents(
+            "applyComponentSchemaChanges",
+            { slug: "cases" },
+            { fields, confirmed: true, schemaVersion: loaded?.schemaVersion }
+          );
+        },
+      },
+    };
+    const kindOf = (name: string): Kind => {
+      const kind = KINDS[name];
+      if (kind === undefined) throw new Error(name);
+      return kind;
+    };
 
-    it("take a group with no name at the top when its fields change, and the file is not refused for it", async () => {
-      await boot();
-      await create([text("heading")]);
+    /** The fields the definition file the saves wrote holds for the entity. */
+    const written = (kind: Kind) =>
+      (
+        JSON.parse(readFileSync(join(basePath, DEFINITION), "utf8")) as Record<
+          Kind["list"],
+          Array<{ fields: unknown[] }>
+        >
+      )[kind.list][0]?.fields;
+    /** What a command that reads the entities would report of it. */
+    const reported = () =>
+      builderDefinitionProblems(
+        JSON.parse(readFileSync(join(basePath, DEFINITION), "utf8")) as object,
+        {},
+        DEFINITION
+      ).map(problem => [problem.code, problem.path] as const);
 
-      await change([text("heading"), laidOut]);
-
-      expect(written().collections[0]?.fields).toEqual([
-        text("heading"),
-        laidOut,
-      ]);
-      expect(reported()).toEqual([]);
-    });
-
-    it.each(["group", "repeater"])(
-      "take a group with no name inside a %s of a new collection, and the file is not refused for it",
-      async type => {
+    it.each(["collection", "Single", "field group"])(
+      "take a field named by a SQL keyword on a %s, and the file is not refused for it",
+      async name => {
         await boot();
+        const kind = kindOf(name);
+        const fields = [text("heading"), text("select"), text("order")];
+        await kind.create([text("heading")]);
+
+        await kind.change(fields);
+
+        expect(written(kind)).toEqual(fields);
+        expect(reported()).toEqual([]);
+      }
+    );
+
+    it.each(["collection", "field group"])(
+      "take a group with no name at the top of a %s, and the file is not refused for it",
+      async name => {
+        await boot();
+        const kind = kindOf(name);
+        const fields = [text("heading"), laidOut];
+        await kind.create([text("heading")]);
+
+        await kind.change(fields);
+
+        expect(written(kind)).toEqual(fields);
+        expect(reported()).toEqual([]);
+      }
+    );
+
+    // A Single's saves both refuse one there, so one in its definition was written by hand.
+    it("refuse a group with no name at the top of a Single, as the check reports one", async () => {
+      await boot();
+      const kind = kindOf("Single");
+      const fields = [text("heading"), laidOut];
+      const refusal = {
+        code: "VALIDATION_ERROR",
+        publicData: { errors: [{ path: "fields[1].name", code: "REQUIRED" }] },
+      };
+
+      await expect(kind.create(fields)).rejects.toMatchObject(refusal);
+      await kind.create([text("heading")]);
+      await expect(kind.change(fields)).rejects.toMatchObject(refusal);
+
+      expect(written(kind)).toEqual([text("heading")]);
+      expect(
+        builderDefinitionProblems(
+          { singles: [{ slug: "cases", fields }] },
+          {},
+          DEFINITION
+        ).map(problem => [problem.code, problem.path])
+      ).toEqual([
+        [
+          "FIELD_NAME_REQUIRED",
+          "schema/builder.json singles[0].fields[1].name",
+        ],
+      ]);
+    });
+
+    it.each(
+      ["collection", "Single", "field group"].flatMap(name =>
+        ["group", "repeater"].map(type => [name, type] as const)
+      )
+    )(
+      "take a group with no name inside a new %s's %s, and the file is not refused for it",
+      async (name, type) => {
+        await boot();
+        const kind = kindOf(name);
         const holder = { name: "holder", type, fields: [laidOut] };
 
-        await create([holder]);
+        await kind.create([holder]);
 
-        expect(written().collections[0]?.fields).toEqual([holder]);
+        expect(written(kind)).toEqual([holder]);
         expect(reported()).toEqual([]);
       }
     );
