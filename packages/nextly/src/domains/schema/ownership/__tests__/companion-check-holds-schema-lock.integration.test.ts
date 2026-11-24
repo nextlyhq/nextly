@@ -166,6 +166,9 @@ const ROADS = [
         {
           slug: SLUG,
           label: SLUG,
+          // This route changes the translations table only, so it takes a change of a translated
+          // field's column and refuses one of the group's own table.
+          localized: true,
           fields: FIELDS,
         }
       ),
