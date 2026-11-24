@@ -17,11 +17,21 @@ import { PgDialect } from "drizzle-orm/pg-core";
 
 import { NextlyError } from "../../../errors/nextly-error";
 
-/** What a hold is on: a collection, named by its slug. */
+/**
+ * What a hold is on: a collection, a Single, or a field group, named by its kind and slug. The kind
+ * is part of the hold's name, so a Single and a collection that share a slug are held apart.
+ */
 export interface EntityRef {
-  readonly kind: "collection";
+  readonly kind: "collection" | "single" | "fieldGroup";
   readonly slug: string;
 }
+
+/** What an entity is called in a refusal a person reads. */
+export const ENTITY_NOUN: Readonly<Record<EntityRef["kind"], string>> = {
+  collection: "collection",
+  single: "Single",
+  fieldGroup: "field group",
+};
 
 /** The one name `entity`'s hold goes by on every database: its kind, then its slug. */
 export function entityHoldKey(entity: EntityRef): string {
@@ -38,8 +48,7 @@ const ENTITY_HOLD_WAIT_MS = 30_000;
 function entityBeingChanged(entity: EntityRef, reason: string): NextlyError {
   return new NextlyError({
     code: "COLLECTION_BEING_CHANGED",
-    publicMessage:
-      "This collection is being changed elsewhere. Try again in a moment.",
+    publicMessage: `This ${ENTITY_NOUN[entity.kind]} is being changed elsewhere. Try again in a moment.`,
     logContext: { reason, entity: entityHoldKey(entity) },
   });
 }

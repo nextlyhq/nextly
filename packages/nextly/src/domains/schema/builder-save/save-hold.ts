@@ -1,5 +1,6 @@
 /**
- * A deleting save's hold of its collection, from before its count until the registry row the save
+ * A deleting save's hold of its entity (a collection, a Single or a field group), from before its
+ * count until the registry row the save
  * writes records the new definition: entry writes take the hold's share side (`holdEntityForWrite`)
  * and wait for it, so a write made for the old definition never lands between the save's count
  * and its delete, nor between its change and its registry write.
@@ -8,8 +9,8 @@
  * is written, however the save ended; the save takes the hold through it where it counts
  * (`take`), once. Each database holds it its own way:
  *
- * - MySQL: the collection's named locks and its registry row `FOR UPDATE` on a connection kept for
- *   the scope (`holdCollectionOnSession`); the save's own statements run on other connections.
+ * - MySQL: the entity's named locks and its registry row `FOR UPDATE` on a connection kept for the
+ *   scope (`holdEntityOnSession`); the save's own statements run on other connections.
  * - PostgreSQL: the entity's advisory lock, exclusive, on a connection kept for the scope
  *   (`holdEntityOnPostgresSession`).
  * - SQLite: the entity's lock in this process (`holdEntityInProcess`).
@@ -19,8 +20,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { StatementSession } from "@nextlyhq/adapter-drizzle/types";
 
-import { holdCollectionOnSession } from "../../dynamic-collections/services/dynamic-collection-registry-service";
+import { holdEntityOnSession } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import {
+  type EntityRef,
+  entityHoldKey,
   holdEntityInProcess,
   holdEntityOnPostgresSession,
 } from "../../dynamic-collections/services/entity-hold";
@@ -28,11 +31,11 @@ import {
 /** A save's hold, kept until `end`. */
 export interface SaveHoldScope {
   /**
-   * Takes collection `slug`'s hold through `adapter`, once for the scope: later calls find it
-   * taken. Refused, with nothing changed, where another change holds the collection past the
-   * hold's wait (`COLLECTION_BEING_CHANGED`).
+   * Takes `entity`'s hold through `adapter`, once for the scope: later calls find it taken.
+   * Refused, with nothing changed, where another change holds the entity past the hold's wait
+   * (`COLLECTION_BEING_CHANGED`).
    */
-  take(adapter: DrizzleAdapter, slug: string): Promise<void>;
+  take(adapter: DrizzleAdapter, entity: EntityRef): Promise<void>;
   /**
    * Lets the hold go, however the save ended. A release that fails is told and passed over: the
    * connection the hold was taken on is closed, which lets it go.
@@ -44,13 +47,13 @@ export interface SaveHoldScope {
 export function saveHoldScope(logger: {
   warn(message: string): void;
 }): SaveHoldScope {
-  let held: { slug: string; release: () => Promise<void> } | undefined;
+  let held: { entity: EntityRef; release: () => Promise<void> } | undefined;
   let taking: Promise<void> | undefined;
   return {
-    async take(adapter, slug) {
+    async take(adapter, entity) {
       // Taken once: a second save step of the same scope (its count, then its push) finds it held.
-      taking ??= takeSaveHold(adapter, slug).then(release => {
-        held = { slug, release };
+      taking ??= takeSaveHold(adapter, entity).then(release => {
+        held = { entity, release };
       });
       await taking;
     },
@@ -60,24 +63,21 @@ export function saveHoldScope(logger: {
       taking = undefined;
       await ending?.release().catch((error: unknown) => {
         logger.warn(
-          `Collection '${ending.slug}': its hold for the save could not be let go (${error instanceof Error ? error.message : String(error)}); closing the connection it was taken on lets it go.`
+          `'${entityHoldKey(ending.entity)}': its hold for the save could not be let go (${error instanceof Error ? error.message : String(error)}); closing the connection it was taken on lets it go.`
         );
       });
     },
   };
 }
 
-/** Collection `slug`'s hold for a save through `adapter`, and what lets it go. */
+/** `entity`'s hold for a save through `adapter`, and what lets it go. */
 async function takeSaveHold(
   adapter: DrizzleAdapter,
-  slug: string
+  entity: EntityRef
 ): Promise<() => Promise<void>> {
   const dialect = adapter.getCapabilities().dialect;
   if (dialect === "sqlite") {
-    const release = await holdEntityInProcess(adapter, {
-      kind: "collection",
-      slug,
-    });
+    const release = await holdEntityInProcess(adapter, entity);
     return () => Promise.resolve(release());
   }
   const { session, close } = await sessionKeptOpen(adapter);
@@ -85,11 +85,8 @@ async function takeSaveHold(
   try {
     ({ release } =
       dialect === "mysql"
-        ? await holdCollectionOnSession(adapter, session, slug)
-        : await holdEntityOnPostgresSession(session, {
-            kind: "collection",
-            slug,
-          }));
+        ? await holdEntityOnSession(adapter, session, entity)
+        : await holdEntityOnPostgresSession(session, entity));
   } catch (error) {
     await close().catch(() => undefined);
     throw error;
