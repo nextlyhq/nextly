@@ -359,7 +359,7 @@ interface UpdateDdlPlan {
    * The translations columns the plan's statements give their fields' new types, run before
    * `migrationSQL` (`singleCompanionRetype`); absent where none takes another type.
    */
-  companionRetype?: SingleCompanionRetype;
+  companionRetype?: SingleCompanionRetype | undefined;
   /** The field list the table holds once this plan has run. */
   fields: FieldDefinition[];
   /** The field list the table holds now. The companion reconcile diffs against it. */
@@ -390,6 +390,21 @@ interface UpdateDdlPlan {
    * overwritten with a verdict about a migration that was never requested.
    */
   ownsMigrationStatus: boolean;
+}
+
+/** The fields whose translations column a plan retypes, as a type change's judgement takes them. */
+function retypedIn(retype: SingleCompanionRetype | undefined): {
+  retyped?: ReadonlySet<string>;
+} {
+  return retype === undefined ? {} : { retyped: retype.fields };
+}
+
+/** The same fields as the save's writer takes them. */
+function retypedByPlan(
+  plan: UpdateDdlPlan | null
+): Pick<CollectionSave, "retypedTranslations"> {
+  const { retyped } = retypedIn(plan?.companionRetype);
+  return retyped === undefined ? {} : { retypedTranslations: retyped };
 }
 
 /**
@@ -1362,9 +1377,7 @@ export class SingleMetadataService {
       entity: entityWith(planned),
       change: "update",
       ...(rename ? { renamedFields: [rename] } : {}),
-      ...(plan?.companionRetype === undefined
-        ? {}
-        : { retypedTranslations: plan.companionRetype.fields }),
+      ...retypedByPlan(plan),
       ...(await entityRelations(
         deps.adapter,
         this.logger,
@@ -1983,7 +1996,7 @@ export class SingleMetadataService {
       wasLocalized,
       isLocalized,
       migrationStatus: existing.migrationStatus,
-      retyped: companionRetype?.fields,
+      ...retypedIn(companionRetype),
     };
     await this.refuseWhatTheValueCannotTake(
       input.slug,
@@ -2072,7 +2085,7 @@ export class SingleMetadataService {
         typeChange,
         schemaService
       ),
-      ...(companionRetype === undefined ? {} : { companionRetype }),
+      companionRetype,
       fields,
       previousFields,
       describesWholeTable: false,
