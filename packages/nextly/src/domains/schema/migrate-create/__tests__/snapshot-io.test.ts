@@ -298,7 +298,9 @@ describe("snapshot-io", () => {
       const recorded = (settings: Record<string, unknown>) => ({
         collections: {},
         singles: {},
-        fieldGroups: { banner: { source: "ui" as const, settings } },
+        fieldGroups: {
+          banner: { source: "builder" as const, settings: settings as never },
+        },
       });
 
       expect(
