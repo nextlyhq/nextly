@@ -26,6 +26,7 @@ import {
 import type { ServiceContainer } from "../../../services";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive/ddl";
+import { rewritesValuesOn } from "../../schema/value-conversion/type-change/field-type-changes";
 import { restoreI18nArchive } from "../migration/restore-archive";
 
 const LOCALES = ["en", "es", "ar"];
@@ -604,9 +605,10 @@ describeEachDialect("a field that stops being translated", dialect => {
     }
   );
 
-  it("refuses first a text field becoming a number whose values the new type cannot read, as it leaves, through the collection's schema dialog", async () => {
-    // "A-1" is no number: the collection's dialog judges the values before the translation's own
-    // check, so its refusal names the field and the values, and nothing changes.
+  it("refuses a text field becoming a number whose values the new type cannot read, as it leaves, through the collection's schema dialog", async () => {
+    // "A-1" is no number. Where the save's file converts the change, the translation's own check
+    // comes first and names the two saves that make it; where no road rewrites values (MySQL), the
+    // push judges the values first and names them. Either way nothing changes.
     const dialog = COLLECTION_CHANGES.find(
       c => c.path === "the builder applies the change with the schema dialog"
     );
@@ -624,7 +626,11 @@ describeEachDialect("a field that stops being translated", dialect => {
       refusal instanceof Error
         ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
         : String(refusal);
-    expect(reported).toMatch(/TYPE_CHANGE_LOSES_VALUES/);
+    expect(reported).toMatch(
+      rewritesValuesOn(dialect)
+        ? /RESHAPED_FIELD_LEAVES_TRANSLATION/
+        : /TYPE_CHANGE_LOSES_VALUES/
+    );
     expect(await columnsOf("dc_posts")).not.toContain("code");
     const kept = await query<{ code: string }>(
       `SELECT ${quote(dialect, "code")} AS code FROM ${quote(dialect, "dc_posts_locales")} ORDER BY ${quote(dialect, "code")}`

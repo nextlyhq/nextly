@@ -901,7 +901,12 @@ describe.each(getConfiguredTestDialects())(
             : "takes back the whole of a push whose second statement failed, and keeps no file",
           async () => {
             const t = await boot();
-            await kind.create([text("heading")]);
+            const link = {
+              name: "related",
+              type: "relationship",
+              relationTo: "users",
+            };
+            await kind.create([text("heading"), link]);
             const filesBefore = migrationFiles();
             const definitionOf = () =>
               readTableDefinition(
@@ -935,9 +940,11 @@ describe.each(getConfiguredTestDialects())(
                 }
               });
 
-            // A type change, which keeps the push, and a field added: two statements.
+            // How a relationship keeps its links, which keeps the push, and a field added: two
+            // statements.
+            const links = { ...link, hasMany: true };
             const refused: unknown = await kind
-              .change(t, [{ name: "heading", type: "number" }, text("body")])
+              .change(t, [text("heading"), links, text("body")])
               .then(
                 () => undefined,
                 (error: unknown) => error
