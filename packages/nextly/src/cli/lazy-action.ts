@@ -54,5 +54,7 @@ async function endAtProbe(): Promise<void> {
   await new Promise<void>(resolve => {
     process.stderr.write(`${CODE_LOADED_LINE}\n`, () => resolve());
   });
-  process.exit(STARTUP_PROBE_EXIT);
+  // STARTUP_PROBE_EXIT, written out: a status worked out at run time could be a
+  // failure's 1, which a command may end with only through the error shape.
+  process.exit(4);
 }
