@@ -229,9 +229,8 @@ describe.each(getConfiguredTestDialects())(
       expect(await legacyObjects(adapter, dialect)).toEqual([]);
     }, 120_000);
 
-    // The registry records which field was translated, and the sync reads it under the names the
-    // site is on. Read under the legacy one it found no record, and the values were lost with the
-    // translations column.
+    // The sync finds the field leaving translation at the group's stored table. Looked for under the
+    // legacy name, nothing was found, and the values stayed in a translations column nothing reads.
     it("keeps the values of a translated field made shared, in a collection and in a group", async () => {
       const url = await openDatabase(dialect);
       await sync(valueProject(true));
