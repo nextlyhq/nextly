@@ -116,9 +116,10 @@ export function blankLineHeader(line: {
  * `nextly migrate` opens the UP section (`isUpMarker`, over each line trimmed as the runner trims
  * it), or every line where there is none. A blank migration states what it is here and only
  * here: a comment among the statements below that reads like a mark says nothing of the file.
- * The one reading of the header, for every reader of a blank migration's marks.
+ * The one reading of the header, for every reader of a blank migration's marks, and for the
+ * dialect a file's header names (`cli/utils/project-dialect.ts`).
  */
-function headerLinesOf(content: string): string[] {
+export function headerLinesOf(content: string): string[] {
   const lines = content.split(/\r?\n/);
   const up = lines.findIndex(line => isUpMarker(line.trim()));
   return up === -1 ? lines : lines.slice(0, up);

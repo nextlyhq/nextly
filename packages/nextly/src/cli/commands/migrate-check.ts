@@ -163,11 +163,31 @@ interface ResolvedMigrateCheckOptions {
 // Command Implementation
 // ============================================================================
 
+/**
+ * `logger`, saying each warning once in the run. The comparison of the changes not yet in a
+ * migration reads the inputs this command has read already (the Builder's definitions, the
+ * entities' addresses and sibling fields), by the same rules, so what it would warn about them a
+ * second time is said once.
+ */
+function warningsOnce(
+  logger: CommandContext["logger"]
+): CommandContext["logger"] {
+  const said = new Set<string>();
+  return {
+    ...logger,
+    warn: (message: string) => {
+      if (said.has(message)) return;
+      said.add(message);
+      logger.warn(message);
+    },
+  };
+}
+
 export async function runMigrateCheck(
   options: ResolvedMigrateCheckOptions,
   context: CommandContext
 ): Promise<void> {
-  const { logger } = context;
+  const logger = warningsOnce(context.logger);
 
   logger.header("Migrate Check");
 
@@ -185,18 +205,20 @@ export async function runMigrateCheck(
   if (configResult === undefined) return;
 
   const cwd = options.cwd ?? process.cwd();
+  const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
   // The check reads no database: the dialect comes from `--dialect`, the migration history or the
   // environment, without connecting. The changes are computed from what the project commits, so a
   // Builder definition file git ignores, which would make this check pass on one machine and fail
-  // on another, is refused.
-  const { migrationsDir, dialect, definitionFile, definitionIgnored } =
-    await readWithoutDatabase({
-      flag: options.dialect,
-      projectRoot: cwd,
-      db: configResult.config.db,
-      logger,
-    });
+  // on another, is refused, whether or not this checkout holds it.
+  const definitionFile = configResult.config.db.uiSchemaFile;
+  const { dialect, definitionIgnored } = await readWithoutDatabase({
+    flag: options.dialect,
+    projectRoot: cwd,
+    migrationsDir,
+    definitionFile,
+    logger,
+  });
   if (definitionIgnored) {
     return exitWithError(logger, builderDefinitionIgnored(definitionFile));
   }

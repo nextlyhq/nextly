@@ -11,7 +11,14 @@
  * it); the environment read before the history, or the flag after either; a question asked where
  * the environment already says, or none asked where nothing does.
  */
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -167,6 +174,69 @@ describe("the order the dialect is read in", () => {
       (await create(project("title"), { dialect: "mysql" })).code
     ).toBeUndefined();
     expect(dialectHeaders()).toEqual(["MySQL"]);
+  });
+});
+
+describe("the environment, read without connecting", () => {
+  it("refuses a DB_DIALECT Nextly does not run on, and a DATABASE_URL whose scheme names none, as a command that connects does", async () => {
+    environment({ DB_DIALECT: "oracle" });
+    const invalid = await check(project("title"));
+    expect(invalid.code).toBe(1);
+    expect(invalid.said.join("\n")).toContain("(DATABASE_DIALECT_INVALID)");
+
+    environment({ DATABASE_URL: "redis://127.0.0.1:1/0" });
+    const unknown = await check(project("title"));
+    expect(unknown.code).toBe(1);
+    expect(unknown.said.join("\n")).toContain("(DATABASE_DIALECT_UNKNOWN)");
+  });
+});
+
+describe("the history's dialect", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is read from a migration written as one dialect's file alone, by its name", async () => {
+    environment({ DB_DIALECT: "sqlite" });
+    expect((await create(project("title"))).code).toBeUndefined();
+    const folder = join(dir, "migrations");
+    const [first] = readdirSync(folder).filter(file => file.endsWith(".sql"));
+    renameSync(
+      join(folder, first),
+      join(folder, first.replace(/\.sql$/, ".sqlite.sql"))
+    );
+
+    environment({});
+    const next = await create(project("title", "summary"));
+    expect(next.code, next.said.join("\n")).toBeUndefined();
+    expect(dialectHeaders()).toEqual(["SQLite", "SQLite"]);
+  });
+
+  it("is read from a file's header, never from a comment among its statements", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-01T12:00:00.000Z"));
+    environment({ DB_DIALECT: "postgresql", DATABASE_URL: UNOPENED_POSTGRES });
+    expect((await create(project("title"))).code).toBeUndefined();
+    // Written by hand after it: its header names no dialect, and a statement's comment does.
+    writeFileSync(
+      join(dir, "migrations", "20260101_120001_000_by_hand.sql"),
+      "-- UP\n-- Dialect: MySQL\nSELECT 1;\n\n-- DOWN\n"
+    );
+
+    vi.setSystemTime(new Date("2026-01-01T12:00:02.000Z"));
+    environment({});
+    const next = await create(project("title", "summary"));
+    expect(next.code, next.said.join("\n")).toBeUndefined();
+    const generated = readdirSync(join(dir, "migrations"))
+      .filter(file => file.endsWith(".sql") && !file.includes("by_hand"))
+      .sort()
+      .map(
+        file =>
+          /^-- Dialect: (\S+)\s*$/m.exec(
+            readFileSync(join(dir, "migrations", file), "utf-8")
+          )?.[1]
+      );
+    expect(generated).toEqual(["PostgreSQL", "PostgreSQL"]);
   });
 });
 

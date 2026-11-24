@@ -18,13 +18,13 @@ import { join, resolve } from "node:path";
 import * as p from "@clack/prompts";
 
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
+import { headerLinesOf } from "../../domains/schema/migrate/history-line";
 import { compareMigrationBaseNames } from "../../domains/schema/migrate/migration-order";
 import { ignoredByGit } from "../../domains/schema/ui-schema/committed-definition";
-import { DIALECTS } from "../dialect-option";
-import { dialectNotStated } from "../errors/areas/database";
+import { databaseEnvError, dialectNotStated } from "../errors/areas/database";
 import { exitWithError } from "../errors/report";
 
-import { detectDialectFromUrl, type SupportedDialect } from "./adapter";
+import { environmentDialect, type SupportedDialect } from "./adapter";
 import type { Logger } from "./logger";
 import { discoverMigrationGroups } from "./migration-discovery";
 import { answered } from "./prompt-cancelled";
@@ -36,18 +36,15 @@ const BY_HEADER: Record<string, SupportedDialect> = {
   SQLite: "sqlite",
 };
 
-/** The header a generated migration file starts with, naming its dialect. */
+/** The line of a generated migration file's header that names its dialect. */
 const HEADER = /^-- Dialect: (\S+)\s*$/m;
 
-/** Whether `value` is a dialect Nextly runs on. */
-function isDialect(value: string | undefined): value is SupportedDialect {
-  return value !== undefined && (DIALECTS as readonly string[]).includes(value);
-}
-
 /**
- * The dialect the migration history was written for: the newest migration file whose header names
- * one. None where the folder holds no such file, or its newest migration is written as one file per
- * dialect, which says it serves several.
+ * The dialect the migration history was written for, from its newest migration that says: one
+ * written as one dialect's file alone (`<base>.sqlite.sql`) by that file's name, one written as a
+ * single file by the dialect its header names (`headerLinesOf`, never a comment among its
+ * statements). None where the folder holds no such migration, or its newest is written as files
+ * for several dialects, which says it serves several.
  */
 async function historyDialect(
   migrationsDir: string
@@ -62,32 +59,50 @@ async function historyDialect(
     compareMigrationBaseNames(b.baseName, a.baseName)
   );
   for (const group of newestFirst) {
-    if (group.variants.some(variant => variant.dialect !== undefined)) {
-      return undefined;
-    }
-    for (const variant of group.variants) {
-      let text: string;
-      try {
-        text = await readFile(join(migrationsDir, variant.file), "utf-8");
-      } catch {
-        continue;
-      }
-      const named = BY_HEADER[HEADER.exec(text)?.[1] ?? ""];
-      if (named !== undefined) return named;
-    }
+    const dialects = new Set(group.variants.map(variant => variant.dialect));
+    if (dialects.size > 1) return undefined;
+    const [only] = dialects;
+    if (only !== undefined) return only;
+    const named = await headerDialect(
+      join(migrationsDir, group.variants[0].file)
+    );
+    if (named !== undefined) return named;
   }
   return undefined;
 }
 
-/** The dialect the environment names without a connection: `DB_DIALECT`, else `DATABASE_URL`'s. */
-function environmentDialect(
+/** The dialect `file`'s header names, or none where it names none or cannot be read. */
+async function headerDialect(
+  file: string
+): Promise<SupportedDialect | undefined> {
+  let text: string;
+  try {
+    text = await readFile(file, "utf-8");
+  } catch {
+    return undefined;
+  }
+  const header = headerLinesOf(text).join("\n");
+  return BY_HEADER[HEADER.exec(header)?.[1] ?? ""];
+}
+
+/**
+ * The dialect the environment names without a connection (`environmentDialect`): none where it
+ * names nothing. A `DB_DIALECT` Nextly does not run on, or a `DATABASE_URL` whose scheme names no
+ * database, is refused as every command refuses it, never passed over.
+ */
+function dialectFromEnvironment(
   env: Readonly<Record<string, string | undefined>>
 ): SupportedDialect | undefined {
-  if (isDialect(env.DB_DIALECT)) return env.DB_DIALECT;
-  const url = env.DATABASE_URL;
-  return url === undefined || url === ""
-    ? undefined
-    : detectDialectFromUrl(url);
+  if (!env.DB_DIALECT && !env.DATABASE_URL) return undefined;
+  const named = environmentDialect(env);
+  if ("problem" in named) {
+    throw databaseEnvError({
+      valid: false,
+      errors: [],
+      problem: named.problem,
+    });
+  }
+  return named.dialect;
 }
 
 /** The terminal's question for the dialect. */
@@ -119,7 +134,7 @@ async function projectDialect(args: {
   if (args.flag !== undefined) return args.flag;
   const fromHistory = await historyDialect(args.migrationsDir);
   if (fromHistory !== undefined) return fromHistory;
-  const fromEnvironment = environmentDialect(args.env ?? process.env);
+  const fromEnvironment = dialectFromEnvironment(args.env ?? process.env);
   if (fromEnvironment !== undefined) return fromEnvironment;
   if (canPrompt()) return (args.ask ?? askDialect)();
   throw dialectNotStated();
@@ -127,36 +142,43 @@ async function projectDialect(args: {
 
 /**
  * What `migrate:check` and `migrate:create` read before they compare, with no database: the
- * migrations folder; the dialect (`projectDialect`), the command ending in the error shape where
- * nothing says; and whether the Schema Builder's definition file is one git ignores. The changes
+ * dialect (`projectDialect`), the command ending in the error shape where nothing says; and the
+ * Schema Builder's definition file, whether it is there and whether git ignores it. The changes
  * are computed from what the project commits, so each command answers an ignored file:
- * `migrate:check` refuses it and `migrate:create` warns.
+ * `migrate:check` refuses it whether or not the checkout holds it (a CI checkout of a project that
+ * ignores it never does), and `migrate:create` warns where it writes from one.
  */
 export async function readWithoutDatabase(args: {
   flag: SupportedDialect | undefined;
   projectRoot: string;
-  /** The configuration's `db`: the migrations folder and `uiSchemaFile`, each relative to the project. */
-  db: { migrationsDir: string; uiSchemaFile: string };
+  /** The migrations folder, absolute. */
+  migrationsDir: string;
+  /** `db.uiSchemaFile`, relative to the project. */
+  definitionFile: string;
   logger: Pick<Logger, "getOptions">;
 }): Promise<{
-  migrationsDir: string;
   dialect: SupportedDialect;
-  definitionFile: string;
+  definitionPresent: boolean;
   definitionIgnored: boolean;
 }> {
-  const migrationsDir = resolve(args.projectRoot, args.db.migrationsDir);
   let dialect: SupportedDialect;
   try {
     dialect = await projectDialect({
       ...(args.flag !== undefined ? { flag: args.flag } : {}),
-      migrationsDir,
+      migrationsDir: args.migrationsDir,
     });
   } catch (error) {
     return exitWithError(args.logger, error);
   }
-  const definitionFile = args.db.uiSchemaFile;
-  const definitionIgnored =
-    existsSync(resolve(args.projectRoot, definitionFile)) &&
-    (await ignoredByGit(args.projectRoot, definitionFile));
-  return { migrationsDir, dialect, definitionFile, definitionIgnored };
+  return {
+    dialect,
+    definitionPresent: existsSync(
+      resolve(args.projectRoot, args.definitionFile)
+    ),
+    // git judges a path by its rules whether or not the file exists.
+    definitionIgnored: await ignoredByGit(
+      args.projectRoot,
+      args.definitionFile
+    ),
+  };
 }

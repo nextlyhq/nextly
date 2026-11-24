@@ -751,24 +751,7 @@ export async function runMigrateCreate(
   }
 
   const cwd = options.cwd ?? process.cwd();
-
-  // The SQL to write is the dialect's, which needs no database: from `--dialect`, the migration
-  // history or the environment, read without connecting. What the run writes from is what the
-  // project commits: a Builder definition file git ignores is named, though the run goes on, since
-  // the developer writing the migration has it.
-  const { migrationsDir, dialect, definitionFile, definitionIgnored } =
-    await readWithoutDatabase({
-      flag: options.dialect,
-      projectRoot: cwd,
-      db: configResult.config.db,
-      logger,
-    });
-  logger.keyValue("Dialect", getDialectDisplayName(dialect));
-  if (definitionIgnored) {
-    logger.warn(
-      `The Schema Builder's definition file, ${definitionFile}, is ignored by git, so the migration is written from a file the project does not commit, and \`migrate:check\` refuses it. Commit ${definitionFile}.`
-    );
-  }
+  const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
   // A real run holds the project's migration files from here, its first read
   // of the folder, to its files' write, questions included, so no other
@@ -781,6 +764,20 @@ export async function runMigrateCreate(
   });
   held.enter();
   try {
+    // The SQL to write is the dialect's, which needs no database: from `--dialect`, the migration
+    // history or the environment, read without connecting. Read once the folder is held, so the
+    // history is the one this run writes after, not one another writer has since added to.
+    const definitionFile = configResult.config.db.uiSchemaFile;
+    const { dialect, definitionPresent, definitionIgnored } =
+      await readWithoutDatabase({
+        flag: options.dialect,
+        projectRoot: cwd,
+        migrationsDir,
+        definitionFile,
+        logger,
+      });
+    logger.keyValue("Dialect", getDialectDisplayName(dialect));
+
     // A Builder save this machine left part-way against this database refuses the command, a
     // blank migration's included: what it would write from is not what the database holds. Asked
     // once the folder is held, so a save that started while this waited for it is seen too.
@@ -809,6 +806,15 @@ export async function runMigrateCreate(
         options.dryRun === true
       );
       return;
+    }
+
+    // What the run writes from is what the project commits: a Builder definition file git
+    // ignores is named, though the run goes on, since the developer writing the migration has it.
+    // A blank migration reads no definition, so it is named only here.
+    if (definitionPresent && definitionIgnored) {
+      logger.warn(
+        `The Schema Builder's definition file, ${definitionFile}, is ignored by git, so the migration is written from a file the project does not commit, and \`migrate:check\` refuses it. Commit ${definitionFile}.`
+      );
     }
 
     // The data-loss consent, read before anything is planned, so a malformed

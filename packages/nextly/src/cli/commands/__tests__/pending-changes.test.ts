@@ -123,6 +123,52 @@ describe("a Schema Builder definition file", () => {
     expect(saidBy(pending)).toContain("dc_notes");
   });
 
+  it("that git ignores is refused by migrate:check where the checkout does not hold it", async () => {
+    git("init", "-q");
+    await writeFile(join(dir, ".gitignore"), "ui-schema.json\n");
+
+    // A CI checkout of a project that ignores the file never holds it.
+    const checked = await check(builderProject);
+    expect(checked.code).toBe(1);
+    expect(saidBy(checked)).toContain("(BUILDER_DEFINITION_IGNORED)");
+    // migrate:create writes from no such file, so it names none.
+    expect(saidBy(await create(builderProject))).not.toContain(
+      "ignored by git"
+    );
+  });
+
+  it("that git ignores is not named by migrate:create --blank, which reads no definition", async () => {
+    git("init", "-q");
+    await writeFile(join(dir, ".gitignore"), "ui-schema.json\n");
+    await define("cases");
+
+    const blank = await create(builderProject, { blank: true });
+    expect(blank.code).toBeUndefined();
+    expect(saidBy(blank)).not.toContain("ignored by git");
+    expect(sqlFiles()).toHaveLength(1);
+  });
+
+  it("whose entry a code-first entity shadows is warned about once by migrate:check", async () => {
+    const shadowing = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "cases",
+          fields: [text({ name: "summary" })],
+        }),
+      ],
+      db: { migrationsDir: "./migrations" },
+    });
+    await define("cases");
+    expect((await create(shadowing)).code).toBeUndefined();
+
+    const checked = await check(shadowing);
+    expect(checked.code).toBeUndefined();
+    const warnings = checked.said.filter(line =>
+      line.includes("that a code-first collection of the same slug shadows")
+    );
+    expect(warnings).toHaveLength(1);
+  });
+
   it("outside any git repository is read as before", async () => {
     await define("cases");
 
