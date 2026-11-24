@@ -40,8 +40,9 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import type { CommandContext } from "../../../program";
+import type { CLIDatabaseAdapter } from "../../../utils/adapter";
 import { createLogger } from "../../../utils/logger";
-import { runMigrate } from "../../migrate";
+import { findPendingFiles, runMigrate } from "../../migrate";
 import { runMigrateCheck } from "../../migrate-check";
 
 import { throwawayDatabase } from "./sync-target";
@@ -334,7 +335,7 @@ export function settleAnswerCases(args: {
       async function built(
         translated: boolean,
         answered: AnsweredSave
-      ): Promise<{ before: string; after: string }> {
+      ): Promise<{ before: string; after: string; later: string }> {
         const dev = await database();
         reach(dev.url);
         await site(dev.adapter, project);
@@ -361,7 +362,17 @@ export function settleAnswerCases(args: {
         );
         const after = copied("after");
         expect(files(after).length).toBeGreaterThan(files(before).length);
-        return { before, after };
+        // A later save on the same table, which the drift check compares against what the
+        // answered save's file left.
+        await save(
+          "posts",
+          [...answered.fields, { name: "extra", type: "text" }],
+          translated ? { localized: true } : {},
+          await versionOf(dev.adapter)
+        );
+        const later = copied("later");
+        expect(files(later).length).toBeGreaterThan(files(after).length);
+        return { before, after, later };
       }
 
       /**
@@ -434,13 +445,15 @@ export function settleAnswerCases(args: {
         return rows.map(row => String(row.id)).sort();
       }
 
-      /** What the ledger holds: each file it has recorded, and how many times it was run. */
-      const ledgerOf = async (adapter: DrizzleAdapter) =>
-        (
-          await adapter.executeQuery<Record<string, unknown>>(
-            `SELECT * FROM ${q("nextly_migrations")}`
-          )
-        ).length;
+      /** The files the reached database's ledger does not hold yet. */
+      const pendingIn = (adapter: DrizzleAdapter, folder: string) =>
+        findPendingFiles(
+          adapter as unknown as CLIDatabaseAdapter,
+          adapter.getDrizzle(),
+          dialect,
+          join(folder, "database", "history"),
+          createLogger({ quiet: true })
+        );
 
       for (const translated of translations) {
         for (const answered of savesFor(translated)) {
@@ -448,7 +461,7 @@ export function settleAnswerCases(args: {
           const filling = answered.name === "added";
 
           it(`passes ${kind} collection's file that ${filling ? "fills" : "deletes"} through migrate:check, a second database and a second run (${answered.name})`, async () => {
-            const { before, after } = await built(translated, answered);
+            const { before, after, later } = await built(translated, answered);
             // The check reads the project as a whole: files, snapshots and what they say.
             const checked = await check(after);
             expect(checked.code, checked.said).toBeUndefined();
@@ -462,7 +475,12 @@ export function settleAnswerCases(args: {
               filling ? {} : { acceptDataLoss: true }
             );
             expect(applied.code, applied.said).toBeUndefined();
-            expect(applied.said).not.toMatch(/drift/i);
+            // A file that fills is compared with the table before it applies; a pending rename
+            // leaves its table unjudged, as any pending rename does. Neither is drift.
+            expect(applied.said).not.toMatch(/SCHEMA_DRIFT|drifted/);
+            if (filling) {
+              expect(applied.said).not.toMatch(/without a drift check/);
+            }
 
             const expected = filling
               ? {
@@ -487,11 +505,19 @@ export function settleAnswerCases(args: {
               expect(await entriesOf(target.adapter)).toEqual(ids);
             }
 
-            // A second run finds nothing to do, and says so; the ledger holds no second record.
-            const ledger = await ledgerOf(target.adapter);
+            // A second run finds nothing to do, and says so; nothing is pending or run again.
+            expect((await pendingIn(target.adapter, after)).length).toBe(0);
             const again = await migrate(after);
             expect(again.code, again.said).toBeUndefined();
-            expect(await ledgerOf(target.adapter)).toBe(ledger);
+            expect(await englishOf(target.adapter, answered.settled)).toEqual(
+              expected
+            );
+
+            // The next save's file applies over the table the settled file left, with no drift.
+            const next = await migrate(later);
+            expect(next.code, next.said).toBeUndefined();
+            expect(next.said).not.toMatch(/SCHEMA_DRIFT|drifted/);
+            expect((await pendingIn(target.adapter, later)).length).toBe(0);
             expect(await englishOf(target.adapter, answered.settled)).toEqual(
               expected
             );
