@@ -785,6 +785,13 @@ exports[`each code, as a command ends with it > DATABASE_CATALOG_UNREADABLE 1`] 
   Docs: https://nextlyhq.com/docs/cli/errors/database-catalog-unreadable  (DATABASE_CATALOG_UNREADABLE)"
 `;
 
+exports[`each code, as a command ends with it > DATABASE_DIALECT_DIFFERS 1`] = `
+"✗ \`DATABASE_URL\` names a PostgreSQL database, and the migrations are for MySQL.
+  Why:  \`--record-snapshot\` records the translation tables of the database it reads, in a migration written for the migrations' dialect.
+  Next: Point \`DATABASE_URL\` at the MySQL database the migrations run on, or pass the \`--dialect\` they are for.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-dialect-differs  (DATABASE_DIALECT_DIFFERS)"
+`;
+
 exports[`each code, as a command ends with it > DATABASE_DIALECT_INVALID 1`] = `
 "✗ \`DB_DIALECT\` is \`mssql\`, which is not a database Nextly supports.
   Why:  Nextly runs on PostgreSQL, MySQL and SQLite.
