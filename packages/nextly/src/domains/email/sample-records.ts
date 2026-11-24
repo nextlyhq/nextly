@@ -10,8 +10,8 @@
  * entries is refused rather than shown entries past it, and so is every
  * caller of a collection whose fields carry a read rule, which is judged per
  * entry and per caller where the loader reads as the system. What a
- * loader answers is checked for shape, bounded, cut to the variables the
- * template declares, and handed back for the preview; it is never stored.
+ * loader answers is checked for shape, bounded, cut to the variables its
+ * owner declares, and handed back for the preview; it is never stored.
  *
  * @module domains/email/sample-records
  */
@@ -63,12 +63,19 @@ export interface EmailSampleRecords {
   list(args: { limit: number }): Promise<SampleRecordSummary[]>;
   /**
    * One record's values for the template's variables, by variable name; null
-   * for a record the loader no longer has. Only the variables the template
-   * declares are handed on. What each holds, nested values included, is the
+   * for a record the loader no longer has. Only the variables the owner
+   * declares with the template are handed on, whatever a site that overrides
+   * it declares. What each holds, nested values included, is the
    * loader's to choose: it reads as the system, so leave out whatever a reader
    * of the collection should not see, such as a hidden field.
    */
   load(id: string): Promise<Record<string, unknown> | null>;
+}
+
+/** An owner's loader, with the names of the variables that owner declares. */
+export interface OwnerSampleRecords {
+  source: EmailSampleRecords;
+  declared: readonly string[];
 }
 
 /** The most records a list offers. */
@@ -218,20 +225,19 @@ export async function listSampleRecords(
 
 /**
  * One record's values for the preview, as plain JSON data, read and handed
- * back, never stored: those of the variables the template `declared`, by
- * their names, and no others.
+ * back, never stored: those of the variables the owner declares, by their
+ * names, and no others.
  *
  * @throws {NextlyError} `NOT_FOUND` when no loader is offered or the record is
  *   gone; `FORBIDDEN` when the caller may not read it; `VALIDATION_ERROR` for
  *   an id no record can have.
  */
 export async function loadSampleRecord(
-  source: EmailSampleRecords | undefined,
+  records: OwnerSampleRecords | undefined,
   id: string,
-  caller: SampleRecordCaller,
-  declared: ReadonlyArray<{ name: string }> | null | undefined
+  caller: SampleRecordCaller
 ): Promise<Record<string, unknown>> {
-  const loader = await offered(source, caller);
+  const loader = await offered(records?.source, caller);
   const recordId = RECORD_ID.safeParse(id);
   if (!recordId.success) {
     throw NextlyError.validation({
@@ -247,13 +253,7 @@ export async function loadSampleRecord(
     });
   }
   const values = plainRecord(record);
-  // A stored row can hold anything, so an entry without a name declares nothing.
-  const names = new Set(
-    (Array.isArray(declared) ? declared : []).flatMap(
-      (variable: { name?: unknown } | null) =>
-        typeof variable?.name === "string" ? [variable.name] : []
-    )
-  );
+  const names = new Set(records?.declared);
   return Object.fromEntries(
     Object.entries(values).filter(([name]) => names.has(name))
   );

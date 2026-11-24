@@ -56,7 +56,7 @@ import {
   type BrandSettingsUpdate,
 } from "../brand-settings";
 import type { DraftPreview } from "../draft-preview-request";
-import type { EmailSampleRecords } from "../sample-records";
+import type { OwnerSampleRecords } from "../sample-records";
 import {
   changedTemplateFields,
   recordTemplateActivity,
@@ -648,10 +648,18 @@ export class EmailTemplateService extends BaseService {
 
   /**
    * @experimental The real records a template's test data can be filled
-   * from, as its running owner offers them; undefined when it offers none.
+   * from, as its running owner offers them, with the names of the variables
+   * that owner declares in code; undefined when it offers none. Both come from
+   * one registration, and a site's own declarations add no name: what an
+   * owner's loader may hand over is its owner's to say.
    */
-  ownerSampleRecords(slug: string): EmailSampleRecords | undefined {
-    return this.registry.owned.get(slug)?.sampleRecords;
+  ownerSampleRecords(slug: string): OwnerSampleRecords | undefined {
+    const entry = this.registry.owned.get(slug);
+    if (!entry?.sampleRecords) return undefined;
+    return {
+      source: entry.sampleRecords,
+      declared: (entry.defaults.variables ?? []).map(variable => variable.name),
+    };
   }
   /** Where the switch to Liquid, and the templates kept off it, are recorded. */
   private readonly meta: MetaService;

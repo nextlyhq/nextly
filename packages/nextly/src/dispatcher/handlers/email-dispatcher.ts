@@ -51,7 +51,7 @@ import { toDescriptor } from "../../domains/email/provider-definition";
 import {
   listSampleRecords,
   loadSampleRecord,
-  type EmailSampleRecords,
+  type OwnerSampleRecords,
   type SampleRecordCaller,
 } from "../../domains/email/sample-records";
 import { sendOutcomeMessage } from "../../domains/email/send-outcome";
@@ -71,7 +71,6 @@ import { testSendRecipientOf } from "../../domains/email/test-send-recipient";
 import { writtenDocumentSchema } from "../../domains/email/written/document";
 import type { UserService } from "../../domains/users/services/user-service";
 import { NextlyError } from "../../errors/nextly-error";
-import type { EmailTemplateRecord } from "../../schemas/email-templates/types";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
 import type { EmailService } from "../../services/email/email-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
@@ -705,8 +704,8 @@ const EMAIL_TEMPLATE_METHODS: Record<
     // first, to a caller who may read what they are read from; `meta.label`
     // says what they are ("A real order"). One page, never more.
     execute: async (svc, p) => {
-      const { source, caller } = await sampleRecordsFor(svc, p.templateId);
-      const { label, items } = await listSampleRecords(source, caller);
+      const { records, caller } = await sampleRecordsFor(svc, p.templateId);
+      const { label, items } = await listSampleRecords(records?.source, caller);
       const meta: PaginationMeta & { label: string } = {
         total: items.length,
         page: 1,
@@ -726,16 +725,8 @@ const EMAIL_TEMPLATE_METHODS: Record<
     // One record's values for the preview, by variable name. Read for this
     // answer and kept nowhere.
     execute: async (svc, p) => {
-      const { source, caller, declared } = await sampleRecordsFor(
-        svc,
-        p.templateId
-      );
-      const variables = await loadSampleRecord(
-        source,
-        p.recordId,
-        caller,
-        declared
-      );
+      const { records, caller } = await sampleRecordsFor(svc, p.templateId);
+      const variables = await loadSampleRecord(records, p.recordId, caller);
       // The values fill the preview exactly as the loader gave them: a date
       // is never rewritten in the installation's timezone on the way.
       const response = respondDoc({ id: p.recordId, variables });
@@ -746,30 +737,26 @@ const EMAIL_TEMPLATE_METHODS: Record<
 };
 
 /**
- * The real records a template's running owner offers for its test data, the
- * caller as the access decision reads them, which the sample-records module
- * asks before the owner's loader runs, and the variables the template
- * declares now: the site's own where it overrides its owner's, as the editor
- * shows them.
+ * The real records a template's running owner offers for its test data, and
+ * the caller as the access decision reads them, which the sample-records
+ * module asks before the owner's loader runs.
  */
 async function sampleRecordsFor(
   svc: EmailTemplateServices,
   templateId: string
 ): Promise<{
-  source: EmailSampleRecords | undefined;
+  records: OwnerSampleRecords | undefined;
   caller: SampleRecordCaller;
-  declared: EmailTemplateRecord["variables"];
 }> {
   const user = requireAuthenticatedUser();
   const template = await svc.templateService.getTemplate(templateId);
   return {
-    source: svc.templateService.ownerSampleRecords(template.slug),
+    records: svc.templateService.ownerSampleRecords(template.slug),
     caller: {
       readCaller: readAccessCallerForDispatch(user),
       userId: user.id,
       scope: readAuthenticatedScope(),
     },
-    declared: template.variables,
   };
 }
 

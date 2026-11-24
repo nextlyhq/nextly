@@ -50,6 +50,7 @@ const NOTED_SHIPPED = "sample-noted-order-shipped";
 /** Orders whose rule sits in a field group they hold. */
 const GROUPED_ORDERS = "sample_grouped_orders";
 const GROUPED_SHIPPED = "sample-grouped-order-shipped";
+const BARE_SHIPPED = "sample-bare-order-shipped";
 
 type Headers = Record<string, string>;
 
@@ -92,6 +93,14 @@ const shippedTemplate = {
       return { orderNumber: id.toUpperCase(), customer: "Ada" };
     },
   },
+} as unknown as PluginEmailTemplate;
+
+/** The same orders, from an owner that declares no variables. */
+const bareShippedTemplate = {
+  ...shippedTemplate,
+  slug: BARE_SHIPPED,
+  name: "Bare order shipped",
+  variables: undefined,
 } as unknown as PluginEmailTemplate;
 
 /** A template offering the orders a read rule filters. */
@@ -337,6 +346,7 @@ for (const dialect of getConfiguredTestDialects()) {
                 ownShippedTemplate,
                 notedShippedTemplate,
                 groupedShippedTemplate,
+                bareShippedTemplate,
               ],
             },
           ],
@@ -544,15 +554,24 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(JSON.stringify(after)).not.toContain("O-2");
     });
 
-    // Last: it leaves the shop's template overridden.
-    it("follows the site's own declarations on a template it overrides", async () => {
+    // Last: these leave the shop's templates overridden.
+    it("answers by the owner's declarations on a template the site overrides, so a name the site adds gets nothing", async () => {
       const templates = t.getService(
         "emailTemplateService"
       ) as unknown as EmailTemplateService;
+      const named = (name: string) => ({
+        name,
+        description: name,
+        required: false,
+      });
       await templates.overrideTemplate(shippedId);
+      // A key the loader returns and its owner never declared, and one no
+      // loader knows.
       await templates.updateTemplate(shippedId, {
         variables: [
-          { name: "orderNumber", description: "The order", required: true },
+          named("orderNumber"),
+          named("internalNote"),
+          named("coupon"),
         ],
       });
       const one = await get(
@@ -560,7 +579,33 @@ for (const dialect of getConfiguredTestDialects()) {
         reader
       );
       expect(one.status, one.text).toBe(200);
-      expect(one.body.variables).toEqual({ orderNumber: "O-9" });
+      expect(one.body.variables).toEqual({
+        orderNumber: "O-9",
+        customer: { name: "Ada", note: "kept" },
+      });
+      expect(one.text).not.toContain("never declared");
+    });
+
+    it("answers nothing for an owner that declares no variables, whatever the site declares", async () => {
+      const templates = t.getService(
+        "emailTemplateService"
+      ) as unknown as EmailTemplateService;
+      const bare = await t.nextly.emailTemplates.findBySlug({
+        slug: BARE_SHIPPED,
+      });
+      const bareId = String(bare?.id);
+      await templates.overrideTemplate(bareId);
+      await templates.updateTemplate(bareId, {
+        variables: [
+          { name: "orderNumber", description: "Order", required: false },
+        ],
+      });
+      const one = await get(
+        `email-templates/${bareId}/sample-records/extra`,
+        reader
+      );
+      expect(one.status, one.text).toBe(200);
+      expect(one.body.variables).toEqual({});
     });
   });
 }
