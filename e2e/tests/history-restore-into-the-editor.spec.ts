@@ -12,6 +12,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { saveFromBar } from "./support/document-bar";
 import { test } from "./support/test";
 
 const ENTRIES = "/admin/api/collections/history-notes/entries";
@@ -106,10 +107,10 @@ test.describe("restoring a version into the editor", () => {
       /^Restore undone: 2 fields put back as they were/
     );
 
-    // Restored again, then saved: the person's own write. A note holds no
-    // draft: it embeds the localized SEO field group, and a document with a
-    // localized field group keeps no pending changes, so its leading action
-    // is "Save changes" and the write goes to the live note.
+    // Restored again, then saved: the person's own write. A note keeps drafts
+    // (a working draft is held per language, so its localized SEO field group
+    // no longer rules one out), so its Save, named "Save", lands in the
+    // working draft rather than in front of readers.
     await showFirstVersion(page, id);
     await restoreTitleAndSummary(page);
     await expect(summaryBox(page)).toHaveValue("first summary");
@@ -118,10 +119,7 @@ test.describe("restoring a version into the editor", () => {
         response.url().includes(`/entries/${id}`) &&
         response.request().method() === "PATCH"
     );
-    await page
-      .getByRole("banner")
-      .getByRole("button", { name: "Save changes", exact: true })
-      .click();
+    await saveFromBar(page, /^Save$/);
     expect((await saved).ok()).toBe(true);
 
     // The save records where the two values came from.
@@ -132,15 +130,18 @@ test.describe("restoring a version into the editor", () => {
     };
     expect(items[0]?.fieldSources).toEqual({ title: 1, summary: 1 });
 
-    // And the note stays published, now holding the restored values: the
-    // save neither unpublished it nor kept the values it replaced.
+    // The working draft holds the restored values, and the note stays
+    // published as it was: the save neither unpublished it nor reached what
+    // readers see. A read answers with the document itself; `?draft=true`
+    // reads the working draft in place of the live row.
+    const held = await page.request.get(`${ENTRIES}/${id}?draft=true`);
+    expect(held.ok(), await held.text()).toBe(true);
+    expect(await held.json()).toMatchObject({ summary: "first summary" });
     const live = await page.request.get(`${ENTRIES}/${id}`);
     expect(live.ok(), await live.text()).toBe(true);
-    // A read answers with the document itself.
-    const item = (await live.json()) as { status: string; summary: string };
-    expect(item).toMatchObject({
+    expect(await live.json()).toMatchObject({
       status: "published",
-      summary: "first summary",
+      summary: "second summary",
     });
   });
 });
