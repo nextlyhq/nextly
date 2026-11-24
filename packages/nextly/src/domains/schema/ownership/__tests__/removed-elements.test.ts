@@ -159,6 +159,32 @@ describe("an index is judged by what the database's index stands on", () => {
   });
 });
 
+describe("two indexes whose names differ only in letter case", () => {
+  it("judges the recorded one by its own columns, not its sibling's", async () => {
+    const refused = await judged(
+      columns("code"),
+      sources({
+        recorded: [{ ...recordedIndex, name: "IDX_CODE" }],
+        indexColumns: { idx_code: ["note"], IDX_CODE: ["code"] },
+      })
+    );
+
+    expect(refused?.publicMessage).toContain('index "IDX_CODE"');
+  });
+
+  it("lets the column only its sibling stands on go", async () => {
+    const refused = await judged(
+      columns("note"),
+      sources({
+        recorded: [{ ...recordedIndex, name: "IDX_CODE" }],
+        indexColumns: { idx_code: ["note"], IDX_CODE: ["code"] },
+      })
+    );
+
+    expect(refused).toBeUndefined();
+  });
+});
+
 describe("a key pointing at several removed columns", () => {
   /** The plugin's key into `code` and `extra`, with `extra` the plugin's own column. */
   const key: KeyInto = {
@@ -318,6 +344,26 @@ describe("two tables whose names differ only in letter case", () => {
 
     expect(refused?.publicMessage).toContain(`on ${TABLE}`);
     expect(refused?.publicMessage).not.toContain("on Dc_Posts");
+  });
+
+  it("refuses what stands on each, where the change removes both", async () => {
+    const refused = await judged(
+      [
+        { kind: "table", table: TABLE },
+        { kind: "table", table: "Dc_Posts" },
+      ],
+      sources({
+        liveNames: {
+          [TABLE]: [TABLE, "Dc_Posts"],
+          Dc_Posts: [TABLE, "Dc_Posts"],
+        },
+        recorded: [recordedIndex, onTheOther],
+        indexColumns: { idx_code: ["code"] },
+      })
+    );
+
+    expect(refused?.publicMessage).toContain(`on ${TABLE}`);
+    expect(refused?.publicMessage).toContain("on Dc_Posts");
   });
 
   it("judges a table the change spells in a case of its own by the one the database has", async () => {
