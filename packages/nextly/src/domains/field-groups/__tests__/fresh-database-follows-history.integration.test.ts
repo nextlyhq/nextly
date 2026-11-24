@@ -365,7 +365,7 @@ describe.each(getConfiguredTestDialects())(
       const synced = await dbSync();
       expect(synced.exit, synced.said).not.toBeUndefined();
       expect(synced.said).toContain(file);
-      expect(synced.said).toContain("INVALID_SNAPSHOT");
+      expect(synced.said).toContain("Restore the file from version control");
 
       const adapter = await connect(dialect, url);
       expect(await hasTable(adapter, "dynamic_components")).toBe(false);

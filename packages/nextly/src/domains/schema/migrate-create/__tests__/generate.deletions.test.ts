@@ -65,6 +65,7 @@ describe("generateMigration's deletions", () => {
           slug: "card",
           tableName: "fg_card",
           fields: [{ name: "heading", type: "text" }],
+          settings: { source: "code", settings: { fields: [] } as never },
         },
       ],
       "initial",
