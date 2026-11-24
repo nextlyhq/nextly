@@ -13,7 +13,14 @@
  * - one that carries the development database's own readings converts only the rows that database
  *   held, and none of the deploy's own.
  */
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -241,14 +248,17 @@ async function write(
   } as never);
 }
 
-/** `v` of each entry, by title, read through the Direct API. */
-async function read(t: TestNextly): Promise<Record<string, unknown>> {
+/** `field` (`v` unless named) of each entry, by title, read through the Direct API. */
+async function read(
+  t: TestNextly,
+  field = "v"
+): Promise<Record<string, unknown>> {
   const found = (await t.nextly.find({
     collection: SLUG,
     limit: 100,
   } as never)) as { items: Array<Record<string, unknown>> };
   return Object.fromEntries(
-    found.items.map(item => [String(item.title), item.v ?? null])
+    found.items.map(item => [String(item.title), item[field] ?? null])
   );
 }
 
@@ -322,6 +332,28 @@ describe.each(getConfiguredTestDialects())(
       return created;
     }
 
+    // A deploy judges a marked change from the newest snapshot before its file to the file's own:
+    // with that one gone from meta/, which values convert cannot be told, so the file is refused
+    // before any statement, never left to the database's cast.
+    it("refuses to deploy a marked change whose earlier snapshot is missing, and changes nothing", async () => {
+      const created = await textBecomesNumber();
+      const second = await boot(dialect);
+      await migrateFolder(second, created);
+      await write(second, "whole", { v: "34" });
+      const meta = join(basePath, "migrations", "meta");
+      const snapshots = (await readdir(meta))
+        .filter(file => file.endsWith(".snapshot.json"))
+        .sort();
+      // The fixture's control: the folder holds the two snapshots the change is judged between.
+      expect(snapshots).toHaveLength(2);
+      await unlink(join(meta, snapshots[0] ?? ""));
+
+      await expect(
+        migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"))
+      ).rejects.toMatchObject(refusedSaying("do not both record the fields"));
+      expect(await read(second)).toEqual({ whole: "34" });
+    });
+
     // `migrate:check` holds each file to the hash its snapshot recorded when it was written: the
     // mark is part of the file that hash was taken of.
     it("writes the mark into the file its snapshot's hash was taken of, which migrate:check accepts", async () => {
@@ -364,6 +396,67 @@ describe.each(getConfiguredTestDialects())(
       await migrateDown(second);
 
       expect(await read(second)).toEqual({ whole: "34", part: "7.5" });
+    });
+
+    // The mark names each column as it was before the file, and a rollback reads the file's change
+    // the other way round, from the column the file left: a field the file renamed is converted
+    // back through the name it had there, so SQLite's cast never writes 34 back as 34.0.
+    it("converts a renamed field's values back when migrate:down rolls back its rename and type change", async () => {
+      const float = { name: "w", type: "number", options: { format: "float" } };
+      const first = await boot(dialect);
+      await createPosts([{ name: "v", type: "text" }]);
+      const created = await filesWritten();
+      await write(first, "kept", { v: "12" });
+      await save(first, [float], {
+        renames: [{ from: "v", to: "w", choice: "rename" }],
+      });
+      await first.destroy();
+      instance = undefined;
+
+      const second = await boot(dialect);
+      await migrateFolder(second, created);
+      await write(second, "whole", { v: "34" });
+      await migrateFolder(
+        second,
+        undefined,
+        resolveDataLossConsent({ flag: true, env: {} })
+      );
+      expect(await read(second, "w")).toEqual({ whole: 34 });
+
+      await migrateDown(second);
+
+      expect(await read(second)).toEqual({ whole: "34" });
+    });
+
+    // Which values a rollback converts back is read from the file's own snapshot and the newest
+    // one before it: with that one gone from meta/, the rollback is refused before any statement,
+    // never left to the database's cast.
+    it("refuses to roll back a marked change whose earlier snapshot is missing, and changes nothing", async () => {
+      const float = { name: "v", type: "number", options: { format: "float" } };
+      const first = await boot(dialect);
+      await createPosts([{ name: "v", type: "text" }]);
+      const created = await filesWritten();
+      await write(first, "kept", { v: "12" });
+      await save(first, [float]);
+      await first.destroy();
+      instance = undefined;
+
+      const second = await boot(dialect);
+      await migrateFolder(second, created);
+      await write(second, "whole", { v: "34" });
+      await migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"));
+      const meta = join(basePath, "migrations", "meta");
+      const snapshots = (await readdir(meta))
+        .filter(file => file.endsWith(".snapshot.json"))
+        .sort();
+      // The fixture's control: the folder holds the two snapshots the rollback is judged between.
+      expect(snapshots).toHaveLength(2);
+      await unlink(join(meta, snapshots[0] ?? ""));
+
+      await expect(migrateDown(second)).rejects.toMatchObject(
+        refusedSaying("do not both record the fields")
+      );
+      expect(await read(second)).toEqual({ whole: 34 });
     });
 
     // Undoing a list becoming a text makes each text a list again, which no conversion writes:

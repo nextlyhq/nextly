@@ -925,6 +925,24 @@ export const MIGRATION_CODES = defineCodes({
       },
     ],
   },
+  CONVERSION_SNAPSHOT_MISSING: {
+    cause:
+      "A migration converts its field type changes' values, and the snapshots its values are judged by do not both record its fields.",
+    from: [
+      {
+        // A marked file deployed or rolled back is judged between its own snapshot and the newest
+        // one before it (`unjudgeableMarkRefusal`): without both, nothing of it ran, never by the
+        // database's cast instead.
+        code: "VALIDATION_ERROR",
+        reason: "converts-snapshot-missing",
+        describe: error => ({
+          what: "A migration's field type change converts its values, and the snapshots that say how could not both be read, so nothing of it ran.",
+          why: issueLines(error).join("\n") || error.publicMessage,
+          next: "Restore the snapshot missing from the migrations folder's meta/ from version control, where it was committed with its migration, then run the command again.",
+        }),
+      },
+    ],
+  },
   MIGRATION_TAMPERED: {
     cause:
       "A migration recorded as applied has a file that no longer matches its recorded checksum.",

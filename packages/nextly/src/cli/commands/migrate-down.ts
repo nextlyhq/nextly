@@ -1540,21 +1540,23 @@ export async function downDatabaseDeps(args: {
     // A marked migration's field type changes judged back, from its own snapshot to the newest one
     // before it, as `nextly migrate` judges a file's, on the DOWN's own statements and under the
     // rollback's consent. Only an app migration in a folder is judged: a plugin's module is marked
-    // by nothing.
+    // by nothing. A snapshot missing on either side refuses it (`judgeFileTypeChanges`), and the
+    // mark, naming each column as it was before the file, is read through the fields the DOWN
+    // gives back (`convertsNamedAt`), so a field the file renamed is converted back too.
     judgeDownTypeChanges: async (p, consent) => {
       const folder = args.migrationsDir;
       if (plugin !== undefined || folder === undefined) return undefined;
       if (p.converts === undefined) return undefined;
       const name = p.filename.replace(/\.sql$/, "");
       const { own, before } = await snapshotsAround(folder, name);
-      if (own === null || before === null) return undefined;
       return judgeFileTypeChanges(db, {
         filename: `${name}.sql`,
-        before: own.entities,
-        target: before.entities,
+        before: own?.entities,
+        target: before?.entities,
         statements: p.statements,
         dialect,
         converts: p.converts.columns,
+        convertsNamedAt: "target",
         consent,
       });
     },

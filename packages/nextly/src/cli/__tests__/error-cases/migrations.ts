@@ -16,7 +16,10 @@ import {
   coreUpgradeIncomplete,
   coreUpgradeUnsupported,
 } from "../../../domains/schema/migrate/core-reconcile";
-import { readConvertsMark } from "../../../domains/schema/migrate/converts-header";
+import {
+  readConvertsMark,
+  unjudgeableMarkRefusal,
+} from "../../../domains/schema/migrate/converts-header";
 import { coreDeletionOf } from "../../../domains/schema/migrate/core-retired-columns";
 import { migrationDriftError } from "../../../domains/schema/migrate/drift-error";
 import { ownWriteLockError } from "../../../domains/schema/migrate/migration-transaction";
@@ -633,6 +636,8 @@ export const MIGRATION_CASES = {
     }
     throw new Error("the mark was read");
   },
+  CONVERSION_SNAPSHOT_MISSING: () =>
+    unjudgeableMarkRefusal("20261123_101500_products.sql"),
   REQUIRED_COLUMN_UNCOUNTED: () =>
     requiredColumnUncountedError({
       table: "dc_posts",

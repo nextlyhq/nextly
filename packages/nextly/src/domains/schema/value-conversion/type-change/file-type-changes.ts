@@ -8,7 +8,8 @@
  * file leaves them, and the newest snapshot before it records them as they were; its statements
  * rename columns. A type change that keeps its column writes no statement at all, so the two
  * snapshots are where it is read. A file run without snapshots on both sides (a hand-written one,
- * or one older than recorded fields) states no field types, and nothing is judged.
+ * or one older than recorded fields) states no field types, and nothing is judged; a marked one is
+ * refused instead, as its values could not be converted as its mark says (`unjudgeableMarkRefusal`).
  *
  * Asked by `nextly migrate` for each pending file, before the file's first statement, where the
  * files before it in the run have already applied and its values are as it will find them.
@@ -29,7 +30,10 @@ import {
   type TypeConversion,
   typeConversionOf,
 } from "../../builder-save/type-conversion";
-import type { ConvertedColumnName } from "../../migrate/converts-header";
+import {
+  type ConvertedColumnName,
+  unjudgeableMarkRefusal,
+} from "../../migrate/converts-header";
 import {
   ACCEPT_DATA_LOSS_FLAG,
   consentCovers,
@@ -97,6 +101,14 @@ export interface FileTypeChangeSource {
    * whose changes the cast converts.
    */
   converts?: readonly ConvertedColumnName[];
+  /**
+   * Where `converts` names each column: as the file's own run finds it, before the file's first
+   * statement (`"before"`, the default, as the mark is written); or as `target` records it, for a
+   * rollback judging the file's change in reverse from the columns the file left, whose mark still
+   * names each as it was before the file. A field the file renames, or whose table it renames, is
+   * then matched through the column it becomes there.
+   */
+  convertsNamedAt?: "before" | "target";
   /**
    * The run's consent to lose data (`--accept-data-loss`), which clears a converted column's
    * values that cannot convert where it covers that column. None, by default.
@@ -483,7 +495,7 @@ function entityTypeChange(args: {
         ...(relationsShaped.size > 0 ? { ignore: relationsShaped } : {}),
         ...(builtByBefore !== at.builtBy ? { builtByBefore } : {}),
         ...retypedOf(source, [translationsTable, `${table}_locales`]),
-        ...convertedOf(source),
+        ...convertedOf(source, { readFrom, table, changes, columnOf }),
         ...at,
       },
     },
@@ -492,18 +504,66 @@ function entityTypeChange(args: {
 
 /**
  * The columns a marked change rewrites (`EntityTypeChangeInput.rewrites`): those its marks name,
- * by table and column, as the database spells them in either case. Nothing for an unmarked one.
+ * by table and column, as the database spells them in either case, where the values are read
+ * before the first statement. A mark naming the columns as `target` holds them
+ * (`convertsNamedAt`) names them through the fields they become (`heldThroughTarget`). Nothing
+ * for an unmarked one.
  */
 function convertedOf(
-  source: FileTypeChangeSource
+  source: FileTypeChangeSource,
+  entity: EntityNames
 ): Pick<EntityTypeChangeInput, "rewrites"> {
   const named = new Set(
-    (source.converts ?? []).map(c => `${c.table}.${c.column}`.toLowerCase())
+    (source.converts ?? []).map(c => columnKey(c.table, c.column))
   );
   if (named.size === 0) return {};
-  return {
-    rewrites: (table, column) => named.has(`${table}.${column}`.toLowerCase()),
-  };
+  const held =
+    source.convertsNamedAt === "target"
+      ? heldThroughTarget(named, entity)
+      : named;
+  return { rewrites: (table, column) => held.has(columnKey(table, column)) };
+}
+
+/** An entity's tables and changed fields, as `entityTypeChange` reads them. */
+interface EntityNames {
+  /** The table its values are read from, before the first statement. */
+  readFrom: string;
+  /** Its table as `target` records it. */
+  table: string;
+  changes: readonly FieldTypeChange[];
+  /** A field's column, lower-cased. */
+  columnOf: (field: FieldDefinition) => string | undefined;
+}
+
+/** A column's key in a set of columns: its table and name, lower-cased. */
+function columnKey(table: string, column: string): string {
+  return `${table}.${column}`.toLowerCase();
+}
+
+/**
+ * The columns, where the values are read before the first statement, of the changed fields whose
+ * columns as `target` holds them `named` names: on the entity's table, or on its translations
+ * table, each through the field it becomes. A field held inside JSON is never marked.
+ */
+function heldThroughTarget(
+  named: ReadonlySet<string>,
+  entity: EntityNames
+): Set<string> {
+  const held = new Set<string>();
+  const tables = [
+    [entity.readFrom, entity.table],
+    [`${entity.readFrom}_locales`, `${entity.table}_locales`],
+  ] as const;
+  for (const change of entity.changes) {
+    if (change.within !== undefined) continue;
+    const from = entity.columnOf(change.from);
+    const to = entity.columnOf(change.to);
+    if (from === undefined || to === undefined) continue;
+    for (const [heldIn, namedIn] of tables) {
+      if (named.has(columnKey(namedIn, to))) held.add(columnKey(heldIn, from));
+    }
+  }
+  return held;
 }
 
 /** The fields the change's `retypes` files retype in the first of `tables` they name. */
@@ -691,6 +751,14 @@ export async function judgeFileTypeChanges(
   db: unknown,
   source: FileTypeChangeSource
 ): Promise<FileTypeChangeJudgement> {
+  // A marked change is converted as its mark says, or refused: one whose snapshots do not both
+  // record the fields cannot be judged, and is never left to the database's cast instead.
+  if (
+    (source.converts ?? []).length > 0 &&
+    (source.before === undefined || source.target === undefined)
+  ) {
+    throw unjudgeableMarkRefusal(source.filename);
+  }
   const refusals: FileTypeChangeRefusal[] = [];
   const conversions: TypeConversion[] = [];
   for (const { kind, slug, input, unread } of fileTypeChangesOf(source)) {

@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
@@ -724,14 +725,21 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
-    /** The judgement of `v` becoming a number on `t`'s table, as a save makes it, and its conversion. */
-    async function judgedThenConversion(t: TestNextly, confirmed: number) {
+    /**
+     * The judgement of `v` becoming a number (or `to`, from `from`) on `t`'s table, as a save
+     * makes it, and its conversion.
+     */
+    async function judgedThenConversion(
+      t: TestNextly,
+      confirmed: number,
+      pair: { from: string; to: string } = { from: "text", to: "number" }
+    ) {
       const adapter = t.adapter as unknown as DrizzleAdapter;
       const input: EntityTypeChangeInput = {
         label: `Collection '${SLUG}'`,
         table: `dc_${SLUG}`,
-        previous: [{ name: "v", type: "text" }] as never,
-        next: [{ name: "v", type: "number" }] as never,
+        previous: [{ name: "v", type: pair.from }] as never,
+        next: [{ name: "v", type: pair.to }] as never,
         builtBy: "collection",
         acknowledged: new Set(["v"]),
         rewrites: true,
@@ -811,6 +819,82 @@ describe.each(getConfiguredTestDialects())(
         await conversion.run(db);
 
         expect(Number((await stored(t)).a)).toBe(12);
+      }
+    );
+
+    // A change that keeps the column's type (an email becoming a text, both `text` on PostgreSQL)
+    // has no statement of its file to state the column again: the conversion writes its values in
+    // place, so the default the column carries stays. Asked directly, as a save refuses the
+    // hand-set default as drift; MySQL's column changes type here, and SQLite sets none by ALTER.
+    it.runIf(dialect === "postgresql")(
+      "keeps the default of a column whose type the change keeps",
+      async () => {
+        const t = await boot([{ name: "v", type: "email" }]);
+        await write(t, "a", { v: "a@b.co" });
+        await exec(
+          t,
+          `ALTER TABLE ${q(`dc_${SLUG}`)} ALTER COLUMN ${q("v")} SET DEFAULT 'x@y.co'`
+        );
+        const { db, conversion } = await judgedThenConversion(t, 0, {
+          from: "email",
+          to: "text",
+        });
+        expect(conversion.columns).toMatchObject([{ keepsType: true }]);
+
+        await conversion.run(db);
+
+        const [column] = await (
+          t.adapter as unknown as {
+            executeQuery<R>(statement: string): Promise<R[]>;
+          }
+        ).executeQuery<{ d: string | null }>(
+          `SELECT column_default AS d FROM information_schema.columns WHERE table_name = 'dc_${SLUG}' AND column_name = 'v'`
+        );
+        expect(column?.d).toContain("x@y.co");
+        expect((await stored(t)).a).toBe("a@b.co");
+      }
+    );
+
+    // MySQL lists a table's triggers only to an account holding TRIGGER on it, while an update
+    // still fires them: an account that cannot see every trigger of the database is refused before
+    // any value is written, as one that sees a trigger is, rather than read as a table with none.
+    it.runIf(dialect === "mysql")(
+      "refuses a conversion by an account that cannot see the table's triggers, and changes nothing",
+      async () => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        await write(t, "a", { v: "12" });
+        await exec(
+          t,
+          `CREATE TRIGGER ${q("tcc_hidden")} AFTER UPDATE ON ${q(`dc_${SLUG}`)} FOR EACH ROW SET @tcc_touched = 1`
+        );
+        const { conversion } = await judgedThenConversion(t, 0);
+        const url = new URL(process.env.DATABASE_URL ?? "");
+        const database = url.pathname.replace(/^\//, "");
+        await exec(t, `CREATE USER 'tcc_limited'@'%' IDENTIFIED BY 'limited'`);
+        try {
+          // Every right the conversion uses on the database's tables, and not TRIGGER.
+          await exec(
+            t,
+            `GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, INDEX ON \`${database}\`.* TO 'tcc_limited'@'%'`
+          );
+          url.username = "tcc_limited";
+          url.password = "limited";
+          const limited = createMySqlAdapter({
+            url: url.toString(),
+          }) as unknown as DrizzleAdapter;
+          await limited.connect();
+          try {
+            await expect(
+              conversion.run(limited.getDrizzle())
+            ).rejects.toMatchObject(refusedSaying("cannot see whether"));
+          } finally {
+            await limited.disconnect().catch(() => {});
+          }
+        } finally {
+          await exec(t, `DROP USER 'tcc_limited'@'%'`);
+        }
+
+        expect(await stored(t)).toEqual({ a: "12" });
       }
     );
 

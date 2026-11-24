@@ -92,6 +92,26 @@ export function readConvertsMark(
   };
 }
 
+/**
+ * The refusal of a marked migration whose snapshots do not both record the fields, the one it is
+ * judged from and the one it is judged to (the file's own and the newest before it, either way
+ * round): a snapshot missing from `meta/`, or one written before snapshots recorded fields. Which
+ * value converts, and to what, is read from the two, so nothing is converted, and nothing is left
+ * to the database's cast instead.
+ */
+export function unjudgeableMarkRefusal(filename: string): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: `migrations.${filename}`,
+        code: "TYPE_CHANGE_BLOCKED",
+        message: `Migration ${filename} converts its field type changes' values, but the snapshots it is judged between do not both record the fields: one is missing from meta/, or was written before snapshots recorded them. Nothing was changed.`,
+      },
+    ],
+    logContext: { reason: "converts-snapshot-missing", file: filename },
+  });
+}
+
 /** The refusal of a file whose mark cannot be followed, saying why. */
 function markRefusal(filename: string, why: string): NextlyError {
   return NextlyError.validation({

@@ -34,6 +34,7 @@
     "config-syntax-error",
     "config-tooling-unavailable",
     "conversion-rules-unknown",
+    "conversion-snapshot-missing",
     "core-destructive-change-declined",
     "core-destructive-needs-terminal",
     "core-schema-apply-failed",

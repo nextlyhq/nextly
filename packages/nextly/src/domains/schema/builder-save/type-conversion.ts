@@ -35,6 +35,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { NextlyError } from "../../../errors/nextly-error";
 import { ddlType } from "../../i18n/migration/ddl-types";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
+import { mysqlSeesEveryTriggerQuery } from "../busy-table/run-unit";
 import { runStatement } from "../pipeline/_internal/run-statement";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { readUpdateTriggers } from "../pipeline/live-table-facts";
@@ -94,6 +95,12 @@ export interface ConvertedColumn {
    * which the push leaves out): the column beside, of the new type, takes its place there.
    */
   takesPlaceOnSqlite: boolean;
+  /**
+   * The column keeps its type on this dialect (an email becoming a text, both `text` on
+   * PostgreSQL), as the one field-to-column descriptor types it before and after: no statement of
+   * the change states it again, so only its values are written, in place (`swapIn`).
+   */
+  keepsType: boolean;
 }
 
 /** A type change's values converted one by one. */
@@ -133,13 +140,15 @@ export function typeConversionOf(args: {
   const columns: ConvertedColumn[] = args.judged.flatMap(change => {
     if (change.converted !== true) return [];
     const translations = change.table === input.translationsTable;
-    const type = translations
-      ? translationsColumnType(change.to, dialect, input.builtBy)
-      : columnDescriptorAt(change.to, dialect, {
-          builtBy: input.builtBy,
-          ...(input.componentRow === true ? { componentRow: true } : {}),
-        })?.dialectType;
+    const type = columnTypeOf(change.to, dialect, input, {
+      translations,
+      builtBy: input.builtBy,
+    });
     if (type === undefined) return [];
+    const was = columnTypeOf(change.from, dialect, input, {
+      translations,
+      builtBy: input.builtByBefore ?? input.builtBy,
+    });
     return [
       {
         table: change.table,
@@ -149,6 +158,7 @@ export function typeConversionOf(args: {
         converted: change.result.counts.kept + change.result.counts.changed,
         cleared: change.result.cleared.length,
         takesPlaceOnSqlite: translations,
+        keepsType: was === type,
       },
     ];
   });
@@ -230,9 +240,31 @@ export async function refuseConversionAsItStands(
     await refuseSqliteSwapDependents(
       db,
       label,
-      conversion.columns.filter(column => column.takesPlaceOnSqlite)
+      conversion.columns.filter(
+        column => column.takesPlaceOnSqlite && !column.keepsType
+      )
     );
   }
+}
+
+/**
+ * A field's column type on `dialect`, as the database spells it: in its translations table as that
+ * table's creator types it, else on the entity's own table (`columnDescriptorAt`), where the
+ * entity's builder made it.
+ */
+function columnTypeOf(
+  field: JudgedFieldTypeChange["to"],
+  dialect: SupportedDialect,
+  input: EntityTypeChangeInput,
+  at: { translations: boolean; builtBy: ColumnOrigin }
+): string | undefined {
+  if (at.translations) {
+    return translationsColumnType(field, dialect, at.builtBy);
+  }
+  return columnDescriptorAt(field, dialect, {
+    builtBy: at.builtBy,
+    ...(input.componentRow === true ? { componentRow: true } : {}),
+  })?.dialectType;
 }
 
 /** A translated field's column type in its translations table, as that table's creator types it. */
@@ -363,9 +395,11 @@ async function judgedAgain(
  * the column taking its values row by row: for a translations table, which no rebuild gives the
  * new type; and for a column whose REAL affinity would turn a text reading that looks like a number
  * back into one (a float number becoming a text keeps `34`, which the column would store as `34.0`
- * and the rebuild then copy as that text).
+ * and the rebuild then copy as that text). Never for a column that keeps its type, which only
+ * takes the values.
  */
 function swapsOnSqlite(column: ConvertedColumn, facts: ColumnFacts): boolean {
+  if (column.keepsType) return false;
   if (column.takesPlaceOnSqlite) return true;
   return realAffinity(facts.type) && textAffinity(column.type);
 }
@@ -414,7 +448,10 @@ async function refuseLeftColumns(
 /**
  * Refuse a conversion of a table that has update triggers, naming them, before any value is
  * written: the conversion writes the table's rows one batch at a time, and each update fires the
- * table's triggers, which would run the site's own code once for each value converted.
+ * table's triggers, which would run the site's own code once for each value converted. On MySQL,
+ * which lists a table's triggers only to an account holding `TRIGGER` on it while a row change
+ * still fires them, an account that cannot see every trigger of the database is refused too: an
+ * empty list there says nothing (`refuseUnseenTriggers`).
  */
 async function refuseOverUpdateTriggers(
   db: unknown,
@@ -422,6 +459,8 @@ async function refuseOverUpdateTriggers(
   label: string,
   converted: readonly JudgedFieldTypeChange[]
 ): Promise<void> {
+  if (converted.length === 0) return;
+  await refuseUnseenTriggers(db, dialect, label, converted);
   const triggersOf = new Map<string, string[]>();
   const errors: { path: string; code: string; message: string }[] = [];
   for (const change of converted) {
@@ -444,6 +483,34 @@ async function refuseOverUpdateTriggers(
       reason: "type-change-over-update-triggers",
       triggers: Object.fromEntries(triggersOf),
     },
+  });
+}
+
+/**
+ * Refuse, on MySQL, a conversion run by an account that cannot see every trigger of the database
+ * (`mysqlSeesEveryTriggerQuery`, as `triggerTables` asks it): a table's update trigger it does
+ * not see would fire on every row the conversion writes. Each converted field is named.
+ */
+async function refuseUnseenTriggers(
+  db: unknown,
+  dialect: SupportedDialect,
+  label: string,
+  converted: readonly JudgedFieldTypeChange[]
+): Promise<void> {
+  if (dialect !== "mysql") return;
+  const seen = await querySqlRows<{ seen: unknown }>(
+    db,
+    dialect,
+    mysqlSeesEveryTriggerQuery()
+  );
+  if (seen.length > 0) return;
+  throw NextlyError.validation({
+    errors: converted.map(change => ({
+      path: `fields.${change.to.name}`,
+      code: "TYPE_CHANGE_BLOCKED",
+      message: `${label}: field '${change.to.name}' cannot change from ${change.from.type} to ${change.to.type}: the change writes each of its values again, and this database account cannot see whether ${change.table} has triggers that would fire on every row it writes, as MySQL lists a table's triggers only to an account holding TRIGGER on it. Grant the account TRIGGER on the database, or make the change as one that holds it.`,
+    })),
+    logContext: { reason: "type-change-over-unseen-triggers" },
   });
 }
 
@@ -775,11 +842,12 @@ export function valuesChangedWhileConverting(args: {
 
 /**
  * The column given its new type and the values written beside it (`BESIDE`), as the module's
- * header describes for each dialect. Before the type changes, on PostgreSQL its default goes (a
- * field's column declares none, and an old one need not cast to the new type) and, where values
- * are cleared, its NOT NULL (the field the change leaves is optional, as a clear into a required
- * one is refused); on MySQL its NOT NULL goes before it is emptied, the file's or push's own
- * statement then stating the column whole.
+ * header describes for each dialect. Before the type changes, on PostgreSQL its default goes (an
+ * old one need not cast to the new type) and, where values are cleared, its NOT NULL (the field
+ * the change leaves is optional, as a clear into a required one is refused); on MySQL its NOT NULL
+ * goes before it is emptied, the file's or push's own statement then stating the column whole. A
+ * column that keeps its type (`keepsType`) has no such statement after it: it only takes the
+ * values, keeping its definition.
  */
 async function swapIn(
   db: unknown,
@@ -791,6 +859,13 @@ async function swapIn(
   const column = sql.identifier(planned.column);
   const beside = sql.identifier(BESIDE);
   const run = (statement: SQL) => runStatement(db, dialect, statement);
+  if (planned.keepsType) {
+    // No statement of the change states the column again, so nothing is changed of it but its
+    // values: its default, its NOT NULL (but where values are cleared) and its indexes stay.
+    await relaxForClears(db, dialect, planned, clears);
+    await run(sql`UPDATE ${table} SET ${column} = ${beside}`);
+    return false;
+  }
   if (dialect === "sqlite" && planned.swaps) {
     // No rebuild gives this column its new type: the column beside, of that type, takes its place,
     // and the column's indexes (a translated unique field's per-language one) are made again on it.
@@ -808,23 +883,41 @@ async function swapIn(
     if (planned.facts.defaultClause !== undefined) {
       await run(sql`ALTER TABLE ${table} ALTER COLUMN ${column} DROP DEFAULT`);
     }
-    if (clears && planned.facts.notNull) {
-      await run(sql`ALTER TABLE ${table} ALTER COLUMN ${column} DROP NOT NULL`);
-    }
+    await relaxForClears(db, dialect, planned, clears);
     await run(
       sql`ALTER TABLE ${table} ALTER COLUMN ${column} TYPE ${type} USING ${beside}`
     );
     return false;
   }
-  if (planned.facts.notNull) {
-    await run(
-      sql`ALTER TABLE ${table} MODIFY COLUMN ${column} ${sql.raw(planned.facts.type)} NULL`
-    );
-  }
+  // Every value is cleared here before the column takes its type, so its NOT NULL goes first.
+  await relaxForClears(db, dialect, planned, true);
   await run(sql`UPDATE ${table} SET ${column} = NULL`);
   await run(sql`ALTER TABLE ${table} MODIFY COLUMN ${column} ${type} NULL`);
   await run(sql`UPDATE ${table} SET ${column} = ${beside}`);
   return false;
+}
+
+/**
+ * The column's NOT NULL dropped where it has one and values are cleared (`clears`), before they
+ * are: PostgreSQL drops the constraint alone; MySQL states the column again with its own type,
+ * NULL; SQLite, whose column is rebuilt or replaced by the change, has no statement for it.
+ */
+async function relaxForClears(
+  db: unknown,
+  dialect: SupportedDialect,
+  planned: PlannedColumn,
+  clears: boolean
+): Promise<void> {
+  if (!clears || !planned.facts.notNull || dialect === "sqlite") return;
+  const table = sql.identifier(planned.table);
+  const column = sql.identifier(planned.column);
+  await runStatement(
+    db,
+    dialect,
+    dialect === "postgresql"
+      ? sql`ALTER TABLE ${table} ALTER COLUMN ${column} DROP NOT NULL`
+      : sql`ALTER TABLE ${table} MODIFY COLUMN ${column} ${sql.raw(planned.facts.type)} NULL`
+  );
 }
 
 /**
