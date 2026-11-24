@@ -49,6 +49,7 @@ import {
   FieldRow,
   StatusBadge,
   TextRuns,
+  useSideLabels,
   type DiffStatus,
 } from "./diff-primitives";
 import { resolveFieldDiff } from "./field-diff-registry";
@@ -162,10 +163,10 @@ function ChangePair(props: {
  *
  * Columns are the shape a comparison has, so the markup states them once and a
  * container query folds them into a stack only where the surface is genuinely
- * too narrow to hold two. The per-side caption carries the labelling in that
- * folded state and goes screen-reader-only once the column headings above sit
- * over the columns instead — assistive technology needs the label either way,
- * since neither position nor a rule is perceivable to it.
+ * too narrow to hold two. Each side is named over it, in columns and stacked
+ * alike, by what the surface calls the two versions: the field splits in
+ * place, so its own captions say which column is which wherever it sits in a
+ * long document, and assistive technology hears the same names.
  *
  * `status` is taken rather than a pre-decided pair of sides, so which side the
  * field never reached is answered HERE and only here. A caller that renders its
@@ -181,23 +182,28 @@ function SplitPair({
   before: React.ReactNode;
   after: React.ReactNode;
 }) {
+  const sides = useSideLabels();
   return (
     <div className="grid grid-cols-1 gap-3 @2xl/diff:grid-cols-2 @2xl/diff:gap-4">
-      <div className="min-w-0 @2xl/diff:border-r @2xl/diff:border-border @2xl/diff:pr-4">
-        <p className="mb-1 text-xs font-medium text-muted-foreground @2xl/diff:sr-only">
-          Before
-        </p>
-        {status === "added" ? <AbsentSide /> : before}
+      <div className="min-w-0">
+        <p className={SIDE_CAPTION}>{sides.before}</p>
+        <div className="rounded-md border border-border bg-background px-3 py-2">
+          {status === "added" ? <AbsentSide /> : before}
+        </div>
       </div>
       <div className="min-w-0">
-        <p className="mb-1 text-xs font-medium text-muted-foreground @2xl/diff:sr-only">
-          After
-        </p>
-        {status === "removed" ? <AbsentSide /> : after}
+        <p className={SIDE_CAPTION}>{sides.after}</p>
+        <div className="rounded-md border border-border bg-background px-3 py-2">
+          {status === "removed" ? <AbsentSide /> : after}
+        </div>
       </div>
     </div>
   );
 }
+
+/** The name over one side of a split change: small capitals, quiet. */
+const SIDE_CAPTION =
+  "mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground";
 
 /**
  * The before/after presentation shared by every value node. `renderValue` draws

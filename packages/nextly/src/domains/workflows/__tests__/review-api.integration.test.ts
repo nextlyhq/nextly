@@ -39,6 +39,8 @@ process.env.NEXTLY_SECRET =
 
 import { randomUUID } from "node:crypto";
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { sql, type SQL } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { apiKeyScope } from "../../../auth/authenticated-scope";
@@ -57,6 +59,7 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import { listRoleSlugsForUserOrRefuse } from "../../../services/lib/permissions";
 import type { ApiKeyService } from "../../auth/services/api-key-service";
+import { systemColumnDriverValue } from "../../schema/services/runtime-schema-generator";
 import { storedSchemaSeq } from "../../schema/stored-schema-seq";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
@@ -111,6 +114,53 @@ const briefs = defineCollection({
   workflow: straight,
   fields: [text({ name: "title" })],
 });
+
+/**
+ * Localized, starting in a review stage (`straight`'s Draft), read in every language but Spanish:
+ * its unmoved parts wait for an approver, a language its reader may not read never among them.
+ */
+const MINUTES = "minutes";
+const minutes = defineCollection({
+  slug: MINUTES,
+  status: true,
+  localized: true,
+  versions: { drafts: true },
+  workflow: straight,
+  access: { read: ({ locale }) => locale !== "es" },
+  fields: [
+    text({ name: "title", localized: true }),
+    // Shared by every language, so the document has a shared part.
+    text({ name: "code", localized: false }),
+  ],
+});
+
+/** Sets when the documents `ids` of `slug` were created: one moment, so their order ties on it. */
+async function createdAtOf(
+  t: TestNextly,
+  slug: string,
+  ids: readonly string[],
+  at: Date
+): Promise<void> {
+  const registry = container.get<{
+    getCollectionBySlug(slug: string): Promise<{ tableName: string } | null>;
+  }>("collectionRegistryService");
+  const table = (await registry.getCollectionBySlug(slug))?.tableName;
+  if (table === undefined) throw new Error(`no table for ${slug}`);
+  const dialect = t.adapter.dialect as SupportedDialect;
+  // A statement that returns no rows: SQLite's driver runs one, the others execute it.
+  const db = t.adapter.getDrizzle<{
+    run(statement: SQL): unknown;
+    execute(statement: SQL): Promise<unknown>;
+  }>();
+  const run = (statement: SQL) =>
+    dialect === "sqlite" ? db.run(statement) : db.execute(statement);
+  await run(
+    sql`UPDATE ${sql.identifier(table)} SET ${sql.identifier("created_at")} = ${systemColumnDriverValue(dialect, "created_at", at)} WHERE ${sql.identifier("id")} IN (${sql.join(
+      ids.map(id => sql`${id}`),
+      sql`, `
+    )})`
+  );
+}
 
 /** Under the editorial workflow, with a read rule that shows its readers the public rows only. */
 const CIRCULARS = "circulars";
@@ -1963,10 +2013,21 @@ describe.each(getConfiguredTestDialects())(
           Buffer.from(JSON.stringify({ at: "soon", key: "k" })).toString(
             "base64url"
           ),
+          // A cursor from before unmoved parts were listed, which names no kind of part.
+          Buffer.from(
+            JSON.stringify({ at: Date.UTC(2026, 0, 1), key: "a".repeat(64) })
+          ).toString("base64url"),
+          // Positions at an unmoved part that no list gives: no collection, a part name too long.
+          ...[
+            { s: "u", at: 0, c: "", id: "x", p: null },
+            { s: "u", at: 0, c: "briefs", id: "x", p: "x".repeat(65) },
+          ].map(body =>
+            Buffer.from(JSON.stringify(body)).toString("base64url")
+          ),
           ...[Date.UTC(10000, 0, 1), 8_640_000_000_000_000].map(at =>
-            Buffer.from(JSON.stringify({ at, key: "a".repeat(64) })).toString(
-              "base64url"
-            )
+            Buffer.from(
+              JSON.stringify({ s: "r", at, key: "a".repeat(64) })
+            ).toString("base64url")
           ),
         ];
         for (const before of notGiven) {
@@ -2212,6 +2273,222 @@ describe.each(getConfiguredTestDialects())(
         expect(parts).toEqual([
           expect.objectContaining({ stage: "done", waitingFor: null }),
         ]);
+      });
+
+      it("lists a part no step has moved yet where its workflow starts in a review stage", async () => {
+        // Briefs start in Draft, whose one step approves: an unpublished Brief that no step has
+        // moved has no review state yet and still waits there for whoever may approve it, as its
+        // own review state says. A Page no step has moved waits in Writing, whose step submits,
+        // which is the writer's, not a review: it is not listed.
+        current = await bootSteps(dialect, undefined, {
+          collections: [briefs],
+        });
+        await people();
+        await person(app(), "pia", [
+          ["read", BRIEFS],
+          ["publish", BRIEFS],
+        ]);
+        const PIA: Who = { kind: "person", id: "pia" };
+        const unmoved = await entry(app(), BRIEFS);
+        await entry(app(), PAGES);
+
+        expect(
+          partsOf(
+            await door.reviewState(PIA, { collection: BRIEFS, id: unmoved })
+          )
+        ).toEqual([
+          expect.objectContaining({
+            stage: "draft",
+            enteredAt: null,
+            steps: [expect.objectContaining({ name: "finish", mayTake: true })],
+          }),
+        ]);
+
+        const waiting = await door.waiting(PIA, { page: 1, limit: 10 });
+        expect(
+          waiting.items.map(item => ({
+            entryId: (item.document as Doc).entryId,
+            stage: item.stage,
+          }))
+        ).toEqual([{ entryId: unmoved, stage: "draft" }]);
+        expect(waiting.meta).toMatchObject({ total: 1 });
+        expect(
+          (await door.waiting(ALICE, { page: 1, limit: 10 })).items
+        ).toEqual([]);
+      });
+
+      it("walks unmoved parts and review states by its cursor, each once, as parts join and leave", async () => {
+        // Five Briefs created in one second (SQLite and MySQL keep whole seconds, so they tie on
+        // it) and two review states entered at that same moment wait for Pia. Walked two at a
+        // time, while a new Brief joins the end and an unmoved Brief not yet reached leaves (a
+        // step moves it to Done, which waits for no one), every part comes exactly once, in the
+        // list's order, and the walk is the whole list as it then stands.
+        current = await bootSteps(dialect, undefined, {
+          collections: [briefs],
+        });
+        await person(app(), "pia", [
+          ["read", BRIEFS],
+          ["publish", BRIEFS],
+        ]);
+        const PIA: Who = { kind: "person", id: "pia" };
+        const moment = new Date(Date.UTC(2026, 10, 1, 10, 0, 0));
+        const unmoved: string[] = [];
+        for (let n = 0; n < 5; n += 1) unmoved.push(await entry(app(), BRIEFS));
+        await createdAtOf(app(), BRIEFS, unmoved, moment);
+        for (let n = 0; n < 2; n += 1) {
+          await seedState(
+            app(),
+            partOf(BRIEFS, await entry(app(), BRIEFS), null),
+            "draft",
+            {
+              definitionHash: workflowDefinitionHash(straight),
+              enteredAt: moment,
+            }
+          );
+        }
+        const idsOf = (page: { items: Doc[] }) =>
+          page.items.map(item => String((item.document as Doc).entryId));
+
+        const before = idsOf(await door.waiting(PIA, { page: 1, limit: 50 }));
+        expect(before).toHaveLength(7);
+        let page = await door.waiting(PIA, { page: 1, limit: 2 });
+        const walked = idsOf(page);
+        // One joins the end; one not yet reached leaves.
+        const joined = await entry(app(), BRIEFS);
+        await createdAtOf(
+          app(),
+          BRIEFS,
+          [joined],
+          new Date(moment.getTime() + 60_000)
+        );
+        const leaving = before[before.length - 1];
+        await seedState(app(), partOf(BRIEFS, leaving, null), "done", {
+          definitionHash: workflowDefinitionHash(straight),
+        });
+        for (let pages = 1; page.meta.nextBefore !== undefined; pages += 1) {
+          expect(pages, "the walk ends").toBeLessThan(10);
+          page = await door.waiting(PIA, {
+            limit: 2,
+            before: String(page.meta.nextBefore),
+          });
+          walked.push(...idsOf(page));
+        }
+
+        const whole = await door.waiting(PIA, { page: 1, limit: 50 });
+        expect(new Set(walked).size, "no part comes twice").toBe(walked.length);
+        expect(walked).toEqual(idsOf(whole));
+        expect(walked).toContain(joined);
+        expect(walked).not.toContain(leaving);
+        expect(whole.meta).toMatchObject({ total: 7 });
+      });
+
+      it("lists a document's unmoved parts in each language its reader may read, and no other", async () => {
+        // Minutes start in Draft and are read in every language but Spanish: an unmoved Minute
+        // waits for Pia in its shared part, English and Arabic, never in Spanish.
+        // Per language, as every installation keeps a localized collection's translatable fields.
+        current = await bootSteps(dialect, undefined, {
+          collections: [minutes],
+          perLanguageStorage: true,
+        });
+        await person(app(), "pia", [
+          ["read", MINUTES],
+          ["publish", MINUTES],
+        ]);
+        const PIA: Who = { kind: "person", id: "pia" };
+        const id = await entry(app(), MINUTES);
+
+        const waiting = await door.waiting(PIA, { page: 1, limit: 10 });
+
+        expect(
+          waiting.items.map(item => ({
+            entryId: (item.document as Doc).entryId,
+            part: item.part,
+            stage: item.stage,
+          }))
+        ).toEqual([
+          { entryId: id, part: null, stage: "draft" },
+          { entryId: id, part: "en", stage: "draft" },
+          { entryId: id, part: "ar", stage: "draft" },
+        ]);
+      });
+
+      it("walks one document's unmoved parts across pages, from the part it stopped at", async () => {
+        // An unmoved Minute waits in its shared part, English and Arabic (Spanish is unreadable).
+        // Walked two at a time, the second page goes on from the document's English part: Arabic
+        // alone, neither part of the first page again.
+        current = await bootSteps(dialect, undefined, {
+          collections: [minutes],
+          perLanguageStorage: true,
+        });
+        await person(app(), "pia", [
+          ["read", MINUTES],
+          ["publish", MINUTES],
+        ]);
+        const PIA: Who = { kind: "person", id: "pia" };
+        const id = await entry(app(), MINUTES);
+        const partsOfPage = (page: { items: Doc[] }) =>
+          page.items.map(item => ({
+            entryId: (item.document as Doc).entryId,
+            part: item.part,
+          }));
+
+        const first = await door.waiting(PIA, { limit: 2, page: 1 });
+        const second = await door.waiting(PIA, {
+          limit: 2,
+          before: String(first.meta.nextBefore),
+        });
+
+        expect(partsOfPage(first)).toEqual([
+          { entryId: id, part: null },
+          { entryId: id, part: "en" },
+        ]);
+        expect(partsOfPage(second)).toEqual([{ entryId: id, part: "ar" }]);
+        expect(second.meta.nextBefore).toBeUndefined();
+      });
+
+      it("walks unmoved parts of two collections created in one second, each once", async () => {
+        // Two Briefs and a Minute created in the same second, in collections that both start in
+        // Draft: tied on time, they are ordered by collection, then document, then part. Walked
+        // one at a time, every part comes once and the walk is the whole list.
+        current = await bootSteps(dialect, undefined, {
+          collections: [briefs, minutes],
+          perLanguageStorage: true,
+        });
+        await person(app(), "pia", [
+          ["read", BRIEFS],
+          ["publish", BRIEFS],
+          ["read", MINUTES],
+          ["publish", MINUTES],
+        ]);
+        const PIA: Who = { kind: "person", id: "pia" };
+        const moment = new Date(Date.UTC(2026, 10, 1, 10, 0, 0));
+        const briefIds = [
+          await entry(app(), BRIEFS),
+          await entry(app(), BRIEFS),
+        ];
+        const minute = await entry(app(), MINUTES);
+        await createdAtOf(app(), BRIEFS, briefIds, moment);
+        await createdAtOf(app(), MINUTES, [minute], moment);
+        const keysOf = (page: { items: Doc[] }) =>
+          page.items.map(
+            item => `${(item.document as Doc).entryId}:${String(item.part)}`
+          );
+
+        let page = await door.waiting(PIA, { limit: 1, page: 1 });
+        const walked = keysOf(page);
+        for (let pages = 1; page.meta.nextBefore !== undefined; pages += 1) {
+          expect(pages, "the walk ends").toBeLessThan(10);
+          page = await door.waiting(PIA, {
+            limit: 1,
+            before: String(page.meta.nextBefore),
+          });
+          walked.push(...keysOf(page));
+        }
+
+        const whole = await door.waiting(PIA, { page: 1, limit: 50 });
+        expect(new Set(walked).size, "no part comes twice").toBe(walked.length);
+        expect(walked).toEqual(keysOf(whole));
+        expect(walked).toHaveLength(5);
       });
 
       it("names a part's last move: its latest step, by whom, from where to where, with the comment", async () => {

@@ -87,14 +87,14 @@ describe("refusals", () => {
     );
   });
 
-  it("refuses a localized field, whose column lives in the companion", () => {
-    expect(
-      refusal(() =>
-        build([{ fields: ["country"] }], {
-          localized: true,
-        })
-      )
-    ).toMatch(/_locales/);
+  it("refuses a localized field, whose column lives in the companion, naming the fix", () => {
+    const message = refusal(() =>
+      build([{ fields: ["country"] }], {
+        localized: true,
+      })
+    );
+    expect(message).toMatch(/_locales/);
+    expect(message).toContain('Mark "country" localized: false');
   });
 
   it("refuses a JSON column, which MySQL cannot index", () => {

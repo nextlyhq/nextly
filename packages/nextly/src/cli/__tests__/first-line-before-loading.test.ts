@@ -36,7 +36,7 @@ import { declaredFirstLine } from "../first-line";
 import { createProgram } from "../program";
 
 import { commandAt } from "./helpers/answer-only-invocations";
-import { runsAnAction } from "./helpers/first-line-invocations";
+import { hasAction } from "./helpers/first-line-invocations";
 // The same judges the start-up timing script loads, from the one module it loads them from.
 import {
   commandPathOf,
@@ -125,7 +125,7 @@ async function beforeTheAction(
 }
 
 const INVOCATIONS = firstLineInvocations(createProgram()).filter(args =>
-  runsAnAction(createProgram(), pathOf(args))
+  hasAction(commandAt(createProgram(), pathOf(args)))
 );
 
 /** The words of `args` that name the command, before its own arguments. */

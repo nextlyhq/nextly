@@ -23,12 +23,23 @@ import type { Command } from "commander";
 
 import { announceMode, announceStart } from "./environment";
 
+/**
+ * Whether a command that starts with its own line may reach a database: one
+ * that may names it when it connects, and the start-up check times it to
+ * there; one that may, but that the check must not run, says why. Asked of
+ * every such command, so a new one cannot leave it unsaid.
+ */
+export type StartLineDatabase =
+  | "may connect"
+  | "no database"
+  | { untimed: string };
+
 /** The line a command starts with. */
 export type FirstLine =
   /** The `Database: …` line naming the database the run uses. */
   | { kind: "database" }
-  /** A short line saying what the command is starting. */
-  | { kind: "start"; line: string }
+  /** A short line saying what the command is starting, and whether it may connect after it. */
+  | { kind: "start"; line: string; database: StartLineDatabase }
   /**
    * The command's own first line, which it prints at once; `pattern` is what
    * that line says, so a warning printed while it loads is not taken for it.
@@ -43,9 +54,24 @@ export function ownLine(pattern: RegExp): FirstLine {
   return { kind: "own", pattern };
 }
 
-/** A command that uses no database starts with `line`. */
-export function startLine(line: string): FirstLine {
-  return { kind: "start", line };
+/** A command that does not start by naming a database starts with `line`. */
+export function startLine(
+  line: string,
+  database: StartLineDatabase
+): FirstLine {
+  return { kind: "start", line, database };
+}
+
+/**
+ * Why the start-up check does not time a command that starts with `first` to
+ * its connection, or `undefined` where it does.
+ */
+export function whyUntimedToConnect(first: FirstLine): string | undefined {
+  if (first.kind === "database") return undefined;
+  if (first.kind === "own" || first.database === "no database") {
+    return "reaches no database";
+  }
+  return first.database === "may connect" ? undefined : first.database.untimed;
 }
 
 const DECLARED = new WeakMap<Command, FirstLine>();

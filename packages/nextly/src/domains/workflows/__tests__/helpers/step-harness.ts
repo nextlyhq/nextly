@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { apiKeyScope } from "../../../../auth/authenticated-scope";
 import { defineCollection, defineSingle, text } from "../../../../config";
 import { getDialectTables } from "../../../../database/index";
+import { layoutForBoot } from "../../../../__tests__/storage-layout";
 import {
   createTestNextly,
   type CreateTestNextlyOptions,
@@ -61,12 +62,20 @@ export function bootSteps(
     collections?: NonNullable<CreateTestNextlyOptions["collections"]>;
     /** Seed the Public role, for a case a visitor reads in. */
     seedPublic?: boolean;
+    /**
+     * Keep translatable fields per language, as every installation does, for a case about a
+     * language's part; the others run on the layout this file's suites were written for.
+     */
+    perLanguageStorage?: boolean;
   } = {}
 ): Promise<TestNextly> {
   const table = (slug: string) =>
     options.tablePrefix === undefined
       ? {}
       : { dbName: `${options.tablePrefix}${slug}` };
+  // Every boot names its layout, so a case booted per language never leaves the cases after it in
+  // this file on per-language storage: the harness keeps a boot's layout until another names one.
+  layoutForBoot(options.perLanguageStorage === true);
   return createTestNextly({
     dialect,
     // Only when given, so every other case boots exactly as before.
