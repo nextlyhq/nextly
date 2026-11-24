@@ -125,6 +125,18 @@ export function pageActions(
   ].filter((action): action is ContributedAction => action !== null);
 }
 
+/** Whether the document has another language to publish, and the person may publish it. */
+function publishesOthers(
+  contributed: ContributedAction | null,
+  languages: readonly string[]
+): boolean {
+  return (
+    contributed !== null &&
+    contributed.action.disabledReason === undefined &&
+    languages.length > 1
+  );
+}
+
 export function useDocumentPublishing({
   target,
   document,
@@ -187,8 +199,6 @@ export function useDocumentPublishing({
     onPublished,
   });
 
-  const mayPublish =
-    contributed !== null && contributed.action.disabledReason === undefined;
   const publishOthers = () =>
     open(
       otherLanguagesChoice({ languages, onScreen, overview, sharedPending }),
@@ -200,8 +210,9 @@ export function useDocumentPublishing({
     withoutReview,
     dialog,
     smartPublish,
-    publishOthers:
-      mayPublish && languages.length > 1 ? publishOthers : undefined,
+    publishOthers: publishesOthers(contributed, languages)
+      ? publishOthers
+      : undefined,
     notice: (
       <OutOfDateNotice
         notice={outOfDate.notice}

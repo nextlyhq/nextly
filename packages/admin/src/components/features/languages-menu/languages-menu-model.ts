@@ -131,26 +131,43 @@ const UNKNOWN: RowState = {
   needsWork: false,
 };
 
+/** What a language has of its own, as the overview tells it. */
+function contentOf(overview: LanguageOverview | undefined, isDefault: boolean) {
+  const pending = overview?.pendingChange === true;
+  // The default language is always written. Any other has content of its own, or has its first
+  // content still held in a saved change.
+  const written = isDefault || overview?.translated === true;
+  return { pending, written, started: written || pending };
+}
+
+/** Whether a translation needs work. The default language is not one. */
+function needsWorkIn(
+  row: Pick<LanguageRow, "isDefault" | "outOfDate" | "pendingChange">
+): boolean {
+  return !row.isDefault && (row.outOfDate || row.pendingChange);
+}
+
 function rowStateOf(args: {
   overview: LanguageOverview | undefined;
   isDefault: boolean;
   documentStatus: unknown;
 }): RowState {
   const { isDefault, overview } = args;
-  const pending = overview?.pendingChange === true;
-  // The default language is always written. Any other has content of its own, or has its first
-  // content still held in a saved change.
-  const written = isDefault || overview?.translated === true;
-  const started = written || pending;
+  const { pending, written, started } = contentOf(overview, isDefault);
   // The default language is what translations are made from, so it never fell behind one.
   const outOfDate = isDefault || !written ? undefined : outOfDateOf(overview);
+  const standing = {
+    isDefault,
+    outOfDate: outOfDate !== undefined,
+    pendingChange: pending,
+  };
   const facts = languageChipFacts(
     {
       translated: started,
       // First content still held is shown to nobody, whatever status the language is given.
       status: written ? overview?.status : "draft",
       pendingChange: pending,
-      stale: outOfDate !== undefined,
+      stale: standing.outOfDate,
     },
     args.documentStatus
   );
@@ -159,9 +176,9 @@ function rowStateOf(args: {
     status: started
       ? statusLine(facts.live, outOfDate, pending)
       : "not started",
-    outOfDate: outOfDate !== undefined,
+    outOfDate: standing.outOfDate,
     pendingChange: pending,
-    needsWork: !isDefault && (outOfDate !== undefined || pending),
+    needsWork: needsWorkIn(standing),
   };
 }
 

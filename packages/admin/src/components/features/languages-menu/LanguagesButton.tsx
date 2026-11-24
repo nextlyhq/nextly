@@ -183,6 +183,49 @@ function LanguageMenuRow({
   );
 }
 
+/** How many translations need work, drawn as a number and spoken in words; nothing at none. */
+function NeedWorkCount({ count }: { count: number }): JSX.Element | null {
+  if (count === 0) return null;
+  return (
+    <>
+      <span className="sr-only">{`, ${needWorkWords(count)}`}</span>
+      <span
+        aria-hidden="true"
+        className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-warning-surface px-1 text-[11px] font-semibold leading-none tabular-nums text-warning-text"
+      >
+        {count}
+      </span>
+    </>
+  );
+}
+
+/** What the menu does beyond opening a language, where the person may do any of it. */
+function MenuActions({
+  onPublishOthers,
+  canManageLanguages,
+}: Pick<
+  LanguagesButtonProps,
+  "onPublishOthers" | "canManageLanguages"
+>): JSX.Element | null {
+  if (onPublishOthers === undefined && !canManageLanguages) return null;
+  return (
+    <>
+      <DropdownMenuSeparator />
+      {onPublishOthers !== undefined ? (
+        // Wrapped, so the menu's own event is not passed on.
+        <DropdownMenuItem onSelect={() => onPublishOthers()}>
+          Publish other languages…
+        </DropdownMenuItem>
+      ) : null}
+      {canManageLanguages ? (
+        <DropdownMenuItem asChild>
+          <Link href={ROUTES.SETTINGS_LANGUAGES}>Manage languages…</Link>
+        </DropdownMenuItem>
+      ) : null}
+    </>
+  );
+}
+
 /** The document's Languages button and its menu. */
 export function LanguagesButton({
   model,
@@ -213,19 +256,7 @@ export function LanguagesButton({
           ) : (
             <ToolbarLabel priority="secondary">Languages</ToolbarLabel>
           )}
-          {model.needWork > 0 ? (
-            <>
-              <span className="sr-only">
-                {`, ${needWorkWords(model.needWork)}`}
-              </span>
-              <span
-                aria-hidden="true"
-                className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-warning-surface px-1 text-[11px] font-semibold leading-none tabular-nums text-warning-text"
-              >
-                {model.needWork}
-              </span>
-            </>
-          ) : null}
+          <NeedWorkCount count={model.needWork} />
           {iconOnly ? null : (
             <ChevronDown className="h-4 w-4" aria-hidden="true" />
           )}
@@ -261,20 +292,10 @@ export function LanguagesButton({
             />
           ))}
         </DropdownMenuGroup>
-        {onPublishOthers !== undefined || canManageLanguages ? (
-          <DropdownMenuSeparator />
-        ) : null}
-        {onPublishOthers !== undefined ? (
-          // Wrapped, so the menu's own event is not passed on.
-          <DropdownMenuItem onSelect={() => onPublishOthers()}>
-            Publish other languages…
-          </DropdownMenuItem>
-        ) : null}
-        {canManageLanguages ? (
-          <DropdownMenuItem asChild>
-            <Link href={ROUTES.SETTINGS_LANGUAGES}>Manage languages…</Link>
-          </DropdownMenuItem>
-        ) : null}
+        <MenuActions
+          onPublishOthers={onPublishOthers}
+          canManageLanguages={canManageLanguages}
+        />
       </DropdownMenuContent>
     </DropdownMenu>
   );
