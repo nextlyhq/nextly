@@ -23,10 +23,15 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { decideHolderPermission } from "../../auth/access/decide";
 import {
   RETIRED_MANAGE_PLAIN_ACTIONS,
   isRetiredManage,
 } from "../../auth/access/retired-manage-permissions";
+import {
+  comparesIdsWithoutCase,
+  rowsByRequestedId,
+} from "../../database/rows-by-requested-id";
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors";
 import { SUPER_ADMIN_SLUG } from "../../services/access/super-admin";
@@ -73,39 +78,28 @@ function chunks(ids: readonly string[]): string[][] {
   return runs;
 }
 
-/**
- * Whether the database compares ids without regard to case: MySQL does, under its case-insensitive
- * collation; PostgreSQL and SQLite compare them exactly.
- */
-function comparesIdsWithoutCase(adapter: DrizzleAdapter): boolean {
-  return adapter.dialect === "mysql";
+/** Whether `adapter`'s database matches an id in another case to the stored one. */
+function foldsIdCase(adapter: DrizzleAdapter): boolean {
+  return comparesIdsWithoutCase(adapter.dialect);
 }
 
 /**
- * Each of `requested` that names a row, mapped to that row, by the spelling asked, as the database
- * matched it: the row of that exact id, and, where the database compares ids without regard to case
- * (`foldsCase`), the one row whose id differs from it only in case, so every spelling MySQL matches
- * to a row answers as that row, however many of them one batch asks. Where it compares exactly, a
- * spelling in another case names no row, as the database answered it.
+ * Each of `requested` that names a row, mapped to that row, as the database matched the id (see
+ * {@link rowsByRequestedId}).
  */
 function byRequestedId<Row extends { id: string }>(
   requested: readonly string[],
   rows: readonly Row[],
   foldsCase: boolean
 ): Map<string, Row> {
-  const exact = new Map(rows.map(row => [row.id, row]));
-  const folded = new Map<string, Row | null>();
-  if (foldsCase) {
-    for (const row of rows) {
-      const key = row.id.toLowerCase();
-      // Two rows differing only in case match no other spelling unambiguously.
-      folded.set(key, folded.has(key) ? null : row);
-    }
-  }
   const found = new Map<string, Row>();
-  for (const id of requested) {
-    const row = exact.get(id) ?? folded.get(id.toLowerCase());
-    if (row) found.set(id, row);
+  for (const [id, own] of rowsByRequestedId(
+    requested,
+    rows,
+    row => row.id,
+    foldsCase
+  )) {
+    found.set(id, own[0]);
   }
   return found;
 }
@@ -137,7 +131,7 @@ async function readPersons(
       });
     }
   }
-  return byRequestedId(userIds, rows, comparesIdsWithoutCase(adapter));
+  return byRequestedId(userIds, rows, foldsIdCase(adapter));
 }
 
 /**
@@ -208,8 +202,10 @@ export async function holderAnswers(
 }
 
 /**
- * Each person's answer, by id. A retired `manage-` permission is held as the plain four it stood
- * for are, each as stored, as `decidePermission` answers a person.
+ * Each person's answer, by id, decided as `decidePermission` decides a person
+ * ({@link decideHolderPermission}): from the roles in force each person holds
+ * and the roles holding each action the decision may ask, read once for all
+ * of them. A retired `manage-` permission asks the plain four it stood for.
  */
 async function peopleAnswers(
   adapter: DrizzleAdapter,
@@ -217,43 +213,25 @@ async function peopleAnswers(
   action: string,
   resource: string
 ): Promise<Map<string, HolderAnswer>> {
-  if (isRetiredManage(action, resource)) {
-    return retiredManageAnswers(adapter, userIds, resource);
-  }
   const people = await readPersons(adapter, userIds);
   const assigned = await rolesInForceOf(
     [...people.values()].filter(person => person.active)
   );
-  const holding = new Set(await rolesHolding(adapter, action, resource));
+  const asked = isRetiredManage(action, resource)
+    ? RETIRED_MANAGE_PLAIN_ACTIONS
+    : [action];
+  const holding = new Map<string, ReadonlySet<string>>();
+  for (const each of asked) {
+    holding.set(each, new Set(await rolesHolding(adapter, each, resource)));
+  }
   const answers = new Map<string, HolderAnswer>();
   for (const id of new Set(userIds)) {
-    answers.set(id, personAnswer(people.get(id), assigned, holding));
+    answers.set(
+      id,
+      personAnswer(people.get(id), assigned, holding, action, resource)
+    );
   }
   return answers;
-}
-
-/**
- * Each person's answer for a retired `manage-` permission: held where each of the plain four it
- * stood for is held, else the first answer that is not "holds".
- */
-async function retiredManageAnswers(
-  adapter: DrizzleAdapter,
-  userIds: readonly string[],
-  resource: string
-): Promise<Map<string, HolderAnswer>> {
-  // Each plain action's answers, by person.
-  const each: Map<string, HolderAnswer>[] = [];
-  for (const plain of RETIRED_MANAGE_PLAIN_ACTIONS) {
-    each.push(await peopleAnswers(adapter, userIds, plain, resource));
-  }
-  return new Map(
-    [...new Set(userIds)].map(id => [
-      id,
-      each
-        .map(answers => answers.get(id) ?? "not-found")
-        .find(answer => answer !== "holds") ?? "holds",
-    ])
-  );
 }
 
 /** The roles assigned to each of `people` and in force now, by their stored id, a read per 500. */
@@ -269,16 +247,28 @@ async function rolesInForceOf(
   return assigned;
 }
 
-/** One person's answer: missing, deactivated, or whether a role of theirs in force holds it. */
+/**
+ * One person's answer: missing, deactivated, or the permission decision on
+ * the roles of theirs in force. Super-admin authority is among the holders
+ * already, since each walk counts the super-admin role and every role
+ * inheriting it ({@link rolesHolding}), so the decision is handed none apart.
+ */
 function personAnswer(
   person: PersonRow | undefined,
   assigned: ReadonlyMap<string, ReadonlySet<string>>,
-  holding: ReadonlySet<string>
+  holding: ReadonlyMap<string, ReadonlySet<string>>,
+  action: string,
+  resource: string
 ): HolderAnswer {
   if (!person) return "not-found";
   if (!person.active) return "deactivated";
-  const roles = assigned.get(person.id) ?? new Set<string>();
-  return [...roles].some(roleId => holding.has(roleId)) ? "holds" : "lacks";
+  const roles = [...(assigned.get(person.id) ?? [])];
+  const holds = (each: string): boolean =>
+    roles.some(roleId => holding.get(each)?.has(roleId) === true);
+  return decideHolderPermission({ superAdmin: false, holds }, action, resource)
+    .allowed
+    ? "holds"
+    : "lacks";
 }
 
 /**
@@ -298,9 +288,10 @@ async function existingRoleIds(
     for (const row of found) rows.push({ id: String(row.id) });
   }
   return new Map(
-    [...byRequestedId(roleIds, rows, comparesIdsWithoutCase(adapter))].map(
-      ([id, row]) => [id, row.id]
-    )
+    [...byRequestedId(roleIds, rows, foldsIdCase(adapter))].map(([id, row]) => [
+      id,
+      row.id,
+    ])
   );
 }
 

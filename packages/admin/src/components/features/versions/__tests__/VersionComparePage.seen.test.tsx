@@ -85,6 +85,19 @@ function page(from: number, to: number) {
   );
 }
 
+/**
+ * The line a drawn comparison opens with, naming its two versions: present
+ * only while a comparison's fields are on screen, not while one loads.
+ */
+const comparisonLine = () =>
+  screen.queryByText(
+    (_, element) =>
+      element?.tagName === "P" &&
+      /^Changes from Version \d+ to Version \d+\./.test(
+        element.textContent ?? ""
+      )
+  );
+
 describe("VersionComparePage, what it marks as seen", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -253,7 +266,7 @@ describe("VersionComparePage, a baseline comparison it marks as seen", () => {
       })
     );
 
-    expect(screen.queryByText(/Comparing version/)).toBeNull();
+    expect(comparisonLine()).toBeNull();
     expect(screen.getByText("Loading comparison…")).toBeInTheDocument();
     expect(markSeenMock).not.toHaveBeenCalledWith(other, expect.anything());
   });
@@ -287,7 +300,7 @@ describe("VersionComparePage, a baseline comparison it marks as seen", () => {
 
     render(baselinePage(scope, "last-viewed"));
     await waitFor(() => expect(markSeenMock).toHaveBeenCalledWith(scope, 5));
-    expect(screen.getByText(/Comparing version/)).toBeInTheDocument();
+    expect(comparisonLine()).toBeInTheDocument();
 
     // The reader returns to the tab, and then the network comes back.
     act(() => {
@@ -300,7 +313,7 @@ describe("VersionComparePage, a baseline comparison it marks as seen", () => {
     // Given the chance to refetch: a refetch would have asked again by now.
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(baselineDiffMock).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/Comparing version/)).toBeInTheDocument();
+    expect(comparisonLine()).toBeInTheDocument();
     expect(
       screen.queryByText("There is no earlier visit to compare with.")
     ).toBeNull();

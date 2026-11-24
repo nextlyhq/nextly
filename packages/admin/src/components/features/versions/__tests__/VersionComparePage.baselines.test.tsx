@@ -1,13 +1,14 @@
 /**
  * The comparison page's choices: a baseline the server resolves, named in the
- * address; "Compare with", which rewrites the address; the view, inline or
+ * address; "Compare", the older side, which rewrites the address; the view, inline or
  * side by side, from the address; the newer version marked as seen; and
  * "Restore…", which hands the version to the editor, in its language.
  */
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, waitFor } from "@admin/__tests__/utils";
+import { toast } from "@admin/components/ui";
 
 const {
   useVersionsMock,
@@ -44,13 +45,31 @@ vi.mock("../diff/VersionDiffView", async () => {
       onShown?: (
         pair: { from: number; to: number; locale: string | null } | null
       ) => void;
+      fieldAction?: (node: unknown) => unknown;
     }) => {
       diffMountMock(props);
       const { from, to, onShown } = props;
       useEffect(() => {
         onShown?.({ from, to, locale: drawn.locale });
       }, [from, to, onShown]);
-      return <div data-testid="diff-view">{`${from}-${to}`}</div>;
+      // One changed field, and one the comparison names as gone from the
+      // content type, so what the page offers on a field is drawn.
+      const changed = {
+        kind: "text",
+        name: "title",
+        label: "Title",
+        type: "text",
+        status: "changed",
+        segments: [],
+      };
+      const gone = { kind: "unknown", name: "subtitle", status: "removed" };
+      return (
+        <div data-testid="diff-view">
+          {`${from}-${to}`}
+          {props.fieldAction?.(changed) as React.ReactNode}
+          {props.fieldAction?.(gone) as React.ReactNode}
+        </div>
+      );
     },
   };
 });
@@ -229,7 +248,7 @@ describe("VersionComparePage, its choices", () => {
     renderPage({ from: 4, to: 5 });
 
     await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: "Compare with" }),
+      screen.getByRole("combobox", { name: "Compare" }),
       "published"
     );
 
@@ -283,7 +302,7 @@ describe("VersionComparePage, its choices", () => {
     renderPage({ from: "last-viewed" });
 
     await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: "Compare with" }),
+      screen.getByRole("combobox", { name: "Compare" }),
       "published"
     );
 
@@ -303,7 +322,7 @@ describe("VersionComparePage, its choices", () => {
     renderPage({ from: "last-viewed" });
 
     await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: "Compare with" }),
+      screen.getByRole("combobox", { name: "Compare" }),
       "previous"
     );
 
@@ -324,7 +343,9 @@ describe("VersionComparePage, its choices", () => {
   it("hands the version to the editor to restore from, rather than writing", async () => {
     renderPage({ from: 4, to: 5 });
 
-    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Restore .*…$/ })
+    );
 
     expect(navigateMock).toHaveBeenCalledWith(
       "/admin/collections/posts/e1?history=1&version=5&restore=1"
@@ -357,7 +378,9 @@ describe("VersionComparePage, its choices", () => {
     drawn.locale = "de";
     renderPage({ from: 4, to: 5, locale: "de" });
 
-    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Restore .*…$/ })
+    );
 
     const target = new URL(
       String(navigateMock.mock.calls.at(-1)?.[0]),
@@ -372,12 +395,93 @@ describe("VersionComparePage, its choices", () => {
     });
   });
 
+  it("copies a link that names the two versions drawn, not the baseline that found them", async () => {
+    // "The version you last looked at" is the reader's own, and moves: a
+    // link carrying it opens another comparison for anyone else, or later.
+    baselineMock.mockReturnValue({
+      data: {
+        from: 3,
+        to: 5,
+        baseline: { name: "last-viewed", versionNo: 3 },
+      },
+      isLoading: false,
+      isError: false,
+    });
+    // user-event stands in for the clipboard, so what was copied is read back
+    // from it.
+    const user = userEvent.setup();
+    renderPage({ from: "last-viewed" });
+    await user.click(screen.getByRole("button", { name: "Copy link" }));
+
+    const copied = new URL(await navigator.clipboard.readText());
+    expect(copied.pathname).toBe("/admin/collections/posts/e1/versions");
+    expect(copied.searchParams.get("from")).toBe("3");
+    expect(copied.searchParams.get("to")).toBe("5");
+  });
+
+  it("says where to copy the link from when the browser offers no clipboard", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    const error = vi.spyOn(toast, "error");
+    try {
+      renderPage({ from: 4, to: 5 });
+      // Not through userEvent, which would put its own clipboard back.
+      screen.getByRole("button", { name: "Copy link" }).click();
+
+      await waitFor(() =>
+        expect(error).toHaveBeenCalledWith(
+          "Couldn't copy the link. Copy it from the address bar."
+        )
+      );
+    } finally {
+      error.mockRestore();
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("names the version it restores", () => {
+    renderPage({ from: 4, to: 5 });
+
+    expect(
+      screen.getByRole("button", { name: "Restore version 5…" })
+    ).toBeInTheDocument();
+  });
+
+  it("hands one field to the editor to restore, by its name", async () => {
+    renderPage({ from: 4, to: 5 });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Restore this field: Title" })
+    );
+
+    const target = new URL(
+      String(navigateMock.mock.calls.at(-1)?.[0]),
+      "http://admin.test"
+    );
+    expect(Object.fromEntries(target.searchParams)).toEqual({
+      history: "1",
+      version: "5",
+      restore: "title",
+    });
+    // A field gone from the content type has nowhere to go back to.
+    expect(
+      screen.queryByRole("button", { name: /Restore this field: subtitle/ })
+    ).toBeNull();
+  });
+
   it("offers no restore to a reader who may not edit the document", () => {
     canMock.mockReturnValue(false);
 
     renderPage({ from: 4, to: 5 });
 
-    expect(screen.queryByRole("button", { name: "Restore…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Restore .*…$/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Restore this field/ })
+    ).toBeNull();
   });
 
   it("hands the comparison's own language to the editor when the address names none", async () => {
@@ -386,7 +490,9 @@ describe("VersionComparePage, its choices", () => {
     drawn.locale = "fr";
     renderPage({ from: 4, to: 5 });
 
-    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Restore .*…$/ })
+    );
 
     const target = new URL(
       String(navigateMock.mock.calls.at(-1)?.[0]),
@@ -465,7 +571,7 @@ describe("VersionComparePage, its choices", () => {
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
 
-  it("names a baseline another feature registered in Compare with", () => {
+  it("names a baseline another feature registered in Compare", () => {
     baselineMock.mockReturnValue({
       data: {
         from: 3,
@@ -478,7 +584,7 @@ describe("VersionComparePage, its choices", () => {
 
     renderPage({ from: "since-approved", to: 5 });
 
-    const select = screen.getByRole("combobox", { name: "Compare with" });
+    const select = screen.getByRole("combobox", { name: "Compare" });
     expect(select).toHaveValue("since-approved");
     expect(
       screen.getByRole("option", { name: "Since approved" })
@@ -521,7 +627,9 @@ describe("VersionComparePage, its choices", () => {
     versionMock.mockReturnValue({ data: { versionNo: 5, locale: "de" } });
 
     renderPage({ from: "draft", to: 5 });
-    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Restore .*…$/ })
+    );
 
     const target = new URL(
       String(navigateMock.mock.calls.at(-1)?.[0]),
@@ -573,7 +681,9 @@ describe("VersionComparePage, its choices", () => {
     });
 
     renderPage({ from: "published", to: 5 });
-    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Restore .*…$/ })
+    );
 
     const target = new URL(
       String(navigateMock.mock.calls.at(-1)?.[0]),
