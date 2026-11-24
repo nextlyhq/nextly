@@ -697,6 +697,34 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // Another table's foreign key to the column holds it as much as its own would.
+    it.runIf(dialect === "sqlite")(
+      "refuses to replace a renamed column another table's foreign key points to, naming the table",
+      async () => {
+        const t = await boot(dialect);
+        await createPosts([{ name: "v", type: "text", unique: true }]);
+        await write(t, "kept", { v: "12" });
+        await exec(
+          t,
+          `CREATE TABLE tcf_points (x text REFERENCES dc_tcf_posts(v))`
+        );
+        const written = await filesWritten();
+
+        await expect(
+          save(
+            t,
+            [{ name: "w", type: "number", options: { format: "float" } }],
+            RENAMED_TO_W
+          )
+        ).rejects.toMatchObject(
+          refusedSaying("the foreign key of tcf_points to v")
+        );
+
+        expect(await filesWritten()).toBe(written);
+        expect(await read(t)).toEqual({ kept: "12" });
+      }
+    );
+
     // Which values a rollback converts back is read from the file's own snapshot and the newest
     // one before it: with that one gone from meta/, the rollback is refused before any statement,
     // never left to the database's cast.
