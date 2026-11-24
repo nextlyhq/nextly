@@ -75,6 +75,7 @@ import {
   keepsTranslationsInside,
   placesComponent,
   pruneOverlay,
+  sameShare,
   shapeBeforeComponents,
   splitStoredValue,
   type SharedStructureShape,
@@ -771,7 +772,13 @@ export function splitSharedStructureWrite(
   value: unknown
 ): { written: SharedStructureWritten; overlay: unknown } {
   const { structure, overlay } = splitStoredValue(value, shape);
-  return { written: { column: ref.column, structure, shape }, overlay };
+  // An overlay holding no text (every value blank, or none) is no translation: stored as none, so
+  // every reader that asks whether a language is translated (status, filters, the source a value
+  // came from) reads this language as untranslated, as a read falling back already does.
+  return {
+    written: { column: ref.column, structure, shape },
+    overlay: sameShare(overlay, {}) ? null : overlay,
+  };
 }
 
 /**

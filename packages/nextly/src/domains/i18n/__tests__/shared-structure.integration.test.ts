@@ -556,4 +556,49 @@ describeEachDialect("one structure across languages", dialect => {
     },
     BOOT_TIMEOUT
   );
+
+  it(
+    "stores no translation for a language whose text inside a container is all blank",
+    async () => {
+      const { nextly } = await site();
+      const created = await nextly.create({
+        collection: "articles",
+        locale: "en",
+        data: {
+          title: "Hello",
+          slides: [{ caption: "first", alt: "a1", rank: 1 }],
+        },
+      });
+      const id = (created.item as { id: string }).id;
+      const [slide] = (await read(nextly, id, "en")).slides;
+      const overlayIn = async (locale: string) => {
+        const rows = await t!.adapter.select<{ slides: unknown }>(
+          "dc_articles_locales",
+          {
+            columns: ["slides"],
+            where: {
+              and: [
+                { column: "_parent", op: "=", value: id },
+                { column: "_locale", op: "=", value: locale },
+              ],
+            },
+          }
+        );
+        return rows[0]?.slides ?? null;
+      };
+
+      // Spanish writes the rows with nothing translated in them.
+      await write(nextly, id, "es", {
+        title: "Hola",
+        slides: [{ id: slide!.id, caption: "", alt: "", rank: 1 }],
+      });
+
+      // The control: English's text is stored.
+      expect(await overlayIn("en")).not.toBeNull();
+      // Spanish holds no translation inside the repeater, so none is stored, and it reads English's.
+      expect(await overlayIn("es")).toBeNull();
+      expect((await read(nextly, id, "es")).slides[0]?.caption).toBe("first");
+    },
+    BOOT_TIMEOUT
+  );
 });
