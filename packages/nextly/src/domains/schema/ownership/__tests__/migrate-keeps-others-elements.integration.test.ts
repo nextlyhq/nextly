@@ -58,6 +58,7 @@ import { companionTableOf } from "../../../i18n/migration/derive-companion-spec"
 import { setPerLanguageStorage } from "../../../i18n/per-language-storage";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
 import { setNonInteractive } from "../../migrate/can-prompt";
+import { ownerRowsToRecord } from "../kept-elements";
 import { SchemaOwnersRepository } from "../schema-owners-repository";
 
 perLanguageStorageSuite();
@@ -459,19 +460,20 @@ describe.each(getConfiguredTestDialects())(
         await adapter.executeQuery(
           `CREATE INDEX ${q(INDEX)} ON ${q(table)} (${q(column)}${prefix})`
         );
-        await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert([
-          {
-            tableName: table,
-            elementKind: "index",
-            elementName: INDEX,
-            ownerKind: "plugin",
-            ownerId: PLUGIN,
-            migratedBy: `plugin:${PLUGIN}`,
-            ownerVersion: "1.0.0",
-            schemaVersion: null,
-            state: "active",
-          },
-        ]);
+        await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert(
+          ownerRowsToRecord(
+            [
+              {
+                table,
+                elementKind: "index",
+                elementName: INDEX,
+                owner: { kind: "plugin", id: PLUGIN },
+              },
+            ],
+            new Set(),
+            []
+          )
+        );
       });
       return table;
     }
@@ -505,22 +507,21 @@ describe.each(getConfiguredTestDialects())(
           `UPDATE ${q(main)} SET ${q(MARKER)} = 'kept by the plugin'`
         );
         await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert(
-          (
-            [
-              ["column", MARKER],
-              ["index", MARKER_INDEX],
-            ] as const
-          ).map(([elementKind, elementName]) => ({
-            tableName: main,
-            elementKind,
-            elementName,
-            ownerKind: "plugin" as const,
-            ownerId: PLUGIN,
-            migratedBy: `plugin:${PLUGIN}`,
-            ownerVersion: "1.0.0",
-            schemaVersion: null,
-            state: "active" as const,
-          }))
+          ownerRowsToRecord(
+            (
+              [
+                ["column", MARKER],
+                ["index", MARKER_INDEX],
+              ] as const
+            ).map(([elementKind, elementName]) => ({
+              table: main,
+              elementKind,
+              elementName,
+              owner: { kind: "plugin" as const, id: PLUGIN },
+            })),
+            new Set(),
+            []
+          )
         );
       });
     }

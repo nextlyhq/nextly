@@ -52,6 +52,7 @@ import { junctionTableNameFor } from "../../services/field-column-descriptor";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
 import { CollectionRegistryService } from "../../../collections/services/collection-registry-service";
 import { definePlugin } from "../../../../plugins/plugin-context";
+import { ownerRowsToRecord } from "../kept-elements";
 import { SchemaOwnersRepository } from "../schema-owners-repository";
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
@@ -332,7 +333,7 @@ describe.each(getConfiguredTestDialects())(
         ...(await readIndexNames(t.adapter.getDrizzle(), dialect, table)),
       ].sort();
 
-    /** Records each element as the plugin's, in the rows a development push writes. */
+    /** Records each element as the plugin's, in the rows a development push writes for an entity's table. */
     async function record(
       t: TestNextly,
       elements: readonly {
@@ -345,17 +346,16 @@ describe.each(getConfiguredTestDialects())(
         (t.adapter as unknown as DrizzleAdapter).getDrizzle(),
         dialect
       ).upsert(
-        elements.map(element => ({
-          tableName: element.table,
-          elementKind: element.kind,
-          elementName: element.name,
-          ownerKind: "plugin" as const,
-          ownerId: PLUGIN,
-          migratedBy: `plugin:${PLUGIN}`,
-          ownerVersion: "1.0.0",
-          schemaVersion: null,
-          state: "active" as const,
-        }))
+        ownerRowsToRecord(
+          elements.map(element => ({
+            table: element.table,
+            elementKind: element.kind,
+            elementName: element.name,
+            owner: { kind: "plugin", id: PLUGIN },
+          })),
+          new Set(),
+          []
+        )
       );
     }
 

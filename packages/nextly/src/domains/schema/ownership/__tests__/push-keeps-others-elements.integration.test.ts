@@ -221,19 +221,20 @@ async function buildMigratedIndex(
   await new SchemaOwnersRepository(
     (instance.adapter as unknown as DrizzleAdapter).getDrizzle(),
     dialect
-  ).upsert([
-    {
-      tableName: table,
-      elementKind: "index",
-      elementName: MIGRATED_INDEX,
-      ownerKind: "plugin",
-      ownerId: PLUGIN,
-      migratedBy: `plugin:${PLUGIN}`,
-      ownerVersion: "1.0.0",
-      schemaVersion: null,
-      state: "active",
-    },
-  ]);
+  ).upsert(
+    keptElements.ownerRowsToRecord(
+      [
+        {
+          table,
+          elementKind: "index",
+          elementName: MIGRATED_INDEX,
+          owner: { kind: "plugin", id: PLUGIN },
+        },
+      ],
+      new Set(),
+      []
+    )
+  );
 }
 
 /**
@@ -260,22 +261,21 @@ async function plantMarker(
     (instance.adapter as unknown as DrizzleAdapter).getDrizzle(),
     dialect
   ).upsert(
-    (
-      [
-        ["column", MARKER],
-        ["index", MARKER_INDEX],
-      ] as const
-    ).map(([elementKind, elementName]) => ({
-      tableName: table,
-      elementKind,
-      elementName,
-      ownerKind: "plugin" as const,
-      ownerId: PLUGIN,
-      migratedBy: `plugin:${PLUGIN}`,
-      ownerVersion: "1.0.0",
-      schemaVersion: null,
-      state: "active" as const,
-    }))
+    keptElements.ownerRowsToRecord(
+      (
+        [
+          ["column", MARKER],
+          ["index", MARKER_INDEX],
+        ] as const
+      ).map(([elementKind, elementName]) => ({
+        table,
+        elementKind,
+        elementName,
+        owner: { kind: "plugin" as const, id: PLUGIN },
+      })),
+      new Set(),
+      []
+    )
   );
 }
 

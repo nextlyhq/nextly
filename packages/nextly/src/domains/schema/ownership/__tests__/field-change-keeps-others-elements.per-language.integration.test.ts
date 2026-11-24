@@ -49,6 +49,7 @@ import { companionTableOf } from "../../../i18n/migration/derive-companion-spec"
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { applyDesiredSchema } from "../../pipeline/index";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
+import { ownerRowsToRecord } from "../kept-elements";
 import { SchemaOwnersRepository } from "../schema-owners-repository";
 
 perLanguageStorageSuite();
@@ -167,8 +168,9 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /**
-     * Makes the index on `column` of `table` by its DDL, and records it as the plugin's in the row a
-     * development push writes. MySQL indexes a text column only by a prefix, which a plugin writes.
+     * Makes the index on `column` of `table` by its DDL, and records it as the plugin's in the form of
+     * a development push's rows. A push writes none for a per-language table, so there the row is the
+     * test's alone. MySQL indexes a text column only by a prefix, which a plugin writes.
      */
     async function buildIndex(
       t: TestNextly,
@@ -183,19 +185,20 @@ describe.each(getConfiguredTestDialects())(
       await new SchemaOwnersRepository(
         (t.adapter as unknown as DrizzleAdapter).getDrizzle(),
         dialect
-      ).upsert([
-        {
-          tableName: table,
-          elementKind: "index",
-          elementName: INDEX,
-          ownerKind: "plugin",
-          ownerId: PLUGIN,
-          migratedBy: `plugin:${PLUGIN}`,
-          ownerVersion: "1.0.0",
-          schemaVersion: null,
-          state: "active",
-        },
-      ]);
+      ).upsert(
+        ownerRowsToRecord(
+          [
+            {
+              table,
+              elementKind: "index",
+              elementName: INDEX,
+              owner: { kind: "plugin", id: PLUGIN },
+            },
+          ],
+          new Set(),
+          []
+        )
+      );
     }
 
     /** The schema dialog's save of the Builder's collection; what it refused with. */
@@ -375,23 +378,22 @@ describe.each(getConfiguredTestDialects())(
         (t.adapter as unknown as DrizzleAdapter).getDrizzle(),
         dialect
       ).upsert(
-        tables.flatMap(tableName =>
-          (
-            [
-              ["column", MARKER],
-              ["index", markerIndex(tableName)],
-            ] as const
-          ).map(([elementKind, elementName]) => ({
-            tableName,
-            elementKind,
-            elementName,
-            ownerKind: "plugin" as const,
-            ownerId: PLUGIN,
-            migratedBy: `plugin:${PLUGIN}`,
-            ownerVersion: "1.0.0",
-            schemaVersion: null,
-            state: "active" as const,
-          }))
+        ownerRowsToRecord(
+          tables.flatMap(table =>
+            (
+              [
+                ["column", MARKER],
+                ["index", markerIndex(table)],
+              ] as const
+            ).map(([elementKind, elementName]) => ({
+              table,
+              elementKind,
+              elementName,
+              owner: { kind: "plugin" as const, id: PLUGIN },
+            }))
+          ),
+          new Set(),
+          []
         )
       );
     }
