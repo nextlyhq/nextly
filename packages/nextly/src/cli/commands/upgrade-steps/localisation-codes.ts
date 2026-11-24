@@ -22,6 +22,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { standardLanguageCode } from "../../../domains/i18n/config/standard-code";
 import {
+  sameStoredCode,
   storedOlderSpellings,
   tablesHoldingCode,
 } from "../../../domains/i18n/older-codes";
@@ -469,7 +470,13 @@ async function convertVersions(
       VERSIONS_TABLE,
       {
         changedLocales: JSON.stringify(
-          list.map(code => (code === from ? to : code))
+          // Each entry the database reads as `from`, as the scan found it (`sameStoredCode`).
+          list.map(code =>
+            typeof code === "string" &&
+            sameStoredCode(adapter.dialect, code, from)
+              ? to
+              : code
+          )
         ),
       },
       { and: [{ column: "id", op: "=", value: row.id }] }
@@ -533,9 +540,10 @@ async function registryRowsNaming(
   const rows = await adapter.select<RegistryRow>(LANGUAGES_TABLE, {
     columns: ["code", "fallback", "revision"],
   });
-  return rows.filter(
-    row => row.code === code || fallbackOf(row).includes(code)
-  );
+  // Compared as the database compares codes (`sameStoredCode`), as the scan found them.
+  const same = (stored: string) =>
+    sameStoredCode(adapter.dialect, stored, code);
+  return rows.filter(row => same(row.code) || fallbackOf(row).some(same));
 }
 
 /** A registry row's fallback codes; a list that cannot be read names none. */
@@ -574,9 +582,11 @@ async function convertLanguageRegistry(
     await adapter.update(
       LANGUAGES_TABLE,
       {
-        code: row.code === from ? to : row.code,
+        code: sameStoredCode(adapter.dialect, row.code, from) ? to : row.code,
         fallback: JSON.stringify(
-          fallbackOf(row).map(code => (code === from ? to : code))
+          fallbackOf(row).map(code =>
+            sameStoredCode(adapter.dialect, code, from) ? to : code
+          )
         ),
         revision: (row.revision ?? 0) + 1,
         updatedAt: new Date(),

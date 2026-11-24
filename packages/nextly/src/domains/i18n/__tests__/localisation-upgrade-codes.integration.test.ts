@@ -705,6 +705,78 @@ describeEachDialect(
       }
     );
 
+    // The same on MySQL for the lists of codes the conversion rewrites: a version's changed
+    // languages and a Settings language's fallback, each holding the other case of the spelling.
+    // Broken, the list keeps `PT_br`, which the scan still finds, so the step never runs out of work.
+    it.runIf(dialect === "mysql")(
+      "rewrites the other case of one older spelling in lists of codes too, on MySQL",
+      async () => {
+        const id = await legacyArticle();
+        // A published version: the steps after the codes' split and rewrite pending changes.
+        const [version] = await database!.adapter.select<{ id: string }>(
+          VERSIONS_TABLE,
+          {
+            columns: ["id"],
+            where: {
+              and: [
+                { column: "entryId", op: "=", value: id },
+                { column: "status", op: "=", value: "published" },
+              ],
+            },
+            limit: 1,
+          }
+        );
+        await database!.adapter.update(
+          VERSIONS_TABLE,
+          { changedLocales: JSON.stringify(["en", "PT_br"]) },
+          { and: [{ column: "id", op: "=", value: version!.id }] }
+        );
+        const at = new Date("2026-08-01T10:00:00Z");
+        await database!.adapter.insert(
+          "nextly_languages",
+          {
+            code: "es",
+            label: "es",
+            direction: "ltr",
+            fallback: JSON.stringify(["PT_br", "en"]),
+            position: 2,
+            isDefault: false,
+            active: true,
+            revision: 1,
+            createdAt: at,
+            updatedAt: at,
+          },
+          { returning: [] }
+        );
+
+        await migrateData(database!.adapter as never, STANDARD);
+
+        const [row] = await database!.adapter.select<{
+          changedLocales: unknown;
+        }>(VERSIONS_TABLE, {
+          columns: ["changedLocales"],
+          where: { and: [{ column: "id", op: "=", value: version!.id }] },
+        });
+        const list =
+          typeof row?.changedLocales === "string"
+            ? (JSON.parse(row.changedLocales) as unknown)
+            : row?.changedLocales;
+        expect(list).toEqual(["en", "pt-BR"]);
+        const [es] = await database!.adapter.select<{ fallback: string }>(
+          "nextly_languages",
+          {
+            columns: ["fallback"],
+            where: { and: [{ column: "code", op: "=", value: "es" }] },
+          }
+        );
+        expect(JSON.parse(es!.fallback)).toEqual(["pt-BR", "en"]);
+        // And the step has nothing left to do.
+        expect(
+          (await previewMigrateData(database!.adapter, STANDARD)).changes
+        ).not.toContainEqual(expect.objectContaining({ action: "convert" }));
+      }
+    );
+
     // A site that manages its languages in Settings keeps them in `nextly_languages`, each with the
     // codes it falls back to. The upgrade converts that registry with the content, so the site's
     // next start names the language as its rows are stored.

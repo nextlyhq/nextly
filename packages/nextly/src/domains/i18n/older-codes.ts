@@ -190,6 +190,21 @@ async function underscoredCodesIn(
 }
 
 /**
+ * What a stored code is as `dialect` compares codes: MySQL compares them without regard to letter
+ * case, so there `pt_BR` and `PT_br` are one spelling, and one conversion rewrites the rows of
+ * both; PostgreSQL and SQLite keep them apart. The one rule the scan and every rewrite of a list of
+ * codes compare by, so a spelling the scan takes as one is rewritten wherever it is stored.
+ */
+export function storedCodeKey(dialect: string, code: string): string {
+  return dialect === "mysql" ? code.toLowerCase() : code;
+}
+
+/** Whether `a` and `b` are one stored code as `dialect` compares codes (`storedCodeKey`). */
+export function sameStoredCode(dialect: string, a: string, b: string): boolean {
+  return storedCodeKey(dialect, a) === storedCodeKey(dialect, b);
+}
+
+/**
  * Each of `codes` that has a part after its language, lower-cased, mapped to the code: what a
  * stored spelling is looked up by once read as the conversion reads it (`standardLanguageCode`,
  * every underscore a hyphen). Empty where no code has such a part, and then no row can be stored
@@ -220,11 +235,8 @@ export async function storedOlderSpellings(
 ): Promise<StoredOlderSpelling[]> {
   const byLowered = olderSpellingsOf(codes);
   if (byLowered.size === 0) return [];
-  // MySQL compares codes without regard to letter case, so there `pt_BR` and `PT_br` are one
-  // spelling: one conversion rewrites the rows of both, and two would be taken for two spellings
-  // of one language kept for the same thing. PostgreSQL and SQLite keep them apart.
-  const keyOf = (code: string) =>
-    adapter.dialect === "mysql" ? code.toLowerCase() : code;
+  // One conversion for each spelling as the database tells spellings apart (`storedCodeKey`).
+  const keyOf = (code: string) => storedCodeKey(adapter.dialect, code);
   const found = new Map<string, StoredOlderSpelling>();
   for (const place of await codeColumnsOn(adapter, translationTables)) {
     for (const code of await underscoredCodesIn(adapter, place)) {
