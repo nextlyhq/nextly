@@ -127,6 +127,7 @@ import {
   recordSnapshotNeedsAppMigration,
 } from "../errors/areas/migrate-create";
 import {
+  type CliError,
   configDeclarationError,
   exitWithError,
   toCliError,
@@ -303,19 +304,25 @@ function recordModeReader(
  * `--record-snapshot` reads the translations tables of the database `DATABASE_URL` names, and
  * records them in a migration written for `dialect`: one whose scheme names another database
  * would record that database's tables, so it is refused before anything is read. A URL whose
- * scheme names none is opened as `dialect`, and its driver says whether it is one.
+ * scheme names none is opened as `dialect`, and its driver says whether it is one. A dry run
+ * reports the refusal instead, as it reports every other the real run would make.
  */
 function refuseRecordingAnotherDialect(
-  recording: boolean | undefined,
+  options: Pick<ResolvedMigrateCreateOptions, "recordSnapshot" | "dryRun">,
   dialect: SupportedDialect,
   logger: CommandContext["logger"]
 ): void {
-  if (recording !== true) return;
+  if (options.recordSnapshot !== true) return;
   const url = process.env.DATABASE_URL;
   const named = url ? detectDialectFromUrl(url) : undefined;
-  if (named !== undefined && named !== dialect) {
-    exitWithError(logger, databaseDialectDiffers(dialect, named));
+  if (named === undefined || named === dialect) return;
+  const refusal = databaseDialectDiffers(dialect, named);
+  // A dry run reports what the real run would refuse, and exits 0.
+  if (options.dryRun === true) {
+    reportDryRun(logger, { changes: [], refusals: [dryRunLineOf(refusal)] });
+    process.exit(0);
   }
+  exitWithError(logger, refusal);
 }
 
 /**
@@ -437,10 +444,14 @@ export function dryRunRefusalOf(error: unknown): string | undefined {
     )
   ) {
     // As the real run prints it: the CLI error it maps to, with its code.
-    const printed = toCliError(error);
-    return `${printed.what} ${printed.why} ${printed.next} (${printed.code})`;
+    return dryRunLineOf(toCliError(error));
   }
   return error.publicMessage;
+}
+
+/** The refusal a dry run reports for `error`, in the words the real run ends with. */
+function dryRunLineOf(error: CliError): string {
+  return `${error.what} ${error.why} ${error.next} (${error.code})`;
 }
 
 /**
@@ -803,7 +814,7 @@ export async function runMigrateCreate(
         logger,
       });
     logger.keyValue("Dialect", getDialectDisplayName(dialect));
-    refuseRecordingAnotherDialect(options.recordSnapshot, dialect, logger);
+    refuseRecordingAnotherDialect(options, dialect, logger);
 
     // A Builder save this machine left part-way against this database refuses the command, a
     // blank migration's included: what it would write from is not what the database holds. Asked

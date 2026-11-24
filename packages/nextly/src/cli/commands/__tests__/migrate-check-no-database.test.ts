@@ -254,6 +254,21 @@ describe("migrate:create --record-snapshot", () => {
     expect(dialectHeaders()).toEqual(["PostgreSQL"]);
     expect(existsSync(join(dir, "site.db"))).toBe(false);
   });
+
+  it("reports that refusal and exits 0 in a dry run, as a dry run reports what the real run would refuse", async () => {
+    environment({ DB_DIALECT: "postgresql", DATABASE_URL: UNOPENED_POSTGRES });
+    expect((await create(project("title"))).code).toBeUndefined();
+
+    environment({ DATABASE_URL: `file:${join(dir, "site.db")}` });
+    const dry = await create(project("title"), {
+      recordSnapshot: true,
+      dryRun: true,
+    });
+    expect(dry.code, dry.said.join("\n")).toBe(0);
+    expect(dry.said.join("\n")).toContain("(DATABASE_DIALECT_DIFFERS)");
+    expect(dialectHeaders()).toEqual(["PostgreSQL"]);
+    expect(existsSync(join(dir, "site.db"))).toBe(false);
+  });
 });
 
 describe("at a terminal", () => {
