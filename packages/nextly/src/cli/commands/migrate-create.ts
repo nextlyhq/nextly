@@ -447,9 +447,24 @@ function reportMigrationDryRun(
   logger: CommandContext["logger"]
 ): void {
   const sqlFile = projectPath(cwd, result.sqlPath);
+  const { moveStep } = result;
+  // The moves' own file first, as it is written and run.
+  const step =
+    moveStep === undefined
+      ? []
+      : [moveStep.sqlPath, moveStep.snapshotPath].map(path => ({
+          action: "write" as const,
+          target: projectPath(cwd, path),
+        }));
+  if (moveStep !== undefined) {
+    logger.info(
+      `${projectPath(cwd, moveStep.sqlPath)} would hold:\n${moveStep.sqlContent.trimEnd()}`
+    );
+  }
   logger.info(`${sqlFile} would hold:\n${result.sqlContent.trimEnd()}`);
   reportDryRun(logger, {
     changes: [
+      ...step,
       { action: "write", target: sqlFile },
       { action: "write", target: projectPath(cwd, result.snapshotPath) },
       // The translation-table migration files, written after the pair.
@@ -869,6 +884,7 @@ export async function runMigrateCreate(
       components,
       metadataUpserts,
       previousMetadataUpserts,
+      registryRowsOf,
       appStream,
       nothing,
     } = inputs;
@@ -932,6 +948,7 @@ export async function runMigrateCreate(
         previous: inputs.latest,
         metadataUpserts,
         previousMetadataUpserts,
+        registryRowsOf,
         permissions,
         nonInteractive,
         autoAcceptRenames: options.acceptRenames === true,
@@ -1020,6 +1037,12 @@ export async function runMigrateCreate(
       return;
     }
     logger.newline();
+    if (result.moveStep !== undefined) {
+      logger.success(
+        `Created the moves' own migration, which runs first → ${result.moveStep.sqlPath}`
+      );
+      logger.success(`Snapshot → ${result.moveStep.snapshotPath}`);
+    }
     logger.success(`Created migration → ${result.sqlPath}`);
     logger.success(`Snapshot → ${result.snapshotPath}`);
     logger.keyValue("Operations", result.operationCount);

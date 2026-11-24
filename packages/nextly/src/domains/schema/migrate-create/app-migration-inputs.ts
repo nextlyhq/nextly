@@ -136,6 +136,10 @@ export interface AppMigrationInputs {
   components: MinimalConfigEntity[];
   metadataUpserts: { tableName: string; sql: string }[];
   previousMetadataUpserts: { tableName: string; sql: string }[];
+  /** The same upserts, for the Builder entities any settings record holds. */
+  registryRowsOf: (
+    record: EntitySettingsRecord | undefined
+  ) => { tableName: string; sql: string }[];
   appStream: AppStreamTables;
   /**
    * The latest snapshot file, or null where the folder has none. The one read
@@ -318,15 +322,17 @@ export async function appMigrationInputs(
   const judgedEntities = onlyJudged(merged, input.judged);
   // And each new pair of sibling fields, against the fields the latest snapshot records.
   assertMigrationSiblingFields(judgedEntities, judgedAgainst, logger);
+  const registryRowsOf: AppMigrationInputs["registryRowsOf"] = record =>
+    builderMetadataUpserts(
+      builderEntriesOf(record),
+      dialect,
+      fieldGroupNames,
+      input.fieldGroupTables
+    );
   // The rows as the previous snapshot recorded each Builder entity, for a
   // migration that writes a row for its settings alone to write back on the
   // way down. A snapshot with no settings record has none to offer.
-  const previousMetadataUpserts = builderMetadataUpserts(
-    builderEntriesOf(latest?.data.entities),
-    dialect,
-    fieldGroupNames,
-    input.fieldGroupTables
-  );
+  const previousMetadataUpserts = registryRowsOf(latest?.data.entities);
   const nothing = nothingToGenerate({
     entityCount: collections.length + singles.length + components.length,
     appStream,
@@ -339,6 +345,7 @@ export async function appMigrationInputs(
     components,
     metadataUpserts,
     previousMetadataUpserts,
+    registryRowsOf,
     appStream,
     latest,
     nothing,

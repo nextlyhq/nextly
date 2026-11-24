@@ -103,6 +103,17 @@ export function recordedSettingsOf(
     : undefined;
 }
 
+/** `record` with one entity's declaration as `entry`. */
+export function withRecordedSettings(
+  record: EntitySettingsRecord,
+  kind: SettingsEntityKind,
+  slug: string,
+  entry: RecordedEntitySettings
+): EntitySettingsRecord {
+  const key = RECORD_KEYS[kind];
+  return { ...record, [key]: { ...record[key], [slug]: entry } };
+}
+
 const KIND_ORDER: readonly SettingsEntityKind[] = [
   "collection",
   "single",

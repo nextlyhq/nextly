@@ -174,6 +174,7 @@ import {
 } from "./dropped-translations";
 import {
   describeSettingsChange,
+  settingsChangesBetween,
   settingsChangesFor,
   settingsRecordOf,
   type EntitySettingsChange,
@@ -192,6 +193,11 @@ import {
   leftoverUniqueStatements,
   type LiveUniqueIndexes,
 } from "./leftover-unique-indexes";
+import {
+  declarationsAfterMoves,
+  tablesAfterMoves,
+  type RunMoves,
+} from "./move-step";
 import { perLanguageMovesIn } from "./per-language-moves";
 import {
   fileStatements,
@@ -410,23 +416,20 @@ export interface GenerateArgs {
     down: AddedStatements;
   };
   /**
-   * Columns the file drops whose values its appended statements copied elsewhere first (a field
-   * moved into a group). Judged as deletions, as `nextly migrate` judges the file, with the
-   * reason that says they are moves.
+   * The fields a Schema Builder save moves into, out of or between groups, planned
+   * (`planEntityMoves`): the statements that carry their values, placed around the caller's own and
+   * the generated ones, and the columns they drop and fill. On MySQL they are a file of their own,
+   * written ahead of the run's (`move-step.ts`).
    */
-  valueMoves?: readonly { table: string; column: string; reason: string }[];
+  moves?: RunMoves;
   /**
-   * Columns the file adds whose values its appended statements bring last (a field moved out of a
-   * group): added without NOT NULL, and made required, as the newest snapshot has them, once the
-   * values are in.
+   * The registry-row upserts of the Builder entities a settings record holds, as `metadataUpserts`
+   * has them for the entities the run declares: the row a step of the run leaves, where it writes
+   * one for the moves alone.
    */
-  refilledColumns?: readonly { table: string; column: string }[];
-  /**
-   * The tables whose values the appended statements move between places (a field moved into, out
-   * of or between groups): a change of those tables, named in the file's header with their
-   * registry rows, though no operation may name them.
-   */
-  valuesMovedIn?: readonly string[];
+  registryRowsOf?: (
+    record: EntitySettingsRecord
+  ) => { tableName: string; sql: string }[];
   /**
    * Foreign keys a table this file creates is declared with, by table: a
    * Schema Builder collection's relationship keys, which the column mapping
@@ -562,7 +565,22 @@ export interface GenerateResult {
   permissionChanges: PermissionChange[];
   /** What the migration deletes, as its header names it; empty when it deletes nothing. */
   deletions: Deletion[];
+  /**
+   * The file that makes the run's moves, written ahead of the migration where there is one: on
+   * MySQL, where the migration has more to change than the moves (`move-step.ts`).
+   */
+  moveStep?: { sqlPath: string; snapshotPath: string; sqlContent: string };
 }
+
+/**
+ * A run's arguments with its moves' facts among them, whichever road found the moves: the columns
+ * the appended statements copied elsewhere first (`valueMoves`), the ones they fill last
+ * (`refilledColumns`), added without NOT NULL and made required once the values are in, and the
+ * tables whose values they move (`valuesMovedIn`), a change of those tables though no operation may
+ * name them.
+ */
+type RunArgs = GenerateArgs &
+  Partial<Pick<RunMoves, "valueMoves" | "refilledColumns" | "valuesMovedIn">>;
 
 /** The table an operation acts on (for correlating metadata upserts). */
 function operationTableName(op: Operation): string {
@@ -975,32 +993,29 @@ async function renameDecisions(
   });
 }
 
-/**
- * Run the migrate:create orchestration. Returns null if no operations
- * remain (config matches latest snapshot; the CLI exits 0 for that).
- */
-export async function generateMigration(
-  requested: GenerateArgs
-): Promise<GenerateResult | null> {
-  // Before anything is planned: a writer another has overtaken stops here.
-  await refuseStaleStart(requested);
-  // Scoped, every planner below sees the scoped entity alone.
+/** Where a run starts: the newest snapshot, and the schema on both sides of it. */
+interface RunStart {
+  args: RunArgs;
+  previous: NonNullable<GenerateArgs["previous"]> | null;
+  stream: AppStreamSnapshots;
+  previousSnapshot: NextlySchemaSnapshot;
+  desiredSnapshot: NextlySchemaSnapshot;
+}
+
+/** What `requested` starts from and goes to, read before anything is planned. */
+async function startOfRun(requested: GenerateArgs): Promise<RunStart> {
+  // Scoped, every planner sees the scoped entity alone.
   const scoped = withScopedEntities(requested);
-  const metaDir = resolve(scoped.migrationsDir, "meta");
-  // Single clock for the whole run so the main file and its companions share a
-  // deterministic base timestamp (companions get a strictly-later one below).
-  const now = scoped.now ?? new Date();
 
   // 1. Load previous state.
   const previous =
     scoped.previous === undefined
-      ? await loadLatestSnapshot(metaDir)
+      ? await loadLatestSnapshot(resolve(scoped.migrationsDir, "meta"))
       : scoped.previous;
 
-  // Taken once, here, so the table diff and every companion planner below
+  // Taken once, here, so the table diff and every companion planner
   // see the same fields (`withKeptScopeFieldsOf`).
-  // Reassigned once below, where the moves made in code join the ones the caller gave.
-  let args = withKeptScopeFieldsOf(scoped, previous?.data.snapshot);
+  const args = withKeptScopeFieldsOf(scoped, previous?.data.snapshot);
 
   // 2. Build desired snapshot from config. Localized collections omit their
   //    translatable columns here (they live in the companion `_locales` table).
@@ -1039,6 +1054,94 @@ export async function generateMigration(
     existingKeys,
     "after"
   );
+  return { args, previous, stream, previousSnapshot, desiredSnapshot };
+}
+
+/** Every entity a run generates for, with its kind. */
+function taggedEntities(
+  args: Pick<GenerateArgs, "collections" | "singles" | "components">
+): TaggedConfigEntity[] {
+  return [
+    ...args.collections.map(e => tagged(e, "collection")),
+    ...args.singles.map(e => tagged(e, "single")),
+    ...args.components.map(e => tagged(e, "fieldGroup")),
+  ];
+}
+
+/**
+ * Run the migrate:create orchestration. Returns null if no operations
+ * remain (config matches latest snapshot; the CLI exits 0 for that).
+ *
+ * On MySQL a run that moves fields into, out of or between groups writes the moves as a file of their
+ * own, ahead of every other change of the run (`move-step.ts`). Both files are planned before either
+ * is written, and they are written together.
+ */
+export async function generateMigration(
+  requested: GenerateArgs
+): Promise<GenerateResult | null> {
+  // Before anything is planned: a writer another has overtaken stops here.
+  await refuseStaleStart(requested);
+  // Single clock for the whole run so the main file and the files beside it share a
+  // deterministic base timestamp.
+  const run = { ...requested, now: requested.now ?? new Date() };
+  const looksForMoves = run.moves !== undefined || run.codeMoves !== undefined;
+  if (
+    run.dialect !== "mysql" ||
+    run.recordSnapshot === true ||
+    !looksForMoves
+  ) {
+    return generateRun(run);
+  }
+  const start = await startOfRun(run);
+  // Asked about once, here: the run is handed the answer.
+  const inCode = await movesMadeInCode(start.args, {
+    entities: taggedEntities(start.args),
+    previous: start.previous?.data.entities,
+    previousSnapshot: start.previousSnapshot,
+  });
+  const moves = run.moves ?? inCode;
+  if (start.previous === null || moves.valuesMovedIn.length === 0) {
+    return generateRun(run, { inCode });
+  }
+  const step = moveStepOf(start, start.previous, moves, run.now);
+  const { moves: _moved, codeMoves: _asked, ...others } = run;
+  const rest = await generateRun(
+    {
+      ...others,
+      previous: {
+        data: step.after,
+        filename: `${step.named(`${run.name}_moves`).baseName}.snapshot.json`,
+      },
+    },
+    {
+      // What the moves leave for the rest of the run: the columns to drop, as the moves they are.
+      inCode: {
+        ...NO_CODE_MOVES,
+        valueMoves: [...moves.valueMoves],
+        declined: inCode.declined,
+      },
+      step: step.named(`${run.name}_moves`),
+    }
+  );
+  // Nothing but the moves: the step is the run's migration, under its own name.
+  return rest ?? writeMoveStep(run, step.named(run.name));
+}
+
+/**
+ * The run of one migration file with its companions (`generateMigration`). `planned`, where a run's
+ * moves were planned ahead of it: the moves as this run takes them, and the step file published with
+ * its own, ahead of them, whose snapshot it starts from.
+ */
+async function generateRun(
+  requested: GenerateArgs,
+  planned: { inCode?: CodeMovesPlan; step?: MoveStepFile } = {}
+): Promise<GenerateResult | null> {
+  const metaDir = resolve(requested.migrationsDir, "meta");
+  const clock = requested.now ?? new Date();
+  const start = await startOfRun(requested);
+  const { previous, stream, previousSnapshot, desiredSnapshot } = start;
+  // Reassigned once below, where the run's moves join the caller's statements.
+  let args = start.args;
 
   // 2a. Plan companion `_locales` migrations for localized collections, singles, AND
   //     components (i18n Option B: companions are migration-owned, emitted as
@@ -1058,11 +1161,7 @@ export async function generateMigration(
   // this run does not make. A never-translated project's older snapshot doesn't say so itself,
   // and turning translation on there is refused until it does, so it records.
   if (args.recordSnapshot === true && snapshotSays) return null;
-  const entities = [
-    ...args.collections.map(e => tagged(e, "collection")),
-    ...args.singles.map(e => tagged(e, "single")),
-    ...args.components.map(e => tagged(e, "fieldGroup")),
-  ];
+  const entities = taggedEntities(args);
   refuseUnrecordedTranslations(args, { snapshotSays, signOfTranslation });
   // What the snapshot this run writes says of each translated table's companion: read from the
   // database for `--record-snapshot`, carried forward otherwise (`writtenTranslations`).
@@ -1106,12 +1205,14 @@ export async function generateMigration(
   // 3a'. Fields moved into or out of a group in code. The diff reads each as a delete and an add;
   //      an accepted one is carried as the Schema Builder carries a move, its values copied to the
   //      new place first, and from here on is a move as one the caller gave would be.
-  const codeMoves = await movesMadeInCode(args, {
-    entities,
-    previous: previous?.data.entities,
-    previousSnapshot,
-  });
-  args = withCodeMoves(args, codeMoves);
+  const codeMoves =
+    planned.inCode ??
+    (await movesMadeInCode(args, {
+      entities,
+      previous: previous?.data.entities,
+      previousSnapshot,
+    }));
+  args = withMoves(withMoves(args, args.moves ?? NO_CODE_MOVES), codeMoves);
 
   // 3b. Fields that stop being translated while their entity stays translated. The diff above gives
   //     the main table their columns; these files move the values around that migration.
@@ -1226,7 +1327,7 @@ export async function generateMigration(
       entities: settingsRecord,
       permissions: permissionRecord,
       metaDir,
-      now,
+      now: clock,
     },
   });
   if (recorded !== undefined) return recorded;
@@ -1590,6 +1691,12 @@ export async function generateMigration(
       downSql: plan.downSql,
     })),
   ];
+  // The moment the main file is named for. A step ahead of this run takes the run's own, so this
+  // file and the companions named before it come after the step's.
+  const now =
+    planned.step === undefined
+      ? clock
+      : new Date(clock.getTime() + beforeMain.length + 1);
   // Every companion file in the order it is written, so a dry run reports the files a real run
   // writes from the same list.
   const companionFiles: Array<{
@@ -1738,7 +1845,8 @@ export async function generateMigration(
       )
     )
   );
-  if (judged.all.length > 0) await args.judgeDeletions?.(judged.all);
+  const deletions = [...(planned.step?.deletions ?? []), ...judged.all];
+  if (deletions.length > 0) await args.judgeDeletions?.(deletions);
 
   const sqlContent = formatMigrationFile({
     name: args.name,
@@ -1764,6 +1872,7 @@ export async function generateMigration(
 
   const { sqlPath, snapshotPath } = await writeMigrationPair(args, {
     startedFrom: startOf(previous),
+    ...(planned.step === undefined ? {} : { step: planned.step }),
     companions: companionFiles.map(
       ({ spec, opts }) =>
         () =>
@@ -1793,7 +1902,177 @@ export async function generateMigration(
       decisions.filter(d => d.accepted).length + groupRenames.accepted,
     settingsChanges: changedSettings,
     permissionChanges: changedPermissions,
-    deletions: judged.all,
+    deletions,
+    ...(planned.step === undefined
+      ? {}
+      : { moveStep: stepPaths(args, planned.step) }),
+  };
+}
+
+/** A move step's file, under the name it is written with (`moveStepOf`). */
+interface MoveStepFile {
+  baseName: string;
+  pair: MigrationPair;
+  operations: readonly Operation[];
+  settingsChanges: EntitySettingsChange[];
+  deletions: Deletion[];
+}
+
+/** Where a step's file and snapshot are written, and its text. */
+function stepPaths(
+  args: Pick<GenerateArgs, "migrationsDir">,
+  { baseName, pair }: MoveStepFile
+): NonNullable<GenerateResult["moveStep"]> {
+  return {
+    sqlPath: resolve(args.migrationsDir, `${baseName}.sql`),
+    snapshotPath: snapshotPathOf(pair.metaDir, baseName),
+    sqlContent: pair.sqlContent,
+  };
+}
+
+/** Writes a run's moves as its one migration: a run that changes nothing else. */
+async function writeMoveStep(
+  run: GenerateArgs,
+  step: MoveStepFile
+): Promise<GenerateResult> {
+  if (step.deletions.length > 0) await run.judgeDeletions?.(step.deletions);
+  const { sqlPath, snapshotPath } = await writeMigrationPair(run, step.pair);
+  return {
+    sqlPath,
+    snapshotPath,
+    sqlContent: step.pair.sqlContent,
+    companionFiles: [],
+    operationCount: step.operations.length,
+    renamesAccepted: 0,
+    settingsChanges: step.settingsChanges,
+    permissionChanges: [],
+    deletions: step.deletions,
+  };
+}
+
+/**
+ * A MySQL run's moves as a migration of their own (`move-step.ts`): the tables and the declarations
+ * the moves alone leave, the statements that take the database there and back, and the snapshot that
+ * says so, which the rest of the run starts from. Its last transaction on MySQL holds the copied
+ * values, the registry row and the file's record: the row changes with the values it names.
+ */
+function moveStepOf(
+  start: RunStart,
+  previous: NonNullable<RunStart["previous"]>,
+  moves: RunMoves,
+  now: Date
+): {
+  after: SnapshotFile;
+  named: (name: string) => MoveStepFile;
+} {
+  const { args, previousSnapshot, desiredSnapshot } = start;
+  const { dialect } = args;
+  const after = (tables: readonly TableSpec[]) =>
+    tablesAfterMoves(tables, desiredSnapshot.tables, moves);
+  const stepSnapshot = {
+    ...previousSnapshot,
+    tables: after(previousSnapshot.tables),
+  };
+  const operations = diffSnapshots(previousSnapshot, stepSnapshot);
+  const declarations = declarationsAfterMoves(
+    previous.data.entities,
+    settingsRecordOf(args),
+    moves.entities
+  );
+  const touched = new Set(moves.valuesMovedIn);
+  const rows = registryRowsFor(
+    touched,
+    new Set(),
+    { metadataUpserts: args.registryRowsOf?.(declarations.moved) ?? [] },
+    dialect
+  );
+  const { up, down } = moves.appended;
+  const sqlStatements = [
+    ...up.first,
+    ...generateStatements(operations, dialect, stepSnapshot.tables),
+    ...up.last,
+    // The registry rows come once every value is where the new definition reads it.
+    ...rows.up,
+  ];
+  // The way back makes a column the moves left optional required again only once the values are
+  // back in it.
+  const left = columnKeysOf(moves.valueMoves);
+  const inverse = buildInverseOperations(operations, previousSnapshot).filter(
+    op =>
+      !(
+        op.type === "change_column_nullable" &&
+        left.has(columnKey(op.tableName, op.columnName))
+      )
+  );
+  const downSqlStatements = [
+    ...down.first,
+    ...generateStatements(inverse, dialect, previousSnapshot.tables),
+    ...down.last,
+    ...requiredOnceRefilled(moves.valueMoves, dialect, previousSnapshot),
+    ...rows.down,
+  ];
+  const settingsChanges =
+    declarations.recorded === undefined
+      ? []
+      : settingsChangesBetween(previous.data.entities, declarations.recorded);
+  const judged = judgedDeletions({
+    files: [mainFileStatements(sqlStatements, dialect)],
+    main: 0,
+    dialect,
+    previous: previousSnapshot,
+    plan: { operations, translationMoves: moves.valueMoves },
+  });
+  const slugsOf = (entities: readonly MinimalConfigEntity[]) =>
+    entities
+      .filter(entity => touched.has(entity.tableName))
+      .map(entity => entity.slug)
+      .sort();
+  const written = {
+    ...previous.data.snapshot,
+    tables: after(previous.data.snapshot.tables),
+  };
+  const baseNameOf = (name: string) =>
+    `${formatTimestamp(now)}_${slugify(name)}`;
+  return {
+    after: {
+      ...previous.data,
+      snapshot: written,
+      ...(declarations.recorded === undefined
+        ? {}
+        : { entities: declarations.recorded }),
+    },
+    named: name => ({
+      baseName: baseNameOf(name),
+      operations,
+      settingsChanges,
+      deletions: judged.main,
+      pair: {
+        name,
+        startedFrom: startOf(previous),
+        metaDir: resolve(args.migrationsDir, "meta"),
+        now,
+        sqlContent: formatMigrationFile({
+          name,
+          dialect,
+          sqlStatements,
+          downSqlStatements,
+          collections: slugsOf(args.collections),
+          singles: slugsOf(args.singles),
+          components: slugsOf(args.components),
+          hasUserExt: false,
+          settingsChanges: settingsChanges.map(describeSettingsChange),
+          permissionChanges: [],
+          deletions: judged.main,
+          changesNoTable: false,
+          tableChangesInCompanionFiles: false,
+          now,
+        }),
+        written,
+        contributions: previous.data.contributions,
+        entities: declarations.recorded,
+        permissions: previous.data.permissions,
+      },
+    }),
   };
 }
 
@@ -2116,8 +2395,12 @@ async function recordSnapshot(
 
 /** A migration's `.sql` content and what its paired snapshot records. */
 interface MigrationPair {
+  /** The name of a pair that is not named as its run is: a move step's. */
+  name?: string;
   /** The snapshot file the run started from (`startOf`), checked again as it writes. */
   startedFrom: string | undefined | null;
+  /** The move step put in place ahead of the pair, whose snapshot the pair starts from. */
+  step?: MoveStepFile;
   /**
    * Prepares each of the run's companion migration files, to be put in place
    * with its own in one step. Absent where the run has none.
@@ -2168,11 +2451,30 @@ async function writeMigrationPair(
   args: Pick<GenerateArgs, "migrationsDir" | "name" | "dryRun">,
   pair: MigrationPair
 ): Promise<{ sqlPath: string; snapshotPath: string }> {
-  const baseName = `${formatTimestamp(pair.now)}_${slugify(args.name)}`;
+  const baseName = `${formatTimestamp(pair.now)}_${slugify(pair.name ?? args.name)}`;
   const sqlPath = resolve(args.migrationsDir, `${baseName}.sql`);
   // Where `writeSnapshot` puts it, by the writer's own rule.
   const snapshotPath = snapshotPathOf(pair.metaDir, baseName);
   if (args.dryRun === true) return { sqlPath, snapshotPath };
+  const { step } = pair;
+  // The migration file the first pair starts from: the step's, where there is one.
+  const startedFrom =
+    step === undefined ? pair.startedFrom : step.pair.startedFrom;
+  const snapshotOf = (
+    each: MigrationPair,
+    base: string,
+    line: Parameters<typeof prepareSnapshot>[7]
+  ) =>
+    prepareSnapshot(
+      each.metaDir,
+      base,
+      each.written,
+      each.sqlContent,
+      each.contributions,
+      each.entities,
+      each.permissions,
+      line
+    );
   // As the folder's holder (`publishHeld`): every file written in full
   // aside, the companions with the pair, so one that cannot be written leaves
   // no migration without it. The last checks are made, then each is put in
@@ -2186,28 +2488,41 @@ async function writeMigrationPair(
       args.migrationsDir,
       async () => {
         await mkdir(args.migrationsDir, { recursive: true });
+        const line = await lineFrom(args.migrationsDir, startedFrom);
+        const ahead =
+          step === undefined
+            ? []
+            : [
+                () => snapshotOf(step.pair, step.baseName, line),
+                () =>
+                  prepareWhole(
+                    resolve(args.migrationsDir, `${step.baseName}.sql`),
+                    step.pair.sqlContent
+                  ),
+              ];
         const files = await prepareAll([
+          ...ahead,
           () => prepareWhole(sqlPath, pair.sqlContent),
-          async () =>
-            prepareSnapshot(
-              pair.metaDir,
+          () =>
+            snapshotOf(
+              pair,
               baseName,
-              pair.written,
-              pair.sqlContent,
-              pair.contributions,
-              pair.entities,
-              pair.permissions,
-              await lineFrom(args.migrationsDir, pair.startedFrom)
+              // Written from the step, which records whatever the folder's other ends merge.
+              step === undefined || line === undefined
+                ? line
+                : { parent: step.baseName, merges: [] }
             ),
           ...(pair.companions ?? []),
         ]);
-        return inRunOrder(files, sqlPath);
+        return [
+          ...files.slice(0, ahead.length),
+          ...inRunOrder(files.slice(ahead.length), sqlPath),
+        ];
       },
       {
         // Still from the newest snapshot: one written since would make this a
         // second migration from the one it started at.
-        stillCurrent: () =>
-          refuseMovedFrom(args.migrationsDir, pair.startedFrom),
+        stillCurrent: () => refuseMovedFrom(args.migrationsDir, startedFrom),
       }
     );
   // Under the hold the running writer has, or one taken here for a caller
@@ -3613,8 +3928,11 @@ async function movesMadeInCode(
   });
 }
 
-/** `args` with the moves made in code beside the ones its caller gave, where there are any. */
-function withCodeMoves(args: GenerateArgs, moves: CodeMovesPlan): GenerateArgs {
+/**
+ * `args` with `moves` joined to it: their statements around the caller's own and the generated ones,
+ * the copy into a group before any drop and the copy out of one after every add, and their facts.
+ */
+function withMoves(args: RunArgs, moves: Omit<RunMoves, "entities">): RunArgs {
   const { up, down } = moves.appended;
   const statements =
     up.first.length + up.last.length + down.first.length + down.last.length;
@@ -3626,13 +3944,12 @@ function withCodeMoves(args: GenerateArgs, moves: CodeMovesPlan): GenerateArgs {
     return args;
   }
   const given = args.appendedStatements;
-  // The caller's statements keep their place around the moves': first ones first, last ones last.
   const joined = (
     mine: AddedStatements,
     theirs: AddedStatements | undefined
   ) => ({
-    first: [...(theirs?.first ?? []), ...mine.first],
-    last: [...mine.last, ...(theirs?.last ?? [])],
+    first: [...mine.first, ...(theirs?.first ?? [])],
+    last: [...(theirs?.last ?? []), ...mine.last],
   });
   return {
     ...args,
@@ -3651,20 +3968,20 @@ function withCodeMoves(args: GenerateArgs, moves: CodeMovesPlan): GenerateArgs {
 
 /** The tables whose values the caller's appended statements move (`valuesMovedIn`). */
 function valuesMovedIn(
-  args: Pick<GenerateArgs, "valuesMovedIn">
+  args: Pick<RunArgs, "valuesMovedIn">
 ): readonly string[] {
   return args.valuesMovedIn ?? [];
 }
 
 /** Whether the caller's appended statements move any table's values. */
-function movesValues(args: Pick<GenerateArgs, "valuesMovedIn">): boolean {
+function movesValues(args: Pick<RunArgs, "valuesMovedIn">): boolean {
   return valuesMovedIn(args).length > 0;
 }
 
 /** The columns the way down re-adds and then fills: each joining field's, and each moved field's. */
 function refilledOnTheWayDown(
   joins: readonly FieldJoinsEntry[],
-  moves: GenerateArgs["valueMoves"]
+  moves: RunArgs["valueMoves"]
 ): { table: string; column: string }[] {
   return [
     ...joins.flatMap(({ plan }) =>

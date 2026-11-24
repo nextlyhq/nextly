@@ -31,20 +31,17 @@ import {
   type EntitySettingsRecord,
   type SettingsEntityKind,
 } from "./entity-settings";
-import type { AddedStatements, MinimalConfigEntity } from "./generate";
+import type { MinimalConfigEntity } from "./generate";
+import type { MovedEntity, RunMoves } from "./move-step";
 import { placeOf, type MoveCandidate, type MoveDecision } from "./prompt-moves";
 
-/** What the accepted moves add to the migration, in the generator's own terms. */
-export interface CodeMovesPlan {
-  appended: { up: AddedStatements; down: AddedStatements };
-  valueMoves: { table: string; column: string; reason: string }[];
-  refilledColumns: { table: string; column: string }[];
-  valuesMovedIn: string[];
+/** What the accepted moves add to the migration, and what each declined one leaves it. */
+export interface CodeMovesPlan extends RunMoves {
   /**
    * The row columns each declined move drops or adds: the person said it is not a move, so its
    * drop and add stay a delete and an add, never paired as a rename (`withoutMovedColumns`).
    */
-  declined: { table: string; column: string }[];
+  declined: readonly { table: string; column: string }[];
 }
 
 export const NO_CODE_MOVES: CodeMovesPlan = {
@@ -52,6 +49,7 @@ export const NO_CODE_MOVES: CodeMovesPlan = {
   valueMoves: [],
   refilledColumns: [],
   valuesMovedIn: [],
+  entities: [],
   declined: [],
 };
 
@@ -260,8 +258,9 @@ export async function planCodeMoves(run: CodeMovesRun): Promise<CodeMovesPlan> {
   // The drafts stops of every entity lead each side of the file, before any entity's values move.
   const stops: { up: string[]; down: string[] } = { up: [], down: [] };
   const planned: { moves: EntityMoves; table: string }[] = [];
+  const entities: MovedEntity[] = [];
   const unrecorded: string[] = [];
-  const declined: CodeMovesPlan["declined"] = [];
+  const declined: { table: string; column: string }[] = [];
   for (const { kind, entity } of run.entities) {
     const accepted = await acceptedMovesOf(run, kind, entity);
     if (accepted === "unrecorded") unrecorded.push(entity.slug);
@@ -272,6 +271,12 @@ export async function planCodeMoves(run: CodeMovesRun): Promise<CodeMovesPlan> {
     const drafts = draftsStopsOf(run, kind, entity.slug, accepted.moves);
     stops.up.push(...drafts.up);
     stops.down.push(...drafts.down);
+    entities.push({
+      kind,
+      slug: entity.slug,
+      before: accepted.before,
+      moves: accepted.moves,
+    });
     planned.push({
       table: entity.tableName,
       moves: plannedOrRefused(
@@ -318,6 +323,7 @@ export async function planCodeMoves(run: CodeMovesRun): Promise<CodeMovesPlan> {
     valueMoves: facts.flatMap(f => f.valueMoves),
     refilledColumns: facts.flatMap(f => f.refilledColumns),
     valuesMovedIn: facts.flatMap(f => f.valuesMovedIn),
+    entities,
     declined,
   };
 }

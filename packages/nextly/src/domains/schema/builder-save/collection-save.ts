@@ -3079,24 +3079,6 @@ async function needsAdopting(
   return deps.adapter.tableExists(table);
 }
 
-type MovesFacts = Pick<
-  GenerateArgs,
-  "valueMoves" | "refilledColumns" | "valuesMovedIn"
->;
-
-/** The facts of a save's moves the generator takes, each left out where the moves have none. */
-function movesFacts(args: MovesFacts): MovesFacts {
-  const facts: MovesFacts = {};
-  if ((args.valueMoves?.length ?? 0) > 0) facts.valueMoves = args.valueMoves;
-  if ((args.refilledColumns?.length ?? 0) > 0) {
-    facts.refilledColumns = args.refilledColumns;
-  }
-  if ((args.valuesMovedIn?.length ?? 0) > 0) {
-    facts.valuesMovedIn = args.valuesMovedIn;
-  }
-  return facts;
-}
-
 /**
  * Generate the collection's migration from `manifest` into the folder, and
  * name every file the run wrote (its main file and any companion beside it),
@@ -3112,12 +3094,8 @@ async function generateFor(
     now: Date;
     tablesAsTheyStand?: TableSpec[];
     appended?: { up: AddedStatements; down: AddedStatements };
-    /** Columns the save drops whose values its moves copied first (`movesOf`). */
-    valueMoves?: GenerateArgs["valueMoves"];
-    /** Columns the save adds that its moves fill last (`movesOf`). */
-    refilledColumns?: GenerateArgs["refilledColumns"];
-    /** The table whose values the save's moves carry, where they carry any (`movesOf`). */
-    valuesMovedIn?: GenerateArgs["valuesMovedIn"];
+    /** The save's moves of fields between containers, where it makes any (`movesOf`). */
+    moves?: GenerateArgs["moves"];
     newTableKeys?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
     existingTableKeys?: GenerateArgs["foreignKeysOfExistingTables"];
     resolutions?: readonly ColumnResolution[];
@@ -3169,6 +3147,7 @@ async function generateFor(
     }),
     metadataUpserts: inputs.metadataUpserts,
     previousMetadataUpserts: inputs.previousMetadataUpserts,
+    registryRowsOf: inputs.registryRowsOf,
     appStream: inputs.appStream,
     defaultLocale: deps.config.localization?.defaultLocale,
     // The site's order, which decides the value a field leaving translation keeps, from the same
@@ -3193,7 +3172,7 @@ async function generateFor(
     ...(args.appended === undefined
       ? {}
       : { appendedStatements: args.appended }),
-    ...movesFacts(args),
+    ...(args.moves === undefined ? {} : { moves: args.moves }),
     ...(args.newTableKeys === undefined
       ? {}
       : { foreignKeysOfNewTables: args.newTableKeys }),
@@ -3232,8 +3211,7 @@ async function generateFor(
 function addedStatements(
   deps: CollectionSaveDeps,
   save: CollectionSave,
-  table: string,
-  moves: EntityMoves = NO_MOVES
+  table: string
 ): { up: AddedStatements; down: AddedStatements } {
   const junctions =
     save.junctions === undefined
@@ -3243,16 +3221,14 @@ function addedStatements(
     save.keys === undefined || save.entity === null || save.previous === null
       ? emptyAdded()
       : keyChanges(deps.adapter.getCapabilities().dialect, table, save.keys);
-  // A move's copy into a group leads the file, before any drop; its copy out of one ends it,
-  // after every add; each way down the other way round.
   return {
     up: {
-      first: [...moves.up.first, ...keys.up.first, ...junctions.up.first],
-      last: [...junctions.up.last, ...keys.up.last, ...moves.up.last],
+      first: [...keys.up.first, ...junctions.up.first],
+      last: [...junctions.up.last, ...keys.up.last],
     },
     down: {
-      first: [...moves.down.first, ...keys.down.first, ...junctions.down.first],
-      last: [...junctions.down.last, ...keys.down.last, ...moves.down.last],
+      first: [...keys.down.first, ...junctions.down.first],
+      last: [...junctions.down.last, ...keys.down.last],
     },
   };
 }
@@ -3265,8 +3241,8 @@ const NO_MOVES: EntityMoves = {
 };
 
 /**
- * The change file's added statements and the columns its moves drop, with the save's moves
- * planned between the definitions before and after it: a move refused here stops the save before
+ * The change file's added statements, and the save's moves planned between the definitions before
+ * and after it, which the generator places around them: a move refused here stops the save before
  * anything is written.
  */
 async function movesOf(
@@ -3275,16 +3251,25 @@ async function movesOf(
   table: string
 ): Promise<{
   appended: { up: AddedStatements; down: AddedStatements };
-  valueMoves: NonNullable<GenerateArgs["valueMoves"]>;
-  refilledColumns: NonNullable<GenerateArgs["refilledColumns"]>;
-  valuesMovedIn: NonNullable<GenerateArgs["valuesMovedIn"]>;
+  moves: NonNullable<GenerateArgs["moves"]>;
 }> {
-  const moves = plannedMovesOf(deps, save, table);
+  const planned = plannedMovesOf(deps, save, table);
   // The header names each dropped column as the move it is, with what the group does not carry.
-  const sentences = await moveSentencesOf(deps, moves);
+  const sentences = await moveSentencesOf(deps, planned);
   return {
-    appended: addedStatements(deps, save, table, moves),
-    ...movesFileFacts(moves, table, sentences),
+    appended: addedStatements(deps, save, table),
+    moves: {
+      appended: { up: planned.up, down: planned.down },
+      ...movesFileFacts(planned, table, sentences),
+      entities: [
+        {
+          kind: kindOf(save).kind,
+          slug: save.slug,
+          before: (save.previous?.fields ?? []) as FieldDefinition[],
+          moves: save.moves ?? [],
+        },
+      ],
+    },
   };
 }
 
