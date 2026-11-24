@@ -144,6 +144,7 @@ import {
   populateCompanionFieldsAllLocales,
   populateTranslationStatus,
   selectEntryWithCompanion,
+  structuresBeside,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -2354,7 +2355,16 @@ export class SingleQueryService extends BaseService {
     if (!companion) return;
     // Read into a copy keyed by id, then attached beside the document's own
     // values: the document keeps every field in its own language and type.
-    const everyLanguage: Record<string, unknown> = { id: doc.id };
+    // Its repeaters and groups keeping one structure carry it, for each language's text to be
+    // laid on (`structuresBeside`).
+    const everyLanguage: Record<string, unknown> = {
+      id: doc.id,
+      ...(await structuresBeside(
+        doc,
+        companion.localizedFields,
+        this.adapter.getDrizzle()
+      )),
+    };
     await populateCompanionFieldsAllLocales({
       db: this.adapter.getDrizzle(),
       companionTable: companion.table,

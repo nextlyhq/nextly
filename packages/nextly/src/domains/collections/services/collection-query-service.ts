@@ -162,15 +162,16 @@ import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
   buildLocalizedOrderExpr,
   buildTranslationStatusCondition,
-  TRANSLATION_FILTER_STATES,
-  TRANSLATION_OVERVIEW_KEY,
   fillCompanionFields,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
   populateTranslationStatus,
   selectEntryWithCompanion,
-  type TranslationStatusFilter,
+  structuresBeside,
+  TRANSLATION_FILTER_STATES,
+  TRANSLATION_OVERVIEW_KEY,
   type TranslationFilterState,
+  type TranslationStatusFilter,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
@@ -1396,7 +1397,14 @@ export class CollectionQueryService extends BaseService {
     if (!companion) return;
     // Read into copies keyed by id, then attached beside each row's own values:
     // the row keeps every field in its own language and type.
-    const everyLanguage = rows.map(row => ({ id: row.id }));
+    // Each row's repeaters and groups keeping one structure carry it, for each language's text to
+    // be laid on (`structuresBeside`).
+    const everyLanguage = await Promise.all(
+      rows.map(async row => ({
+        id: row.id,
+        ...(await structuresBeside(row, companion.localizedFields, this.db)),
+      }))
+    );
     await populateCompanionFieldsAllLocales({
       db: this.db as never,
       companionTable: companion.table,

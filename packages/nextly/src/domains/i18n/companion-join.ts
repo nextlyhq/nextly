@@ -42,6 +42,7 @@ import { withComponentShapes } from "./runtime/component-shapes";
 import {
   assembleStoredValue,
   type SharedStructureShape,
+  splitStoredValue,
   type StructuredField,
 } from "./shared-structure";
 import type { TranslationFilterState } from "./translation-filter-states";
@@ -752,6 +753,31 @@ export interface PopulateCompanionAllArgs {
   readiness: CompanionReadiness | undefined;
   /** See {@link CompanionReadBudget.maxParams}. */
   maxParams?: number;
+}
+
+/**
+ * The structures of `source`'s repeaters and groups keeping one structure in every language, by
+ * field name: what an every-language read lays each language's overlay on
+ * (`populateCompanionFieldsAllLocales`), which reads into rows holding their id alone. Taken from a
+ * row as read (one language's text on it) or as stored: either way its structure alone, the text
+ * split off by its shape, read with its components' fields on `db`.
+ */
+export async function structuresBeside(
+  source: Record<string, unknown>,
+  localizedFields: readonly LocalizedFieldRef[],
+  db: unknown
+): Promise<Record<string, unknown>> {
+  if (!localizedFields.some(field => field.sharedStructure)) return {};
+  const refs = await withComponentShapes(localizedFields, db);
+  const out: Record<string, unknown> = {};
+  for (const field of refs) {
+    if (!field.sharedStructure || !Object.hasOwn(source, field.name)) continue;
+    out[field.name] = splitStoredValue(
+      source[field.name],
+      field.sharedStructure
+    ).structure;
+  }
+  return out;
 }
 
 /**

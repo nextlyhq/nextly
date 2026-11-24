@@ -519,4 +519,41 @@ describeEachDialect("one structure across languages", dialect => {
     },
     BOOT_TIMEOUT
   );
+
+  it(
+    "gives every language's repeater and group, each assembled with that language's own text, in an every-language read",
+    async () => {
+      const { nextly } = await site();
+      const { id, first, second } = await translatedArticle(nextly);
+
+      const read = (await nextly.findByID({
+        collection: "articles",
+        id,
+        locale: "en",
+        translations: "all",
+      } as never)) as {
+        _allLocales?: Record<string, Record<string, unknown>>;
+      };
+
+      const slides = read._allLocales?.slides as
+        | Record<string, Slide[] | null>
+        | undefined;
+      // Each language's rows, the one structure with its own text: never the text alone.
+      expect(
+        slides?.es?.map(({ id: row, caption, rank }) => [row, caption, rank])
+      ).toEqual([
+        [first, "primero", 1],
+        [second, "segundo", 2],
+      ]);
+      expect(slides?.en?.map(slide => slide.caption)).toEqual([
+        "first",
+        "second",
+      ]);
+      expect(read._allLocales?.seo).toMatchObject({
+        en: { headline: "Read me", weight: 5 },
+        es: { headline: "Léeme", weight: 5 },
+      });
+    },
+    BOOT_TIMEOUT
+  );
 });
