@@ -212,4 +212,111 @@ describe("generateMigration: overlay columns of containers keeping one structure
       "slides"
     );
   });
+
+  /** The latest snapshot's spec of `column` on `table`. */
+  async function snapshotColumn(
+    table: string,
+    column: string
+  ): Promise<{ name: string; nullable: boolean } | undefined> {
+    const meta = resolve(migrationsDir, "meta");
+    const files = (await readdir(meta))
+      .filter(f => f.endsWith(".snapshot.json"))
+      .sort();
+    const snap = JSON.parse(
+      await readFile(resolve(meta, files[files.length - 1]!), "utf-8")
+    );
+    const found = snap.snapshot.tables.find(
+      (t: { name: string }) => t.name === table
+    );
+    return found?.columns.find((c: { name: string }) => c.name === column);
+  }
+
+  // A required repeater translated whole before has no main-table column; the one its structure
+  // now takes is filled by `nextly migrate`'s data step after the migrations, so it is added
+  // nullable, and only a later run makes it NOT NULL as declared. Added NOT NULL to a table with
+  // rows, the migration is refused before the data step can run.
+  it.each(["sqlite", "postgresql", "mysql"] as const)(
+    "adds a required container's structure column nullable, the run it stops being translated whole (%s)",
+    async dialect => {
+      const required = { ...SLIDES, required: true };
+      const before: MinimalConfigEntity = {
+        slug: "pages",
+        tableName: "dc_pages",
+        localized: true,
+        fields: [
+          { name: "title", type: "text" },
+          { ...required, localized: true },
+        ],
+      };
+      const run = (name: string, collection: MinimalConfigEntity, now: Date) =>
+        generateMigration({
+          name,
+          dialect,
+          migrationsDir,
+          defaultLocale: "en",
+          collections: [collection],
+          singles: [],
+          components: [],
+          nonInteractive: true,
+          now,
+        });
+      await run("create_pages", before, NOW);
+      // The control: translated whole, no column on the main table.
+      expect(await snapshotColumn("dc_pages", "slides")).toBeUndefined();
+
+      await run(
+        "one_structure",
+        { ...before, fields: [{ name: "title", type: "text" }, required] },
+        LATER
+      );
+      expect(await snapshotColumn("dc_pages", "slides")).toMatchObject({
+        nullable: true,
+      });
+
+      // The next run finds it there and no longer translated whole: required as declared.
+      await run(
+        "settled",
+        { ...before, fields: [{ name: "title", type: "text" }, required] },
+        new Date("2026-11-20T14:00:00.000Z")
+      );
+      expect(await snapshotColumn("dc_pages", "slides")).toMatchObject({
+        nullable: false,
+      });
+    }
+  );
+
+  // Turning translation off brings each translated column home and drops the translations table;
+  // a container's text, kept apart by row, cannot be brought back that way, and every language's
+  // text there would be lost. Refused, naming the entity and the container, before any file.
+  it.each(["sqlite", "postgresql", "mysql"] as const)(
+    "refuses turning translation off for an entity whose container keeps its text per language (%s)",
+    async dialect => {
+      const pages: MinimalConfigEntity = {
+        slug: "pages",
+        tableName: "dc_pages",
+        localized: true,
+        fields: [{ name: "title", type: "text" }, SLIDES],
+      };
+      const run = (collection: MinimalConfigEntity, now: Date) =>
+        generateMigration({
+          name: "pages",
+          dialect,
+          migrationsDir,
+          defaultLocale: "en",
+          collections: [collection],
+          singles: [],
+          components: [],
+          nonInteractive: true,
+          now,
+        });
+      await run(pages, NOW);
+      const written = (await readdir(migrationsDir)).length;
+
+      await expect(run({ ...pages, localized: false }, LATER)).rejects.toThrow(
+        /Turning translation off for the collection "pages" isn't supported yet: its repeaters and groups "slides" keep their text per language/
+      );
+      // Nothing was written.
+      expect((await readdir(migrationsDir)).length).toBe(written);
+    }
+  );
 });

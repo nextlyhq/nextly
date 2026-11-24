@@ -45,6 +45,7 @@ import {
   deriveCompanionSpec,
   deriveCompanionTableSpec,
 } from "../../i18n/migration/derive-companion-spec";
+import { disableKeepingOverlaysRefusal } from "../../i18n/migration/disable-keeping-overlays";
 import { planFieldAddedToTranslationMigration } from "../../i18n/migration/field-added-to-translation";
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import {
@@ -59,6 +60,10 @@ import {
 } from "../../i18n/migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import { copyLiveness } from "../../i18n/migration/generate-down";
+import {
+  buildDefaultLocaleRefreshStatements,
+  buildMissingDefaultRowsInsert,
+} from "../../i18n/migration/generate-up";
 import {
   planCompanionMigration,
   type CompanionMigrationPlan,
@@ -1017,8 +1022,24 @@ export async function generateMigration(
     previousContributions: previous?.data.contributions ?? {},
     desired: withTablesAsTheyStand(
       buildDesiredSnapshotFromConfig(
-        args.collections,
-        args.singles,
+        // A required container leaving whole translation is added nullable in this run, its
+        // rows filled after the migrations (`withStagedContainerColumns`).
+        args.collections.map(c =>
+          withStagedContainerColumns(
+            c,
+            "collection",
+            previous?.data.snapshot,
+            args.dialect
+          )
+        ),
+        args.singles.map(c =>
+          withStagedContainerColumns(
+            c,
+            "single",
+            previous?.data.snapshot,
+            args.dialect
+          )
+        ),
         args.components,
         args.dialect
       ),
@@ -2813,6 +2834,24 @@ function withRestoredAs(
  * transition is emitted — that self-heals as soon as one migrate:create runs while the
  * entity is still localized.
  */
+/**
+ * Refuse, before any file is written, turning translation off for an entity whose repeaters or
+ * groups keep their text per language: the containers with an overlay column in the previous
+ * snapshot (`overlayColumns`), by the rule every road that turns translation off keeps
+ * (`disableKeepingOverlaysRefusal`).
+ */
+function refuseDisableKeepingOverlays(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  prevMain: TableSpec
+): void {
+  const refusal = disableKeepingOverlaysRefusal(
+    { kind, slug: entity.slug },
+    prevMain.overlayColumns ?? []
+  );
+  if (refusal) throw refusal;
+}
+
 function disableEntryFor(
   c: MinimalConfigEntity,
   entityKind: I18nTransitionKind,
@@ -2825,6 +2864,7 @@ function disableEntryFor(
 ): CompanionPlanEntry | undefined {
   const prevMain = previousSnapshot.tables.find(t => t.name === mainTable);
   if (prevMain?.localized !== true) return undefined;
+  refuseDisableKeepingOverlays(c, entityKind, prevMain);
   // Turning translation off moves every translated field out of it at once, so each is judged as
   // a field leaving translation alone is (`refusalsForFieldsLeavingTranslation`): one whose shared
   // column is shaped otherwise than its translated one is refused before any file is written. The
@@ -4046,9 +4086,12 @@ function overlayColumnsOf(
 /**
  * The file adding the overlay columns `entity`'s translations table gains in this run: each
  * container that keeps text inside now and had no overlay column in the previous snapshot
- * (`overlayColumns`), added empty, since no language has text there yet. Planned as a field added
- * to translation is (`planFieldAddedToTranslationMigration`), whose column is added and nothing
- * copied. Undefined when there is none.
+ * (`overlayColumns`). Planned as a field added to translation is
+ * (`planFieldAddedToTranslationMigration`), then each column seeded for the default language
+ * from the main table: a container already holding text there (its entity turning translation
+ * on, or a container starting to keep its text apart) has it copied whole into the default
+ * language's overlay, which every read takes as that language's text (`overlayOf`), so no
+ * language's first save leaves it without its text. Undefined when there is none.
  */
 function overlaysEntryFor(
   entity: MinimalConfigEntity,
@@ -4080,12 +4123,32 @@ function overlaysEntryFor(
     added,
     builtBy,
   });
+  // Seeded only from a container whose column the main table already had: one new in this run
+  // has nothing there to copy.
+  const onMain = new Set(prevTable?.columns.map(column => column.name) ?? []);
+  const columns = added.flatMap(field => {
+    const column = fieldToLocalizedColumnSpec(field, dialect, builtBy);
+    return column && onMain.has(column.name) ? [column.name] : [];
+  });
+  // The default language's rows take the main row's value; an entry with no such row gets one,
+  // with the main row's publishing state where each language has its own.
+  const seed =
+    columns.length === 0
+      ? []
+      : [
+          ...buildDefaultLocaleRefreshStatements(planned.spec, columns),
+          buildMissingDefaultRowsInsert(planned.spec, columns, {
+            status: planned.spec.status === true,
+          }),
+        ];
   return {
     spec: planned.spec,
     plan: {
       kind: "adds",
       spec: planned.spec,
-      upSql: planned.upSql,
+      upSql: [planned.upSql, ...seed.map(statement => `${statement};`)].join(
+        "\n\n"
+      ),
       downSql: planned.downSql,
     },
     entity: kind,
@@ -4180,6 +4243,48 @@ function stripRelocatedDrops(
     }
     return true;
   });
+}
+
+/**
+ * `entity` with each required repeater or group that was translated whole before, and so had no
+ * column on its main table, made optional for this run's main table: the column that now holds its
+ * one structure is added nullable, since the rows already there get their structure only from
+ * `nextly migrate`'s data step after the migrations, and a NOT NULL column added to rows that have
+ * no value is refused. The next run, which finds the column there and the container no longer
+ * translated whole, makes it required as declared. Nothing changes without a previous snapshot.
+ */
+function withStagedContainerColumns(
+  entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
+  existing: NextlySchemaSnapshot | undefined,
+  dialect: SupportedDialect
+): MinimalConfigEntity {
+  const previous = existing?.tables.find(t => t.name === entity.tableName);
+  if (!previous?.localizedColumns?.length) return entity;
+  const wasTranslated = new Set(previous.localizedColumns);
+  const onMain = new Set(previous.columns.map(column => column.name));
+  const staged = new Set(
+    overlayContainersOf(entity).filter(field => {
+      if (field.required !== true) return false;
+      const column = fieldToLocalizedColumnSpec(
+        field,
+        dialect,
+        columnOriginOf(entity, kind)
+      );
+      return (
+        column != null &&
+        wasTranslated.has(column.name) &&
+        !onMain.has(column.name)
+      );
+    })
+  );
+  if (staged.size === 0) return entity;
+  return {
+    ...entity,
+    fields: entity.fields.map(field =>
+      staged.has(field) ? { ...field, required: false } : field
+    ),
+  };
 }
 
 /**
