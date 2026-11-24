@@ -15,6 +15,7 @@
  */
 import { execFile } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   mkdtempSync,
   readdirSync,
@@ -94,6 +95,26 @@ vi.mock("../../busy-table/run-unit", async original => {
     ) => {
       await stopHere(`unit:${args[2].source}`);
       return actual.runUnitInTries(...args);
+    },
+  };
+});
+
+// A save brings a translations table in step after its file, through this function, whose statements
+// the file's stop points do not name: the save may be stopped once it has run, as a process killed
+// there, with the main file applied, the column gone and the registry row still to write.
+vi.mock("../../../i18n/migration/held-leaving-drops", async original => {
+  const actual =
+    await original<
+      typeof import("../../../i18n/migration/held-leaving-drops")
+    >();
+  return {
+    ...actual,
+    applyCompanionTransition: async (
+      ...args: Parameters<typeof actual.applyCompanionTransition>
+    ) => {
+      const answer = await actual.applyCompanionTransition(...args);
+      await stopHere("companion: after");
+      return answer;
     },
   };
 });
@@ -444,7 +465,9 @@ describe.each(
       kill.at = point => {
         passed.push(point);
         const here =
-          (point.startsWith("unit:") || point.startsWith("push:")) &&
+          (point.startsWith("unit:") ||
+            point.startsWith("push:") ||
+            point.startsWith("companion:")) &&
           armed &&
           at(point) === true;
         if (here) killedAt = point;
@@ -545,6 +568,26 @@ describe.each(
       const last = stdout.trim().split("\n").at(-1) ?? "[]";
       return JSON.parse(last) as Outcome[];
     }
+
+    /** What each of `operations` came to, one line each, as the output prints them. */
+    const outcomesOf = (outcomes: Outcome[]) =>
+      outcomes
+        .map(o =>
+          JSON.stringify({
+            kind: o.kind,
+            via: o.via,
+            ok: o.ok,
+            code: o.code,
+            message: o.message?.slice(0, 200),
+            detail: o.detail?.slice(0, 300),
+            items: o.items?.length,
+            item:
+              o.item === undefined
+                ? undefined
+                : Object.keys(o.item).slice(0, 12),
+          })
+        )
+        .join("\n");
 
     /** Writes setting the field under each name, one setting another field, and reads, both ways. */
     const operations = (field: string, n: number) => [
@@ -1372,18 +1415,21 @@ describe.each(
       async () => {
         const t = await boot({ translatable: true });
         const schemaVersion = await versionOf(t);
-        await killSave(t, afterStatement(dropsColumn("heading")), () =>
-          dispatchCollections(
-            {} as ServiceContainer,
-            "applySchemaChanges",
-            { collectionName: slug },
-            {
-              fields: [field("note")],
-              confirmed: true,
-              schemaVersion,
-              ...dropHeading(0),
-            }
-          )
+        await killSave(
+          t,
+          point => point === "companion: after",
+          () =>
+            dispatchCollections(
+              {} as ServiceContainer,
+              "applySchemaChanges",
+              { collectionName: slug },
+              {
+                fields: [field("note")],
+                confirmed: true,
+                schemaVersion,
+                ...dropHeading(0),
+              }
+            )
         );
         expect(await liveColumns(t), `killed at ${killedAt}`).not.toContain(
           "heading"
@@ -1403,6 +1449,16 @@ describe.each(
           { kind: "read", via: "rest" },
           { kind: "read", via: "api" },
         ]);
+
+        if (process.env.KILLED_OUT) {
+          appendFileSync(
+            process.env.KILLED_OUT,
+            `${expect.getState().currentTestName?.slice(-110) ?? "?"} | killed at ${killedAt}\n` +
+              outcomesOf([sets!, other!, rest!, api!]) +
+              "\n"
+          );
+          return;
+        }
 
         expect(sets!.code, JSON.stringify(sets)).toBe(
           "BUILDER_SAVE_FIELD_UNSETTLED"
@@ -1433,17 +1489,20 @@ describe.each(
           data: { note: "n", _overwrite: true },
         } as never);
         const schemaVersion = await versionOf(t, "dynamic_singles", hero);
-        await killSave(t, afterStatement(dropsColumn("heading")), () =>
-          dispatchSingles(
-            "applySingleSchemaChanges",
-            { slug: hero },
-            {
-              fields: [field("note")],
-              confirmed: true,
-              schemaVersion,
-              ...dropHeading(0),
-            }
-          )
+        await killSave(
+          t,
+          point => point === "companion: after",
+          () =>
+            dispatchSingles(
+              "applySingleSchemaChanges",
+              { slug: hero },
+              {
+                fields: [field("note")],
+                confirmed: true,
+                schemaVersion,
+                ...dropHeading(0),
+              }
+            )
         );
         expect(
           await liveColumns(t, `single_${hero}`),
@@ -1466,6 +1525,16 @@ describe.each(
           { kind: "single-read", via: "rest", slug: hero },
           { kind: "single-read", via: "api", slug: hero },
         ]);
+
+        if (process.env.KILLED_OUT) {
+          appendFileSync(
+            process.env.KILLED_OUT,
+            `${expect.getState().currentTestName?.slice(-110) ?? "?"} | killed at ${killedAt}\n` +
+              outcomesOf([sets!, other!, rest!, api!]) +
+              "\n"
+          );
+          return;
+        }
 
         expect(sets!.code, JSON.stringify(sets)).toBe(
           "BUILDER_SAVE_FIELD_UNSETTLED"
