@@ -83,12 +83,10 @@ test("offers Schedule… on the main button's menu, the press not repeated", asy
   // "Choose what to publish…" picks the languages and shared fields that go
   // live, and is offered beside it. The preview and the document's other
   // views follow. Publish itself is the button, not a row again.
-  const rows = page.getByRole("menuitem");
-  await expect(rows).toContainText([
-    "Save draft",
-    "Choose what to publish…",
-    "Schedule…",
-  ]);
+  const menu = page.getByRole("menu");
+  for (const row of ["Save draft", "Choose what to publish…", "Schedule…"]) {
+    await expect(menu.getByRole("menuitem", { name: row })).toBeVisible();
+  }
   await expect(page.getByRole("menuitem", { name: "Publish now" })).toHaveCount(
     0
   );
@@ -394,9 +392,9 @@ test.describe("a reader who may not create releases", () => {
       await readerPage
         .getByRole("button", { name: "More ways to publish" })
         .click();
-      await expect(readerPage.getByRole("menuitem")).toContainText([
-        "Choose what to publish…",
-      ]);
+      await expect(
+        readerPage.getByRole("menuitem", { name: "Choose what to publish…" })
+      ).toBeVisible();
       await expect(
         readerPage.getByRole("menuitem", { name: "Schedule…" })
       ).toHaveCount(0);

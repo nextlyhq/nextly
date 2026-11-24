@@ -6,7 +6,8 @@
  *
  * It offers the person themselves, the roles the part waits for (each as the
  * whole role), and the people holding one of those roles, read only for a
- * person who may list people. Those are the assignees the server accepts, as
+ * person who may list people. A search at the top asks the people list for
+ * the name typed, so someone past its first page is found as well. Those are the assignees the server accepts, as
  * the part's review state names them: an assignee must hold the stage's
  * primary step, and the roles it waits for are the ones that do. The server
  * still judges every assignment; a refusal is said in a toast. A part already
@@ -23,6 +24,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  Input,
 } from "@nextlyhq/ui";
 import type { JSX } from "react";
 import { useState } from "react";
@@ -37,12 +39,15 @@ import type { ReleaseDocumentRef } from "@admin/types/releases";
 import type { UserApiResponse } from "@admin/types/user";
 import type { PartReview, ReviewAssignee } from "@admin/types/workflows";
 
-/** Enough people for a choice, in one page. */
-const ONE_PAGE = {
-  pagination: { page: 0, pageSize: 100 },
-  sorting: [],
-  filters: {},
-};
+/** One page of people, narrowed by the name typed where there is one. */
+function peopleQuery(search: string) {
+  const term = search.trim();
+  return {
+    pagination: { page: 0, pageSize: 100 },
+    sorting: [],
+    filters: term === "" ? {} : { search: term },
+  };
+}
 
 /** One row of the picker: whom it assigns to, and what it says. */
 interface AssignOption {
@@ -113,8 +118,11 @@ export function AssignPicker({
   // People are read once the menu is first opened, and only for a person who
   // may list them: the roles alone are offered to everyone else.
   const [opened, setOpened] = useState(false);
+  const [search, setSearch] = useState("");
   const mayListPeople = has("read-users");
-  const people = useUsers(ONE_PAGE, { enabled: opened && mayListPeople });
+  const people = useUsers(peopleQuery(search), {
+    enabled: opened && mayListPeople,
+  });
   const options = assignOptions({
     part,
     me,
@@ -145,6 +153,21 @@ export function AssignPicker({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-48">
+        {mayListPeople ? (
+          <div className="p-1.5">
+            <Input
+              type="search"
+              aria-label="Find a person"
+              placeholder="Find a person…"
+              className="h-8 text-xs"
+              value={search}
+              onChange={event => setSearch(event.target.value)}
+              // The menu's own keys (typeahead, arrows) stay off the field
+              // while a name is typed in it.
+              onKeyDown={event => event.stopPropagation()}
+            />
+          </div>
+        ) : null}
         {options.map(option => (
           <DropdownMenuItem
             key={option.key}

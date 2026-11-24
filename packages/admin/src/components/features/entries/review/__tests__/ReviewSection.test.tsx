@@ -315,6 +315,46 @@ describe("ReviewSection", () => {
     );
   });
 
+  it("searches the people beyond the first page by name, as they type", async () => {
+    // One page of people is not every one of them: the picker asks the same
+    // list for the name typed, rather than treating its first page as all.
+    held.slugs = new Set(["read-users"]);
+    usersSpy.mockImplementation(
+      async (params: { filters?: { search?: string } }) =>
+        params.filters?.search === "zara"
+          ? {
+              items: [
+                {
+                  id: "zara",
+                  name: "Zara Khan",
+                  email: "zara@x",
+                  roles: [{ id: "r-ed" }],
+                },
+              ],
+              meta: {},
+            }
+          : { items: [], meta: {} }
+    );
+    fetchSpy.mockResolvedValue(answer(part()));
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    await userEvent.click(
+      within(section).getByRole("button", { name: "Assign…" })
+    );
+    await userEvent.type(
+      await screen.findByRole("searchbox", { name: "Find a person" }),
+      "zara"
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Zara Khan" })
+    );
+    await waitFor(() =>
+      expect(assignSpy).toHaveBeenCalledWith([
+        expect.objectContaining({ assignee: { kind: "user", id: "zara" } }),
+      ])
+    );
+  });
+
   it("lists no people for a person who may not list them", async () => {
     fetchSpy.mockResolvedValue(answer(part()));
     render(<ReviewSection document={post} />);
@@ -324,6 +364,8 @@ describe("ReviewSection", () => {
       "Editors (the whole role)",
     ]);
     expect(usersSpy).not.toHaveBeenCalled();
+    // Nor a search for them.
+    expect(screen.queryByRole("searchbox")).toBeNull();
   });
 
   it("draws no step for the parts the header's main button moves", async () => {
