@@ -91,11 +91,13 @@ const publisher = { canEdit: true, canPublish: true, canUnpublish: true };
 
 const lead = (s: DocumentActionState) =>
   actionsAt(documentActions(s), "primary");
-const labels = (s: DocumentActionState, placement: "toolbar" | "menu") =>
-  actionsAt(documentActions(s), placement).map(action => action.label);
+const labels = (
+  s: DocumentActionState,
+  placement: "toolbar" | "menu" | "publish-menu"
+) => actionsAt(documentActions(s), placement).map(action => action.label);
 
 describe("the next step, per person and stage", () => {
-  it("a writer in drafting submits for review, with saving beside it", () => {
+  it("a writer in drafting submits for review, with saving on its menu", () => {
     const s = state({ ...writer, review: drafting(true) });
     expect(lead(s)).toEqual([
       expect.objectContaining({
@@ -104,7 +106,9 @@ describe("the next step, per person and stage", () => {
       }),
     ]);
     expect(lead(s)[0]?.disabledReason).toBeUndefined();
-    expect(labels(s, "toolbar")).toEqual(["Save draft"]);
+    // One main button: saving is a row of its menu, and nothing sits beside it.
+    expect(labels(s, "publish-menu")).toEqual(["Save draft"]);
+    expect(labels(s, "toolbar")).toEqual([]);
   });
 
   it("a writer in review keeps saving, and is offered no approval", () => {
@@ -136,15 +140,16 @@ describe("the next step, per person and stage", () => {
     expect(labels(s, "toolbar")).not.toContain("Request changes");
   });
 
-  it("a publisher in drafting submits, and Publish is drawn held with why", () => {
+  it("a publisher in drafting submits, with no held Publish beside it", () => {
     const s = state({ ...publisher, review: drafting(true) });
     expect(lead(s)[0]).toMatchObject({ id: "review-step:submit" });
-    const publish = documentActions(s).find(action => action.id === "publish");
-    expect(publish).toMatchObject({
-      placement: "toolbar",
-      disabledReason: "Needs approval: Drafting",
-    });
-    expect(labels(s, "toolbar")).toEqual(["Save draft", "Publish"]);
+    // The step is the one main action: a greyed Publish beside it is a second
+    // main-looking control the person cannot use.
+    expect(documentActions(s).map(action => action.id)).not.toContain(
+      "publish"
+    );
+    expect(labels(s, "toolbar")).toEqual([]);
+    expect(labels(s, "publish-menu")).toEqual(["Save draft"]);
   });
 
   it("a publisher in review leads with Publish, held until it is approved", () => {
@@ -190,7 +195,8 @@ describe("the next step, per person and stage", () => {
       review: drafting(true),
     });
     expect(lead(s)[0]).toMatchObject({ id: "review-step:submit" });
-    expect(labels(s, "toolbar")).toEqual(["Save"]);
+    expect(labels(s, "publish-menu")).toEqual(["Save"]);
+    expect(labels(s, "toolbar")).toEqual([]);
   });
 
   it("holds a step with the reason the editor gives, and every step on a past version", () => {
@@ -240,7 +246,17 @@ describe("the next step, per person and stage", () => {
       },
     });
     expect(lead(s)[0]).toMatchObject({ id: "review-step:legal" });
-    expect(labels(s, "toolbar")).toEqual(["Approve"]);
+    // Only asking for changes sits beside the main button; any other step
+    // the person holds is a row of its menu.
+    expect(labels(s, "toolbar")).toEqual([]);
+    expect(labels(s, "publish-menu")).toEqual(["Approve"]);
+  });
+
+  it("draws Request changes beside the main button only while the stage holds publishing", () => {
+    const held = state({ ...reviewer, review: inReview(true) });
+    expect(labels(held, "toolbar")).toEqual(["Request changes"]);
+    const open = state({ ...reviewer, review: approved(true) });
+    expect(labels(open, "toolbar")).toEqual([]);
   });
 
   it("falls back to approve, then submit, then move where no step is primary", () => {

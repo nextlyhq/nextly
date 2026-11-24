@@ -2,12 +2,14 @@
 
 /**
  * The side panel's Review section: for the part on screen (and, on a
- * translated document, its shared fields), the stage it stands in, who it is
- * assigned to or waits for, when it is due, and its last move. Each part's
- * own steps are offered on it, so a part the header does not speak for (the
- * shared fields waiting in another stage than the language) can still be
- * moved. A person who may assign it is offered to: to themselves, to a role it
- * waits for, or to no one.
+ * translated document, its shared fields), the stage it stands in, who it
+ * waits for, who it is assigned to, when it is due, and its last move.
+ *
+ * The steps are the header's main button, so the section draws none for the
+ * parts the header moves (`partsOnScreen`); only a part the header does not
+ * speak for (the shared fields waiting in another stage than the language)
+ * offers its own steps here, so it can still be moved. A person who may
+ * assign a part has one Assign… picker of people and roles.
  *
  * Reads the same review state the header does, under the same key, so the
  * two never disagree and the panel costs no request of its own. Draws nothing
@@ -18,30 +20,22 @@
  */
 
 import { Button } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import { Fragment, type JSX } from "react";
+import type React from "react";
 
 import { StagePill } from "@admin/components/features/settings/workflows/StagePill";
-import { toast } from "@admin/components/ui";
-import {
-  useAssignPart,
-  useReviewState,
-} from "@admin/hooks/queries/useReviewState";
+import { useReviewState } from "@admin/hooks/queries/useReviewState";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
-import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
 import { useHasPermission } from "@admin/hooks/useHasPermission";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
-import type {
-  PartReview,
-  ReviewAssignee,
-  ReviewStep,
-} from "@admin/types/workflows";
+import type { PartReview, ReviewStep } from "@admin/types/workflows";
 
 import { leadingReviewStep } from "../EntryForm/document-actions";
 import { PanelSection } from "../EntryForm/panels/PanelSection";
 
-import { waitingForWords } from "./review-words";
+import { AssignPicker } from "./AssignPicker";
+import { partsOnScreen, waitingForWords } from "./review-words";
 import { approves, useSharedApprovalHold } from "./shared-hold";
 import { StepRefusalNote } from "./StepRefusalNote";
 import { useStepTaker, type StepTaker } from "./useStepTaker";
@@ -84,6 +78,11 @@ export function ReviewSection({
   );
   if (parts.length === 0) return null;
   const titled = parts.length > 1;
+  // The parts the header's main button moves, read by the same rule the
+  // header uses, so no step is offered in both places.
+  const moved = new Set(
+    partsOnScreen(data, language).map(each => each.part ?? "")
+  );
   return (
     <PanelSection title="Review">
       <div className="space-y-4">
@@ -95,6 +94,7 @@ export function ReviewSection({
             taker={taker}
             hold={hold}
             approvalHeld={part.part === null ? sharedHeld : undefined}
+            offersSteps={!moved.has(part.part ?? "")}
             title={
               !titled
                 ? null
@@ -117,18 +117,18 @@ function PartBlock({
   taker,
   hold,
   approvalHeld,
+  offersSteps,
   title,
 }: {
   document: ReleaseDocumentRef;
   part: PartReview;
   taker: StepTaker;
-  /** Why every step waits at this moment, where something holds them. */
   hold: string | undefined;
-  /** Why this part's approve steps are held, where they are. */
   approvalHeld: string | undefined;
+  /** Whether its steps are drawn here, for a part the header does not move. */
+  offersSteps: boolean;
   title: string | null;
 }): JSX.Element {
-  const { formatDate } = useAdminDateFormatter();
   return (
     <div className="space-y-1.5 text-sm" data-review-part={part.part ?? ""}>
       {title === null ? null : (
@@ -139,30 +139,16 @@ function PartBlock({
           Live, nothing waiting for review
         </p>
       ) : (
-        <p>
-          {/* The stage as Settings shows it: its saved label on its colour. */}
-          <StagePill
-            label={part.stageLabel ?? part.stage}
-            colour={part.stageColour}
-          />
-        </p>
-      )}
-      {part.stage === null ? null : (
         <>
-          <p className="text-xs text-muted-foreground">
-            {assignmentWords(part)}
-          </p>
-          {part.dueAt === null ? null : (
-            <p className="text-xs text-muted-foreground">
-              Due {formatDate(part.dueAt, { dateStyle: "medium" }, part.dueAt)}
-            </p>
-          )}
-          <PartSteps
-            part={part}
-            taker={taker}
-            hold={hold}
-            approvalHeld={approvalHeld}
-          />
+          <PartFacts part={part} />
+          {offersSteps ? (
+            <PartSteps
+              part={part}
+              taker={taker}
+              hold={hold}
+              approvalHeld={approvalHeld}
+            />
+          ) : null}
           <AssignControls document={document} part={part} />
         </>
       )}
@@ -171,7 +157,50 @@ function PartBlock({
   );
 }
 
-/** The steps this person may take on the part alone, primary first. */
+/**
+ * Where a part in review stands, as label and value rows: its stage (as
+ * Settings shows it, its saved label on its colour), who it waits for, who it
+ * is assigned to, and when it is due.
+ */
+function PartFacts({ part }: { part: PartReview }): JSX.Element {
+  const { formatDate } = useAdminDateFormatter();
+  const waiting = waitingForWords(part.waitingFor);
+  const rows: { term: string; value: React.ReactNode }[] = [
+    {
+      term: "Stage",
+      value: (
+        <StagePill
+          label={part.stageLabel ?? part.stage ?? ""}
+          colour={part.stageColour}
+        />
+      ),
+    },
+    { term: "Waiting for", value: waiting ?? "No one" },
+    {
+      term: "Assigned",
+      value: part.assignee === null ? "Nobody" : (waiting ?? part.assignee.id),
+    },
+    ...(part.dueAt === null
+      ? []
+      : [
+          {
+            term: "Due",
+            value: formatDate(part.dueAt, { dateStyle: "medium" }, part.dueAt),
+          },
+        ]),
+  ];
+  return (
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1 text-xs">
+      {rows.map(row => (
+        <Fragment key={row.term}>
+          <dt className="text-muted-foreground">{row.term}</dt>
+          <dd className="min-w-0 text-foreground">{row.value}</dd>
+        </Fragment>
+      ))}
+    </dl>
+  );
+}
+
 function PartSteps({
   part,
   taker,
@@ -225,22 +254,9 @@ function PartSteps({
 }
 
 /** Who the part is assigned to, or that it is not and who it waits for. */
-function assignmentWords(part: PartReview): string {
-  const waiting = waitingForWords(part.waitingFor);
-  if (part.assignee !== null) {
-    return `Assigned to ${waiting ?? part.assignee.id}`;
-  }
-  return waiting === null
-    ? "Not assigned"
-    : `Not assigned, waiting for ${waiting}`;
-}
-
 /**
- * The ways to assign the part this person is offered. The server takes an
- * assignment from whoever may edit the document or take the stage's main
- * step, and only to someone who may take that step; a refusal is said where
- * it happens. The candidates are the ones the review state already names:
- * the person, and the roles the part waits for.
+ * The Assign… picker, for a person who may assign the part: one who may edit
+ * the document, or who may take its stage's primary step.
  */
 function AssignControls({
   document,
@@ -250,71 +266,11 @@ function AssignControls({
   part: PartReview;
 }): JSX.Element | null {
   const has = useHasPermission();
-  const me = useCurrentUserId();
-  const assign = useAssignPart(document);
   const leading = leadingReviewStep(part.steps);
-  // Whoever may edit the document, or may take the stage's primary step as
-  // the server judges it, may assign the part.
   const mayAssign =
     has(`update-${document.scopeSlug}`) || leading?.mayTake === true;
   if (!mayAssign || leading === undefined) return null;
-
-  const to = (assignee: ReviewAssignee | null) => {
-    assign.mutate(
-      { part: part.part, revision: part.revision, assignee },
-      {
-        onError: reason =>
-          toast.error(apiErrorMessage(reason, "The part wasn't assigned.")),
-      }
-    );
-  };
-  const assignedToMe =
-    part.assignee?.kind === "user" && part.assignee.id === me;
-  const roles =
-    part.assignee === null && part.waitingFor?.kind === "roles"
-      ? part.waitingFor.roles
-      : [];
-  return (
-    <div className="flex flex-wrap gap-1.5 pt-1">
-      {me === null || assignedToMe ? null : (
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="h-7 px-2 text-xs"
-          disabled={assign.isPending}
-          onClick={() => to({ kind: "user", id: me })}
-        >
-          Assign to me
-        </Button>
-      )}
-      {roles.map(role => (
-        <Button
-          key={role.id}
-          type="button"
-          size="sm"
-          variant="outline"
-          className="h-7 px-2 text-xs"
-          disabled={assign.isPending}
-          onClick={() => to({ kind: "role", id: role.id })}
-        >
-          Assign to {role.name ?? "this role"}
-        </Button>
-      ))}
-      {part.assignee === null ? null : (
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="h-7 px-2 text-xs"
-          disabled={assign.isPending}
-          onClick={() => to(null)}
-        >
-          Unassign
-        </Button>
-      )}
-    </div>
-  );
+  return <AssignPicker document={document} part={part} />;
 }
 
 /** The part's latest move: who moved it where, when, and what they said. */

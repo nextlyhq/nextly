@@ -25,6 +25,7 @@ import { useCan } from "@admin/hooks/useCan";
 import type { ShownCopy } from "@admin/lib/document-version";
 
 import { useOpenForDocument } from "../../releases/useOpenForDocument";
+import { PUBLISH_WITHOUT_REVIEW_ACTION_ID } from "../EntryForm/document-actions";
 import type { LanguageLabel } from "../publishAllOutcomes";
 
 import { defaultPartsChoice, type PartsChoice } from "./publish-parts-choice";
@@ -35,6 +36,9 @@ export const PUBLISH_PARTS_ACTION_ID = "publish-parts";
 
 /** What the action says. */
 export const PUBLISH_PARTS_LABEL = "Choose what to publish…";
+
+/** What publishing past the workflow says, on the main button's menu. */
+export const PUBLISH_WITHOUT_REVIEW_LABEL = "Publish without review…";
 
 export interface PublishPartsActionProps {
   /** The document; absent while the page is loading. */
@@ -56,6 +60,12 @@ export interface PublishPartsActionProps {
 export interface PublishPartsAction {
   /** The action to contribute, or null when it does not apply. */
   contributed: ContributedAction | null;
+  /**
+   * "Publish without review…", or null where the person may not publish past
+   * the workflow or nothing on the document waits for approval. It opens the
+   * same dialog, asking the reason first.
+   */
+  withoutReview: ContributedAction | null;
   /** The dialog to mount, or null while it has never been opened. */
   dialog: ReactNode;
 }
@@ -93,10 +103,27 @@ export function usePublishPartsAction({
   // Each opening starts afresh: a new key mounts a new choice.
   const [opening, setOpening] = useState(0);
   const [initialChoice, setInitialChoice] = useState<PartsChoice | null>(null);
+  // Whether this opening asks the reason to publish without review first.
+  const [asksReason, setAsksReason] = useState(false);
 
   if (lifecycleEnabled !== true || target === undefined) {
-    return { contributed: null, dialog: null };
+    return { contributed: null, withoutReview: null, dialog: null };
   }
+
+  const openDialog = (reasonFirst: boolean) => {
+    if (open) return;
+    setInitialChoice(
+      defaultPartsChoice({
+        languages,
+        currentLocale,
+        defaultLocale,
+        sharedPending,
+      })
+    );
+    setAsksReason(reasonFirst);
+    setOpening(count => count + 1);
+    setOpen(true);
+  };
 
   const contributed: ContributedAction = {
     action: {
@@ -107,22 +134,28 @@ export function usePublishPartsAction({
         ? {}
         : { disabledReason: "You don't have permission to publish this." }),
     },
-    binding: {
-      onSelect: () => {
-        if (open) return;
-        setInitialChoice(
-          defaultPartsChoice({
-            languages,
-            currentLocale,
-            defaultLocale,
-            sharedPending,
-          })
-        );
-        setOpening(count => count + 1);
-        setOpen(true);
-      },
-    },
+    binding: { onSelect: () => openDialog(false) },
   };
+
+  // Offered only to a person the server lets publish past the workflow, and
+  // only while some part of the document waits for approval: otherwise there
+  // is no review to skip, and Publish itself is the way.
+  const withoutReview: ContributedAction | null =
+    canPublish &&
+    reviewAnswer?.attached === true &&
+    reviewAnswer.review.mayPublishWithoutReview &&
+    reviewAnswer.review.parts.some(
+      part => part.stage !== null && !part.publishable
+    )
+      ? {
+          action: {
+            id: PUBLISH_WITHOUT_REVIEW_ACTION_ID,
+            label: PUBLISH_WITHOUT_REVIEW_LABEL,
+            placement: "publish-menu",
+          },
+          binding: { onSelect: () => openDialog(true) },
+        }
+      : null;
 
   const review: PublishReview | undefined =
     reviewAnswer?.attached === true && reviewDocument !== undefined
@@ -147,8 +180,9 @@ export function usePublishPartsAction({
         shown={shown}
         onDone={summary => toast.success(summary)}
         {...(review === undefined ? {} : { review })}
+        asksReason={asksReason}
       />
     );
 
-  return { contributed, dialog };
+  return { contributed, withoutReview, dialog };
 }

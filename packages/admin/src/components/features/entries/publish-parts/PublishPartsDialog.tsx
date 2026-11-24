@@ -85,6 +85,12 @@ export interface PublishPartsDialogProps {
   onDone?: (summary: string) => void;
   /** The workflow governing the document, where one is attached. */
   review?: PublishReview;
+  /**
+   * Whether the dialog opens asking the reason to publish without review, as
+   * it does when opened from "Publish without review…" on the main button's
+   * menu, rather than at the choice of parts.
+   */
+  asksReason?: boolean;
 }
 
 const TITLE: Record<PublishPartsDirection, string> = {
@@ -123,10 +129,11 @@ export function PublishPartsDialog({
   shown,
   onDone,
   review,
+  asksReason = false,
 }: PublishPartsDialogProps): JSX.Element {
   const [choice, setChoice] = useState<PartsChoice>(initialChoice);
   // The reason being written to publish without review; null while not asked.
-  const [reason, setReason] = useState<string | null>(null);
+  const [reason, setReason] = useState<string | null>(asksReason ? "" : null);
   const sharedId = useId();
   const description = usePublishPartsDescription({
     target,
