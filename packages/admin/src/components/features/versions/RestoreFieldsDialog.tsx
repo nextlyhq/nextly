@@ -85,6 +85,9 @@ function scopeLine(
   translatedChosen: number,
   sharedChosen: number
 ): string {
+  if (translatedChosen === 0 && sharedChosen === 0) {
+    return "No field is chosen, so nothing changes.";
+  }
   if (sharedChosen === 0) {
     return `Changes ${language} only. Other languages and shared fields stay as they are.`;
   }
