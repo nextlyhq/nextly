@@ -564,7 +564,7 @@ describe.each(getConfiguredTestDialects())(
                 path: "fields.v",
                 code: "TYPE_CHANGE_LOSES_VALUES",
                 message: expect.stringContaining(
-                  "Confirm clearing the values that cannot convert"
+                  "Change the values that cannot convert, then save again"
                 ),
               }),
             ],
@@ -1224,6 +1224,40 @@ describe.each(getConfiguredTestDialects())(
           refusedSaying("tcc_touch")
         );
         expect(await stored(t)).toEqual({ a: "012" });
+      }
+    );
+
+    // A translations column may be given its type by nothing but the conversion, so a trigger on its
+    // table stays refused by name whatever the values.
+    it.skipIf(!rewritesValuesOn(dialect))(
+      "refuses a translated change under an update trigger where no value needs writing, and changes nothing",
+      async () => {
+        const t = await boot([{ name: "v", type: "text", localized: true }], {
+          localized: true,
+        });
+        await write(t, "a", { v: "12" }, "en");
+        if (dialect === "postgresql") {
+          await exec(
+            t,
+            `CREATE FUNCTION tcc_touch_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql`
+          );
+        }
+        await exec(
+          t,
+          dialect === "postgresql"
+            ? `CREATE TRIGGER tcc_touch AFTER UPDATE ON ${q(`dc_${SLUG}_locales`)} FOR EACH ROW EXECUTE FUNCTION tcc_touch_fn()`
+            : `CREATE TRIGGER tcc_touch AFTER UPDATE ON ${q(`dc_${SLUG}_locales`)} BEGIN SELECT 1; END`
+        );
+
+        expect(
+          JSON.stringify(
+            await save(t, [{ name: "v", type: "number", localized: true }], {
+              localized: true,
+            })
+          )
+        ).toContain("tcc_touch");
+
+        expect(await read(t, "v", "en")).toEqual({ a: "12" });
       }
     );
 

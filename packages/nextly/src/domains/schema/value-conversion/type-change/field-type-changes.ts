@@ -977,9 +977,13 @@ export function typeChangeRefusals(
   return refusals;
 }
 
-/** How a save takes consent to clear a converted change's lost values: its review's count. */
+/**
+ * What a save says of a converted change's lost values: what to do about them, and how a request
+ * consents to clearing them, its review's counts sent back. Said to whoever saves, through a dialog
+ * that may ask for no such confirmation.
+ */
 const CLEARS_BY_REVIEW =
-  "Confirm clearing the values that cannot convert, with the count the review shows, and the save clears them, here and on every database its migration deploys to.";
+  "Change the values that cannot convert, then save again. A request that states how many of them it clears (`confirmedTypeChanges`, as its preview counts them) clears them, here and on every database its migration deploys to.";
 
 /** One judged change's refusal, as `typeChangeRefusals` describes it; null where it goes ahead. */
 function refusalOf(

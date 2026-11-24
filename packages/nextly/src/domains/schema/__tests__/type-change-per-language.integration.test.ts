@@ -332,7 +332,9 @@ describe.each(getConfiguredTestDialects())(
         await write(t, "lost", { v: "not an address" });
 
         await expect(save(t, [email])).rejects.toMatchObject(
-          refusedSaying("Confirm clearing the values that cannot convert")
+          refusedSaying(
+            "Change the values that cannot convert, then save again"
+          )
         );
 
         expect(await read(t)).toEqual({
