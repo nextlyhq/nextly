@@ -1217,7 +1217,10 @@ async function storedFieldGroupsOf(
   );
   return declaredFieldGroupStorage(
     adapter as Parameters<typeof declaredFieldGroupStorage>[0],
-    config.fieldGroups
+    config.fieldGroups,
+    // A database with no registry yet is one this command sets up on the current names
+    // (`ensureCoreTables`); any other keeps the names it holds.
+    "current"
   );
 }
 

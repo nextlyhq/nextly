@@ -21,7 +21,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import type { recordNewSiteOnCurrentNames as recordNewSite } from "../domains/field-groups/services/field-group-new-site";
+import type { recordNewSiteOrWarn as recordNewSite } from "../domains/field-groups/services/field-group-new-site";
 import {
   busyTableBounds,
   type BusyTableBounds,
@@ -833,8 +833,9 @@ async function setUpNewDatabase(
   // (`field-group-new-site`), unless its schema comes from a migration history,
   // which this release writes on the legacy names.
   const fieldGroupNaming = args.newSiteFieldGroupNaming ?? "current";
-  const { withFieldGroupRegistryFor, recordNewSiteOnCurrentNames } =
-    await import("../domains/field-groups/services/field-group-new-site");
+  const { withFieldGroupRegistryFor, recordNewSiteOrWarn } = await import(
+    "../domains/field-groups/services/field-group-new-site"
+  );
   const staticTables = {
     ...withFieldGroupRegistryFor(
       dialect,
@@ -911,7 +912,7 @@ async function setUpNewDatabase(
   await recordNewSiteNaming(
     fieldGroupNaming,
     staticTables.nextlyMeta !== undefined,
-    recordNewSiteOnCurrentNames,
+    recordNewSiteOrWarn,
     adapter,
     logger
   );
@@ -1261,10 +1262,8 @@ async function markMediaUsageRecordedOnNewSite(
 
 /**
  * Records that a new site's field groups start on the current names, beside the registry it
- * describes, where the dialect's tables hold the record's table (`hasMeta`). A failure leaves the
- * storage on the current names with nothing saying so: the site still serves, and only
- * `migrate:field-groups` would refuse it, so it is reported rather than failing a setup whose
- * tables already exist.
+ * describes, where the dialect's tables hold the record's table (`hasMeta`). A failure is reported
+ * rather than thrown (`recordNewSiteOrWarn`).
  */
 async function recordNewSiteNaming(
   naming: "legacy" | "current",
@@ -1274,14 +1273,8 @@ async function recordNewSiteNaming(
   logger: EnsureFirstRunSetupArgs["logger"]
 ): Promise<void> {
   if (naming !== "current" || !hasMeta) return;
-  try {
-    await record(
-      adapter as unknown as Parameters<typeof record>[0],
-      logger as unknown as Parameters<typeof record>[1]
-    );
-  } catch (err) {
-    logger.warn(
-      `[nextly] Could not record that this new site's field groups use the current storage names (${err instanceof Error ? err.message : String(err)}). \`nextly migrate:field-groups\` will refuse to run until it is recorded.`
-    );
-  }
+  await record(
+    adapter as unknown as Parameters<typeof record>[0],
+    logger as unknown as Parameters<typeof record>[1]
+  );
 }

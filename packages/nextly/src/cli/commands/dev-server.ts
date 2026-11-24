@@ -28,6 +28,10 @@ import {
   withoutRemovedFromCode,
 } from "../../domains/dynamic-collections/services/removed-from-code";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
+import { MIGRATION_TARGET } from "../../domains/field-groups/migration/target";
+import { recordNewSiteOrWarn } from "../../domains/field-groups/services/field-group-new-site";
+import type { FieldGroupNaming } from "../../domains/field-groups/services/field-group-storage-names";
+import { readStoredFieldGroupTables } from "../../domains/field-groups/services/field-group-stored-tables";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
   forgetFieldGroupStorageNames,
@@ -161,6 +165,33 @@ async function resolveRegistryTable(
 }
 
 /**
+ * The field-group registry the bootstrap declares, and whether it is a new site's: a database
+ * holding neither registry starts on the current names, as a first start sets one up
+ * (`field-group-new-site`). Decided by one reading. Null where the catalog cannot be read.
+ */
+async function bootstrapRegistry(
+  adapter: DrizzleAdapter,
+  logger: CommandContext["logger"]
+): Promise<{ registryTable: string; newSite: boolean } | null> {
+  const registryTable = await resolveRegistryTable(adapter, logger);
+  if (registryTable === null) return null;
+  const { absent } = await readStoredFieldGroupTables(adapter);
+  return absent === true
+    ? { registryTable: MIGRATION_TARGET.registryTable, newSite: true }
+    : { registryTable, newSite: false };
+}
+
+/** The CLI's logger as a service takes one: an information line is the command's detail. */
+function serviceLoggerFor(logger: CommandContext["logger"]): ServiceLogger {
+  return {
+    info: (m: string) => logger.debug(m),
+    warn: (m: string) => logger.warn(m),
+    error: (m: string) => logger.error(m),
+    debug: (m: string) => logger.debug(m),
+  };
+}
+
+/**
  * Create the system tables this bootstrap does not, under the right spelling.
  *
  * `SystemTableService` resolves the registry before creating it, so a database
@@ -171,25 +202,23 @@ async function resolveRegistryTable(
  */
 async function ensureSystemTables(
   drizzleAdapter: DrizzleAdapter,
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  /** A new site's names, where this sets one up; otherwise the service reads the site's own. */
+  fieldGroupNaming?: FieldGroupNaming
 ): Promise<boolean> {
   try {
     const { SystemTableService } = await import(
       "../../services/system/system-table-service"
     );
-    const serviceLogger: ServiceLogger = {
-      info: (m: string) => logger.debug(m),
-      warn: (m: string) => logger.warn(m),
-      error: (m: string) => logger.error(m),
-      debug: (m: string) => logger.debug(m),
-    };
     // The result is READ. `ensureSystemTables` catches its own failures and
     // reports `{ success: false }` rather than throwing, so discarding it lets
     // a repair that did nothing be reported as one that worked.
     const result = await new SystemTableService(
       drizzleAdapter,
-      serviceLogger
-    ).ensureSystemTables();
+      serviceLoggerFor(logger)
+    ).ensureSystemTables(
+      fieldGroupNaming === undefined ? {} : { fieldGroupNaming }
+    );
     if (!result.success) {
       logger.debug(`System table creation: ${result.error ?? "unknown error"}`);
     }
@@ -400,11 +429,12 @@ export async function ensureCoreTables(
       // push naming the spelling that was just moved away from — and the push
       // is the one caller that creates rather than retargets. Re-reading here
       // costs one catalog query and is the only value the push may trust.
-      const pushRegistry = await resolveRegistryTable(drizzleAdapter, logger);
-      if (pushRegistry === null) {
+      const registry = await bootstrapRegistry(drizzleAdapter, logger);
+      if (registry === null) {
         pushFailure = { catalog: true };
         return;
       }
+      const { registryTable: pushRegistry, newSite } = registry;
       // F8 PR 2: use the freshPushSchema helper for the static-tables push.
       // No diff, no prompts, no journal — this is fresh-DB setup, not a user
       // schema change. Behavior matches the legacy DrizzlePushService.apply
@@ -448,7 +478,11 @@ export async function ensureCoreTables(
           );
 
           // Also create system tables (dynamic_collections, etc.)
-          await ensureSystemTables(drizzleAdapter, logger);
+          await ensureSystemTables(
+            drizzleAdapter,
+            logger,
+            newSite ? "current" : undefined
+          );
 
           logger.success("Core tables created (fallback)");
         } else {
@@ -459,6 +493,10 @@ export async function ensureCoreTables(
           // happens after the exclusion has unwound.
           pushFailure = { push: pushError };
         }
+      }
+      // A new site's storage is settled on the names just created, as a first start records it.
+      if (newSite && pushFailure === undefined) {
+        await recordNewSiteOrWarn(drizzleAdapter, serviceLoggerFor(logger));
       }
     }
   );

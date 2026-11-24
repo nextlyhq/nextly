@@ -19,11 +19,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAdapter } from "../../../database/factory";
 import { getDialectTables } from "../../../database/index";
 import { SchemaRegistry } from "../../../database/schema-registry";
+import { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { createLogger } from "../../utils/logger";
 import { ensureCoreTables } from "../dev-server";
@@ -33,12 +34,32 @@ import type { CLIDatabaseAdapter } from "../../utils/adapter";
 import type { CommandContext } from "../../program";
 import type { ResolvedDevOptions } from "../db-sync";
 
+/** Whether the schema push fails, as it does where drizzle-kit would have to ask. */
+const push = vi.hoisted(() => ({ fails: false }));
+vi.mock("../../../domains/schema/pipeline/fresh-push", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../domains/schema/pipeline/fresh-push")
+    >();
+  return {
+    ...actual,
+    freshPushSchema: (...args: Parameters<typeof actual.freshPushSchema>) =>
+      push.fails
+        ? Promise.reject(new Error("the push cannot run here"))
+        : actual.freshPushSchema(...args),
+  };
+});
+
 let dir: string;
+const opened: DrizzleAdapter[] = [];
 
 beforeEach(() => {
+  push.fails = false;
   dir = mkdtempSync(join(tmpdir(), "nextly-core-tables-"));
 });
-afterEach(() => {
+afterEach(async () => {
+  // Closed before its folder goes: Windows does not delete a file that is open.
+  for (const adapter of opened.splice(0)) await adapter.disconnect();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -51,6 +72,7 @@ async function adapterFor() {
   const registry = new SchemaRegistry("sqlite");
   registry.registerStaticSchemas(getDialectTables("sqlite"));
   drizzleAdapter.setTableResolver(registry);
+  opened.push(drizzleAdapter);
   return { adapter, drizzleAdapter };
 }
 
@@ -67,15 +89,15 @@ describe("ensureCoreTables and the field-group registry", () => {
 
     // The premise: nothing exists yet, so the assertion below cannot pass by
     // finding a table that was already there.
-    expect(await drizzleAdapter.tableExists(STORAGE_FORMAT.registryTable)).toBe(
-      false
-    );
+    expect(
+      await drizzleAdapter.tableExists(MIGRATION_TARGET.registryTable)
+    ).toBe(false);
 
     await runEnsureCoreTables(adapter);
 
-    expect(await drizzleAdapter.tableExists(STORAGE_FORMAT.registryTable)).toBe(
-      true
-    );
+    expect(
+      await drizzleAdapter.tableExists(MIGRATION_TARGET.registryTable)
+    ).toBe(true);
   });
 
   /**
@@ -88,13 +110,13 @@ describe("ensureCoreTables and the field-group registry", () => {
     const { adapter, drizzleAdapter } = await adapterFor();
     await runEnsureCoreTables(adapter);
     await drizzleAdapter.executeQuery(
-      `DROP TABLE "${STORAGE_FORMAT.registryTable}"`
+      `DROP TABLE "${MIGRATION_TARGET.registryTable}"`
     );
 
     await runEnsureCoreTables(adapter, false);
 
     expect(
-      await drizzleAdapter.tableExists(STORAGE_FORMAT.registryTable),
+      await drizzleAdapter.tableExists(MIGRATION_TARGET.registryTable),
       "--no-auto-sync must not repair the schema; the option exists to leave " +
         "that to migrations"
     ).toBe(false);
@@ -111,21 +133,63 @@ describe("ensureCoreTables and the field-group registry", () => {
     await runEnsureCoreTables(adapter);
 
     await drizzleAdapter.executeQuery(
-      `DROP TABLE "${STORAGE_FORMAT.registryTable}"`
+      `DROP TABLE "${MIGRATION_TARGET.registryTable}"`
     );
     expect(await drizzleAdapter.tableExists("users")).toBe(true);
-    expect(await drizzleAdapter.tableExists(STORAGE_FORMAT.registryTable)).toBe(
-      false
-    );
+    expect(
+      await drizzleAdapter.tableExists(MIGRATION_TARGET.registryTable)
+    ).toBe(false);
 
     await runEnsureCoreTables(adapter);
 
     expect(
       await drizzleAdapter.tableExists(STORAGE_FORMAT.registryTable),
+      "a legacy registry beside a site on the current names is preferred by every reader"
+    ).toBe(false);
+    expect(
+      await drizzleAdapter.tableExists(MIGRATION_TARGET.registryTable),
       "the existing-database branch must repair a dropped registry; the raw " +
         "replay never emits its CREATE TABLE, so this can only come from the " +
         "system-table service running after it"
     ).toBe(true);
+  });
+
+  /** The control: a database an earlier release set up is repaired under the names it is on. */
+  it("repairs a legacy site's dropped registry under its legacy name", async () => {
+    const { adapter, drizzleAdapter } = await adapterFor();
+    await runEnsureCoreTables(adapter);
+    await drizzleAdapter.executeQuery(
+      `DROP TABLE "${MIGRATION_TARGET.registryTable}"`
+    );
+    await drizzleAdapter.executeQuery(`DELETE FROM "nextly_meta"`);
+
+    await runEnsureCoreTables(adapter);
+
+    expect(await drizzleAdapter.tableExists(STORAGE_FORMAT.registryTable)).toBe(
+      true
+    );
+    expect(
+      await drizzleAdapter.tableExists(MIGRATION_TARGET.registryTable)
+    ).toBe(false);
+  });
+
+  /**
+   * Where the schema push cannot run, SQLite's core tables are created from raw statements, and
+   * the system-table service makes the registry: under the current name on a new site too.
+   */
+  it("creates the current registry where the push fails and raw statements set the database up", async () => {
+    push.fails = true;
+    const { adapter, drizzleAdapter } = await adapterFor();
+
+    await runEnsureCoreTables(adapter);
+
+    expect(await drizzleAdapter.tableExists("users")).toBe(true);
+    expect(
+      await drizzleAdapter.tableExists(MIGRATION_TARGET.registryTable)
+    ).toBe(true);
+    expect(await drizzleAdapter.tableExists(STORAGE_FORMAT.registryTable)).toBe(
+      false
+    );
   });
 });
 

@@ -88,3 +88,21 @@ export async function recordNewSiteOnCurrentNames(
     forgetFieldGroupStorageNames(adapter);
   }
 }
+
+/**
+ * {@link recordNewSiteOnCurrentNames}, reported rather than thrown where it fails. The storage is
+ * on the current names either way and the site serves, so a setup whose tables already exist is
+ * not failed over it: only `migrate:field-groups` refuses the site until it is recorded.
+ */
+export async function recordNewSiteOrWarn(
+  adapter: DrizzleAdapter,
+  logger: Logger
+): Promise<void> {
+  try {
+    await recordNewSiteOnCurrentNames(adapter, logger);
+  } catch (err) {
+    logger.warn(
+      `[nextly] Could not record that this new site's field groups use the current storage names (${err instanceof Error ? err.message : String(err)}). \`nextly migrate:field-groups\` will refuse to run until it is recorded.`
+    );
+  }
+}
