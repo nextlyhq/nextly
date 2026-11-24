@@ -463,16 +463,17 @@ async function recordedRows(
         kind: "collection" as const,
         slug,
         ...names(recorded, storedCollections, slug),
-        write: () =>
-          collections.writeRecordedCollection(
-            recordedCollection(
-              slug,
-              recorded,
-              deps.collectionSources?.get(slug)
-            ),
-            collectionOriginOf(recorded, deps.collectionSources?.get(slug)),
+        write: () => {
+          const origin = collectionOriginOf(
+            recorded,
+            deps.collectionSources?.get(slug)
+          );
+          return collections.writeRecordedCollection(
+            recordedCollection(slug, recorded, origin.source),
+            origin,
             options("collection", recorded, storedCollections, slug)
-          ),
+          );
+        },
       })),
     ...Object.entries(entities.singles)
       .filter(kept)
@@ -657,8 +658,8 @@ function recordedFieldGroup(
 function recordedCollection(
   slug: string,
   recorded: RecordedEntitySettings,
-  /** The plugin's origin, for a collection one contributes (`RegistryWriteDeps`). */
-  plugin: `plugin:${string}` | undefined
+  /** The origin the row it creates takes (`collectionOriginOf`). */
+  source: NonNullable<CodeFirstCollectionConfig["source"]>
 ): CodeFirstCollectionConfig {
   const declared = { ...declaration(recorded), slug };
   if (recorded.source === "code") {
@@ -666,7 +667,7 @@ function recordedCollection(
       declared as CodeFirstCollectionSource<
         CodeFirstCollectionConfig["fields"][number]
       >,
-      plugin ?? "code"
+      source
     );
   }
   const row = collectionRowValues(declared as UiSchemaEntity);
