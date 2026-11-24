@@ -394,6 +394,29 @@ describe.each(
         .flatMap(each => each.columns.map(column => column.name));
     }
 
+    /**
+     * Every row of the database that names `id`, its table before it: an entry's own row, and what
+     * its writes leave in any other table.
+     */
+    async function rowsNaming(t: TestNextly, id: string): Promise<string[]> {
+      const tables = (await t.adapter.executeQuery(
+        "SELECT TABLE_NAME AS name FROM information_schema.tables WHERE table_schema = DATABASE()"
+      )) as unknown as Array<{ name: unknown }>;
+      const found: string[] = [];
+      for (const { name } of tables) {
+        const rows = (await t.adapter.executeQuery(
+          `SELECT * FROM \`${String(name)}\``
+        )) as unknown as Array<Record<string, unknown>>;
+        for (const row of rows) {
+          const said = JSON.stringify(row, (_, value: unknown) =>
+            typeof value === "bigint" ? String(value) : value
+          );
+          if (said.includes(id)) found.push(`${String(name)} ${said}`);
+        }
+      }
+      return found.sort();
+    }
+
     /** The schema version a save of the entity `entity` in `registry` names. */
     async function versionOf(
       t: TestNextly,
@@ -916,10 +939,15 @@ describe.each(
       "refuses an update naming only the status of a collection whose committed change dropped its status column",
       async () => {
         const t = await boot({ status: true });
-        const [first] = (await t.adapter.executeQuery(
-          `SELECT id FROM ${table} WHERE slug = 'first'`
+        await t.nextly.create({
+          collection: slug,
+          data: { title: "Second", slug: "second", note: "n", heading: "h" },
+        } as never);
+        // One entry for each road, so what either write kept is read on its own.
+        const entries = (await t.adapter.executeQuery(
+          `SELECT id FROM ${table} ORDER BY slug`
         )) as unknown as Array<{ id: unknown }>;
-        const id = String(first?.id);
+        const [overRest, overApi] = entries.map(entry => String(entry.id));
         await killSave(t, afterStatement(dropsColumn("status")), () =>
           dispatchCollections(
             {} as ServiceContainer,
@@ -931,28 +959,47 @@ describe.each(
         expect(await liveColumns(t), `killed at ${killedAt}`).not.toContain(
           "status"
         );
+        const before = {
+          rest: await rowsNaming(t, overRest!),
+          api: await rowsNaming(t, overApi!),
+        };
+        // The entry's own row is among them.
+        for (const rows of [before.rest, before.api]) {
+          expect(rows.some(row => row.startsWith(`${table} `))).toBe(true);
+        }
 
         const outcomes = await fromAnotherProcess([
           {
             kind: "update",
             via: "rest",
-            id,
+            id: overRest!,
             data: { status: "published", _overwrite: true },
           },
           {
             kind: "update",
             via: "api",
-            id,
+            id: overApi!,
             data: { status: "published", _overwrite: true },
           },
         ]);
+        const after = {
+          rest: await rowsNaming(t, overRest!),
+          api: await rowsNaming(t, overApi!),
+        };
 
+        // Each is looked at whatever the others came to: what it answered, and what it kept.
         for (const refused of outcomes) {
-          expect(refused.ok, JSON.stringify(refused)).toBe(false);
-          expect(refused.code, JSON.stringify(refused)).toBe(
-            "BUILDER_SAVE_FIELD_UNSETTLED"
-          );
+          expect.soft(refused.ok, JSON.stringify(refused)).toBe(false);
+          expect
+            .soft(refused.code, JSON.stringify(refused))
+            .toBe("BUILDER_SAVE_FIELD_UNSETTLED");
         }
+        expect
+          .soft(after.rest, "nothing of the REST write is kept")
+          .toEqual(before.rest);
+        expect
+          .soft(after.api, "nothing of the Direct API write is kept")
+          .toEqual(before.api);
       },
       600_000
     );
