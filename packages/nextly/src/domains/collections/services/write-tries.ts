@@ -169,7 +169,7 @@ export function askOnce<T>(
   ask: () => Promise<T>,
   options: { onTransaction: boolean }
 ): Promise<T> {
-  const tries = running.getStore();
+  const tries: WriteTries | undefined = running.getStore();
   return tries === undefined || options.onTransaction
     ? ask()
     : tries.answer(question, ask);
