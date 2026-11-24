@@ -139,6 +139,38 @@ export async function refuseFieldGroupTransitionOnLegacy(
   throw fieldGroupStorageNotMigratedError(filename);
 }
 
+/**
+ * Refuses to record a file on the current field-group names as applied on a database whose field
+ * groups are still on the legacy ones (`nextly migrate:resolve --applied`). It is the rule
+ * `nextly migrate` holds the transition to, for any file on those names: recorded, every later file
+ * would be planned against storage the database does not have. A file that does not say it is on
+ * the current names says nothing here.
+ */
+export async function refuseCurrentNamesOnLegacyStorage(
+  adapter: CatalogReadAdapter,
+  filename: string,
+  naming: FieldGroupNaming | null
+): Promise<void> {
+  if (naming !== "current") return;
+  if ((await databaseFieldGroupNaming(adapter)) === "current") return;
+  throw currentNamesNotRecordedError(filename);
+}
+
+/** The refusal to record a current-name file applied on legacy storage. */
+export function currentNamesNotRecordedError(filename: string): NextlyError {
+  return new NextlyError({
+    code: "VALIDATION_ERROR",
+    publicMessage:
+      `${filename} is on the current field-group names (dynamic_field_groups, fg_<slug>), and this database's field groups are still on the legacy ones (dynamic_components, comp_<slug>). ` +
+      "Recording it as applied would say the database moved when it has not. " +
+      `Nothing was recorded. Move the field groups with \`${FIELD_GROUP_STORAGE_MIGRATION_COMMAND}\`, then run \`nextly migrate\`.`,
+    logContext: {
+      reason: "field-group-storage-not-migrated",
+      file: filename,
+    },
+  });
+}
+
 /** The refusal of the transition file on a database whose field groups have not moved. */
 export function fieldGroupStorageNotMigratedError(
   filename: string

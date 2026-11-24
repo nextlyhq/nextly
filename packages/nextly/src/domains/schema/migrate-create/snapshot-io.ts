@@ -254,7 +254,21 @@ export async function historyFieldGroupNamingIn(
 ): Promise<FieldGroupNaming> {
   const newest = await newestSnapshotName(metaDir);
   if (newest === undefined) return "legacy";
-  const content = await readFile(resolve(metaDir, newest), "utf-8");
+  return snapshotFileNaming(
+    await readFile(resolve(metaDir, newest), "utf-8"),
+    newest
+  );
+}
+
+/**
+ * The field-group names a snapshot file's text says its history is on. A template's older-format
+ * file records no tables and predates the record, so it is on the legacy names. Any other file
+ * that is no snapshot is refused.
+ */
+export function snapshotFileNaming(
+  content: string,
+  filename: string
+): FieldGroupNaming {
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
@@ -262,7 +276,7 @@ export async function historyFieldGroupNamingIn(
     // Not JSON: `parseSnapshotFile` below says so.
   }
   if (isOlderFormatSnapshot(parsed)) return "legacy";
-  return snapshotFieldGroupNaming(parseSnapshotFile(content, newest));
+  return snapshotFieldGroupNaming(parseSnapshotFile(content, filename));
 }
 
 /**
