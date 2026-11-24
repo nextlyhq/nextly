@@ -144,8 +144,10 @@ function useNewFieldGroupDialog(host: UnsavedEntity["ownedBy"]) {
   };
   return {
     onNew,
+    // Its own key, apart from its props: each "New field group" opens a fresh dialog, and a key
+    // spread among props is no key.
+    dialogKey: operation,
     dialog: {
-      key: operation,
       open: making !== null,
       config: FIELD_GROUP_BUILDER_CONFIG,
       onCancel: () => finish(null),
@@ -164,6 +166,8 @@ export function useBuilderFieldGroupChoices(
   entitySlug: string | undefined
 ): {
   config: FieldPickerConfig["fieldGroups"];
+  /** The dialog's key: a fresh one for each "New field group". */
+  dialogKey: number;
   dialog: ReturnType<typeof useNewFieldGroupDialog>["dialog"];
 } {
   const { data: fieldGroupData, isLoading: fieldGroupsLoading } =
@@ -218,6 +222,7 @@ export function useBuilderFieldGroupChoices(
           onNew: newGroup.onNew,
         }
       : undefined,
+    dialogKey: newGroup.dialogKey,
     dialog: newGroup.dialog,
   };
 }
@@ -339,7 +344,7 @@ export function BuilderFieldPicker({
         onAdd={add}
       />
       {/* Over the picker, which waits on the chooser until it is made or closed. */}
-      <NewEntityDialog {...fieldGroups.dialog} />
+      <NewEntityDialog key={fieldGroups.dialogKey} {...fieldGroups.dialog} />
     </>
   );
 }

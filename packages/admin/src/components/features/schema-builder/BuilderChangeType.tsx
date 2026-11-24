@@ -179,7 +179,7 @@ export function BuilderChangeType({
         change={change}
         onCancel={onCancel}
       />
-      <NewEntityDialog {...fieldGroups.dialog} />
+      <NewEntityDialog key={fieldGroups.dialogKey} {...fieldGroups.dialog} />
     </>
   );
 }
