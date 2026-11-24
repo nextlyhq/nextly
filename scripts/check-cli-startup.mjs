@@ -29,14 +29,14 @@
  * (`STARTUP_PROBE_ENV` in `cli/startup-probe.ts`), a command writes one line
  * once its action's module is imported and ends there, doing none of its
  * work. Each is run 5 times in the same project, and once more with a loader
- * hook that counts the modules it resolved. This pass reports and enforces no
- * budget yet, but a run must end with the line and the probe's own exit code
- * (`STARTUP_PROBE_EXIT`), or with exit 0 and no line; any other end fails the
- * check, as does a counting run that does not end with the line or writes no
- * count. A command that exits 0 without the line runs an action written inline
- * rather than through `lazyAction`: it is named as such and held to the
- * answer-only budget, so code that action imports for itself cannot load
- * untimed.
+ * hook that counts the modules it resolved. A command whose median is over
+ * `CODE_LOAD_LIMIT_MS` fails the check, and a run must end with the line and
+ * the probe's own exit code (`STARTUP_PROBE_EXIT`), or with exit 0 and no
+ * line; any other end fails the check, as does a counting run that does not
+ * end with the line or writes no count. A command that exits 0 without the
+ * line runs an action written inline rather than through `lazyAction`: it is
+ * named as such and held to the answer-only budget, so code that action
+ * imports for itself cannot load untimed.
  *
  * Last, every command that declares it may reach a database, except one that
  * declares why it must not be run, is timed until it has connected
@@ -72,6 +72,8 @@ import { stripVTControlCharacters } from "node:util";
 
 import { tsImport } from "tsx/esm/api";
 
+import { isCliEntry } from "./cli-entry.mjs";
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE = join(ROOT, "packages", "nextly");
 const BIN = join(PACKAGE, "dist", "cli", "nextly.mjs");
@@ -95,6 +97,9 @@ const RUNS = 10;
 const RUN_TIMEOUT_MS = 10_000;
 // A command's own code, timed to the line it writes once that code has loaded.
 const CODE_LOAD_RUNS = 5;
+// Temporary: it keeps commands from getting slower until the smaller budgets
+// they are meant for hold. The slowest command took 1.6 s on the Linux runner.
+export const CODE_LOAD_LIMIT_MS = 2500;
 // One load that takes this long has hung: the heaviest takes a few seconds.
 const CODE_LOAD_TIMEOUT_MS = 60_000;
 // The one dialect the connect pass runs on, whose database is a file of its own.
@@ -491,26 +496,36 @@ function inlineActionFailure(name, ms) {
 
 /**
  * `args` timed `CODE_LOAD_RUNS` times to its code loaded, and its modules
- * counted: the reason it failed, or `undefined`. The times are reported, not
- * judged, except an inline action's.
+ * counted: the reason it failed (over the limit, or not measured), or
+ * `undefined`. An inline action is held to its own budget instead. `measured`
+ * is what runs the command, given by the test of this judgement.
  */
-function measureCodeLoad(args, where, probe) {
+export function measureCodeLoad(
+  args,
+  where,
+  probe,
+  measured = { runs: probedRuns, modules: modulesResolved }
+) {
   const name = `nextly ${args.join(" ")}`;
-  const runs = probedRuns(args, where, probe);
+  const runs = measured.runs(args, where, probe);
   if (runs.failure) return `${name}: ${runs.failure}`;
   const ms = median(runs.times);
   if (runs.kind === "none") return inlineActionFailure(name, ms);
-  const modules = modulesResolved(args, where, probe);
+  const over = ms > CODE_LOAD_LIMIT_MS;
+  const modules = measured.modules(args, where, probe);
   console.log(
-    `     ${ms.toFixed(0).padStart(5)} ms  ${String(modules.count ?? "?").padStart(5)} modules  ${name}`
+    `${over ? "FAIL" : "ok  "} ${ms.toFixed(0).padStart(5)} ms  ${String(modules.count ?? "?").padStart(5)} modules  ${name}`
   );
-  return modules.failure ? `${name}: ${modules.failure}` : undefined;
+  if (modules.failure) return `${name}: ${modules.failure}`;
+  return over
+    ? `${name}: its code loaded after ${ms.toFixed(0)} ms (median), over ${CODE_LOAD_LIMIT_MS} ms`
+    : undefined;
 }
 
 /** Every command that runs an action, each timed to its code loaded: the failures. */
 function codeLoadFailures(runs, where, probe) {
   console.log(
-    `\ncode loads: ${runs.length}, ${CODE_LOAD_RUNS} runs each to the line written once a command's code has loaded (median); reported, no budget yet`
+    `\ncode loads: ${runs.length}, ${CODE_LOAD_RUNS} runs each to the line written once a command's code has loaded, limit ${CODE_LOAD_LIMIT_MS} ms (median)`
   );
   return runs
     .map(args => measureCodeLoad(args, where, probe))
@@ -746,8 +761,8 @@ async function main() {
     process.exit(1);
   }
   console.log(
-    "\nEvery answer-only invocation and every command's first line is within its budget, every command's code load was timed, and so was every connection reached."
+    "\nEvery answer-only invocation and every command's first line is within its budget, every command's code load is within its limit, and every connection reached was timed."
   );
 }
 
-await main();
+if (isCliEntry(import.meta.url)) await main();
