@@ -1511,6 +1511,66 @@ describe.each(getConfiguredTestDialects())(
       60_000
     );
 
+    // On SQLite a write waits for the database as long as its busy timeout, which the site may set:
+    // past it, a write still held is refused as the database being busy, with nothing of it written,
+    // as one that finds the file held past the timeout is. Waited for longer, or refused as the
+    // collection being changed, it would answer a busy database two ways.
+    it.runIf(dialect === "sqlite").each([
+      {
+        op: "update",
+        write: (t: TestNextly, id: string) =>
+          t.nextly.update({
+            collection: SLUG,
+            id,
+            data: { label: "late", _overwrite: true },
+          } as never),
+      },
+      {
+        op: "create",
+        write: (t: TestNextly) =>
+          t.nextly.create({
+            collection: SLUG,
+            data: { title: "late", slug: "late", label: "late" },
+          }),
+      },
+    ])(
+      "refuses a held $op as the database being busy once its busy timeout ends, with nothing of it written",
+      async ({ write }) => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        const id = await firstEntry(t);
+        // Well under the second the save is kept holding for, and no other wait's default.
+        await t.adapter.executeQuery("PRAGMA busy_timeout = 400");
+        const began = Date.now();
+        let ended = 0;
+        const { heldBack, outcome } = await whileSaving(t, () =>
+          write(t, id).finally(() => {
+            ended = Date.now() - began;
+          })
+        );
+        expect(heldBack).toBe(false);
+        expect(outcome, told(outcome)).toMatchObject({
+          code: "DATABASE_BUSY",
+          statusCode: 503,
+        });
+        // It waited for the timeout, rather than being refused at once.
+        expect(ended).toBeGreaterThanOrEqual(350);
+        const [late] = await sql<{ n: number | string }>(
+          t,
+          `SELECT COUNT(*) AS n FROM ${q(TABLE)} WHERE ${q("label")} = 'late'`
+        );
+        expect(Number(late?.n)).toBe(0);
+        // The same write, sent again as the refusal says, is applied.
+        await write(t, id);
+        const [again] = await sql<{ n: number | string }>(
+          t,
+          `SELECT COUNT(*) AS n FROM ${q(TABLE)} WHERE ${q("label")} = 'late'`
+        );
+        expect(Number(again?.n)).toBe(1);
+      },
+      60_000
+    );
+
     // A delete sets nothing, and reads the entry first: made again as an update is, its hooks run
     // once.
     it("keeps a delete waiting until the save is over, then deletes the entry, its before hook run once", async () => {
