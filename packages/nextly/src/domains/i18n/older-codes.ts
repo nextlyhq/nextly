@@ -190,18 +190,64 @@ async function underscoredCodesIn(
 }
 
 /**
- * What a stored code is as `dialect` compares codes: MySQL compares them without regard to letter
- * case, so there `pt_BR` and `PT_br` are one spelling, and one conversion rewrites the rows of
- * both; PostgreSQL and SQLite keep them apart. The one rule the scan and every rewrite of a list of
+ * What a stored code is as the database compares codes (`codesFoldCase`): where it compares them
+ * without regard to letter case, `pt_BR` and `PT_br` are one spelling, and one conversion rewrites
+ * the rows of both; elsewhere they are two. The one rule the scan and every rewrite of a list of
  * codes compare by, so a spelling the scan takes as one is rewritten wherever it is stored.
  */
-export function storedCodeKey(dialect: string, code: string): string {
-  return dialect === "mysql" ? code.toLowerCase() : code;
+export function storedCodeKey(foldsCase: boolean, code: string): string {
+  return foldsCase ? code.toLowerCase() : code;
 }
 
-/** Whether `a` and `b` are one stored code as `dialect` compares codes (`storedCodeKey`). */
-export function sameStoredCode(dialect: string, a: string, b: string): boolean {
-  return storedCodeKey(dialect, a) === storedCodeKey(dialect, b);
+/** Whether `a` and `b` are one stored code as the database compares codes (`storedCodeKey`). */
+export function sameStoredCode(
+  foldsCase: boolean,
+  a: string,
+  b: string
+): boolean {
+  return storedCodeKey(foldsCase, a) === storedCodeKey(foldsCase, b);
+}
+
+/**
+ * Whether the database compares stored codes without regard to letter case. PostgreSQL and SQLite
+ * never do. MySQL compares by each column's collation: a case-insensitive one (`..._ci`, the
+ * default) folds case, a binary or case-sensitive one (`utf8mb4_bin`, `..._cs`) keeps `pt_BR` and
+ * `PT_br` apart. Case is folded only where every code column the scan reads folds it, so a column
+ * that keeps the two apart has each found, and a document kept under both is refused, rather than
+ * one of them converted and the other left. A list of codes is read as text in the connection's
+ * collation, so only the plain code columns decide.
+ */
+export async function codesFoldCase(
+  adapter: DrizzleAdapter,
+  translationTables: readonly string[]
+): Promise<boolean> {
+  if (adapter.dialect !== "mysql") return false;
+  const places = (await codeColumnsOn(adapter, translationTables)).filter(
+    place => place.list !== true
+  );
+  if (places.length === 0) return true;
+  const tables = [...new Set(places.map(({ table }) => table))];
+  const columns = [...new Set(places.map(({ column }) => column))];
+  const rows = await adapter.queryStatement<{
+    tableName: string;
+    columnName: string;
+    collation: string | null;
+  }>(
+    sql`SELECT TABLE_NAME AS ${sql.identifier("tableName")}, COLUMN_NAME AS ${sql.identifier("columnName")}, COLLATION_NAME AS ${sql.identifier("collation")} FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${sql.join(
+      tables.map(table => sql`${table}`),
+      sql`, `
+    )}) AND COLUMN_NAME IN (${sql.join(
+      columns.map(column => sql`${column}`),
+      sql`, `
+    )})`
+  );
+  const read = new Set(places.map(({ table, column }) => `${table}.${column}`));
+  return rows
+    .filter(row => read.has(`${row.tableName}.${row.columnName}`))
+    .every(
+      row =>
+        row.collation === null || row.collation.toLowerCase().endsWith("_ci")
+    );
 }
 
 /**
@@ -236,7 +282,8 @@ export async function storedOlderSpellings(
   const byLowered = olderSpellingsOf(codes);
   if (byLowered.size === 0) return [];
   // One conversion for each spelling as the database tells spellings apart (`storedCodeKey`).
-  const keyOf = (code: string) => storedCodeKey(adapter.dialect, code);
+  const foldsCase = await codesFoldCase(adapter, translationTables);
+  const keyOf = (code: string) => storedCodeKey(foldsCase, code);
   const found = new Map<string, StoredOlderSpelling>();
   for (const place of await codeColumnsOn(adapter, translationTables)) {
     for (const code of await underscoredCodesIn(adapter, place)) {
