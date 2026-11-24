@@ -8,19 +8,27 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { connectionFailure } from "../../errors/areas/database";
+import { describeError } from "../../../errors/index";
+import { NextlyError } from "../../../errors/nextly-error";
 
-const createCliAdapter = vi.fn();
+const createAdapter = vi.fn();
+const installRegistryResolver = vi.fn();
 
+vi.mock("../../../database/factory", () => ({
+  createAdapter: () => createAdapter(),
+}));
+vi.mock("../../utils/registry-resolver", () => ({
+  installRegistryResolver: () => installRegistryResolver(),
+}));
+// The real open, over the stand-ins above; only the environment is given.
 vi.mock("../../utils/adapter", async importOriginal => ({
   ...(await importOriginal<typeof import("../../utils/adapter")>()),
   validateDatabaseEnv: () => ({
     valid: true,
     errors: [],
-    dialect: "sqlite",
-    databaseUrl: "file:./app.db",
+    dialect: "postgresql",
+    databaseUrl: "postgres://localhost:5432/app",
   }),
-  createCliAdapter: () => createCliAdapter(),
 }));
 vi.mock("../../utils/config-loader", async importOriginal => ({
   ...(await importOriginal<typeof import("../../utils/config-loader")>()),
@@ -45,12 +53,12 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  createCliAdapter.mockReset();
+  createAdapter.mockReset();
+  installRegistryResolver.mockReset();
 });
 
-/** What the command answered in JSON, the open having failed with `error`. */
-async function answered(error: Error): Promise<unknown> {
-  createCliAdapter.mockRejectedValue(error);
+/** What the command answered in JSON. */
+async function answered(): Promise<unknown> {
   const logger = new Proxy({}, { get: () => () => {} });
   await expect(
     runMigrateStatus(
@@ -64,17 +72,35 @@ async function answered(error: Error): Promise<unknown> {
 }
 
 describe("migrate:status --json, when its database cannot be used", () => {
-  it("names the failure itself where the database opened", async () => {
-    expect(await answered(new TypeError("the tables could not be read"))).toBe(
-      "the tables could not be read"
-    );
+  it.each([
+    new TypeError("the tables could not be read"),
+    // As Nextly's own code throws, with a code: still not a failed connection.
+    NextlyError.internal({ logMessage: "the tables could not be read" }),
+  ])("names the failure itself where the database opened: %s", async error => {
+    createAdapter.mockResolvedValue({ disconnect: async () => {} });
+    installRegistryResolver.mockImplementation(() => {
+      throw error;
+    });
+
+    expect(await answered()).toBe(describeError(error));
   });
 
   it("says the connection failed where it did", async () => {
-    const error = await answered(
-      connectionFailure("sqlite", new Error("unable to open database file"))
-    );
+    createAdapter.mockRejectedValue(new Error("connect ECONNREFUSED"));
+
+    const error = await answered();
     expect(error).toMatch(/^Failed to connect to database: /);
-    expect(error).toContain("unable to open database file");
+    expect(error).toContain("connect ECONNREFUSED");
+  });
+
+  it("reads as before where the open refuses with a code of its own", async () => {
+    createAdapter.mockRejectedValue(
+      new NextlyError({
+        code: "NEXTLY_POSTGRES_SCHEMA_MOVED",
+        publicMessage: "db.postgres.schema is moved.",
+      })
+    );
+
+    expect(await answered()).toMatch(/^Failed to connect to database: /);
   });
 });

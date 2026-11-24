@@ -345,6 +345,19 @@ async function createForTarget(
   return adapter;
 }
 
+/** The failures that came after a database had opened, while its tables were loaded. */
+const TABLES_FAILURES = new WeakSet<object>();
+
+/**
+ * Whether `error` came after its database had opened, while its tables were loaded, so it is no
+ * failed connection whatever its kind.
+ */
+export function cameAfterConnecting(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && TABLES_FAILURES.has(error)
+  );
+}
+
 /**
  * Gives an adapter that has connected the static system tables. Where their code fails, the
  * connection is given up, and the error is thrown as it is: the database answered, so this is not
@@ -363,6 +376,7 @@ async function installTables(adapter: DrizzleAdapter): Promise<void> {
   } catch (error) {
     // A disconnect that fails says less than what was already wrong.
     await adapter.disconnect().catch(() => {});
+    if (typeof error === "object" && error !== null) TABLES_FAILURES.add(error);
     throw error;
   }
 }

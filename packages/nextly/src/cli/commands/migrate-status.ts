@@ -71,7 +71,7 @@ import {
   resolveDeclaredSchema,
 } from "../../domains/schema/migrate/resolved-schema";
 import { marksNoTransaction } from "../../domains/schema/migrate/split-sql";
-import { describeError, NextlyError } from "../../errors/index";
+import { describeError } from "../../errors/index";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import type {
   MigrationErrorJson,
@@ -80,6 +80,7 @@ import type {
 import { databaseEnvError, exitWithError, exitWithJsonError } from "../errors";
 import type { CommandContext } from "../program";
 import {
+  cameAfterConnecting,
   createCliAdapter,
   validateDatabaseEnv,
   getDialectDisplayName,
@@ -263,15 +264,14 @@ function endWithError(
 }
 
 /**
- * What `--json` says of a database that could not be used. A failure to connect carries a code,
- * given it by the open; one that carries none came after the database answered, and is named as
- * it is.
+ * What `--json` says of a database that could not be used: that the connection failed, unless
+ * the failure came after the database had opened.
  */
 function openFailureText(error: unknown): string {
   const text = describeError(error);
-  return NextlyError.is(error)
-    ? `Failed to connect to database: ${text}`
-    : text;
+  return cameAfterConnecting(error)
+    ? text
+    : `Failed to connect to database: ${text}`;
 }
 
 /**
