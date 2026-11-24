@@ -18,17 +18,14 @@
 import type { UpgradeStep } from "../upgrade-step";
 
 import { storedPasswordsStep } from "./stored-passwords";
-import {
-  VERSIONS_AND_TRANSLATIONS,
-  versionPasswordsStep,
-} from "./version-passwords";
+import { VERSION_SNAPSHOTS, versionPasswordsStep } from "./version-passwords";
 
 /**
- * The group of the steps over the version history and the translations (`UpgradeStep.group`):
- * each reads what the ones before it repair, the version history's passwords removed among them,
- * since a pending change's values are what the localisation steps split and compare.
+ * What the localisation steps repair (`UpgradeStep.group`): each reads what the ones before it
+ * repair. The draft split also reads what pending changes hold (`VERSION_SNAPSHOTS`), which the
+ * version history's password removal changes; the others read neither that nor anything else.
  */
-const LOCALISATION = VERSIONS_AND_TRANSLATIONS;
+const LOCALISATION = "localisation";
 
 /** Converting roles that hold a retired `manage-` permission. */
 const retiredManageStep: UpgradeStep = {
@@ -91,6 +88,8 @@ const localisationValuesStep: UpgradeStep = {
 /** Keeping every pending change by part, split against what is live. */
 const localisationDraftsStep: UpgradeStep = {
   group: LOCALISATION,
+  // It splits and compares the values pending changes hold, which the password removal changes.
+  reads: [LOCALISATION, VERSION_SNAPSHOTS],
   title: "split pending changes into shared and language drafts",
   pending: async context =>
     (await import("./localisation-drafts")).documentsWithDraftsToSplit(context),

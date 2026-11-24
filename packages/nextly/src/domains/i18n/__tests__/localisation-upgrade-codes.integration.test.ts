@@ -577,6 +577,66 @@ describeEachDialect(
     // spelling that mixes the two is converted; the discovery of what the rows hold reads it the
     // same way. Broken, it looks the spelling up with only its hyphens read as underscores, never
     // finds `zh_Hant-TW`, and leaves those rows out of reach of the language.
+    // A version's list of changed languages can hold a standard code beside an older spelling.
+    // Only the older spelling is one: the standard code is no conversion, and none of it
+    // collides with itself. Broken, `fr-FR` is taken for an older spelling of itself, and its own
+    // rows refuse the run as one language under two codes.
+    it("takes only the older spellings from a version's list that holds a standard code too", async () => {
+      const THREE = siteWithLanguages(["en", "pt-BR", "fr-FR"], "en");
+      database = await openUpgradeDatabase(dialect);
+      const t = await bootSite(database, "upgraded", THREE);
+      const created = await entriesOf(t).createEntry(
+        { collectionName: ARTICLES, overrideAccess: true, locale: "en" },
+        {
+          title: "hello",
+          summary: "s",
+          code: "code-list-fr",
+          status: "published",
+        }
+      );
+      const id = (created.data as { id: string }).id;
+      await entriesOf(t).updateEntry(
+        {
+          collectionName: ARTICLES,
+          entryId: id,
+          locale: "fr-FR",
+          overrideAccess: true,
+        },
+        { title: "bonjour", status: "published", _overwrite: true }
+      );
+      const [version] = await database.adapter.select<{ id: string }>(
+        VERSIONS_TABLE,
+        {
+          columns: ["id"],
+          where: { and: [{ column: "entryId", op: "=", value: id }] },
+          limit: 1,
+        }
+      );
+      await database.adapter.update(
+        VERSIONS_TABLE,
+        { changedLocales: JSON.stringify(["fr-FR", "pt_BR"]) },
+        { and: [{ column: "id", op: "=", value: version!.id }] }
+      );
+
+      expect(
+        await refusalBeforeSchemaChanges(database.adapter, THREE)
+      ).toBeUndefined();
+      await migrateData(database.adapter as never, THREE);
+
+      const [row] = await database.adapter.select<{ changedLocales: unknown }>(
+        VERSIONS_TABLE,
+        {
+          columns: ["changedLocales"],
+          where: { and: [{ column: "id", op: "=", value: version!.id }] },
+        }
+      );
+      const list =
+        typeof row?.changedLocales === "string"
+          ? (JSON.parse(row.changedLocales) as unknown)
+          : row?.changedLocales;
+      expect(list).toEqual(["fr-FR", "pt-BR"]);
+    });
+
     it("converts a stored spelling that mixes underscores and hyphens", async () => {
       const MIXED = siteWithLanguages(["en", "zh-Hant-TW"], "en");
       database = await openUpgradeDatabase(dialect);

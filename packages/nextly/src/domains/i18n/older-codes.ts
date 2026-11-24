@@ -182,7 +182,9 @@ async function underscoredCodesIn(
       codes.push(held.slice((place.prefix ?? "").length));
       continue;
     }
-    codes.push(...codesOfList(held));
+    // A list matched for one code with an underscore can hold codes without one beside it
+    // (`["fr-FR", "pt_BR"]`): only those with one are older spellings.
+    codes.push(...codesOfList(held).filter(code => code.includes("_")));
   }
   return codes;
 }
@@ -215,7 +217,8 @@ export async function storedOlderSpellings(
       const to = byLowered.get(
         (standardLanguageCode(code) ?? code).toLowerCase()
       );
-      if (to !== undefined) found.set(code, to);
+      // A code already in the form it is read as is no older spelling of it.
+      if (to !== undefined && to !== code) found.set(code, to);
     }
   }
   return [...found].map(([from, to]) => ({ from, to }));

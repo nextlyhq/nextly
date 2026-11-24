@@ -115,9 +115,14 @@ export interface UpgradeStep {
    */
   report?: (context: UpgradeStepContext) => Promise<UpgradeReport>;
   /**
-   * The steps this one reads the repairs of: a step reads what the earlier steps of its group
-   * repair, and nothing a step of another group changes. So its count is taken ahead of the run
-   * only where no earlier step of its group has work. A step with none is a group of its own.
+   * What the step repairs, as a name the steps that read it give in `reads`. A step with none is
+   * a group of its own, which no other step reads.
    */
   group?: string;
+  /**
+   * The groups whose repairs this step's count reads; by default its own group. Its count is
+   * taken ahead of the run only where no earlier step of any of them has work: one that has work
+   * may change what the count reads, so the count waits for the run.
+   */
+  reads?: readonly string[];
 }

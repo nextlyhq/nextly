@@ -24,13 +24,13 @@ const sourceOf = (context: UpgradeStepContext) =>
   storedPasswordsOn(context.adapter as unknown as DrizzleAdapter);
 
 /**
- * The group of the steps that rewrite the version history and read what each other repair
- * (`UpgradeStep.group`): this one, and the localisation steps after it.
+ * What this step repairs (`UpgradeStep.group`): the values pending changes and versions hold,
+ * which a step splitting or comparing them reads (`UpgradeStep.reads`).
  */
-export const VERSIONS_AND_TRANSLATIONS = "versions and translations";
+export const VERSION_SNAPSHOTS = "version snapshots";
 
 export const versionPasswordsStep: UpgradeStep = {
-  group: VERSIONS_AND_TRANSLATIONS,
+  group: VERSION_SNAPSHOTS,
   title: "remove passwords kept in version history",
   pending: async context =>
     storedPasswordTotal(await countVersionsHoldingPasswords(sourceOf(context))),

@@ -425,6 +425,24 @@ describe.each(getConfiguredTestDialects())(
       expect(await storedPin()).toBe("plain-pin");
     }, 240_000);
 
+    // `--step` leaves the data steps to the run that finishes the migrations, unless its own
+    // window takes every pending one: that run reaches them, so it is asked before its schema
+    // changes as a run without `--step` is. Broken, its refusal comes after the migrations.
+    it("refuses the two spellings before the migrations a --step that takes them all applies", async () => {
+      await siteWithTwoSpellings();
+
+      // Two migrations are waiting (the column and the per-language table it joins).
+      const refusal = await migrate({ step: 2, backupConfirmed: true }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(NextlyError.isCode(refusal, "NEXTLY_LANGUAGE_CODES_COLLIDE")).toBe(
+        true
+      );
+      expect(await summaryColumnExists()).toBe(false);
+    }, 240_000);
+
     it("lists the work in a dry run and changes nothing", async () => {
       await siteHoldingAPlainPassword("plain-pin");
 

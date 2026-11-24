@@ -21,7 +21,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
-import { NextlyError } from "../../errors";
+import { describeError, NextlyError } from "../../errors";
 import type { DryRunChange, DryRunPlan } from "../dry-run";
 
 import { confirmBackup } from "./backup-confirmation";
@@ -127,17 +127,23 @@ export async function firstDataStepWithWork(
  */
 function countsAhead(steps: readonly UpgradeStep[]): {
   waits: (step: UpgradeStep) => boolean;
-  /** The earlier step of `step`'s group whose work its count waits for, if any. */
+  /** The earlier step whose work `step`'s count waits for, if any. */
   waitingOn: (step: UpgradeStep) => UpgradeStep | undefined;
   hasWork: (step: UpgradeStep) => void;
 } {
   const groupOf = (step: UpgradeStep) =>
     step.group ?? `step ${String(steps.indexOf(step))}`;
+  // What a step's count reads (`UpgradeStep.reads`): by default its own group's repairs.
+  const readsOf = (step: UpgradeStep) => step.reads ?? [groupOf(step)];
   // Each group with work, and the first of its steps that has it.
   const withWork = new Map<string, UpgradeStep>();
+  const waitingOn = (step: UpgradeStep) =>
+    readsOf(step)
+      .map(group => withWork.get(group))
+      .find(earlier => earlier !== undefined);
   return {
-    waits: step => withWork.has(groupOf(step)),
-    waitingOn: step => withWork.get(groupOf(step)),
+    waits: step => waitingOn(step) !== undefined,
+    waitingOn,
     hasWork: step => {
       const group = groupOf(step);
       if (!withWork.has(group)) withWork.set(group, step);
@@ -254,7 +260,11 @@ export async function confirmDataStepsBackup(
 export async function runDataSteps(
   deps: DataStepsDeps
 ): Promise<{ title: string; changed: number }[]> {
-  const first = await firstDataStepWithWork(deps);
+  // The first count is a refusal's first chance too, after the command's schema changes where it
+  // made some: such a refusal says what had applied, as one made in the run does.
+  const first = await firstDataStepWithWork(deps).catch((error: unknown) => {
+    throw refusalAfterWork(error, deps, []);
+  });
   if (first === undefined) return [];
   await confirmDataStepsBackup(deps, first);
 
@@ -420,12 +430,14 @@ async function countForPreview(
       // run may make once that work is done, after the schema changes.
       const earlier = ahead.waitingOn(step);
       if (earlier) {
+        // Named either way: a refusal as one the run may make, a count that could not be read as
+        // one the run takes once the earlier step has.
         const refusal = dryRunRefusalOf(error);
-        if (refusal !== undefined) {
-          deferred.push(
-            `"${step.title}" may be refused once "${earlier.title}" has run, after the schema changes, which stay applied then: counted now, ${refusal}`
-          );
-        }
+        deferred.push(
+          refusal !== undefined
+            ? `"${step.title}" may be refused once "${earlier.title}" has run, after the schema changes, which stay applied then: counted now, ${refusal}`
+            : `"${step.title}" could not be counted before "${earlier.title}" has run: ${describeError(error)}`
+        );
         continue;
       }
       const refusal = dryRunRefusalOf(error);

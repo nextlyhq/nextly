@@ -15,6 +15,8 @@ import {
   type DataStepsDeps,
 } from "../data-steps";
 import { runConvertZonedDates } from "../i18n-convert-zoned-dates";
+import { LOCALISATION_DATA_STEPS } from "../upgrade-steps";
+import { versionPasswordsStep } from "../upgrade-steps/version-passwords";
 import { planWithStoredData } from "../stored-data-of-run";
 import {
   NOTHING_CHANGED,
@@ -297,6 +299,25 @@ describe("the refusal asked of the steps before anything changes", () => {
     );
   });
 
+  // A count that waits for an earlier step and cannot be read now is named too, rather than
+  // left out of the plan. Broken, the dry run says nothing of it.
+  it("names a count that waits for an earlier step and cannot be read now", async () => {
+    const unreadable: UpgradeStep = {
+      title: "read what was tidied",
+      group: "translations",
+      pending: () => Promise.reject(new Error("no such column")),
+      run: () => Promise.resolve(1),
+    };
+
+    const plan = await previewOf([busy("translations"), unreadable]);
+
+    expect(plan.notes).toContainEqual(
+      expect.stringContaining(
+        '"read what was tidied" could not be counted before "tidy one thing" has run'
+      )
+    );
+  });
+
   /** A run of `steps` after the command applied `schemaChanges`, a backup confirmed. */
   const runOf = (steps: readonly UpgradeStep[], schemaChanges?: string) =>
     runDataSteps({
@@ -337,6 +358,53 @@ describe("the refusal asked of the steps before anything changes", () => {
         steps: ["tidy one thing"],
       },
     });
+  });
+
+  // The run's first count is a refusal's first chance after the schema changes too. Broken, that
+  // refusal still says nothing was changed.
+  it("says what applied before a refusal the run's first count makes after the schema changes", async () => {
+    const refusal = await runOf(
+      [refusing("translations")],
+      "the 2 migrations this run applied"
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    const message = (refusal as NextlyError).publicMessage;
+    expect(message).toContain("the 2 migrations this run applied");
+    expect(message).not.toContain(NOTHING_CHANGED);
+  });
+
+  // What each real step repairs and reads: removing the version history's passwords changes what
+  // the draft split compares, and nothing the code conversion reads. Broken (one group for both),
+  // a code collision is not judged up front once the history holds a password.
+  it("judges the code conversion up front past the version history's passwords, and the draft split after them", async () => {
+    const real = (title: string) => {
+      const found = [versionPasswordsStep, ...LOCALISATION_DATA_STEPS].find(
+        step => step.title.startsWith(title)
+      );
+      if (!found) throw new Error(`no step "${title}"`);
+      return found;
+    };
+    const withWork = (step: UpgradeStep): UpgradeStep => ({
+      ...step,
+      pending: () => Promise.resolve(1),
+    });
+    const refusingAs = (step: UpgradeStep): UpgradeStep => ({
+      ...step,
+      pending: refusing().pending,
+    });
+    const passwords = withWork(
+      real("remove passwords kept in version history")
+    );
+
+    expect(
+      await refusalOf([passwords, refusingAs(real("convert language codes"))])
+    ).toBeDefined();
+    expect(
+      await refusalOf([passwords, refusingAs(real("split pending changes"))])
+    ).toBeUndefined();
   });
 
   it("keeps a refusal made before anything applied as the step made it", async () => {
