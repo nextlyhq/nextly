@@ -46,6 +46,7 @@ import {
 } from "../../../schema/builder-save/collection-save";
 import type { Resolution } from "../../../schema/pipeline/resolution/types";
 import { applyCollectionSchemaChange } from "../../../schema/services/collection-schema-apply";
+import { encodeStamp } from "../../runtime/companion-stamp-column";
 import { loadUiSchema } from "../../../schema/ui-schema/loader";
 
 interface Entries {
@@ -611,6 +612,63 @@ export function requiredTextFieldCases(
         );
       }
 
+      /** The English row of `id` in the collection's translations table, its stamp as `what`. */
+      async function stampRow<T>(
+        slug: string,
+        id: string,
+        what: string
+      ): Promise<T> {
+        const q = (name: string) => quote(dialect, name);
+        const [row] = await query<{ value: T }>(
+          `SELECT ${what} AS value FROM ${q(`dc_${slug}_locales`)} WHERE ${q("_parent")} = '${id}' AND ${q("_locale")} = 'en'`
+        );
+        return row!.value;
+      }
+
+      /**
+       * How a stamp is stored, as its type and the shape of its text: the integer SQLite keeps, the
+       * DATETIME(3) MySQL keeps, the timestamptz PostgreSQL keeps.
+       */
+      async function stampForm(
+        slug: string,
+        id: string
+      ): Promise<{ type: unknown; shape: string }> {
+        const type =
+          dialect === "sqlite"
+            ? "typeof(_updated_at)"
+            : dialect === "postgresql"
+              ? "pg_typeof(_updated_at)::text"
+              : "CAST(_updated_at AS CHAR)";
+        const text = await stampText(slug, id);
+        return {
+          type:
+            dialect === "mysql"
+              ? "datetime(3)"
+              : await stampRow<string>(slug, id, type),
+          shape: text.replace(/\d/g, "9"),
+        };
+      }
+
+      /** A stamp's text as the database prints it, precise to the millisecond. */
+      const stampText = (slug: string, id: string): Promise<string> =>
+        stampRow<unknown>(
+          slug,
+          id,
+          dialect === "postgresql"
+            ? "to_char(_updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.MS')"
+            : dialect === "mysql"
+              ? "LEFT(DATE_FORMAT(_updated_at, '%Y-%m-%d %H:%i:%s.%f'), 23)"
+              : "_updated_at"
+        ).then(String);
+
+      /** An encoded stamp as the same text: SQLite's integer, and the moment to the millisecond. */
+      const encodedText = (encoded: unknown): string =>
+        dialect === "sqlite"
+          ? String(encoded)
+          : (encoded instanceof Date ? encoded.toISOString() : String(encoded))
+              .replace("T", " ")
+              .slice(0, 23);
+
       /**
        * That a change lost nothing: every entry is there, and where the values are kept per
        * language, every language's row with its value, as `before` read them under `column`.
@@ -1032,6 +1090,33 @@ export function requiredTextFieldCases(
               if (translated) {
                 expect(after[`${ids.bare}:es`]).toBe(before[`${ids.bare}:es`]);
               }
+
+              // An ordinary write stamps a row through the runtime's encoder (`encodeStamp`). The
+              // stamp the fill wrote reads back in the same form, on every database.
+              const written = await handler().getEntryService().updateEntry(
+                {
+                  collectionName: slug,
+                  entryId: ids.kept,
+                  overrideAccess: true,
+                  locale: "en",
+                },
+                { heading: "Again", _overwrite: true }
+              );
+              expect(written.success, JSON.stringify(written)).toBe(true);
+              const ordinary = await stampForm(slug, ids.kept);
+              for (const id of [ids.empty, ids.bare]) {
+                expect(await stampForm(slug, id)).toEqual(ordinary);
+              }
+              // And it is the form the encoder gives the moment the row holds.
+              const at = (await stampsOf(slug))[`${ids.empty}:en`]!;
+              const encoded = encodeStamp(
+                new Date(at),
+                `dc_${slug}_locales`,
+                dialect
+              );
+              expect(await stampText(slug, ids.empty)).toBe(
+                encodedText(encoded)
+              );
             });
           }
         }
