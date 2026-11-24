@@ -38,7 +38,7 @@ export const PUBLISH_PARTS_ACTION_ID = "publish-parts";
 export const PUBLISH_PARTS_LABEL = "Choose what to publish…";
 
 /** What publishing past the workflow says, on the main button's menu. */
-export const PUBLISH_WITHOUT_REVIEW_LABEL = "Publish without review…";
+const PUBLISH_WITHOUT_REVIEW_LABEL = "Publish without review…";
 
 export interface PublishPartsActionProps {
   /** The document; absent while the page is loading. */

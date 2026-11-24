@@ -240,6 +240,43 @@ describe("an action that cannot be used", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("keeps the same press as its hold lifts, closing the reason and then running", async () => {
+    // The element a person has focused must not be swapped for another as
+    // the review state arrives, or focus is lost under them.
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    const held = {
+      id: "publish",
+      label: "Publish",
+      placement: "primary" as const,
+      disabledReason: "Checking the review…",
+    };
+    const { rerender } = render(
+      <DocumentActionBar
+        actions={[held]}
+        bindings={{ publish: { onSelect } }}
+      />
+    );
+    const press = screen.getByRole("button", { name: /^publish$/i });
+    await user.click(press);
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "Checking the review…"
+    );
+
+    const { disabledReason: _lifted, ...free } = held;
+    rerender(
+      <DocumentActionBar
+        actions={[free]}
+        bindings={{ publish: { onSelect } }}
+      />
+    );
+    expect(screen.getByRole("button", { name: /^publish$/i })).toBe(press);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(press).not.toHaveAttribute("data-held");
+    await user.click(press);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
   it("draws a leading action refused for this instant disabled, with why", () => {
     // Nothing to save, a submit in flight: not a hold to explain, and the
     // press would do nothing a moment later either.

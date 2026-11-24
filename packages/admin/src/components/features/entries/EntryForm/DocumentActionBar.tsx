@@ -35,7 +35,14 @@ import {
   PopoverContent,
 } from "@nextlyhq/ui";
 import { ChevronDown, Loader2, Lock, MoreHorizontal } from "lucide-react";
-import { Fragment, useEffect, useId, useState, type JSX } from "react";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useState,
+  type ComponentProps,
+  type JSX,
+} from "react";
 
 import { useInTopBar } from "@admin/components/layout/header/TopBarPlaces";
 import { Link } from "@admin/components/ui/link";
@@ -523,46 +530,26 @@ function MainPress({
   className?: string;
 }) {
   const reasonId = useId();
-  const [open, setOpen] = useState(false);
   const hold = explainsHold ? primary.action.disabledReason : undefined;
-  const held = hold !== undefined;
-  // A hold that lifts takes its reason away with it.
-  useEffect(() => {
-    if (!held) setOpen(false);
-  }, [held]);
-  const submits = !held && primary.binding.submitForm !== undefined;
+  const { open, setOpen, toggle } = useHoldReason(hold !== undefined);
   return (
-    <Popover open={held && open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverAnchor asChild>
         <Button
           size="sm"
-          variant={held ? "outline" : "default"}
-          type={submits ? "submit" : "button"}
-          {...(submits ? { form: primary.binding.submitForm } : {})}
-          onClick={
-            held
-              ? () => setOpen(current => !current)
-              : submits
-                ? undefined
-                : primary.binding.onSelect
-          }
-          disabled={!held && reason !== undefined}
-          aria-describedby={held ? reasonId : undefined}
-          /*
-            The reason is the title when there is one, so a control an author
-            cannot use says why. Three separate permissions and several
-            document states decide these, and a dead button with no
-            explanation reads as broken rather than as forbidden.
-          */
-          title={hold ?? reason ?? primary.action.label}
-          data-action={primary.action.id}
-          data-primary="true"
-          {...(held ? { "data-held": "" } : {})}
-          className={cn(held && "gap-1.5 text-foreground", className)}
+          {...(hold === undefined
+            ? readyPressProps(primary, reason)
+            : heldPressProps(primary, hold, reasonId, toggle))}
+          className={cn(
+            hold !== undefined && "gap-1.5 text-foreground",
+            className
+          )}
         >
-          {held ? <Lock className="h-3.5 w-3.5" aria-hidden="true" /> : null}
-          {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-          {primary.action.label}
+          <PressContents
+            label={primary.action.label}
+            held={hold !== undefined}
+            pending={pending}
+          />
         </Button>
       </PopoverAnchor>
       <span id={reasonId} className="sr-only">
@@ -572,6 +559,102 @@ function MainPress({
         <p>{hold}</p>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * Whether a held press's reason is open beside it. A hold that lifts takes
+ * its reason away with it, so the reason is never open over a press that now
+ * runs.
+ */
+function useHoldReason(held: boolean): {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  toggle: () => void;
+} {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!held) setOpen(false);
+  }, [held]);
+  return {
+    open: held && open,
+    setOpen,
+    toggle: () => setOpen(current => !current),
+  };
+}
+
+/**
+ * What the press is given, its `data-*` marks included: an object literal
+ * names them as keys, which a JSX attribute alone may spell freely.
+ */
+type PressProps = Omit<ComponentProps<typeof Button>, "children" | "size"> &
+  Partial<Record<`data-${string}`, string>>;
+
+/** The press's identity, the same in every state. */
+function pressIdentity(primary: Bound): PressProps {
+  return { "data-action": primary.action.id, "data-primary": "true" };
+}
+
+/**
+ * A press the model holds: pressable, quiet, described by its reason, and
+ * opening that reason instead of running.
+ */
+function heldPressProps(
+  primary: Bound,
+  hold: string,
+  reasonId: string,
+  toggle: () => void
+): PressProps {
+  return {
+    ...pressIdentity(primary),
+    type: "button",
+    variant: "outline",
+    onClick: toggle,
+    "aria-describedby": reasonId,
+    title: hold,
+    "data-held": "",
+  };
+}
+
+/**
+ * A press nothing in the model holds: it runs the action, or submits the
+ * form it is bound to, and is disabled while this instant refuses it (nothing
+ * to save, a submit in flight). The reason is the title when there is one,
+ * so a control an author cannot use says why: a dead button with no
+ * explanation reads as broken rather than as forbidden.
+ */
+function readyPressProps(
+  primary: Bound,
+  reason: string | undefined
+): PressProps {
+  const { submitForm, onSelect } = primary.binding;
+  return {
+    ...pressIdentity(primary),
+    variant: "default",
+    ...(submitForm === undefined
+      ? { type: "button" as const, onClick: onSelect }
+      : { type: "submit" as const, form: submitForm }),
+    disabled: reason !== undefined,
+    title: reason ?? primary.action.label,
+  };
+}
+
+/** What the press shows: a lock while held, a spinner while pending, its words. */
+function PressContents({
+  label,
+  held,
+  pending,
+}: {
+  label: string;
+  held: boolean;
+  pending: boolean;
+}) {
+  return (
+    <>
+      {held ? <Lock className="h-3.5 w-3.5" aria-hidden="true" /> : null}
+      {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+      {label}
+    </>
   );
 }
 
