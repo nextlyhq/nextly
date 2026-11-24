@@ -190,6 +190,18 @@ export function readsOnTransaction(value: object): boolean {
   return viewed.has(value);
 }
 
+/**
+ * Whether a statement asked through `value` lands on a transaction's
+ * connection: `value` is a view reading on one, or the calling flow holds one
+ * open on the adapter itself.
+ */
+export function asksOnTransaction(value: object): boolean {
+  if (readsOnTransaction(value)) return true;
+  const open = (value as { transactionOpenInFlow?: unknown })
+    .transactionOpenInFlow;
+  return typeof open === "function" && open.call(value) === true;
+}
+
 /** The transaction each view reads on. */
 const viewTransactions = new WeakMap<object, TransactionContext>();
 

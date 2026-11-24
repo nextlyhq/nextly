@@ -36,6 +36,7 @@ const record = (
 });
 
 const TEXT = { name: "heading", type: "text" };
+const TEXT_TYPE = { type: "text" };
 const SELECT = {
   name: "heading",
   type: "select",
@@ -79,6 +80,45 @@ describe("fileTypeChangesOf", () => {
         next: [SELECT],
       },
     });
+  });
+
+  it("never leaves a field on the row to the file for a relationship held inside JSON of the same name", () => {
+    // `details.contact` changes how it keeps its links inside JSON, which no statement of the file
+    // converts; the row's own `contact` changes type, and is judged.
+    const fields = (inner: object, contact: object) => [
+      {
+        name: "details",
+        type: "group",
+        fields: [
+          {
+            name: "contact",
+            type: "relationship",
+            relationTo: "users",
+            ...inner,
+          },
+        ],
+      },
+      { name: "contact", ...contact },
+    ];
+    const [found] = fileTypeChangesOf(
+      source(
+        record({
+          collections: {
+            posts: declared({ slug: "posts", fields: fields({}, TEXT_TYPE) }),
+          },
+        }),
+        record({
+          collections: {
+            posts: declared({
+              slug: "posts",
+              fields: fields({ hasMany: true }, { type: "number" }),
+            }),
+          },
+        })
+      )
+    );
+
+    expect(found?.input.ignore?.has("contact") ?? false).toBe(false);
   });
 
   it("reads a Builder entity's columns as the Builder makes them", () => {

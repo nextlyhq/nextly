@@ -153,12 +153,21 @@ export async function runPostInitTasks(): Promise<void> {
   // start compares nothing with the live schema; there `nextly migrate:create` writes the index.
   if (process.env.NODE_ENV === "development") {
     try {
-      const { storedLocalizableEntities, warnAboutUnindexedTranslatedUnique } =
-        await import("../domains/i18n/runtime/translated-unique-boot-check");
+      const [
+        { storedLocalizableEntities, warnAboutUnindexedTranslatedUnique },
+        { configTheCodeOwnsIn },
+      ] = await Promise.all([
+        import("../domains/i18n/runtime/translated-unique-boot-check"),
+        import("../di/load-dynamic-tables"),
+      ]);
       const logger = getService("logger");
+      const adapter = getService("adapter");
       await warnAboutUnindexedTranslatedUnique(
-        getService("adapter"),
-        getService("config"),
+        adapter,
+        // The configuration code still owns: a collection a demote handed to the Schema Builder is
+        // judged as the Builder's stored entity below, by the Builder's column rules, and not by
+        // its code entry, which the schema roads ignore (`configTheCodeOwns`).
+        await configTheCodeOwnsIn(adapter, getService("config")),
         message => logger.warn(message),
         // The Schema Builder's entities too, which no configuration names.
         await storedLocalizableEntities({

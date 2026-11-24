@@ -238,6 +238,16 @@ export function setModeLineWriter(
 }
 
 /**
+ * Prints `line` through the writer the program set for the run's line: a
+ * command's start line, which goes where the database line goes (standard
+ * error, kept back by `--quiet`), so a command's `--json` output stays one
+ * document.
+ */
+export function announceStart(line: string): void {
+  writeModeLine?.(line);
+}
+
+/**
  * Prints the run's line once a run, through the writer the program set. Called
  * where a command first validates its database settings, so every command
  * that reaches a database names the database, the mode it runs in and where its URL

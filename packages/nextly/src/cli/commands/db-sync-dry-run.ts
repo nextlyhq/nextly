@@ -18,6 +18,7 @@ import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-s
 import { blockedConversionMessages } from "../../domains/schema/pipeline/classifier/conversion-refusal";
 import { describeOp } from "../../domains/schema/pipeline/diff/describe-operation";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
+import { configTheCodeOwns } from "../../domains/schema/pipeline/registered-collections";
 import type {
   ClassifierEvent,
   TypeChangeEvent,
@@ -145,11 +146,13 @@ async function assertSyncAllowed(
     logger: context.logger,
     action: "db:sync",
   });
+  // As the sync judges them: a handed-over collection's code entry is ignored (`configTheCodeOwns`).
   const registered = await loadBuilderEntities(adapter);
-  await assertConfiguredAddresses(configResult.config, registered, table =>
+  const owned = configTheCodeOwns(configResult.config, registered.collections);
+  await assertConfiguredAddresses(owned, registered, table =>
     adapter.tableExists(table)
   );
-  await assertConfiguredSiblingFields(configResult.config, registered, table =>
+  await assertConfiguredSiblingFields(owned, registered, table =>
     adapter.tableExists(table)
   );
   assertPluginFieldDeclarations(configResult.config);

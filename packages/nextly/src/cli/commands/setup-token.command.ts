@@ -6,6 +6,7 @@ import type { Command } from "commander";
 
 import type { CommandContext, GlobalOptions } from "../context";
 import { withDryRun } from "../dry-run";
+import { DATABASE_LINE, declareFirstLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -18,21 +19,24 @@ export function registerSetupTokenCommand(
   createContext: (options: GlobalOptions) => CommandContext
 ): void {
   // `--dry-run` carries the one meaning and help line it has everywhere.
-  withDryRun(
-    program
-      .command("setup-token")
-      .description(
-        "Replace the production setup token and print the new one, or print a value for NEXTLY_SETUP_TOKEN"
-      )
-  )
-    .option(
-      "--generate",
-      "Print a value suitable for NEXTLY_SETUP_TOKEN, touching nothing",
-      false
+  declareFirstLine(
+    withDryRun(
+      program
+        .command("setup-token")
+        .description(
+          "Replace the production setup token and print the new one, or print a value for NEXTLY_SETUP_TOKEN"
+        )
     )
-    .action(
-      lazyAction(async () =>
-        (await import("./setup-token")).setupTokenAction(createContext)
+      .option(
+        "--generate",
+        "Print a value suitable for NEXTLY_SETUP_TOKEN, touching nothing",
+        false
       )
-    );
+      .action(
+        lazyAction(async () =>
+          (await import("./setup-token")).setupTokenAction(createContext)
+        )
+      ),
+    DATABASE_LINE
+  );
 }

@@ -34,6 +34,14 @@ export const REGISTRY_TABLES: Partial<Record<VersionScopeKind, string>> = {
  * pin, a "last looked at" marker) against the entity's deletion, which removes
  * that row and then sweeps the history in one transaction: the write either
  * commits first and is swept, or waits and finds the entity gone.
+ *
+ * The lock is a shared one. The deletion locks the row for update before it
+ * removes it, which a shared lock holds off as well, and two writes to the
+ * history are kept apart by the document's own row, locked next. An exclusive
+ * lock here deadlocked two saves of one collection on MySQL: each entry write
+ * already holds the row shared for its collection (`holdEntityForWrite`), so
+ * two saves that then asked for it exclusively each waited on the other's
+ * shared lock, and one was rolled back and run again.
  */
 export async function documentTableName(
   tx: TransactionContext,
@@ -46,7 +54,7 @@ export async function documentTableName(
     where: {
       and: [{ column: "slug", op: "=" as const, value: ref.scopeSlug }],
     },
-    forUpdate: true,
+    forShare: true,
   });
   return entity ? entity.tableName : null;
 }

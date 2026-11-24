@@ -74,7 +74,7 @@ describe("settings nav table", () => {
 
   it("files each destination under its group, in order", () => {
     expect(shape(superuser)).toEqual([
-      ["Site", ["General", "Email", "Workflows"]],
+      ["Site", ["General", "Email", "Workflows", "Languages"]],
       ["People", ["Users", "Roles"]],
       ["Developers", ["API Keys", "Webhooks", "Background Jobs"]],
     ]);
@@ -125,8 +125,9 @@ describe("visibility", () => {
   it.each([
     ["read-email-templates", [["Site", ["Email"]]]],
     ["read-email-providers", [["Site", ["Email"]]]],
-    // Workflows are read on either settings grant, as their routes are.
-    ["read-settings", [["Site", ["General", "Workflows"]]]],
+    // Workflows are read on either settings grant, as their routes are;
+    // Languages on reading settings alone, as the languages route is.
+    ["read-settings", [["Site", ["General", "Workflows", "Languages"]]]],
     ["update-settings", [["Site", ["Workflows"]]]],
     ["read-users", [["People", ["Users"]]]],
     ["read-roles", [["People", ["Roles"]]]],

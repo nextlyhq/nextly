@@ -16,6 +16,7 @@ import {
   reserveEmailRequest,
   type EmailRequestVerdict,
 } from "./email-limits";
+import { expiryFor } from "./expiry";
 import { ADDRESS, nameAndAddress } from "./input";
 import { pageLink } from "./links";
 import {
@@ -23,6 +24,7 @@ import {
   type AccountPasswordRefusal,
 } from "./new-password";
 import { PURPOSES } from "./purposes";
+import { secretFields } from "./secret-fields";
 import type { StartedSession } from "./verify";
 
 /**
@@ -129,12 +131,22 @@ export async function invite(
     data: carried,
     voidEarlier: true,
   });
-  const link = pageLink(settings, "acceptInvitation", minted.token);
+  const fields = secretFields(settings, "invitation", { link: minted });
   if (input.sendEmail) {
     const existing = await accountByAddress(deps.db, address);
     await deps.mail.queue(
       existing === null
-        ? { kind: "invitation", accountId: null, to: address, link }
+        ? {
+            kind: "invitation",
+            accountId: null,
+            to: address,
+            ...fields,
+            // Its template may greet the person by name and say when the
+            // link stops working, in the site's time zone. Inviting again
+            // sends the new link's expiry, through this same path.
+            name,
+            ...expiryFor(minted.expiresAt, settings.timeZone),
+          }
         : {
             kind: "invitation-has-account",
             accountId: existing.id,
@@ -148,7 +160,7 @@ export async function invite(
   return {
     status: "invited",
     token: minted.token,
-    link,
+    link: fields.link,
     expiresAt: minted.expiresAt,
   };
 }
