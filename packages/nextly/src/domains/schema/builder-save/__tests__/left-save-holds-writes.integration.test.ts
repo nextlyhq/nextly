@@ -462,6 +462,10 @@ describe.each(
           expect(refused.ok, JSON.stringify(refused)).toBe(false);
           expect(databaseError(refused), JSON.stringify(refused)).toBe(false);
           expect(refused.message, JSON.stringify(refused)).toMatch(/heading/);
+          // Its own code, apart from any other conflict: a release run stops on it, naming the field.
+          expect(refused.code, JSON.stringify(refused)).toBe(
+            "BUILDER_SAVE_FIELD_UNSETTLED"
+          );
         }
         expect(restSets!.status).toBe(409);
         for (const through of [restOther!, apiOther!]) {

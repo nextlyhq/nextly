@@ -474,8 +474,7 @@ export const SCHEMA_CODES = defineCodes({
       "A write or read of entries was refused, because a Builder save left part-way changed a field it reaches and is not settled.",
     from: [
       {
-        code: "CONFLICT",
-        reason: "builder-save-field-unsettled",
+        code: "BUILDER_SAVE_FIELD_UNSETTLED",
         describe: fieldUnsettled,
       },
     ],

@@ -335,9 +335,9 @@ export function heldFieldsRefusal(
   const kindName = kind === "fieldGroup" ? "field group" : kind;
   const names = fields.map(name => `"${name}"`).join(", ");
   const one = fields.length === 1;
-  return NextlyError.conflict({
-    reason: "state",
-    message: `A Builder save of the ${kindName} "${slug}" was left part-way, and it changed ${one ? "the field" : "the fields"} ${names} without recording ${one ? "it" : "them"} yet. A write that sets ${one ? "it" : "one of them"}, or a read that needs ${one ? "it" : "them"}, is refused until the save is settled: the next development start (\`next dev\`), or the next save of this ${kindName} in the Schema Builder, settles it. Then try again.`,
+  return new NextlyError({
+    code: "BUILDER_SAVE_FIELD_UNSETTLED",
+    publicMessage: `A Builder save of the ${kindName} "${slug}" was left part-way, and it changed ${one ? "the field" : "the fields"} ${names} without recording ${one ? "it" : "them"} yet. A write that sets ${one ? "it" : "one of them"}, or a read that needs ${one ? "it" : "them"}, is refused until the save is settled: the next development start (\`next dev\`), or the next save of this ${kindName} in the Schema Builder, settles it. Then try again.`,
     logContext: {
       reason: "builder-save-field-unsettled",
       kind,

@@ -22180,22 +22180,6 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * The one create implementation. Both transaction entry points delegate here,
-   * so a create is shaped, authorized, written and recorded the same way
-   * whichever one a caller reached for.
-   *
-   * The options carry the only things that legitimately differ between them —
-   * see `CreateEntryWriteOptions`. Everything else is identical by
-   * construction rather than by two implementations agreeing.
-   */
-  // Replaces createEntryInTransaction (cyclomatic 20) and
-  // createSingleEntryInTransaction (24), which were separate copies of this
-  // pipeline. One implementation at 24 is the lower of the two, not a new
-  // hotspot; the remaining count is the create pipeline's own branching, which
-  // comes down by splitting the phases into their own units rather than by
-  // keeping two copies of them.
-  // fallow-ignore-next-line complexity
-  /**
    * Refuses a write in a caller's transaction that sets a field a Builder save left part-way holds,
    * read on that transaction, before anything of the write runs (`refuseWriteOverLeftSave`).
    */
@@ -22213,6 +22197,22 @@ export class CollectionMutationService extends BaseService {
     });
   }
 
+  /**
+   * The one create implementation. Both transaction entry points delegate here,
+   * so a create is shaped, authorized, written and recorded the same way
+   * whichever one a caller reached for.
+   *
+   * The options carry the only things that legitimately differ between them —
+   * see `CreateEntryWriteOptions`. Everything else is identical by
+   * construction rather than by two implementations agreeing.
+   */
+  // Replaces createEntryInTransaction (cyclomatic 20) and
+  // createSingleEntryInTransaction (24), which were separate copies of this
+  // pipeline. One implementation at 24 is the lower of the two, not a new
+  // hotspot; the remaining count is the create pipeline's own branching, which
+  // comes down by splitting the phases into their own units rather than by
+  // keeping two copies of them.
+  // fallow-ignore-next-line complexity
   private async createEntryWrite(
     tx: TransactionContext,
     params: CreateEntryWriteParams,
@@ -22224,11 +22224,6 @@ export class CollectionMutationService extends BaseService {
     await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
       executor: tx.getDrizzle(),
     });
-    await this.refuseLeftSaveWriteInTransaction(
-      tx,
-      params.collectionName,
-      body
-    );
     // What the create claims about where its translated values came from,
     // read before the key is dropped with the version.
     const provenance = this.provenanceOf(
@@ -22238,6 +22233,12 @@ export class CollectionMutationService extends BaseService {
       undefined
     );
     if ("refused" in provenance) return provenance.refused;
+    // A field a Builder save left part-way holds is refused before anything is written.
+    await this.refuseLeftSaveWriteInTransaction(
+      tx,
+      params.collectionName,
+      body
+    );
     // A publish made without review, and why, read off the body for the publish gate and never
     // stored; see createEntry.
     const withoutReview = withoutReviewOfBody(body);
@@ -23147,11 +23148,6 @@ export class CollectionMutationService extends BaseService {
     await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
       executor: tx.getDrizzle(),
     });
-    await this.refuseLeftSaveWriteInTransaction(
-      tx,
-      params.collectionName,
-      body
-    );
     // How this item is judged, decided before the version and `_overwrite`
     // are dropped, as on updateEntry: an item that gives a version is judged
     // on its own, so a stale one is refused and the rest of a batch applied.
@@ -23160,6 +23156,12 @@ export class CollectionMutationService extends BaseService {
       body
     );
     if ("success" in versionCheck) return versionCheck;
+    // And so is one setting a field a left Builder save holds; see createEntryWrite.
+    await this.refuseLeftSaveWriteInTransaction(
+      tx,
+      params.collectionName,
+      body
+    );
     // A publish made without review, read off the body for the publish gate; see updateEntry.
     const withoutReview = withoutReviewOfBody(body);
     // What the write claims about where its translated values came from,

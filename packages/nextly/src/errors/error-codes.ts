@@ -69,6 +69,11 @@ export const NEXTLY_ERROR_STATUS = {
   // before anything changed. Its own code beside CONFLICT so a caller, a release run among them,
   // can tell the refusal is safe to try again once the other change ends.
   COLLECTION_BEING_CHANGED: 409,
+  // A write that sets a field a Builder save left part-way holds: a change of that save committed
+  // apart from the registry row describing the field. Its own code beside CONFLICT and
+  // COLLECTION_BEING_CHANGED, so a caller, a release run among them, stops and names the field:
+  // trying again changes nothing until the save is settled.
+  BUILDER_SAVE_FIELD_UNSETTLED: 409,
   // An update that must say which version of a document it was made from, or
   // that it overwrites whatever is stored, and said neither: 428, Precondition
   // Required. Its own code beside STALE_VERSION: nothing is out of date, the
