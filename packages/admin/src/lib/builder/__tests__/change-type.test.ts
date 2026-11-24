@@ -12,6 +12,7 @@ import {
   changeTypeOffered,
   containerChangeRefused,
   settingsFittingType,
+  withSavedTypeRestored,
   withTypeChanged,
 } from "../change-type";
 
@@ -148,6 +149,52 @@ describe("a field changed to another type", () => {
     expect(changed({ type: "group", fields: inside }, "repeater").fields).toBe(
       inside
     );
+  });
+});
+
+describe("a field back to the type it was saved as", () => {
+  const saved: BuilderField = {
+    id: "f-1",
+    name: "link",
+    label: "Link",
+    type: "relationship",
+    relationTo: "posts",
+    maxDepth: 2,
+    description: "Where it points",
+    validation: { required: true },
+    admin: { width: "50%", placeholder: "Pick" },
+  } as BuilderField;
+  // The draft changed it to a text, relabelled it, cleared its help text and moved it.
+  const draft: BuilderField = {
+    id: "f-1",
+    name: "link",
+    label: "Where to",
+    type: "text",
+    validation: { required: true },
+    admin: { width: "100%" },
+  } as BuilderField;
+
+  it("has every setting of its own it was saved with, and what the person has given it since", () => {
+    expect(withSavedTypeRestored(draft, saved)).toEqual({
+      id: "f-1",
+      name: "link",
+      label: "Where to",
+      type: "relationship",
+      relationTo: "posts",
+      maxDepth: 2,
+      validation: { required: true },
+      // The help text the person cleared stays cleared; the width they set stands.
+      admin: { width: "100%", placeholder: "Pick" },
+    });
+  });
+
+  it("Required is as the person has it now", () => {
+    expect(
+      withSavedTypeRestored(
+        { ...draft, validation: { required: false } },
+        saved
+      ).validation
+    ).toEqual({ required: false });
   });
 });
 

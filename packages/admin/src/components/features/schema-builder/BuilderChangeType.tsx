@@ -12,6 +12,7 @@
  *
  * The change is the host's: it is handed the field as the new type keeps it (`withTypeChanged`).
  */
+import type { UseQueryResult } from "@tanstack/react-query";
 import { MOST_USED_FIELD_TYPES } from "nextly/field-catalog";
 import type { JSX } from "react";
 
@@ -26,6 +27,7 @@ import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import {
   containerChangeRefused,
   settingsFittingType,
+  withSavedTypeRestored,
   withTypeChanged,
 } from "@admin/lib/builder/change-type";
 import {
@@ -33,8 +35,16 @@ import {
   type FieldPlacement,
 } from "@admin/lib/builder/field-placement";
 import { findFieldById } from "@admin/lib/builder/field-transformers";
-import { BUILDER_FIELD_TYPES } from "@admin/lib/builder/offered-field-types";
-import type { TypeChangeTarget } from "@admin/services/typeChangeTargetsApi";
+import {
+  BUILDER_FIELD_TYPES,
+  builderOfferedTypes,
+} from "@admin/lib/builder/offered-field-types";
+import { pluginFieldTypeCatalogEntries } from "@admin/lib/builder/plugin-field-type-entries";
+import type {
+  TypeChangeQuestion,
+  TypeChangeTarget,
+} from "@admin/services/typeChangeTargetsApi";
+import type { PluginMetadata } from "@admin/types/branding";
 
 import { pickerExcludedTypes, type BuilderConfig } from "./builder-config";
 import { useBuilderFieldGroupChoices } from "./BuilderFieldPicker";
@@ -86,6 +96,50 @@ function choiceFromTarget(target: TypeChangeTarget | undefined): TypeChoice {
     : { available: true, mark: target.outcome };
 }
 
+/**
+ * `field` as picking `type` makes it: back to its type as saved, the saved field with the person's
+ * edits since; to another, what the new type keeps of it.
+ */
+function changedTo(
+  field: BuilderField,
+  saved: BuilderField | null,
+  type: string,
+  plugins: PluginMetadata[] | undefined
+): BuilderField {
+  if (saved !== null && type === saved.type) {
+    return withSavedTypeRestored(field, saved);
+  }
+  return withTypeChanged(
+    field,
+    type,
+    settingsFittingType(type, { surface: BUILDER_SETTINGS, plugins })
+  );
+}
+
+/**
+ * What the picker asks the server of the saved field `saved`: every type it offers, a plugin's among
+ * them, each with whether the change would leave the field holding several values, so the server
+ * judges the field as the save would write it.
+ */
+function questionOf(
+  config: BuilderConfig,
+  field: BuilderField,
+  saved: FieldPlacement,
+  plugins: PluginMetadata[] | undefined
+): TypeChangeQuestion {
+  const offered = builderOfferedTypes(
+    config,
+    pluginFieldTypeCatalogEntries(plugins, "entries")
+  );
+  const candidates = [...offered]
+    .filter(type => type !== saved.field.type)
+    .map(type => ({
+      type,
+      hasMany: changedTo(field, saved.field, type, plugins).hasMany === true,
+    }));
+  return { path: savedPathOf(saved), type: saved.field.type, candidates };
+}
+
 type Props = {
   config: BuilderConfig;
   fields: readonly BuilderField[];
@@ -99,31 +153,33 @@ type Props = {
   onChanged: (next: BuilderField) => void;
 };
 
-export function BuilderChangeType({
+export function BuilderChangeType(props: Props): JSX.Element | null {
+  const field = findFieldById([...props.fields], props.fieldId);
+  return field ? <ChangeTypeOf {...props} field={field} /> : null;
+}
+
+function ChangeTypeOf({
   config,
-  fields,
   fieldId,
   entitySlug,
   savedFields,
   onCancel,
   onChanged,
-}: Props): JSX.Element | null {
+  field,
+}: Props & { field: BuilderField }): JSX.Element {
   const { plugins } = useBranding();
-  const field = findFieldById([...fields], fieldId);
   const savedPlacement = savedFields
     ? findFieldPlacement(savedFields, fieldId)
     : null;
-  // Asked by value: the query's key is compared by what it holds, not by identity.
-  const saved = savedPlacement
-    ? { path: savedPathOf(savedPlacement), type: savedPlacement.field.type }
-    : null;
+  const saved = savedPlacement?.field ?? null;
   const targets = useTypeChangeTargets({
     kind: config.kind,
     slug: entitySlug,
-    saved,
+    question: savedPlacement
+      ? questionOf(config, field, savedPlacement, plugins)
+      : null,
   });
   const fieldGroups = useBuilderFieldGroupChoices(config, entitySlug);
-  if (!field) return null;
 
   const choiceOf = (type: string): TypeChoice => {
     const holding = containerChangeRefused(field, type);
@@ -141,23 +197,9 @@ export function BuilderChangeType({
   const change: FieldPickerChange = {
     current: field.type,
     choiceOf,
-    ...(saved !== null && targets.isPending
-      ? { pending: { kind: "loading" as const } }
-      : saved !== null && targets.isError
-        ? {
-            pending: {
-              kind: "failed" as const,
-              // What failed, then why, as the server or the network said it.
-              message: `What each type would do to the saved values could not be checked (${apiErrorMessage(targets.error, "no answer")}). Close and try again.`,
-            },
-          }
-        : {}),
+    ...pendingOf(saved, targets),
     onChange: ({ type, fieldGroup }) => {
-      const next = withTypeChanged(
-        field,
-        type,
-        settingsFittingType(type, { surface: BUILDER_SETTINGS, plugins })
-      );
+      const next = changedTo(field, saved, type, plugins);
       onChanged(fieldGroup ? { ...next, component: fieldGroup } : next);
     },
   };
@@ -182,4 +224,21 @@ export function BuilderChangeType({
       <NewEntityDialog key={fieldGroups.dialogKey} {...fieldGroups.dialog} />
     </>
   );
+}
+
+/** What the picker waits on, for a saved field: the server's answer, or why it could not be asked. */
+function pendingOf(
+  saved: BuilderField | null,
+  targets: UseQueryResult<TypeChangeTarget[]>
+): Pick<FieldPickerChange, "pending"> {
+  if (saved === null) return {};
+  if (targets.isPending) return { pending: { kind: "loading" } };
+  if (!targets.isError) return {};
+  return {
+    pending: {
+      kind: "failed",
+      // What failed, then why, as the server or the network said it.
+      message: `What each type would do to the saved values could not be checked (${apiErrorMessage(targets.error, "no answer")}). Close and try again.`,
+    },
+  };
 }

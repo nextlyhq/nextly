@@ -19,17 +19,37 @@ export interface TypeChangeTarget {
   outcome: "keeps" | "converts" | "may-lose" | null;
 }
 
+/** A type the picker offers, and whether the field changed to it would hold several values. */
+export interface TypeChangeCandidate {
+  type: string;
+  hasMany: boolean;
+}
+
+/** The saved field the picker asks about: where it is saved, its type there, and what is offered. */
+export interface TypeChangeQuestion {
+  /** Its holders' names, then its own, as saved. */
+  path: readonly string[];
+  /** Its type as the page knows it saved: an answer about another is refused. */
+  type: string;
+  /** Each type the picker offers, with whether the change leaves the field holding several values. */
+  candidates: readonly TypeChangeCandidate[];
+}
+
 /**
- * What each other type would do to the saved field at `path` (its holders' names, then its own) of
- * the entity at `address` (`/collections/schema/posts`), as the type picker shows it.
+ * What each candidate type would do to the saved field the picker asks about (`question`), of the
+ * entity at `address` (`/collections/schema/posts`).
  */
 export async function typeChangeTargetsAt(
   address: string,
-  path: readonly string[]
+  question: TypeChangeQuestion
 ): Promise<TypeChangeTarget[]> {
   const result = await protectedApi.post<ListResponse<TypeChangeTarget>>(
     `${address}/type-change-targets`,
-    { field: [...path] }
+    {
+      field: [...question.path],
+      type: question.type,
+      candidates: question.candidates.map(candidate => ({ ...candidate })),
+    }
   );
   return result.items;
 }

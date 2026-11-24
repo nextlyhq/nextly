@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+import { container } from "../../../di/container";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -67,13 +68,18 @@ async function itemsOf(answer: unknown): Promise<Target[]> {
   return body.items;
 }
 
-async function targetsOf(slug: string, field: string[]): Promise<Target[]> {
+/** What the picker asks of a saved field, `type` being the type it is saved as. */
+async function targetsOf(
+  slug: string,
+  field: string[],
+  type: string
+): Promise<Target[]> {
   return itemsOf(
     await dispatchCollections(
       {} as ServiceContainer,
       "typeChangeTargets",
       { collectionName: slug },
-      { field }
+      { field, type }
     )
   );
 }
@@ -100,7 +106,10 @@ describe.each(getConfiguredTestDialects())(
       );
 
       const fromText = new Map(
-        (await targetsOf("tct_posts", ["summary"])).map(t => [t.type, t])
+        (await targetsOf("tct_posts", ["summary"], "text")).map(t => [
+          t.type,
+          t,
+        ])
       );
       expect(fromText.has("text")).toBe(false);
       expect(fromText.get("number")).toMatchObject({
@@ -112,7 +121,10 @@ describe.each(getConfiguredTestDialects())(
         outcome: null,
       });
       const fromNumber = new Map(
-        (await targetsOf("tct_posts", ["views"])).map(t => [t.type, t])
+        (await targetsOf("tct_posts", ["views"], "number")).map(t => [
+          t.type,
+          t,
+        ])
       );
       expect(fromNumber.get("text")).toMatchObject({
         blocked: null,
@@ -141,7 +153,7 @@ describe.each(getConfiguredTestDialects())(
       );
 
       const inGroup = new Map(
-        (await targetsOf("tct_nested", ["meta", "rating"])).map(t => [
+        (await targetsOf("tct_nested", ["meta", "rating"], "number")).map(t => [
           t.type,
           t,
         ])
@@ -151,7 +163,7 @@ describe.each(getConfiguredTestDialects())(
         outcome: "converts",
       });
       await expect(
-        targetsOf("tct_nested", ["meta", "missing"])
+        targetsOf("tct_nested", ["meta", "missing"], "number")
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
@@ -166,7 +178,9 @@ describe.each(getConfiguredTestDialects())(
           { name: "tct_posts", label: "Post", fields: [] } as never,
           {}
         );
-      await expect(targetsOf("tct_posts", ["missing"])).rejects.toMatchObject({
+      await expect(
+        targetsOf("tct_posts", ["missing"], "text")
+      ).rejects.toMatchObject({
         code: "NOT_FOUND",
       });
     });
@@ -206,7 +220,8 @@ const CASES: { field: Field; to: string }[] = [
 interface Entity {
   kind: "collection" | "Single" | "field group";
   create(field: Field): Promise<void>;
-  targets(): Promise<Target[]>;
+  /** The picker's answer for `field` as saved. */
+  targets(field: Field): Promise<Target[]>;
   save(field: Field): Promise<unknown>;
 }
 
@@ -220,7 +235,7 @@ const collection = (t: TestNextly): Entity => ({
       { name: "tct_agree", label: "Post", fields: [field] }
     );
   },
-  targets: () => targetsOf("tct_agree", ["v"]),
+  targets: field => targetsOf("tct_agree", ["v"], String(field.type)),
   save: async field => {
     const [row] = await (
       t.adapter as unknown as {
@@ -247,12 +262,12 @@ const single = (t: TestNextly): Entity => ({
       { slug: "tct_home", label: "Home", fields: [field] }
     );
   },
-  targets: async () =>
+  targets: async field =>
     itemsOf(
       await dispatchSingles(
         "singleTypeChangeTargets",
         { slug: "tct_home" },
-        { field: ["v"] }
+        { field: ["v"], type: String(field.type) }
       )
     ),
   save: async field => {
@@ -280,12 +295,12 @@ const fieldGroup = (t: TestNextly): Entity => ({
       { slug: "tct_box", label: "Box", fields: [field] }
     );
   },
-  targets: async () =>
+  targets: async field =>
     itemsOf(
       await dispatchComponents(
         "componentTypeChangeTargets",
         { slug: "tct_box" },
-        { field: ["v"] }
+        { field: ["v"], type: String(field.type) }
       )
     ),
   save: async field => {
@@ -353,7 +368,7 @@ describe.each(getConfiguredTestDialects())(
           const entity = of(await boot());
           await entity.create(field);
           const label = `${entity.kind} ${String(field.type)} to ${to}`;
-          const target = (await entity.targets()).find(t => t.type === to);
+          const target = (await entity.targets(field)).find(t => t.type === to);
           expect(target, label).toBeDefined();
           const outcome = await entity.save({ ...field, type: to }).then(
             () => undefined,
@@ -390,6 +405,55 @@ describe.each(getConfiguredTestDialects())(
       },
       600_000
     );
+  }
+);
+
+// With no migration writer the save is made by the push, which changes no translations column's
+// type: the picker offers such a change only where the save would make it.
+describe.each(getConfiguredTestDialects().filter(d => d !== "sqlite"))(
+  "a collection with no migration writer (%s)",
+  dialect => {
+    it("marks a translated change of column unavailable, as its save refuses it", async () => {
+      const basePath = await mkdtemp(join(tmpdir(), "nextly-type-targets-"));
+      folders.push(basePath);
+      vi.stubEnv("NODE_ENV", "development");
+      instance = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath,
+        db: DB,
+        localization: LOCALIZATION,
+      });
+      const field = { name: "v", type: "checkbox", localized: true };
+      await collection(instance).create(field);
+      const entity = collection(instance);
+      const has = container.has.bind(container);
+      vi.spyOn(container, "has").mockImplementation(
+        name => name !== "builderSaveSetup" && has(name)
+      );
+      try {
+        const target = (await entity.targets(field)).find(
+          t => t.type === "number"
+        );
+        expect(target).toMatchObject({ blocked: "translations-column" });
+        const outcome = await entity.save({ ...field, type: "number" }).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        // The push refuses the same field, for the same reason, under an apply's own error.
+        expect(outcome).toMatchObject({
+          publicData: {
+            errors: expect.arrayContaining([
+              expect.objectContaining({
+                path: "fields.v",
+                code: target?.refusal?.code,
+              }),
+            ]),
+          },
+        });
+      } finally {
+        vi.mocked(container.has).mockRestore();
+      }
+    });
   }
 );
 

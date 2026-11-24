@@ -26,7 +26,11 @@ import {
   operatorsForType,
 } from "@admin/components/field-ui/ConditionRow";
 
-import { findFieldPlacement } from "./field-placement";
+import {
+  findFieldPlacement,
+  findFieldPlacements,
+  type FieldPlacement,
+} from "./field-placement";
 
 /** Why a condition is broken. */
 export type ConditionBreak =
@@ -139,15 +143,16 @@ function operatorFits(type: string, operator: string): boolean {
 /**
  * Why `field`'s condition is broken, given the fields on its level (as the
  * settings panel offers them), or null when it reads its source, or has none
- * yet: a condition not yet given a source is unfinished, not broken. `saved`
- * holds the last saved definition's fields by id, where there is one: a source
+ * yet: a condition not yet given a source is unfinished, not broken. `saved` is
+ * where the field was last saved (`savedPlaceOf`), where there is one: a source
  * that was saved as a dropdown and is now another type no longer has the
- * options a condition compared it with.
+ * options a condition inherited from it compares with. A comparison made since,
+ * or changed since, reads the source as it is now.
  */
 export function brokenConditionOf(
   field: BuilderField,
   siblings: readonly BuilderField[],
-  saved?: ReadonlyMap<string, BuilderField>
+  saved?: FieldPlacement
 ): BrokenCondition | null {
   const stored = field.admin?.condition;
   if (!stored?.field) return null;
@@ -172,33 +177,103 @@ export function brokenConditionOf(
       message: `${subject}'s condition compares ${called(source)} in a way a ${source.type} field cannot. Choose another comparison, or remove the condition.`,
     };
   }
-  const value = condition.value;
-  const wasChoice = saved?.get(source.id);
-  if (
-    wasChoice !== undefined &&
+  return (
+    formerOptionBreak(subject, source, condition, saved) ??
+    missingOptionBreak(subject, source, condition)
+  );
+}
+
+/** The text a condition compares its source with, where its comparison takes one; else null. */
+function comparedText(condition: ReturnType<typeof normalized>): string | null {
+  return operatorTakesValue(condition.operator) &&
+    typeof condition.value === "string"
+    ? condition.value
+    : null;
+}
+
+/**
+ * A condition inherited from a saved dropdown that is now another type, comparing it with one of the
+ * options it had (`saved`, where the reader was last saved).
+ */
+function formerOptionBreak(
+  subject: string,
+  source: BuilderField,
+  condition: ReturnType<typeof normalized>,
+  saved: FieldPlacement | undefined
+): BrokenCondition | null {
+  const value = comparedText(condition);
+  const wasChoice = saved?.siblings.find(each => each.id === source.id);
+  if (value === null || wasChoice === undefined) return null;
+  const former =
     CHOICE_TYPES.has(wasChoice.type) &&
     !CHOICE_TYPES.has(source.type) &&
-    operatorTakesValue(condition.operator) &&
-    typeof value === "string" &&
-    (wasChoice.options ?? []).some(option => option.value === value)
-  ) {
-    return {
-      reason: "option-removed",
-      message: `${subject}'s condition compares ${called(source)} with "${value}", one of the options it had as a dropdown, which it no longer has. Choose another value, or remove the condition.`,
-    };
-  }
-  const optionGone =
-    CHOICE_TYPES.has(source.type) &&
-    operatorTakesValue(condition.operator) &&
-    typeof value === "string" &&
+    comparedBeforeTheChange(saved?.field, wasChoice, condition) &&
+    (wasChoice.options ?? []).some(option => option.value === value);
+  return former
+    ? {
+        reason: "option-removed",
+        message: `${subject}'s condition compares ${called(source)} with "${value}", one of the options it had as a dropdown, which it no longer has. Choose another value, or remove the condition.`,
+      }
+    : null;
+}
+
+/** A condition comparing a choice with a value that is not one of its options. */
+function missingOptionBreak(
+  subject: string,
+  source: BuilderField,
+  condition: ReturnType<typeof normalized>
+): BrokenCondition | null {
+  const value = comparedText(condition);
+  const gone =
+    value !== null &&
     value !== "" &&
+    CHOICE_TYPES.has(source.type) &&
     !(source.options ?? []).some(option => option.value === value);
-  return optionGone
+  return gone
     ? {
         reason: "option-removed",
         message: `${subject}'s condition compares ${called(source)} with "${value}", which is no longer one of its options. Choose another value, or remove the condition.`,
       }
     : null;
+}
+
+/**
+ * Whether the saved field `reader` compared the saved source `wasSource` just as `condition` does
+ * now: read of it, by the same operator, with the same value. Its name in the saved definition is
+ * what the saved condition read it by.
+ */
+function comparedBeforeTheChange(
+  reader: BuilderField | undefined,
+  wasSource: BuilderField,
+  condition: ReturnType<typeof normalized>
+): boolean {
+  const stored = reader?.admin?.condition;
+  if (!stored?.field) return false;
+  const was = normalized(stored);
+  return (
+    was.field === wasSource.name &&
+    was.operator === condition.operator &&
+    was.value === condition.value
+  );
+}
+
+/**
+ * Where the field `fieldId` was last saved, told from its namesakes by the containers above it as
+ * they are now (`ancestors`): an id can repeat across containers. Only where nothing else was saved
+ * under that id is the single place it was saved taken, wherever it stands now; none otherwise.
+ */
+export function savedPlaceOf(
+  saved: readonly BuilderField[],
+  fieldId: string,
+  ancestors: readonly BuilderField[]
+): FieldPlacement | undefined {
+  const places = findFieldPlacements(saved, fieldId);
+  const here = places.find(
+    place =>
+      place.ancestors.length === ancestors.length &&
+      place.ancestors.every((each, at) => each.id === ancestors[at].id)
+  );
+  return here ?? (places.length === 1 ? places[0] : undefined);
 }
 
 /**
@@ -212,13 +287,16 @@ export function brokenConditions(
   fields: readonly BuilderField[],
   saved: readonly BuilderField[] = []
 ): Map<string, BrokenCondition> {
-  const savedById = fieldsById(saved);
   const broken = new Map<string, BrokenCondition>();
   const walk = (list: readonly BuilderField[]): void => {
     for (const each of list) {
       if (each.admin?.condition) {
-        const siblings = findFieldPlacement(fields, each.id)?.siblings ?? [];
-        const found = brokenConditionOf(each, siblings, savedById);
+        const placement = findFieldPlacement(fields, each.id);
+        const found = brokenConditionOf(
+          each,
+          placement?.siblings ?? [],
+          savedPlaceOf(saved, each.id, placement?.ancestors ?? [])
+        );
         if (found) broken.set(each.id, found);
       }
       if (each.fields) walk(each.fields);
@@ -226,21 +304,6 @@ export function brokenConditions(
   };
   walk(fields);
   return broken;
-}
-
-/** Every field in `fields`, at any depth, by its id. */
-export function fieldsById(
-  fields: readonly BuilderField[]
-): Map<string, BuilderField> {
-  const byId = new Map<string, BuilderField>();
-  const walk = (list: readonly BuilderField[]): void => {
-    for (const each of list) {
-      byId.set(each.id, each);
-      if (each.fields) walk(each.fields);
-    }
-  };
-  walk(fields);
-  return byId;
 }
 
 /**

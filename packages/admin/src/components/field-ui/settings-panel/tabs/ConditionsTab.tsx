@@ -12,7 +12,7 @@ import type {
 } from "@admin/components/features/schema-builder/types";
 import { brokenConditionOf } from "@admin/lib/builder/condition-identity";
 
-import { useSavedFieldsById } from "../saved-fields-context";
+import { useSavedPlaceOf } from "../saved-fields-context";
 import type { FieldSettingsSurface } from "../types";
 
 import { ConditionBuilder } from "./ConditionBuilder";
@@ -37,9 +37,9 @@ export function ConditionsTab({
   readOnly = false,
   onChange,
 }: Props): JSX.Element {
-  // The saved definition, where the surface keeps one: a saved dropdown that became another type no
-  // longer has the options a condition compared it with.
-  const savedById = useSavedFieldsById();
+  // Where the field was last saved, where the surface keeps a saved definition: a saved dropdown that
+  // became another type no longer has the options a condition inherited from it compares with.
+  const savedPlace = useSavedPlaceOf(field.id, ancestors);
   if (conditions === "none") {
     return (
       <p className="text-sm text-muted-foreground">
@@ -53,7 +53,7 @@ export function ConditionsTab({
   const condition = field.admin?.condition;
   // Judged against the same fields offered as its sources, so what this says
   // is what the outline marks and the save refuses.
-  const broken = brokenConditionOf(field, siblings, savedById);
+  const broken = brokenConditionOf(field, siblings, savedPlace);
 
   return (
     <div className="space-y-2">

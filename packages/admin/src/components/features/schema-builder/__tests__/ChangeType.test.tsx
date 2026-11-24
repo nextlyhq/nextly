@@ -11,7 +11,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
-import type { TypeChangeTarget } from "@admin/services/typeChangeTargetsApi";
+import type {
+  TypeChangeQuestion,
+  TypeChangeTarget,
+} from "@admin/services/typeChangeTargetsApi";
 
 import { BuilderChangeType } from "../BuilderChangeType";
 import { BuilderOverlays, type ActiveOverlay } from "../BuilderOverlays";
@@ -26,15 +29,15 @@ vi.mock("@admin/hooks/queries", async importOriginal => ({
   useFieldGroups: () => ({ data: { items: [] }, isLoading: false }),
 }));
 
-/** The server's answer, and each path it was asked about. */
+/** The server's answer, and each thing it was asked. */
 let answer: () => Promise<TypeChangeTarget[]> = async () => [];
-const asked: Array<{ address: string; path: readonly string[] }> = [];
+const asked: Array<{ address: string; question: TypeChangeQuestion }> = [];
 vi.mock("@admin/services/typeChangeTargetsApi", async importOriginal => ({
   ...(await importOriginal<
     typeof import("@admin/services/typeChangeTargetsApi")
   >()),
-  typeChangeTargetsAt: (address: string, path: readonly string[]) => {
-    asked.push({ address, path });
+  typeChangeTargetsAt: (address: string, question: TypeChangeQuestion) => {
+    asked.push({ address, question });
     return answer();
   },
 }));
@@ -146,9 +149,21 @@ describe("Change type… on a saved field", () => {
     await waitFor(() =>
       expect(row("text")).toHaveTextContent("Converts the values")
     );
-    expect(asked).toEqual([
-      { address: "/collections/schema/posts", path: ["meta", "rating"] },
+    expect(asked.map(each => each.address)).toEqual([
+      "/collections/schema/posts",
     ]);
+    // The field as saved, its type as saved, and every other type offered, each with whether the
+    // change would leave the field holding several values.
+    const [{ question }] = asked;
+    expect(question.path).toEqual(["meta", "rating"]);
+    expect(question.type).toBe("number");
+    expect(question.candidates.map(each => each.type)).toEqual(
+      expect.arrayContaining(["text", "textarea", "checkbox", "select"])
+    );
+    expect(question.candidates.map(each => each.type)).not.toContain("number");
+    expect(
+      question.candidates.every(each => typeof each.hasMany === "boolean")
+    ).toBe(true);
     expect(row("checkbox")).toHaveTextContent("May lose some values");
     expect(row("textarea")).toHaveTextContent(
       "Unavailable: Its type changes as it stops being translated. Turn off Localized and save."
@@ -166,6 +181,17 @@ describe("Change type… on a saved field", () => {
     );
   });
 
+  it("asks of a saved list the several values the change would keep, and of a single one none", async () => {
+    answer = async () => [];
+    renderChange("f-kind", [kind, meta]);
+    await waitFor(() => expect(asked).toHaveLength(1));
+    const keeps = (type: string) =>
+      asked[0]?.question.candidates.find(each => each.type === type)?.hasMany;
+    // The dropdown takes several picks; a text field, changed to from it, holds one.
+    expect(keeps("radio")).toBe(false);
+    expect(keeps("text")).toBe(false);
+  });
+
   it("changed already, it offers its type as saved back, as keeping every value", async () => {
     answer = async () => [];
     const { user, onChanged } = renderChange("f-kind", [
@@ -179,6 +205,52 @@ describe("Change type… on a saved field", () => {
     expect(onChanged).toHaveBeenCalledWith(
       expect.objectContaining({ type: "radio", options: kind.options })
     );
+  });
+
+  // The draft's change dropped what the new type cannot show: coming back brings the saved field's
+  // settings back whole, with what the person has edited since.
+  it("back to its type as saved, the field has every setting it was saved with", async () => {
+    const savedKind: BuilderField = {
+      ...kind,
+      admin: { placeholder: "Pick one", isClearable: true, width: "50%" },
+    };
+    // The draft: text, renamed, its options and picks gone.
+    const draft: BuilderField = {
+      id: "f-kind",
+      name: "kind",
+      label: "Kind, renamed",
+      type: "text",
+      validation: { required: false },
+      admin: { width: "100%" },
+    };
+    const onChanged = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <BuilderChangeType
+        config={COLLECTION_BUILDER_CONFIG}
+        fields={[draft]}
+        fieldId="f-kind"
+        entitySlug="posts"
+        savedFields={[savedKind]}
+        onCancel={vi.fn()}
+        onChanged={onChanged}
+      />
+    );
+    await waitFor(() =>
+      expect(row("select")).toHaveTextContent("Keeps every value")
+    );
+    await user.click(row("select"));
+    expect(onChanged).toHaveBeenCalledWith({
+      id: "f-kind",
+      name: "kind",
+      label: "Kind, renamed",
+      type: "select",
+      options: kind.options,
+      hasMany: true,
+      // Required and width as the person has them now, the dropdown's own settings as saved.
+      validation: { required: false },
+      admin: { placeholder: "Pick one", isClearable: true, width: "100%" },
+    });
   });
 
   it("says so when the server cannot be asked, and offers nothing meanwhile", async () => {

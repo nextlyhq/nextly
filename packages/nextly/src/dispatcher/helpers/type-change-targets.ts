@@ -70,6 +70,16 @@ export interface TypeChangeRefusalWords {
   steps: string[];
 }
 
+/**
+ * A type the picker offers, and whether the field, changed to it, would hold several values, as the
+ * Builder's change would leave it (`withTypeChanged`): a change that keeps several values is judged
+ * as one, a change that keeps one value as the other. Undefined keeps the field's own.
+ */
+export interface TypeChangeCandidate {
+  type: string;
+  hasMany?: boolean;
+}
+
 /** One type a saved field could be changed to, as the picker shows it. */
 export interface TypeChangeTarget {
   type: string;
@@ -173,7 +183,7 @@ function translationRefusal(args: {
  */
 export function typeChangeTargets(args: {
   field: FieldDefinition;
-  candidates: readonly string[];
+  candidates: readonly TypeChangeCandidate[];
   dialect: SupportedDialect;
   builtBy: ColumnOrigin;
   componentRow?: boolean;
@@ -187,9 +197,13 @@ export function typeChangeTargets(args: {
       : fieldTypeOnDialect(field, args.dialect, args.builtBy, at);
   const from = typeOf(args.field);
   return args.candidates
-    .filter(type => type !== args.field.type)
-    .map(type => {
-      const candidate = { ...args.field, type } as FieldDefinition;
+    .filter(candidate => candidate.type !== args.field.type)
+    .map(({ type, hasMany }) => {
+      const candidate = {
+        ...args.field,
+        type,
+        ...(hasMany === undefined ? {} : { hasMany }),
+      } as FieldDefinition;
       const to = typeOf(candidate);
       const blocked = pairBlocked(from, to);
       if (blocked !== null)
@@ -216,11 +230,20 @@ export function typeChangeTargets(args: {
 
 /**
  * What the type picker asks: the saved field, by its path of names through its groups and repeaters,
- * and the types it offers; the field types the catalog lists where it names none.
+ * the type the page knows it as saved by, and the types it offers, each with whether the change
+ * would keep several values; the field types the catalog lists where it names none.
  */
 const TargetsRequest = z.object({
   field: z.array(z.string().min(1)).min(1).max(20),
-  candidates: z.array(z.string().min(1)).max(100).optional(),
+  // The type the page knows the field as saved by: an answer for another type is refused, since the
+  // picker's marks would describe a definition that is no longer stored.
+  type: z.string().min(1),
+  candidates: z
+    .array(
+      z.object({ type: z.string().min(1), hasMany: z.boolean().optional() })
+    )
+    .max(100)
+    .optional(),
 });
 
 /**
@@ -276,6 +299,11 @@ export function respondTypeChangeTargets(args: {
       message: `No saved field ${request.field.join(".")}.`,
     });
   }
+  if (found.field.type !== request.type) {
+    throw NextlyError.conflict({
+      message: `The type of the saved field ${request.field.join(".")} has changed since the page was loaded. Reload it to see the field as saved.`,
+    });
+  }
   const adapter = getAdapterFromDI();
   if (adapter === undefined) {
     throw NextlyError.internal({
@@ -286,7 +314,8 @@ export function respondTypeChangeTargets(args: {
     field: found.field,
     inJson: found.inJson,
     candidates:
-      request.candidates ?? FIELD_TYPE_CATALOG.map(entry => entry.type),
+      request.candidates ??
+      FIELD_TYPE_CATALOG.map(entry => ({ type: entry.type })),
     dialect: adapter.getCapabilities().dialect,
     builtBy: args.builtBy,
     ...(args.componentRow === true ? { componentRow: true } : {}),

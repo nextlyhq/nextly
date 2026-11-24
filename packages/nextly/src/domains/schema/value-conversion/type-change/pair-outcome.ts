@@ -59,12 +59,16 @@ function dateValues(): OldValue[] {
   );
 }
 
+/** An address an email field holds, which no plain text above is. */
+const EMAIL = "someone@example.com";
+
 /** A value of each kind a field of `type` may hold, as the rules read stored values. */
 function valuesOf(type: FieldTypeOnDialect): OldValue[] {
   switch (type.family) {
     case "text":
-    case "email":
       return TEXTS.map(textValue);
+    case "email":
+      return [...TEXTS, EMAIL].map(textValue);
     case "choice":
       return [...(type.options ?? []), ...TEXTS].map(textValue);
     case "richText":
@@ -103,6 +107,16 @@ function valuesOf(type: FieldTypeOnDialect): OldValue[] {
   }
 }
 
+/** Whether `type` is a choice, or a list of choices, with no options to judge its values against yet. */
+function choiceWithNoOptions(type: FieldTypeOnDialect): boolean {
+  if (type.family === "choice") return (type.options ?? []).length === 0;
+  return (
+    type.family === "list" &&
+    type.item !== undefined &&
+    choiceWithNoOptions(type.item)
+  );
+}
+
 /**
  * What a change from `from` to `to` can do to a field's values, or null where the pair is blocked
  * whatever the values hold (`pairBlocked` says why). A value the rules lose or block marks the pair
@@ -113,11 +127,15 @@ export function pairOutcome(
   to: FieldTypeOnDialect
 ): PairOutcome | null {
   if (pairBlocked(from, to) !== null) return null;
+  // A choice given no options yet takes them later, and every value is judged against those then.
+  if (choiceWithNoOptions(to)) return "may-lose";
   let converts = false;
-  // Only values a field of `from` can hold: those the rules keep for the type itself.
+  // Only values a field of `from` can hold: those the rules keep for the type itself. None of them
+  // held means no value here is judged, so nothing says every value is kept.
   const held = valuesOf(from).filter(
     value => judgeValue(from, from, value).outcome === "kept"
   );
+  if (held.length === 0) return "may-lose";
   for (const value of held) {
     const { outcome } = judgeValue(from, to, value);
     if (outcome === "lost" || outcome === "blocked") return "may-lose";

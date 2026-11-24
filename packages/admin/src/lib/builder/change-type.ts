@@ -98,10 +98,7 @@ function keptAdmin(
   const picker = fits.options
     ? OPTIONS_PICKER_SETTINGS[optionsPickerOf(type)]
     : undefined;
-  const kept: BuilderFieldAdmin = {};
-  for (const key of SHARED_ADMIN) {
-    if (admin[key] !== undefined) Object.assign(kept, { [key]: admin[key] });
-  }
+  const kept = sharedAdminOf(admin);
   if (
     (fits.placeholder || picker?.placeholder === true) &&
     admin.placeholder !== undefined
@@ -165,6 +162,62 @@ export function withTypeChanged(
     field.fields
       ? { fields: field.fields }
       : {}),
+  };
+}
+
+/** The admin options every type has that the person has given `field`, on their own. */
+function sharedAdminOf(
+  admin: BuilderFieldAdmin | undefined
+): BuilderFieldAdmin {
+  const shared: BuilderFieldAdmin = {};
+  for (const key of SHARED_ADMIN) {
+    if (admin?.[key] !== undefined)
+      Object.assign(shared, { [key]: admin[key] });
+  }
+  return shared;
+}
+
+/**
+ * `current` made the type it was saved as: the saved field's type and every setting of its own
+ * (options, links, the bounds its values are held to), with what every type has as the person has
+ * it now: its name, label, help text, where and when it shows, and Required.
+ */
+export function withSavedTypeRestored(
+  current: BuilderField,
+  saved: BuilderField
+): BuilderField {
+  const {
+    description: _description,
+    admin: savedAdmin,
+    validation: savedValidation,
+    ...ownSettings
+  } = saved;
+  const { required: _required, ...savedRules } = savedValidation ?? {};
+  // The saved field's admin settings of its own type (a placeholder, a picker's layout) come back;
+  // the shared ones are as the person has them now.
+  const ownAdmin = Object.fromEntries(
+    Object.entries(savedAdmin ?? {}).filter(
+      ([key]) => !(SHARED_ADMIN as readonly string[]).includes(key)
+    )
+  );
+  const admin = { ...ownAdmin, ...sharedAdminOf(current.admin) };
+  return {
+    ...ownSettings,
+    id: current.id,
+    name: current.name,
+    label: current.label,
+    validation: {
+      ...savedRules,
+      ...(current.validation?.required !== undefined
+        ? { required: current.validation.required }
+        : {}),
+    },
+    ...(current.description !== undefined
+      ? { description: current.description }
+      : {}),
+    ...(Object.keys(admin).length > 0 ? { admin } : {}),
+    ...(current.advanced !== undefined ? { advanced: current.advanced } : {}),
+    ...(current.fields !== undefined ? { fields: current.fields } : {}),
   };
 }
 

@@ -328,14 +328,17 @@ function PickerBody({
         loading={config.fieldGroups?.loading === true}
         onNew={config.fieldGroups?.onNew}
         onBack={back}
-        onPick={fieldGroup =>
-          change
-            ? change.onChange({
-                type: step.type.type,
-                fieldGroup: fieldGroup.slug,
-              })
-            : setStep({ kind: "label", type: step.type, fieldGroup })
-        }
+        onPick={fieldGroup => {
+          if (!change) {
+            setStep({ kind: "label", type: step.type, fieldGroup });
+          } else if (choiceIn(change, step.type.type).available) {
+            // Asked again: the type can stop being available while the group is chosen.
+            change.onChange({
+              type: step.type.type,
+              fieldGroup: fieldGroup.slug,
+            });
+          }
+        }}
       />
     );
   }

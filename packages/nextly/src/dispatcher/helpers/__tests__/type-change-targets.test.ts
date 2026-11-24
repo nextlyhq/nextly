@@ -25,7 +25,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       new Map(
         typeChangeTargets({
           field: { name: "f", ...field } as FieldDefinition,
-          candidates: CANDIDATES,
+          candidates: CANDIDATES.map(type => ({ type })),
           dialect,
           builtBy: "collection",
         }).map(target => [target.type, target])
@@ -75,11 +75,12 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       field: Partial<FieldDefinition>,
       type: string,
       layout: TranslationLayout = COLLECTION,
-      inJson = false
+      inJson = false,
+      hasMany?: boolean
     ) =>
       typeChangeTargets({
         field: { name: "f", ...field } as FieldDefinition,
-        candidates: [type],
+        candidates: [{ type, ...(hasMany === undefined ? {} : { hasMany }) }],
         dialect,
         builtBy: "collection",
         layout,
@@ -171,6 +172,43 @@ describe("the route's answer for a field found by its path", () => {
     container.clear();
   });
 
+  it("judges a change to a type that keeps one value as one value, not as the field's list", () => {
+    const list = {
+      name: "f",
+      type: "number",
+      hasMany: true,
+    } as FieldDefinition;
+    const targetOf = (hasMany?: boolean) =>
+      typeChangeTargets({
+        field: list,
+        candidates: [
+          { type: "text", ...(hasMany === undefined ? {} : { hasMany }) },
+        ],
+        dialect: "postgresql",
+        builtBy: "collection",
+        layout: { perLanguage: false, fileRetypes: true },
+      })[0]?.outcome;
+    // Several numbers becoming one text loses all but one; written as a list of texts, each is kept.
+    expect(targetOf(true)).toBe("converts");
+    expect(targetOf(false)).toBe("may-lose");
+    // Not said, the field's own.
+    expect(targetOf()).toBe("converts");
+  });
+
+  it("refuses an answer for a field whose saved type is no longer the one the page knows", () => {
+    container.registerSingleton("adapter", () => ({
+      getCapabilities: () => ({ dialect: "sqlite" }),
+    }));
+    expect(() =>
+      respondTypeChangeTargets({
+        fields: [{ name: "summary", type: "text" }] as FieldDefinition[],
+        body: { field: ["summary"], type: "textarea" },
+        builtBy: "collection",
+        layout: { perLanguage: false, fileRetypes: true },
+      })
+    ).toThrow(expect.objectContaining({ code: "CONFLICT" }));
+  });
+
   it("finds a field a group with no name holds on its level, by its own name", async () => {
     // A stand-in for the site's adapter: the route reads only which database it runs on.
     container.registerSingleton("adapter", () => ({
@@ -184,7 +222,11 @@ describe("the route's answer for a field found by its path", () => {
           fields: [{ name: "subtitle", type: "text" }],
         },
       ] as FieldDefinition[],
-      body: { field: ["subtitle"], candidates: ["number"] },
+      body: {
+        field: ["subtitle"],
+        type: "text",
+        candidates: [{ type: "number" }],
+      },
       builtBy: "collection",
       layout: { perLanguage: false, fileRetypes: true },
     });

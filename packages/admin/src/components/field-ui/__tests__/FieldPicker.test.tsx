@@ -759,6 +759,38 @@ describe("FieldTypeChangePicker: changing a field's type", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Try again.");
   });
 
+  it("the field group chosen is handed back only while its type can still be picked", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    let available = true;
+    render(
+      <FieldTypeChangePicker
+        open
+        config={{
+          ...CONFIG,
+          fieldGroups: {
+            type: "component",
+            options: [{ slug: "hero", label: "Hero", text: "Hero" }],
+          },
+        }}
+        onCancel={vi.fn()}
+        change={{
+          current: "text",
+          choiceOf: () =>
+            available
+              ? { available: true }
+              : { available: false, reason: "No longer." },
+          onChange,
+        }}
+      />
+    );
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    // The answer changed while the group was being chosen.
+    available = false;
+    await user.click(await screen.findByRole("option", { name: "Hero" }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("the field-group type asks which field group, then hands back both", async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();

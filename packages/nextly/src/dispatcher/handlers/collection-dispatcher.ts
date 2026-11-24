@@ -971,10 +971,11 @@ const COLLECTIONS_METHODS: Record<
         fields: (collection.fields ?? []) as unknown as FieldDefinition[],
         body,
         builtBy: "collection",
-        // A collection's save file retypes a translated field's translations column.
+        // A collection's save file retypes a translated field's translations column, where the save
+        // writes one; with no writer, its push does not, and refuses the change.
         layout: {
           perLanguage: storesPerLanguage(collection),
-          fileRetypes: true,
+          fileRetypes: container.has("builderSaveSetup"),
         },
       });
     },
