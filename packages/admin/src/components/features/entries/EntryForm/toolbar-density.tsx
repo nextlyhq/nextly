@@ -46,6 +46,10 @@ export const TOOLBAR_CONTAINER = "@container/toolbar";
  * - `secondary` — supporting actions (preview, share a link). First to go,
  *   because they are the ones an author is least often reaching for while
  *   typing a title.
+ * - `cluster` — History, beside the entry header's one main button. That
+ *   header's cluster (History, the languages control, at most one secondary
+ *   step, the main button, More and the panel toggle) is narrower than the
+ *   one `secondary` was measured against, so History keeps its word longer.
  *
  * Only a control that keeps an icon may give up its words. The document's own
  * verbs (Save draft, Unpublish, Discard changes) and the primary action draw
@@ -53,7 +57,7 @@ export const TOOLBAR_CONTAINER = "@container/toolbar";
  * their words at every width. With the title on a line of its own, the
  * action row no longer has to make room for it, so they can.
  */
-export type ToolbarLabelPriority = "secondary";
+export type ToolbarLabelPriority = "secondary" | "cluster";
 
 /**
  * Thresholds are the ROW'S OUTER width, and the arbitrary values are the reason
@@ -83,6 +87,9 @@ export type ToolbarLabelPriority = "secondary";
 const COLLAPSE_AT: Record<ToolbarLabelPriority, string> = {
   // 48rem of usable width + 3rem of padding.
   secondary: "@max-[51rem]/toolbar:sr-only",
+  // The widest one-button cluster, every control in it and History's word
+  // shown, measures about 43.5rem: below 44rem of bar the word gives way.
+  cluster: "@max-[44rem]/toolbar:sr-only",
 };
 
 export interface ToolbarLabelProps {

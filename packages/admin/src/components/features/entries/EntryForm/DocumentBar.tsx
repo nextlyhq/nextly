@@ -676,7 +676,7 @@ function HistoryButton({
       {iconOnly ? (
         <span className="sr-only">History</span>
       ) : (
-        <ToolbarLabel priority="secondary">History</ToolbarLabel>
+        <ToolbarLabel priority="cluster">History</ToolbarLabel>
       )}
     </Button>
   );

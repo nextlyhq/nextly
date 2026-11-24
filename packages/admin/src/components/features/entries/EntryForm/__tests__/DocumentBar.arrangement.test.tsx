@@ -318,6 +318,20 @@ describe("the document bar", () => {
     }
   });
 
+  it("keeps History's word until the bar is narrower than the main button's cluster needs", () => {
+    // The header's cluster is History, the languages control, at most one
+    // secondary step, the main button, More and the panel toggle: its word
+    // gives way only below 44rem of bar, later than the supporting actions'
+    // 51rem, so a 1440px editor shows it as drawn.
+    render(<Harness state={STATES[1]!} />);
+    const history = screen.getByRole("button", { name: "History" });
+    const label = [...history.querySelectorAll("span")].find(
+      span => span.textContent === "History"
+    );
+    expect(label?.className).toContain("@max-[44rem]/toolbar:sr-only");
+    expect(label?.className).not.toContain("@max-[51rem]/toolbar:sr-only");
+  });
+
   it("lets History's word step aside for its icon on a narrow bar, keeping its name and a tooltip", () => {
     // A narrow bar (history open beside it, say) has no width for every
     // label; History gives up its word like the other supporting action
