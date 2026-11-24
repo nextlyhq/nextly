@@ -472,6 +472,52 @@ describe("VersionComparePage, its choices", () => {
     }
   });
 
+  it("never leaves an earlier comparison's link in the copy box", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    try {
+      const { rerender } = renderPage({ from: 4, to: 5 });
+      screen.getByRole("button", { name: "Copy link" }).click();
+      await screen.findByRole("textbox", { name: "Link to this comparison" });
+
+      // Another pair on screen: the box named the one before, so it goes.
+      rerender(
+        <VersionComparePage
+          scope={scope}
+          documentHref="/admin/collections/posts/e1"
+          readOnlyHref="/admin/collections/posts"
+          from={3}
+          to={5}
+        />
+      );
+      expect(
+        screen.queryByRole("textbox", { name: "Link to this comparison" })
+      ).toBeNull();
+
+      // A copy that works says so, and no box stands beside it.
+      screen.getByRole("button", { name: "Copy link" }).click();
+      await screen.findByRole("textbox", { name: "Link to this comparison" });
+      const writeText = vi.fn(() => Promise.resolve());
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+      });
+      screen.getByRole("button", { name: "Copy link" }).click();
+      await waitFor(() => expect(writeText).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("textbox", { name: "Link to this comparison" })
+        ).toBeNull()
+      );
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
   it("offers older versions in the drawn comparison's language when the newer one is not loaded", () => {
     // A shared link can name a version beyond the loaded page: the list has
     // no record of it, but the comparison drawn says its language.

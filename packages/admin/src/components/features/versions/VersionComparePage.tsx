@@ -616,22 +616,30 @@ export function VersionComparePage({
   // that left the pair to the page, or named a baseline such as "the version
   // you last looked at", would open a different comparison after the next
   // save, or for another reader.
+  const pinnedHref = useMemo(
+    () =>
+      shown
+        ? new URL(
+            versionsHref(
+              scope,
+              { from: shown.from, to: shown.to },
+              seen?.locale ?? locale,
+              view
+            ),
+            window.location.origin
+          ).href
+        : window.location.href,
+    [shown, scope, seen, locale, view]
+  );
   // The link to copy by hand, shown where the browser would not copy it: the
   // address bar may still name the reader's own baseline, so it is not the
-  // link to share.
+  // link to share. Shown only while it is still the link to this comparison:
+  // another pair or layout makes it the link to something no longer on
+  // screen, and sharing that would share the wrong comparison.
   const [manualLink, setManualLink] = useState<string | null>(null);
+  const shownManualLink = manualLink === pinnedHref ? manualLink : null;
   const copyLink = useCallback(() => {
-    const href = shown
-      ? new URL(
-          versionsHref(
-            scope,
-            { from: shown.from, to: shown.to },
-            seen?.locale ?? locale,
-            view
-          ),
-          window.location.origin
-        ).href
-      : window.location.href;
+    const href = pinnedHref;
     const failed = () => {
       setManualLink(href);
       toast.error("Couldn't copy the link. Copy it from the box below.");
@@ -644,9 +652,13 @@ export function VersionComparePage({
     }
     void navigator.clipboard
       .writeText(href)
-      .then(() => toast.success("Link copied. It opens this comparison."))
+      .then(() => {
+        // Copied: the box to copy from by hand has done its work.
+        setManualLink(null);
+        toast.success("Link copied. It opens this comparison.");
+      })
       .catch(failed);
-  }, [shown, scope, seen, locale, view]);
+  }, [pinnedHref]);
 
   // Hands the version on screen to the editor, as "Restore…" does: every
   // field it changed, or one field asked for by name.
@@ -755,12 +767,12 @@ export function VersionComparePage({
           </div>
         </div>
 
-        {manualLink !== null ? (
+        {shownManualLink !== null ? (
           <label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
             Link to this comparison
             <input
               readOnly
-              value={manualLink}
+              value={shownManualLink}
               // Chosen whole as it is reached, ready to copy.
               onFocus={event => event.currentTarget.select()}
               className="h-9 rounded-md border border-input bg-background px-2 font-mono text-xs text-foreground"
