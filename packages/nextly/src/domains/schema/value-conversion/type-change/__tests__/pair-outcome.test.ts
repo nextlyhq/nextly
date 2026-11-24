@@ -33,6 +33,18 @@ const choices = {
 
 const several = { hasMany: true } as Partial<FieldDefinition>;
 
+/** A number kept to the digits it states, of which a double keeps no more than 17. */
+const DECIMAL = {
+  dbType: "decimal",
+  precision: 30,
+  scale: 4,
+} as Partial<FieldDefinition>;
+
+/** A number the Builder made to hold a fraction, kept as a double. */
+const FRACTION = {
+  options: { format: "float" },
+} as unknown as Partial<FieldDefinition>;
+
 /** The writings of every date and every number the mark judges a field by. */
 const DATES = ["2026-01-02T03:04:05Z", "2026-01-02T03:04:05.123Z"];
 const NUMBERS = ["0", "7", "-3", "3.5", "123456789012345678901234567890"];
@@ -160,7 +172,8 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
   // holds: one its column could not hold would be judged by nobody.
   it.each([
     ["a whole number", "number", {}, 5, "converts"],
-    ["a number with a fraction", "number", { format: "float" }, 22, "converts"],
+    ["a number with a fraction", "number", FRACTION, 22, "converts"],
+    ["a decimal", "number", DECIMAL, 22, "converts"],
     ["a choice with no options", "select", {}, 40, "keeps"],
     ["a choice with no options, by one", "select", {}, 254, "keeps"],
     ["rich text", "richText", {}, 100_000, "converts"],
@@ -182,10 +195,9 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
   // A double names numbers of up to 309 digits, which MySQL's bounded column for a unique text does
   // not hold.
   it("judges a number with a fraction becoming a unique text by its longest writing", () => {
-    const fraction = { format: "float" } as Partial<FieldDefinition>;
-    expect(outcome("number", "text", fraction)).toBe("converts");
+    expect(outcome("number", "text", FRACTION)).toBe("converts");
     expect(
-      outcome("number", "text", fraction, {
+      outcome("number", "text", FRACTION, {
         unique: true,
       } as Partial<FieldDefinition>)
     ).toBe(dialect === "mysql" ? "may-lose" : "converts");
@@ -197,12 +209,19 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
     ).toBe("converts");
   });
 
-  // The numbers judged for their length are each kept by a double, so none is lost to JSON by them.
-  it("keeps every number judged as JSON", () => {
+  // JSON keeps a number as a double: every one a whole or a fractional number field holds, and not
+  // every one of a decimal with more digits than a double keeps. SQLite keeps no such decimal.
+  it("judges a number becoming JSON over the longest it holds", () => {
     expect(outcome("number", "json")).toBe("keeps");
+    expect(outcome("number", "json", FRACTION)).toBe("keeps");
     expect(
-      outcome("number", "json", { format: "float" } as Partial<FieldDefinition>)
+      outcome("number", "json", {
+        dbType: "decimal",
+      } as Partial<FieldDefinition>)
     ).toBe("keeps");
+    expect(outcome("number", "json", DECIMAL)).toBe(
+      dialect === "sqlite" ? "keeps" : "may-lose"
+    );
   });
 
   // A checkbox holds two values and a choice its options, each judged: the mark says what the

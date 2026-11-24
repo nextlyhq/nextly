@@ -10,7 +10,7 @@
  * @module domains/schema/value-conversion/type-change/pair-outcome
  */
 import { documentOfText } from "./document";
-import type { FieldTypeOnDialect } from "./field-type";
+import type { FieldTypeOnDialect, NumberFormat } from "./field-type";
 import { judgeValue, type OldValue, pairBlocked, readDateText } from "./judge";
 import { readNumber } from "./numbers";
 
@@ -37,6 +37,18 @@ const NUMBERS: readonly string[] = [
   "123456789012345678901234567890",
 ];
 
+/** A number as long as any a column of `format` holds, written in full. */
+function longestNumber(format: NumberFormat | undefined): string {
+  switch (format?.kind) {
+    case "integer":
+      return "-2147483648";
+    case "decimal":
+      return `-${"9".repeat(format.precision - format.scale)}.${"9".repeat(format.scale)}`;
+    default:
+      return "-1.7976931348623157e308";
+  }
+}
+
 /** A JSON value of each kind the rules judge (rule 8). */
 const JSON_VALUES: readonly unknown[] = [{ a: 1 }, [1, 2], "words", 1.5, true];
 
@@ -44,8 +56,8 @@ function textValue(text: string): OldValue {
   return { kind: "text", text };
 }
 
-function numberValues(): OldValue[] {
-  return NUMBERS.flatMap(writing => {
+function numberValues(format: NumberFormat | undefined): OldValue[] {
+  return [...NUMBERS, longestNumber(format)].flatMap(writing => {
     const number = readNumber(writing);
     return number === null ? [] : [{ kind: "number" as const, number }];
   });
@@ -68,6 +80,11 @@ function longerThan(to: FieldTypeOnDialect): string {
   return "x".repeat((to.textBound?.most ?? 0) + 1);
 }
 
+/** An address one longer than `to` holds, or the shortest judged where that is longer already. */
+function addressLongerThan(to: FieldTypeOnDialect): string {
+  return longerThan(to).slice(EMAIL.length) + EMAIL;
+}
+
 /**
  * A value of each kind a field of `type` may hold, as the rules read stored values, and one longer
  * than `to`, the type it becomes, holds.
@@ -80,16 +97,16 @@ function valuesOf(
     case "text":
       return [...TEXTS, longerThan(to)].map(textValue);
     case "email":
-      return [...TEXTS, EMAIL, `${longerThan(to)}${EMAIL}`].map(textValue);
+      return [...TEXTS, EMAIL, addressLongerThan(to)].map(textValue);
     case "choice":
-      return [...(type.options ?? []), ...TEXTS].map(textValue);
+      return [...(type.options ?? []), ...TEXTS, longerThan(to)].map(textValue);
     case "richText":
-      return TEXTS.map(text => ({
+      return [...TEXTS, longerThan(to)].map(text => ({
         kind: "document" as const,
         value: documentOfText(text),
       }));
     case "number":
-      return numberValues();
+      return numberValues(type.number);
     case "checkbox":
       return [
         { kind: "boolean", value: true },
