@@ -6,7 +6,7 @@ import type { Command } from "commander";
 
 import type { CommandContext, GlobalOptions } from "../context";
 import { withDryRun } from "../dry-run";
-import { DATABASE_LINE, declareFirstLine } from "../first-line";
+import { declareFirstLine, startLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -18,6 +18,8 @@ export function registerSetupTokenCommand(
   program: Command,
   createContext: (options: GlobalOptions) => CommandContext
 ): void {
+  // `--generate` touches nothing, so the run starts with its own line; one that
+  // replaces the token names its database when it connects (once a run).
   // `--dry-run` carries the one meaning and help line it has everywhere.
   declareFirstLine(
     withDryRun(
@@ -37,6 +39,6 @@ export function registerSetupTokenCommand(
           (await import("./setup-token")).setupTokenAction(createContext)
         )
       ),
-    DATABASE_LINE
+    startLine("Setting up the setup token...")
   );
 }
