@@ -738,60 +738,6 @@ export function judgeStatements(
   }));
 }
 
-/** The columns and constraints a list of statements drops, by table (`elementsDroppedBy`). */
-export interface DroppedElements {
-  /** Every table, lower-cased, a column or a constraint is dropped from. */
-  readonly tables: ReadonlySet<string>;
-  /** Whether the statements drop `name`, a column or a constraint, from `table`. */
-  has(table: string, kind: "column" | "constraint", name: string): boolean;
-}
-
-/**
- * The columns and constraints `statements` drop, as their ALTER TABLE DROP clauses name them
- * (`readDropClause`): a column, a constraint, MySQL's foreign key or check. Each DROP clause is read
- * on its own, so one beside a clause read nowhere here still counts, and a clause that renames a
- * column drops nothing. Names compare lower-cased.
- */
-export function elementsDroppedBy(
-  statements: readonly string[],
-  dialect: SupportedDialect
-): DroppedElements {
-  const tables = new Set<string>();
-  const dropped = new Set<string>();
-  for (const statement of statements) {
-    for (const { object } of dropClaimsIn(statement, dialect)) {
-      if (object.kind === "column") {
-        tables.add(object.table.toLowerCase());
-        dropped.add(`column\u0000${within(object.table, object.column)}`);
-      } else if (object.kind === "constraint") {
-        tables.add(object.table.toLowerCase());
-        dropped.add(`constraint\u0000${within(object.table, object.name)}`);
-      }
-    }
-  }
-  return {
-    tables,
-    has: (table, kind, name) =>
-      dropped.has(`${kind}\u0000${within(table, name)}`),
-  };
-}
-
-/** The claims of every DROP clause of an ALTER TABLE, each clause read on its own. */
-function dropClaimsIn(statement: string, dialect: SupportedDialect): Claim[] {
-  const cursor = cursorOf(statement, dialect);
-  if (!cursor.accept("ALTER", "TABLE")) return [];
-  cursor.acceptCondition();
-  cursor.accept("ONLY");
-  const on = cursor.qualifiedName()?.name ?? cursor.name();
-  if (on === undefined) return [];
-  return cursor.clauses().flatMap(tokens => {
-    const clause = new StatementCursor(tokens);
-    return clause.accept("DROP")
-      ? (readDropClause(clause, on, dialect) ?? [])
-      : [];
-  });
-}
-
 /** Lower-cased names, each once. */
 function distinct(names: Iterable<string>): string[] {
   return [...new Set([...names].map(name => name.toLowerCase()))];

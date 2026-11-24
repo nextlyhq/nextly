@@ -33,7 +33,6 @@ function deps(over: Record<string, unknown> = {}) {
     assertAppliedFilesPresentFn: vi.fn(async () => {}),
     syncElementOwnersFn: vi.fn(async () => {}),
     documentColumnsFn: vi.fn(async () => {}),
-    settleRetirementsFn: vi.fn(async () => {}),
     reconcileMetadataFn: vi.fn(async () => ({
       collectionsRegistered: 0,
       singlesRegistered: 0,

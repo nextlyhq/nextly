@@ -246,7 +246,6 @@ import {
   withoutAdoptedIndexes,
 } from "../../domains/schema/migrate/unique-column-guard";
 import { refuseUnresolvedAttempts } from "../../domains/schema/migrate/unresolved-attempt";
-import { refuseDropsOfUsedEntities } from "../../domains/schema/migrate/used-entity-drops";
 import {
   coreTableNames,
   mergeContributions,
@@ -1384,11 +1383,6 @@ export interface MigrateCoreDeps {
   withLock?: typeof withMigrateLock;
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
-  /**
-   * Seam for tests; defaults to the real settling of the retirement captures before any file
-   * applies (`settleRetiredDocumentEvents`).
-   */
-  settleRetirementsFn?: typeof settleRetiredDocumentEvents;
   /**
    * For tests: called at each named point the run reaches (`stop-points.ts`): before and after
    * each statement of a file, once a file is recorded applied, as a dropped entity's registry row
@@ -2755,6 +2749,7 @@ function metadataArgsOf(
 ): Parameters<typeof reconcileMigrationMetadata>[0] {
   return {
     adapter: deps.adapter as unknown as DrizzleAdapter,
+    db: deps.db,
     dialect: deps.dialect,
     migrationsDir: deps.migrationsDir,
     ...(deps.declared === undefined ? {} : { declared: deps.declared }),
@@ -3382,10 +3377,7 @@ export async function migrateCore(
           retiredDocumentEvents: () =>
             deletionEventsOfRetiredDocuments(metadataArgs()),
           settleRetirements: () =>
-            (deps.settleRetirementsFn ?? settleRetiredDocumentEvents)(
-              metadataArgs(),
-              "down"
-            ),
+            settleRetiredDocumentEvents(metadataArgs(), "down"),
         }
       );
       // A file that deletes data runs only with consent covering each
@@ -4004,25 +3996,6 @@ async function judgeFileDeletions(
     deps.db,
     deps.dialect
   );
-  // A file dropping a collection or Single something still uses is refused here too, before any
-  // statement and before the attempt is recorded, as the Schema Builder refuses its delete
-  // (`used-entity-drops.ts`).
-  await refuseDropsOfUsedEntities({
-    adapter: deps.adapter as unknown as DrizzleAdapter,
-    db: deps.db,
-    dialect: deps.dialect,
-    // The app files the step leaves the run after the modules, as the rename refusal above judges.
-    units: appFileUnits(
-      listed,
-      appStepAfter(deps.step, modules.length),
-      deps.dialect
-    ),
-    // The plugins' modules the run applies first: a key one adds or removes counts.
-    preceding: modules.flatMap(unit => unit.statements),
-    migrationsDir: deps.migrationsDir,
-    // The extension schema the run compiled, as the command and the boot hand it.
-    extensionSchema: () => Promise.resolve(deps.extensionSchema ?? null),
-  });
   // A file turning translation on or off whose move would lose a column's comment, character set
   // or collation is refused here too, before any statement (`refuseMigrationFilesLosingDefinition`).
   await refuseMigrationFilesLosingDefinition(

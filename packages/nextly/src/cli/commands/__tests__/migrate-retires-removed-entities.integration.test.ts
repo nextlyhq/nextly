@@ -11,11 +11,10 @@
  * no event twice, as a real process killed there is; one stopped inside the file (PostgreSQL and
  * SQLite) removes nothing, and the next run applies the file whole. A table rebuilt in place, a
  * file run outside a transaction, a table renamed by an earlier file of the run, an id reused in a
- * second retirement in one run, and a DOWN's drop under `migrate:down` are covered too. And a drop of a collection another one's field
- * still names is refused, with nothing removed, unless the run itself removes what uses it.
+ * second retirement in one run, and a DOWN's drop under `migrate:down` are covered too.
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -34,7 +33,6 @@ import {
   KILLED_AT,
   withStopPoints,
 } from "../../../domains/schema/migrate/stop-points";
-import { refuseDropsOfUsedEntities } from "../../../domains/schema/migrate/used-entity-drops";
 import {
   LOCK_DIALECTS,
   lockWorld,
@@ -412,7 +410,7 @@ describe.each(LOCK_DIALECTS)(
     }, 300_000);
 
     it("leaves a table rebuilt in place, and what names it, as they are: nothing is retired", async () => {
-      // `pages` names `posts`; a rebuild of `posts` keeps it, so nothing is refused.
+      // `pages` names `posts`; a rebuild of `posts` keeps it.
       await pagesNamePosts();
       file([
         `CREATE TABLE ${posts}_rebuilt (id varchar(36) PRIMARY KEY, title varchar(64))`,
@@ -518,82 +516,6 @@ describe.each(LOCK_DIALECTS)(
       return [`${prefix}head`, `${prefix}0`];
     }
 
-    /** Whether the refusal lets `files` through, each with its statements. */
-    function judge(files: { label: string; statements: string[] }[]) {
-      return refuseDropsOfUsedEntities({
-        adapter: adapter as never,
-        db: adapter.getDrizzle(),
-        dialect,
-        units: files,
-        migrationsDir,
-        extensionSchema: () => Promise.resolve(null),
-      });
-    }
-
-    it("judges the fields naming a dropped collection as the run's own snapshot leaves them", async () => {
-      await pagesNamePosts();
-      const label = file(POSTS_DROPPED);
-      const run = [{ label, statements: POSTS_DROPPED }];
-      // No snapshot: the registry is what the run goes by, and `pages` still names `posts`.
-      await expect(judge(run)).rejects.toThrow(/posts/);
-
-      // The file's snapshot records `pages` without the field: the run removes it.
-      mkdirSync(join(migrationsDir, "meta"), { recursive: true });
-      writeFileSync(
-        join(migrationsDir, "meta", label.replace(/\.sql$/, ".snapshot.json")),
-        JSON.stringify({
-          version: 1,
-          migrationHash: "0".repeat(64),
-          snapshot: { tables: [] },
-          entities: {
-            collections: {
-              pages: {
-                source: "code",
-                settings: { fields: [{ name: "title", type: "text" }] },
-              },
-            },
-            singles: {},
-            fieldGroups: {},
-          },
-        })
-      );
-      await expect(judge(run)).resolves.toBeUndefined();
-    }, 180_000);
-
-    it("judges a foreign key into a dropped Single as the run's statements leave it", async () => {
-      // SQLite drops a key only by rebuilding its table, which is judged as keeping it.
-      if (dialect === "sqlite") return;
-      const key = `${P}_pages_home`;
-      await adapter.executeQuery(
-        `ALTER TABLE ${pages} ADD COLUMN home_id varchar(36)`
-      );
-      await adapter.executeQuery(
-        `ALTER TABLE ${pages} ADD CONSTRAINT ${key} FOREIGN KEY (home_id) REFERENCES ${home} (id)`
-      );
-      const homeDropped = [
-        `DROP TABLE ${home}_links`,
-        `DROP TABLE ${home}_locales`,
-        `DROP TABLE ${home}`,
-      ];
-      const run = (first: string[]) => [
-        { label: "x.sql", statements: [...first, ...homeDropped] },
-      ];
-
-      await expect(judge(run([]))).rejects.toThrow(/home/);
-      await expect(
-        judge(
-          run([
-            dialect === "mysql"
-              ? `ALTER TABLE ${pages} DROP FOREIGN KEY ${key}`
-              : `ALTER TABLE ${pages} DROP CONSTRAINT ${key}`,
-          ])
-        )
-      ).resolves.toBeUndefined();
-      await expect(
-        judge(run([`ALTER TABLE ${pages} DROP COLUMN home_id`]))
-      ).resolves.toBeUndefined();
-    }, 180_000);
-
     it("captures a quoted mixed-case table under the spelling the catalog holds", async () => {
       // Only PostgreSQL keeps a quoted name's case apart.
       if (dialect !== "postgresql") return;
@@ -617,63 +539,6 @@ describe.each(LOCK_DIALECTS)(
       expect(run.applied).toBe(1);
       expect(await deletionsOf("collection", "mixed")).toEqual({ q1: 1 });
       expect(await captures()).toBe(0);
-    }, 180_000);
-
-    it("refuses a drop of a collection a foreign key still points into once the run is done", async () => {
-      // SQLite drops a key only by rebuilding its table, which is judged as keeping it.
-      if (dialect === "sqlite") return;
-      const key = `${P}_pages_post`;
-      await adapter.executeQuery(
-        `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36)`
-      );
-      await adapter.executeQuery(
-        `ALTER TABLE ${pages} ADD CONSTRAINT ${key} FOREIGN KEY (post_id) REFERENCES ${posts} (id)`
-      );
-      const run = (first: string[]) => [
-        { label: "x.sql", statements: [...first, ...POSTS_DROPPED] },
-      ];
-
-      // No field names `posts`: the key alone keeps it.
-      await expect(judge(run([]))).rejects.toThrow(new RegExp(pages));
-      await expect(
-        judge(
-          run([
-            dialect === "mysql"
-              ? `ALTER TABLE ${pages} DROP FOREIGN KEY ${key}`
-              : `ALTER TABLE ${pages} DROP CONSTRAINT ${key}`,
-          ])
-        )
-      ).resolves.toBeUndefined();
-    }, 180_000);
-
-    it("refuses a drop of a collection a foreign key the run adds points into, unless a later file takes it away", async () => {
-      const added =
-        dialect === "sqlite"
-          ? [
-              `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36) REFERENCES ${posts} (id)`,
-            ]
-          : [
-              `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36)`,
-              `ALTER TABLE ${pages} ADD CONSTRAINT ${P}_pages_new_post FOREIGN KEY (post_id) REFERENCES ${posts} (id)`,
-            ];
-
-      await expect(
-        judge([{ label: "x.sql", statements: [...added, ...POSTS_DROPPED] }])
-      ).rejects.toThrow(new RegExp(pages));
-
-      // A later file of the run takes the key away again: nothing points into `posts` after it.
-      const takenAway =
-        dialect === "sqlite"
-          ? `ALTER TABLE ${pages} DROP COLUMN post_id`
-          : dialect === "mysql"
-            ? `ALTER TABLE ${pages} DROP FOREIGN KEY ${P}_pages_new_post`
-            : `ALTER TABLE ${pages} DROP CONSTRAINT ${P}_pages_new_post`;
-      await expect(
-        judge([
-          { label: "a.sql", statements: added },
-          { label: "b.sql", statements: [takenAway, ...POSTS_DROPPED] },
-        ])
-      ).resolves.toBeUndefined();
     }, 180_000);
 
     it("retires only the table a quoted drop spells, not one differing only in case", async () => {
@@ -728,7 +593,7 @@ describe.each(LOCK_DIALECTS)(
       expect(await captures()).toBe(2);
     }, 180_000);
 
-    it("captures nothing, and refuses nothing, where nextly_meta is not there", async () => {
+    it("captures nothing where nextly_meta is not there", async () => {
       await adapter.executeQuery("DROP TABLE nextly_meta");
 
       await expect(
@@ -747,103 +612,30 @@ describe.each(LOCK_DIALECTS)(
       ).resolves.toBeUndefined();
     }, 180_000);
 
-    it("refuses the drop when the registry is there but cannot be read", async () => {
-      await pagesNamePosts();
+    it("captures nothing blindly: a registry that is there but cannot be read fails the capture", async () => {
       await adapter.executeQuery(
         `ALTER TABLE dynamic_collections RENAME COLUMN table_name TO ${P}_unread`
       );
       try {
         await expect(
-          judge([{ label: "x.sql", statements: POSTS_DROPPED }])
+          captureRetiredDocuments(
+            adapter.getDrizzle(),
+            dialect,
+            {
+              source: "x.sql",
+              transaction: true,
+              retirements: { renamedBefore: new Map() },
+            },
+            POSTS_DROPPED,
+            0,
+            false
+          )
         ).rejects.toThrow();
       } finally {
         await adapter.executeQuery(
           `ALTER TABLE dynamic_collections RENAME COLUMN ${P}_unread TO table_name`
         );
       }
-    }, 180_000);
-
-    it("refuses a drop of a collection renamed by an earlier file of the run, as its own drop", async () => {
-      await pagesNamePosts();
-
-      await expect(
-        judge([
-          {
-            label: "a.sql",
-            statements: [`ALTER TABLE ${posts} RENAME TO ${posts}_moved`],
-          },
-          {
-            label: "b.sql",
-            statements: [
-              `DROP TABLE ${posts}_tags`,
-              `DROP TABLE ${posts}_locales`,
-              `DROP TABLE ${posts}_moved`,
-            ],
-          },
-        ])
-      ).rejects.toThrow(/posts/);
-    }, 180_000);
-
-    it("judges a foreign key into a dropped Single by each DROP clause, and a renamed column as kept", async () => {
-      // SQLite drops a key only by rebuilding its table.
-      if (dialect === "sqlite") return;
-      const key = `${P}_pages_home2`;
-      await adapter.executeQuery(
-        `ALTER TABLE ${pages} ADD COLUMN home_id varchar(36)`
-      );
-      await adapter.executeQuery(
-        `ALTER TABLE ${pages} ADD CONSTRAINT ${key} FOREIGN KEY (home_id) REFERENCES ${home} (id)`
-      );
-      const homeDropped = [
-        `DROP TABLE ${home}_links`,
-        `DROP TABLE ${home}_locales`,
-        `DROP TABLE ${home}`,
-      ];
-      const run = (first: string[]) => [
-        { label: "x.sql", statements: [...first, ...homeDropped] },
-      ];
-
-      // The key's DROP beside a clause read nowhere here still takes it away.
-      await expect(
-        judge(
-          run([
-            dialect === "mysql"
-              ? `ALTER TABLE ${pages} DROP FOREIGN KEY ${key}, MODIFY COLUMN title varchar(64) NOT NULL`
-              : `ALTER TABLE ${pages} DROP CONSTRAINT ${key}, ALTER COLUMN title SET NOT NULL`,
-          ])
-        )
-      ).resolves.toBeUndefined();
-      // A renamed column keeps its key.
-      await expect(
-        judge(run([`ALTER TABLE ${pages} RENAME COLUMN home_id TO home_ref`]))
-      ).rejects.toThrow(/home/);
-      // A table made again without the key has none.
-      await expect(
-        judge(
-          run([
-            `DROP TABLE ${pages}`,
-            `CREATE TABLE ${pages} (id varchar(36) PRIMARY KEY, title varchar(64))`,
-          ])
-        )
-      ).resolves.toBeUndefined();
-    }, 180_000);
-
-    it("refuses a drop a schema-qualified key the run adds points into", async () => {
-      // Only PostgreSQL's `public` is read here as the app's own schema.
-      if (dialect !== "postgresql") return;
-
-      await expect(
-        judge([
-          {
-            label: "x.sql",
-            statements: [
-              `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36)`,
-              `ALTER TABLE public.${pages} ADD CONSTRAINT ${P}_pages_q FOREIGN KEY (post_id) REFERENCES public.${posts} (id)`,
-              ...POSTS_DROPPED,
-            ],
-          },
-        ])
-      ).rejects.toThrow(new RegExp(pages));
     }, 180_000);
 
     it("retires a mixed-case table only where its own spelling is dropped and not made again", async () => {
@@ -910,97 +702,6 @@ describe.each(LOCK_DIALECTS)(
       expect(run.applied).toBe(1);
       expect(await deletionsOf("collection", "twin")).toEqual({ t1: 1 });
       expect(await captures()).toBe(0);
-    }, 180_000);
-
-    it("judges a drop against the keys the plugins' modules the run applies first add or remove", async () => {
-      /** The refusal over `posts`' drop, after the plugins' modules' `preceding` statements. */
-      const afterModules = (preceding: string[]) =>
-        refuseDropsOfUsedEntities({
-          adapter: adapter as never,
-          db: adapter.getDrizzle(),
-          dialect,
-          units: [{ label: "x.sql", statements: POSTS_DROPPED }],
-          preceding,
-          migrationsDir,
-          extensionSchema: () => Promise.resolve(null),
-        });
-      const key = `${P}_pages_mod`;
-
-      // A module adds a key into `posts`.
-      await expect(
-        afterModules(
-          dialect === "sqlite"
-            ? [
-                `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36) REFERENCES ${posts} (id)`,
-              ]
-            : [
-                `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36)`,
-                `ALTER TABLE ${pages} ADD CONSTRAINT ${key} FOREIGN KEY (post_id) REFERENCES ${posts} (id)`,
-              ]
-        )
-      ).rejects.toThrow(new RegExp(pages));
-
-      // SQLite drops a key only by rebuilding its table.
-      if (dialect === "sqlite") return;
-      // A key the database holds, which a module drops first.
-      await adapter.executeQuery(
-        `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36)`
-      );
-      await adapter.executeQuery(
-        `ALTER TABLE ${pages} ADD CONSTRAINT ${key} FOREIGN KEY (post_id) REFERENCES ${posts} (id)`
-      );
-      await expect(afterModules([])).rejects.toThrow(new RegExp(pages));
-      await expect(
-        afterModules([
-          dialect === "mysql"
-            ? `ALTER TABLE ${pages} DROP FOREIGN KEY ${key}`
-            : `ALTER TABLE ${pages} DROP CONSTRAINT ${key}`,
-        ])
-      ).resolves.toBeUndefined();
-    }, 180_000);
-
-    it("refuses a drop of a collection a key the run adds points into under the name it renamed it to", async () => {
-      const moved = `${posts}_art`;
-      const added =
-        dialect === "sqlite"
-          ? [
-              `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36) REFERENCES ${moved} (id)`,
-            ]
-          : [
-              `ALTER TABLE ${pages} ADD COLUMN post_id varchar(36)`,
-              `ALTER TABLE ${pages} ADD CONSTRAINT ${P}_pages_moved FOREIGN KEY (post_id) REFERENCES ${moved} (id)`,
-            ];
-
-      await expect(
-        judge([
-          {
-            label: "x.sql",
-            statements: [
-              `ALTER TABLE ${posts} RENAME TO ${moved}`,
-              ...added,
-              `DROP TABLE ${posts}_tags`,
-              `DROP TABLE ${posts}_locales`,
-              `DROP TABLE ${moved}`,
-            ],
-          },
-        ])
-      ).rejects.toThrow(new RegExp(pages));
-    }, 180_000);
-
-    it("refuses a drop a key from a surviving table differing only in case points into", async () => {
-      // Only PostgreSQL keeps a quoted name's case apart.
-      if (dialect !== "postgresql") return;
-      const survivor = `${P}_Posts`;
-      await adapter.executeQuery(
-        `CREATE TABLE "${survivor}" (id varchar(36) PRIMARY KEY, post_id varchar(36))`
-      );
-      await adapter.executeQuery(
-        `ALTER TABLE "${survivor}" ADD CONSTRAINT ${P}_survivor_post FOREIGN KEY (post_id) REFERENCES ${posts} (id)`
-      );
-
-      await expect(
-        judge([{ label: "x.sql", statements: POSTS_DROPPED }])
-      ).rejects.toThrow(new RegExp(survivor));
     }, 180_000);
 
     /**
@@ -1305,63 +1006,5 @@ describe.each(LOCK_DIALECTS)(
       },
       2 * PROCESS_TIMEOUT
     );
-
-    it(
-      "refuses migrate:down whose DOWN drops a collection a foreign key still points into",
-      async () => {
-        await extraApplied();
-        // `pages` keeps a key into `extra`, which no field declares.
-        if (dialect === "sqlite") {
-          await adapter.executeQuery(
-            `ALTER TABLE ${pages} ADD COLUMN extra_id varchar(36) REFERENCES ${extra} (id)`
-          );
-        } else {
-          await adapter.executeQuery(
-            `ALTER TABLE ${pages} ADD COLUMN extra_id varchar(36)`
-          );
-          await adapter.executeQuery(
-            `ALTER TABLE ${pages} ADD CONSTRAINT ${P}_pages_extra FOREIGN KEY (extra_id) REFERENCES ${extra} (id)`
-          );
-        }
-        const before = await ledger();
-
-        const down = await nextlyProcess([
-          "migrate:down",
-          "--step",
-          "1",
-          "--accept-data-loss",
-          "--non-interactive",
-          "--force-unlock",
-        ]);
-
-        const said = `${down.stdout}\n${down.stderr}`;
-        expect(down.status, said).not.toBe(0);
-        // Refused by the check, before the DOWN, not by the database part-way.
-        expect(said).toMatch(/still points into/);
-        expect(await adapter.tableExists(extra), said).toBe(true);
-        expect(await ledger(), said).toBe(before);
-      },
-      2 * PROCESS_TIMEOUT
-    );
-
-    it("refuses a drop of a collection another one's field still names, removing nothing", async () => {
-      // `pages` relates to `posts`: dropping `posts` would leave its field pointing at nothing.
-      await pagesNamePosts();
-      file(POSTS_DROPPED);
-      const before = await ledger();
-
-      const refused = await migrate(
-        resolveDataLossConsent({ flag: posts, env: {} })
-      ).then(
-        () => undefined,
-        (error: unknown) => error
-      );
-
-      expect(String((refused as Error | undefined)?.message)).toMatch(/posts/);
-      expect(await adapter.tableExists(posts)).toBe(true);
-      expect(await ledger()).toBe(before);
-      expect(await captures()).toBe(0);
-      expect(await deletionsOf("collection", "posts")).toEqual({});
-    }, 180_000);
   }
 );

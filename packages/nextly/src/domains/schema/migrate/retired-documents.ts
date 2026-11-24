@@ -343,6 +343,17 @@ export async function forgetCapturesOfStandingTables(
   }
 }
 
+/**
+ * The run whose captures are settled: the handle it was given, which every read goes through, and
+ * the adapter that opens each transaction events are recorded in, asked for only where there is
+ * something to record.
+ */
+export interface RetirementRun {
+  adapter: DrizzleAdapter;
+  db: unknown;
+  dialect: SupportedDialect;
+}
+
 /** What a run did with the captures it found. */
 export interface RetiredDocumentEvents {
   /** Each entity whose documents' deletion events were recorded, as `<kind> <slug>`. */
@@ -372,10 +383,9 @@ export interface RetiredDocumentEvents {
  * answered with the rest, for the caller to judge.
  */
 export async function recordRetiredDocumentEvents(
-  adapter: DrizzleAdapter
+  run: RetirementRun
 ): Promise<RetiredDocumentEvents> {
-  const dialect = adapter.getCapabilities().dialect;
-  const db = adapter.getDrizzle();
+  const { db, dialect } = run;
   const result: RetiredDocumentEvents = { recorded: [], left: [], failed: [] };
   if (!(await metaStands(db, dialect))) return result;
   const heads = (await readHeads(db, dialect, KEY_PREFIX)).sort(
@@ -386,7 +396,7 @@ export async function recordRetiredDocumentEvents(
     const name = `${head.kind} ${head.slug}`;
     if (waiting.has(name)) continue;
     try {
-      const outcome = await settleCapture(adapter, head);
+      const outcome = await settleCapture(run, head);
       if (outcome !== "forgotten") result[outcome].push(name);
     } catch (error) {
       if (endsTheRun(error)) throw error;
@@ -406,11 +416,10 @@ export async function recordRetiredDocumentEvents(
  * stands, left where the table is gone, and otherwise its events recorded, row by row.
  */
 async function settleCapture(
-  adapter: DrizzleAdapter,
+  run: RetirementRun,
   head: CaptureHead
 ): Promise<"recorded" | "left" | "forgotten"> {
-  const dialect = adapter.getCapabilities().dialect;
-  const db = adapter.getDrizzle();
+  const { adapter, db, dialect } = run;
   const name = `${head.kind} ${head.slug}`;
   const prefix = entityPrefix(head);
   const applied = await new SchemaEventsRepository(db, dialect).isFileApplied(

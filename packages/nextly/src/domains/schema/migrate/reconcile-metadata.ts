@@ -96,6 +96,7 @@ import { writeRegistryFromSource } from "./registry-writer";
 import {
   recordRetiredDocumentEvents,
   type RetiredDocumentEvents,
+  type RetirementRun,
 } from "./retired-documents";
 import { endsTheRun, reachStopPoint } from "./stop-points";
 
@@ -134,6 +135,11 @@ export function asServiceLogger(logger: ReconcileLogger): Logger {
 
 export interface ReconcileMetadataDeps {
   adapter: DrizzleAdapter;
+  /**
+   * The handle the run reads through, where it was given one of its own; the adapter's otherwise.
+   * Read by the settling of retired documents' events, which runs before any file.
+   */
+  db?: unknown;
   dialect: SupportedDialect;
   migrationsDir: string;
   /** What the run's declared schema names, which old Builder files are judged against. */
@@ -646,13 +652,13 @@ async function holdersInPlace(deps: ReconcileMetadataDeps): Promise<boolean> {
  * the first run's commit, which writes the registry instead, records them once it lands.
  */
 export async function deletionEventsOfRetiredDocuments(
-  deps: Pick<ReconcileMetadataDeps, "adapter" | "logger">
+  deps: RetirementDeps
 ): Promise<void> {
   if (registryWriteOpen()) return;
   try {
     reportRetiredDocumentEvents(
       deps.logger,
-      await recordRetiredDocumentEvents(deps.adapter),
+      await recordRetiredDocumentEvents(retirementRunOf(deps)),
       undefined
     );
   } catch (error) {
@@ -673,12 +679,12 @@ export async function deletionEventsOfRetiredDocuments(
  * every Phase 3 warns of it.
  */
 export async function settleRetiredDocumentEvents(
-  deps: Pick<ReconcileMetadataDeps, "adapter" | "logger">,
+  deps: RetirementDeps,
   blocking: "up" | "down"
 ): Promise<void> {
   const blocked = reportRetiredDocumentEvents(
     deps.logger,
-    await recordRetiredDocumentEvents(deps.adapter),
+    await recordRetiredDocumentEvents(retirementRunOf(deps)),
     blocking
   );
   if (blocked.length === 0) return;
@@ -690,6 +696,21 @@ export async function settleRetiredDocumentEvents(
         : "applying the migration a rollback dropped it in again"
     } would lose them. Fix the cause, then run the command again.`,
   });
+}
+
+/** What settling the captures of retired entities needs, and where it says what it did. */
+type RetirementDeps = Pick<
+  ReconcileMetadataDeps,
+  "adapter" | "dialect" | "db" | "logger"
+>;
+
+/** The run whose captures are settled, reading through the handle it was given. */
+function retirementRunOf(deps: RetirementDeps): RetirementRun {
+  return {
+    adapter: deps.adapter,
+    db: deps.db ?? deps.adapter.getDrizzle(),
+    dialect: deps.dialect,
+  };
 }
 
 /**
