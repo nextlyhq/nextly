@@ -1995,6 +1995,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 legacy: legacyBundle,
                 fills: undefined,
                 rowFills: fileAnswers.rowFills,
+                renameResolutions,
               }
             );
             return pushed;

@@ -1070,6 +1070,7 @@ async function applyHoldingSchemaLock(
       legacy: change.legacyResolutions,
       fills: change.fills,
       rowFills: undefined,
+      renameResolutions: change.renameResolutions,
     }
   );
   // The unique index a field that stops being unique still has under a name the push does not

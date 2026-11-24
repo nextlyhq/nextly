@@ -95,6 +95,13 @@ const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const quote = (dialect: TestDialect, name: string) =>
   dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
+/** A stamp long before any test runs, as each dialect's `_updated_at` column takes it. */
+const LONG_AGO: Record<TestDialect, string> = {
+  sqlite: "1",
+  postgresql: "'2000-01-01T00:00:00Z'",
+  mysql: "'2000-01-01 00:00:00.000'",
+};
+
 /**
  * The cases, for `layout`, with each collection and Single named from `prefix` so the two suites
  * never share a table.
@@ -232,6 +239,8 @@ export function requiredTextFieldCases(
         /** The event the dialog's typed answer names, as the main table's column. */
         event: "add_not_null_with_nulls" | "add_required_field_no_default";
         without: number;
+        /** The columns the save renames, each answered as a rename where its values are kept. */
+        renames?: { from: string; to: string }[];
       }
 
       /** `note` made required: the two entries without a note do not fit it. */
@@ -257,6 +266,32 @@ export function requiredTextFieldCases(
         without: 3,
       };
 
+      /**
+       * `note` renamed to `remark` and required, in one save: the entries its values leave empty
+       * under the old name are the two that do not fit it.
+       */
+      const NOTE_RENAMED_REQUIRED: Change = {
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "remark", type: "text", required: true },
+        ],
+        field: "remark",
+        event: "add_not_null_with_nulls",
+        without: 2,
+        renames: [{ from: "note", to: "remark" }],
+      };
+
+      /** `change`'s renames as the dialog answers them, on the table the values are kept in. */
+      const renamesOf = (slug: string, translated: boolean, change: Change) =>
+        (change.renames ?? []).map(rename => ({
+          tableName: keptPerLanguage(translated)
+            ? `dc_${slug}_locales`
+            : `dc_${slug}`,
+          fromColumn: rename.from,
+          toColumn: rename.to,
+          choice: "rename" as const,
+        }));
+
       /** The answer as the dialog's typed resolution names it, by the main table's column. */
       const resolutionOf = (slug: string, change: Change, answer: Answer) => ({
         eventId: `${change.event}:dc_${slug}.${change.field}`,
@@ -281,6 +316,7 @@ export function requiredTextFieldCases(
       ): Promise<void> {
         const answers = {
           eventResolutions: [resolutionOf(slug, change, answer)],
+          renameResolutions: renamesOf(slug, translated, change),
         };
         const preview = (await dispatchCollections(
           {} as ServiceContainer,
@@ -296,19 +332,34 @@ export function requiredTextFieldCases(
           noticeOf(change, answer),
         ]);
 
-        const applied = (await dispatchCollections(
+        const applied = await appliedThroughDialog(
+          slug,
+          translated,
+          change.fields,
+          answers
+        );
+        expect(applied.ok, await applied.clone().text()).toBe(true);
+      }
+
+      /** The dialog's apply of `fields` with `answers`, as it answers: not judged here. */
+      async function appliedThroughDialog(
+        slug: string,
+        translated: boolean,
+        fields: Record<string, unknown>[],
+        answers: Record<string, unknown>
+      ): Promise<Response> {
+        return (await dispatchCollections(
           {} as ServiceContainer,
           "applySchemaChanges",
           { collectionName: slug },
           {
-            fields: change.fields,
+            fields,
             confirmed: true,
             ...(translated ? { localized: true } : {}),
             ...answers,
             schemaVersion: await schemaVersionOf("dynamic_collections", slug),
           }
         )) as unknown as Response;
-        expect(applied.ok, await applied.clone().text()).toBe(true);
       }
 
       /** The same change as the save's own migration file, run as `nextly migrate` runs it. */
@@ -359,7 +410,7 @@ export function requiredTextFieldCases(
           isLocalized: translated,
           status: false,
           wasStatus: false,
-          renameResolutions: [],
+          renameResolutions: renamesOf(slug, translated, change),
           eventResolutions: [
             resolutionOf(slug, change, answer) as unknown as Resolution,
           ],
@@ -401,6 +452,9 @@ export function requiredTextFieldCases(
             },
             change: "update",
             resolutions: [{ column: change.field, ...answer }],
+            ...(change.renames === undefined
+              ? {}
+              : { renamedFields: change.renames }),
           },
         };
       }
@@ -422,6 +476,106 @@ export function requiredTextFieldCases(
               `SELECT ${quote(dialect, "id")} AS id, ${quote(dialect, column)} AS value FROM ${quote(dialect, `dc_${slug}`)}`
             );
         return Object.fromEntries(rows.map(row => [String(row.id), row.value]));
+      }
+
+      /**
+       * A table of `holder` whose one row references entry `id` of `main`, refusing its delete: a
+       * key the database enforces, as another table's relationship has.
+       */
+      async function holdEntry(
+        holder: string,
+        main: string,
+        id: string
+      ): Promise<void> {
+        const q = (name: string) => quote(dialect, name);
+        await query(
+          `CREATE TABLE ${q(holder)} (${q("id")} VARCHAR(36) PRIMARY KEY, ${q("entry")} ${await idColumnType(main)}, FOREIGN KEY (${q("entry")}) REFERENCES ${q(main)} (${q("id")}) ON DELETE RESTRICT)`
+        );
+        await query(
+          `INSERT INTO ${q(holder)} (${q("id")}, ${q("entry")}) VALUES ('h1', '${id}')`
+        );
+      }
+
+      /** The type of `table`'s id column as the database declares it, for a key to match. */
+      async function idColumnType(table: string): Promise<string> {
+        if (dialect === "sqlite") return "TEXT";
+        if (dialect === "postgresql") {
+          const [row] = await query<{ type: string }>(
+            `SELECT format_type(atttypid, atttypmod) AS type FROM pg_attribute WHERE attrelid = '${table}'::regclass AND attname = 'id'`
+          );
+          return row?.type ?? "TEXT";
+        }
+        const [row] = await query<{
+          type: string;
+          charset: string | null;
+          collation: string | null;
+        }>(
+          `SELECT COLUMN_TYPE AS type, CHARACTER_SET_NAME AS charset, COLLATION_NAME AS collation FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' AND COLUMN_NAME = 'id'`
+        );
+        return row?.charset
+          ? `${row.type} CHARACTER SET ${row.charset} COLLATE ${row.collation}`
+          : (row?.type ?? "VARCHAR(36)");
+      }
+
+      /** Every language's row of the collection's entries: its entry, language and note. */
+      async function languageRows(
+        slug: string
+      ): Promise<{ parent: string; locale: string; note: unknown }[]> {
+        const q = (name: string) => quote(dialect, name);
+        const rows = await query<Record<string, unknown>>(
+          `SELECT ${q("_parent")} AS parent, ${q("_locale")} AS locale, ${q("note")} AS note FROM ${q(`dc_${slug}_locales`)}`
+        );
+        return rows
+          .map(row => ({
+            parent: String(row.parent),
+            locale: String(row.locale),
+            note: row.note ?? null,
+          }))
+          .sort((a, b) =>
+            `${a.parent}:${a.locale}`.localeCompare(`${b.parent}:${b.locale}`)
+          );
+      }
+
+      /** Each language row's stamp, by `entry:language`, as the database returns it. */
+      async function stampsOf(
+        slug: string
+      ): Promise<Record<string, string | null>> {
+        const q = (name: string) => quote(dialect, name);
+        const rows = await query<Record<string, unknown>>(
+          `SELECT ${q("_parent")} AS parent, ${q("_locale")} AS locale, ${q("_updated_at")} AS stamp FROM ${q(`dc_${slug}_locales`)}`
+        );
+        return Object.fromEntries(
+          rows.map(row => [
+            `${String(row.parent)}:${String(row.locale)}`,
+            row.stamp === null || row.stamp === undefined
+              ? null
+              : row.stamp instanceof Date
+                ? row.stamp.toISOString()
+                : String(row.stamp),
+          ])
+        );
+      }
+
+      /** `change` through `road`, not judged: its review is not read, and a refusal is thrown. */
+      async function attempt(
+        road: Road,
+        slug: string,
+        translated: boolean,
+        answer: Answer
+      ): Promise<void> {
+        if (road === "file") {
+          await writtenWithout(slug, answer, NOTE_REQUIRED);
+        } else if (road === "push") {
+          await throughPush(slug, translated, answer, NOTE_REQUIRED);
+        } else {
+          const response = await appliedThroughDialog(
+            slug,
+            translated,
+            NOTE_REQUIRED.fields,
+            { eventResolutions: [resolutionOf(slug, NOTE_REQUIRED, answer)] }
+          );
+          if (!response.ok) throw new Error(await response.text());
+        }
       }
 
       /** The entries the collection's table holds, by id. */
@@ -546,6 +700,148 @@ export function requiredTextFieldCases(
               )
             );
           });
+
+          // A main-table column renamed and made required in one push is refused by the pipeline,
+          // which takes no answer for a column it renames; the dialog's save of one runs its file.
+          if (road !== "push" || keptPerLanguage(translated)) {
+            it(`fills a text field of ${kind} collection renamed and made required in one save, counting the entries it leaves empty under its old name (${road})`, async () => {
+              const answer: Answer = { kind: "fill", value: "filled" };
+              const slug = `${slugOf(answer)}_ren`;
+              const ids = await notesWithEntries(slug, translated);
+
+              await through(
+                road,
+                slug,
+                translated,
+                answer,
+                NOTE_RENAMED_REQUIRED
+              );
+
+              // The renamed values kept, the empty ones filled under the new name.
+              expect(
+                await defaultLanguageValues(slug, translated, "remark")
+              ).toEqual({
+                [ids.kept]: "kept",
+                [ids.empty]: "filled",
+                [ids.bare]: "filled",
+              });
+            });
+          }
+
+          // A field kept per language has no NOT NULL to hold an entry without its value, so these
+          // cases are its own; a column of the main table made required already holds none.
+          if (keptPerLanguage(translated)) {
+            it(`refuses an answer for ${kind} collection's required text field the save only renames (${road})`, async () => {
+              const answer: Answer = { kind: "delete_nonconforming" };
+              const slug = `${slugOf(answer)}_req`;
+              const ids = await notesWithEntries(slug, translated);
+              // Required first, with no answer: the dialog asks nothing for a field kept per
+              // language, so the entries without a note stay as they are.
+              const required = await appliedThroughDialog(
+                slug,
+                translated,
+                NOTE_REQUIRED.fields,
+                {}
+              );
+              expect(required.ok, await required.clone().text()).toBe(true);
+
+              if (road === "push") {
+                // The push asks nothing of a field the change only renames, so it settles nothing.
+                await throughPush(
+                  slug,
+                  translated,
+                  answer,
+                  NOTE_RENAMED_REQUIRED
+                );
+              } else {
+                const refused =
+                  road === "dialog"
+                    ? appliedThroughDialog(
+                        slug,
+                        translated,
+                        NOTE_RENAMED_REQUIRED.fields,
+                        {
+                          eventResolutions: [
+                            resolutionOf(slug, NOTE_RENAMED_REQUIRED, answer),
+                          ],
+                          renameResolutions: renamesOf(
+                            slug,
+                            translated,
+                            NOTE_RENAMED_REQUIRED
+                          ),
+                        }
+                      ).then(async response => {
+                        if (response.ok) return;
+                        // The refusal's code, from the envelope the API answers with.
+                        const body = (await response.json()) as {
+                          error?: { code?: string };
+                        };
+                        throw { code: body.error?.code };
+                      })
+                    : writtenWithout(slug, answer, NOTE_RENAMED_REQUIRED);
+                await expect(refused).rejects.toMatchObject({
+                  code: "VALIDATION_ERROR",
+                });
+              }
+
+              // Nothing was deleted.
+              expect(await idsOf(`dc_${slug}`)).toEqual(
+                [ids.kept, ids.empty, ids.bare].sort()
+              );
+            });
+
+            it(`keeps every language's row of ${kind} collection's entries whose delete the database refuses (${road})`, async () => {
+              const answer: Answer = { kind: "delete_nonconforming" };
+              const slug = `${slugOf(answer)}_held`;
+              const ids = await notesWithEntries(slug, translated);
+              // Another table holds one of the entries without a note, so the database refuses its
+              // delete. Where the statements commit one at a time (MySQL), nothing deleted before
+              // that refusal can be taken back.
+              const holder = `${slug}_holds`;
+              await holdEntry(holder, `dc_${slug}`, ids.empty);
+              try {
+                const before = await languageRows(slug);
+
+                await attempt(road, slug, translated, answer).catch(
+                  () => undefined
+                );
+
+                // Every entry still there keeps every language's row.
+                const left = new Set(await idsOf(`dc_${slug}`));
+                expect(
+                  (await languageRows(slug)).filter(row => left.has(row.parent))
+                ).toEqual(before.filter(row => left.has(row.parent)));
+              } finally {
+                await query(`DROP TABLE ${quote(dialect, holder)}`);
+              }
+            });
+
+            it(`stamps the default-language rows a fill writes for ${kind} collection (${road})`, async () => {
+              const answer: Answer = { kind: "fill", value: "filled" };
+              const slug = `${slugOf(answer)}_stamp`;
+              const ids = await notesWithEntries(slug, translated);
+              // Every row stamped long ago, so a stamp the fill writes is told from it.
+              await query(
+                `UPDATE ${quote(dialect, `dc_${slug}_locales`)} SET ${quote(dialect, "_updated_at")} = ${LONG_AGO[dialect]}`
+              );
+              const before = await stampsOf(slug);
+
+              await through(road, slug, translated, answer);
+
+              const after = await stampsOf(slug);
+              // The rows the fill wrote carry a stamp of their own: the one it filled and the one
+              // it added.
+              for (const id of [ids.empty, ids.bare]) {
+                expect(after[`${id}:en`]).not.toBeNull();
+                expect(after[`${id}:en`]).not.toBe(before[`${id}:en`]);
+              }
+              // Every other row keeps its stamp.
+              expect(after[`${ids.kept}:en`]).toBe(before[`${ids.kept}:en`]);
+              if (translated) {
+                expect(after[`${ids.bare}:es`]).toBe(before[`${ids.bare}:es`]);
+              }
+            });
+          }
         }
       }
 

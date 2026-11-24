@@ -24,6 +24,12 @@ import { quoteIdent } from "./identifier-quoting";
 export interface PerLanguageColumn {
   companionTable: string;
   locale: string;
+  /**
+   * The content stamp (`_updated_at`) every row a fill writes takes, encoded as the runtime writes
+   * one (`encodeStamp`): the default language's value changed at that moment, so every translation
+   * of it written before then is older than its source.
+   */
+  stamp: unknown;
 }
 
 /**
@@ -126,10 +132,13 @@ function fillLiteral(
  * The statements settling the entries with no value for a field kept per language, in its
  * default language: those whose row in that language holds NULL, or that have no row in it.
  *
- * - A delete removes every language's row of such an entry from the translations table first,
- *   so no row is left naming an entry that is gone, then the entry itself.
+ * - A delete removes such an entry first, then every language's row of it: the database's cascade
+ *   has already taken them where keys are enforced, and the second statement takes them where the
+ *   statements run with keys off (a migration on SQLite). In this order a refused entry delete
+ *   leaves every row in place, even where each statement commits as it runs (MySQL).
  * - A fill gives each default-language row holding NULL the value, then adds a default-language
- *   row holding it for each entry that has none; the row's other columns take their defaults.
+ *   row holding it for each entry that has none; the row's other columns take their defaults. Each
+ *   row it writes takes the content stamp (`PerLanguageColumn.stamp`).
  *
  * No column is made NOT NULL: a translations table's columns stay nullable, since a language
  * other than the default one may hold no value and fall back. Where a statement reads the table it
@@ -153,15 +162,17 @@ function perLanguageStatements(
   const fitting = `SELECT DISTINCT ${parent} FROM ${companion} WHERE ${inDefaultLanguage} AND ${column} IS NOT NULL`;
   if (resolution.kind === "delete_nonconforming") {
     return [
-      `DELETE FROM ${companion} WHERE ${parent} NOT IN (SELECT ${parent} FROM (${fitting}) AS ${q("fitting")});`,
       `DELETE FROM ${main} WHERE ${q("id")} NOT IN (${fitting});`,
+      `DELETE FROM ${companion} WHERE ${parent} NOT IN (SELECT ${parent} FROM (${fitting}) AS ${q("fitting")});`,
     ];
   }
   const value = fillLiteral(resolution, dialect);
+  const stamp = sqlValueLiteral(perLanguage.stamp, dialect);
+  const stampColumn = q("_updated_at");
   const withRow = `SELECT DISTINCT ${parent} FROM ${companion} WHERE ${inDefaultLanguage}`;
   return [
-    `UPDATE ${companion} SET ${column} = ${value} WHERE ${inDefaultLanguage} AND ${column} IS NULL;`,
-    `INSERT INTO ${companion} (${parent}, ${language}, ${column}) SELECT ${q("id")}, ${locale}, ${value} FROM ${main} WHERE ${q("id")} NOT IN (SELECT ${parent} FROM (${withRow}) AS ${q("with_row")});`,
+    `UPDATE ${companion} SET ${column} = ${value}, ${stampColumn} = ${stamp} WHERE ${inDefaultLanguage} AND ${column} IS NULL;`,
+    `INSERT INTO ${companion} (${parent}, ${language}, ${stampColumn}, ${column}) SELECT ${q("id")}, ${locale}, ${stamp}, ${value} FROM ${main} WHERE ${q("id")} NOT IN (SELECT ${parent} FROM (${withRow}) AS ${q("with_row")});`,
   ];
 }
 

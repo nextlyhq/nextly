@@ -229,6 +229,7 @@ import {
   keptPerLanguage,
   madeRequired,
   perLanguageColumn,
+  sourceColumn,
 } from "./per-language-answers";
 import {
   openSaveRecords,
@@ -2058,7 +2059,7 @@ function fileResolutions(
  * required field kept per language needs. Undefined where the field's column is the main table's.
  */
 function perLanguageColumnOf(
-  deps: Pick<CollectionSaveDeps, "config">,
+  deps: Pick<CollectionSaveDeps, "config" | "adapter">,
   save: CollectionSave,
   table: string,
   name: string
@@ -2069,7 +2070,8 @@ function perLanguageColumnOf(
   }
   return perLanguageColumn(
     table,
-    defaultLanguage(deps.config.localization?.defaultLocale)
+    defaultLanguage(deps.config.localization?.defaultLocale),
+    deps.adapter.getCapabilities().dialect
   );
 }
 
@@ -2090,12 +2092,17 @@ async function settledRows(
     const field = answeredFieldOrRefuse(save, resolution.column);
     refuseUnfitFill(field, resolution, dialect);
     // Counted where the field's values are kept: its translations table's default-language rows
-    // for a field kept per language, its column of the main table otherwise.
+    // for a field kept per language, its column of the main table otherwise; read under the name
+    // the save renames it from, which is the one the database still has.
     const perLanguage = perLanguageColumnOf(
       deps,
       save,
       table,
       resolution.column
+    );
+    const source = sourceColumn(
+      save.renamedFields,
+      toSnakeCase(resolution.column)
     );
     const rows =
       perLanguage === undefined
@@ -2105,12 +2112,14 @@ async function settledRows(
             live,
             field,
             resolution,
+            source,
           })
         : await settledPerLanguage(deps, save, {
             table,
             exists,
             perLanguage,
             resolution,
+            source,
           });
     if (resolution.kind === "delete_nonconforming") {
       assertDeleteWithinThreshold(rows);
@@ -2200,14 +2209,16 @@ async function settledOnMainTable(
     live: TableSpec | undefined;
     field: UiSchemaEntity["fields"][number];
     resolution: NonNullable<CollectionSave["resolutions"]>[number];
+    /** The field's column as the database still names it (`sourceColumn`). */
+    source: string;
   }
 ): Promise<number> {
-  const column = toSnakeCase(args.resolution.column);
-  const liveColumn = args.live?.columns.find(c => c.name === column);
+  const liveColumn = args.live?.columns.find(c => c.name === args.source);
   // An answer settles rows that do not fit a field this save makes
   // required: one required now whose column is new, or nullable as it
   // stands. Any other would delete or fill rows, and the generator would
-  // make the column NOT NULL, for a change the save does not make.
+  // make the column NOT NULL, for a change the save does not make. A renamed
+  // field is judged and counted by the column it is renamed from.
   if (args.field.required !== true || liveColumn?.nullable === false) {
     throw answerNotAsked(args.resolution.column);
   }
@@ -2216,7 +2227,10 @@ async function settledOnMainTable(
     await countRowsBreakingNotNull(
       deps.adapter.getDrizzle(),
       deps.adapter.getCapabilities().dialect,
-      { table: args.table, column: liveColumn === undefined ? null : column }
+      {
+        table: args.table,
+        column: liveColumn === undefined ? null : args.source,
+      }
     )
   ).total;
 }
@@ -2236,10 +2250,19 @@ async function settledPerLanguage(
     exists: boolean;
     perLanguage: PerLanguageColumn;
     resolution: NonNullable<CollectionSave["resolutions"]>[number];
+    /** The field's column as the database still names it (`sourceColumn`). */
+    source: string;
   }
 ): Promise<number> {
   const name = args.resolution.column;
-  if (!madeRequired(save.previous?.fields, save.entity?.fields, name)) {
+  if (
+    !madeRequired(
+      save.previous?.fields,
+      save.entity?.fields,
+      name,
+      save.renamedFields
+    )
+  ) {
     throw answerNotAsked(name);
   }
   if (!args.exists) return 0;
@@ -2250,11 +2273,7 @@ async function settledPerLanguage(
     {
       table: args.table,
       companionTable,
-      column: await liveCompanionColumn(
-        deps,
-        companionTable,
-        toSnakeCase(name)
-      ),
+      column: await liveCompanionColumn(deps, companionTable, args.source),
       locale,
     }
   );

@@ -6,8 +6,9 @@
  *
  * For a field kept per language, the statements settle the entries without a
  * value in the default language on the translations table: a delete removes
- * every language's row of such an entry before the entry, and a fill fills the
- * default-language rows holding NULL and adds one where an entry has none.
+ * such an entry before every language's row of it, and a fill fills the
+ * default-language rows holding NULL and adds one where an entry has none,
+ * each row it writes stamped.
  * Where a statement reads the table it changes, it does so through a derived
  * table of distinct rows, which MySQL requires.
  */
@@ -49,9 +50,13 @@ describe("resolutionStatement for a date fill", () => {
 });
 
 describe("resolutionStatements for a field kept per language", () => {
-  const perLanguage = { companionTable: "dc_posts_locales", locale: "en" };
+  const perLanguage = {
+    companionTable: "dc_posts_locales",
+    locale: "en",
+    stamp: "2026-11-24 09:15:30.250",
+  };
 
-  it("deletes every language's row of an entry without the value, then the entry", () => {
+  it("deletes an entry without the value, then every language's row of it", () => {
     expect(
       resolutionStatements(
         {
@@ -63,12 +68,12 @@ describe("resolutionStatements for a field kept per language", () => {
         "mysql"
       )
     ).toEqual([
-      "DELETE FROM `dc_posts_locales` WHERE `_parent` NOT IN (SELECT `_parent` FROM (SELECT DISTINCT `_parent` FROM `dc_posts_locales` WHERE `_locale` = 'en' AND `note` IS NOT NULL) AS `fitting`);",
       "DELETE FROM `dc_posts` WHERE `id` NOT IN (SELECT DISTINCT `_parent` FROM `dc_posts_locales` WHERE `_locale` = 'en' AND `note` IS NOT NULL);",
+      "DELETE FROM `dc_posts_locales` WHERE `_parent` NOT IN (SELECT `_parent` FROM (SELECT DISTINCT `_parent` FROM `dc_posts_locales` WHERE `_locale` = 'en' AND `note` IS NOT NULL) AS `fitting`);",
     ]);
   });
 
-  it("fills the default-language rows without the value, and adds one where an entry has none", () => {
+  it("fills and stamps the default-language rows without the value, and adds one where an entry has none", () => {
     expect(
       resolutionStatements(
         {
@@ -81,8 +86,8 @@ describe("resolutionStatements for a field kept per language", () => {
         "postgresql"
       )
     ).toEqual([
-      `UPDATE "dc_posts_locales" SET "note" = 'it''s' WHERE "_locale" = 'en' AND "note" IS NULL;`,
-      `INSERT INTO "dc_posts_locales" ("_parent", "_locale", "note") SELECT "id", 'en', 'it''s' FROM "dc_posts" WHERE "id" NOT IN (SELECT "_parent" FROM (SELECT DISTINCT "_parent" FROM "dc_posts_locales" WHERE "_locale" = 'en') AS "with_row");`,
+      `UPDATE "dc_posts_locales" SET "note" = 'it''s', "_updated_at" = '2026-11-24 09:15:30.250' WHERE "_locale" = 'en' AND "note" IS NULL;`,
+      `INSERT INTO "dc_posts_locales" ("_parent", "_locale", "_updated_at", "note") SELECT "id", 'en', '2026-11-24 09:15:30.250', 'it''s' FROM "dc_posts" WHERE "id" NOT IN (SELECT "_parent" FROM (SELECT DISTINCT "_parent" FROM "dc_posts_locales" WHERE "_locale" = 'en') AS "with_row");`,
     ]);
   });
 });

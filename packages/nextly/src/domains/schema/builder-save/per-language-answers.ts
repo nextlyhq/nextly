@@ -18,7 +18,11 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../../../types/database-operations";
 import { appLocalization } from "../../i18n/configured-locales";
-import type { LegacyResolutionsBundle } from "../pipeline/prompt-dispatcher/browser";
+import { encodeStamp } from "../../i18n/runtime/companion-stamp-column";
+import type {
+  BrowserRenameResolution,
+  LegacyResolutionsBundle,
+} from "../pipeline/prompt-dispatcher/browser";
 import { parseEventId, type Resolution } from "../pipeline/resolution/types";
 import {
   resolutionStatements,
@@ -33,8 +37,16 @@ import {
 } from "../services/field-column-descriptor";
 import { perLanguageAfter } from "../value-conversion/type-change/field-type-changes";
 
+import { renamedFieldsOf } from "./schema-change-save";
+
 /** A field as these answers read it: by its name, and whether it is required. */
 type NamedField = { readonly name?: string; readonly required?: boolean };
+
+/** A column's rename, as the save's renames name it (`CollectionSave.renamedFields`). */
+interface FieldRename {
+  from: string;
+  to: string;
+}
 
 /**
  * The fields of an entity kept per language after a change, by name: its translatable fields
@@ -55,20 +67,26 @@ export function keptPerLanguage(
 
 /**
  * Whether field `name` is required after a change and was not before it: an answer for its
- * entries is one the change asks. A field the change adds is not there before it, nor in a list
- * that is absent. Both lists are read as a row stores them, a group with no name laying its fields
- * out beside the others.
+ * entries is one the change asks. Before it, the field is found under the name the change renamed
+ * it from (`renames`, by column), so a required field only renamed asks nothing; a field the change
+ * adds is not there before it, nor in a list that is absent. Both lists are read as a row stores
+ * them, a group with no name laying its fields out beside the others.
  */
 export function madeRequired(
   before: unknown,
   after: unknown,
-  name: string
+  name: string,
+  renames: readonly FieldRename[] | undefined
 ): boolean {
-  const find = (fields: unknown) =>
-    Array.isArray(fields)
-      ? fieldsStoredOnRow(fields as NamedField[]).find(f => f.name === name)
-      : undefined;
-  return find(after)?.required === true && find(before)?.required !== true;
+  const named = (fields: unknown) =>
+    Array.isArray(fields) ? fieldsStoredOnRow(fields as NamedField[]) : [];
+  const required = (field: NamedField | undefined) => field?.required === true;
+  const from = sourceColumn(renames, toSnakeCase(name));
+  const now = named(after).find(f => f.name === name);
+  const was = named(before).find(
+    f => f.name !== undefined && toSnakeCase(f.name) === from
+  );
+  return required(now) && !required(was);
 }
 
 /**
@@ -80,12 +98,33 @@ export function defaultLanguage(configured: string | undefined): string {
   return appLocalization()?.defaultLocale ?? configured ?? "en";
 }
 
-/** Where a field kept per language on main table `table` settles its rows, in `locale`. */
+/**
+ * Where a field kept per language on main table `table` settles its rows: the translations table,
+ * in `locale`, each row a fill writes stamped with this moment as the runtime stamps a language's
+ * change of content (`encodeStamp`), so a translation of the filled value is told older than it.
+ */
 export function perLanguageColumn(
   table: string,
-  locale: string
+  locale: string,
+  dialect: SupportedDialect
 ): PerLanguageColumn {
-  return { companionTable: `${table}_locales`, locale };
+  const companionTable = `${table}_locales`;
+  return {
+    companionTable,
+    locale,
+    stamp: encodeStamp(new Date(), companionTable, dialect),
+  };
+}
+
+/**
+ * The column a column was before a change's renames: the one renamed onto it, where a rename took
+ * it, and itself otherwise. Read where the database still holds the column under its old name.
+ */
+export function sourceColumn(
+  renames: readonly FieldRename[] | undefined,
+  column: string
+): string {
+  return renames?.find(rename => rename.to === column)?.from ?? column;
 }
 
 /** The answers a push takes for a change, in the shapes it takes them, any of them absent. */
@@ -105,6 +144,8 @@ interface PushAnswers {
   fills: ReadonlyArray<{ field: string; value: unknown }> | undefined;
   /** A Single's row fills, by field (`dialogRowAnswers`). */
   rowFills: ReadonlyArray<{ field: string; value: unknown }> | undefined;
+  /** The change's renames, as the dialog answers them. */
+  renameResolutions: readonly BrowserRenameResolution[] | undefined;
 }
 
 /**
@@ -127,16 +168,17 @@ function perLanguageSettleStatements(
   dialect: SupportedDialect
 ): string[] {
   const kept = keptPerLanguage(args.localized, args.newFields);
+  const renames = renamedFieldsOf(args.renameResolutions ?? []);
   const resolutions = fieldsStoredOnRow(args.newFields).flatMap(
     (field): ColumnResolution[] => {
       const name = field.name;
       if (typeof name !== "string" || !kept.has(name)) return [];
       const answer =
-        (madeRequired(args.oldFields, args.newFields, name)
+        (madeRequired(args.oldFields, args.newFields, name, renames)
           ? answerFor(args, name)
           : undefined) ?? fillFor(args.rowFills, name);
       if (answer === undefined) return [];
-      return [settlement(args.tableName, field, answer, locale)];
+      return [settlement(args.tableName, field, answer, locale, dialect)];
     }
   );
   return resolutions.flatMap(r => resolutionStatements(r, dialect));
@@ -174,12 +216,13 @@ function settlement(
   table: string,
   field: FieldDefinition,
   answer: Answer,
-  locale: string
+  locale: string,
+  dialect: SupportedDialect
 ): ColumnResolution {
   const settled = {
     tableName: table,
     columnName: toSnakeCase(field.name),
-    perLanguage: perLanguageColumn(table, locale),
+    perLanguage: perLanguageColumn(table, locale, dialect),
   };
   if (answer.kind === "delete") {
     return { ...settled, kind: "delete_nonconforming" };
