@@ -45,7 +45,7 @@ async function inTwoTries(ask: (made: number) => Promise<unknown>) {
       tries.compared(made === 1);
       return undefined;
     },
-    async () => true
+    async () => undefined
   );
   expect(made).toBe(2);
 }
