@@ -29,6 +29,8 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
+
 import { NextlyError } from "../../../errors/nextly-error";
 import { SCHEMA_OWNERS_TABLE } from "../../../schemas/schema-owners";
 import { getActiveExtensionSchema } from "../extension/active-schema";
@@ -45,6 +47,11 @@ import {
   readReferencingKeys,
   readReferencingTables,
 } from "../pipeline/live-table-facts";
+import {
+  fieldsStoredOnRow,
+  getColumnDescriptor,
+  toSnakeCase,
+} from "../services/field-column-descriptor";
 
 import {
   describeOwner,
@@ -133,12 +140,12 @@ export async function liveKeysInto(
 }
 
 /**
- * What a schema push judges by: the compiled extension schema it applies, the owner rows it read
- * and brought up to date where it found the registry, and the live catalog through `db`. Where it
- * did not (`rows` undefined, the registry absent or its probe unanswered), the rows are asked of
- * the database again, failing closed (`readRecordedElementsThrough`).
+ * What a schema push or a migration run judges by: the compiled extension schema it applies, the
+ * owner rows it already read, and the live catalog through `db`. Where it has none (`rows`
+ * undefined: a push whose probe of the registry went unanswered), the rows are asked of the
+ * database again, failing closed (`readRecordedElementsThrough`).
  */
-export function pushRemovedElementsSources(input: {
+export function removedElementsSourcesOn(input: {
   db: unknown;
   dialect: SupportedDialect;
   extensions: ExtensionSchemaRecord | null;
@@ -647,6 +654,27 @@ function goesWithItsColumns(
 /** An owner as the refusal's log names it; a key whose owner nothing says is unknown. */
 function ownerWords(owner: SchemaOwner | null): string {
   return owner === null ? "unknown" : describeOwner(owner);
+}
+
+/**
+ * The field of `fields` whose column is `column`, as the entity's builder names its columns: the
+ * one answer every check names a removed column's field by, on the entity's table or its
+ * per-language table, which names its columns the same way.
+ */
+export function fieldOfColumn(
+  fields: readonly FieldDefinition[],
+  column: string,
+  dialect: SupportedDialect,
+  builtBy: Parameters<typeof getColumnDescriptor>[2]
+): string | undefined {
+  const wanted = column.toLowerCase();
+  return fieldsStoredOnRow(fields).find(
+    field =>
+      (
+        getColumnDescriptor(field, dialect, builtBy)?.name ??
+        toSnakeCase(field.name)
+      ).toLowerCase() === wanted
+  )?.name;
 }
 
 /** The field the caller names for a removed table or column, where it names one. */

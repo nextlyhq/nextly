@@ -132,6 +132,7 @@ import {
   withEntityCoverage,
 } from "../../domains/schema/migrate/entity-shared-rows";
 import {
+  fileDeletions,
   readDeletionFacts,
   runDeletions,
   runStatements,
@@ -273,6 +274,10 @@ import {
   createOwnerRegistry,
   ownerRecordKey,
 } from "../../domains/schema/ownership/owner-registry";
+import {
+  refuseRemovingOthersElements,
+  removedElementsSourcesOn,
+} from "../../domains/schema/ownership/removed-elements";
 import {
   introspectLiveSnapshot,
   liveColumnNames,
@@ -2902,6 +2907,9 @@ async function runMigrationStreams(
           appliedBefore: pluginOutcome.ran,
         }),
     columnOverrides: overriddenColumns(deps.extensionSchema),
+    ...(deps.extensionSchema === undefined
+      ? {}
+      : { extensionSchema: deps.extensionSchema }),
   });
   return { pluginModulesApplied, applied };
 }
@@ -5391,6 +5399,11 @@ export async function runFileMigrations(args: {
    * one in-place change to another owner's column its files may make.
    */
   columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+  /**
+   * The compiled extension schema the run applies: what each owner adds to
+   * the app's tables, read by the check that a file removes none of it.
+   */
+  extensionSchema?: ExtensionSchema;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -5545,6 +5558,27 @@ export async function runFileMigrations(args: {
         liveTables: await readLiveTables(db, dialect, [upStatements]),
         liveIndexTables: await readLiveIndexTables(db, dialect, [upStatements]),
         columnOverrides: args.columnOverrides,
+      });
+      // What the file removes takes no element another owner built on the app's tables: an
+      // index, foreign key or check on a column it drops, anything on a table it drops
+      // (`removed-elements.ts`). Its deletions are the ones the data-loss consent reads, judged
+      // against the database as the files before it leave it, before its first statement.
+      await refuseRemovingOthersElements({
+        deletions: fileDeletions(
+          upStatements,
+          dialect,
+          await readDeletionFacts(db, dialect, upStatements)
+        ),
+        dialect,
+        entity: `Migration ${filename}`,
+        sources: removedElementsSourcesOn({
+          db,
+          dialect,
+          extensions: args.extensionSchema ?? null,
+          rows: fileOwnerRows,
+        }),
+        // A file has the fields' columns, not their definitions: each column names its field.
+        fieldOf: (_table, column) => column,
       });
       assertRunnableStatements(upStatements, dialect, filename, {
         transaction: m.transaction,

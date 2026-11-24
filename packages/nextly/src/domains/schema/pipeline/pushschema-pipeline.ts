@@ -82,7 +82,7 @@ import {
 } from "../ownership/kept-elements";
 import {
   deletionsOfOperations,
-  pushRemovedElementsSources,
+  removedElementsSourcesOn,
   refuseRemovingOthersElements,
 } from "../ownership/removed-elements";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
@@ -1407,7 +1407,7 @@ export class PushSchemaPipeline {
           deletions: deletionsOfOperations(resolvedOps),
           dialect,
           entity: "The schema change",
-          sources: pushRemovedElementsSources({
+          sources: removedElementsSourcesOn({
             db,
             dialect,
             extensions,

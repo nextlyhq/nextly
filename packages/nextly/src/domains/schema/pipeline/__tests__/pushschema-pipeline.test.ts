@@ -58,7 +58,7 @@ vi.mock("../../ownership/removed-elements", async importOriginal => {
   const original = await importOriginal<typeof removedElements>();
   return {
     ...original,
-    pushRemovedElementsSources: (): removedElements.RemovedElementsSources => ({
+    removedElementsSourcesOn: (): removedElements.RemovedElementsSources => ({
       extensionSchema: () => Promise.resolve(null),
       recordedElements: () => Promise.resolve([]),
       indexColumns: () => Promise.resolve(new Map()),

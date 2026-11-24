@@ -164,6 +164,7 @@ import {
 import { readRecordedElementsOn } from "../ownership/dependent-elements";
 import {
   databaseRemovedElementsSources,
+  fieldOfColumn,
   readingOthersElements,
   refuseRemovingOthersElements,
   withoutOthersElements,
@@ -3123,13 +3124,7 @@ function fieldOfRemoval(
             usesJunctionTable(field) &&
             same(junctionTableNameFor(table, field), removedTable)
         )?.name
-      : fieldsStoredOnRow(previous).find(field =>
-          same(
-            getColumnDescriptor(field, dialect, builtBy)?.name ??
-              toSnakeCase(field.name),
-            column
-          )
-        )?.name;
+      : fieldOfColumn(previous, column, dialect, builtBy);
 }
 
 /**
