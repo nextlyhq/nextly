@@ -459,6 +459,14 @@ describe("unwrittenChangesError", () => {
   describe("over a snapshot written before text was kept per language", () => {
     afterEach(() => _resetPerLanguageStorage());
 
+    /** The refusal a comparison ends in; the case fails where it ends in none. */
+    function refusalOf(changes: Parameters<typeof unwrittenChangesError>[0]) {
+      const error = unwrittenChangesError(changes);
+      if (error === undefined)
+        throw new Error("the comparison refused nothing");
+      return error;
+    }
+
     /** The newest snapshot as an earlier release wrote it: `title` on the main table. */
     function earlierSnapshot(entities: DeclaredEntities) {
       setPerLanguageStorage(false);
@@ -472,24 +480,24 @@ describe("unwrittenChangesError", () => {
       const after = entitiesOf(
         collection([TITLE, { name: "views", type: "number" }])
       );
-      const error = unwrittenChangesError(
+      const { code, why, next } = refusalOf(
         await compareOver({
           entities: after,
           permissions: NO_PERMISSIONS,
           latest: earlierSnapshot(before),
         })
       );
-      expect(error?.code).toBe("SCHEMA_DRIFT");
+      expect(code).toBe("SCHEMA_DRIFT");
       // The title's drop is the translations file's, which `migrate:create` writes beside the main one.
-      expect(error?.why).toContain("~ translations table dc_posts");
-      expect(error?.why).not.toContain("drop_column dc_posts.title");
-      expect(error?.why).toContain("dc_posts: title -> dc_posts_locales");
-      expect(error?.why).toContain("Nothing is lost");
-      expect(error?.next).toContain("localized: false");
-      expect(error?.next).toContain("`localization`");
+      expect(why).toContain("~ translations table dc_posts");
+      expect(why).not.toContain("drop_column dc_posts.title");
+      expect(why).toContain("dc_posts: title -> dc_posts_locales");
+      expect(why).toContain("Nothing is lost");
+      expect(next).toContain("localized: false");
+      expect(next).toContain("`localization`");
       // The added number is not a move: it still needs its migration.
-      expect(error?.why).toContain("+ add_column dc_posts.views");
-      expect(error?.next).toContain(
+      expect(why).toContain("+ add_column dc_posts.views");
+      expect(next).toContain(
         "For the other changes listed: Run `nextly migrate:create"
       );
     });
@@ -500,17 +508,17 @@ describe("unwrittenChangesError", () => {
       );
       // The same earlier snapshot, but `title` marked to stay on the main table: only `views` goes.
       const kept = entitiesOf(collection([{ ...TITLE, localized: false }]));
-      const error = unwrittenChangesError(
+      const { why, next } = refusalOf(
         await compareOver({
           entities: kept,
           permissions: NO_PERMISSIONS,
           latest: earlierSnapshot(before),
         })
       );
-      expect(error?.why).toContain("- drop_column dc_posts.views");
-      expect(error?.why).not.toContain("moves to");
-      expect(error?.why).not.toContain("Nothing is lost");
-      expect(error?.next).not.toContain("localized: false");
+      expect(why).toContain("- drop_column dc_posts.views");
+      expect(why).not.toContain("moves to");
+      expect(why).not.toContain("Nothing is lost");
+      expect(next).not.toContain("localized: false");
     });
   });
 });

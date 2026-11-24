@@ -174,7 +174,7 @@ function settingsDifferences(
  * earlier version's snapshot, and the tables a real site declares are named
  * as added in any case.
  */
-export function permissionDifferences(
+function permissionDifferences(
   declared: PermissionRecord,
   latest: { data: SnapshotFile } | null,
   recorded: RecordedInDatabase | undefined

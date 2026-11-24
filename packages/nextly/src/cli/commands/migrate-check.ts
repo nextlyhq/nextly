@@ -56,7 +56,6 @@
  * docs/guides/production-migrations.mdx.
  */
 
-import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -112,7 +111,6 @@ import {
   judgeBuilderDefinitions,
   readBuilderDefinitions,
 } from "../../domains/schema/ui-schema/builder-definitions";
-import { ignoredByGit } from "../../domains/schema/ui-schema/committed-definition";
 import { addressRefusalsError } from "../../shared/address-rule";
 import {
   type CliError,
@@ -138,7 +136,7 @@ import {
   readMigrationFolder,
   selectVariant,
 } from "../utils/migration-discovery";
-import { projectDialect } from "../utils/project-dialect";
+import { readWithoutDatabase } from "../utils/project-dialect";
 
 // ============================================================================
 // Types
@@ -187,27 +185,19 @@ export async function runMigrateCheck(
   if (configResult === undefined) return;
 
   const cwd = options.cwd ?? process.cwd();
-  const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
   // The check reads no database: the dialect comes from `--dialect`, the migration history or the
-  // environment, without connecting (`projectDialect`).
-  let dialect: SupportedDialect;
-  try {
-    dialect = await projectDialect({
-      ...(options.dialect !== undefined ? { flag: options.dialect } : {}),
-      migrationsDir,
+  // environment, without connecting. The changes are computed from what the project commits, so a
+  // Builder definition file git ignores, which would make this check pass on one machine and fail
+  // on another, is refused.
+  const { migrationsDir, dialect, definitionFile, definitionIgnored } =
+    await readWithoutDatabase({
+      flag: options.dialect,
+      projectRoot: cwd,
+      db: configResult.config.db,
+      logger,
     });
-  } catch (error) {
-    return exitWithError(logger, error);
-  }
-
-  // The changes are computed from what the project commits: a Builder definition file git ignores
-  // would make this check pass on one machine and fail on another, so it is refused.
-  const definitionFile = configResult.config.db.uiSchemaFile;
-  if (
-    existsSync(resolve(cwd, definitionFile)) &&
-    (await ignoredByGit(cwd, definitionFile))
-  ) {
+  if (definitionIgnored) {
     return exitWithError(logger, builderDefinitionIgnored(definitionFile));
   }
 

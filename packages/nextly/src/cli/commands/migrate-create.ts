@@ -106,7 +106,6 @@ import type {
   ContributedElements,
   TableSpec,
 } from "../../domains/schema/pipeline/diff/types";
-import { ignoredByGit } from "../../domains/schema/ui-schema/committed-definition";
 import {
   BUILDER_DEFINITION_MISSING_ISSUE,
   RELATION_TARGET_MISSING_ISSUE,
@@ -149,7 +148,7 @@ import {
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 import { formatDuration } from "../utils/logger";
-import { projectDialect } from "../utils/project-dialect";
+import { readWithoutDatabase } from "../utils/project-dialect";
 
 import { commandRun } from "./command-run";
 import { isPluginDefinition } from "./plugin-definition-shape";
@@ -752,28 +751,20 @@ export async function runMigrateCreate(
   }
 
   const cwd = options.cwd ?? process.cwd();
-  const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
   // The SQL to write is the dialect's, which needs no database: from `--dialect`, the migration
-  // history or the environment, read without connecting (`projectDialect`).
-  let dialect: SupportedDialect;
-  try {
-    dialect = await projectDialect({
-      ...(options.dialect !== undefined ? { flag: options.dialect } : {}),
-      migrationsDir,
+  // history or the environment, read without connecting. What the run writes from is what the
+  // project commits: a Builder definition file git ignores is named, though the run goes on, since
+  // the developer writing the migration has it.
+  const { migrationsDir, dialect, definitionFile, definitionIgnored } =
+    await readWithoutDatabase({
+      flag: options.dialect,
+      projectRoot: cwd,
+      db: configResult.config.db,
+      logger,
     });
-  } catch (error) {
-    exitWithError(logger, error);
-  }
   logger.keyValue("Dialect", getDialectDisplayName(dialect));
-
-  // What the run writes from is what the project commits: a Builder definition file git ignores
-  // is named, though the run goes on, since the developer writing the migration has it.
-  const definitionFile = configResult.config.db.uiSchemaFile;
-  if (
-    existsSync(resolve(cwd, definitionFile)) &&
-    (await ignoredByGit(cwd, definitionFile))
-  ) {
+  if (definitionIgnored) {
     logger.warn(
       `The Schema Builder's definition file, ${definitionFile}, is ignored by git, so the migration is written from a file the project does not commit, and \`migrate:check\` refuses it. Commit ${definitionFile}.`
     );

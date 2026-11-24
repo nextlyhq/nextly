@@ -11,17 +11,21 @@
  *
  * @module cli/utils/project-dialect
  */
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import * as p from "@clack/prompts";
 
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { compareMigrationBaseNames } from "../../domains/schema/migrate/migration-order";
+import { ignoredByGit } from "../../domains/schema/ui-schema/committed-definition";
 import { DIALECTS } from "../dialect-option";
 import { dialectNotStated } from "../errors/areas/database";
+import { exitWithError } from "../errors/report";
 
 import { detectDialectFromUrl, type SupportedDialect } from "./adapter";
+import type { Logger } from "./logger";
 import { discoverMigrationGroups } from "./migration-discovery";
 import { answered } from "./prompt-cancelled";
 
@@ -45,7 +49,7 @@ function isDialect(value: string | undefined): value is SupportedDialect {
  * one. None where the folder holds no such file, or its newest migration is written as one file per
  * dialect, which says it serves several.
  */
-export async function historyDialect(
+async function historyDialect(
   migrationsDir: string
 ): Promise<SupportedDialect | undefined> {
   let groups;
@@ -105,7 +109,7 @@ async function askDialect(): Promise<SupportedDialect> {
  *
  * @throws {CliError} `DIALECT_NOT_STATED` where nothing says and nobody can be asked
  */
-export async function projectDialect(args: {
+async function projectDialect(args: {
   flag?: SupportedDialect;
   migrationsDir: string;
   env?: Readonly<Record<string, string | undefined>>;
@@ -119,4 +123,40 @@ export async function projectDialect(args: {
   if (fromEnvironment !== undefined) return fromEnvironment;
   if (canPrompt()) return (args.ask ?? askDialect)();
   throw dialectNotStated();
+}
+
+/**
+ * What `migrate:check` and `migrate:create` read before they compare, with no database: the
+ * migrations folder; the dialect (`projectDialect`), the command ending in the error shape where
+ * nothing says; and whether the Schema Builder's definition file is one git ignores. The changes
+ * are computed from what the project commits, so each command answers an ignored file:
+ * `migrate:check` refuses it and `migrate:create` warns.
+ */
+export async function readWithoutDatabase(args: {
+  flag: SupportedDialect | undefined;
+  projectRoot: string;
+  /** The configuration's `db`: the migrations folder and `uiSchemaFile`, each relative to the project. */
+  db: { migrationsDir: string; uiSchemaFile: string };
+  logger: Pick<Logger, "getOptions">;
+}): Promise<{
+  migrationsDir: string;
+  dialect: SupportedDialect;
+  definitionFile: string;
+  definitionIgnored: boolean;
+}> {
+  const migrationsDir = resolve(args.projectRoot, args.db.migrationsDir);
+  let dialect: SupportedDialect;
+  try {
+    dialect = await projectDialect({
+      ...(args.flag !== undefined ? { flag: args.flag } : {}),
+      migrationsDir,
+    });
+  } catch (error) {
+    return exitWithError(args.logger, error);
+  }
+  const definitionFile = args.db.uiSchemaFile;
+  const definitionIgnored =
+    existsSync(resolve(args.projectRoot, definitionFile)) &&
+    (await ignoredByGit(args.projectRoot, definitionFile));
+  return { migrationsDir, dialect, definitionFile, definitionIgnored };
 }
