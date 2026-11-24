@@ -494,11 +494,9 @@ function fieldsWithTargetsAsBuilderReads(
 ): unknown[] {
   return fields.map(field => {
     if (typeof field !== "object" || field === null) return field;
-    const record = field as Record<string, unknown> & { relationTo?: unknown };
-    const named =
-      (typeof record.relationTo === "string" && record.relationTo !== "") ||
-      Array.isArray(record.relationTo);
-    const target = named ? null : relationshipTargetSlug(record);
+    const record = field as Record<string, unknown>;
+    // The one reader of a target decides: a named `relationTo` answers itself, a list none.
+    const target = relationshipTargetSlug(record);
     const read = target === null ? record : { ...record, relationTo: target };
     return Array.isArray(read.fields)
       ? { ...read, fields: fieldsWithTargetsAsBuilderReads(read.fields) }

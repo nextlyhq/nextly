@@ -649,3 +649,71 @@ describe("a default configuration refused for the Builder's definitions", () => 
     expect(hasFieldType("rating")).toBe(true);
   });
 });
+
+describe("a Builder definition file the load cannot read, beside a code relationship to a Builder entity", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const unreadable = () => {
+    exported.config = {
+      collections: [
+        {
+          slug: "notes",
+          fields: [
+            { name: "about", type: "relationship", relationTo: "cases" },
+          ],
+        },
+      ],
+    };
+    const cwd = project();
+    writeFileSync(
+      join(cwd, "ui-schema.json"),
+      JSON.stringify({
+        collections: [{ fields: [] }],
+        singles: [],
+        components: [],
+      })
+    );
+    return cwd;
+  };
+
+  // The file may declare the target, so the relationship is not judged: a running site is told
+  // of the file and goes on, which leaves the Builder reachable to repair it.
+  it("is warned of, and the configuration loads, for a running site", async () => {
+    const warned: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation((...parts: unknown[]) => {
+      warned.push(parts.map(String).join(" "));
+    });
+
+    const loaded = await loadConfig({
+      cwd: unreadable(),
+      missing: "refuse",
+      builderDefinitions: "warn",
+    });
+
+    expect(loaded.config.collections?.map(entity => entity.slug)).toContain(
+      "notes"
+    );
+    expect(
+      warned.filter(line => line.includes("ui-schema.json")),
+      warned.join("\n")
+    ).toHaveLength(1);
+  });
+
+  it("is refused at the file by a command that reads the entities", async () => {
+    const refused = await loadConfig({
+      cwd: unreadable(),
+      missing: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        ?.publicData?.errors ?? []
+    ).map(problem => problem.path);
+    expect(paths).toEqual(["ui-schema.json"]);
+  });
+});

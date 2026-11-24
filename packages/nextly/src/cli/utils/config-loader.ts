@@ -161,16 +161,7 @@ async function refuseLostBuilderDefinitions(
   config: SanitizedNextlyConfig,
   builderEntities: BuilderEntities
 ): Promise<void> {
-  // A file that could not be read may hold the target: it is the problem named, at the file.
-  if (isUnread(builderEntities)) {
-    throw NextlyError.validation({
-      errors: unreadDefinitionProblems(
-        builderEntities,
-        config.db.uiSchemaFile ?? "ui-schema.json"
-      ),
-      logContext: { reason: "config-invalid" },
-    });
-  }
+  if (isUnread(builderEntities)) return;
   let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
     latest = await loadLatestSnapshot(
@@ -205,6 +196,27 @@ const UNKNOWN_TARGET_CODES: ReadonlySet<string> = new Set([
 /** Whether `error` refuses a target nothing declares, which may be an entity the file lost. */
 function namesAnUnknownTarget(error: unknown): boolean {
   return NextlyError.is(error) && UNKNOWN_TARGET_CODES.has(error.code);
+}
+
+/**
+ * Refuses a definition file that could not be read, at the file, where a plugin's target is
+ * otherwise about to be refused as one nothing declares: the file may declare it. Only there, as
+ * that load is refused either way. Without a plugin the target is not judged, so the gate reports
+ * the file by the caller's policy and a running site goes on.
+ */
+function refuseUnreadDefinitions(
+  builderEntities: BuilderEntities,
+  config: SanitizedNextlyConfig,
+  configPath: string
+): void {
+  if (!isUnread(builderEntities)) return;
+  throw NextlyError.validation({
+    errors: unreadDefinitionProblems(
+      builderEntities,
+      config.db?.uiSchemaFile ?? "ui-schema.json"
+    ),
+    logContext: { configPath, reason: "config-invalid" },
+  });
 }
 
 /**
@@ -1033,6 +1045,7 @@ async function loadConfigInternal(
         // refuse it, so the fix named is restoring the file, not creating the target. Only a
         // target nothing declares can be that entity; any other refusal is reported as itself.
         if (namesAnUnknownTarget(error)) {
+          refuseUnreadDefinitions(builderEntities, config, configPath);
           await refuseLostBuilderDefinitions(cwd, config, builderEntities);
         }
         throw error;
