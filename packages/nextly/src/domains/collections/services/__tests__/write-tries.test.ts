@@ -12,7 +12,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   askOnce,
-  replayingWrite,
   savesHoldEntriesHere,
   WRITE_TRIES,
   WriteTries,
@@ -270,28 +269,21 @@ describe("the tries of an entry write", () => {
     expect(heard).toEqual(["failed", "allowed"]);
   });
 
-  it("is replaying only in a later try before its hold, and never in a write of its own inside one", async () => {
+  it("answers no question of a write made inside a later try, which has tries of its own", async () => {
     const tries = new WriteTries();
-    const seen: boolean[] = [];
+    const rule = vi.fn(async () => "allowed");
+    const ask = () => askOnce("update", rule, { onTransaction: false });
     let made = 0;
     await tries.make(async () => {
       made += 1;
-      seen.push(replayingWrite());
-      if (made === 1) {
-        tries.compared(true);
-        return undefined;
-      }
-      const inner = new WriteTries();
-      await inner.make(async () => {
-        seen.push(replayingWrite());
-        return undefined;
-      }, reloads());
-      tries.compared(false);
-      seen.push(replayingWrite());
+      await ask();
+      // As a hook of the later try writes to the same collection.
+      if (made === 2) await new WriteTries().make(ask, reloads());
+      tries.compared(made === 1);
       return undefined;
     }, reloads());
 
-    expect(seen).toEqual([false, true, false, false]);
-    expect(replayingWrite()).toBe(false);
+    // The first try's, and the inner write's: the later try's own is the one kept.
+    expect(rule).toHaveBeenCalledTimes(2);
   });
 });

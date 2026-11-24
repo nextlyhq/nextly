@@ -595,11 +595,7 @@ import {
   type FilteredWriteMatch,
   type ReadReach,
 } from "./write-filter-match";
-import {
-  replayingWrite,
-  savesHoldEntriesHere,
-  WriteTries,
-} from "./write-tries";
+import { savesHoldEntriesHere, WriteTries } from "./write-tries";
 
 /** The Drizzle executor shape the companion-join readers accept (a transaction
  * handle's `getDrizzle()` result, or the pooled `this.db`). */
@@ -3539,11 +3535,7 @@ export class CollectionMutationService extends BaseService {
         args.localeCtx.perLanguage === false);
     const issues = await validateEntryData(
       view,
-      // A write made again was judged by its fields' own validators already,
-      // of the same data: the definition's rules alone are judged again.
-      replayingWrite()
-        ? args.fields
-        : attachFieldValidators("collection", args.collectionName, args.fields),
+      attachFieldValidators("collection", args.collectionName, args.fields),
       {
         mode: args.mode,
         req: args.user ? { user: args.user } : {},

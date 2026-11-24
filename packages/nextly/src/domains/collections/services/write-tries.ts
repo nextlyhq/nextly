@@ -7,13 +7,15 @@
  * Where the save it waited for changed the definition, the write is refused under the hold, before
  * any statement, to be made again from the definition as it stands.
  *
- * Nothing of the site's own code runs twice for it:
+ * Of the site's own code:
  *
  * - A before hook may send mail, call another service or count, which no rollback takes back. What
  *   its step left is kept, and a later try is handed that (`kept`).
  * - An access rule's answer is kept for the tries after it (`askOnce`), as the answer of a write
  *   that waits once is kept through its wait, until the write has its hold; what is asked under
  *   the hold is asked as always.
+ * - A field's validators judge the data in every try, as the definition's own rules do: the
+ *   definition they judge it by is another.
  *
  * So a write made again means what its hooks made of it: they ran against the earlier definition,
  * and the entry is written in the later one, as though the write had been sent just before the save
@@ -76,7 +78,7 @@ export class WriteTries implements HeldTries {
    * Whether the try under way is a later one that has no hold yet: from its hold on, what runs is
    * the write itself, and what its hooks make, which no earlier try reached.
    */
-  get replaying(): boolean {
+  private get replaying(): boolean {
     return this.madeAgain && !this.holds;
   }
 
@@ -171,14 +173,6 @@ export function askOnce<T>(
   return tries === undefined || options.onTransaction
     ? ask()
     : tries.answer(question, ask);
-}
-
-/**
- * Whether the write running now is being made again, before its hold: the site's own code has judged
- * its data already, and the data is the same.
- */
-export function replayingWrite(): boolean {
-  return running.getStore()?.replaying === true;
 }
 
 /** Runs `write`, with what it came to rather than what it threw. */

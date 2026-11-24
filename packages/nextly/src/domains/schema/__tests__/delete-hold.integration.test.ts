@@ -1689,38 +1689,111 @@ describe.each(getConfiguredTestDialects())(
       expect(row?.label).toBe("");
     }, 60_000);
 
-    // A field's own validator is the site's code too: it judged the data once, and the same data is
-    // what a write made again stores. The definition's rules are judged again.
-    it("asks a field's own validator once for a held update made again", async () => {
-      const t = await boot();
-      for (const note of ["a", "b", "c"]) await insert(t, note);
-      const id = await firstEntry(t);
-      let asked = 0;
-      registerFieldFunctions("collection", SLUG, [
-        {
-          name: "label",
-          type: "text",
-          validate: () => {
-            asked += 1;
-            return true;
-          },
-        },
-      ]);
-      try {
-        const { heldBack, outcome } = await whileSaving(t, () =>
-          t.nextly.update({
-            collection: SLUG,
-            id,
-            data: { label: "changed", _overwrite: true },
-          } as never)
+    // A write made again is stored in the definition the save left, so it is judged by that: by a
+    // rule the save put on a field, though the write met every rule of the definition it was first
+    // made from. Judged only at first, the entry would hold what its own definition refuses.
+    it.each([
+      {
+        rule: "required flag",
+        now: { name: "label", type: "text", required: true },
+        sent: "",
+        code: "REQUIRED",
+      },
+      {
+        rule: "max length",
+        now: { name: "label", type: "text", validation: { maxLength: 8 } },
+        sent: "longer than that",
+        code: "TOO_LONG",
+      },
+    ])(
+      "refuses a held update made again by the $rule the save put on its field",
+      async ({ now, sent, code }) => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        const id = await firstEntry(t);
+        const { heldBack, outcome } = await whileSaving(
+          t,
+          () =>
+            t.nextly.update({
+              collection: SLUG,
+              id,
+              data: { label: sent, _overwrite: true },
+            } as never),
+          [now]
         );
         expect(heldBack).toBe(true);
-        expect(outcome, told(outcome)).toBe("written");
-      } finally {
-        registerFieldFunctions("collection", SLUG, []);
-      }
-      expect(asked).toBe(1);
-    }, 60_000);
+        expect(outcome, told(outcome)).toMatchObject({
+          code: "VALIDATION_ERROR",
+          publicData: { errors: [expect.objectContaining({ code })] },
+        });
+        const [row] = await sql<{ label: unknown }>(
+          t,
+          `SELECT ${q("label")} AS label FROM ${q(TABLE)} WHERE ${q("id")} = '${id}'`
+        );
+        expect(row?.label).toBe(id);
+      },
+      60_000
+    );
+
+    // A field's own validator judges the data as the definition's rules do, so it is asked in every
+    // try, and what it answers of the collection as the save left it stands. Asked at first alone,
+    // a write it would now refuse is stored.
+    it.each([
+      { answers: "lets through again", second: true as const, stored: "sent" },
+      {
+        answers: "then refuses",
+        second: "Not in the collection as it is.",
+        stored: undefined,
+      },
+    ])(
+      "asks a field's own validator again for a held update made again, which it $answers",
+      async ({ second, stored }) => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        const id = await firstEntry(t);
+        let asked = 0;
+        registerFieldFunctions("collection", SLUG, [
+          {
+            name: "label",
+            type: "text",
+            validate: () => {
+              asked += 1;
+              return asked === 1 ? true : second;
+            },
+          },
+        ]);
+        let outcome: unknown;
+        try {
+          const ended = await whileSaving(t, () =>
+            t.nextly.update({
+              collection: SLUG,
+              id,
+              data: { label: "sent", _overwrite: true },
+            } as never)
+          );
+          expect(ended.heldBack).toBe(true);
+          outcome = ended.outcome;
+        } finally {
+          registerFieldFunctions("collection", SLUG, []);
+        }
+        expect(asked).toBe(2);
+        if (second === true) expect(outcome, told(outcome)).toBe("written");
+        else {
+          expect(outcome, told(outcome)).toMatchObject({
+            code: "VALIDATION_ERROR",
+            publicData: {
+              errors: [expect.objectContaining({ code: "CUSTOM" })],
+            },
+          });
+        }
+        const [row] = await sql<{ label: unknown }>(
+          t,
+          `SELECT ${q("label")} AS label FROM ${q(TABLE)} WHERE ${q("id")} = '${id}'`
+        );
+        expect(row?.label).toBe(stored ?? id);
+      },
+      60_000
+    );
 
     // A before hook is the site's own code: it may send mail, call another service or count. A write
     // made again after the save it waited for is made from what its hooks left the first time, so
