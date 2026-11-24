@@ -4,7 +4,7 @@
  * a database that release left. No release creates them now, so they have no production DDL to
  * reuse; one definition here serves every test that needs them.
  */
-import type { TestDialect } from "../../../plugins/test-nextly";
+import type { TestDialect } from "../../../../plugins/test-nextly";
 
 /** The file ledger, as `nextly migrate` kept it before `nextly_schema_events`. */
 export function fileLedgerDdl(dialect: TestDialect): string[] {
