@@ -223,7 +223,10 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
-import { assembleStoredValue } from "../../i18n/shared-structure";
+import {
+  assembleStoredValue,
+  sameSharedStructure,
+} from "../../i18n/shared-structure";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
@@ -4773,6 +4776,25 @@ export class SingleMutationService extends BaseService {
           // stored below instead. The stored row still travels onward so
           // everything after this reports the document as it stands, which
           // for a held edit is the published content the public still sees.
+          // A repeater's or group's structure written as it is stored changes nothing the live
+          // row's version covers: its text went to the language's row. Left out of the UPDATE,
+          // so a save of translated values alone moves only that language's counter
+          // (`sameSharedStructure`), as a collection entry's does.
+          if (!holdEdit) {
+            const stored = existingDoc as Record<string, unknown>;
+            for (const written of sharedStructuresIn(mainPayload, shapedRefs)) {
+              const key =
+                written.column in mainPayload ? written.column : written.field;
+              if (
+                sameSharedStructure(
+                  (mainPayload as Record<string, unknown>)[key],
+                  stored[key] ?? stored[written.field] ?? stored[written.column]
+                )
+              ) {
+                delete (mainPayload as Record<string, unknown>)[key];
+              }
+            }
+          }
           const savedBy = actorForWrite(options.actor, options.user);
           const rows = holdEdit
             ? [existingDoc]

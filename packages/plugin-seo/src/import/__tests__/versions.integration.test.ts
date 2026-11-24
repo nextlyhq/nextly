@@ -34,10 +34,15 @@ import type { DryRunBody, ImportReportEntry, ImportSource } from "../contract";
 
 /** The old SEO group each type keeps, translated where `localized` is set. */
 function meta(localized: boolean) {
+  // Translated by its fields, each in its own language: a group keeps one structure in every
+  // language, and only the fields inside it say whether they are translated.
+  const each = localized ? { localized: true as const } : {};
   return group({
     name: "meta",
-    ...(localized ? { localized: true } : {}),
-    fields: [text({ name: "seoTitle" }), textarea({ name: "seoDescription" })],
+    fields: [
+      text({ name: "seoTitle", ...each }),
+      textarea({ name: "seoDescription", ...each }),
+    ],
   });
 }
 

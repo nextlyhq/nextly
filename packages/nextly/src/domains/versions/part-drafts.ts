@@ -27,6 +27,7 @@
 
 import { isServicesRegistered } from "../../di/service-access";
 import { addressableFields } from "../../shared/addressable-fields";
+import { parsedValue } from "../../shared/lib/json-column-value";
 import { SYSTEM_TEXT_FIELD_NAMES } from "../collections/system-text-fields";
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
@@ -272,6 +273,12 @@ function touchesPart(
   return [...touched].some(key => part.has(key));
 }
 
+/** Whether `value` is a structure at all, a group's object or a repeater's rows, read as stored. */
+function holdsStructure(value: unknown): boolean {
+  const read = parsedValue(value);
+  return typeof read === "object" && read !== null;
+}
+
 /** A save's document before and after it, which a held share is judged by. */
 export interface SaveValues {
   /** The document the save replaced: its pending change over the live one, or the live one. */
@@ -299,7 +306,12 @@ function structuredSharesChanged(
     if (!values) return { shared: true, language: true };
     const before = splitSharedStructure(values.before[name], shape);
     const after = splitSharedStructure(values.after[name], shape);
-    shared ||= !sameShare(before.structure, after.structure);
+    // A structure coming to be, or going, is a change of the shared part even when it holds
+    // nothing yet: a group first written with only its text has an empty structure that text is
+    // laid on, which a comparison leaving out blanks reads as no change.
+    shared ||=
+      holdsStructure(before.structure) !== holdsStructure(after.structure) ||
+      !sameShare(before.structure, after.structure);
     language ||= !sameShare(before.overlay ?? {}, after.overlay ?? {});
   }
   return { shared, language };

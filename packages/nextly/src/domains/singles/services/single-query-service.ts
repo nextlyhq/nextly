@@ -183,6 +183,10 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import {
+  sharedStructureShape,
+  splitStoredValue,
+} from "../../i18n/shared-structure";
+import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
@@ -2893,9 +2897,29 @@ export class SingleQueryService extends BaseService {
     // target a non-existent column and fail the auto-create.
     const localizedDefaults: Record<string, unknown> = {};
     const insertDefaults: Record<string, unknown> = {};
+    // A repeater or group keeping one structure in every language with its text in an overlay:
+    // its default's structure goes on the main row and its text to the default language's row, as
+    // a save splits it. Inserted whole, the main row would hold text no language reads from there,
+    // and the first save, putting the structure right, would move every language's version.
+    const sharedShapes = new Map(
+      storesPerLanguage(singleMeta)
+        ? rowFields.flatMap(field => {
+            const shape =
+              "name" in field && field.name
+                ? sharedStructureShape(field)
+                : null;
+            return shape ? [[field.name as string, shape] as const] : [];
+          })
+        : []
+    );
     for (const [key, value] of Object.entries(defaults)) {
       if (noColumnFieldNames.has(key)) continue;
-      if (localizedNames.has(key)) {
+      const shape = sharedShapes.get(key);
+      if (shape) {
+        insertDefaults[key] = splitStoredValue(value, shape).structure;
+        // Whole: the seed splits it by the same shape (`splitLocalizedWrite`).
+        localizedDefaults[key] = value;
+      } else if (localizedNames.has(key)) {
         localizedDefaults[key] = value;
       } else {
         insertDefaults[key] = value;
