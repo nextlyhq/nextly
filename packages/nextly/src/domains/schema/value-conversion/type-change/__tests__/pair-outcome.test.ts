@@ -115,6 +115,36 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
     }
   );
 
+  // MySQL keeps a unique text in a bounded column, which a longer text does not fit; elsewhere a text
+  // is unbounded, unique or not.
+  it.each(["textarea", "code", "richText", "email"])(
+    "judges a %s becoming a unique text by what its column holds",
+    from => {
+      const unique = { unique: true } as Partial<FieldDefinition>;
+      const shared = outcome(from, "text");
+      expect(shared).toBe(from === "richText" ? "converts" : "keeps");
+      // An email's own column holds no more than a unique text's does.
+      expect(outcome(from, "text", {}, unique)).toBe(
+        dialect === "mysql" && from !== "email" ? "may-lose" : shared
+      );
+    }
+  );
+
+  // A field group sizes a text by its own maximum length, on every database.
+  it("judges an address becoming a shorter text by what the text's column holds", () => {
+    const inGroup = (type: string, extra: Record<string, unknown> = {}) =>
+      fieldTypeOnDialect(
+        { name: "f", type, ...extra } as FieldDefinition,
+        dialect,
+        "fieldGroup"
+      );
+    const shorter = inGroup("text", { maxLength: 40 });
+    expect(pairOutcome(inGroup("email"), inGroup("text"))).toBe("keeps");
+    expect(pairOutcome(inGroup("email"), shorter)).toBe(
+      dialect === "sqlite" ? "keeps" : "may-lose"
+    );
+  });
+
   // A checkbox holds two values and a choice its options, each judged: the mark says what the
   // options hold of them.
   it("judges a checkbox or a choice becoming a choice over every value it holds", () => {

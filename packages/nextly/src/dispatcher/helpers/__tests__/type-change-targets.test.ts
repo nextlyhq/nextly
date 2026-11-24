@@ -52,6 +52,22 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       });
     });
 
+    // The draft's own settings decide the column the change makes: MySQL keeps a unique text in a
+    // bounded one, which a long text need not fit.
+    it("a long text becoming a text the draft made unique: judged as the column that makes", () => {
+      const outcomeWith = (field: Partial<FieldDefinition>) =>
+        typeChangeTargets({
+          field: { name: "f", type: "textarea" } as FieldDefinition,
+          candidates: [{ type: "text", field }],
+          dialect,
+          builtBy: "collection",
+        })[0]?.outcome;
+      expect(outcomeWith({ unique: false })).toBe("keeps");
+      expect(outcomeWith({ unique: true })).toBe(
+        dialect === "mysql" ? "may-lose" : "keeps"
+      );
+    });
+
     it("a saved group: every type unavailable", () => {
       const targets = targetsOf({ type: "group", fields: [] });
       for (const target of targets.values()) {
@@ -76,7 +92,10 @@ describe("the route's answer for a field found by its path", () => {
       typeChangeTargets({
         field: list,
         candidates: [
-          { type: "text", ...(hasMany === undefined ? {} : { hasMany }) },
+          {
+            type: "text",
+            ...(hasMany === undefined ? {} : { field: { hasMany } }),
+          },
         ],
         dialect: "postgresql",
         builtBy: "collection",
@@ -103,7 +122,16 @@ describe("the route's answer for a field found by its path", () => {
           ],
         } as FieldDefinition,
         candidates: [
-          { type: "radio", ...(options === undefined ? {} : { options }) },
+          {
+            type: "radio",
+            ...(options === undefined
+              ? {}
+              : {
+                  field: {
+                    options: options.map(value => ({ label: value, value })),
+                  },
+                }),
+          },
         ],
         dialect: "postgresql",
         builtBy: "collection",
@@ -128,6 +156,104 @@ describe("the route's answer for a field found by its path", () => {
         layout: { perLanguage: false, fileRetypes: true },
       })
     ).toThrow(expect.objectContaining({ code: "CONFLICT" }));
+  });
+
+  describe("for a field whose settings the page knows", () => {
+    const KIND = {
+      name: "kind",
+      type: "select",
+      options: [
+        { label: "A", value: "a" },
+        { label: "B", value: "b" },
+      ],
+    };
+    /** The settings a page asks with for a field stored with none of them, as it loads one. */
+    const UNSET = { hasMany: false, unique: false, options: [] };
+    const ask = (stored: Record<string, unknown>, saved: unknown) => {
+      container.registerSingleton("adapter", () => ({
+        getCapabilities: () => ({ dialect: "mysql" }),
+      }));
+      return respondTypeChangeTargets({
+        fields: [stored] as unknown as FieldDefinition[],
+        body: {
+          field: [stored.name],
+          type: stored.type,
+          saved,
+          candidates: [{ type: "textarea" }],
+        },
+        builtBy: "collection",
+        layout: { perLanguage: true, fileRetypes: true },
+      });
+    };
+
+    it.each([
+      ["Unique", { name: "v", type: "text", unique: true }, UNSET],
+      ["several values", { name: "v", type: "text", hasMany: true }, UNSET],
+      [
+        "translation, off since",
+        { name: "v", type: "text", localized: false },
+        UNSET,
+      ],
+      [
+        "translation, on since",
+        { name: "v", type: "number", localized: true },
+        { ...UNSET, localized: false },
+      ],
+      ["its options", KIND, { ...UNSET, options: ["a", "b", "c"] }],
+    ])(
+      "refuses an answer where another save changed %s, and says to reload",
+      (_setting, stored, saved) => {
+        expect(() => ask(stored, saved)).toThrow(
+          expect.objectContaining({
+            code: "CONFLICT",
+            publicMessage: `The saved field ${stored.name} has changed since the page was loaded. Reload it to see the field as saved.`,
+          })
+        );
+      }
+    );
+
+    // A definition need not state a default, whatever wrote it: one stored with none of these
+    // settings, or with each said, reads the same.
+    it.each([
+      ["stored with none of them", { name: "v", type: "text" }, UNSET],
+      [
+        "stored with nulls",
+        {
+          name: "v",
+          type: "text",
+          unique: null,
+          hasMany: null,
+          localized: null,
+          options: null,
+        },
+        UNSET,
+      ],
+      [
+        "stored with each default said, as a page that knows none said",
+        {
+          name: "v",
+          type: "text",
+          unique: false,
+          hasMany: false,
+          localized: true,
+          options: [],
+        },
+        UNSET,
+      ],
+      [
+        "stored with no default said, as a page that knows each said",
+        { name: "v", type: "text" },
+        { ...UNSET, localized: true },
+      ],
+      [
+        "never translated, whatever its type's default",
+        { name: "v", type: "text", virtual: true },
+        UNSET,
+      ],
+      ["its options in another order", KIND, { ...UNSET, options: ["b", "a"] }],
+    ])("answers for a field %s", (_how, stored, saved) => {
+      expect(ask(stored, saved).status).toBe(200);
+    });
   });
 
   it("finds a field a group with no name holds on its level, by its own name", async () => {

@@ -24,11 +24,11 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       type: string,
       layout: TranslationLayout = COLLECTION,
       inJson = false,
-      hasMany?: boolean
+      as?: Partial<FieldDefinition>
     ) =>
       typeChangeTargets({
         field: { name: "f", ...field } as FieldDefinition,
-        candidates: [{ type, ...(hasMany === undefined ? {} : { hasMany }) }],
+        candidates: [{ type, ...(as === undefined ? {} : { field: as }) }],
         dialect,
         builtBy: "collection",
         layout,
@@ -51,6 +51,22 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         blocked: "joins-translation",
         outcome: null,
         refusal: { code: "RESHAPED_FIELD_JOINS_TRANSLATION" },
+      });
+    });
+
+    // Whether the field is translated after the change is the draft's to say.
+    it("a shared number becoming a text the draft keeps shared: open; one it translates: unavailable", () => {
+      const becoming = (saved: Partial<FieldDefinition>, localized: boolean) =>
+        targetOf({ type: "number", ...saved }, "text", COLLECTION, false, {
+          localized,
+        });
+      expect(becoming({}, false)).toMatchObject({
+        blocked: null,
+        outcome: "converts",
+      });
+      expect(becoming({ localized: false }, true)).toMatchObject({
+        blocked: "joins-translation",
+        outcome: null,
       });
     });
 

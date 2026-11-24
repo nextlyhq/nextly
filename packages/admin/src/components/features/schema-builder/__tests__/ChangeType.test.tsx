@@ -10,11 +10,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
+import {
+  convertToBuilderField,
+  convertToFieldDefinition,
+} from "@admin/lib/builder/field-transformers";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 import type {
   TypeChangeQuestion,
   TypeChangeTarget,
 } from "@admin/services/typeChangeTargetsApi";
+import type { FieldDefinition } from "@admin/types/collection";
 
 import { BuilderChangeType } from "../BuilderChangeType";
 import { BuilderOverlays, type ActiveOverlay } from "../BuilderOverlays";
@@ -221,8 +226,7 @@ describe("Change type… on a saved field", () => {
     expect(asked.map(each => each.address)).toEqual([
       "/collections/schema/posts",
     ]);
-    // The field as saved, its type as saved, and every other type offered, each with whether the
-    // change would leave the field holding several values.
+    // The field as saved, its type as saved, and every other type offered.
     const [{ question }] = asked;
     expect(question.path).toEqual(["meta", "rating"]);
     expect(question.type).toBe("number");
@@ -230,9 +234,6 @@ describe("Change type… on a saved field", () => {
       expect.arrayContaining(["text", "textarea", "checkbox", "select"])
     );
     expect(question.candidates.map(each => each.type)).not.toContain("number");
-    expect(
-      question.candidates.every(each => typeof each.hasMany === "boolean")
-    ).toBe(true);
     expect(row("checkbox")).toHaveTextContent("May lose some values");
     expect(row("textarea")).toHaveTextContent(
       "Unavailable: Its type changes as it stops being translated. Turn off Localized and save."
@@ -255,7 +256,8 @@ describe("Change type… on a saved field", () => {
     renderChange("f-kind", [kind, meta]);
     await waitFor(() => expect(asked).toHaveLength(1));
     const keeps = (type: string) =>
-      asked[0]?.question.candidates.find(each => each.type === type)?.hasMany;
+      asked[0]?.question.candidates.find(each => each.type === type)?.field
+        .hasMany === true;
     // The dropdown takes several picks; a text field, changed to from it, holds one.
     expect(keeps("radio")).toBe(false);
     expect(keeps("text")).toBe(false);
@@ -266,7 +268,9 @@ describe("Change type… on a saved field", () => {
   it("asks of each type over the options the change would leave the field", async () => {
     answer = async () => [];
     const optionsAsked = (type: string) =>
-      asked[0]?.question.candidates.find(each => each.type === type)?.options;
+      asked[0]?.question.candidates
+        .find(each => each.type === type)
+        ?.field.options?.map(option => option.value) ?? [];
     const saved: BuilderField = {
       ...kind,
       options: [
@@ -309,6 +313,89 @@ describe("Change type… on a saved field", () => {
     await waitFor(() => expect(asked).toHaveLength(1));
     expect(optionsAsked("checkbox")).toEqual(["a"]);
     expect(optionsAsked("text")).toEqual([]);
+  });
+
+  // Unique, Localized and the rules it keeps shape the column the change makes, and the draft may
+  // have set any of them since the save.
+  it("asks of each type as the save would write the field, with the draft's own settings", async () => {
+    answer = async () => [];
+    const draft: BuilderField = {
+      id: "f-kind",
+      name: "kind",
+      label: "Kind",
+      type: "textarea",
+      validation: { maxLength: 40 },
+      advanced: { unique: true, index: false, localized: false },
+    };
+    render(
+      <BuilderChangeType
+        config={COLLECTION_BUILDER_CONFIG}
+        fields={[draft]}
+        fieldId="f-kind"
+        entitySlug="posts"
+        savedFields={[{ ...draft, advanced: undefined, validation: {} }]}
+        onCancel={vi.fn()}
+        onChanged={vi.fn()}
+      />
+    );
+    await waitFor(() => expect(asked).toHaveLength(1));
+    const asText = asked[0]?.question.candidates.find(
+      each => each.type === "text"
+    );
+    expect(asText?.field).toEqual(
+      convertToFieldDefinition({ ...draft, type: "text" })
+    );
+    expect(asText?.field).toMatchObject({
+      type: "text",
+      unique: true,
+      localized: false,
+      validation: { maxLength: 40 },
+    });
+  });
+
+  it("asks by the settings the field was saved with, as it loads one stored with none of them", async () => {
+    answer = async () => [];
+    const stored = { name: "kind", label: "Kind", type: "text" };
+    const saved = convertToBuilderField(stored as FieldDefinition, 0);
+    const askedOf = async (draft: BuilderField, savedAs: BuilderField) => {
+      asked.length = 0;
+      const { unmount } = render(
+        <BuilderChangeType
+          config={COLLECTION_BUILDER_CONFIG}
+          fields={[draft]}
+          fieldId={saved.id}
+          entitySlug="posts"
+          savedFields={[savedAs]}
+          onCancel={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      );
+      await waitFor(() => expect(asked).toHaveLength(1));
+      unmount();
+      // As it is sent: what is undefined is not.
+      return JSON.parse(JSON.stringify(asked[0]?.question.saved)) as unknown;
+    };
+    const drafted: BuilderField = {
+      ...saved,
+      hasMany: true,
+      advanced: { unique: true, index: false, localized: false },
+    };
+    expect(await askedOf(drafted, saved)).toEqual({
+      hasMany: false,
+      unique: false,
+      options: [],
+    });
+    expect(
+      await askedOf(saved, {
+        ...drafted,
+        options: [{ label: "A", value: "a" }],
+      })
+    ).toEqual({
+      hasMany: true,
+      unique: true,
+      localized: false,
+      options: ["a"],
+    });
   });
 
   it("changed already, it offers its type as saved back, as keeping every value", async () => {
@@ -370,6 +457,21 @@ describe("Change type… on a saved field", () => {
       validation: { required: false },
       admin: { placeholder: "Pick one", isClearable: true, width: "100%" },
     });
+  });
+
+  // Trying again would ask about the same earlier definition: only reloading the page helps.
+  it("says to reload, in the server's words alone, when the saved field has changed since", async () => {
+    const words =
+      "The saved field kind has changed since the page was loaded. Reload it to see the field as saved.";
+    answer = async () => {
+      throw Object.assign(new Error(words), { status: 409, code: "CONFLICT" });
+    };
+    renderChange("f-kind", [kind, meta]);
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(/Reload it/)
+    );
+    expect(screen.getByRole("status").textContent).toBe(words);
+    expect(row("number")).toHaveAttribute("aria-disabled", "true");
   });
 
   it("says so when the server cannot be asked, and offers nothing meanwhile", async () => {
