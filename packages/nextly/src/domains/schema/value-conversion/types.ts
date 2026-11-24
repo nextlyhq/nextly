@@ -135,6 +135,11 @@ export type ConversionReasonKind =
   | "column-refuses"
   /** A value the new field's own validation refuses would be cleared. */
   | "field-refuses"
+  /**
+   * A text that is itself JSON, becoming a JSON field's string: the field would be read back as what
+   * the text says, not as the text.
+   */
+  | "read-as-json"
   /** The new type holds the value only rounded. */
   | "rounded"
   /** The value is outside the range the new type holds. */

@@ -27,7 +27,7 @@ import {
   fieldsStoredOnRow,
   type SupportedDialect,
 } from "../../services/field-column-descriptor";
-import { describeClassed } from "../describe";
+import { describeClassed, describeRowCount } from "../describe";
 import type { RowKey } from "../types";
 
 import {
@@ -298,6 +298,13 @@ export interface JudgedFieldTypeChange extends FieldTypeChange {
    * index still stands, so two that read as one were judged as repeats (`judgeFieldTypeChanges`).
    */
   uniqueBefore?: true;
+  /**
+   * The field starts or stops being kept per language in the same change, whose own file copies its
+   * values between the entity's table and its translations table as they are stored, before the
+   * change's file would convert them: never converted, so a value it would rewrite or clear refuses
+   * the change (`typeChangeRefusals`).
+   */
+  movesTranslation?: "joins" | "leaves";
 }
 
 /**
@@ -482,13 +489,38 @@ async function judgeOnRow(
     return undefined;
   }
   const text = await textOf(held.table);
-  const how = rowJudging(change, args, held, text);
+  const moves = await movesTranslation(change, args, held, columnsOf);
+  const how = rowJudging(change, args, held, { text, moves });
   return {
     ...change,
     ...held,
     result: await storedJudgementOnRow(change, args, held, text, how),
     ...rowFlags(change, args, held, how),
+    ...(moves === undefined ? {} : { movesTranslation: moves }),
   };
+}
+
+/**
+ * Whether the change also moves the field's values into or out of the entity's translations table
+ * (`JudgedFieldTypeChange.movesTranslation`), told by where they are `held` and where the field
+ * keeps them after. A translations table the change itself makes is filled by a file after the
+ * change's own, from the values as they are then, so nothing moves before them.
+ */
+async function movesTranslation(
+  change: FieldTypeChange,
+  args: JudgeArgs,
+  held: { table: string },
+  columnsOf: (table: string) => Promise<ReadonlySet<string>>
+): Promise<JudgedFieldTypeChange["movesTranslation"]> {
+  if (args.translationsTable === undefined) return undefined;
+  if (args.translatedAfter === undefined) return undefined;
+  const after = args.translatedAfter.has(change.to.name);
+  if (held.table === args.translationsTable) {
+    return after ? undefined : "leaves";
+  }
+  return after && (await columnsOf(args.translationsTable)).size > 0
+    ? "joins"
+    : undefined;
 }
 
 /** How a change on the row is judged (`rowJudging`). */
@@ -512,9 +544,14 @@ function rowJudging(
   change: FieldTypeChange,
   args: JudgeArgs,
   held: { table: string; column: string },
-  text: TableText | undefined
+  of: {
+    text: TableText | undefined;
+    moves: JudgedFieldTypeChange["movesTranslation"];
+  }
 ): RowJudging {
+  const { text } = of;
   const rewritten =
+    of.moves === undefined &&
     rewritesAt(args.rewrites, held.table, held.column) &&
     rewritesPair(change.fromType, change.toType);
   const unique =
@@ -958,20 +995,24 @@ function refusalOf(
   // through, as the cast does not clear what it cannot read.
   const consented = acknowledged.has(name) && change.converted === true;
   const lossy = judgement.class === "lossy" && !consented;
-  // A cleared value is no value, which a required field's column refuses: the clear is refused
-  // even confirmed, rather than written part way into a NOT NULL that stops it.
-  const clearsRequired =
-    judgement.class === "lossy" && consented && change.to.required === true;
+  // A value written as none, cleared or kept as no value, leaves its row with none, which a required
+  // field's column refuses: refused even confirmed, rather than written part way into a NOT NULL
+  // that stops it.
+  const emptiesRequired =
+    change.converted === true && change.to.required === true && !lossy
+      ? change.result.emptied
+      : 0;
   const translated = change.changesTranslationsColumn === true;
   const leaving = change.leavesWithEntity === true;
-  if (!blocked && !lossy && !clearsRequired && !translated && !leaving) {
+  if (!blocked && !lossy && emptiesRequired === 0 && !translated && !leaving) {
     return null;
   }
   const why = refusalReasons({
     translated,
     leaving,
     lossy,
-    clearsRequired,
+    emptiesRequired,
+    moves: change.movesTranslation,
     rewritten: judgement.reasons.some(r => r.kind === "needs-rewrite"),
     converted: change.converted === true,
     repeatsUnderOldIndex:
@@ -980,7 +1021,7 @@ function refusalOf(
     clearsBy: () => clearsBy(change),
   });
   const values =
-    blocked || lossy || clearsRequired
+    judgement.class !== "safe" && (blocked || lossy || emptiesRequired > 0)
       ? ` (${describeClassed(judgement)})`
       : "";
   return {
@@ -1007,7 +1048,10 @@ function refusalReasons(of: {
   translated: boolean;
   leaving: boolean;
   lossy: boolean;
-  clearsRequired: boolean;
+  /** How many rows of a required field the change would leave with no value. */
+  emptiesRequired: number;
+  /** The field's values also move into or out of the translations table. */
+  moves: JudgedFieldTypeChange["movesTranslation"];
   rewritten: boolean;
   converted: boolean;
   /** Values that read as one meet the old field's unique index, which the save drops only after. */
@@ -1036,20 +1080,35 @@ function refusalReasons(of: {
   return why;
 }
 
+/** Why a field whose values also move keeps its type in that change, and the two saves that make both. */
+const MOVES_AS_STORED: Record<
+  NonNullable<JudgedFieldTypeChange["movesTranslation"]>,
+  string
+> = {
+  joins:
+    "It becomes translated in the same save, which copies its values into the translations table as they are stored: change the field's type and save first, then make it translated.",
+  leaves:
+    "It stops being translated in the same save, which copies its values out of the translations table as they are stored: stop translating it and save first, then change the field's type.",
+};
+
 /**
- * Why the change's values themselves stop it, beyond their own reasons: a clear into a required
- * field; a lost value the road clears once consented to (`clearsBy`); or one, or a value read only
+ * Why the change's values themselves stop it, beyond their own reasons: rows of a required field left
+ * with no value; values that also move between tables; a lost value the road clears once consented to (`clearsBy`); or one, or a value read only
  * once rewritten, that the deploying cast would not clear or rewrite. Undefined where none does.
  */
 function valuesReason(of: {
   lossy: boolean;
-  clearsRequired: boolean;
+  emptiesRequired: number;
+  moves: JudgedFieldTypeChange["movesTranslation"];
   rewritten: boolean;
   converted: boolean;
   clearsBy: () => string;
 }): string | undefined {
-  if (of.clearsRequired) {
-    return "It is required, so a cleared value would leave its row with none: make it optional first, or change the values that cannot convert, then save again.";
+  if (of.emptiesRequired > 0) {
+    return `It is required, so ${describeRowCount(of.emptiesRequired)} would be left with no value in it: make it optional first, or give ${of.emptiesRequired === 1 ? "that row a value that converts" : "those rows values that convert"}, then save again.`;
+  }
+  if (of.moves !== undefined && (of.lossy || of.rewritten)) {
+    return MOVES_AS_STORED[of.moves];
   }
   if (of.lossy) {
     return of.converted

@@ -394,7 +394,9 @@ async function judgedAgain(
       counts: countsOf(change),
       facts,
       acknowledged,
-      swaps: dialect === "sqlite" && swapsOnSqlite(column, facts),
+      swaps:
+        dialect === "sqlite" &&
+        swapsOnSqlite(column, facts, change.result.emptied > 0),
     });
   }
   throwTypeChangeRefusals(
@@ -411,12 +413,18 @@ async function judgedAgain(
 /**
  * Whether, on SQLite, the column beside takes the converted column's place (`swapIn`) rather than
  * the column taking its values row by row: where nothing else gives it the new type
- * (`takesPlaceOnSqlite`); and for a column whose REAL affinity would turn a text reading that looks like a number
+ * (`takesPlaceOnSqlite`); for a column whose REAL affinity would turn a text reading that looks like a number
  * back into one (a float number becoming a text keeps `34`, which the column would store as `34.0`
- * and the rebuild then copy as that text). Never for a column that keeps its type, which only
- * takes the values.
+ * and the rebuild then copy as that text); and for a NOT NULL one that takes a row with no value
+ * (`empties`), which only the rebuild after the conversion lets it. Otherwise never for a column that
+ * keeps its type, which only takes the values.
  */
-function swapsOnSqlite(column: ConvertedColumn, facts: ColumnFacts): boolean {
+function swapsOnSqlite(
+  column: ConvertedColumn,
+  facts: ColumnFacts,
+  empties: boolean
+): boolean {
+  if (empties && facts.notNull) return true;
   if (column.keepsType) return false;
   if (column.takesPlaceOnSqlite) return true;
   return realAffinity(facts.type) && textAffinity(column.type);
@@ -601,7 +609,8 @@ async function convertColumn(
     });
   }
   // The column beside goes once the column has taken its values, unless it took the column's place.
-  if (!(await swapIn(db, dialect, planned, now.lost > 0))) {
+  const empties = judged.some(change => change.result.emptied > 0);
+  if (!(await swapIn(db, dialect, planned, empties))) {
     await run(sql`ALTER TABLE ${table} DROP COLUMN ${beside}`);
   }
 }
@@ -638,8 +647,8 @@ export function valuesChangedWhileConverting(args: {
 /**
  * The column given its new type and the values written beside it (`BESIDE`), as the module's
  * header describes for each dialect. Before the type changes, on PostgreSQL its default goes (an
- * old one need not cast to the new type) and, where values are cleared, its NOT NULL (the field
- * the change leaves is optional, as a clear into a required one is refused); on MySQL its NOT NULL
+ * old one need not cast to the new type) and, where a row is left with no value (`empties`), its NOT
+ * NULL (the field the change leaves is optional, as emptying a required one is refused); on MySQL its NOT NULL
  * goes before it is emptied, the file's or push's own statement then stating the column whole. A
  * column that keeps its type (`keepsType`) has no such statement after it: it only takes the
  * values, keeping its definition.
@@ -648,24 +657,25 @@ async function swapIn(
   db: unknown,
   dialect: SupportedDialect,
   planned: PlannedColumn,
-  clears: boolean
+  empties: boolean
 ): Promise<boolean> {
   const table = sql.identifier(planned.table);
   const column = sql.identifier(planned.column);
   const beside = sql.identifier(BESIDE);
   const run = (statement: SQL) => runStatement(db, dialect, statement);
-  if (planned.keepsType) {
-    // No statement of the change states the column again, so nothing is changed of it but its
-    // values: its default, its NOT NULL (but where values are cleared) and its indexes stay.
-    await relaxForClears(db, dialect, planned, clears);
-    await run(sql`UPDATE ${table} SET ${column} = ${beside}`);
-    return false;
-  }
-  if (dialect === "sqlite" && planned.swaps) {
-    // No rebuild gives this column its new type: the column beside, of that type, takes its place,
-    // and the column's indexes (a translated unique field's per-language one) are made again on it.
+  if (planned.swaps) {
+    // No statement gives this SQLite column its new type, or it is NOT NULL until the rebuild after
+    // this: the column beside, of the new type, takes its place, and the column's indexes (a
+    // translated unique field's per-language one) are made again on it.
     await replaceColumn(db, planned.table, BESIDE, planned.column);
     return true;
+  }
+  if (planned.keepsType) {
+    // No statement of the change states the column again, so nothing is changed of it but its
+    // values: its default, its NOT NULL (but where a row is emptied) and its indexes stay.
+    await relaxForEmpties(db, dialect, planned, empties);
+    await run(sql`UPDATE ${table} SET ${column} = ${beside}`);
+    return false;
   }
   if (dialect === "sqlite") {
     // Every row takes what the column beside holds, an empty one no value; the rebuild that gives
@@ -678,14 +688,14 @@ async function swapIn(
     if (planned.facts.defaultClause !== undefined) {
       await run(sql`ALTER TABLE ${table} ALTER COLUMN ${column} DROP DEFAULT`);
     }
-    await relaxForClears(db, dialect, planned, clears);
+    await relaxForEmpties(db, dialect, planned, empties);
     await run(
       sql`ALTER TABLE ${table} ALTER COLUMN ${column} TYPE ${type} USING ${beside}`
     );
     return false;
   }
   // Every value is cleared here before the column takes its type, so its NOT NULL goes first.
-  await relaxForClears(db, dialect, planned, true);
+  await relaxForEmpties(db, dialect, planned, true);
   await run(sql`UPDATE ${table} SET ${column} = NULL`);
   await run(sql`ALTER TABLE ${table} MODIFY COLUMN ${column} ${type} NULL`);
   await run(sql`UPDATE ${table} SET ${column} = ${beside}`);
@@ -693,17 +703,17 @@ async function swapIn(
 }
 
 /**
- * The column's NOT NULL dropped where it has one and values are cleared (`clears`), before they
- * are: PostgreSQL drops the constraint alone; MySQL states the column again with its own type,
- * NULL; SQLite, whose column is rebuilt or replaced by the change, has no statement for it.
+ * The column's NOT NULL dropped where it has one and a row is left with no value (`empties`), before
+ * it is: PostgreSQL drops the constraint alone; MySQL states the column again with its own type,
+ * NULL; SQLite has no statement for it, and its column is replaced instead (`swapsOnSqlite`).
  */
-async function relaxForClears(
+async function relaxForEmpties(
   db: unknown,
   dialect: SupportedDialect,
   planned: PlannedColumn,
-  clears: boolean
+  empties: boolean
 ): Promise<void> {
-  if (!clears || !planned.facts.notNull || dialect === "sqlite") return;
+  if (!empties || !planned.facts.notNull || dialect === "sqlite") return;
   const table = sql.identifier(planned.table);
   const column = sql.identifier(planned.column);
   await runStatement(

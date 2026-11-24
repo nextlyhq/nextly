@@ -820,6 +820,26 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // The same into a required text would leave the row with no value: refused with the count, though
+    // nothing is lost to confirm.
+    it.skipIf(!rewritesValuesOn(dialect))(
+      "refuses a required list's empty list becoming a required text, naming the count, and changes nothing",
+      async () => {
+        const t = await boot([{ name: "v", type: "chips" }]);
+        await write(t, "one", { v: ["x"] });
+        await write(t, "none", { v: [] });
+        expect(
+          await save(t, [{ name: "v", type: "chips", required: true }])
+        ).toBeUndefined();
+
+        expect(
+          await save(t, [{ name: "v", type: "text", required: true }])
+        ).toMatchObject(refusedSaying("1 row would be left with no value"));
+
+        expect(await read(t, "v")).toEqual({ one: ["x"], none: [] });
+      }
+    );
+
     // PostgreSQL's driver hands a JSON column's string back as a text, which the read path reads as
     // JSON once more: a text that is itself JSON would come back as what it says rather than as the
     // text it is. Refused, naming the rows, rather than counted as kept; SQLite reads each back as

@@ -129,6 +129,8 @@ const REFUSAL_WORDS: Record<ConversionReasonKind, string> = {
   "kind-never-held": "is of a kind the new type could never hold",
   "column-refuses": "is refused by the new column",
   "field-refuses": "is refused by the field's own validation",
+  "read-as-json":
+    "is itself JSON, which the field would read back as what it says",
   rounded: "would be held only rounded",
   "out-of-range": "is outside the range the new type holds",
   "no-time-or-offset": "names no time or no offset from UTC",

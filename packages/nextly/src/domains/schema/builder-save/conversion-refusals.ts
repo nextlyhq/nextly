@@ -48,16 +48,16 @@ export async function conversionRefusals(
   db: unknown,
   dialect: SupportedDialect,
   label: string,
-  of: ConversionAsked
+  asked: ConversionAsked
 ): Promise<TypeChangeRefusal[]> {
+  // Only SQLite puts the column beside in a column's place.
+  const of = dialect === "sqlite" ? asked : { ...asked, swapped: [] };
   return [
     ...(await leftColumns(db, dialect, label, of.columns)),
     ...(await overUpdateTriggers(db, dialect, label, of.judged)),
     ...(await overChecks(db, dialect, label, of)),
     ...(await overCarried(db, dialect, label, of)),
-    ...(dialect === "sqlite"
-      ? await overSwapDependents(db, label, of.swapped)
-      : []),
+    ...(await overSwapDependents(db, label, of.swapped)),
   ];
 }
 
@@ -238,7 +238,12 @@ async function overCarried(
     if (column === undefined) continue;
     const reasons = [
       ...uniqueJsonReasons(dialect, change),
-      ...(column.keepsType ? [] : await lostReasons(db, dialect, change)),
+      ...(column.keepsType && !of.swapped.includes(column)
+        ? []
+        : await lostReasons(db, dialect, change)),
+      ...(column.takesPlaceOnSqlite && of.swapped.includes(column)
+        ? await lostNotNull(db, change)
+        : []),
     ];
     refusals.push(
       ...reasons.map(reason =>
@@ -282,6 +287,27 @@ async function lostReasons(
           `${carried.collation}, which the column would not keep${change.from.unique === true || change.to.unique === true ? ", and its Unique setting compares by it" : ""}. Give it the database's own collation first, then try again.`,
         ]),
   ];
+}
+
+/**
+ * Why a SQLite column that nothing but the conversion gives its new type would lose its NOT NULL: the
+ * column that takes its place is added taking no value, and no rebuild of its table follows to state
+ * the constraint again.
+ */
+async function lostNotNull(
+  db: unknown,
+  change: JudgedFieldTypeChange
+): Promise<string[]> {
+  const [found] = await querySqlRows<{ required: number }>(
+    db,
+    "sqlite",
+    sql`SELECT "notnull" AS required FROM pragma_table_info(${change.table}) WHERE lower(name) = ${change.column.toLowerCase()}`
+  );
+  return Number(found?.required ?? 0) === 0
+    ? []
+    : [
+        `${change.table}.${change.column} is NOT NULL, which SQLite's column of the new type, put in its place, would not keep. Rename the field and save first, then change its type.`,
+      ];
 }
 
 /** A column's default, and a collation it compares by that is not its type's own, as words. */
@@ -371,9 +397,10 @@ async function sqliteCarried(
 
 /**
  * On SQLite, a column the conversion swaps for the column beside it (`swapsOnSqlite`) where the
- * swap's `DROP COLUMN` would stop part-way: a view or a trigger whose text names the table, an index
- * on the table over an expression or with a condition, or a UNIQUE constraint on the column, which
- * SQLite keeps whole or refuses to drop a column under. Each is named.
+ * swap's `DROP COLUMN` would stop part-way, or take with it what the column's own definition holds:
+ * a view or a trigger whose text names the table; an index on the table over an expression or with a
+ * condition; a UNIQUE constraint on the column, which SQLite keeps whole or refuses to drop a column
+ * under; a foreign key on it or to it; and a CHECK or a generated column that reads it. Each is named.
  */
 async function overSwapDependents(
   db: unknown,
@@ -401,8 +428,9 @@ async function overSwapDependents(
 
 /**
  * What on SQLite depends on `table` beyond the plain indexes a column swap makes again: each view
- * and trigger whose text names it, each of its indexes over an expression or with a condition, and
- * a UNIQUE constraint on `column`, whose index SQLite made itself and drops with no column.
+ * and trigger whose text names it, each of its indexes over an expression or with a condition, a
+ * UNIQUE constraint on `column`, whose index SQLite made itself and drops with no column, and what
+ * the column carries besides its type (`sqliteForeignKeys`, `sqliteReadersOf`).
  */
 async function sqliteSwapDependents(
   db: unknown,
@@ -451,7 +479,81 @@ async function sqliteSwapDependents(
       dependents.push(`index ${index.name}`);
     }
   }
-  return dependents;
+  return [
+    ...dependents,
+    ...(await sqliteForeignKeys(db, table, column)),
+    ...(await sqliteReadersOf(db, table, column)),
+  ];
+}
+
+/** The foreign keys on `column` of a SQLite `table`, and those of other tables to it. */
+async function sqliteForeignKeys(
+  db: unknown,
+  table: string,
+  column: string
+): Promise<string[]> {
+  const named = column.toLowerCase();
+  const own = await querySqlRows<{ references_table: string }>(
+    db,
+    "sqlite",
+    sql`SELECT "table" AS references_table FROM pragma_foreign_key_list(${table}) WHERE lower("from") = ${named}`
+  );
+  const to = await querySqlRows<{ name: string }>(
+    db,
+    "sqlite",
+    sql`SELECT DISTINCT m.name AS name FROM sqlite_master AS m, pragma_foreign_key_list(m.name) AS f
+        WHERE m.type = 'table' AND lower(f."table") = ${table.toLowerCase()} AND lower(f."to") = ${named}`
+  );
+  return [
+    ...own.map(
+      key => `the foreign key of ${column} to ${key.references_table}`
+    ),
+    ...to.map(key => `the foreign key of ${key.name} to ${column}`),
+  ];
+}
+
+/**
+ * Whether a CHECK constraint of a SQLite table, its column's own or one with no name, or a generated
+ * column of it, reads `column`: SQLite states neither but in the table's own statement, and drops a
+ * column's own CHECK with it without a word.
+ */
+async function sqliteReadersOf(
+  db: unknown,
+  table: string,
+  column: string
+): Promise<string[]> {
+  const [made] = await querySqlRows<{ sql: string | null }>(
+    db,
+    "sqlite",
+    sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND lower(name) = ${table.toLowerCase()}`
+  );
+  const statement = made?.sql ?? "";
+  const reads = (opening: RegExp) =>
+    expressionsAfter(statement, opening).some(expression =>
+      namesColumn(expression, column)
+    );
+  return [
+    ...(reads(/\bCHECK\s*\(/gi) ? [`a CHECK that reads ${column}`] : []),
+    ...(reads(/\bAS\s*\(/gi) ? [`a generated column that reads ${column}`] : []),
+  ];
+}
+
+/** The parenthesized expressions of `statement` that `opening` (ending at its parenthesis) begins. */
+function expressionsAfter(statement: string, opening: RegExp): string[] {
+  return [...statement.matchAll(opening)].map(match => {
+    const start = match.index + match[0].length;
+    let depth = 1;
+    let quoted = false;
+    let at = start;
+    for (; at < statement.length && depth > 0; at += 1) {
+      const character = statement[at];
+      if (character === "'") quoted = !quoted;
+      if (quoted) continue;
+      if (character === "(") depth += 1;
+      if (character === ")") depth -= 1;
+    }
+    return statement.slice(start, at);
+  });
 }
 
 /** `text` with every character a regular expression gives a meaning escaped. */

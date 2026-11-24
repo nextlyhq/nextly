@@ -41,6 +41,11 @@ export interface StoredTypeChangeJudgement {
   cleared: RowKey[];
   /** How many values each outcome holds, for a review that names the changed ones too. */
   counts: Record<ValueOutcome, number>;
+  /**
+   * How many rows hold something now and no value after: a lost value, or one the new type keeps as
+   * no value (a list's `[]` becoming a text).
+   */
+  emptied: number;
 }
 
 /** What a collection is asked besides the class, reasons and rows. */
@@ -89,6 +94,7 @@ const REPORTED_AS: Record<
   "link-not-carried": "link-not-carried",
   "column-refuses": "column-refuses",
   "field-refuses": "field-refuses",
+  "read-as-json": "read-as-json",
 };
 
 /**
@@ -112,10 +118,14 @@ export async function collectTypeChange(
     tally.add(
       value.key,
       await withFieldRule(
-        asConverted(
-          judgeValue(from, to, decodeStored(from, value)),
-          stored,
-          read
+        readBack(
+          to,
+          asConverted(
+            judgeValue(from, to, decodeStored(from, value)),
+            stored,
+            read
+          ),
+          options
         ),
         accepts
       ),
@@ -207,7 +217,44 @@ function blockedPairJudgement(
     },
     cleared: [],
     counts: { kept: 0, changed: 0, lost: 0, blocked: 0 },
+    emptied: 0,
   };
+}
+
+/**
+ * A verdict as an entry reads it back, where the save writes the value itself (`rewrites`). A JSON
+ * column's driver on PostgreSQL hands a stored JSON string back as a text, which an entry's read
+ * takes as JSON once more (`decodeJsonFieldValues`), as it must on a database that keeps JSON as
+ * text: a text that is itself JSON (`12`, `{"a":1}`) would read back as what it says. Its column's
+ * value alone, never one inside another JSON value, which is read whole.
+ */
+function readBack(
+  to: FieldTypeOnDialect,
+  verdict: ValueVerdict,
+  options: CollectOptions
+): ValueVerdict {
+  if (options.rewrites !== true || verdict.readsAs === undefined) {
+    return verdict;
+  }
+  return readsAsItsOwnJson(to, verdict.readsAs)
+    ? { outcome: "blocked", reason: "read-as-json" }
+    : verdict;
+}
+
+/** Whether a JSON column's `readsAs` is a string an entry's read takes as another value (`readBack`). */
+export function readsAsItsOwnJson(
+  to: FieldTypeOnDialect,
+  readsAs: string
+): boolean {
+  if (to.family !== "json" || to.dialect === "sqlite") return false;
+  const value: unknown = JSON.parse(readsAs);
+  if (typeof value !== "string") return false;
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -257,6 +304,7 @@ class TypeChangeTally {
     { count: number; first: RowKey[] }
   >();
   private readonly cleared: RowKey[] = [];
+  private emptied = 0;
   private readonly repeatsOf:
     | ((key: RowKey, readsAs: string) => RowKey[] | undefined)
     | undefined;
@@ -280,6 +328,12 @@ class TypeChangeTally {
     }
     this.counts[verdict.outcome] += 1;
     if (verdict.outcome === "lost") this.cleared.push(key);
+    if (
+      stored !== null &&
+      (verdict.outcome === "lost" || verdict.reason === "empty")
+    ) {
+      this.emptied += 1;
+    }
     if (verdict.reason === "same-value" || verdict.reason === "empty") return;
     this.note(REPORTED_AS[verdict.reason], key);
   }
@@ -300,6 +354,7 @@ class TypeChangeTally {
       },
       cleared: this.cleared,
       counts: this.counts,
+      emptied: this.emptied,
     };
   }
 
