@@ -108,7 +108,10 @@ describe.each(getConfiguredTestDialects())(
         collection: COLLECTION,
         id,
         locale: "es",
-        data: { badge: { id: badge, heading: "Hola", box: { label: "ES" } } },
+        data: {
+          badge: { id: badge, heading: "Hola", box: { label: "ES" } },
+          _overwrite: true,
+        },
       } as never);
 
       expect(((await read(id, "en")).box as Doc).label).toBe("EN");
@@ -143,6 +146,7 @@ describe.each(getConfiguredTestDialects())(
               { id: second!.id, caption: "dos ES" },
             ],
           },
+          _overwrite: true,
         },
       } as never);
 
@@ -157,6 +161,7 @@ describe.each(getConfiguredTestDialects())(
             heading: "Hello",
             items: [{ id: second!.id, caption: "two EN" }],
           },
+          _overwrite: true,
         },
       } as never);
 

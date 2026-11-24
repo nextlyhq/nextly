@@ -53,7 +53,7 @@ const FIELDS = [
   {
     name: "stats",
     type: "group",
-    fields: [{ name: "count", type: "number" }],
+    fields: [{ name: "visits", type: "number" }],
   },
 ];
 
