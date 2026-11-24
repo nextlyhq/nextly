@@ -121,6 +121,36 @@ describe("a type change collected over its stored values", () => {
     ]);
   });
 
+  // What the database's own conversion does not reach: a value lost, emptied, or stored in another
+  // form than its reading. Where it counts none, the judgement without the rewrite blocks none.
+  it.each([
+    ["text", "number", ["12", null], 0],
+    ["text", "number", ["012", "12"], 1],
+    ["text", "number", ["abc", "12"], 1],
+    ["chips", "text", ["[]", null], 1],
+    ["chips", "text", ['["x"]'], 1],
+    ["email", "text", ["a@b.co"], 0],
+    ["text", "json", ["word"], 1],
+  ] as const)(
+    "counts the values a change from %s to %s writes: %j",
+    async (from, to, texts, written) => {
+      const read = (rewrites: boolean) =>
+        collectTypeChange(
+          typeOf("postgresql", from),
+          typeOf("postgresql", to),
+          stored(...texts),
+          undefined,
+          { rewrites }
+        );
+
+      expect((await read(true)).written).toBe(written);
+      // The one question, asked the way a road that rewrites nothing asks it.
+      expect((await read(false)).judgement.class === "safe").toBe(
+        written === 0
+      );
+    }
+  );
+
   // An entry's read takes a JSON column's string as JSON once more where the driver parses JSON: a
   // text that is itself JSON would read back as what it says. SQLite's driver parses none.
   it.each([

@@ -30,35 +30,95 @@ import type { ConvertedColumn } from "./type-conversion";
 export const BESIDE = "__nextly_converted";
 
 /** What a conversion's refusals are asked of. */
-interface ConversionAsked {
+interface ConversionAsked<Column extends ConvertedColumn = ConvertedColumn> {
   /** The columns it converts. */
-  columns: readonly ConvertedColumn[];
+  columns: readonly Column[];
   /** The judged changes of those columns. */
   judged: readonly JudgedFieldTypeChange[];
   /** On SQLite, the columns the column beside takes the place of. */
-  swapped: readonly ConvertedColumn[];
+  swapped: readonly Column[];
+}
+
+/** What a conversion's refusals answer. */
+interface ConversionAnswer<Column extends ConvertedColumn> {
+  refusals: TypeChangeRefusal[];
+  /**
+   * The columns left to the file's own statement, which reaches every reading of theirs
+   * (`castReaches`): those the conversion would be refused over, where that statement sets off and
+   * loses nothing.
+   */
+  leftToCast: Column[];
 }
 
 /**
  * Every refusal of a conversion for what its tables carry: a column left by a conversion that
  * stopped part-way; update triggers; a CHECK constraint naming a column written anew; a unique
  * JSON on SQLite; a default or a collation the column's new type would lose; and on SQLite what a
- * column swap would stop part-way over. Each names its field, and what stops it.
+ * column swap would stop part-way over. Each names its field, and what stops it. A column whose
+ * values the file's own statement reaches is not refused for what only a conversion sets off or
+ * breaks: it is left to that statement instead, refused only for what that would lose
+ * (`lostToCast`).
  */
-export async function conversionRefusals(
+export async function conversionRefusals<Column extends ConvertedColumn>(
   db: unknown,
   dialect: SupportedDialect,
   label: string,
-  asked: ConversionAsked
-): Promise<TypeChangeRefusal[]> {
+  asked: ConversionAsked<Column>
+): Promise<ConversionAnswer<Column>> {
   // Only SQLite puts the column beside in a column's place.
   const of = dialect === "sqlite" ? asked : { ...asked, swapped: [] };
-  return [
+  const refusals = [
     ...(await leftColumns(db, dialect, label, of.columns)),
+    ...(await overSwapDependents(db, label, of.swapped)),
+    ...(await overWritten(
+      db,
+      dialect,
+      label,
+      narrowed(of, column => !column.castReaches)
+    )),
+  ];
+  const leftToCast: Column[] = [];
+  for (const column of of.columns.filter(each => each.castReaches)) {
+    const one = narrowed(of, each => each === column);
+    const lost = await lostToCast(db, dialect, label, one);
+    refusals.push(...lost);
+    if (lost.length > 0) continue;
+    if ((await overWritten(db, dialect, label, one)).length > 0) {
+      leftToCast.push(column);
+    }
+  }
+  return { refusals, leftToCast };
+}
+
+/** What is asked of `of`, for the columns `keeps` says. */
+function narrowed<Column extends ConvertedColumn>(
+  of: ConversionAsked<Column>,
+  keeps: (column: Column) => boolean
+): ConversionAsked<Column> {
+  const columns = of.columns.filter(keeps);
+  return {
+    columns,
+    judged: of.judged.filter(change =>
+      columns.some(
+        column =>
+          column.table === change.table && column.column === change.column
+      )
+    ),
+    swapped: of.swapped.filter(column => columns.includes(column)),
+  };
+}
+
+/** The refusals of writing the columns' values and giving the columns their new type. */
+async function overWritten(
+  db: unknown,
+  dialect: SupportedDialect,
+  label: string,
+  of: ConversionAsked
+): Promise<TypeChangeRefusal[]> {
+  return [
     ...(await overUpdateTriggers(db, dialect, label, of.judged)),
     ...(await overChecks(db, dialect, label, of)),
     ...(await overCarried(db, dialect, label, of)),
-    ...(await overSwapDependents(db, label, of.swapped)),
   ];
 }
 
@@ -276,12 +336,53 @@ async function lostReasons(
       : [
           `${change.table}.${change.column} has a default (${carried.default}), which the column would not keep. Remove the default first, then try again.`,
         ]),
-    ...(carried.collation === undefined
-      ? []
-      : [
-          `${carried.collation}, which the column would not keep${change.from.unique === true || change.to.unique === true ? ", and its Unique setting compares by it" : ""}. Give it the database's own collation first, then try again.`,
-        ]),
+    ...collationReasons(carried, change),
   ];
+}
+
+/** Why a column taking another type would lose the collation it carries, where it carries one. */
+function collationReasons(
+  carried: Carried,
+  change: JudgedFieldTypeChange
+): string[] {
+  return carried.collation === undefined
+    ? []
+    : [
+        `${carried.collation}, which the column would not keep${change.from.unique === true || change.to.unique === true ? ", and its Unique setting compares by it" : ""}. Give it the database's own collation first, then try again.`,
+      ];
+}
+
+/** A PostgreSQL column type that compares by a collation. */
+const COLLATED_TYPE = /^(text|varchar|character|char|bpchar|citext)\b/i;
+
+/**
+ * What the file's own statement would lose of a column and say nothing of, where its values need no
+ * conversion: the collation a text compares by, where the new type compares by one too, or a Unique
+ * JSON would compare by none. A number, a date or a checkbox has no collation to lose, and over a
+ * default or a CHECK its new type does not take, the database refuses the statement itself.
+ */
+async function lostToCast(
+  db: unknown,
+  dialect: SupportedDialect,
+  label: string,
+  of: ConversionAsked
+): Promise<TypeChangeRefusal[]> {
+  const refusals: TypeChangeRefusal[] = [];
+  for (const change of of.judged) {
+    const column = of.columns.find(each => each.column === change.column);
+    if (column === undefined || column.keepsType) continue;
+    const compares =
+      COLLATED_TYPE.test(column.type) ||
+      (change.to.unique === true && change.toType.family === "json");
+    if (!compares) continue;
+    const carried = await carriedBy(db, dialect, change.table, change.column);
+    refusals.push(
+      ...collationReasons(carried, change).map(reason =>
+        refused(change.to.name, `${cannotChange(label, change)}: ${reason}`)
+      )
+    );
+  }
+  return refusals;
 }
 
 /**

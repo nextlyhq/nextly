@@ -132,6 +132,7 @@ const judged = (
     cleared: [],
     counts: { kept: 0, changed: 0, lost: 0, blocked: 0 },
     emptied: 0,
+    written: 0,
   },
 });
 

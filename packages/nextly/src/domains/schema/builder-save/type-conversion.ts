@@ -112,6 +112,13 @@ export interface ConvertedColumn {
    * a column repair judges what a CHECK reads by (`kindChanges`).
    */
   changesKind: boolean;
+  /**
+   * The file's own statement, which casts the column, reaches every reading too: PostgreSQL's
+   * `ALTER … TYPE`, of a column on the entity's own table, where no value needs writing. Over what
+   * the table carries that a conversion would set off or break, such a column is left to that
+   * statement rather than refused (`conversionRefusals`' `leftToCast`).
+   */
+  castReaches: boolean;
 }
 
 /** A type change's values converted one by one. */
@@ -185,6 +192,7 @@ export function typeConversionOf(args: {
             from: { type: was, nullable: true },
             to: { type, nullable: true },
           }),
+        castReaches: castReaches(change, dialect, translations),
       },
     ];
   });
@@ -210,6 +218,22 @@ export function typeConversionOf(args: {
       return mine.length === 0 ? undefined : runOf(mine);
     },
   };
+}
+
+/**
+ * Whether the file's own statement reaches every reading of the judged change
+ * (`ConvertedColumn.castReaches`). Never on SQLite, whose file makes the table again and refuses
+ * over what it carries by a guard of its own, nor in a translations table, whose column nothing but
+ * the conversion may give its new type.
+ */
+function castReaches(
+  change: JudgedFieldTypeChange,
+  dialect: SupportedDialect,
+  translations: boolean
+): boolean {
+  return (
+    dialect === "postgresql" && !translations && change.result.written === 0
+  );
 }
 
 /** How many of the judged change's values are kept, changed and lost. */
@@ -252,14 +276,14 @@ export function isConversionRefusal(error: unknown): boolean {
  * first file of a change `nextly migrate` deploys or `migrate:down` rolls back. The conversion asks
  * them again where it runs (`judgedAgain`), with the SQLite columns only known there to be swapped.
  */
-export function conversionRefusalsAsItStands(
+export async function conversionRefusalsAsItStands(
   db: unknown,
   dialect: SupportedDialect,
   label: string,
   conversion: TypeConversion,
   judged: readonly JudgedFieldTypeChange[]
 ): Promise<TypeChangeRefusal[]> {
-  return conversionRefusals(db, dialect, label, {
+  const { refusals } = await conversionRefusals(db, dialect, label, {
     columns: conversion.columns,
     judged: judged.filter(change => change.converted === true),
     // The columns known to be swapped before any is read; a REAL one is known where it runs.
@@ -267,6 +291,7 @@ export function conversionRefusalsAsItStands(
       column => column.takesPlaceOnSqlite && !column.keepsType
     ),
   });
+  return refusals;
 }
 
 /**
@@ -394,20 +419,28 @@ async function judgedAgain(
       counts: countsOf(change),
       facts,
       acknowledged,
+      castReaches: castReaches(
+        change,
+        dialect,
+        change.table === input.translationsTable
+      ),
       swaps:
         dialect === "sqlite" &&
         swapsOnSqlite(column, facts, change.result.emptied > 0),
     });
   }
-  throwTypeChangeRefusals(
+  const { refusals: carried, leftToCast } = await conversionRefusals(
+    db,
+    dialect,
     input.label,
-    await conversionRefusals(db, dialect, input.label, {
+    {
       columns: planned,
       judged,
       swapped: planned.filter(column => column.swaps),
-    })
+    }
   );
-  return planned;
+  throwTypeChangeRefusals(input.label, carried);
+  return planned.filter(column => !leftToCast.includes(column));
 }
 
 /**

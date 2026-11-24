@@ -974,7 +974,7 @@ describe.each(getConfiguredTestDialects())(
         // The control: the trigger is there still, and fires on an update.
         await exec(
           t,
-          `INSERT INTO dc_tcf_posts (id, title, v) VALUES ('x', 'x', 1)`
+          `INSERT INTO dc_tcf_posts (id, title, slug, v) VALUES ('x', 'x', 'x', 1)`
         );
         await exec(t, `UPDATE dc_tcf_posts SET v = 2 WHERE id = 'x'`);
         expect(await fired(t)).toBe(1);

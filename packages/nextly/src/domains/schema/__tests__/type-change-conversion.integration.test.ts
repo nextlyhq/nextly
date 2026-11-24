@@ -1002,6 +1002,36 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // Where no value needs writing, PostgreSQL's own statement changes the column: a constraint the new
+    // type takes holds after, and one it does not take stops the statement, nothing changed.
+    it.runIf(dialect === "postgresql").each([
+      { takes: true, check: "v IS NOT NULL OR title <> 'none'" },
+      { takes: false, check: "LENGTH(v) >= 2" },
+    ])(
+      "leaves a column a CHECK constraint names to the database where no value needs writing (takes the new type: $takes)",
+      async ({ takes, check }) => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        await addValidationCheck(t, check);
+        await write(t, "a", { v: "12" });
+
+        const outcome = await save(t, [{ name: "v", type: "number" }]);
+
+        if (takes) {
+          expect(outcome).toBeUndefined();
+          expect(await read(t, "v")).toEqual({ a: 12 });
+          await expect(
+            exec(
+              t,
+              `UPDATE ${q(`dc_${SLUG}`)} SET title = 'none', ${q("v")} = NULL`
+            )
+          ).rejects.toThrow();
+          return;
+        }
+        expect(outcome).toBeInstanceOf(Error);
+        expect(await read(t, "v")).toEqual({ a: "12" });
+      }
+    );
+
     // The same constraint naming another column of the table is no bar to the change.
     it.skipIf(!rewritesValuesOn(dialect))(
       "changes a column beside one a CHECK constraint names",

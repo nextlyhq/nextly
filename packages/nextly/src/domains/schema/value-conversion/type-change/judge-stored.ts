@@ -46,6 +46,12 @@ export interface StoredTypeChangeJudgement {
    * no value (a list's `[]` becoming a text).
    */
   emptied: number;
+  /**
+   * How many rows hold a value the new type reads only once it is written: one lost or emptied, or
+   * one whose stored form is not its reading. Where none does, the database's own conversion reaches
+   * every reading, as `rewrites` absent judges it.
+   */
+  written: number;
 }
 
 /** What a collection is asked besides the class, reasons and rows. */
@@ -218,6 +224,7 @@ function blockedPairJudgement(
     cleared: [],
     counts: { kept: 0, changed: 0, lost: 0, blocked: 0 },
     emptied: 0,
+    written: 0,
   };
 }
 
@@ -307,6 +314,7 @@ class TypeChangeTally {
   >();
   private readonly cleared: RowKey[] = [];
   private emptied = 0;
+  private written = 0;
   private readonly repeatsOf:
     | ((key: RowKey, readsAs: string) => RowKey[] | undefined)
     | undefined;
@@ -331,6 +339,12 @@ class TypeChangeTally {
     this.counts[verdict.outcome] += 1;
     if (verdict.outcome === "lost") this.cleared.push(key);
     if (stored !== null && leavesNone(verdict)) this.emptied += 1;
+    if (
+      verdict.outcome === "lost" ||
+      this.outcomeAsStored(verdict, stored) !== verdict.outcome
+    ) {
+      this.written += 1;
+    }
     if (verdict.reason === "same-value" || verdict.reason === "empty") return;
     this.note(REPORTED_AS[verdict.reason], key);
   }
@@ -352,6 +366,7 @@ class TypeChangeTally {
       cleared: this.cleared,
       counts: this.counts,
       emptied: this.emptied,
+      written: this.written,
     };
   }
 
