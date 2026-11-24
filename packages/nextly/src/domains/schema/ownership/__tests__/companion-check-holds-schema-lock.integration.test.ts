@@ -5,8 +5,9 @@
  *
  * As it happens: a save of a collection, a Single or a field group, through the schema dialog and
  * through its own route, is stopped just after the check has answered, and a second connection asks
- * for the lock as `nextly plugins install` asks (`withMigrateLock`). It is refused, naming the
- * holder, and runs nothing; the save then ends, and the same ask is let in. On SQLite, PostgreSQL
+ * for the lock as `nextly plugins install` asks (`withMigrateLock`), from outside the save, whose own
+ * work runs in its claim. The lock's row names the save as its holder; the ask is refused, naming
+ * it, and runs nothing; the save then ends, and the same ask is let in. On SQLite, PostgreSQL
  * and MySQL, on per-language storage. What another program runs by hand takes no lock, and nothing
  * here speaks of it.
  */
@@ -34,6 +35,7 @@ import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { withMigrateLock } from "../../pipeline/locks";
+import { SCHEMA_LOCK_TABLE } from "../../pipeline/schema-lock";
 import type * as RemovedElements from "../removed-elements";
 
 perLanguageStorageSuite();
@@ -259,22 +261,45 @@ describe.each(getConfiguredTestDialects())(
         }>(
           `SELECT schema_version AS v FROM ${registry} WHERE slug = '${SLUG}'`
         );
-        const asked: Awaited<ReturnType<typeof ask>>[] = [];
+        let stopped = (): void => undefined;
+        let goOn = (): void => undefined;
+        const atCheck = new Promise<void>(resolve => (stopped = resolve));
+        const released = new Promise<void>(resolve => (goOn = resolve));
         pause.afterCheck = async () => {
-          asked.push(await ask());
+          stopped();
+          await released;
         };
 
-        await save(Number(row?.v ?? 1));
+        const saving = save(Number(row?.v ?? 1));
+        // A save that ends without reaching the check is told as that, not waited for.
+        const reached = await Promise.race([
+          atCheck.then(() => "the check"),
+          saving.then(
+            () => "its end",
+            (error: unknown) => `its refusal: ${String(error)}`
+          ),
+        ]);
+        expect(reached).toBe("the check");
+        // No row, or no such table, is nobody holding it: the case goes on, and is told so below.
+        const held = await other!
+          .executeQuery<{
+            command: unknown;
+          }>(`SELECT command FROM ${SCHEMA_LOCK_TABLE}`)
+          .then(
+            rows => rows[0]?.command,
+            () => undefined
+          );
+        const { ran, refused } = await ask();
+        goOn();
+        await saving;
 
-        pause.afterCheck = undefined;
-        expect(asked.length).toBeGreaterThan(0);
-        for (const each of asked) {
-          expect(each.ran).toBe(false);
-          expect(
-            NextlyError.isCode(each.refused, "NEXTLY_MIGRATE_LOCK_BUSY"),
-            String(each.refused)
-          ).toBe(true);
-        }
+        expect(String(held)).toContain(SLUG);
+        expect(ran).toBe(false);
+        expect(
+          NextlyError.isCode(refused, "NEXTLY_MIGRATE_LOCK_BUSY"),
+          String(refused)
+        ).toBe(true);
+        expect((refused as NextlyError).publicMessage).toContain(SLUG);
         // The same ask, once the save has ended: what refused it was the save's hold.
         expect(await ask()).toEqual({ ran: true, refused: undefined });
       }
