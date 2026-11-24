@@ -28,6 +28,6 @@ export function registerWebhooksPruneCommand(program: Command): void {
           async () => (await import("./webhooks-prune")).webhooksPruneAction
         )
       ),
-    startLine("Pruning webhook deliveries...")
+    startLine("Pruning webhook deliveries...", "may connect")
   );
 }

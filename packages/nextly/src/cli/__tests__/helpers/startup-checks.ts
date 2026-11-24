@@ -7,17 +7,18 @@
  * loaded apart, the judge would read a registry the program never wrote to.
  */
 export { createProgram } from "../../program";
-// The variable that stops a run once its command's code has loaded, and the line it writes then.
+// The variable that stops a run at a named point, and the line it writes there.
 export {
-  CODE_LOADED_LINE,
   STARTUP_PROBE_ENV,
   STARTUP_PROBE_EXIT,
-} from "../../lazy-action";
+  STARTUP_PROBE_LINES,
+} from "../../startup-probe";
 
 export { answerOnlyInvocations, wrongAnswer } from "./answer-only-invocations";
 export {
   codeLoadInvocations,
   commandPathOf,
+  connectInvocations,
   firstLineInvocations,
   firstNonBlankLine,
   wrongFirstLine,

@@ -22,9 +22,9 @@ import { lazyAction } from "../lazy-action";
 
 // The variable and line the start-up timing script uses, from the one module it loads them from.
 import {
-  CODE_LOADED_LINE,
   STARTUP_PROBE_ENV,
   STARTUP_PROBE_EXIT,
+  STARTUP_PROBE_LINES,
 } from "./helpers/startup-checks";
 
 /** Thrown by the stand-in for `process.exit`, so the run stops where it would. */
@@ -106,16 +106,20 @@ describe("lazyAction", () => {
     expect(action).not.toHaveBeenCalled();
     // The line comes once the module is imported, and the run ends once it is out.
     expect(events).toEqual(["loaded", "line", "written", "exit"]);
-    expect(written).toEqual([`${CODE_LOADED_LINE}\n`]);
+    expect(written).toEqual([`${STARTUP_PROBE_LINES.loaded}\n`]);
   });
 
-  it("runs the action as usual under any other value of the probe", async () => {
-    process.env[STARTUP_PROBE_ENV] = "1";
-    const { action, handler } = recordedAction();
+  // The probe's other point is further on: a run it ends goes past this one.
+  it.each(["1", "connected"])(
+    "runs the action as usual under another value of the probe, %s",
+    async value => {
+      process.env[STARTUP_PROBE_ENV] = value;
+      const { action, handler } = recordedAction();
 
-    await handler();
+      await handler();
 
-    expect(action).toHaveBeenCalledOnce();
-    expect(written).toEqual([]);
-  });
+      expect(action).toHaveBeenCalledOnce();
+      expect(written).toEqual([]);
+    }
+  );
 });

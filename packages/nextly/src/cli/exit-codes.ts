@@ -10,14 +10,14 @@ import type { Command } from "commander";
 
 import { REPAIR_COLUMNS_EXIT_HELP } from "../domains/schema/repair-columns/exit-code";
 
-import { STARTUP_PROBE_ENV, STARTUP_PROBE_EXIT } from "./lazy-action";
+import { STARTUP_PROBE_ENV, STARTUP_PROBE_EXIT } from "./startup-probe";
 
 /**
  * The codes every command ends with. The start-up probe's is among them, so a
  * run it stopped is named wherever a code is read, and no command uses that
  * code for anything else.
  */
-const SHARED_EXIT_CODES = `0 done or nothing to do · 1 failed or refused · ${STARTUP_PROBE_EXIT} stopped once its code loaded (${STARTUP_PROBE_ENV} is set) · 130 interrupted`;
+const SHARED_EXIT_CODES = `0 done or nothing to do · 1 failed or refused · ${STARTUP_PROBE_EXIT} stopped by the start-up probe (${STARTUP_PROBE_ENV} is set) · 130 interrupted`;
 
 /**
  * The codes a command adds to the shared ones, keyed by its name as typed after

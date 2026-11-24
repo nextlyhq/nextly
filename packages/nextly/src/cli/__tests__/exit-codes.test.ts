@@ -20,7 +20,7 @@ import { createProgram } from "../program";
 import { commandAt, commandPaths } from "./helpers/answer-only-invocations";
 
 const SHARED =
-  "0 done or nothing to do · 1 failed or refused · 4 stopped once its code loaded (NEXTLY_STARTUP_PROBE is set) · 130 interrupted";
+  "0 done or nothing to do · 1 failed or refused · 4 stopped by the start-up probe (NEXTLY_STARTUP_PROBE is set) · 130 interrupted";
 
 /** The codes each command adds, as its help must print them. */
 const OWN: Record<string, string[]> = {

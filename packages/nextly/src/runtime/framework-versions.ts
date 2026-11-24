@@ -13,7 +13,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import semver from "semver";
+// Each function on its own: semver's root loads every one it has, at each
+// command's start.
+import satisfies from "semver/functions/satisfies.js";
 
 import { NextlyError } from "../errors/nextly-error";
 import { installedPackageVersion } from "../shared/lib/installed-package-version";
@@ -96,7 +98,7 @@ export function frameworkVersionProblems(
   for (const [name, supported] of Object.entries(supportedFrameworkRanges())) {
     const version = installed(appRoot, name as FrameworkPackage);
     if (version === null) continue;
-    if (!semver.satisfies(version, supported)) {
+    if (!satisfies(version, supported)) {
       problems.push({
         name: name as FrameworkPackage,
         installed: version,

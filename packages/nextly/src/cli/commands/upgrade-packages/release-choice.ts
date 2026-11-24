@@ -13,7 +13,11 @@
  * @module cli/commands/upgrade-packages/release-choice
  */
 
-import semver from "semver";
+// Each function on its own: semver's root loads every one it has, at each
+// command's start.
+import isNewer from "semver/functions/gt.js";
+import prereleaseOf from "semver/functions/prerelease.js";
+import validVersion from "semver/functions/valid.js";
 
 /** What the registry holds for `nextly`: each dist-tag's release, and every release. */
 export interface RegistryReleases {
@@ -52,7 +56,7 @@ export type ReleaseChoice =
 
 /** The dist-tag a release's channel is: its prerelease identifier, or `latest`. */
 export function channelOf(version: string): string {
-  const [identifier] = semver.prerelease(version) ?? [];
+  const [identifier] = prereleaseOf(version) ?? [];
   return typeof identifier === "string" ? identifier : "latest";
 }
 
@@ -72,7 +76,7 @@ function channelChoice(
   releases: RegistryReleases
 ): ReleaseChoice {
   const tags = tagged(releases);
-  if (installed === undefined || semver.valid(installed) === null) {
+  if (installed === undefined || validVersion(installed) === null) {
     return { kind: "refused", why: { reason: "not-installed" }, tags };
   }
   const channel = channelOf(installed);
@@ -80,12 +84,12 @@ function channelChoice(
   if (named === undefined) {
     return { kind: "refused", why: { reason: "no-tag", channel }, tags };
   }
-  if (semver.gt(named, installed)) return { kind: "move", version: named };
+  if (isNewer(named, installed)) return { kind: "move", version: named };
   return {
     kind: "current",
     channel,
     newer: tags.filter(
-      ({ tag, version }) => tag !== channel && semver.gt(version, installed)
+      ({ tag, version }) => tag !== channel && isNewer(version, installed)
     ),
   };
 }
