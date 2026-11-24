@@ -132,20 +132,37 @@ export function nothingUnwritten(changes: UnwrittenChanges): boolean {
  * caller.
  */
 export function compareWithNewestSnapshot(args: {
-  /** The table changes `migrate:create` would write, and which drops are moves. */
-  pending: Pick<PendingChanges, "tables" | "beside" | "perLanguageMoves">;
+  /** What `migrate:create` would write: the table changes, which drops are moves, permissions. */
+  pending: Pick<
+    PendingChanges,
+    "tables" | "beside" | "perLanguageMoves" | "permissions"
+  >;
   entities: DeclaredEntities;
   permissions: PermissionRecord;
   latest: { data: SnapshotFile } | null;
   /** What the database records, read only where the newest snapshot predates a record. */
   recorded?: RecordedInDatabase;
+  /**
+   * Whether the caller reads the database (`nextly migrate`, a production start), whose first run
+   * records the declared permissions itself. Not `migrate:check`, which reads none.
+   */
+  readsDatabase?: boolean;
 }): UnwrittenChanges {
   const { entities, latest } = args;
   return {
     tables: args.pending.tables,
     beside: args.pending.beside,
     settings: settingsDifferences(entities, latest, args.recorded),
-    permissions: permissionDifferences(args.permissions, latest, args.recorded),
+    // With no snapshot at all, a command that reads no database names the permissions the first
+    // migration records, as `migrate:create` writes them; a database's first `nextly migrate`
+    // records the declared ones itself, so for it they are no change.
+    permissions:
+      latest === null && args.readsDatabase !== true
+        ? args.pending.permissions.filter(
+            (change): change is Extract<PermissionChange, { kind: "owner" }> =>
+              change.kind === "owner"
+          )
+        : permissionDifferences(args.permissions, latest, args.recorded),
     noSnapshot: latest === null,
     perLanguageMoves: args.pending.perLanguageMoves,
   };
@@ -403,6 +420,7 @@ export async function unwrittenChangesOf(
     entities,
     permissions,
     latest,
+    readsDatabase: args.recorded !== undefined,
     ...(predatesRecord && args.recorded !== undefined
       ? {
           recorded: await args.recorded(

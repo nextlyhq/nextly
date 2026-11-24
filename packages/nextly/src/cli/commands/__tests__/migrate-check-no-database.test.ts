@@ -12,6 +12,7 @@
  * the environment already says, or none asked where nothing does.
  */
 import {
+  existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -237,6 +238,21 @@ describe("the history's dialect", () => {
           )?.[1]
       );
     expect(generated).toEqual(["PostgreSQL", "PostgreSQL"]);
+  });
+});
+
+describe("migrate:create --record-snapshot", () => {
+  it("refuses a DATABASE_URL that names another dialect than the migrations are for, before reading it", async () => {
+    environment({ DB_DIALECT: "postgresql", DATABASE_URL: UNOPENED_POSTGRES });
+    expect((await create(project("title"))).code).toBeUndefined();
+
+    // The history is PostgreSQL's; the URL names a SQLite file.
+    environment({ DATABASE_URL: `file:${join(dir, "site.db")}` });
+    const recorded = await create(project("title"), { recordSnapshot: true });
+    expect(recorded.code).toBe(1);
+    expect(recorded.said.join("\n")).toContain("(DATABASE_DIALECT_DIFFERS)");
+    expect(dialectHeaders()).toEqual(["PostgreSQL"]);
+    expect(existsSync(join(dir, "site.db"))).toBe(false);
   });
 });
 

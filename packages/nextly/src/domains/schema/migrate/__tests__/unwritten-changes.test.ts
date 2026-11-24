@@ -89,7 +89,12 @@ const MIGRATIONS = mkdtempSync(join(tmpdir(), "unwritten-changes-"));
 afterAll(() => rmSync(MIGRATIONS, { recursive: true, force: true }));
 
 /** No table change: for the cases about settings and permissions alone. */
-const NO_TABLES = { tables: [], beside: [], perLanguageMoves: [] };
+const NO_TABLES = {
+  tables: [],
+  beside: [],
+  perLanguageMoves: [],
+  permissions: [],
+};
 
 type CompareArgs = Parameters<typeof compareWithNewestSnapshot>[0];
 

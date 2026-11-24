@@ -118,6 +118,7 @@ import { topoSortPlugins } from "../../plugins/topo-sort";
 import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
 import type { CommandContext } from "../context";
 import { projectPath, reportDryRun } from "../dry-run";
+import { databaseDialectDiffers } from "../errors/areas/database";
 import {
   consentTookTheName,
   migrationCreateCancelled,
@@ -133,6 +134,7 @@ import {
 import {
   type CLIDatabaseAdapter,
   createCliAdapter,
+  detectDialectFromUrl,
   getDialectDisplayName,
   type MissingDatabase,
   openDryRunAdapter,
@@ -263,7 +265,9 @@ interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
  */
 function recordModeReader(
   recording: boolean | undefined,
-  dryRun: boolean | undefined
+  dryRun: boolean | undefined,
+  /** The dialect the migrations are for, which the database is opened as (`readWithoutDatabase`). */
+  dialect: SupportedDialect
 ): {
   read?: (tableName: string) => Promise<readonly string[]>;
   close: () => Promise<void>;
@@ -274,7 +278,10 @@ function recordModeReader(
   let adapter: Promise<CLIDatabaseAdapter | MissingDatabase> | undefined;
   return {
     read: async tableName => {
-      adapter ??= dryRun === true ? openDryRunAdapter() : createCliAdapter();
+      adapter ??=
+        dryRun === true
+          ? openDryRunAdapter({ dialect })
+          : createCliAdapter({ dialect });
       const opened = await adapter;
       if ("missing" in opened) return [];
       const { companionColumnNames } = await import(
@@ -290,6 +297,25 @@ function recordModeReader(
       if (opened && !("missing" in opened)) await opened.disconnect();
     },
   };
+}
+
+/**
+ * `--record-snapshot` reads the translations tables of the database `DATABASE_URL` names, and
+ * records them in a migration written for `dialect`: one whose scheme names another database
+ * would record that database's tables, so it is refused before anything is read. A URL whose
+ * scheme names none is opened as `dialect`, and its driver says whether it is one.
+ */
+function refuseRecordingAnotherDialect(
+  recording: boolean | undefined,
+  dialect: SupportedDialect,
+  logger: CommandContext["logger"]
+): void {
+  if (recording !== true) return;
+  const url = process.env.DATABASE_URL;
+  const named = url ? detectDialectFromUrl(url) : undefined;
+  if (named !== undefined && named !== dialect) {
+    exitWithError(logger, databaseDialectDiffers(dialect, named));
+  }
 }
 
 /**
@@ -777,6 +803,7 @@ export async function runMigrateCreate(
         logger,
       });
     logger.keyValue("Dialect", getDialectDisplayName(dialect));
+    refuseRecordingAnotherDialect(options.recordSnapshot, dialect, logger);
 
     // A Builder save this machine left part-way against this database refuses the command, a
     // blank migration's included: what it would write from is not what the database holds. Asked
@@ -921,7 +948,11 @@ export async function runMigrateCreate(
 
     // `--record-snapshot` records which fields are translated as the database holds them, so it reads
     // the translations tables, connecting only once it has one to check. Every other run stays offline.
-    const live = recordModeReader(options.recordSnapshot, options.dryRun);
+    const live = recordModeReader(
+      options.recordSnapshot,
+      options.dryRun,
+      dialect
+    );
     // An older unique index a field that stops being unique leaves holding its column is read from
     // the database, and only then (`uniqueIndexReader`).
     const uniques = uniqueIndexReader(dialect);

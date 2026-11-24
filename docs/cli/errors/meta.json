@@ -43,6 +43,7 @@
     "database-adapter-missing",
     "database-behind-migrations",
     "database-catalog-unreadable",
+    "database-dialect-differs",
     "database-dialect-invalid",
     "database-dialect-unknown",
     "database-not-baselined",
