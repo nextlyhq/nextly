@@ -507,8 +507,10 @@ function fieldsWithTargetsAsBuilderReads(
 /**
  * Whether `problem` is the missing name of a group that only lays its fields out: the one field
  * the definition format lets go without a name (`ui-schema.ts`), whose fields are stored where it
- * sits. The Builder's field save takes one, as its create does inside a container. The code rules
- * ask every field for a name; a nameless field of any other type is reported.
+ * sits. A collection's and a field group's field saves take one, and every create takes one inside
+ * a container. A Single's saves refuse one at its top level; one there was written by hand, is
+ * served, and is not refused either, so a file that works keeps working. The code rules ask every
+ * field for a name; a nameless field of any other type is reported.
  */
 function isLayoutGroupName(
   lists: Readonly<Record<string, readonly unknown[]>>,
@@ -520,8 +522,6 @@ function isLayoutGroupName(
   ) {
     return false;
   }
-  // A Single's saves take none at its top level, so one there is reported.
-  if (/^singles\[\d+\]\.fields\[\d+\]\.name$/.test(problem.path)) return false;
   const field = entryAt(lists, problem.path.slice(0, -".name".length));
   return (
     typeof field === "object" &&

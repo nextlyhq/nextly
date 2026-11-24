@@ -742,9 +742,9 @@ describe("a Builder address each code of the address rule refuses", () => {
 });
 
 describe("a Builder group with no name, by the kind of entity it is in", () => {
-  // A Single's saves refuse one at its top level, so one there was written by hand; every other
-  // place is one the Builder saves.
-  it("is reported at a Single's top level alone", () => {
+  // Every place but a Single's top level is one the Builder saves. One there was written by hand,
+  // and is served as any other, so a file that works keeps working.
+  it("is reported nowhere, a Single's top level included", () => {
     const text = { name: "body", type: "text" };
     const laidOut = { type: "group", fields: [text] };
     const named = (type: string) => ({
@@ -768,8 +768,6 @@ describe("a Builder group with no name, by the kind of entity it is in", () => {
       "ui-schema.json"
     );
 
-    expect(problems.map(problem => [problem.code, problem.path])).toEqual([
-      ["FIELD_NAME_REQUIRED", "ui-schema.json singles[0].fields[2].name"],
-    ]);
+    expect(problems).toEqual([]);
   });
 });

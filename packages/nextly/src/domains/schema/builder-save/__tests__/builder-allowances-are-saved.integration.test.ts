@@ -199,8 +199,10 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
-    // A Single's saves both refuse one there, so one in its definition was written by hand.
-    it("refuse a group with no name at the top of a Single, as the check reports one", async () => {
+    // The one place a kind's saves refuse what the check allows: a definition written by hand with
+    // one there is served (the column builders read through it), so it is not refused, and a file
+    // that works keeps working.
+    it("refuse a group with no name at the top of a Single, which the check lets a hand-written file hold", async () => {
       await boot();
       const kind = kindOf("Single");
       const fields = [text("heading"), laidOut];
@@ -220,12 +222,7 @@ describe.each(getConfiguredTestDialects())(
           {},
           DEFINITION
         ).map(problem => [problem.code, problem.path])
-      ).toEqual([
-        [
-          "FIELD_NAME_REQUIRED",
-          "schema/builder.json singles[0].fields[1].name",
-        ],
-      ]);
+      ).toEqual([]);
     });
 
     it.each(
