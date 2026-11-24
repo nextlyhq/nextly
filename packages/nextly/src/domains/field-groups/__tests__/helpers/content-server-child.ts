@@ -12,7 +12,8 @@
  * - `<id> save <entryId> <heading>` answers `OK` when the save succeeded, the heading saved as
  *   the group's translated tagline too.
  * - `<id> duplicate <entryId>` answers `OK <new entryId>`.
- * - `<id> plugin-save <entryId> <heading>` and `plugin-tx-save` save through a plugin's context.
+ * - `<id> plugin-save <entryId> <heading>` and `plugin-tx-save` save through a plugin's context;
+ *   `plugin-tx-save-unwarmed` does so without warming the collection's readiness first.
  * - `<id> read-single-all` answers the Single's group and every language's values beside it.
  * - `<id> read-single` and `<id> save-single <heading>` do the same for the Single.
  *
@@ -51,7 +52,10 @@ const { definePlugin } = await import("../../../../plugins/plugin-context");
 // opens its own transaction, and one on a transaction the plugin opened.
 type PluginCollections = Pick<
   CollectionService,
-  "updateEntry" | "updateEntryInTransaction" | "withTransaction"
+  | "updateEntry"
+  | "updateEntryInTransaction"
+  | "warmLocalizedReadiness"
+  | "withTransaction"
 >;
 let pluginCollections: PluginCollections | undefined;
 const plugin = definePlugin({
@@ -140,7 +144,11 @@ async function answer(command: string, args: string[]): Promise<string> {
     });
     return "OK";
   }
-  if (command === "plugin-save" || command === "plugin-tx-save") {
+  if (
+    command === "plugin-save" ||
+    command === "plugin-tx-save" ||
+    command === "plugin-tx-save-unwarmed"
+  ) {
     if (!pluginCollections) return "ERROR NO_PLUGIN the plugin did not start";
     const collections = pluginCollections;
     const [id, heading] = args;
@@ -151,6 +159,11 @@ async function answer(command: string, args: string[]): Promise<string> {
     if (command === "plugin-save") {
       await collections.updateEntry(LIVE_COLLECTION, id!, data, {});
     } else {
+      // Before the transaction, as a write on one of the plugin's own needs: what it warms can
+      // only be read inside one, never resolved.
+      if (command === "plugin-tx-save") {
+        await collections.warmLocalizedReadiness(LIVE_COLLECTION);
+      }
       await collections.withTransaction(tx =>
         collections.updateEntryInTransaction(tx, LIVE_COLLECTION, id!, data, {})
       );

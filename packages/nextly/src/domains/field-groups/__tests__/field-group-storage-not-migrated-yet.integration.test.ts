@@ -455,10 +455,12 @@ describe.each(getConfiguredTestDialects())(
               await meetMove(tx).catch(() => undefined);
             })
           );
-          // The commit itself fails: the transaction was rolled back, not committed.
+          // The harness asks the transaction as the callback returns and finds it aborted, and the
+          // commit itself then fails: rolled back, not committed.
           expect(done).not.toBe("ok");
           expect(await marks()).toEqual([]);
           expect(takeAbortedTransactionSightings()).toEqual([
+            expect.stringContaining(PG_ABORTED_TRANSACTION),
             expect.stringContaining("rolled back, not committed"),
           ]);
         });
@@ -534,6 +536,7 @@ describe.each(getConfiguredTestDialects())(
             delete: await counted(at.remove),
           };
           await site!.close();
+          site = undefined;
           return counts;
         };
         const legacy = await measured(false);

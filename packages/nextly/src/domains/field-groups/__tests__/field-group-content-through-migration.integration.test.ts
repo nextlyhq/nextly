@@ -216,7 +216,7 @@ describe.each(getConfiguredTestDialects())(
     }, 300_000);
 
     /** The legacy site with content, a server started on it, and the migration then run. */
-    const openMigratedUnder = async () => {
+    const openMigratedUnder = async (options: { migrate?: boolean } = {}) => {
       site = await openStorageGenerationSite({
         dialect,
         loaded,
@@ -240,7 +240,9 @@ describe.each(getConfiguredTestDialects())(
         perLanguageStorageEnabled() ? "on" : "off",
       ]);
       await server.printed("READY");
-      expect((await site.migrateStorage()).ran).toBe(true);
+      if (options.migrate !== false) {
+        expect((await site.migrateStorage()).ran).toBe(true);
+      }
       return (created.item as { id: string }).id;
     };
 
@@ -257,6 +259,19 @@ describe.each(getConfiguredTestDialects())(
       }
       return answers.at(-1)!;
     };
+
+    // The control for the plugin's write below: the same request with no migration at all, so what
+    // it answers there is told from what it answers on a server that met one.
+    it.each(["plugin-tx-save", "plugin-tx-save-unwarmed"])(
+      "control: before any migration, a plugin's write on its own transaction (%s)",
+      async command => {
+        const id = await openMigratedUnder({ migrate: false });
+        const answer = await ask(server!, `${command} ${id} from-plugin`);
+        console.log(`[control] ${dialect} ${command}: ${answer.slice(0, 200)}`);
+        if (command === "plugin-tx-save") expect(answer).toBe("OK");
+      },
+      300_000
+    );
 
     // A read follows a move by itself, so a server that reads first has found the new names by the
     // time it writes. Each of these is the first thing a server does after the migration, with only
