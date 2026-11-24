@@ -235,13 +235,23 @@ function builderProblemsFor(
     ? unreadDefinitionProblems(entities, definitionFile)
     : builderDefinitionProblems(entities, code, definitionFile);
   if (builderPolicyOf(options) === "refuse") return found;
-  for (const problem of found) {
-    consoleLogger.warn(
+  const lines = found.map(
+    problem =>
       `[Nextly] Problem in the Builder's definitions at ${problem.path}: ${problem.message}`
-    );
+  );
+  // A development start loads more than once, and each save loads again: the same problems are
+  // said once, and changed ones anew.
+  const said = lines.join("\n");
+  const root = resolve(options.cwd ?? process.cwd());
+  if (builderWarningSaid.get(root) !== said) {
+    for (const line of lines) consoleLogger.warn(line);
   }
+  builderWarningSaid.set(root, said);
   return [];
 }
+
+/** What was last warned of in each project's Builder definitions, by its root. */
+const builderWarningSaid = new Map<string, string>();
 
 /** The problem an unreadable definition file is, at the file, in the shared report's shape. */
 function unreadDefinitionProblems(

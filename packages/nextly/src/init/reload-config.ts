@@ -33,6 +33,7 @@ import type {
   CollectionConfig,
   CollectionHooks,
 } from "../collections/config/define-collection";
+import { dropHeldBuilderWarning } from "../di/builder-problems-at-start";
 import { container } from "../di/container";
 import { loadBuilderEntities } from "../di/load-dynamic-tables";
 import type { NextlyServiceConfig } from "../di/register";
@@ -2091,6 +2092,11 @@ async function applyReloadHolding(
       // A running site: a problem in the Builder's definitions is warned of, not refused.
       builderDefinitions: "warn",
     });
+    // A load of the project's own configuration judged its definition file, so what the start
+    // held of its rows is said already. One that found no file may be reading another folder.
+    if (opts?.atStart === true && result.configPath !== undefined) {
+      dropHeldBuilderWarning();
+    }
     loadedConfig = result.config;
     // Watch exactly what this read: the config and every file it imported. Set
     // before the checks below, which may still refuse the edit; the fix for a

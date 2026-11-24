@@ -717,3 +717,61 @@ describe("a Builder definition file the load cannot read, beside a code relation
     expect(paths).toEqual(["ui-schema.json"]);
   });
 });
+
+describe("a Builder problem a load warns of, loaded again in the same process", () => {
+  // A development start loads the configuration more than once, and a save loads it again: the
+  // same problems are said once, and changed ones are said anew.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("is said once, and again when an edit changes what is wrong", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const cwd = project();
+    const write = (slug: string) =>
+      writeFileSync(
+        join(cwd, "ui-schema.json"),
+        JSON.stringify({
+          collections: [
+            { slug: "fine", fields: [{ name: "body", type: "text" }] },
+            {
+              slug,
+              fields: [
+                { name: slug, type: "text" },
+                { name: slug, type: "text" },
+              ],
+            },
+          ],
+          singles: [],
+          components: [],
+        })
+      );
+    const warned: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation((...parts: unknown[]) => {
+      const line = parts.map(String).join(" ");
+      if (line.includes("ui-schema.json")) warned.push(line);
+    });
+    const load = async () => {
+      clearConfigCache();
+      await loadConfig({ cwd, builderDefinitions: "warn" });
+    };
+
+    write("cases");
+    await load();
+    await load();
+    expect(warned).toHaveLength(1);
+
+    write("matters");
+    await load();
+    expect(warned).toHaveLength(2);
+
+    // Back to the first problem: it changed again, so it is said again.
+    write("cases");
+    await load();
+    expect(warned).toHaveLength(3);
+  });
+});
