@@ -1029,14 +1029,12 @@ describe.each(LEFT_SAVE_SUITES)(
     );
 
     // PostgreSQL and SQLite run a file in one transaction, so a kill finds none or all of the change:
-    // killed before the file ran, the write that sets the field is as it ever was.
-    it.runIf(dialect !== "mysql" && !perLanguage).each([
-      ["changes its type", { numeric: true }, "heading", "8"],
-      ["makes it required", {}, "note", "set"],
-    ] as const)(
-      "refuses no write where a save that %s was killed before its file ran",
-      async (_what, options, set, value) => {
-        const t = await boot(options);
+    // killed before the file ran, the write that sets the field is as it ever was. A type change is a
+    // push there, in one transaction of its own, which has no point before its statement.
+    it.runIf(dialect !== "mysql" && !perLanguage)(
+      "refuses no write where a save that makes a field required was killed before its file ran",
+      async () => {
+        const t = await boot();
         const schemaVersion = await versionOf(t);
         await killSave(
           t,
@@ -1047,10 +1045,10 @@ describe.each(LEFT_SAVE_SUITES)(
               "applySchemaChanges",
               { collectionName: slug },
               {
-                fields:
-                  set === "heading"
-                    ? [field("heading"), field("note")]
-                    : [field("heading"), { ...field("note"), required: true }],
+                fields: [
+                  field("heading"),
+                  { ...field("note"), required: true },
+                ],
                 confirmed: true,
                 schemaVersion,
               }
@@ -1060,20 +1058,12 @@ describe.each(LEFT_SAVE_SUITES)(
           {
             kind: "write",
             via: "rest",
-            data: {
-              title: "R1",
-              slug: "r1",
-              [set]: set === "heading" ? Number(value) : value,
-            },
+            data: { title: "R1", slug: "r1", note: "set" },
           },
           {
             kind: "write",
             via: "api",
-            data: {
-              title: "A1",
-              slug: "a1",
-              [set]: set === "heading" ? Number(value) : value,
-            },
+            data: { title: "A1", slug: "a1", note: "set" },
           },
           { kind: "read", via: "rest" },
           { kind: "read", via: "api" },
