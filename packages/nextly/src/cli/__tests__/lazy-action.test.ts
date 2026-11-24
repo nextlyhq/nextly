@@ -9,8 +9,11 @@
  *
  * What would separate a correct probe from a broken one:
  * - the line written before the module is imported (a time that measures nothing);
+ * - the run ended before the line is out: standard error may be a pipe, whose
+ *   writes finish later, and an exit drops what is still pending;
  * - the action run after the line (a timed run that does the command's work);
  * - the run going on after the line, into the program's after-action hooks;
+ * - a stopped run exiting 0, as a run that did its work does;
  * - a probe that answers to any value, or that changes a run without it.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,7 +21,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lazyAction } from "../lazy-action";
 
 // The variable and line the start-up timing script uses, from the one module it loads them from.
-import { CODE_LOADED_LINE, STARTUP_PROBE_ENV } from "./helpers/startup-checks";
+import {
+  CODE_LOADED_LINE,
+  STARTUP_PROBE_ENV,
+  STARTUP_PROBE_EXIT,
+} from "./helpers/startup-checks";
 
 /** Thrown by the stand-in for `process.exit`, so the run stops where it would. */
 class Exited extends Error {
@@ -36,11 +43,20 @@ beforeEach(() => {
   delete process.env[STARTUP_PROBE_ENV];
   written = [];
   events = [];
-  vi.spyOn(process.stderr, "write").mockImplementation(chunk => {
-    written.push(String(chunk));
-    events.push("line");
-    return true;
-  });
+  // Like a pipe: the write is taken now and finishes on a later turn, when
+  // its callback runs.
+  vi.spyOn(process.stderr, "write").mockImplementation(
+    (chunk: unknown, ...rest: unknown[]) => {
+      written.push(String(chunk));
+      events.push("line");
+      const done = rest.find(each => typeof each === "function");
+      setTimeout(() => {
+        events.push("written");
+        if (typeof done === "function") done();
+      }, 0);
+      return true;
+    }
+  );
   vi.spyOn(process, "exit").mockImplementation(code => {
     events.push("exit");
     throw new Exited(code === undefined ? undefined : Number(code));
@@ -77,17 +93,19 @@ describe("lazyAction", () => {
     expect(written).toEqual([]);
   });
 
-  it("under the start-up probe, says the code has loaded and ends the run without running it", async () => {
+  it("under the start-up probe, says the code has loaded and ends the run with its own code, without running it", async () => {
     process.env[STARTUP_PROBE_ENV] = "loaded";
     const { action, handler } = recordedAction();
 
     const ended = await handler("a").catch((error: unknown) => error);
 
     expect(ended).toBeInstanceOf(Exited);
-    expect((ended as Exited).code).toBe(0);
+    // Its own code, which no command exits with otherwise (exit-codes.test.ts).
+    expect((ended as Exited).code).toBe(STARTUP_PROBE_EXIT);
+    expect(STARTUP_PROBE_EXIT).toBe(4);
     expect(action).not.toHaveBeenCalled();
-    // The line comes once the module is imported, and the run ends right after it.
-    expect(events).toEqual(["loaded", "line", "exit"]);
+    // The line comes once the module is imported, and the run ends once it is out.
+    expect(events).toEqual(["loaded", "line", "written", "exit"]);
     expect(written).toEqual([`${CODE_LOADED_LINE}\n`]);
   });
 

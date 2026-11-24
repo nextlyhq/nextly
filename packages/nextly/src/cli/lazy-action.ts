@@ -13,12 +13,19 @@
 /**
  * The variable that, set to `loaded`, stops a run once its command's code has
  * loaded: the start-up timing measures how long that takes. Not documented for
- * users; without it a run is unchanged.
+ * users beyond its exit code; without it a run is unchanged.
  */
 export const STARTUP_PROBE_ENV = "NEXTLY_STARTUP_PROBE";
 
 /** The line a run under the start-up probe writes once its command's code has loaded. */
 export const CODE_LOADED_LINE = "nextly: code loaded";
+
+/**
+ * The code a run under the start-up probe exits with, used by no command for
+ * anything else: a run stopped before its work never passes for one that did
+ * it, so a probe variable left set where a command must really run fails it.
+ */
+export const STARTUP_PROBE_EXIT = 4;
 
 /**
  * The action `load` resolves to, imported on the first call and given every
@@ -29,18 +36,23 @@ export function lazyAction<Args extends unknown[]>(
 ): (...args: Args) => Promise<void> {
   return async (...args: Args) => {
     const action = await load();
-    endAtProbe();
+    await endAtProbe();
     await action(...args);
   };
 }
 
 /**
  * Under the start-up probe, says the command's code has loaded and ends the
- * run there, so a timed run does none of the command's work and the program's
- * after-action steps never start. Otherwise does nothing.
+ * run there with the probe's own code, so a timed run does none of the
+ * command's work, the program's after-action steps never start, and the run
+ * cannot pass for one that did its work. Otherwise does nothing.
  */
-function endAtProbe(): void {
+async function endAtProbe(): Promise<void> {
   if (process.env[STARTUP_PROBE_ENV] !== "loaded") return;
-  process.stderr.write(`${CODE_LOADED_LINE}\n`);
-  process.exit(0);
+  // Standard error may be a pipe, whose writes finish later, and an exit drops
+  // what is still pending: the run ends once the line is out.
+  await new Promise<void>(resolve => {
+    process.stderr.write(`${CODE_LOADED_LINE}\n`, () => resolve());
+  });
+  process.exit(STARTUP_PROBE_EXIT);
 }

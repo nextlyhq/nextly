@@ -30,11 +30,13 @@
  * once its action's module is imported and ends there, doing none of its
  * work. Each is run 5 times in the same project, and once more with a loader
  * hook that counts the modules it resolved. This pass reports and enforces no
- * budget yet, but a run that does not exit 0 fails the check, as does a
- * counting run that does not end with the line or writes no count. A command
- * that exits 0 without the line runs an action written inline rather than
- * through `lazyAction`: it is named as such and held to the answer-only
- * budget, so code that action imports for itself cannot load untimed.
+ * budget yet, but a run must end with the line and the probe's own exit code
+ * (`STARTUP_PROBE_EXIT`), or with exit 0 and no line; any other end fails the
+ * check, as does a counting run that does not end with the line or writes no
+ * count. A command that exits 0 without the line runs an action written inline
+ * rather than through `lazyAction`: it is named as such and held to the
+ * answer-only budget, so code that action imports for itself cannot load
+ * untimed.
  *
  * Run after the build: `node scripts/check-cli-startup.mjs`.
  */
@@ -81,8 +83,11 @@ const CODE_LOAD_TIMEOUT_MS = 60_000;
 const MODULES_LINE = "nextly: modules resolved ";
 // Loaded with `--import` into the counting run only, so the timed runs carry
 // no hook: every module the run resolved from a file, written as it exits.
+// Written straight to the file descriptor, since nothing written through a
+// stream after `exit` is waited for.
 const MODULE_COUNT_HOOK = `data:text/javascript,${encodeURIComponent(
   [
+    'import { writeSync } from "node:fs";',
     'import { registerHooks } from "node:module";',
     "const seen = new Set();",
     "registerHooks({ resolve(specifier, context, next) {",
@@ -90,7 +95,7 @@ const MODULE_COUNT_HOOK = `data:text/javascript,${encodeURIComponent(
     '  if (!resolved.url.startsWith("node:")) seen.add(resolved.url);',
     "  return resolved;",
     "} });",
-    `process.on("exit", () => process.stderr.write(${JSON.stringify(MODULES_LINE)} + seen.size + "\\n"));`,
+    `process.on("exit", () => writeSync(2, ${JSON.stringify(MODULES_LINE)} + seen.size + "\\n"));`,
   ].join("\n")
 )}`;
 
@@ -111,7 +116,12 @@ async function loadSource() {
     // Every command that runs an action, and the variants timed beside them.
     codeLoads: source.codeLoadInvocations(createProgram()),
     // The variable that stops a run once its code has loaded, and the line it writes then.
-    probe: { env: source.STARTUP_PROBE_ENV, line: source.CODE_LOADED_LINE },
+    probe: {
+      env: source.STARTUP_PROBE_ENV,
+      line: source.CODE_LOADED_LINE,
+      // The code a run the probe stopped exits with, which no command uses otherwise.
+      exit: source.STARTUP_PROBE_EXIT,
+    },
     firstLineHelpers: {
       firstNonBlankLine: source.firstNonBlankLine,
       // The line each command declared, as the program's own test judges it.
@@ -356,14 +366,15 @@ function probed(args, { project, env }, probe, nodeArgs = []) {
 
 /**
  * How a probed run ended: `loaded` once it wrote the probe's line and exited
- * 0, `none` when it exited 0 without the line (it loads no code of its own),
- * or why it failed.
+ * with the probe's code, `none` when it exited 0 without the line (its action
+ * is written inline), or why it failed.
  */
 function probedOutcome(run, probe) {
   const failed = unfinished(run);
   if (failed) return { failure: failed };
   const loaded = run.stderr.split("\n").some(line => line === probe.line);
-  if (run.status === 0) return { kind: loaded ? "loaded" : "none" };
+  if (loaded && run.status === probe.exit) return { kind: "loaded" };
+  if (!loaded && run.status === 0) return { kind: "none" };
   const said = run.stderr.trim().split("\n").slice(-3).join(" / ");
   return {
     failure: `ended (exit ${String(run.status)}) without loading: ${said}`,

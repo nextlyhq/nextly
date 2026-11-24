@@ -182,16 +182,29 @@ export function wrongFirstLine(
 
 /**
  * The runs the start-up timing stops once their command's code has loaded:
- * every command that runs an action, with the arguments it is timed to its
- * first line with. A parent that only holds subcommands answers with its help
- * and loads nothing, so it is not among them. A variant of a command's
+ * every command with an action of its own (`hasAction`), with the arguments
+ * it is timed to its first line with. A parent that only holds subcommands
+ * answers with its help and loads nothing, so it is not among them. A variant of a command's
  * arguments would time the same thing: the run stops as the action's module
  * loads, before the action reads them.
  */
 export function codeLoadInvocations(program: Command): string[][] {
   return firstLineInvocations(program).filter(args =>
-    runsAnAction(program, commandPathOf(program, args))
+    hasAction(commandAt(program, commandPathOf(program, args)))
   );
+}
+
+/**
+ * Whether `command` has an action of its own: a leaf's, or a parent's that
+ * Commander runs instead of answering with its help. Read from the handler
+ * Commander keeps (`_actionHandler`, set by `.action()`, the one its own run
+ * dispatches on), since it offers no public way to ask; the test of this
+ * helper builds a parent with an action, so a rename reads as none and fails
+ * there.
+ */
+export function hasAction(command: Command): boolean {
+  const handler: unknown = Reflect.get(command, "_actionHandler");
+  return typeof handler === "function";
 }
 
 /** Whether the command `path` names under `program` runs an action itself, holding no subcommands. */

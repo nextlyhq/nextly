@@ -8,7 +8,11 @@
  */
 export { createProgram } from "../../program";
 // The variable that stops a run once its command's code has loaded, and the line it writes then.
-export { CODE_LOADED_LINE, STARTUP_PROBE_ENV } from "../../lazy-action";
+export {
+  CODE_LOADED_LINE,
+  STARTUP_PROBE_ENV,
+  STARTUP_PROBE_EXIT,
+} from "../../lazy-action";
 
 export { answerOnlyInvocations, wrongAnswer } from "./answer-only-invocations";
 export {
