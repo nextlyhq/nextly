@@ -240,9 +240,11 @@ describe("choosing what to publish", () => {
 
     await user.click(screen.getByRole("button", { name: "Publish" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
       "slug: Another entry already uses this value in Spanish."
     );
+    expect(alert).toHaveClass("text-danger-text");
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
   it("publishes only once the editor's recordings on their way have landed", async () => {

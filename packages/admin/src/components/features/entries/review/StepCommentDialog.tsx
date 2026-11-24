@@ -25,6 +25,10 @@ import {
 import { useId, useState, type JSX } from "react";
 
 import { Loader2 } from "@admin/components/icons";
+import {
+  editorMainAction,
+  useDialogReturnFocus,
+} from "@admin/hooks/useDialogReturnFocus";
 
 import { StepRefusalNote } from "./StepRefusalNote";
 
@@ -61,6 +65,10 @@ export function StepCommentDialog({
   const [comment, setComment] = useState("");
   const fieldId = useId();
   const trimmed = comment.trim();
+  // Opened from state, so focus is handed back by hand when it closes: to the
+  // control that asked, or, where a step taken has redrawn the header without
+  // it, to the editor's main action.
+  const returnFocus = useDialogReturnFocus(open, editorMainAction);
   return (
     <Dialog
       open={open}
@@ -70,7 +78,7 @@ export function StepCommentDialog({
         onCancel();
       }}
     >
-      <DialogContent>
+      <DialogContent onCloseAutoFocus={returnFocus}>
         <DialogHeader>
           <DialogTitle>{label}</DialogTitle>
           <DialogDescription>

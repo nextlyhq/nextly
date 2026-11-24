@@ -11,7 +11,6 @@
  * nothing of its own.
  *
  * @module hooks/queries/useReviewState
- * @experimental
  */
 
 import {

@@ -8,7 +8,6 @@
  * its reason, as core's baselines refuse one they cannot resolve.
  *
  * @module domains/workflows/review-baselines
- * @experimental
  */
 import { getService } from "../../di";
 import {
@@ -82,8 +81,6 @@ function comparisonBaselineOf(baseline: ReviewBaseline): ComparisonBaseline {
 /**
  * Registers "since submitted" and "since approved" with the history's comparison baselines, each
  * not registered yet, so a boot that runs again in the same process registers nothing twice.
- *
- * @experimental
  */
 export function registerWorkflowBaselines(): void {
   const known = new Set(comparisonBaselineNames());

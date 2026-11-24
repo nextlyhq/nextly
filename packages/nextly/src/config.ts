@@ -52,7 +52,7 @@ export {
   type SinglePreviewConfig,
 } from "./singles/config/define-single";
 
-// Editorial workflows (@experimental): a workflow defined in code, attached
+// Editorial workflows: a workflow defined in code, attached
 // to collections and Singles with their `workflow` option. Only modules that
 // reach no Node built-in are exported here, so a collection file can import
 // them beside `defineCollection`; the definition hash is computed at boot.

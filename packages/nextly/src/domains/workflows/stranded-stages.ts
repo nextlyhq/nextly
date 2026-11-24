@@ -8,7 +8,6 @@
  * the same shape, so a count and the list it links to cannot disagree.
  *
  * @module domains/workflows/stranded-stages
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
@@ -73,8 +72,6 @@ function knownStageNames(workflow: Workflow): string[] {
  * The condition a review state of a document `workflow` is attached to meets when it is
  * stranded, on the review states table: its stage is none the definition knows. The one
  * statement of it, read by the list here and by the `_strandedStage` filter.
- *
- * @experimental
  */
 export function strandedStageShape(
   workflow: Workflow
@@ -84,8 +81,6 @@ export function strandedStageShape(
 
 /**
  * A stranded part, with its workflow and what Needs attention says of it.
- *
- * @experimental
  */
 export interface StrandedReviewState extends ReviewState {
   /** The slug of the workflow attached to its collection or Single. */
@@ -203,8 +198,6 @@ interface StrandedScope extends StrandedEntity {
  * Every stranded part of the documents `scope.workflows` are attached to, or of one collection's
  * or Single's when `scope.collection` or `scope.single` names it, ordered by document and part: one read per collection or
  * Single, on a transaction of its own, since the review states surface is a transaction's.
- *
- * @experimental
  */
 export function strandedReviewStates(
   adapter: DrizzleAdapter,
@@ -454,8 +447,6 @@ function movedOf(states: readonly StrandedReviewState[]): MovedStranded {
  * the first stage, which is how it read while stranded. Refused, moving nothing, for a person
  * unknown or deactivated, a stage missing from a workflow whose parts it moves or one that allows
  * publishing, and a missing comment. Answers the documents moved.
- *
- * @experimental
  */
 export async function moveStrandedReviewStates(
   adapter: DrizzleAdapter,
@@ -487,8 +478,6 @@ export async function moveStrandedReviewStates(
  * The documents `moveStrandedReviewStates` would move for `input`, judged and refused exactly as it
  * judges and refuses, writing nothing. Read straight on the adapter, outside any transaction: a
  * dry run takes no lock, and a transaction would take SQLite's write lock (`BEGIN IMMEDIATE`).
- *
- * @experimental
  */
 export async function planMoveStrandedReviewStates(
   adapter: DrizzleAdapter,

@@ -19,7 +19,6 @@
  * is asked when it is taken, and a refusal is said where it happens.
  *
  * @module components/features/entries/review/useEditorReview
- * @experimental
  */
 
 import { useQueryClient } from "@tanstack/react-query";
@@ -47,7 +46,8 @@ import {
   waitingForWords,
 } from "./review-words";
 import { approves, useSharedApprovalHold } from "./shared-hold";
-import { STEP_NOT_OFFERED, useStepTaker } from "./useStepTaker";
+import { useAnnouncedStepTaker } from "./step-announcement";
+import { STEP_NOT_OFFERED } from "./useStepTaker";
 
 export interface EditorReviewInput {
   /** The document, once it exists; nothing is asked before. */
@@ -122,7 +122,8 @@ export function useEditorReview({
 }: EditorReviewInput): EditorReview {
   const query = useReviewState(document);
   const { defaultLocale } = useLocalization();
-  const taker = useStepTaker(document);
+  // Each step said to assistive technology as well as in a toast.
+  const taker = useAnnouncedStepTaker(document);
   const queryClient = useQueryClient();
 
   // A store moves the review (an edit to approved content returns it to

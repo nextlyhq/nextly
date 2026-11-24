@@ -8,7 +8,6 @@
  * one condition.
  *
  * @module domains/workflows/changed-since-approved-condition
- * @experimental
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import {
@@ -35,8 +34,6 @@ import { approvedSlot, WORKFLOW_PIN_HOLDER } from "./workflow-pins";
  * among the languages `locales` names and the shared part (`null` considers every language, as the
  * other workflow filters take it). A collection no workflow is attached to was never approved, and
  * keeps no entry.
- *
- * @experimental
  */
 export function changedSinceApprovedCondition(args: {
   dialect: SupportedDialect;

@@ -106,6 +106,30 @@ describe("ReviewSection", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("has its announcement region in the page, empty, before any step is taken", async () => {
+    // A region left by an earlier case would make this pass on its own.
+    document.getElementById("nextly-review-announcer")?.remove();
+    fetchSpy.mockResolvedValue(answer(part()));
+
+    render(<ReviewSection document={post} />);
+    await screen.findByRole("region", { name: "Review" });
+
+    const region = document.getElementById("nextly-review-announcer");
+    expect(region).not.toBeNull();
+    expect(region?.getAttribute("aria-live")).toBe("polite");
+    expect(region?.textContent).toBe("");
+  });
+
+  it("can take focus back from a step dialog, as the place a step leaves the person", async () => {
+    fetchSpy.mockResolvedValue(answer(part()));
+
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+
+    expect(section).toHaveAttribute("data-review-focus");
+    expect(section).toHaveAttribute("tabindex", "-1");
+  });
+
   it("says the stage, who it waits for, and the last move", async () => {
     fetchSpy.mockResolvedValue(answer(part()));
     render(<ReviewSection document={post} />);
@@ -207,6 +231,61 @@ describe("ReviewSection", () => {
     );
   });
 
+  it("keeps the keyboard's place when a press replaces itself: Assign to me gives way to Unassign, and back", async () => {
+    fetchSpy.mockResolvedValue(answer(part()));
+    // The server answers the next read with the assignment just made, as a refetch reads it.
+    assignSpy.mockImplementation(
+      async (requests: { assignee: { kind: string; id: string } | null }[]) => {
+        const assignee = requests[0]?.assignee ?? null;
+        fetchSpy.mockResolvedValue(
+          answer(
+            assignee === null
+              ? part()
+              : part({
+                  assignee: { kind: "user", id: "me" },
+                  waitingFor: { kind: "user", id: "me", name: "Me" },
+                })
+          )
+        );
+        return { message: "Assigned.", item: {} };
+      }
+    );
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+
+    within(section).getByRole("button", { name: "Assign to me" }).focus();
+    await userEvent.keyboard("{Enter}");
+    // The press is gone once assigned; focus lands on the one that undoes it, not the page.
+    const unassign = await within(section).findByRole("button", {
+      name: "Unassign",
+    });
+    await waitFor(() => expect(unassign).toHaveFocus());
+
+    await userEvent.keyboard("{Enter}");
+    const assign = await within(section).findByRole("button", {
+      name: "Assign to me",
+    });
+    await waitFor(() => expect(assign).toHaveFocus());
+  });
+
+  it("gives focus back to a press whose assignment was refused", async () => {
+    fetchSpy.mockResolvedValue(answer(part()));
+    assignSpy.mockImplementation(async () => {
+      // A browser drops focus from a control as it is disabled; jsdom keeps it, so drop it here.
+      (document.activeElement as HTMLElement | null)?.blur();
+      throw new Error("refused");
+    });
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    const assign = within(section).getByRole("button", {
+      name: "Assign to me",
+    });
+    assign.focus();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(assignSpy).toHaveBeenCalled());
+    await waitFor(() => expect(assign).toHaveFocus());
+  });
+
   it("offers no assigning to a person who may neither edit nor take the stage's step", async () => {
     held.slugs = new Set(["approve-posts"]);
     fetchSpy.mockResolvedValue(
@@ -301,4 +380,54 @@ describe("ReviewSection", () => {
       })
     );
   });
+
+  it("draws each part's stage as words with a shape, never as a button", async () => {
+    fetchSpy.mockResolvedValue(answer(part()));
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    const stage = section.querySelector("[data-stage-shape]");
+    expect(stage).toHaveAttribute("data-stage-shape", "in-review");
+    expect(stage).toHaveTextContent("In review");
+    expect(stage?.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    expect(stage?.closest("button")).toBeNull();
+  });
+
+  it("says a step taken to assistive technology, not only in a toast", async () => {
+    stepSpy.mockResolvedValue({ message: "Step taken.", item: {} });
+    fetchSpy.mockResolvedValue(answer(part()));
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    await userEvent.click(
+      within(section).getByRole("button", { name: "Approve" })
+    );
+    await waitFor(() => expect(announced()).toContain("Approve: done."));
+  });
+
+  it("says a refused step to assistive technology once, through its alert in place", async () => {
+    stepSpy.mockRejectedValue(new Error("Someone else moved it first."));
+    fetchSpy.mockResolvedValue(answer(part()));
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    await userEvent.click(
+      within(section).getByRole("button", { name: "Approve" })
+    );
+    // An alert is read at once, so the polite region does not say it again.
+    await waitFor(() =>
+      expect(within(section).getByRole("alert")).toHaveTextContent(
+        "Someone else moved it first."
+      )
+    );
+    // In the status text colour that reads at AA in both schemes.
+    expect(within(section).getByRole("alert")).toHaveClass("text-danger-text");
+    expect(
+      announced().some(text => text.includes("Someone else moved it first."))
+    ).toBe(false);
+  });
 });
+
+/** What every polite status region on the page says now. */
+function announced(): string[] {
+  return Array.from(
+    document.querySelectorAll('[role="status"][aria-live="polite"]')
+  ).map(region => region.textContent?.trim() ?? "");
+}

@@ -68,6 +68,15 @@ export const LOCK = {
    * release it finds, whichever spec left it there.
    */
   releases: "releases",
+  /**
+   * The playground's `review` workflow: its settings (default reviewers,
+   * stage labels, which roles hold each step) and the roles holding its
+   * steps. "Waiting for …" names every role that may approve, so a spec
+   * signing in a reviewer changes what every other spec's notes wait for,
+   * and the Settings › Workflows screen changes the rest. Every spec working
+   * a workflow takes it, and its writers reset the settings under it.
+   */
+  reviewWorkflow: "review-workflow",
   /** The `related-links` single, written and read back exactly. */
   relatedLinks: "related-links",
   /**

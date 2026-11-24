@@ -26,7 +26,9 @@ An endpoint subscribes to event types by their exact ids, or to `*` for every cu
 one. Core's are `entry.created`, `entry.updated`, `entry.deleted`, `entry.published`,
 `entry.unpublished`, `entry.status_changed`, `single.updated`, `single.published`,
 `single.unpublished`, `media.uploaded`, `media.updated`, `media.deleted`, `user.created`,
-`user.deleted` and the form builder's `form.submission.created`. `*` is the only wildcard. `GET /admin/api/webhooks/event-types` lists every type an endpoint may
+`user.deleted`, `workflow.stage_changed` (a part of a document changed its workflow stage or lost
+its approval; see [Workflows: Events](/docs/workflows#events)) and the form builder's
+`form.submission.created`. `*` is the only wildcard. `GET /admin/api/webhooks/event-types` lists every type an endpoint may
 subscribe to, with the plugin or `core` that declares it, to anyone who may read, create or update
 webhooks.
 

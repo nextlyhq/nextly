@@ -15,7 +15,6 @@
  * saves leave an approval in place.
  *
  * @module domains/workflows/part-approval
- * @experimental
  */
 import type { RegisteredWorkflow } from "./registry";
 import type { ReviewDocument, ReviewState } from "./review-state-repository";
@@ -23,8 +22,6 @@ import { governs, holdReason } from "./workflow-publish-gate";
 
 /**
  * One part a publish would put live, as the decision is asked about it.
- *
- * @experimental
  */
 export interface PartApprovalQuestion {
   /** The workflow the document's collection or Single is attached to, with its hash. */
@@ -45,8 +42,6 @@ export interface PartApprovalQuestion {
 
 /**
  * Whether the part may go live now, by the publish gate's decision: see the module.
- *
- * @experimental
  */
 export async function partApproved(
   question: PartApprovalQuestion

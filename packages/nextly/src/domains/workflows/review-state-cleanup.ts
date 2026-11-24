@@ -8,7 +8,6 @@
  * workflow may not have the table at all.
  *
  * @module domains/workflows/review-state-cleanup
- * @experimental
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
@@ -38,8 +37,6 @@ import { releasePartPins } from "./workflow-pins";
 /**
  * Removes every part's review state of a deleted document, on the delete's transaction. The
  * versions workflows pinned for it are removed by the delete's own sweep of the document's pins.
- *
- * @experimental
  */
 export async function removeDeletedDocumentReviewStates(
   tx: TransactionContext,
@@ -84,8 +81,6 @@ async function partsLeftWithoutDraft(
  * a publish closing its cycle releases them, and one `workflow-discarded` event per stage the
  * parts were in records it as the discarder's act. A part with no review state has no review to
  * close, and records nothing.
- *
- * @experimental
  */
 export async function closeReviewOnDiscard(
   tx: TransactionContext,

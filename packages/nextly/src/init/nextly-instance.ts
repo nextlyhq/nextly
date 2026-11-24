@@ -1111,7 +1111,7 @@ export interface Nextly {
   releases: ReleasesNamespace;
 
   /**
-   * @experimental Review state under a workflow: read it, take steps, assign,
+   * Review state under a workflow: read it, take steps, assign,
    * and list what waits, refused exactly where REST would refuse the caller.
    */
   workflows: WorkflowsNamespace;

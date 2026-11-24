@@ -792,7 +792,7 @@ await nextly.verifyEmail({ token: "verification-token" });
 
 **Returns:** `{ success: true, email? }`.
 
-## Workflows (experimental)
+## Workflows
 
 `nextly.workflows` reads and moves review state through the same code as the REST routes, so both answer one caller alike. Calls are trusted unless you pass `overrideAccess: false` with a `user`. A trusted call is never refused for access, and takes a step as the system, which may not approve or request changes. It is still refused for a document that does not exist (`NOT_FOUND`) or a part the document cannot have (`WORKFLOW_UNKNOWN_PART`).
 
@@ -855,7 +855,7 @@ await nextly.workflows.settings.update({
 
 `list` answers the same items as `GET /admin/api/workflows`, `configPath`, the diagram's data and `stageCounts` included, and `settings.read` the same settings, `defaultReviewerHolds` and `reviewerRoles` included.
 
-`stepMany` and `assignMany` answer `{ moved, refused }` and `{ assigned, refused }`, each refusal naming its `document` as you named it (`{ collection, id }`, or a Single's `{ single }` alone), its `code` and its `message`. The other shapes and refusals are those of the REST routes; see [Workflows](/docs/api-reference/rest-api#workflows-experimental).
+`stepMany` and `assignMany` answer `{ moved, refused }` and `{ assigned, refused }`, each refusal naming its `document` as you named it (`{ collection, id }`, or a Single's `{ single }` alone), its `code` and its `message`. The other shapes and refusals are those of the REST routes; see [Workflows](/docs/api-reference/rest-api#workflows).
 
 ## Other namespaces
 

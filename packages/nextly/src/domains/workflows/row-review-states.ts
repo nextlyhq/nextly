@@ -17,7 +17,6 @@
  * the names, each read once per 500 rows.
  *
  * @module domains/workflows/row-review-states
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql, type SQL } from "drizzle-orm";
@@ -60,7 +59,7 @@ import {
 import { allowsPublish } from "./steps";
 import type { Workflow } from "./types";
 
-/** One part of a listed document, where it stands. @experimental */
+/** One part of a listed document, where it stands. */
 export interface RowPartReview {
   /** A language, or null for the shared part. */
   part: string | null;
@@ -291,8 +290,6 @@ async function nameEachPart(
  * Each of `ids`'s parts where they stand, documents of the collection `slug`, by id, among the
  * languages `locales` names and the shared part (`null` considers every language): an empty map
  * for a collection no workflow is attached to. A document whose row is gone has no entry.
- *
- * @experimental
  */
 export async function rowReviewStatesOf(
   adapter: DrizzleAdapter,

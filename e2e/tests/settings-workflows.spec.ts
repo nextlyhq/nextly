@@ -21,9 +21,12 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { uniqueTag } from "./support/accounts";
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 
-test.describe.configure({ mode: "serial" });
+// It changes the review workflow's grants, default reviewer and labels, which
+// every workflow spec reads, so it never runs beside one.
+test.describe.configure({ mode: "serial", lock: [LOCK.reviewWorkflow] });
 
 const SETTINGS = "/admin/api/workflows/review/settings";
 

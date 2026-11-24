@@ -12,7 +12,6 @@
  * collection, among the languages the read was judged for.
  *
  * @module domains/workflows/stage-condition
- * @experimental
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import {
@@ -39,8 +38,6 @@ import { workflowAttachedTo } from "./registry";
 /**
  * The condition keeping entries of `collectionName` with a part in `stage`. A collection no
  * workflow is attached to, or a stage its workflow does not have, keeps no entry.
- *
- * @experimental
  */
 export function stageCondition(args: {
   dialect: SupportedDialect;

@@ -10,14 +10,14 @@
  */
 
 import type { JSX } from "react";
-import { useId } from "react";
+import { useEffect, useId, useRef } from "react";
 
 import { AlertTriangle } from "@admin/components/icons";
 import { Button, Label, Textarea } from "@admin/components/ui";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 
+import { useAnnouncedStepTaker } from "../review/step-announcement";
 import { StepRefusalNote } from "../review/StepRefusalNote";
-import { useStepTaker } from "../review/useStepTaker";
 
 import type { ReadyProblem } from "./ready-to-publish";
 
@@ -26,8 +26,9 @@ const WITHOUT_REVIEW_REASON_MAX = 2000;
 
 /**
  * What holds Publish, each with its fix or who can unblock it. Nothing where nothing does. A fix
- * is taken as the editor's header and side panel take a step (`useStepTaker`): a step that needs
- * a comment asks for it first, and a refusal is said here as well as in a toast.
+ * is taken as the editor's header and side panel take a step (`useAnnouncedStepTaker`): a step
+ * that needs a comment asks for it first, a step taken is said to assistive technology, and a
+ * refusal is said here as well as in a toast.
  */
 export function ReadyToPublish({
   document,
@@ -37,7 +38,7 @@ export function ReadyToPublish({
   problems: readonly ReadyProblem[];
 }): JSX.Element | null {
   const headingId = useId();
-  const taker = useStepTaker(document);
+  const taker = useAnnouncedStepTaker(document);
   if (problems.length === 0) return null;
   return (
     <section
@@ -98,6 +99,12 @@ export function WithoutReviewReason({
   disabled: boolean;
 }): JSX.Element {
   const fieldId = useId();
+  // Asked for in place of the button that asked for it, which is gone: focus
+  // moves to the reason, so the keyboard is where the next thing to do is.
+  const field = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    field.current?.focus();
+  }, []);
   return (
     <div className="space-y-2">
       <Label htmlFor={fieldId}>Reason</Label>
@@ -106,6 +113,7 @@ export function WithoutReviewReason({
         Say why; the reason is kept with the publish.
       </p>
       <Textarea
+        ref={field}
         id={fieldId}
         value={value}
         maxLength={WITHOUT_REVIEW_REASON_MAX}

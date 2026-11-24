@@ -15,7 +15,7 @@
  * list without the SQL the server builds from it.
  *
  * @module domains/collections/query/reserved-filter-keys
- * @experimental The workflow keys may change until the dashboard's Needs
+ * The workflow keys may change until the dashboard's Needs
  *   attention card is complete.
  */
 
@@ -30,7 +30,7 @@ export const IN_RELEASE_KEY = "_inRelease";
 
 /**
  * The reserved key keeping entries with a part in a stage their workflow no
- * longer has. @experimental
+ * longer has.
  */
 export const STRANDED_STAGE_KEY = "_strandedStage";
 
@@ -48,7 +48,6 @@ export const CHANGED_SINCE_APPROVED_KEY = "_changedSinceApproved";
 
 /**
  * The reserved key keeping entries with a part in one stage of their workflow.
- * @experimental
  */
 export const STAGE_KEY = "_stage";
 

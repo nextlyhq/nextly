@@ -19,7 +19,6 @@
  * and nothing is read on a database the review states table is not on yet.
  *
  * @module domains/workflows/definition-sweep
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
@@ -306,8 +305,6 @@ async function followWorkflow(
  * this boot registered, as the module describes: detached states removed, renamed and mapped
  * stages followed. Run at boot, after the migrations and before approvals given under an earlier
  * definition are judged.
- *
- * @experimental
  */
 export async function followWorkflowDefinitions(
   adapter: DrizzleAdapter,

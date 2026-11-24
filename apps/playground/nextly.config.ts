@@ -195,6 +195,29 @@ const ReviewedNotes = defineCollection({
   workflow: reviewWorkflow(),
 });
 
+/**
+ * A translated collection a workflow holds: each language and the fields every language shares
+ * stand in a stage of their own, so the Languages panel's stages can be shown and tested. Its
+ * own workflow rather than the notes' `review`, so the settings each is given never meet.
+ * Registered for the e2e run and the visual check only, by the fixture switch.
+ */
+const ReviewedPages = defineCollection({
+  slug: "reviewed-pages",
+  labels: { singular: "Reviewed page", plural: "Reviewed pages" },
+  localized: true,
+  status: true,
+  versions: { drafts: true },
+  fields: [
+    text({ name: "title", label: "Title", required: true, localized: true }),
+    textarea({ name: "summary", label: "Summary", localized: true }),
+    text({ name: "reference", label: "Reference" }),
+  ],
+  workflow: reviewWorkflow({
+    slug: "translated-review",
+    label: "Translated review",
+  }),
+});
+
 /** A kind of listing page hidden from search as a whole, as tag pages often are. */
 const SeoTags = defineCollection({
   slug: "seo-tags",
@@ -381,6 +404,9 @@ export default definePlaygroundConfig({
     // A collection the `review` workflow holds, for the browser tests and the
     // visual check of the editor under a workflow; by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ReviewedNotes] : []),
+    // The same under its own workflow, translated, for the Languages panel's stages; by the
+    // same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ReviewedPages] : []),
     // The browser test of a document editable in one language and read-only
     // in another needs a rule that answers by language; registered for the
     // e2e run only, by the same switch.

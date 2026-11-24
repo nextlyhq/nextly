@@ -9,8 +9,6 @@ import { z } from "zod";
 /**
  * A place in the waiting list's order: a review state's entry into its stage and its key (a
  * lowercase hex digest, unique per part), which together order every part exactly once.
- *
- * @experimental
  */
 export interface WaitingPosition {
   enteredAt: Date;
@@ -46,8 +44,6 @@ function decodedBody(token: string): unknown {
 
 /**
  * The cursor for `position`: opaque to clients, who pass it back as `before`.
- *
- * @experimental
  */
 export function encodeWaitingCursor(position: WaitingPosition): string {
   return Buffer.from(
@@ -61,8 +57,6 @@ export function encodeWaitingCursor(position: WaitingPosition): string {
  * not a well-formed position, or names a time no review state can hold, is refused as invalid
  * input, never read as the list's start. The token is not signed: a hand-made position only moves
  * where the caller's own read starts, and every row it reaches is still checked for their access.
- *
- * @experimental
  */
 export const WaitingCursor = z
   .string()

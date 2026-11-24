@@ -206,4 +206,69 @@ describe("ReviewStatusLine", () => {
     );
     expect(container).toBeEmptyDOMElement();
   });
+
+  it.each([
+    [
+      "drafting",
+      part({ stage: "drafting", stageLabel: "Drafting", steps: [SUBMIT] }),
+    ],
+    ["in-review", part({ steps: [APPROVE] })],
+    [
+      "approved",
+      part({ stage: "approved", stageLabel: "Approved", publishable: true }),
+    ],
+    [
+      "changes-requested",
+      part({
+        stage: "drafting",
+        stageLabel: "Drafting",
+        steps: [SUBMIT],
+        lastMove: {
+          kind: "workflow-request-changes",
+          actor: { kind: "person", id: "rita", name: "Rita" },
+          at: "2026-11-17T09:00:00.000Z",
+          from: "inReview",
+          to: "drafting",
+          comment: "Shorten the intro.",
+        },
+      }),
+    ],
+  ])(
+    "draws the %s stage as words with its shape, never as a button",
+    (shape, given) => {
+      render(
+        <ReviewStatusLine status="draft" hasWorkingDraft={false} part={given} />
+      );
+      const line = screen.getByTestId("review-status-line");
+      const stage = line.querySelector("[data-stage-shape]");
+      expect(stage).toHaveAttribute("data-stage-shape", shape);
+      expect(stage).toHaveTextContent(given.stageLabel ?? given.stage ?? "");
+      // The shape is drawn for the eye; the words are what is read.
+      expect(stage?.querySelector("svg")).toHaveAttribute(
+        "aria-hidden",
+        "true"
+      );
+      expect(line.querySelector("button")).toBeNull();
+    }
+  );
 });
+
+const SUBMIT: PartReview["steps"][number] = {
+  name: "submit",
+  label: "Submit for review",
+  kind: "submit",
+  to: "inReview",
+  mayTake: true,
+  primary: true,
+  commentRequired: false,
+};
+
+const APPROVE: PartReview["steps"][number] = {
+  name: "approve",
+  label: "Approve",
+  kind: "approve",
+  to: "approved",
+  mayTake: true,
+  primary: true,
+  commentRequired: false,
+};

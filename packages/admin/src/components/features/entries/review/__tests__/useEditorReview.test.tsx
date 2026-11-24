@@ -229,6 +229,22 @@ describe("the editor's next step under a workflow", () => {
     );
   });
 
+  it("says a step taken from the header to assistive technology, not only in a toast", async () => {
+    held.slugs = new Set(["update-posts"]);
+    fetchSpy.mockResolvedValue(attached(part()));
+    render(<Editor />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Submit for review" })
+    );
+    await waitFor(() =>
+      expect(
+        Array.from(
+          document.querySelectorAll('[role="status"][aria-live="polite"]')
+        ).map(region => region.textContent?.trim())
+      ).toContain("Submit for review: done.")
+    );
+  });
+
   it("holds the step while the page has unsaved changes", async () => {
     fetchSpy.mockResolvedValue(attached(part()));
     render(<Editor isDirty />);
@@ -301,9 +317,13 @@ describe("the editor's next step under a workflow", () => {
     fetchSpy.mockResolvedValue(attached(part(inReview(false))));
     render(<Editor />);
     const publish = await screen.findByRole("button", { name: /^publish$/i });
-    await waitFor(() => expect(publish).toBeDisabled());
-    expect(publish).toHaveAttribute(
-      "title",
+    // Held, yet an enabled button reached by keyboard and read with why.
+    await waitFor(() =>
+      expect(publish).toHaveAttribute("data-review-held", "true")
+    );
+    expect(publish).not.toHaveAttribute("aria-disabled");
+    expect(publish).not.toBeDisabled();
+    expect(publish).toHaveAccessibleDescription(
       "Needs approval: In review, waiting for Editors"
     );
   });

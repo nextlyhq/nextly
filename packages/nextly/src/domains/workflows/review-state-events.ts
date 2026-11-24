@@ -6,7 +6,6 @@
  * by every producer.
  *
  * @module domains/workflows/review-state-events
- * @experimental
  */
 import { z } from "zod";
 
@@ -26,8 +25,6 @@ import {
  * - `discarded`: a discard of the part's working draft closed its review.
  * - `strandedMoved`: a person moved the part out of a stage the workflow no longer has; `from`
  *   names the stages its parts were in, and the note keeps their comment.
- *
- * @experimental
  */
 export const REVIEW_STATE_EVENT_KINDS = {
   stageRenamed: {
@@ -78,8 +75,6 @@ export const REVIEW_STATE_EVENT_KINDS = {
 
 /**
  * Registers each of these kinds not registered yet; safe on every write.
- *
- * @experimental
  */
 export function ensureReviewStateEventKinds(): void {
   for (const kind of Object.values(REVIEW_STATE_EVENT_KINDS)) {

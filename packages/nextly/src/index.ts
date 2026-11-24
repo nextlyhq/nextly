@@ -1161,7 +1161,7 @@ export type {
 // pull the server graph into a browser bundle.
 export { collectionDraftSplit } from "./domains/versions/draft-split-eligibility";
 
-// Editorial workflows (@experimental): a workflow defined in code, attached
+// Editorial workflows: a workflow defined in code, attached
 // to collections and Singles with their `workflow` option. The same exports as
 // `nextly/config`, which a collection file can import them from.
 export {

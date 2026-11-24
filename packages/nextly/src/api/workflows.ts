@@ -10,7 +10,6 @@
  * changes, and the version and revision the caller saw.
  *
  * @module api/workflows
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { z } from "zod";
@@ -102,8 +101,6 @@ import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 /**
  * A document as a request names it: an entry of a collection by its id, or a Single by its slug.
- *
- * @experimental
  */
 export type NamedDocument =
   | { collection: string; id: string }
@@ -113,8 +110,6 @@ export type NamedDocument =
  * A document of a move over several that was refused, named as the request named it: a Single by
  * its slug alone, so a refusal (one for a Single the caller may not read included) never tells
  * the caller its stored id.
- *
- * @experimental
  */
 export interface NamedRefusal {
   document: NamedDocument;
@@ -274,8 +269,6 @@ const SettingsChangeBody = z
 /**
  * The shapes a document, a collection or Single, a part and what was seen of it are named in, for
  * another door that parses its own, stricter input from them, so every door names them alike.
- *
- * @experimental
  */
 export const workflowInputShapes = { DocumentRef, EntityRef, Part, Seen };
 
@@ -290,8 +283,6 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
  * Who asks, as each check needs them: the read checks' user and scope, and the step's caller. Null
  * is trusted server code (the Direct API's default), which no read check holds back and which
  * takes a step as the system.
- *
- * @experimental
  */
 export type WorkflowAsker = {
   user: UserContext;
@@ -305,8 +296,6 @@ export type WorkflowAsker = {
  * The asker an authenticated caller is: built with the shared reader constructor, so the read
  * checks judge them as every other read route does, a key by its own scope, never its owner's.
  * A key is named by `apiKeyId`, as the history of its moves names it.
- *
- * @experimental
  */
 export async function workflowAskerOf(
   auth: AuthContext,
@@ -544,8 +533,6 @@ async function waitingItemsFor(
  * The documents of `collection` with a part waiting for `asker`, by the waiting list's own read,
  * no more than `cap` waiting parts' worth: a collection list's `_waitingForMe` filter keeps these.
  * `capped` says more may wait than were read, so the list's total is a floor.
- *
- * @experimental
  */
 export async function waitingEntryIds(
   asker: WaitingAsker,
@@ -573,8 +560,6 @@ export async function waitingEntryIds(
 /**
  * What waits for `asker`, a page at a time: the waiting list's own answer, which its route and the
  * dashboard's Needs attention count both read, so the two never disagree.
- *
- * @experimental
  */
 export async function waitingPage(
   asker: WaitingAsker,
@@ -741,8 +726,6 @@ async function assignmentsOf(
 /**
  * What the REST routes and the Direct API both run, each input parsed at the boundary as a
  * request body is: one implementation, so the two doors answer one caller alike.
- *
- * @experimental
  */
 export const workflowOperations = {
   /**
@@ -1049,8 +1032,6 @@ const ROUTES: Record<
 /**
  * Every `/workflows/...` route, dispatched by the method the route parser names. Private to the
  * session, refusals included: what a caller may see of review state depends on who asks.
- *
- * @experimental
  */
 export const handleWorkflowRequest = privateToSession(
   withErrorHandler(

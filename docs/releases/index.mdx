@@ -18,12 +18,16 @@ can put new pages live and retire old ones in the same moment.
 | Admin      | A **Releases** section with a list and a calendar, **Schedule…** on every document's Publish button, and what needs attention on the dashboard and in each person's bell                  |
 | Permission | Scheduling requires publish access. A key scoped only to publishing releases can schedule without holding a general read grant. Renaming and deleting each have a permission of their own |
 
-## What it is not
+## Releases and approval
 
-<Callout type="warn">
-  This is **scheduled publishing**, not an approval workflow. There are no
-  review stages, transitions or assignees. If you need "editor submits, manager
-  approves, then it goes live", that is not what a release does.
+<Callout type="info">
+  A release is **scheduled publishing**: it has no review stages or assignees of
+  its own. Where a document's collection or Single has a
+  [workflow](/docs/workflows) attached, a release waits for its approval. A
+  document going live that is not approved is a hard problem, "Not approved",
+  which keeps the release from being scheduled; and an edit that withdraws an
+  approval stops a scheduled release holding that document as the edit is
+  saved, not at its moment. See [Workflows: Releases](/docs/workflows#releases).
 </Callout>
 
 ## In the admin

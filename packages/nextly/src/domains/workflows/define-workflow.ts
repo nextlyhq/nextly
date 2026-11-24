@@ -8,7 +8,6 @@
  * stages: drafting, inReview, approved").
  *
  * @module domains/workflows/define-workflow
- * @experimental
  */
 
 import { NextlyError } from "../../errors";
@@ -27,8 +26,6 @@ import {
 /**
  * The longest stage, step or workflow name: the width the record of content
  * events keeps a stage in.
- *
- * @experimental
  */
 export const MAX_WORKFLOW_NAME_LENGTH = 64;
 
@@ -682,8 +679,6 @@ function checkWhole(problems: Problems, workflow: Workflow): void {
  *   fields: [],
  * });
  * ```
- *
- * @experimental
  */
 export function defineWorkflow<const S extends string, const T extends string>(
   input: WorkflowInput<S, T>
@@ -763,8 +758,6 @@ function inputOf(workflow: Workflow): WorkflowInput {
  * checked as fully as one declared, and one whose resolved parts disagree
  * with its definition (a first stage that is not the first, a default not
  * decided as `defineWorkflow` decides it) is refused.
- *
- * @experimental
  */
 export function workflowProblems(
   workflow: Workflow
@@ -787,8 +780,6 @@ export function workflowProblems(
 /**
  * Whether a stage is a review stage: one with an outgoing step of kind
  * approve.
- *
- * @experimental
  */
 export function isReviewStage(workflow: Workflow, stage: string): boolean {
   return workflow.steps.some(
@@ -800,8 +791,6 @@ export function isReviewStage(workflow: Workflow, stage: string): boolean {
  * Whether a move from `from` to `to` enters review, opening a review cycle:
  * from a stage that is not a review stage into one that is, by any step or
  * automatically.
- *
- * @experimental
  */
 export function entersReview(
   workflow: Workflow,
@@ -814,8 +803,6 @@ export function entersReview(
 /**
  * Whether the person who brought a part into its stage may take this step.
  * Allowed unless the step refuses it.
- *
- * @experimental
  */
 export function allowsSelfApproval(step: ResolvedWorkflowStep): boolean {
   return !step.refusesSelfApproval;
@@ -823,8 +810,6 @@ export function allowsSelfApproval(step: ResolvedWorkflowStep): boolean {
 
 /**
  * A stage's primary step: its only outgoing step, or the one marked primary.
- *
- * @experimental
  */
 export function primaryStep(
   workflow: Workflow,

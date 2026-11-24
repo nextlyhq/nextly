@@ -9,6 +9,10 @@
 
 import type React from "react";
 
+import {
+  StageShape,
+  type StageShapeKind,
+} from "@admin/components/features/entries/review/StageShape";
 import { cn } from "@admin/lib/utils";
 
 import { NEUTRAL_SWATCH, stageColourOf } from "./stage-colours";
@@ -17,6 +21,13 @@ export interface StagePillProps {
   label: string;
   /** The stored colour, or none. */
   colour: string | null | undefined;
+  /**
+   * The kind of stage a document's part stands in, where one does: its label
+   * is then drawn with the shape of that kind (`StageShape`), so the stage
+   * reads by shape as well as by colour. A stage named apart from any part
+   * (in Settings) has none.
+   */
+  shape?: StageShapeKind | undefined;
   className?: string;
 }
 
@@ -52,6 +63,7 @@ export function StageDot({
 export function StagePill({
   label,
   colour,
+  shape,
   className,
 }: StagePillProps): React.JSX.Element {
   const drawn = stageColourOf(colour ?? undefined);
@@ -66,7 +78,11 @@ export function StagePill({
       )}
     >
       <StageDot colour={colour} />
-      <span>{label}</span>
+      {shape === undefined ? (
+        <span>{label}</span>
+      ) : (
+        <StageShape shape={shape} label={label} />
+      )}
     </span>
   );
 }

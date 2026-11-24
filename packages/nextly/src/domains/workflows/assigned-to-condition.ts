@@ -4,7 +4,6 @@
  * correlated `EXISTS` over the review states, so the page and its count read one condition.
  *
  * @module domains/workflows/assigned-to-condition
- * @experimental
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import {
@@ -28,8 +27,6 @@ import type { ReviewAssignee } from "./review-state-repository";
  * any of the languages `locales` names or in the shared part (`null` considers every language, as
  * the other workflow filters take it). A collection no workflow is attached to, or a reader who
  * stands for no one, keeps no entry.
- *
- * @experimental
  */
 export function assignedToCondition(args: {
   dialect: SupportedDialect;

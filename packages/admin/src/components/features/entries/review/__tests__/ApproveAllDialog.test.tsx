@@ -145,6 +145,9 @@ function stale(parts: (string | null)[]): Error {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The review's live region sits on the page's body, which the render cleanup does not reach:
+  // a sentence an earlier case left there must not answer for this one.
+  document.getElementById("nextly-review-announcer")?.remove();
   versions = {
     en: [version(7, "en"), version(5, "en", "published")],
     es: [version(9, "es"), version(6, "es", "published")],
@@ -431,4 +434,59 @@ describe("Approve all languages", () => {
       )
     );
   });
+
+  it("gives focus back to Approve all languages… when closed", async () => {
+    const { dialog } = await openDialog([inReview("en"), inReview("es")]);
+    expect(dialog).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Approve all languages" })
+      ).toBeNull()
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Approve all languages…" })
+      ).toHaveFocus()
+    );
+  });
+
+  it("says the approval to assistive technology, not only in a toast", async () => {
+    stepSpy.mockResolvedValue({ message: "Step taken.", item: {} });
+    const { dialog } = await openDialog([inReview("en"), inReview("es")]);
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /^Approve English/ })
+    );
+    await waitFor(() =>
+      expect(announced()).toContain(
+        "Approved English and Spanish, each for the version you saw."
+      )
+    );
+  });
+
+  it("says a refused approval to assistive technology once, through its alert", async () => {
+    stepSpy.mockRejectedValue(new Error("Approvals are closed today."));
+    const { dialog } = await openDialog([inReview("en"), inReview("es")]);
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /^Approve English/ })
+    );
+    await waitFor(() =>
+      expect(within(dialog).getByRole("alert")).toHaveTextContent(
+        "Approvals are closed today."
+      )
+    );
+    // In the status text colour that reads at AA in both schemes, not the
+    // destructive action's red, which is lighter than text may be.
+    expect(within(dialog).getByRole("alert")).toHaveClass("text-danger-text");
+    expect(
+      announced().some(text => text.includes("Approvals are closed today."))
+    ).toBe(false);
+  });
 });
+
+/** What every polite status region on the page says now. */
+/** What the review's own live region says: a toast's status region is not the announcement. */
+function announced(): string[] {
+  const region = document.getElementById("nextly-review-announcer");
+  return region === null ? [] : [region.textContent?.trim() ?? ""];
+}

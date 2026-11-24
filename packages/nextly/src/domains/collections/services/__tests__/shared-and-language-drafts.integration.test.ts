@@ -21,6 +21,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   grantTo,
+  superAdminUser,
   userWhoMay,
 } from "../../../../__tests__/fixtures/permission-holders";
 
@@ -647,6 +648,9 @@ describe.each(getConfiguredTestDialects())(
       await save(entries, TRANSLATED, id, "es", { title: "es 2", views: 40 });
       expect(Object.keys(await drafts(id)).sort()).toEqual(["es", "shared"]);
 
+      // The discard reads the live document as its caller, and a caller who was never stored
+      // may read nothing: the editor is a stored super-admin.
+      await superAdminUser(handle!, "editor");
       await discardWorkingDraft({
         scopeKind: "collection",
         slug: TRANSLATED,
@@ -708,6 +712,9 @@ describe.each(getConfiguredTestDialects())(
         createdBy: "editor",
       });
 
+      // The discard reads the live document as its caller, and a caller who was never stored
+      // may read nothing: the editor is a stored super-admin.
+      await superAdminUser(handle!, "editor");
       await discardWorkingDraft({
         scopeKind: "collection",
         slug: TRANSLATED,

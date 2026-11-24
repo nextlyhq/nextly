@@ -36,6 +36,8 @@ import { useCopyFromLanguageScope } from "./CopyFromLanguageScope";
 import { useEntryLocale } from "./EntryLocaleContext";
 import { StateDot } from "./LanguageStateDot";
 import { PublishAllConfirm } from "./PublishAllConfirmDialog";
+import { StageShape } from "./review/StageShape";
+import type { LanguageReviewStage } from "./review/useLanguageReviewStages";
 import {
   languageState,
   languageStateLabel,
@@ -88,7 +90,7 @@ export interface LanguagePanelProps {
    * Each language's stage in the workflow that holds publishing, by language
    * code. Absent, or empty, where no workflow is attached.
    */
-  reviewStages?: Readonly<Record<string, string>>;
+  reviewStages?: Readonly<Record<string, LanguageReviewStage>>;
   className?: string;
 }
 
@@ -327,7 +329,7 @@ function LanguageRows({
     | ((code: string, options?: { seedFrom?: string }) => void)
     | undefined;
   /** Each language's workflow stage, by code; undefined where none holds it. */
-  reviewStages: Readonly<Record<string, string>> | undefined;
+  reviewStages: Readonly<Record<string, LanguageReviewStage>> | undefined;
 }) {
   if (shown.length === 0) {
     // Said rather than shown as an empty list. A list with no rows under a
@@ -580,7 +582,7 @@ function LanguageRow({
   actionsDisabled: boolean;
   navigationDisabled: boolean;
   /** The language's stage in the workflow holding publishing, where one does. */
-  reviewStage: string | undefined;
+  reviewStage: LanguageReviewStage | undefined;
 }) {
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2 border-b border-border last:border-b-0">
@@ -600,19 +602,9 @@ function LanguageRow({
         <span className="shrink-0 whitespace-nowrap text-sm font-medium">
           {label}
         </span>
-        <span className={MARKER_STRIP_CLASS}>
-          {rowMarkers({ isDefault, rtl, pendingChange, stale }).map(marker => (
-            <span
-              key={marker.text}
-              className={
-                marker.actionable ? MARKER_ACTIONABLE_CLASS : MARKER_PLAIN_CLASS
-              }
-              title={marker.title}
-            >
-              {marker.text}
-            </span>
-          ))}
-        </span>
+        <RowMarkerStrip
+          markers={rowMarkers({ isDefault, rtl, pendingChange, stale })}
+        />
         {metaKnown && (
           <span
             className="whitespace-nowrap text-xs text-muted-foreground"
@@ -624,12 +616,7 @@ function LanguageRow({
         {/* Beside the state rather than in place of it: the status says what
             readers see, the stage what the language waits for. */}
         {reviewStage === undefined ? null : (
-          <span
-            className="whitespace-nowrap text-xs text-muted-foreground"
-            data-review-stage={reviewStage}
-          >
-            · {reviewStage}
-          </span>
+          <ReviewStageNote stage={reviewStage} />
         )}
       </div>
       {/* The active row carries NO action. Filling the language being edited is
@@ -643,48 +630,136 @@ function LanguageRow({
           editing now
         </span>
       ) : (
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          {/* Offered on EVERY language, not only an empty one. Filling a
-              language that already has content is an overwrite rather than a
-              start, which is what the verb reports and what the confirm step
-              then spells out; refusing the action instead left it reachable
-              from nowhere. */}
-          {canSeed && onSeed && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 px-2 text-xs"
-              disabled={actionsDisabled}
-              // Named for the language it acts on. Read out of context — a
-              // screen reader listing this panel's controls — three buttons
-              // all saying "Start from…" name no language at all.
-              aria-label={`${seedVerb(state, metaKnown)} ${label} from another language`}
-              onClick={onSeed}
-            >
-              {seedVerb(state, metaKnown)} from…
-            </Button>
-          )}
-          {onSelect && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-xs"
-              // Switching languages is withheld while a past version is on
-              // screen: changing the document underneath the history banner
-              // shows one language's history labelled as another's. A reader
-              // is not held here, only from the mutations beside it.
-              disabled={navigationDisabled}
-              aria-label={`Open ${label}`}
-              onClick={() => onSelect(code)}
-            >
-              Open
-            </Button>
-          )}
-        </div>
+        <LanguageRowActions
+          code={code}
+          label={label}
+          state={state}
+          metaKnown={metaKnown}
+          canSeed={canSeed}
+          onSelect={onSelect}
+          onSeed={onSeed}
+          actionsDisabled={actionsDisabled}
+          navigationDisabled={navigationDisabled}
+        />
       )}
     </li>
+  );
+}
+
+/**
+ * The row's markers, each a word that never truncates, an actionable one
+ * (changes, review) drawn apart from a plain one (default, rtl).
+ */
+function RowMarkerStrip({
+  markers,
+}: {
+  markers: ReturnType<typeof rowMarkers>;
+}): JSX.Element {
+  return (
+    <span className={MARKER_STRIP_CLASS}>
+      {markers.map(marker => (
+        <span
+          key={marker.text}
+          className={
+            marker.actionable ? MARKER_ACTIONABLE_CLASS : MARKER_PLAIN_CLASS
+          }
+          title={marker.title}
+        >
+          {marker.text}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * A language's stage in the workflow holding publishing: words with the shape
+ * of the stage's kind, so it never rests on colour, and plain text, never a
+ * control.
+ */
+function ReviewStageNote({
+  stage,
+}: {
+  stage: LanguageReviewStage;
+}): JSX.Element {
+  return (
+    <span
+      className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground"
+      data-review-stage={stage.label}
+    >
+      · <StageShape shape={stage.shape} label={stage.label} />
+    </span>
+  );
+}
+
+/**
+ * What a row other than the active one offers: filling the language from
+ * another, where the host allows it, and opening it, where the host can.
+ */
+function LanguageRowActions({
+  code,
+  label,
+  state,
+  metaKnown,
+  canSeed,
+  onSelect,
+  onSeed,
+  actionsDisabled,
+  navigationDisabled,
+}: {
+  code: string;
+  label: string;
+  state: LanguageState;
+  metaKnown: boolean;
+  canSeed: boolean;
+  onSelect:
+    | ((code: string, options?: { seedFrom?: string }) => void)
+    | undefined;
+  onSeed: (() => void) | undefined;
+  actionsDisabled: boolean;
+  navigationDisabled: boolean;
+}): JSX.Element {
+  return (
+    <div className="ml-auto flex shrink-0 items-center gap-1.5">
+      {/* Offered on EVERY language, not only an empty one. Filling a
+          language that already has content is an overwrite rather than a
+          start, which is what the verb reports and what the confirm step
+          then spells out; refusing the action instead left it reachable
+          from nowhere. */}
+      {canSeed && onSeed && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          disabled={actionsDisabled}
+          // Named for the language it acts on. Read out of context — a
+          // screen reader listing this panel's controls — three buttons
+          // all saying "Start from…" name no language at all.
+          aria-label={`${seedVerb(state, metaKnown)} ${label} from another language`}
+          onClick={onSeed}
+        >
+          {seedVerb(state, metaKnown)} from…
+        </Button>
+      )}
+      {onSelect && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          // Switching languages is withheld while a past version is on
+          // screen: changing the document underneath the history banner
+          // shows one language's history labelled as another's. A reader
+          // is not held here, only from the mutations beside it.
+          disabled={navigationDisabled}
+          aria-label={`Open ${label}`}
+          onClick={() => onSelect(code)}
+        >
+          Open
+        </Button>
+      )}
+    </div>
   );
 }
 

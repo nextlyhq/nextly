@@ -81,15 +81,25 @@ function row(label: string): HTMLElement {
 describe("LanguagePanel review stages", () => {
   beforeEach(() => useBranding.mockReturnValue({ locales: LOCALES }));
 
-  it("names each language's stage beside its status", () => {
+  it("names each language's stage beside its status, with its shape", () => {
     renderPanel({
       translations: TRANSLATIONS,
-      reviewStages: { de: "In review", en: "Approved" },
+      reviewStages: {
+        de: { label: "In review", shape: "in-review" },
+        en: { label: "Approved", shape: "approved" },
+      },
     });
-    expect(
-      within(row("German")).getByText("In review", { exact: false })
-    ).toHaveAttribute("data-review-stage", "In review");
+    const german = row("German").querySelector("[data-review-stage]");
+    expect(german).toHaveAttribute("data-review-stage", "In review");
+    expect(german).toHaveTextContent("In review");
+    expect(german?.querySelector("[data-stage-shape]")).toHaveAttribute(
+      "data-stage-shape",
+      "in-review"
+    );
     expect(row("English")).toHaveTextContent("Approved");
+    expect(
+      row("English").querySelector('[data-stage-shape="approved"] svg')
+    ).toHaveAttribute("aria-hidden", "true");
   });
 
   it("draws the rows as before where no workflow holds the document", () => {

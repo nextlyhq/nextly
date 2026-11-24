@@ -11,7 +11,6 @@
  * names the key, by `apiKeyId`.
  *
  * @module direct-api/namespaces/workflows
- * @experimental
  */
 import type { PaginationMeta } from "../../api/response-shapes";
 import type { NamedRefusal } from "../../api/workflows";
@@ -35,13 +34,13 @@ import type { DirectAPIConfig, RunAsPrincipal } from "../types/shared";
 import type { NextlyContext } from "./context";
 import { checkedCaller, runAsCaller } from "./helpers";
 
-/** Who a call is made for, beyond the Direct API's own options. @experimental */
+/** Who a call is made for, beyond the Direct API's own options. */
 export interface WorkflowCallArgs extends DirectAPIConfig, RunAsPrincipal {
   /** The API key a checked call is made for, by its id, where it is made for one. */
   apiKeyId?: string;
 }
 
-/** A document, as a call names it: an entry of a collection, or a Single. @experimental */
+/** A document, as a call names it: an entry of a collection, or a Single. */
 export type WorkflowDocumentRef =
   | { collection: string; id: string }
   | { single: string };
@@ -53,7 +52,6 @@ export interface WorkflowSeenPart {
   version: string;
 }
 
-/** @experimental */
 export interface WorkflowsNamespace {
   /** The document's review state, part by part. */
   reviewState(
@@ -113,7 +111,7 @@ export interface WorkflowsNamespace {
   settings: WorkflowSettingsNamespace;
 }
 
-/** `nextly.workflows.settings`. @experimental */
+/** `nextly.workflows.settings`. */
 export interface WorkflowSettingsNamespace {
   /** The workflow's settings, as they read now. */
   read(
@@ -165,8 +163,6 @@ const CALL_OPTIONS: ReadonlySet<string> = new Set(
 /**
  * A settings update's arguments without the options the call is made with: the change it asks
  * for, passed on whole.
- *
- * @experimental
  */
 export function settingsChangeOf(args: object): Record<string, unknown> {
   return Object.fromEntries(
@@ -174,7 +170,7 @@ export function settingsChangeOf(args: object): Record<string, unknown> {
   );
 }
 
-/** One assignment, as a call names it. @experimental */
+/** One assignment, as a call names it. */
 export interface WorkflowAssignmentInput {
   document: WorkflowDocumentRef;
   part: string | null;
@@ -183,7 +179,6 @@ export interface WorkflowAssignmentInput {
   dueAt?: Date | null;
 }
 
-/** @experimental */
 export function createWorkflowsNamespace(
   ctx: NextlyContext
 ): WorkflowsNamespace {

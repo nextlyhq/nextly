@@ -9,7 +9,6 @@
  * review state never shows a document its reader may not see.
  *
  * @module domains/workflows/review-api
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -71,13 +70,13 @@ import type { ResolvedWorkflowStep, Workflow, WorkflowStepKind } from "./types";
 import type { WaitingPosition } from "./waiting-cursor";
 import { mayPublishWithoutReview } from "./workflow-publish-gate";
 
-/** Error codes this module refuses with. @experimental */
+/** Error codes this module refuses with. */
 export const REVIEW_API_ERROR_CODES = {
   /** An approval asked for several documents at once: each is given for the version shown. */
   bulkApproval: "WORKFLOW_BULK_APPROVAL",
 } as const;
 
-/** A step a part may take from where it stands. @experimental */
+/** A step a part may take from where it stands. */
 export interface AvailableStep {
   name: string;
   label: string;
@@ -88,27 +87,21 @@ export interface AvailableStep {
    * it (`stepsTakeableBy`): its permission, a person for an approval or a request for changes,
    * and the self-approval it refuses. True for trusted code but on a step only a person may take.
    * What the step checks of the content (the version seen, a comment) is asked when it is taken.
-   *
-   * @experimental
    */
   mayTake: boolean;
   /**
    * Whether it is its stage's primary step: the stage's only step out, or the one marked
    * `primary`. Exactly one step out of a stage is.
-   *
-   * @experimental
    */
   primary: boolean;
   /**
    * Whether it is taken only with a comment: a request for changes always, any other step whose
    * definition asks for one. The step refuses one taken without.
-   *
-   * @experimental
    */
   commentRequired: boolean;
 }
 
-/** One part's review state, as a reader is told it. @experimental */
+/** One part's review state, as a reader is told it. */
 export interface PartReview {
   /** A language, or null for the shared part. */
   part: string | null;
@@ -150,8 +143,6 @@ export interface PartReview {
 /**
  * A document's review state, part by part. With no workflow attached to its collection or Single,
  * `workflow` is null and `parts` is empty.
- *
- * @experimental
  */
 export interface DocumentReview {
   workflow: { slug: string; label: string } | null;
@@ -161,8 +152,6 @@ export interface DocumentReview {
    * publish that asks to (`mayPublishWithoutReview`): trusted code, or a person holding
    * "Publish without review" on its collection or Single; never an API key. False where no
    * workflow is attached, as there is no review to go past.
-   *
-   * @experimental
    */
   mayPublishWithoutReview: boolean;
 }
@@ -205,8 +194,6 @@ function stepsFrom(workflow: Workflow, stage: string | null): StepOut[] {
  * may take, are asked after, on the pool, as every question of who holds a permission is. The
  * caller has already been allowed to read the document, so a document with no workflow attached
  * answers as such only to one who may read it.
- *
- * @experimental
  */
 export async function reviewStateOf(
   adapter: DrizzleAdapter,
@@ -312,7 +299,7 @@ export async function reviewStateOf(
   };
 }
 
-/** A part waiting for a caller, as the list names it. @experimental */
+/** A part waiting for a caller, as the list names it. */
 export interface WaitingPart {
   document: ReviewDocument;
   part: string | null;
@@ -428,8 +415,6 @@ const WAITING_SCAN_CEILING = 20_000;
  * reviewer is theirs or may not take it. Only collections and Singles the caller may read are
  * looked in; each part is then asked the document read check, and only those it passes are listed
  * AND counted, so the count never takes in a part the caller may not read.
- *
- * @experimental
  */
 export async function waitingFor(
   adapter: DrizzleAdapter,
@@ -614,8 +599,6 @@ async function waitingIn(
  * How many stages' next step the caller may take, in collections and Singles they may read: the
  * stages the waiting list looks in (`takeableStages`), counted with no document read. Nothing can
  * ever wait for a caller with none.
- *
- * @experimental
  */
 export async function takeableStageCount(
   adapter: DrizzleAdapter,
@@ -859,8 +842,6 @@ export interface ManyRefusal {
  * anything else about it is looked at. A step of kind approve in the workflow of a document the
  * caller may read is refused for the whole request before anything moves: an approval is given
  * from the review of one document, for the version shown.
- *
- * @experimental
  */
 export async function stepMany(
   adapter: DrizzleAdapter,
@@ -936,8 +917,6 @@ export async function stepMany(
  * Assignments over several documents: each document's assignments are made in their own
  * transaction through the one assignment every door makes, so each is made if it may be and each
  * refusal is named with its own reason.
- *
- * @experimental
  */
 export async function assignMany(
   adapter: DrizzleAdapter,
