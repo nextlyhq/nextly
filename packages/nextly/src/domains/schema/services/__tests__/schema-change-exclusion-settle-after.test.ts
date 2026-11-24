@@ -22,7 +22,15 @@ vi.mock("../../builder-save/save-in-progress", () => ({
 }));
 
 vi.mock("../../builder-save/settle-left-save", () => ({
-  settleBeforeBuilderSave: vi.fn(async () => ["a-record-standing-before"]),
+  settleBeforeBuilderSave: vi.fn(async () => [
+    {
+      id: "a-record-standing-before",
+      kind: "collection",
+      slug: "posts",
+      outcome: "left",
+      notes: [],
+    },
+  ]),
   settleAfterBuilderSave: vi.fn(
     async (
       _adapter: unknown,

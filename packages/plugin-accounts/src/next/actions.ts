@@ -267,6 +267,17 @@ export const cancelAddressChangeAction: AccountFormAction = accountAction(
 );
 
 /**
+ * Accepts an invitation (a link's `token`, `password`), signing the visitor
+ * in, then sends them to `next` when it is a path on the site, else home.
+ *
+ * @experimental
+ */
+export const acceptInvitationAction: AccountFormAction = accountAction(
+  "acceptInvitation",
+  "always"
+);
+
+/**
  * Deletes the account (`currentPassword`).
  *
  * @experimental

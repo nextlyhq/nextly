@@ -108,6 +108,47 @@ for (const dialect of getConfiguredTestDialects()) {
       });
     }
 
+    it("previews the code converting would store, before it is converted", async () => {
+      current = await createTestNextly({ dialect });
+      const service = templates(current);
+      const created = await writtenOrder(current);
+      const draft = {
+        subject: created.subject,
+        htmlContent: "",
+        plainTextContent: null,
+        preheader: null,
+        useLayout: true,
+        kind: "template" as const,
+        layoutId: null,
+        format: "written" as const,
+        blocks: EVERYTHING,
+      };
+
+      // The draft preview the Convert dialog reads: the code, Liquid and all,
+      // before any data, alongside the render.
+      const preview = await service.previewDraft(
+        draft,
+        WRITTEN_SAMPLE_DATASETS.typical
+      );
+      expect(preview.source?.html).toContain("{%");
+      expect(preview.html).not.toContain("{%");
+
+      await patch(created.id, { format: "code" });
+      const converted = await service.getTemplate(created.id);
+      // What the preview showed is exactly what converting stored.
+      expect(preview.source).toEqual({
+        html: converted.htmlContent,
+        text: converted.plainTextContent,
+      });
+
+      // A coded draft's code is what it sent: there is none to show.
+      const coded = await service.previewDraft(
+        { ...draft, format: "code", blocks: null, htmlContent: "<p>Hi</p>" },
+        {}
+      );
+      expect(coded.source).toBeUndefined();
+    });
+
     it("is coded afterwards: its Liquid is what the blocks compiled to, edited as code, never written again", async () => {
       current = await createTestNextly({ dialect });
       const service = templates(current);

@@ -16,24 +16,30 @@
  *
  * @module __tests__/storage-layout
  */
-import { pathToFileURL } from "node:url";
-
 import {
   _resetPerLanguageStorage,
   setPerLanguageStorage,
 } from "../domains/i18n/per-language-storage";
 
 /**
- * Whether the running test file opted into per-language storage, and the layout its tests start on:
- * the file's, or the one its latest boot asked for. On `globalThis`, as the hook is.
+ * Whether the running test file opted into per-language storage; the layout its tests start on (the
+ * file's, or the one a boot made outside any test asked for); the layout in force now (that, or the
+ * one the running test's latest boot asked for); and whether a test is running. On `globalThis`,
+ * as the hook is.
  */
 const harness = globalThis as {
   __nextly_testPerLanguageSuite?: boolean;
+  __nextly_testStartLayoutPerLanguage?: boolean;
   __nextly_testLayoutPerLanguage?: boolean;
+  __nextly_testRunning?: boolean;
 };
 
-/** Puts `perLanguage` in force and remembers it as the layout the file's tests start on. */
-function useLayout(perLanguage: boolean): void {
+/**
+ * Puts `perLanguage` in force. Remembered as the layout the file's tests start on only where
+ * `remember` says so: a boot inside a test chooses that test's layout alone.
+ */
+function useLayout(perLanguage: boolean, remember: boolean): void {
+  if (remember) harness.__nextly_testStartLayoutPerLanguage = perLanguage;
   harness.__nextly_testLayoutPerLanguage = perLanguage;
   if (perLanguage) _resetPerLanguageStorage();
   else setPerLanguageStorage(false);
@@ -46,37 +52,51 @@ function useLayout(perLanguage: boolean): void {
  */
 export function perLanguageStorageSuite(): void {
   harness.__nextly_testPerLanguageSuite = true;
-  useLayout(true);
+  useLayout(true, true);
 }
 
 /** `setup.ts`, at the start of each test file: the earlier layout until the file opts in. */
 export function startTestFile(): void {
   harness.__nextly_testPerLanguageSuite = false;
-  useLayout(false);
+  harness.__nextly_testRunning = false;
+  useLayout(false, true);
 }
 
 /**
- * `setup.ts`, before each test: the layout its file or its file's latest boot chose, whatever the
- * test before it set through the hook. A suite booted once for all its tests keeps its boot's.
+ * `setup.ts`, before each test: the layout its file chose, or a boot made outside any test (a
+ * suite booted once for all its tests keeps its boot's), whatever the test before it set through
+ * the hook or its own boot asked for.
  */
 export function startTest(): void {
-  useLayout(harness.__nextly_testLayoutPerLanguage === true);
+  harness.__nextly_testRunning = true;
+  useLayout(harness.__nextly_testStartLayoutPerLanguage === true, false);
+}
+
+/**
+ * `setup.ts`, after each test and its file's own hooks: the layout the next test, or the next file
+ * in a shared worker, starts from, as `startTest` puts it.
+ */
+export function endTest(): void {
+  harness.__nextly_testRunning = false;
+  useLayout(harness.__nextly_testStartLayoutPerLanguage === true, false);
 }
 
 /**
  * `setup.ts`, around `createTestNextly`: the layout a boot of an older suite asks for with
- * `perLanguageStorage`, as the setting chose it when that suite was written. A suite that opted in
- * keeps per-language storage whatever it passes.
+ * `perLanguageStorage`, as the setting chose it when that suite was written. Inside a test it holds
+ * for that test alone, as a boot's setting did; outside one (a boot in `beforeAll`) for every test
+ * after it. A suite that opted in keeps per-language storage whatever it passes.
  */
 export function layoutForBoot(perLanguageStorage: unknown): void {
   if (harness.__nextly_testPerLanguageSuite === true) return;
-  if (perLanguageStorage === true) useLayout(true);
-  else if (perLanguageStorage === false) useLayout(false);
+  if (typeof perLanguageStorage !== "boolean") return;
+  useLayout(perLanguageStorage, harness.__nextly_testRunning !== true);
 }
 
 /** The preload that puts a CLI child on the earlier layout (`earlier-layout-preload.ts`). */
-const EARLIER_LAYOUT_PRELOAD = pathToFileURL(
-  new URL("./earlier-layout-preload.ts", import.meta.url).pathname
+const EARLIER_LAYOUT_PRELOAD = new URL(
+  "./earlier-layout-preload.ts",
+  import.meta.url
 ).href;
 
 /**

@@ -56,8 +56,8 @@ import {
   refuseNewCollectionIndexNamesTaken,
 } from "../../schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
-import { fieldsDroppedFromRow } from "../../schema/services/translated-drops";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import { fieldsDroppedFromRow } from "../../schema/services/translated-drops";
 import { loadUiSchema } from "../../schema/ui-schema/loader";
 import { withSystemTextFields } from "../system-text-fields";
 

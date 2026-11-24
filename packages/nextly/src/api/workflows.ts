@@ -16,11 +16,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { z } from "zod";
 
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
-import {
-  canReadEntity,
-  readAccessCaller,
-  readableEntities,
-} from "../auth/entity-read-access";
+import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
 import {
   authorizeCaller,
   authorizeCallerForAny,
@@ -41,11 +37,12 @@ import {
   documentTableOf,
   documentTableOn,
 } from "../domains/workflows/part-versions";
-import { registeredWorkflows } from "../domains/workflows/registry";
+import { readableAttachedEntities } from "../domains/workflows/readable-attached";
 import {
   assignMany,
   reviewStateOf,
   stepMany,
+  takeableStageCount,
   waitingFor,
   type ManyRefusal,
   type WaitingReadable,
@@ -62,6 +59,7 @@ import {
 import {
   encodeWaitingCursor,
   WaitingCursor,
+  type WaitingPosition,
 } from "../domains/workflows/waiting-cursor";
 import {
   listWorkflowSummaries,
@@ -73,6 +71,11 @@ import {
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
 import {
+  bootedHeadingRegistries,
+  headingKey,
+  readableHeadings,
+} from "../services/dashboard/readable-headings";
+import {
   resolveDocumentVisibilityScope,
   visibleDocuments,
   type DocumentRef,
@@ -83,6 +86,7 @@ import {
   privateToSession,
   SKIP_DATE_FORMATTING_HEADER,
   respondBulk,
+  respondData,
   respondDoc,
   respondList,
   respondMutation,
@@ -478,6 +482,181 @@ async function readableBy(
   }
 }
 
+/** Who is asking, as the waiting list reads them: no more than its read checks need. */
+export type WaitingAsker = Pick<
+  NonNullable<WorkflowAsker>,
+  "user" | "scope" | "caller"
+>;
+
+/** The collections and Singles a workflow is attached to that `asker` may read anything of. */
+async function readableAttached(asker: WaitingAsker): Promise<Set<string>> {
+  // The same rule the admin's workspace answer carries (`readableAttachedEntities`).
+  return readableAttachedEntities(
+    readAccessCaller({
+      user: asker.user,
+      ...(asker.scope === undefined ? {} : { authenticatedScope: asker.scope }),
+    })
+  );
+}
+
+/**
+ * The waiting list's read for `asker`: what waits for them among the collections and Singles they
+ * may read (only `collection`, when one is named), each item in a language they may read it in.
+ * The one read the waiting list, its count and a collection list's `_waitingForMe` filter make.
+ */
+async function waitingItemsFor(
+  asker: WaitingAsker,
+  query: {
+    limit: number;
+    offset: number;
+    /** Where a cursor walk resumes: read from past it. */
+    after?: WaitingPosition;
+    collection?: string;
+  }
+) {
+  const readable = await readableAttached(asker);
+  let degraded = false;
+  const found = await waitingFor(adapter(), {
+    caller: asker.caller,
+    limit: query.limit,
+    offset: query.offset,
+    ...(query.after === undefined ? {} : { after: query.after }),
+    readsEntity: (kind, slug) =>
+      Promise.resolve(
+        readable.has(slug) &&
+          (query.collection === undefined ||
+            (kind === "collection" && slug === query.collection))
+      ),
+    // Each item in the language its part names: an item about a language the caller may not
+    // read the document in is left out, as a read of that language would be refused.
+    readable: async items => {
+      const asked = await readableAmong(asker, items);
+      degraded ||= asked.degraded;
+      return asked.readable;
+    },
+  });
+  // A read check made while a registry could not be listed may have left out work the caller
+  // may read: what it found is then a floor, never an exact count.
+  return { ...found, degraded };
+}
+
+/**
+ * The documents of `collection` with a part waiting for `asker`, by the waiting list's own read,
+ * no more than `cap` waiting parts' worth: a collection list's `_waitingForMe` filter keeps these.
+ * `capped` says more may wait than were read, so the list's total is a floor.
+ *
+ * @experimental
+ */
+export async function waitingEntryIds(
+  asker: WaitingAsker,
+  collection: string,
+  cap: number
+): Promise<{ ids: string[]; capped: boolean }> {
+  const { items, total, totalCapped, degraded } = await waitingItemsFor(asker, {
+    limit: cap,
+    offset: 0,
+    collection,
+  });
+  const ids = [
+    ...new Set(
+      items
+        .filter(item => item.document.scopeKind === "collection")
+        .map(item => item.document.entryId)
+    ),
+  ];
+  return {
+    ids,
+    capped: totalCapped === true || degraded || total > items.length,
+  };
+}
+
+/**
+ * What waits for `asker`, a page at a time: the waiting list's own answer, which its route and the
+ * dashboard's Needs attention count both read, so the two never disagree.
+ *
+ * @experimental
+ */
+export async function waitingPage(
+  asker: WaitingAsker,
+  query: { page: number; limit: number; before?: WaitingPosition }
+) {
+  const { items, total, totalCapped, next, degraded } = await waitingItemsFor(
+    asker,
+    {
+      limit: query.limit,
+      // Offset paging (`page`) works as it always has; the cursor is additive, read from where
+      // the page that gave it stopped.
+      offset: query.before === undefined ? (query.page - 1) * query.limit : 0,
+      ...(query.before === undefined ? {} : { after: query.before }),
+    }
+  );
+  // Each item's document named by its title as the caller reads it: the dashboard's heading read,
+  // one read per collection and language for the page, never a title the caller may not read.
+  const headings = await readableHeadings(
+    items.map(item => ({
+      kind: item.document.scopeKind,
+      slug: item.document.scopeSlug,
+      entryId:
+        item.document.scopeKind === "single" ? "" : item.document.entryId,
+      locale: item.part,
+    })),
+    {
+      user: asker.user,
+      ...(asker.scope === undefined ? {} : { authenticatedScope: asker.scope }),
+    },
+    bootedHeadingRegistries()
+  );
+  const titled = items.map(item => ({
+    ...item,
+    title:
+      headings.get(
+        headingKey({
+          kind: item.document.scopeKind,
+          slug: item.document.scopeSlug,
+          entryId:
+            item.document.scopeKind === "single" ? "" : item.document.entryId,
+          locale: item.part,
+        })
+      )?.title ?? null,
+  }));
+  const floor = degraded ? { totalCapped: true as const } : {};
+  // Where the next page starts, for a client that walks by cursor rather than page number.
+  const nextBefore =
+    next === null ? {} : { nextBefore: encodeWaitingCursor(next) };
+  if (query.before !== undefined) {
+    // A cursor walk: page and total describe the window returned, as other cursor reads do.
+    return {
+      items: titled,
+      meta: {
+        total: titled.length,
+        page: 1,
+        limit: query.limit,
+        totalPages: 1,
+        hasNext: next !== null,
+        hasPrev: true,
+        ...floor,
+        ...nextBefore,
+      },
+    };
+  }
+  const totalPages = Math.max(1, Math.ceil(total / query.limit));
+  return {
+    items: titled,
+    meta: {
+      total,
+      page: query.page,
+      limit: query.limit,
+      totalPages,
+      // A list that stopped before reading everything may have more, past its last page too.
+      hasNext: query.page < totalPages || totalCapped,
+      hasPrev: query.page > 1,
+      // More may wait than the list read: its total is a floor ("1000+"), as a capped count's is.
+      ...(totalCapped ? { totalCapped: true as const } : floor),
+      ...nextBefore,
+    },
+  };
+}
+
 /**
  * Which of `items` the asker may read, in order, each document in the language its part names:
  * asked of the ordinary read path in batches (`visibleDocuments`: a read per collection and
@@ -489,7 +668,7 @@ async function readableBy(
  * registry's documents and reads them as unreadable, so what it found is a floor, not the answer.
  */
 async function readableAmong(
-  asker: NonNullable<WorkflowAsker>,
+  asker: WaitingAsker,
   items: readonly WaitingReadable[]
 ): Promise<{ readable: boolean[]; degraded: boolean }> {
   const kept = new Map<string, readonly (string | null)[]>();
@@ -727,76 +906,20 @@ export const workflowOperations = {
 
   /** What waits for the caller, a page at a time. Trusted code has nothing waiting for it. */
   async waiting(asker: NonNullable<WorkflowAsker>, input: unknown) {
-    const query = parse(WaitingQuery, input);
-    // Collections and Singles share one namespace of slugs, so one ask covers both.
-    const attached = registeredWorkflows().flatMap(registered => [
-      ...registered.collections,
-      ...registered.singles,
-    ]);
-    const readable = await readableEntities(
-      attached,
-      readAccessCaller({
-        user: asker.user,
-        ...(asker.scope === undefined
-          ? {}
-          : { authenticatedScope: asker.scope }),
-      })
-    );
-    let degraded = false;
-    const { items, total, totalCapped, next } = await waitingFor(adapter(), {
+    return waitingPage(asker, parse(WaitingQuery, input));
+  },
+
+  /**
+   * Whether anything can ever wait for the caller's review: how many stages' next step they may
+   * take, in content they may read, judged as the waiting list judges it, with no document read.
+   */
+  async waitingScope(asker: NonNullable<WorkflowAsker>) {
+    const readable = await readableAttached(asker);
+    const stages = await takeableStageCount(adapter(), {
       caller: asker.caller,
-      limit: query.limit,
-      // Offset paging (`page`) works as it always has; the cursor is additive, read from where the
-      // page that gave it stopped.
-      offset: query.before === undefined ? (query.page - 1) * query.limit : 0,
-      ...(query.before === undefined ? {} : { after: query.before }),
       readsEntity: (_kind, slug) => Promise.resolve(readable.has(slug)),
-      // Each item in the language its part names: an item about a language the caller may not
-      // read the document in is left out, as a read of that language would be refused.
-      readable: async items => {
-        const asked = await readableAmong(asker, items);
-        degraded ||= asked.degraded;
-        return asked.readable;
-      },
     });
-    // A read check made while a registry could not be listed may have left out work the caller
-    // may read: the total is then a floor, never an exact count.
-    const floor = degraded ? { totalCapped: true as const } : {};
-    // Where the next page starts, for a client that walks by cursor rather than page number.
-    const nextBefore =
-      next === null ? {} : { nextBefore: encodeWaitingCursor(next) };
-    if (query.before !== undefined) {
-      // A cursor walk: page and total describe the window returned, as other cursor reads do.
-      return {
-        items,
-        meta: {
-          total: items.length,
-          page: 1,
-          limit: query.limit,
-          totalPages: 1,
-          hasNext: next !== null,
-          hasPrev: true,
-          ...floor,
-          ...nextBefore,
-        },
-      };
-    }
-    const totalPages = Math.max(1, Math.ceil(total / query.limit));
-    return {
-      items,
-      meta: {
-        total,
-        page: query.page,
-        limit: query.limit,
-        totalPages,
-        // A list that stopped before reading everything may have more, past its last page too.
-        hasNext: query.page < totalPages || totalCapped,
-        hasPrev: query.page > 1,
-        // More may wait than the list read: its total is a floor ("1000+"), as a capped count's is.
-        ...(totalCapped ? { totalCapped: true as const } : floor),
-        ...nextBefore,
-      },
-    };
+    return { reviews: stages > 0, stages };
   },
 };
 
@@ -908,6 +1031,10 @@ const ROUTES: Record<
           : { id: document.id, code, message }
       )
     );
+  },
+
+  async getWaitingScope(_request, asker) {
+    return respondData(await workflowOperations.waitingScope(asker));
   },
 
   async listWaiting(request, asker) {

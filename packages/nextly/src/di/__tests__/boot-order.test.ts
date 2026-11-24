@@ -185,6 +185,41 @@ describe("the boot sequence in registerServices", () => {
     }
   );
 
+  /**
+   * A stored page, the admin's included, is served only once the tag expiry
+   * ledger is published. Where the app runs no migrations at start, nothing
+   * before the registry is read can expire a tag, so the ledger is published
+   * before the start's schema reads, each a round trip the page would wait
+   * for; where it runs them, after them, which record their own expiries.
+   */
+  it("publishes the tag expiry ledger before the schema reads, or after the migrations at start", () => {
+    const early = boot.indexOf(
+      'publishLedgerIfAt("before the schema reads", ledgerAt, adapter);'
+    );
+    const late = boot.indexOf(
+      'publishLedgerIfAt("after migrations at start", ledgerAt, adapter);'
+    );
+    const decided = boot.indexOf(
+      "const ledgerAt = ledgerPublicationOf(structure, config);"
+    );
+    for (const at of [decided, early, late]) expect(at).toBeGreaterThan(-1);
+    expect(decided).toBeLessThan(early);
+    expect(early).toBeLessThan(boot.indexOf("await prepareBootSchema("));
+    expect(early).toBeLessThan(
+      boot.indexOf("await assertBootPluginInstallStates(")
+    );
+    expect(late).toBeGreaterThan(boot.indexOf("await runBootMigrations("));
+    // Published nowhere else in the start, and only where the decision says.
+    expect(boot).not.toContain("installTagExpiryLedger(");
+    expect(bodyOf("publishLedgerIfAt")).toContain(
+      "if (at === publication) installTagExpiryLedger(adapter);"
+    );
+    // After the migrations wherever the app opts into them, before otherwise.
+    expect(bodyOf("ledgerPublicationOf")).toContain(
+      'structure.migratesAtStart || config.db?.runMigrationsOnBoot === true\n    ? "after migrations at start"\n    : "before the schema reads"'
+    );
+  });
+
   it("runs the boot migrations inside the migration phase", () => {
     expect(bodyOf("runBootMigrations")).toContain(
       "await runProdMigrationsIfEnabled("

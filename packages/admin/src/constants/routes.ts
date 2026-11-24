@@ -56,6 +56,9 @@ export const ROUTES = {
   // two tables. The rail's Content item and the Content panel's title lead
   // here; COLLECTIONS and SINGLES below show one table each.
   CONTENT: "/admin/content",
+  // What waits for the reader's review across every collection and Single a workflow holds: the
+  // Content panel's first link where a workflow holds any content.
+  CONTENT_WAITING: "/admin/content/waiting",
 
   // ============================================================
   // Section landing pages.
@@ -157,6 +160,9 @@ export const ROUTES = {
   // emails) on its own page.
   SETTINGS_WORKFLOWS: "/admin/settings/workflows",
   SETTINGS_WORKFLOW_DETAIL: "/admin/settings/workflows/[slug]",
+  // Languages: the languages content is written in, their order and the
+  // default, changed here unless the configuration declares them.
+  SETTINGS_LANGUAGES: "/admin/settings/languages",
 
   // Plugin routes
   PLUGINS: "/admin/plugins",

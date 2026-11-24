@@ -48,6 +48,7 @@ import { isValidUUID } from "../auth/services/role/utils";
 import { pluginSettingsSecrets } from "../plugins/settings-service";
 
 import { isAuditReason } from "./audit-reasons";
+import { CORE_DOTTED_AUDIT_KINDS } from "./core-dotted-kinds";
 import {
   erasureNeedsLock,
   insertErasureAware,
@@ -90,6 +91,22 @@ export type AuditEventKind =
   | "preview-links-revoked"
   | "role-assigned"
   | "role-revoked"
+  /**
+   * A collection was closed to super-admin, or opened to it again: from the
+   * admin, by the super-admin who re-entered their password, or from the
+   * configuration, recorded by the `nextly migrate` or development start
+   * that first applied it. Metadata: `collection`, `before` and `after`
+   * (`"closed"` or `"open"`), and `source` (`"admin"` or `"code"`).
+   */
+  | "collection-super-admin-access-changed"
+  /**
+   * A private file was handed to a caller through the checked download, by
+   * stream or by a short link. Names who (staff, an API key's maker with
+   * `actorKind: "apiKey"`, or a signed-in person) and, in metadata,
+   * `collection`, `id` and `delivery` (`"stream"` or `"redirect"`), plus
+   * `apiKeyId` for a key. Never the link or where the file is stored.
+   */
+  | "file.downloaded"
   | "user-deleted";
 
 /**
@@ -551,8 +568,9 @@ function offersRetention(
  * package controls, but a plugin row carries what the plugin chose within its
  * declared keys — an email, a provider subject — which deletion clears and a
  * write racing it must not put back. The address and the client stay the
- * actor's alone. A plugin's kind always carries its `<slug>.` prefix, and no
- * core kind contains a dot.
+ * actor's alone. A plugin's kind always carries its `<slug>.` prefix, and the
+ * only core kinds containing a dot are those `CORE_DOTTED_AUDIT_KINDS` names,
+ * which no plugin may declare.
  */
 function auditRowInput(
   event: AuditEvent,
@@ -560,7 +578,7 @@ function auditRowInput(
   usersTable: unknown
 ): ErasureAwareInsert {
   const metadata = encodeMetadata(table, event.metadata);
-  const pluginRow = event.kind.includes(".");
+  const pluginRow = isPluginKind(event.kind);
   const actorUserId = event.actorUserId ?? null;
   const targetUserId = event.targetUserId ?? null;
   const actorPrincipal = event.actorPrincipal ?? NO_PERSON;
@@ -591,6 +609,14 @@ function auditRowInput(
     actorUserId,
     targetUserId,
   };
+}
+
+/**
+ * Whether `kind` is a plugin's: it carries a `<slug>.` prefix and is not one
+ * of the few core kinds that contain a dot.
+ */
+function isPluginKind(kind: string): boolean {
+  return kind.includes(".") && !CORE_DOTTED_AUDIT_KINDS.has(kind);
 }
 
 /** The person columns of a row that names no person in a role. */

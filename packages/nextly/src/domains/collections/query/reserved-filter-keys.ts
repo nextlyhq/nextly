@@ -35,6 +35,30 @@ export const IN_RELEASE_KEY = "_inRelease";
 export const STRANDED_STAGE_KEY = "_strandedStage";
 
 /**
+ * The reserved key keeping entries with a part assigned to the reader or to one
+ * of their roles. @experimental
+ */
+export const ASSIGNED_TO_ME_KEY = "_assignedToMe";
+
+/**
+ * The reserved key keeping entries with a part changed since its last approval.
+ * @experimental
+ */
+export const CHANGED_SINCE_APPROVED_KEY = "_changedSinceApproved";
+
+/**
+ * The reserved key keeping entries with a part in one stage of their workflow.
+ * @experimental
+ */
+export const STAGE_KEY = "_stage";
+
+/**
+ * The reserved key keeping entries with a part waiting for the reader's review.
+ * @experimental
+ */
+export const WAITING_FOR_ME_KEY = "_waitingForMe";
+
+/**
  * Every key a filter may carry only at its top level.
  *
  * @experimental
@@ -44,6 +68,10 @@ export const RESERVED_TOP_LEVEL_KEYS = [
   PENDING_CHANGE_KEY,
   IN_RELEASE_KEY,
   STRANDED_STAGE_KEY,
+  ASSIGNED_TO_ME_KEY,
+  CHANGED_SINCE_APPROVED_KEY,
+  STAGE_KEY,
+  WAITING_FOR_ME_KEY,
 ] as const;
 
 /** @experimental */

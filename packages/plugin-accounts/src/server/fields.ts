@@ -94,6 +94,22 @@ const FIELD_CALLS: Record<AccountAction, FieldCall> = {
       visitor,
       currentPassword: read("currentPassword"),
     }),
+  // Answers the message and cookies alone: the account and the site's data
+  // stay with the server, never sent back to the browser.
+  acceptInvitation: async (server, visitor, read) => {
+    const address = read("address");
+    const accepted = await server.acceptInvitation({
+      visitor,
+      token: read("token"),
+      password: read("password"),
+      ...(address === "" ? {} : { address }),
+    });
+    return {
+      message: accepted.message,
+      cookies: accepted.cookies,
+      signedIn: true,
+    };
+  },
 };
 
 /** Runs `action`'s server function with the fields a visitor sent. */

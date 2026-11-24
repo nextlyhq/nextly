@@ -4,6 +4,8 @@ import type { SeoContentType } from "../../settings/contract";
 import {
   attentionItems,
   changesOf,
+  foundField,
+  offeredFields,
   isHidden,
   faqSectionOf,
   mappingOf,
@@ -782,5 +784,84 @@ describe("rebasedDraft and the verification codes", () => {
       { name: "x-verify", code: "x1" },
       { name: "y-verify", code: "y1" },
     ]);
+  });
+});
+
+describe("a detail read from one of the entry's own dates", () => {
+  // As the route lists a type with no date of its own, the lifecycle on.
+  const cases: SeoContentType = {
+    ...posts,
+    key: "cases",
+    mappableFields: [
+      { name: "title", label: "Title" },
+      { name: "seo.ogImage", label: "SEO › Share image", kind: "seo" },
+      { name: "createdAt", label: "Created", kind: "built-in" },
+      { name: "updatedAt", label: "Updated", kind: "built-in" },
+      { name: "firstPublishedAt", label: "First published", kind: "built-in" },
+    ],
+  };
+  const mapped = (source: string) =>
+    draftOf(
+      { id: "s1" },
+      {
+        structuredData: {
+          cases: {
+            type: "blogPosting",
+            details: {
+              blogPosting: { datePublished: source, author: "title" },
+            },
+          },
+        },
+      }
+    );
+
+  it("holds the date published mapped to the created date, as the page reads it", () => {
+    expect(missingDetails(mapped("createdAt"), cases, "blogPosting")).toEqual(
+      []
+    );
+  });
+
+  it("still names the date missing where the mapped field does not exist", () => {
+    expect(missingDetails(mapped("publishedOn"), cases, "blogPosting")).toEqual(
+      ["datePublished"]
+    );
+  });
+
+  it("holds a field of the plugin's own SEO group, which the page reads too", () => {
+    const image = draftOf(
+      { id: "s1" },
+      {
+        structuredData: {
+          cases: {
+            type: "blogPosting",
+            details: {
+              blogPosting: {
+                datePublished: "createdAt",
+                author: "title",
+                image: "seo.ogImage",
+              },
+            },
+          },
+        },
+      }
+    );
+    expect(missingDetails(image, cases, "blogPosting")).toEqual([]);
+  });
+
+  it("offers the created and first published dates for the date published, never the last save", () => {
+    const names = (detail: Parameters<typeof offeredFields>[1]) =>
+      offeredFields(cases, detail).map(field => field.name);
+    expect(names("datePublished")).toEqual([
+      "title",
+      "createdAt",
+      "firstPublishedAt",
+    ]);
+    // Only a date can be one; the last save never says when a page changed.
+    expect(names("author")).toEqual(["title"]);
+    expect(names("dateModified")).toEqual(["title"]);
+  });
+
+  it("finds no field by name for the date modified in the last save, which the page passes over", () => {
+    expect(foundField(cases, "dateModified")).toBeUndefined();
   });
 });

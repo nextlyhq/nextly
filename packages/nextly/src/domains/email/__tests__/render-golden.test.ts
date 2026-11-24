@@ -4,10 +4,13 @@
  * The outputs in `__golden__/render-golden.json` were produced by the
  * `{{variable}}` engine this package shipped before Liquid. A change to the
  * engine must leave every one of them byte for byte as it is: an existing site
- * sends these emails today, and none of them may change.
+ * sends these emails today, and none of them may change. The one exception is
+ * a template whose own wording changed since: its entry is the new wording's
+ * output under Liquid, pinned when the change was made (the accounts
+ * invitation, which greets by name and gives the link's expiry).
  *
  * Covered: every core built-in template and the default layout (read from
- * their source), the accounts plugin's ten templates (frozen below, since this
+ * their source), the accounts plugin's twelve templates (frozen below, since this
  * package cannot import the plugin), and one template that exercises the
  * subject, preheader and plain-text paths. Each is rendered with four sets of
  * data: typical values, hostile values, nothing at all, and values that are
@@ -79,6 +82,17 @@ const ACCOUNTS_TEMPLATES: Array<
     subject: "Your password changed",
     htmlContent: `<p>Your account's password changed. If you didn't do this, reset it now.</p>`,
   },
+  {
+    slug: "accounts-invitation",
+    subject: "You're invited to make an account",
+    // Greets by name and gives the link's expiry where the email carries them.
+    htmlContent: `<p>{% if name %}Hello {{name}},{% else %}Hello,{% endif %}</p><p>You're invited to make an account with this address. <a href="{{link}}">Choose a password</a> to start.{% if expiresAtText %} The link works until {{expiresAtText}} ({{timeZone}}).{% endif %}</p><p>If you weren't expecting this, you can ignore this email.</p>`,
+  },
+  {
+    slug: "accounts-invitation-has-account",
+    subject: "You're invited to sign in",
+    htmlContent: `<p>You're invited to use your account here, and this address already has one. <a href="{{signInLink}}">Sign in</a>, or <a href="{{resetLink}}">reset your password</a> if you've forgotten it. If your account was closed, contact us.</p>`,
+  },
 ];
 
 /** Exercises the subject, preheader and plain text, which the others leave empty. */
@@ -110,6 +124,9 @@ const DATASETS: Record<string, Record<string, unknown>> = {
     signInLink: "https://example.com/sign-in",
     newAddress: "new@example.com",
     cancelLink: "https://example.com/cancel",
+    name: "Ayesha Khan",
+    expiresAtText: "30 November 2026, 5:00 PM",
+    timeZone: "Asia/Karachi",
     order: { number: "1042", total: "$225.00" },
     user: { profile: { city: "Lahore" } },
     items: "two",
@@ -129,6 +146,9 @@ const DATASETS: Record<string, Record<string, unknown>> = {
     signInLink: "line\r\nbreak",
     newAddress: "'quoted'",
     cancelLink: "</a><a href=//evil>",
+    name: `<img src=x onerror=alert(1)>`,
+    expiresAtText: "{{ link }}",
+    timeZone: '" onclick="x',
     order: { number: "<1042>", total: "&euro; 5" },
     user: { profile: { city: "{{ appName }}" } },
     items: "{{ order.number | upcase }}",
@@ -207,7 +227,7 @@ describe("every template renders exactly as before", () => {
         ...ACCOUNTS_TEMPLATES.map(t => t.slug),
       ])
     );
-    expect(ACCOUNTS_TEMPLATES).toHaveLength(10);
+    expect(ACCOUNTS_TEMPLATES).toHaveLength(12);
   });
 
   it("pins the accounts plugin's templates as its source holds them now", async () => {

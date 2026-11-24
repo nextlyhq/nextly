@@ -364,7 +364,10 @@ import {
   splitPendingChange,
   writeCompanionValues,
 } from "./apply-pending-change";
-import { resolveSingleForRequest } from "./ensure-runtime-table";
+import {
+  resolveSingleForRequest,
+  withDeclaredFields,
+} from "./ensure-runtime-table";
 import {
   liveSharedSingle,
   type SharedComparison,
@@ -1492,9 +1495,12 @@ export class SingleMutationService extends BaseService {
           scopeSlug: params.slug,
           entryId,
         };
+        // A Single that is not translated has one pending change, kept by
+        // part: its shared draft goes with its language's.
+        const withShared = draftsKeptByPart() && singleMeta.localized !== true;
         const { removed, judged: before } = await removePendingChangeJudged(
           tx,
-          { ref: discardedRef, locale: draftLocale },
+          { ref: discardedRef, locale: draftLocale, withShared },
           judging.check,
           () => this.refuseIfPendingChangeMoved(tx, judging, entryId, stale),
           { main: undefined, language: undefined }
@@ -1539,7 +1545,7 @@ export class SingleMutationService extends BaseService {
             // translation row.
             const languagesTable = `${singleMeta.tableName}_locales`;
             const translated =
-              singleMeta.localized === true &&
+              storesPerLanguage(singleMeta) &&
               this.localization !== undefined &&
               (
                 await liveColumnNames(tx.getDrizzle(), this.adapter.dialect, [
@@ -1565,7 +1571,14 @@ export class SingleMutationService extends BaseService {
               kind: "draftDiscarded",
               actor: actorForWrite(params.actor ?? null, params.user),
               personName: params.user?.name ?? null,
-              ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+              ...(draftLocale
+                ? {
+                    parts: {
+                      locales: [draftLocale],
+                      ...(withShared ? { shared: true } : {}),
+                    },
+                  }
+                : {}),
             }
           );
           // What the draft said about where its values came from goes with
@@ -2699,7 +2712,7 @@ export class SingleMutationService extends BaseService {
 
     try {
       // 1. Get Single metadata from registry
-      const singleMeta = await resolveSingleForRequest(
+      const storedMeta = await resolveSingleForRequest(
         this.adapter,
         this.singleRegistryService,
         slug,
@@ -2707,6 +2720,15 @@ export class SingleMutationService extends BaseService {
         // A write: refused in production where the Single was never registered.
         { intent: "write" }
       );
+      // With the fields the running configuration declares that the registry row predates: a
+      // production start writes no registry row and serves those fields over it, so the save
+      // accepts, validates and stores them as a read returns them.
+      const singleMeta =
+        storedMeta &&
+        withDeclaredFields(
+          storedMeta,
+          this.singleRegistryService.getCodeFirstFields(slug)
+        );
       if (!singleMeta) {
         return {
           success: false,
@@ -6659,16 +6681,23 @@ export class SingleMutationService extends BaseService {
           });
           // After the in-transaction phase, whose writes go through this `tx`
           // too, so the after-hooks see what the transaction commits; read
-          // only where there are after-hooks to hand it to.
+          // only where there are after-hooks to hand it to. Decoded as the
+          // document is: a group or other JSON value comes back from the
+          // translations table as stored, and laid over the decoded document
+          // as such it would reach the hooks and the answer as text.
           writtenTranslation = this.hookRegistry.hasHooks(
             "afterUpdate",
             hookCollection
           )
-            ? await this.translationIn(
-                existingDoc.id,
-                companion,
-                writeLocale,
-                tx
+            ? this.queryService.deserializeJsonFields(
+                // The language's values alone, decoded as a document's are.
+                (await this.translationIn(
+                  existingDoc.id,
+                  companion,
+                  writeLocale,
+                  tx
+                )) as SingleDocument,
+                fieldConfigs
               )
             : {};
 

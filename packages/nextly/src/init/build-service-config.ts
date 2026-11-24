@@ -164,6 +164,13 @@ export function buildServiceConfig(
       serviceConfig.permissions = nextlyConfig.permissions;
     }
 
+    // The collections the app opens to the preset roles, forwarded for the
+    // seeder that sets their grants: dropped here, every collection the app
+    // opened by slug would stay closed to them.
+    if (!serviceConfig.presetGrants && nextlyConfig?.presetGrants) {
+      serviceConfig.presetGrants = nextlyConfig.presetGrants;
+    }
+
     // If users config not explicitly provided, use from nextly.config.ts
     if (!serviceConfig.users && nextlyConfig?.users) {
       serviceConfig.users = nextlyConfig.users;

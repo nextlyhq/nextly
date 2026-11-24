@@ -35,6 +35,14 @@ const TSX = pathToFileURL(
   join(dirname(requireHere.resolve("tsx/package.json")), "dist/loader.mjs")
 ).href;
 
+/**
+ * `text` as a pattern that matches it alone: every character a pattern reads specially escaped,
+ * the `\` of a Windows path among them, which unescaped would match the letter after it.
+ */
+function literally(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 const folders: string[] = [];
 afterEach(() => {
   for (const folder of folders.splice(0)) {
@@ -354,7 +362,7 @@ describe("a second project folder's environment files", () => {
     // works in, not the one the CLI ran in.
     expect(read.printed[0]).toMatch(
       new RegExp(
-        `^Database: SQLite ${join(realpathSync(other), "other-env-local.db").replaceAll(".", "\\.")} \\(development; DATABASE_URL from \\S*\\.env\\.local\\)$`
+        `^Database: SQLite ${literally(join(realpathSync(other), "other-env-local.db"))} \\(development; DATABASE_URL from \\S*\\.env\\.local\\)$`
       )
     );
   });

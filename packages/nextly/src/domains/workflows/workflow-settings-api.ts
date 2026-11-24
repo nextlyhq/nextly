@@ -855,7 +855,7 @@ async function viewOf(
         .map(([other]) => other),
     };
   }
-  // Each stage's reviewer asked as a write would ask, so the read never says one holds the step
+  // Each stage's reviewer is checked as a write checks it, so the read never says one holds the step
   // that a save would refuse.
   const defaultReviewerHolds: Record<string, HolderAnswer> = {};
   for (const [stage, reviewer] of Object.entries(

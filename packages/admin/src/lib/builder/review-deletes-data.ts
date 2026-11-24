@@ -26,7 +26,18 @@ export function reviewDeletesData(
   changes: Pick<SchemaPreviewChange, "removed" | "changed">
 ): boolean {
   return (
-    changes.removed.length > 0 ||
-    changes.changed.some(row => row.classification === "destructive")
+    changes.removed.length > 0 || changes.changed.some(changedRowDeletesData)
   );
+}
+
+/**
+ * Whether a changed row deletes stored values: the server classes it `destructive`, such as a
+ * relationship whose links move into or out of a link table, a field whose column goes, or a type
+ * change that can lose values. The dialog confirms such a change by name, and its Save confirms
+ * the count it showed.
+ */
+export function changedRowDeletesData(
+  row: SchemaPreviewChange["changed"][number]
+): boolean {
+  return row.classification === "destructive";
 }

@@ -3,18 +3,24 @@
  * only where the migration that deploys it to every other database reaches the same values: where
  * the database's cast reads each stored value as its rule does. Anything else is refused, saying
  * it can't be deployed yet, and changes nothing: a value the cast would not rewrite (a list's one
- * item), one it would not clear (a text that is no number), and any change of a translated field,
- * kept in a translations table whose column a type change does not convert. Values are read back through the
- * Direct API, as the app reads them.
+ * item), and one it would not clear (a text that is no number). A translated field's values are
+ * judged in each language, and its translations table's column takes the new type in the file the
+ * save writes, where its column changes on the save's database; one whose column changes only on
+ * another database is refused. Values are read back through the Direct API, as the app reads them.
  *
  * What separates the right answer from plausible wrong ones:
- * - a save that judges the entity's own table alone lets a translated change through, leaving
- *   each language's value in the old type;
- * - one that refuses a translated change only where a value is held lets one through that leaves
- *   the column, and every value written after, in the old type;
+ * - a save that judges the entity's own table alone lets a value in another language through
+ *   that the new type cannot read;
+ * - one that changes the entity's own column alone leaves each language's value, and every value
+ *   written after, in the old type, read back as a text;
  * - a refusal without its reason gives the person no way to tell a value to fix from a change
  *   that can't be deployed yet.
  */
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
@@ -30,6 +36,8 @@ import type { ServiceContainer } from "../../../services";
 const SLUG = "tcc_posts";
 
 let instance: TestNextly | undefined;
+/** The project folder a translated case's saves write their migrations in, removed after it. */
+let project: string | undefined;
 
 /** A type change's refusal, wherever its path names the field, saying why it can't be deployed yet. */
 function refusedWith(why: string) {
@@ -68,6 +76,9 @@ function refusedAs(code: string, why: string) {
 afterEach(async () => {
   await instance?.destroy();
   instance = undefined;
+  if (project !== undefined)
+    await rm(project, { recursive: true, force: true });
+  project = undefined;
   vi.unstubAllEnvs();
 });
 
@@ -81,10 +92,22 @@ describe.each(getConfiguredTestDialects())(
       options: { localized?: boolean } = {}
     ): Promise<TestNextly> {
       vi.stubEnv("NODE_ENV", "development");
+      // A translated collection's saves write their migrations, as a Builder project's do: its
+      // translations column takes a new type only in the file a save writes and runs.
+      if (options.localized === true) {
+        project = await mkdtemp(join(tmpdir(), "type-change-conversion-"));
+      }
       const t = await createTestNextly({
         dialect,
         ...(options.localized === true
-          ? { localization: { locales: ["en", "es"], defaultLocale: "en" } }
+          ? {
+              localization: { locales: ["en", "es"], defaultLocale: "en" },
+              basePath: project,
+              db: {
+                migrationsDir: "./database/history",
+                uiSchemaFile: "./schema/builder.json",
+              },
+            }
           : {}),
       });
       instance = t;
@@ -219,7 +242,7 @@ describe.each(getConfiguredTestDialects())(
 
     // Every language's value is kept in the translations table, which no type change's migration
     // converts: refused, rather than leaving each language's value in the old type.
-    it("refuses a translated field holding a value, saying it can't be deployed yet, and changes nothing", async () => {
+    it("converts a translated field's whole numbers into a number field in every language", async () => {
       const t = await boot([{ name: "v", type: "text", localized: true }], {
         localized: true,
       });
@@ -235,15 +258,56 @@ describe.each(getConfiguredTestDialects())(
         await save(t, [{ name: "v", type: "number", localized: true }], {
           localized: true,
         })
+      ).toBeUndefined();
+
+      expect(await read(t, "v", "en")).toEqual({ a: 12 });
+      expect(await read(t, "v", "es")).toEqual({ a: 34 });
+    });
+
+    // The save counts on a translations column's new type only where its own file carries it, which
+    // `migrate:create` plans from the folder's newest snapshot: one that records the fields but not
+    // which columns the translations table keeps (a snapshot written before those were kept) gives
+    // the file no `retypes` step, so the change is refused as before, every value as it was.
+    it("refuses a translated change where the newest snapshot keeps no record of the translations columns", async () => {
+      const t = await boot([{ name: "v", type: "text", localized: true }], {
+        localized: true,
+      });
+      const id = await write(t, "a", { v: "12" }, "en");
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        data: { v: "34", _overwrite: true },
+        locale: "es",
+      } as never);
+      const meta = join(project ?? "", "database", "history", "meta");
+      const [newest] = readdirSync(meta)
+        .filter(file => file.endsWith(".snapshot.json"))
+        .sort()
+        .reverse();
+      const file = JSON.parse(readFileSync(join(meta, newest), "utf-8")) as {
+        snapshot: { tables: { name: string; localizedColumns?: string[] }[] };
+        entities?: { collections: Record<string, unknown> };
+      };
+      // The fixture's controls: the snapshot records the fields and the translations columns.
+      expect(file.entities?.collections[SLUG]).toBeDefined();
+      const table = file.snapshot.tables.find(t => t.name === `dc_${SLUG}`);
+      expect(table?.localizedColumns).toContain("v");
+      delete table?.localizedColumns;
+      writeFileSync(join(meta, newest), JSON.stringify(file, null, 2));
+
+      expect(
+        await save(t, [{ name: "v", type: "number", localized: true }], {
+          localized: true,
+        })
       ).toMatchObject(refusedAs("TYPE_CHANGE_BLOCKED", "kept per language"));
 
       expect(await read(t, "v", "en")).toEqual({ a: "12" });
       expect(await read(t, "v", "es")).toEqual({ a: "34" });
     });
 
-    // Holding no value is no exception: the translations table's column would keep the old type,
-    // so a value written after the change would be stored, and read, as the old type.
-    it("refuses a translated field holding no value too, and changes nothing", async () => {
+    // Holding no value is no exception: the translations table's column takes the new type, so a
+    // value written after the change is stored, and read, as a number.
+    it("changes a translated field holding no value too, so a value written after is a number", async () => {
       const t = await boot(
         [
           { name: "v", type: "text", localized: true },
@@ -263,10 +327,10 @@ describe.each(getConfiguredTestDialects())(
           ],
           { localized: true }
         )
-      ).toMatchObject(refusedAs("TYPE_CHANGE_BLOCKED", "kept per language"));
+      ).toBeUndefined();
 
-      await write(t, "c", { v: "7" }, "en");
-      expect(await read(t, "v", "en")).toEqual({ a: null, b: null, c: "7" });
+      await write(t, "c", { v: 7 }, "en");
+      expect(await read(t, "v", "en")).toEqual({ a: null, b: null, c: 7 });
     });
 
     // Where the translations column keeps its type, nothing in that table changes: a long text
@@ -293,10 +357,11 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v", "es")).toEqual({ a: "hola" });
     });
 
-    // The file the save writes deploys to every database, so a translations column that keeps its
-    // type here but not on another (a checkbox's integer on SQLite, boolean or tinyint elsewhere)
-    // is refused on every one, SQLite included.
-    it("refuses a translated checkbox becoming a number on every database, as its column changes on some", async () => {
+    // The file the save writes changes the translations column as this database makes it: a
+    // checkbox's integer on SQLite is a number's column too, so a file written there changes
+    // nothing, and the column another database makes (boolean, tinyint) would keep the old type.
+    // Refused on SQLite; elsewhere the file changes the column.
+    it("changes a translated checkbox into a number where its column changes here, and refuses it on SQLite", async () => {
       const t = await boot(
         [
           { name: "v", type: "checkbox", localized: true },
@@ -306,16 +371,51 @@ describe.each(getConfiguredTestDialects())(
       );
       await write(t, "a", { w: "x" }, "en");
 
-      expect(
-        await save(
-          t,
-          [
-            { name: "v", type: "number", localized: true },
-            { name: "w", type: "text", localized: true },
-          ],
-          { localized: true }
-        )
-      ).toMatchObject(refusedAs("TYPE_CHANGE_BLOCKED", "kept per language"));
+      const outcome = await save(
+        t,
+        [
+          { name: "v", type: "number", localized: true },
+          { name: "w", type: "text", localized: true },
+        ],
+        { localized: true }
+      );
+
+      if (dialect === "sqlite") {
+        expect(outcome).toMatchObject(
+          refusedAs("TYPE_CHANGE_BLOCKED", "kept per language")
+        );
+      } else {
+        expect(outcome).toBeUndefined();
+        await write(t, "b", { v: 3 }, "es");
+        expect(await read(t, "v", "es")).toMatchObject({ b: 3 });
+      }
+    });
+
+    // The translations column is cast as the entity's own column is, so a value the cast would not
+    // read alike never reaches it: a text a checkbox reads only once rewritten ("TRUE") is refused
+    // in each language before anything runs, every value as it was.
+    it("refuses a translated text becoming a checkbox over a value it reads only once rewritten, and changes nothing", async () => {
+      const t = await boot([{ name: "v", type: "text", localized: true }], {
+        localized: true,
+      });
+      const id = await write(t, "a", { v: "yes" }, "en");
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        data: { v: "TRUE", _overwrite: true },
+        locale: "es",
+      } as never);
+
+      const refused = await save(
+        t,
+        [{ name: "v", type: "checkbox", localized: true }],
+        { localized: true }
+      );
+
+      expect(refused).toMatchObject(
+        refusedAs("TYPE_CHANGE_BLOCKED", "rewritten into its form")
+      );
+      expect(await read(t, "v", "es")).toEqual({ a: "TRUE" });
     });
 
     // A save that stops translating the whole collection moves each language's value out of the
@@ -359,9 +459,9 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v", "en")).toEqual({ a: "12" });
     });
 
-    // A translated change is blocked whatever its values, so a value that cannot convert is named
-    // beside that reason, rather than sending the person to clear it first.
-    it("refuses a translated change with a value that cannot convert, naming both reasons, as blocked", async () => {
+    // Each language's value is judged before the save changes anything: a value no number reads in
+    // one language alone refuses the change, naming that language's row, and nothing changes.
+    it("refuses a translated change over a value one language holds that cannot convert, and changes nothing", async () => {
       const t = await boot([{ name: "v", type: "text", localized: true }], {
         localized: true,
       });
@@ -380,11 +480,11 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect(refused).toMatchObject(
-        refusedAs("TYPE_CHANGE_BLOCKED", "kept per language")
+        refusedAs("TYPE_CHANGE_LOSES_VALUES", "Clearing the values")
       );
-      expect(refused).toMatchObject(
-        refusedAs("TYPE_CHANGE_BLOCKED", "Clearing the values")
-      );
+      expect(JSON.stringify(refused)).not.toMatch(/kept per language/);
+      expect(JSON.stringify(refused)).toMatch(/\bes\b/);
+      expect(await read(t, "v", "en")).toEqual({ a: "12" });
       expect(await read(t, "v", "es")).toEqual({ a: "abc" });
     });
 
@@ -449,6 +549,66 @@ describe.each(getConfiguredTestDialects())(
         slug: "tcc_hero",
       } as never)) as { v?: unknown; item?: { v?: unknown } } | undefined;
       expect(read?.item?.v ?? read?.v).toBe(12);
+    });
+
+    // A Single's save in production is applied by its push, which changes no translations column's
+    // type: the file it writes carries the column's new type, but that file is not what runs. So a
+    // translated field's type change is refused there, with its reason, and nothing changes.
+    it("refuses a translated Single's type change in production, where its push runs rather than its file", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      project = await mkdtemp(join(tmpdir(), "type-change-conversion-single-"));
+      const t = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        basePath: project,
+        db: {
+          migrationsDir: "./database/history",
+          uiSchemaFile: "./schema/builder.json",
+        },
+      });
+      instance = t;
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "tcc_hero",
+          label: "Hero",
+          localized: true,
+          fields: [{ name: "v", type: "text", localized: true }],
+        }
+      );
+      for (const [locale, v] of [
+        ["en", "12"],
+        ["es", "34"],
+      ] as const) {
+        await t.nextly.updateSingle({
+          slug: "tcc_hero",
+          data: { v, _overwrite: true },
+          locale,
+        } as never);
+      }
+      vi.stubEnv("NODE_ENV", "production");
+
+      const refused = await dispatchSingles(
+        "updateSingleSchema",
+        { slug: "tcc_hero" },
+        { fields: [{ name: "v", type: "number", localized: true }] }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(JSON.stringify(refused)).toMatch(/kept per language/);
+      for (const [locale, v] of [
+        ["en", "12"],
+        ["es", "34"],
+      ] as const) {
+        const held = (await t.nextly.findSingle({
+          slug: "tcc_hero",
+          locale,
+        } as never)) as { v?: unknown; item?: { v?: unknown } } | undefined;
+        expect(held?.item?.v ?? held?.v).toBe(v);
+      }
     });
 
     // A Single answers a pair as a collection does: its own check before the save asks the same

@@ -56,7 +56,10 @@ function mountText(initial: Inline[]) {
       value={{
         name: path => (path === "orderUrl" ? "Order page" : path),
         blank: () => false,
-        paths: ["orderUrl"],
+        // A condition may ask about the `order` object; a link may not go
+        // to it, so the Link dialog offers the address paths alone.
+        paths: ["order", "orderUrl"],
+        addressPaths: ["orderUrl"],
       }}
     >
       <Field />
@@ -139,6 +142,13 @@ describe("a written block's text editor", () => {
     await user.click(screen.getByRole("button", { name: "Link" }));
     let dialog = await screen.findByRole("dialog", { name: "Add link" });
     await user.click(within(dialog).getByLabelText("A variable"));
+    // Only addresses: the `order` object a condition could ask about is not
+    // a place a link can go.
+    expect(
+      within(within(dialog).getByLabelText("Variable"))
+        .getAllByRole("option")
+        .map(option => option.textContent)
+    ).toEqual(["Choose a variable", "Order page"]);
     await user.selectOptions(
       within(dialog).getByLabelText("Variable"),
       "Order page"

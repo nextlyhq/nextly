@@ -287,8 +287,18 @@ export const WRITING_DOORS: readonly Door[] = [
  * `public` asks a visitor what `service` asks one, of targets of its own on
  * which the Public role holds {@link PUBLIC_HOLDS}; in every other setup the
  * Public role holds what boot seeding grants it (`publicHolds`).
+ *
+ * `closed` asks what `service` asks of a collection and a related row, every
+ * caller, of rule collections of its own marked closed to super-admin
+ * (`closedToSuperAdmin`), at every door that reads or writes entries. The
+ * doors that answer about a permission alone (`route`, `can`, `widget`,
+ * `schema`, `capabilities`) are not asked: the mark refuses entries, not
+ * permissions. Its answers are `service`'s, except that super-admin
+ * authority is refused (`oneAnswer`): a super-admin person and a full-access
+ * key carrying it. A super-admin's read-only key holds the catalogue's reads
+ * without that authority, so it reads a closed collection as it reads any.
  */
-export type Setup = "service" | "no-service" | "bound" | "public";
+export type Setup = "service" | "no-service" | "bound" | "public" | "closed";
 
 export interface Row {
   setup: Setup;
@@ -312,6 +322,12 @@ interface Reach {
 const READ: readonly Action[] = ["read"];
 /** What a resource's own routes do: read, create, update and delete. */
 const CRUD: readonly Action[] = ["read", "create", "update", "delete"];
+/**
+ * The email deliveries: the Activity's read, and the retry of one queued
+ * email, which is its one write (an update) and is made only through REST and
+ * the Direct API.
+ */
+const READ_RETRY: readonly Action[] = ["read", "update"];
 /** A user's writes, asked apart from the read the table asked first. */
 const USER_WRITES: readonly Action[] = ["create", "update", "delete"];
 const READ_UPDATE: readonly Action[] = ["read", "update"];
@@ -356,7 +372,7 @@ const REACH: Record<Door, Reach> = {
       "single-pub": PUBLISHING,
       roles: CRUD,
       providers: CRUD,
-      deliveries: READ,
+      deliveries: READ_RETRY,
     },
   },
   // Media, users, roles and email deliveries are read by the namespaces a principal cannot call
@@ -372,7 +388,7 @@ const REACH: Record<Door, Reach> = {
       users: READ,
       "single-pub": PUBLISHING,
       roles: READ,
-      deliveries: READ,
+      deliveries: READ_RETRY,
     },
     callersOf: {
       media: NOT_PRINCIPAL,
@@ -507,6 +523,17 @@ const REACH_BY_SETUP: Record<Setup, Partial<Record<Door, Reach>>> = {
     system: REACH.system,
     bulk: REACH.bulk,
   },
+  // Every door that reads or writes entries of a collection, and population.
+  closed: {
+    rest: REACH.rest,
+    direct: REACH.direct,
+    website: REACH.website,
+    service: REACH.service,
+    entity: REACH.entity,
+    population: REACH.population,
+    lock: REACH.lock,
+    bulk: REACH.bulk,
+  },
 };
 
 /** Whether a door asks a case, so a row is never sent where it cannot be. */
@@ -589,11 +616,24 @@ export function rows(): Row[] {
   );
   // A visitor again, with the Public role holding what it can be granted.
   const publicRole = cross("public", TARGETS, rulesOf, ACTIONS, ["visitor"]);
+  // Every caller again, of collections closed to super-admin. Last, so every
+  // row already in the answers file keeps its place.
+  const closed = cross(
+    "closed",
+    ["collection", "related"],
+    rulesOf,
+    ACTIONS,
+    CALLERS
+  );
   // A visitor's create, update and delete are rows like any other: judged by
   // what the Public role holds, then by a rule naming the write.
-  return [...withService, ...withoutService, ...bound, ...publicRole].filter(
-    row => DOORS.some(door => asks(door, row))
-  );
+  return [
+    ...withService,
+    ...withoutService,
+    ...bound,
+    ...publicRole,
+    ...closed,
+  ].filter(row => DOORS.some(door => asks(door, row)));
 }
 
 export function doorsAsking(row: Row): Door[] {
@@ -713,9 +753,9 @@ const SEEDED: Partial<Record<Target, readonly Action[]>> = {
   users: ["create", "read", "update", "delete"],
   roles: ["create", "read", "update", "delete"],
   providers: ["create", "read", "update", "delete"],
-  // The Activity is read only: `read-email-deliveries` is its one permission
-  // here (`manage-email-deliveries` cancels a queued email, and does not
-  // count as a read).
+  // `read-email-deliveries` reads the Activity. Its one write, a retry, has
+  // no permission of its own: `manage-email-deliveries` grants it
+  // (`MANAGED_WRITES`), and does not count as a read.
   deliveries: ["read"],
 };
 
@@ -738,10 +778,19 @@ const MANAGE_COUNTS_AS: readonly Action[] = [
   "delete",
 ];
 
+/**
+ * The writes a resource's `manage-` permission grants without counting as
+ * its read: a queued email's retry, granted by `manage-email-deliveries`
+ * alone. Extend an entry for another write or door.
+ */
+const MANAGED_WRITES: Partial<Record<Target, readonly Action[]>> = {
+  deliveries: ["update"],
+};
+
 const holdsManage = (caller: Caller, action: Action, target: Target) =>
-  MANAGED.includes(target) &&
-  MANAGE_COUNTS_AS.includes(action) &&
-  caller === "key-super-admin";
+  caller === "key-super-admin" &&
+  ((MANAGED.includes(target) && MANAGE_COUNTS_AS.includes(action)) ||
+    (MANAGED_WRITES[target]?.includes(action) ?? false));
 
 /** Whether the role screen grants the caller this action on this target. */
 function holdsPermission(caller: Caller, action: Action, target: Target) {
@@ -954,7 +1003,9 @@ export function oneAnswer(row: Row): Verdict {
     caller === "super-admin-inherited" ||
     caller === "key-super-admin"
   ) {
-    return "allow";
+    // Past every rule, except on a collection closed to super-admin, which
+    // refuses super-admin authority whatever else the caller holds.
+    return row.setup === "closed" ? "refuse" : "allow";
   }
   if (!holdsPermission(caller, action, target)) return "refuse";
   return answerFor(row, rulesLet(rule, action, caller, target));

@@ -64,6 +64,18 @@ export interface BulkActionBarProps {
     note?: string;
     onSelect: () => void;
   }[];
+  /**
+   * The workflow moves over the selection, each present only where the caller may make it, on a
+   * collection a workflow holds. Approve is never one: each approval is given from that
+   * document's review, for the version shown.
+   */
+  workflowMoves?: {
+    submit?: () => void;
+    assign?: () => void;
+    sendBack?: () => void;
+    /** Whether a move is on its way: each move is held back until it is answered. */
+    pending?: boolean;
+  };
 }
 
 // ============================================================================
@@ -100,7 +112,10 @@ export function BulkActionBar({
   onClear,
   itemLabel = "entry",
   declaredActions = [],
+  workflowMoves,
 }: BulkActionBarProps): JSX.Element {
+  // The workflow's moves, only on a collection a workflow holds.
+  const moves = collection?.workflow ? workflowMoves : undefined;
   // Each action is offered on its own permission, as the server answers it:
   // a user may hold one without the others. Publish / Unpublish are only
   // meaningful for collections with the built-in Draft / Published lifecycle,
@@ -145,6 +160,46 @@ export function BulkActionBar({
           <X className="h-4 w-4" />
           Clear
         </Button>
+
+        {/* The workflow's moves over the selection, never Approve: each approval is given from
+            that document's review, which the note says. */}
+        {moves && (
+          <>
+            {moves.submit && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={moves.pending === true}
+                onClick={moves.submit}
+              >
+                Submit for review
+              </Button>
+            )}
+            {moves.assign && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={moves.pending === true}
+                onClick={moves.assign}
+              >
+                Assign…
+              </Button>
+            )}
+            {moves.sendBack && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={moves.pending === true}
+                onClick={moves.sendBack}
+              >
+                Send back…
+              </Button>
+            )}
+            <span className="text-xs text-muted-foreground">
+              {"Approve from each document's review."}
+            </span>
+          </>
+        )}
 
         {/* Publish / Unpublish (only for collections with the built-in
             Draft / Published lifecycle, and only the transitions this caller
