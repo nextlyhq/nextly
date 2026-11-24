@@ -376,6 +376,11 @@ describe.each(getConfiguredTestDialects())(
       return { code, said: said.join("\n") };
     }
 
+    /** A command that went through; one that did not is told with what it said. */
+    function wentThrough(ran: { code: number | undefined; said: string }) {
+      expect(ran.code, ran.said).toBe(undefined);
+    }
+
     /** The migration files written so far. */
     const files = () =>
       readdirSync(join(state.dir, "migrations")).filter(name =>
@@ -547,10 +552,8 @@ describe.each(getConfiguredTestDialects())(
     it("migrate:create refuses removing a field a plugin's recorded index stands on, writing nothing", async () => {
       const url = await emptyDatabase();
       use(url);
-      expect((await migrateCreate("add_posts", configWith(true))).code).toBe(
-        undefined
-      );
-      expect((await migrate(configWith(true))).code).toBe(undefined);
+      wentThrough(await migrateCreate("add_posts", configWith(true)));
+      wentThrough(await migrate(configWith(true)));
       const table = await buildIndex(url);
       const written = files();
 
@@ -565,14 +568,10 @@ describe.each(getConfiguredTestDialects())(
     it("nextly migrate refuses a file removing that field before its first statement, changing nothing", async () => {
       const url = await emptyDatabase();
       use(url);
-      expect((await migrateCreate("add_posts", configWith(true))).code).toBe(
-        undefined
-      );
-      expect((await migrate(configWith(true))).code).toBe(undefined);
+      wentThrough(await migrateCreate("add_posts", configWith(true)));
+      wentThrough(await migrate(configWith(true)));
       // The file is written before the plugin builds anything, as on another database.
-      expect((await migrateCreate("remove_code", configWith(false))).code).toBe(
-        undefined
-      );
+      wentThrough(await migrateCreate("remove_code", configWith(false)));
       const table = await buildIndex(url);
       const before = await shapeOf(url, table);
       expect(before.columns).toContain("code");
@@ -587,18 +586,12 @@ describe.each(getConfiguredTestDialects())(
     it("nextly migrate refuses a later file's removal before the first file runs, changing nothing", async () => {
       const url = await emptyDatabase();
       use(url);
-      expect((await migrateCreate("add_posts", configWith(true))).code).toBe(
-        undefined
-      );
-      expect((await migrate(configWith(true))).code).toBe(undefined);
+      wentThrough(await migrateCreate("add_posts", configWith(true)));
+      wentThrough(await migrate(configWith(true)));
       // Written before the plugin builds anything, as on another database: a file that adds a
       // column, and one that removes the column the plugin will index.
-      expect(
-        (await migrateCreate("add_extra", configWith(true, true))).code
-      ).toBe(undefined);
-      expect(
-        (await migrateCreate("remove_code", configWith(false, true))).code
-      ).toBe(undefined);
+      wentThrough(await migrateCreate("add_extra", configWith(true, true)));
+      wentThrough(await migrateCreate("remove_code", configWith(false, true)));
       const table = await buildIndex(url);
       const before = await shapeOf(url, table);
       expect(before.columns).not.toContain("extra");
@@ -613,10 +606,8 @@ describe.each(getConfiguredTestDialects())(
     it("migrate:create refuses removing a field group's field whose column in its shared table a plugin's recorded index stands on, writing nothing", async () => {
       const url = await emptyDatabase();
       use(url);
-      expect(
-        (await migrateCreate("add_cards", groupConfigWith(true))).code
-      ).toBe(undefined);
-      expect((await migrate(groupConfigWith(true))).code).toBe(undefined);
+      wentThrough(await migrateCreate("add_cards", groupConfigWith(true)));
+      wentThrough(await migrate(groupConfigWith(true)));
       const table = await buildIndex(url, "rank", GROUP_TABLE);
       expect(table).toBe(GROUP_TABLE);
       const written = files();
@@ -640,10 +631,8 @@ describe.each(getConfiguredTestDialects())(
         if (earlier) setPerLanguageStorage(false);
         const url = await emptyDatabase();
         use(url);
-        expect((await migrateCreate("add_posts", shaped({}))).code).toBe(
-          undefined
-        );
-        expect((await migrate(shaped({}))).code).toBe(undefined);
+        wentThrough(await migrateCreate("add_posts", shaped({})));
+        wentThrough(await migrate(shaped({})));
         const table = await buildIndex(url);
         const before = await shapeOf(url, table);
         const written = files();
@@ -665,10 +654,8 @@ describe.each(getConfiguredTestDialects())(
       setPerLanguageStorage(false);
       const url = await emptyDatabase();
       use(url);
-      expect((await migrateCreate("add_posts", shaped({}, text))).code).toBe(
-        undefined
-      );
-      expect((await migrate(shaped({}, text))).code).toBe(undefined);
+      wentThrough(await migrateCreate("add_posts", shaped({}, text)));
+      wentThrough(await migrate(shaped({}, text)));
       const table = await buildIndex(url);
       expect(table).toBe(TABLE);
       const before = await shapeOf(url, table);
@@ -714,10 +701,8 @@ describe.each(getConfiguredTestDialects())(
         if (earlier) setPerLanguageStorage(false);
         const url = await emptyDatabase();
         use(url);
-        expect((await migrateCreate("add_posts", shaped({}))).code).toBe(
-          undefined
-        );
-        expect((await migrate(shaped({}))).code).toBe(undefined);
+        wentThrough(await migrateCreate("add_posts", shaped({})));
+        wentThrough(await migrate(shaped({})));
         await plantMarker(url);
         const before = await markerOf(url);
         expect(before).toEqual({
@@ -748,10 +733,8 @@ describe.each(getConfiguredTestDialects())(
         if (earlier) setPerLanguageStorage(false);
         const url = await emptyDatabase();
         use(url);
-        expect(
-          (await migrateCreate("add_cards", groupConfigWith(true))).code
-        ).toBe(undefined);
-        expect((await migrate(groupConfigWith(true))).code).toBe(undefined);
+        wentThrough(await migrateCreate("add_cards", groupConfigWith(true)));
+        wentThrough(await migrate(groupConfigWith(true)));
         await plantMarker(url, GROUP_TABLE);
         const before = await markerOf(url, GROUP_TABLE);
         expect(before).toEqual({
@@ -780,10 +763,8 @@ describe.each(getConfiguredTestDialects())(
       const url = await emptyDatabase();
       use(url);
       // The control: the plugin's index is made by the app's migration, which records no row for it.
-      expect(
-        (await migrateCreate("add_posts", pluggedWith(true, true))).code
-      ).toBe(undefined);
-      expect((await migrate(pluggedWith(true, true))).code).toBe(undefined);
+      wentThrough(await migrateCreate("add_posts", pluggedWith(true, true)));
+      wentThrough(await migrate(pluggedWith(true, true)));
       expect((await shapeOf(url, TABLE)).indexes).toContain(DECLARED_INDEX);
       const written = files();
 
@@ -802,9 +783,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("migrate:create writes the file and says it was not checked where no database is there", async () => {
       use(absentDatabase());
-      expect((await migrateCreate("add_posts", configWith(true))).code).toBe(
-        undefined
-      );
+      wentThrough(await migrateCreate("add_posts", configWith(true)));
       const written = files();
 
       const created = await migrateCreate("remove_code", configWith(false));
