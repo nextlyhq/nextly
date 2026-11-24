@@ -308,7 +308,7 @@ export interface LocalizationUpOptions {
  * before the columns go; refused, naming each, where an index stands on one of them with other
  * columns or on part of it, before anything runs.
  */
-function indexDropsBeforeColumns(
+export function indexDropsBeforeColumns(
   spec: Pick<CompanionMigrationSpec, "dialect" | "mainTable" | "collection">,
   dropped: readonly string[],
   indexes: LocalizationUpOptions["mainIndexes"]

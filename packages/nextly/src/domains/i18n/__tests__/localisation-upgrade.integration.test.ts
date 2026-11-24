@@ -38,6 +38,7 @@ import {
   migrateData,
   openUpgradeDatabase,
   previewMigrateData,
+  refusalBeforeSchemaChanges,
   seedLegacyStates,
   SITE,
   whatEachReaderSees,
@@ -308,6 +309,47 @@ describeEachDialect(
       for (const table of translated) {
         expect(await columnsOf(table)).toEqual(before[table]);
       }
+    });
+
+    // A moved column leaves its main table, and an index standing on it alone goes with it, first,
+    // since SQLite refuses to drop a column an index names. One standing on it and another column
+    // would break, or keep something else unique, so the upgrade refuses it before anything
+    // changes, naming it. Broken, SQLite stops part-way on the first, and the other dialects drop
+    // or shrink the second without a word.
+    it("drops an index on a moved column alone, and refuses one on it with another column", async () => {
+      await legacySite();
+      const adapter = database!.adapter;
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const columnsOf = async (table: string) => {
+        const { tables } = await introspectLiveColumns(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          [table]
+        );
+        return (tables[0]?.columns ?? []).map(column => column.name);
+      };
+      const titleIndex = `CREATE INDEX ${q("idx_notes_title")} ON ${q("dc_notes")} (${q("title")})`;
+      const twoColumns = `CREATE INDEX ${q("idx_notes_two")} ON ${q("dc_notes")} (${q("title")}, ${q("id")})`;
+
+      await adapter.executeQuery(twoColumns);
+      expect(await refusalBeforeSchemaChanges(adapter, SITE)).toMatchObject({
+        code: "NEXTLY_UPGRADE_COLUMN_HELD",
+        publicMessage: expect.stringContaining("idx_notes_two"),
+      });
+      await expect(upgrade()).rejects.toMatchObject({
+        code: "NEXTLY_UPGRADE_COLUMN_HELD",
+      });
+      expect(await columnsOf("dc_notes")).toContain("title");
+
+      await adapter.executeQuery(
+        dialect === "mysql"
+          ? `DROP INDEX ${q("idx_notes_two")} ON ${q("dc_notes")}`
+          : `DROP INDEX ${q("idx_notes_two")}`
+      );
+      await adapter.executeQuery(titleIndex);
+      await upgrade();
+      expect(await columnsOf("dc_notes")).not.toContain("title");
     });
 
     // A field group declared in code had its columns built by the pipeline, whose rule bounds a

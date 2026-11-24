@@ -1796,22 +1796,17 @@ async function runStatementsInOrder(
   afterEach?: () => void
 ): Promise<void> {
   if (adapter.dialect === "sqlite") {
-    // One savepoint: SQLite's schema statements are transactional, so one it refuses part-way (a
-    // drop a view or a trigger still names) leaves nothing applied, rather than the columns
-    // dropped before it gone and the table half moved. A savepoint, not BEGIN, so it nests inside
-    // a transaction a caller holds.
-    await adapter.executeQuery("SAVEPOINT nextly_companion_move");
-    try {
+    // One savepoint (`inOneSqliteSavepoint`): a statement SQLite refuses part-way leaves nothing of
+    // the move applied.
+    const { inOneSqliteSavepoint } = await import(
+      "../migration/sqlite-savepoint"
+    );
+    await inOneSqliteSavepoint(adapter, "nextly_companion_move", async () => {
       for (const statement of statements) {
         await adapter.executeQuery(statement);
         afterEach?.();
       }
-    } catch (error) {
-      await adapter.executeQuery("ROLLBACK TO SAVEPOINT nextly_companion_move");
-      await adapter.executeQuery("RELEASE SAVEPOINT nextly_companion_move");
-      throw error;
-    }
-    await adapter.executeQuery("RELEASE SAVEPOINT nextly_companion_move");
+    });
     return;
   }
   if (adapter.dialect !== "mysql") {
