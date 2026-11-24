@@ -673,6 +673,31 @@ describe.each(getConfiguredTestDialects())(
         "v_short",
       ],
       ["a UNIQUE", "v text UNIQUE", "UNIQUE"],
+      [
+        "a CHECK naming it quoted, beside a doubled quote",
+        `v text CHECK ("v" <> 'it''s )')`,
+        "a CHECK that reads v",
+      ],
+      [
+        "a CHECK naming it bracketed",
+        "v text CHECK ([v] <> 'x')",
+        "a CHECK that reads v",
+      ],
+      [
+        "a CHECK naming a column with an apostrophe before it",
+        `v text, "it's" text CHECK ("it's" <> 'a' OR v <> 'b')`,
+        "a CHECK that reads v",
+      ],
+      [
+        "a CHECK naming a column with a parenthesis before it",
+        `v text, "a)" text CHECK ("a)" IS NULL OR v <> 'b')`,
+        "a CHECK that reads v",
+      ],
+      [
+        "a CHECK opened after a comment",
+        "v text CHECK /* it's ) */ (v <> 'b')",
+        "a CHECK that reads v",
+      ],
       ["a foreign key", "v text REFERENCES dc_tcf_posts(id)", "foreign key"],
       ["a generated column of it", "v text, g text AS (v || 'x')", "generated"],
     ])(
