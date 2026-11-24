@@ -23,11 +23,12 @@ export const LIVE_LOCALIZATION = { locales: ["en", "de"], defaultLocale: "en" };
 
 export const liveCard = defineFieldGroup({
   slug: LIVE_GROUP,
-  // Translated, so a read takes its translations from the companion table, which the migration
-  // renames with the group's own.
+  // Translated but for its heading, so a read takes the tagline from the companion table, which
+  // the migration
+  // renames with the group's own, and the heading from the group's table.
   localized: true,
   fields: [
-    text({ name: "heading" }),
+    text({ name: "heading", localized: false }),
     text({ name: "tagline", localized: true }),
   ],
 });
