@@ -51,6 +51,7 @@ import {
   LIVE_COLLECTION,
   LIVE_DECLARED,
   LIVE_LOCALIZATION,
+  LIVE_SINGLE,
 } from "./helpers/live-site-entities";
 import {
   legacyObjects,
@@ -95,7 +96,11 @@ async function ask(holder: Holder, request: string): Promise<string> {
  * with it answers saying so rather than as the heading.
  */
 async function readHeading(holder: Holder, id: string): Promise<unknown> {
-  const answer = await ask(holder, `read ${id}`);
+  return headingOf(await ask(holder, `read ${id}`));
+}
+
+/** A read's answer as `readHeading` gives it. */
+function headingOf(answer: string): unknown {
   if (!answer.startsWith("OK ")) return answer;
   const card = JSON.parse(answer.slice(3)) as {
     heading?: unknown;
@@ -210,9 +215,8 @@ describe.each(getConfiguredTestDialects())(
       expect(atPoints.length - upPoints).toBeGreaterThan(2);
     }, 300_000);
 
-    it("saves first after the migration, with no read before it, and is refused no more than it is told to retry", async () => {
-      // A read follows a move by itself, so a server that reads first has found the new names by
-      // the time it saves. One that saves first has only the names it started with.
+    /** The legacy site with content, a server started on it, and the migration then run. */
+    const openMigratedUnder = async () => {
       site = await openStorageGenerationSite({
         dialect,
         loaded,
@@ -221,34 +225,71 @@ describe.each(getConfiguredTestDialects())(
         localization: LIVE_LOCALIZATION,
       });
       const first = await site.developmentStart(LIVE_DECLARED);
+      const card = { heading: "Kept", tagline: "Kept" };
       const created = await first.nextly.create({
         collection: LIVE_COLLECTION as never,
-        data: {
-          title: "P",
-          card: { heading: "Kept", tagline: "Kept" },
-        } as never,
+        data: { title: "P", card } as never,
       });
-      const id = (created.item as { id: string }).id;
+      await first.nextly.updateSingle({
+        slug: LIVE_SINGLE as never,
+        data: { title: "H", card, _overwrite: true } as never,
+      });
       server = startScript(SERVER, [
         dialect,
         site.url!,
         perLanguageStorageEnabled() ? "on" : "off",
       ]);
       await server.printed("READY");
-
       expect((await site.migrateStorage()).ran).toBe(true);
+      return (created.item as { id: string }).id;
+    };
 
+    /** Asks until it is done, at most three times, each refusal saying to retry. */
+    const untilDone = async (request: string): Promise<string> => {
       const answers: string[] = [];
       for (let tries = 0; tries < 3; tries++) {
-        answers.push(await ask(server, `save ${id} saved-first`));
-        if (answers.at(-1) === "OK") break;
+        answers.push(await ask(server!, request));
+        if (answers.at(-1)!.startsWith("OK")) break;
       }
-      expect(answers.at(-1), answers.join(" / ")).toBe("OK");
+      expect(answers.at(-1), answers.join(" / ")).toMatch(/^OK/);
       for (const refused of answers.slice(0, -1)) {
         expect(refused).toMatch(/^REFUSED FIELD_GROUP_STORAGE_MOVING /);
       }
-      expect(await readHeading(server, id)).toBe("saved-first");
-      expect(await legacyObjects(site.adapter, dialect)).toEqual([]);
-    }, 300_000);
+      return answers.at(-1)!;
+    };
+
+    // A read follows a move by itself, so a server that reads first has found the new names by the
+    // time it writes. Each of these is the first thing a server does after the migration, with only
+    // the names it started with.
+    describe("whose first request after the migration", () => {
+      it("is a save, saves it on the retry it is told to make", async () => {
+        const id = await openMigratedUnder();
+        await untilDone(`save ${id} saved-first`);
+        expect(await readHeading(server!, id)).toBe("saved-first");
+        expect(await legacyObjects(site!.adapter, dialect)).toEqual([]);
+      }, 300_000);
+
+      it("is a duplicate, makes it whole on the retry it is told to make", async () => {
+        const id = await openMigratedUnder();
+        const copy = (await untilDone(`duplicate ${id}`)).slice("OK ".length);
+        expect(await readHeading(server!, copy)).toBe("Kept");
+        expect(await readHeading(server!, id)).toBe("Kept");
+        expect(await legacyObjects(site!.adapter, dialect)).toEqual([]);
+      }, 300_000);
+
+      it("is a Single's save, saves it on the retry it is told to make", async () => {
+        await openMigratedUnder();
+        await untilDone("save-single single-first");
+        expect(headingOf(await ask(server!, "read-single"))).toBe(
+          "single-first"
+        );
+        expect(await legacyObjects(site!.adapter, dialect)).toEqual([]);
+      }, 300_000);
+
+      it("is a Single's read, returns its group and its translation", async () => {
+        await openMigratedUnder();
+        expect(headingOf(await ask(server!, "read-single"))).toBe("Kept");
+      }, 300_000);
+    });
   }
 );

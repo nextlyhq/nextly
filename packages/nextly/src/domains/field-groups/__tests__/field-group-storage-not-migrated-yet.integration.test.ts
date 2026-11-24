@@ -179,14 +179,13 @@ describe.each(getConfiguredTestDialects())(
         return (found as { card?: { heading?: unknown } }).card?.heading;
       };
       /** Puts the Single's first version back, as a person in the admin does. */
+      let admin: string | undefined;
       const restoreSingle = async () => {
         const found = (await nextly.findSingle({
           slug: "fgnm_home" as never,
         })) as { id?: string };
-        const user = {
-          id: await superAdminUser(site!.current!, "fgnm-admin"),
-          roles: ["super-admin"],
-        };
+        admin ??= await superAdminUser(site!.current!, "fgnm-admin");
+        const user = { id: admin, roles: ["super-admin"] };
         return outcome(
           restoreVersion({
             scopeKind: "single",

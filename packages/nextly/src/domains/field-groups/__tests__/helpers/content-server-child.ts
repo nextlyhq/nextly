@@ -11,6 +11,8 @@
  * - `<id> read <entryId>` answers `OK <json>`: the entry's field-group value as a read returns it.
  * - `<id> save <entryId> <heading>` answers `OK` when the save succeeded, the heading saved as
  *   the group's translated tagline too.
+ * - `<id> duplicate <entryId>` answers `OK <new entryId>`.
+ * - `<id> read-single` and `<id> save-single <heading>` do the same for the Single.
  *
  * Either answers `REFUSED <code> <message>` for an error a caller is meant to act on, and
  * `ERROR <code> <message>` for any other failure, so the suite tells a refusal from a crash.
@@ -36,14 +38,14 @@ const { setPerLanguageStorage } = await import(
 );
 setPerLanguageStorage(layout === "on");
 const { createTestNextly } = await import("../../../../plugins/test-nextly");
-const { LIVE_COLLECTION, LIVE_DECLARED, LIVE_LOCALIZATION } = await import(
-  "./live-site-entities"
-);
+const { LIVE_COLLECTION, LIVE_DECLARED, LIVE_LOCALIZATION, LIVE_SINGLE } =
+  await import("./live-site-entities");
 
 const adapter = await createAdapter({ type: dialect, url } as never);
 const instance = await createTestNextly({
   adapter: adapter as never,
   collections: LIVE_DECLARED.collections,
+  singles: LIVE_DECLARED.singles,
   fieldGroups: LIVE_DECLARED.fieldGroups,
   localization: LIVE_LOCALIZATION,
 });
@@ -109,6 +111,29 @@ async function answer(command: string, args: string[]): Promise<string> {
       // translation carries the same text, so a read shows whether it came back with the rest.
       data: {
         card: { heading: args[1], tagline: args[1] },
+        _overwrite: true,
+      } as never,
+    });
+    return "OK";
+  }
+  if (command === "duplicate") {
+    const copied = await instance.nextly.duplicate({
+      collection: LIVE_COLLECTION as never,
+      id: args[0]!,
+    });
+    return `OK ${(copied as { item: { id: string } }).item.id}`;
+  }
+  if (command === "read-single") {
+    const read = await instance.nextly.findSingle({
+      slug: LIVE_SINGLE as never,
+    });
+    return `OK ${JSON.stringify((read as { card?: unknown }).card ?? null)}`;
+  }
+  if (command === "save-single") {
+    await instance.nextly.updateSingle({
+      slug: LIVE_SINGLE as never,
+      data: {
+        card: { heading: args[0], tagline: args[0] },
         _overwrite: true,
       } as never,
     });
