@@ -261,8 +261,8 @@ export async function historyFieldGroupNamingIn(
 }
 
 /**
- * The field-group names a snapshot file's text says its history is on. A template's older-format
- * file records no tables and predates the record, so it is on the legacy names. Any other file
+ * The field-group names a snapshot file's text says its history is on: a template's older-format
+ * file's own word (`olderFormatNaming`), and any other's as its tables or its record say. A file
  * that is no snapshot is refused.
  */
 export function snapshotFileNaming(
@@ -275,8 +275,26 @@ export function snapshotFileNaming(
   } catch {
     // Not JSON: `parseSnapshotFile` below says so.
   }
-  if (isOlderFormatSnapshot(parsed)) return "legacy";
+  if (isOlderFormatSnapshot(parsed)) return olderFormatNaming(parsed, filename);
   return snapshotFieldGroupNaming(parseSnapshotFile(content, filename));
+}
+
+/**
+ * The names a template's older-format file says its project starts on. It records no tables, so it
+ * says so outright, and a file from before it could is on the legacy names, as every project made
+ * from one is. A word it does not know is refused rather than taken for either.
+ */
+function olderFormatNaming(
+  parsed: unknown,
+  filename: string
+): FieldGroupNaming {
+  const said = (parsed as { fieldGroupStorage?: unknown }).fieldGroupStorage;
+  if (said === undefined) return "legacy";
+  if (said === "current") return "current";
+  throw new SnapshotFileError(
+    filename,
+    `expected fieldGroupStorage to be "current" when present, got ${JSON.stringify(said)}`
+  );
 }
 
 /**
@@ -508,7 +526,12 @@ export async function loadLatestSnapshot(
       return {
         filename: latest,
         data: {
-          version: 1,
+          ...(olderFormatNaming(parsed, latest) === "current"
+            ? {
+                version: CURRENT_NAMES_SNAPSHOT_VERSION,
+                fieldGroupStorage: "current" as const,
+              }
+            : { version: 1 as const }),
           // The file's own content, hashed: it has no migration hash to carry.
           migrationHash: createHash("sha256").update(content).digest("hex"),
           snapshot: templateStart(templateEntitiesOf(parsed, latest)),

@@ -14,6 +14,7 @@ import {
   parseSnapshotFile,
   SnapshotFileError,
   snapshotFieldGroupNaming,
+  snapshotFileNaming,
   snapshotPathOf,
   verifyMigrationHash,
   writeSnapshot,
@@ -316,6 +317,25 @@ describe("snapshot-io", () => {
           entities: recorded({ fields: [], dbName: "fg_banner" }),
         })
       ).toBe("legacy");
+    });
+
+    // A template's older-format file records no tables: it says outright, and one from before it
+    // could is legacy. A word it does not know is refused, not taken for either.
+    it("reads a template's older-format file by its own word", () => {
+      const file = (fieldGroupStorage?: unknown) =>
+        JSON.stringify({
+          version: 1,
+          collections: [],
+          singles: [],
+          ...(fieldGroupStorage === undefined ? {} : { fieldGroupStorage }),
+        });
+      expect(snapshotFileNaming(file(), "t.snapshot.json")).toBe("legacy");
+      expect(snapshotFileNaming(file("current"), "t.snapshot.json")).toBe(
+        "current"
+      );
+      expect(() =>
+        snapshotFileNaming(file("newest"), "t.snapshot.json")
+      ).toThrow(/t\.snapshot\.json is invalid: expected fieldGroupStorage/);
     });
 
     // A slug-derived legacy table beside them cannot be on the same names: no reading of the
