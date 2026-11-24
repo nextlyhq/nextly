@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
-import { checkMove, placeOf } from "../check-move";
+import { checkMove, definitionRefusal, placeOf } from "../check-move";
 
 const text = (name: string, extra: Record<string, unknown> = {}) =>
   ({ name, label: name, type: "text", ...extra }) as FieldDefinition;
@@ -588,5 +588,78 @@ describe("checkMove", () => {
         )
       ).toMatchObject({ ok: true, move: { perLanguage: false } });
     });
+  });
+});
+
+// What a road that would refuse a move for a reason of its own says first: only what the two field
+// lists decide alone, so a message never answers with a reason the road may know better.
+describe("definitionRefusal", () => {
+  const before = [
+    { name: "code", type: "text", unique: true },
+    { name: "tags", type: "text" },
+    { name: "label", type: "text" },
+    {
+      name: "items",
+      type: "repeater",
+      fields: [{ name: "note", type: "text" }],
+    },
+    { name: "meta", type: "group", fields: [{ name: "note", type: "text" }] },
+    { name: "page", type: "blocks" },
+    { name: "card", type: "component", component: "card" },
+  ] as unknown as FieldDefinition[];
+  const moved = (name: string, into: string) =>
+    before.map(field =>
+      (field as { name?: string }).name === into
+        ? {
+            ...field,
+            fields: [
+              ...((field as { fields?: object[] }).fields ?? []),
+              before.find(each => (each as { name?: string }).name === name),
+            ],
+          }
+        : (field as { name?: string }).name === name
+          ? undefined
+          : field
+    ) as unknown as FieldDefinition[];
+
+  it.each([
+    ["a field kept unique into a group", "code", "meta"],
+    ["a field kept unique into a repeater", "code", "items"],
+    ["a field into a repeater", "label", "items"],
+  ] as const)("says %s refused, for what it is", (_what, name, into) => {
+    expect(
+      definitionRefusal(before, moved(name, into).filter(Boolean) as never, {
+        from: [name],
+        to: [into, name],
+      })
+    ).toBeTypeOf("string");
+  });
+
+  it("says nothing of a move that is allowed, or is refused for a reason of another kind", () => {
+    const allowed = moved("tags", "meta").filter(Boolean) as never;
+    expect(
+      definitionRefusal(before, allowed, {
+        from: ["tags"],
+        to: ["meta", "tags"],
+      })
+    ).toBeUndefined();
+    // The same name at a place that does not exist is a save that does not match its fields.
+    expect(
+      definitionRefusal(before, before, {
+        from: ["gone"],
+        to: ["meta", "gone"],
+      })
+    ).toBeUndefined();
+  });
+
+  it("says a field group refused only with its users to name", () => {
+    const after = before;
+    const request = { from: ["label"], to: ["card", "label"] };
+    expect(definitionRefusal(before, after, request)).toBeUndefined();
+    expect(
+      definitionRefusal(before, after, request, {
+        fieldGroupUsers: () => ({ uses: [], complete: true }),
+      })
+    ).toMatch(/cannot be moved into or out of the field group card/);
   });
 });

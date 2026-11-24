@@ -111,7 +111,10 @@ import {
   getFieldGroupMetadataServiceFromDI,
   getLoggerFromDI,
 } from "../helpers/di";
-import { readableFieldOwners } from "../helpers/readable-field-owners";
+import {
+  movesRefusedFirst,
+  readableFieldOwners,
+} from "../helpers/readable-field-owners";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { readRequestedMoves } from "../helpers/request-moves";
 import { requireParam, toNumber } from "../helpers/validation";
@@ -855,6 +858,12 @@ export const COMPONENTS_METHODS: Record<
             moves,
             writes: builderSave !== undefined,
             pushReason: () => entityPushReason(builderSave, pushes),
+            refusedFirst: travelling =>
+              movesRefusedFirst(adapter, travelling, {
+                before: component.fields as unknown as FieldDefinition[],
+                after: fields as unknown as FieldDefinition[],
+                localized: isStored || wasStored,
+              }),
           });
           // A field leaving translation has preconditions of its own, asked before the apply
           // alters anything.

@@ -9,9 +9,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { FieldOwner } from "../../domains/collections/services/collection-dependents";
 import {
   checkMove,
+  definitionRefusal,
   type FieldMoveRequest,
   type MoveEntity,
 } from "../../domains/schema/field-moves/check-move";
+import type { RefusedMove } from "../../domains/schema/field-moves/moves-road";
 import { NextlyError } from "../../errors";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
@@ -101,4 +103,38 @@ export async function fieldGroupUsersForMoves(
   );
   const { owners, complete } = await readableFieldOwners(adapter);
   return fieldGroupUsersOf(owners, complete);
+}
+
+/**
+ * The first of a save's moves that can never be made as it is (`definitionRefusal`), and the words
+ * for it, asked where the save's road is about to refuse every move it makes (`refuseMovesOffTheFile`):
+ * told why it can never be kept, rather than that it waits for a road it waits on no longer. None
+ * where each move is one `checkMove` allows, and the road answers. Where the users of a field group
+ * a move crosses cannot be read, its refusal names none of them here and the road answers instead.
+ *
+ * @param fields the entity's fields before the save and after it, and whether it is translated
+ */
+export async function movesRefusedFirst(
+  adapter: DrizzleAdapter | undefined,
+  moves: readonly FieldMoveRequest[],
+  fields: {
+    before: readonly FieldDefinition[];
+    after: readonly FieldDefinition[];
+    localized?: boolean;
+  }
+): Promise<RefusedMove | undefined> {
+  const { before, after, localized } = fields;
+  const fieldGroupUsers = await fieldGroupUsersForMoves(
+    adapter,
+    moves,
+    fields
+  ).catch(() => undefined);
+  for (const move of moves) {
+    const message = definitionRefusal(before, after, move, {
+      ...(localized === undefined ? {} : { localized }),
+      ...(fieldGroupUsers === undefined ? {} : { fieldGroupUsers }),
+    });
+    if (message !== undefined) return { path: move.to.join("."), message };
+  }
+  return undefined;
 }

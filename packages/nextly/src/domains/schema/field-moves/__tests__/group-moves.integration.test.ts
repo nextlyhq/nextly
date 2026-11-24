@@ -225,6 +225,15 @@ function movedValues(holder: unknown): Record<string, unknown> {
 const asJson = (values: Record<string, unknown>): unknown =>
   JSON.parse(JSON.stringify(values));
 
+/** The posts' registry row as stored, whole, which a refused save leaves as it was. */
+async function registryRow(t: TestNextly, slug = SLUG): Promise<string> {
+  const [row] = await run<Record<string, unknown>>(
+    t,
+    `SELECT * FROM dynamic_collections WHERE slug = '${slug}'`
+  );
+  return JSON.stringify(row ?? null, Object.keys(row ?? {}).sort());
+}
+
 /** How many migration files the saves have written so far. */
 async function filesWritten(): Promise<number> {
   return (await readdir(join(basePath, "migrations"))).filter(f =>
@@ -1662,6 +1671,7 @@ describe.each(getConfiguredTestDialects())(
         const files = await migrationFiles();
         const stated = await definition();
         const columns = (await columnsOf(t)).sort();
+        const registry = await registryRow(t);
 
         await expect(save(t, ON_ROW, OUT_OF_META)).rejects.toThrow(
           expect.objectContaining({
@@ -1681,6 +1691,7 @@ describe.each(getConfiguredTestDialects())(
         expect(await migrationFiles()).toEqual(files);
         expect(await definition()).toBe(stated);
         expect((await columnsOf(t)).sort()).toEqual(columns);
+        expect(await registryRow(t)).toBe(registry);
       });
 
       // The save counted its own database; a deploy's may repeat a value that one never did. The file
@@ -1756,6 +1767,7 @@ describe.each(getConfiguredTestDialects())(
           const groups = await storedGroups(t);
           const files = await migrationFiles();
           const columns = (await columnsOf(t)).sort();
+          const registry = await registryRow(t);
 
           await expect(
             save(
@@ -1779,6 +1791,7 @@ describe.each(getConfiguredTestDialects())(
           expect(await storedGroups(t)).toEqual(groups);
           expect(await migrationFiles()).toEqual(files);
           expect((await columnsOf(t)).sort()).toEqual(columns);
+          expect(await registryRow(t)).toBe(registry);
         }
       );
 
@@ -1862,6 +1875,7 @@ describe.each(getConfiguredTestDialects())(
         const stated = await definition();
         const table = slug === SLUG ? TABLE : `dc_${slug}`;
         const columns = await columnsOf(t, table);
+        const registry = await registryRow(t, slug);
         const refusal = expect.objectContaining({
           publicData: {
             errors: [
@@ -1877,6 +1891,7 @@ describe.each(getConfiguredTestDialects())(
         expect(await migrationFiles()).toEqual(files);
         expect(await definition()).toBe(stated);
         expect((await columnsOf(t, table)).sort()).toEqual(columns.sort());
+        expect(await registryRow(t, slug)).toBe(registry);
       }
 
       it("a unique field, whose uniqueness a group's key cannot keep", async () => {

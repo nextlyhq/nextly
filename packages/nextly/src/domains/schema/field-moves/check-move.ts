@@ -298,6 +298,40 @@ export function checkMove(
   };
 }
 
+/**
+ * The refusals whose message the two field lists decide alone, with nothing the database or the
+ * reader says: what `checkMove` refuses a move for wherever its road is.
+ */
+const DECIDED_BY_DEFINITIONS: ReadonlySet<MoveRefusalReason> =
+  new Set<MoveRefusalReason>([
+    "unique",
+    "into-repeater",
+    "within-repeater",
+    "out-of-repeater",
+    "blocks",
+  ]);
+
+/**
+ * What refuses a move that can never be made as it is sent, where a road that would refuse it
+ * anyway, for a reason of its own, would say it waits: the message `checkMove` gives for a move
+ * its definitions alone refuse (`DECIDED_BY_DEFINITIONS`), and for a field group's, where the
+ * users it names are given. None for a move `checkMove` allows, or one it refuses for what the
+ * road already tells, which stays the road's to answer.
+ */
+export function definitionRefusal(
+  before: readonly FieldDefinition[],
+  after: readonly FieldDefinition[],
+  request: FieldMoveRequest,
+  entity: MoveEntity = {}
+): string | undefined {
+  const checked = checkMove(before, after, request, entity);
+  if (checked.ok) return undefined;
+  const decided =
+    DECIDED_BY_DEFINITIONS.has(checked.reason) ||
+    (checked.reason === "field-group" && entity.fieldGroupUsers !== undefined);
+  return decided ? checked.message : undefined;
+}
+
 /** The refusal of a field whose storage changes with the move, or that has no column to move. */
 function storageRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
   if (from.field.type !== to.field.type || !sameStorage(from.field, to.field)) {

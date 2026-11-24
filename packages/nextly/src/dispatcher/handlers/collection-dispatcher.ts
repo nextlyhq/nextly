@@ -150,6 +150,7 @@ import {
   getSchemaRegistryFromDI,
 } from "../helpers/di";
 import { entryWithStored } from "../helpers/entry-with-stored";
+import { movesRefusedFirst } from "../helpers/readable-field-owners";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { readRequestedMoves } from "../helpers/request-moves";
 import {
@@ -1422,6 +1423,13 @@ const COLLECTIONS_METHODS: Record<
             moves,
             writes: container.has("builderSaveSetup"),
             pushReason,
+            refusedFirst: travelling =>
+              movesRefusedFirst(adapter, travelling, {
+                before: (collection.fields ??
+                  []) as unknown as FieldDefinition[],
+                after: fields as unknown as FieldDefinition[],
+                localized: wasLocalized || isLocalized,
+              }),
           });
           // After a schema apply (rename, add, drop) two independent in-memory
           // caches hold Drizzle table objects that are now stale:
@@ -2451,6 +2459,12 @@ async function reviewedMoves(args: {
       after: args.after,
       renames: args.renames,
     }),
+    refusedFirst: travelling =>
+      movesRefusedFirst(args.adapter, travelling, {
+        before: args.before,
+        after: args.after,
+        localized: args.wasLocalized || (args.requestedLocalized ?? false),
+      }),
   });
   return moves;
 }

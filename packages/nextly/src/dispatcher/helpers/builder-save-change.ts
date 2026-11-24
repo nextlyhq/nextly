@@ -39,7 +39,10 @@ import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { consoleLogger } from "../../shared/types";
 
 import { getAdapterFromDI, getLoggerFromDI } from "./di";
-import { fieldGroupUsersForMoves } from "./readable-field-owners";
+import {
+  fieldGroupUsersForMoves,
+  movesRefusedFirst,
+} from "./readable-field-owners";
 
 /**
  * The Builder save writer, loaded where a save runs: it brings the migration
@@ -162,6 +165,12 @@ export async function writeBuilderSchemaChange(
     moves: change.moves ?? [],
     writes: deps !== undefined,
     pushReason: () => entityPushReason(deps, pushesNow),
+    refusedFirst: travelling =>
+      movesRefusedFirst(deps?.adapter, travelling, {
+        before: change.stored.fields as unknown as FieldDefinition[],
+        after: change.fields,
+        localized: change.localized,
+      }),
   });
   if (deps === undefined) {
     await apply();

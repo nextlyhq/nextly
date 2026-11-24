@@ -11,7 +11,7 @@
  *   that also needs the push, one outside development, and a translated field's, whose values
  *   kept for each language would need the language table's own statements.
  */
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -31,7 +31,9 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
 import type { CollectionService } from "../../../collections/services/collection-service";
+import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
+import { databaseState } from "./refused-moves-state";
 import {
   type DataLossConsent,
   NO_CONSENT,
@@ -743,25 +745,22 @@ describe.each(getConfiguredTestDialects())(
       }
 
       /**
-       * What every save could change: the definition file, the migrations, and the shared table's
-       * rows, each with every value it holds, in one order whatever the database returns them in.
+       * What every save could change: each entity's tables, their columns, indexes and rows, its
+       * registry row, the definition file and the migrations (`databaseState`).
        */
-      async function state(t: TestNextly): Promise<unknown> {
-        const { tableName } = await t
-          .getService("fieldGroupRegistryService")
-          .getComponent(CARD);
-        const rows = await run<Record<string, unknown>>(
-          t,
-          `SELECT * FROM ${dialect === "mysql" ? `\`${tableName}\`` : `"${tableName}"`}`
-        );
-        return {
-          definition: await readFile(join(basePath, "ui-schema.json"), "utf-8"),
-          files: await filesWritten(),
-          rows: rows
-            .map(row => JSON.stringify(row, Object.keys(row).sort()))
-            .sort(),
-        };
-      }
+      const state = (t: TestNextly) =>
+        databaseState({
+          run: <T>(statement: string) => run<T>(t, statement),
+          dialect,
+          tablePrefixes: ["dc_rfm_", "single_rfm_", "comp_rfm_"],
+          registries: [
+            { table: "dynamic_collections", slugs: [POSTS, ARTICLES] },
+            { table: "dynamic_singles", slugs: [HERO] },
+            { table: STORAGE_FORMAT.registryTable, slugs: [CARD, FRAME] },
+          ],
+          migrations: join(basePath, "migrations"),
+          definitionFile: join(basePath, "ui-schema.json"),
+        });
 
       /**
        * The refusal of moving `field`: its own sentence, then the users clause naming every user once,
@@ -965,7 +964,7 @@ describe.each(getConfiguredTestDialects())(
         expect(through.meta.complete).toBe(true);
       });
 
-      it("refuses the second field group's field moved into the field group it holds, naming every user", async () => {
+      it("refuses the second field group's field moved into the field group it holds, and one moved out of it, naming every user", async () => {
         const t = await boot(dialect);
         await createUsers(t);
         const before = await state(t);
@@ -977,6 +976,56 @@ describe.each(getConfiguredTestDialects())(
             [{ from: ["caption"], to: ["card", "caption"] }]
           )
         ).rejects.toThrow(refusal("caption"));
+        await expect(
+          saveFieldGroup(
+            t,
+            FRAME,
+            [cardRef, caption, SUMMARY],
+            [{ from: ["card", "summary"], to: ["summary"] }]
+          )
+        ).rejects.toThrow(refusal("summary"));
+        expect(await state(t)).toEqual(before);
+      });
+
+      // The Single is the host here: the field group it uses is moved into and out of, and named with
+      // everything using that field group, the Single itself.
+      it("refuses a Single's field moved into a field group it uses, and one moved out of it, naming the field group's users", async () => {
+        const t = await boot(dialect);
+        await createUsers(t);
+        const frameRef: Field = {
+          name: "frame",
+          type: "component",
+          component: FRAME,
+        };
+        await saveSingle(t, HERO, [frameRef, headline], []);
+        const before = await state(t);
+        const frameRefusal = (field: string) =>
+          expect.objectContaining({
+            publicData: {
+              errors: [
+                expect.objectContaining({
+                  code: "FIELD_MOVE_REFUSED",
+                  message: `${field} cannot be moved into or out of the field group ${FRAME}: a field group is changed only in its own editor. It is used by the Single ${HERO}.`,
+                }),
+              ],
+            },
+          });
+        await expect(
+          saveSingle(
+            t,
+            HERO,
+            [frameRef],
+            [{ from: ["headline"], to: ["frame", "headline"] }]
+          )
+        ).rejects.toThrow(frameRefusal("headline"));
+        await expect(
+          saveSingle(
+            t,
+            HERO,
+            [frameRef, headline, caption],
+            [{ from: ["frame", "caption"], to: ["caption"] }]
+          )
+        ).rejects.toThrow(frameRefusal("caption"));
         expect(await state(t)).toEqual(before);
       });
     });

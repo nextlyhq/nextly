@@ -163,6 +163,7 @@ import {
   getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
+import { movesRefusedFirst } from "../helpers/readable-field-owners";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { readRequestedMoves } from "../helpers/request-moves";
 import {
@@ -1806,6 +1807,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             moves,
             writes: builderSave !== undefined,
             pushReason: () => entityPushReason(builderSave, pushes),
+            refusedFirst: travelling =>
+              movesRefusedFirst(adapter, travelling, {
+                before: single.fields as unknown as FieldDefinition[],
+                after: fields as unknown as FieldDefinition[],
+                localized: layout.isStored || layout.wasStored,
+              }),
           });
           // A field leaving translation has preconditions of its own, asked before the push alters
           // anything.
