@@ -10,14 +10,24 @@
  * addressable: it can be linked into a review rather than described. That is
  * the concrete reason this is a route and not a larger dialog.
  *
+ * Drawn as the editor draws a past version: the actions in the title row
+ * (Copy link, Restore…), one card choosing the two versions and the language,
+ * then the comparison's own bar and the fields, each changed one split in
+ * place side by side. The history list itself lives beside the document; here
+ * the two versions are chosen by name.
+ *
  * @module components/features/versions/VersionComparePage
  */
 
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeftRight, Link2, RotateCcw } from "lucide-react";
 import type { JSX } from "react";
 import { useCallback, useMemo, useState } from "react";
 
-import { Alert, AlertDescription, Button } from "@admin/components/ui";
+import {
+  Breadcrumbs,
+  type BreadcrumbItem,
+} from "@admin/components/shared/breadcrumbs";
+import { Alert, AlertDescription, Button, toast } from "@admin/components/ui";
 import { withQuery } from "@admin/constants/routes";
 import { LOCALE_PARAM } from "@admin/constants/search-params";
 import {
@@ -27,33 +37,39 @@ import {
   useVersions,
 } from "@admin/hooks/queries/useVersions";
 import { useCan } from "@admin/hooks/useCan";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { validationIssues } from "@admin/lib/api/parseApiError";
+import { formatDateTime } from "@admin/lib/dates/format";
 import { navigateTo } from "@admin/lib/navigation";
-import type { VersionScope } from "@admin/services/versionApi";
+import type {
+  FieldDiff,
+  VersionMeta,
+  VersionScope,
+} from "@admin/services/versionApi";
 
 import type { ChangesLayout } from "./diff/changes-layout";
 import { VersionDiffView } from "./diff/VersionDiffView";
-import { HISTORY_PARAM, RESTORE_PARAM, VERSION_PARAM } from "./history-address";
 import {
+  HISTORY_PARAM,
+  RESTORE_ALL,
+  RESTORE_PARAM,
+  VERSION_PARAM,
+} from "./history-address";
+import {
+  HISTORY_COLUMN,
   HISTORY_FRAME,
-  HISTORY_HEAD,
-  HISTORY_RAIL,
-  HISTORY_SPLIT,
-  HISTORY_TITLES,
+  HISTORY_PICKER,
 } from "./history-layout";
 import { useMarkVersionSeen } from "./useMarkVersionSeen";
-import {
-  baselineLabel,
-  predecessorOf,
-  type PairResolution,
-} from "./version-pairing";
+import { versionAuthorLabel } from "./version-author";
+import { isFieldChange } from "./version-changes";
+import { baselineLabel, type PairResolution } from "./version-pairing";
 import {
   namesServerBaseline,
   resolvePair,
   type ComparisonFrom,
 } from "./version-search-params";
 import { versionsHref } from "./versions-href";
-import { VersionTimelineRail } from "./VersionTimelineRail";
 
 export interface VersionComparePageProps {
   scope: VersionScope;
@@ -71,6 +87,11 @@ export interface VersionComparePageProps {
   /** The document's title, so the page says which document it is about. */
   documentTitle?: string;
   /**
+   * The list the document belongs to, leading the trail ("Posts"), where it
+   * has one: a collection's entries. A Single has none.
+   */
+  listCrumb?: { label: string; href: string };
+  /**
    * The pair from the URL. Either may be absent on a link that names none;
    * `from` may name the version before `to` in its language (`previous`).
    */
@@ -87,13 +108,30 @@ export interface VersionComparePageProps {
   view?: "inline" | "side";
 }
 
-/** The baselines a reader may compare with, as "Compare with" offers them. */
+/** The baselines the older side may be, as "Compare" offers them. */
 const COMPARE_WITH: readonly { value: string; label: string }[] = [
   { value: "previous", label: "The version before" },
-  { value: "published", label: "What is published" },
-  { value: "draft", label: "The current draft" },
+  { value: "published", label: "Currently published" },
+  { value: "draft", label: "Current draft" },
   { value: "last-viewed", label: "The version you last looked at" },
 ];
+
+/** A version as the page names it: its own name, else its number. */
+function versionName(versionNo: number, meta: VersionMeta | undefined): string {
+  return meta?.label ? `“${meta.label}”` : `Version ${versionNo}`;
+}
+
+/** A version as a choice lists it: its name, when, and by whom. */
+function versionChoice(meta: VersionMeta): string {
+  const versionNo = meta.versionNo ?? 0;
+  return [
+    meta.label
+      ? `${versionName(versionNo, meta)} (v${versionNo})`
+      : `Version ${versionNo}`,
+    formatDateTime(meta.createdAt),
+    versionAuthorLabel(meta),
+  ].join(" · ");
+}
 
 /** A baseline's name, as the page says it in a sentence. */
 const BASELINE_PHRASE: Record<string, string> = {
@@ -139,21 +177,20 @@ const NO_PAIR_MESSAGE: Record<
   Exclude<PairResolution["kind"], "pair" | "baseline">,
   string
 > = {
-  // The rail already states that the history is empty and what to do about
-  // it. This side answers only why no COMPARISON is drawn, so the two
-  // surfaces say different things rather than the same thing twice.
+  // Said of the comparison, not of the document: the picker beside it offers
+  // nothing to choose, and the history panel is where a history is read.
   "no-history": "There is nothing to compare yet.",
   "only-version":
     "There is only one version so far, so there is nothing to compare it with.",
   // Deliberately different from the line above. Saying "there is only one
-  // version" beside a rail listing several would leave a reader unable to tell
-  // which surface to believe; this says which language is meant, and that
-  // there is somewhere else to look.
+  // version" beside a picker listing several would leave a reader unable to
+  // tell which surface to believe; this says which language is meant, and
+  // that there is somewhere else to look.
   "only-in-locale":
     "This is the only version in this language, so there is nothing to compare " +
     "it with. Versions in other languages have their own history.",
   "not-loaded":
-    "The version before this one has not been loaded yet. Choose Load more in the list to fetch it.",
+    "The version before this one has not been loaded yet. Choose Load older versions to fetch it.",
 };
 
 /** A comparison the diff view reports drawn, with the language it is in. */
@@ -186,6 +223,8 @@ function ComparisonPane({
   isError,
   isLoading,
   onRetry,
+  nameOf,
+  fieldAction,
 }: {
   scope: VersionScope;
   pair: PairResolution;
@@ -200,6 +239,10 @@ function ComparisonPane({
   isError: boolean;
   isLoading: boolean;
   onRetry: () => void;
+  /** Names the drawn pair's two versions, from the versions the page holds. */
+  nameOf: (versionNo: number) => string;
+  /** What the page offers on one field: "Restore this field". */
+  fieldAction?: (node: FieldDiff) => React.ReactNode;
 }) {
   if (isError) {
     return (
@@ -272,6 +315,9 @@ function ComparisonPane({
           {...(view ? { view } : {})}
           onViewChange={onViewChange}
           onShown={onShown}
+          fromLabel={nameOf(data.from)}
+          toLabel={nameOf(data.to)}
+          {...(fieldAction ? { fieldAction } : {})}
         />
       </>
     );
@@ -312,6 +358,9 @@ function ComparisonPane({
       {...(view ? { view } : {})}
       onViewChange={onViewChange}
       onShown={onShown}
+      fromLabel={nameOf(pair.from)}
+      toLabel={nameOf(pair.to)}
+      {...(fieldAction ? { fieldAction } : {})}
     />
   );
 }
@@ -321,6 +370,7 @@ export function VersionComparePage({
   documentHref,
   readOnlyHref,
   documentTitle,
+  listCrumb,
   from,
   to,
   locale,
@@ -344,8 +394,8 @@ export function VersionComparePage({
   // Derived once and given to BOTH surfaces. An infinite query flips to
   // `isError` when a LATER page fails while keeping the pages it already holds,
   // so the aggregate state says "this failed" about a page nobody asked for.
-  // Passed raw, it erases the rail's rows on one surface and unmounts a valid
-  // comparison on the other — two different lies about the same event. Only a
+  // Taken raw, it would empty the versions the picker offers and unmount a
+  // valid comparison — two different lies about the same event. Only a
   // failure that left nothing on screen is a failure of the history itself.
   const historyUnavailable = list.isError && versions.length === 0;
 
@@ -425,11 +475,19 @@ export function VersionComparePage({
       ? pair.to
       : null;
   const refusedVersion = useVersion({ scope, versionNo: refusedTo });
-  const restoreTarget = seen
-    ? { versionNo: seen.to, locale: seen.locale }
-    : refusedTo !== null && refusedVersion.data?.versionNo === refusedTo
-      ? { versionNo: refusedTo, locale: refusedVersion.data.locale }
-      : null;
+  const refusedLocale =
+    refusedTo !== null && refusedVersion.data?.versionNo === refusedTo
+      ? refusedVersion.data.locale
+      : undefined;
+  const restoreTarget = useMemo(
+    () =>
+      seen
+        ? { versionNo: seen.to, locale: seen.locale }
+        : refusedTo !== null && refusedLocale !== undefined
+          ? { versionNo: refusedTo, locale: refusedLocale }
+          : null,
+    [seen, refusedTo, refusedLocale]
+  );
 
   /** The same comparison, at another baseline or in another view. */
   const rewrite = useCallback(
@@ -462,125 +520,202 @@ export function VersionComparePage({
     [rewrite]
   );
 
-  // Choosing a row compares it against the version before it IN ITS OWN LOCALE,
-  // and writes that choice to the URL so the comparison on screen is the one the
-  // address names. A localized document interleaves its languages in one
-  // numbered history, so the row below is routinely another language — a pair
-  // the server rejects outright.
-  const selectPair = useCallback(
+  // A version's record, by number, from the pages the page holds.
+  const metaOf = useCallback(
+    (versionNo: number) => versions.find(v => v.versionNo === versionNo),
+    [versions]
+  );
+  const nameOf = useCallback(
+    (versionNo: number) => versionName(versionNo, metaOf(versionNo)),
+    [metaOf]
+  );
+  // In the middle of a sentence ("Restore version 5…"), a number reads lower.
+  const restoreName = (versionNo: number) => {
+    const meta = metaOf(versionNo);
+    return meta?.label ? `“${meta.label}”` : `version ${versionNo}`;
+  };
+
+  // Choosing the newer side keeps the older one where it still pairs with it:
+  // a baseline always does, and a version only in the same language, since a
+  // localized document numbers its languages in one history and the server
+  // refuses a pair across two. Otherwise the older side becomes the version
+  // before the one chosen, in its own language.
+  const chooseTo = useCallback(
     (versionNo: number) => {
-      const previous = predecessorOf(
-        versions,
-        versionNo,
-        list.hasNextPage ?? false
-      );
-      if (previous.kind !== "version") return;
-      // Compared as the VALUES that decide the comparison, not as URL text.
-      // `navigateTo` skips a push only when its argument equals
-      // `window.location.pathname`, which a target carrying a query never does,
-      // so choosing the row already on screen stacked another identical entry
-      // and Back walked through indistinguishable copies of one comparison.
-      // Comparing serialized text instead would answer differently for
-      // `?to=9&from=8`, or for a link carrying an unrelated parameter, and
-      // reinstate exactly that — these two numbers are what `resolvePair`
-      // reads, so they are what "the same comparison" means.
-      if (previous.versionNo === from && versionNo === to) return;
-      // Built through the same `versionsHref` the history sheet uses, so one
-      // place decides what a comparison's address looks like. Hand-building it
-      // here is how the locale came to be dropped: the address was assembled
-      // from the two numbers this callback happens to hold, and a language is
-      // not one of them.
-      //
-      // The locale is taken from the SELECTED version rather than carried from
-      // the current address, so choosing a row in another language moves the
-      // page to that language instead of keeping the previous one. The rail
-      // interleaves locales, so the row a reader clicks is routinely not in the
-      // language now on screen.
+      const chosen = metaOf(versionNo);
+      const olderMeta = typeof from === "number" ? metaOf(from) : undefined;
+      const nextFrom: ComparisonFrom =
+        typeof from === "string"
+          ? from
+          : typeof from === "number" &&
+              olderMeta !== undefined &&
+              olderMeta.locale === (chosen?.locale ?? null)
+            ? from
+            : "previous";
+      // Compared as the VALUES that decide the comparison, not as URL text:
+      // `navigateTo` skips a push only for an identical path, which a target
+      // carrying a query never is, so choosing what is already on screen
+      // would stack copies of one comparison for Back to walk through.
+      if (versionNo === (shown?.to ?? to) && nextFrom === (from ?? shown?.from))
+        return;
+      // The language comes from the chosen version, so choosing one in
+      // another language moves the page to that language.
       navigateTo(
         versionsHref(
           scope,
-          { from: previous.versionNo, to: versionNo },
-          versions.find(v => v.versionNo === versionNo)?.locale
+          { from: nextFrom, to: versionNo },
+          chosen?.locale ?? locale,
+          view
         )
       );
     },
-    [versions, list.hasNextPage, from, to, scope]
+    [metaOf, from, to, shown, scope, locale, view]
+  );
+
+  // The older side: a baseline, or a version by number.
+  const chooseFrom = useCallback(
+    (value: string) => {
+      const versionNo = Number(value);
+      const next: ComparisonFrom =
+        value !== "" && Number.isInteger(versionNo) ? versionNo : value;
+      if (next === (from ?? shown?.from)) return;
+      rewrite({ from: next });
+    },
+    [from, shown, rewrite]
+  );
+
+  // The two versions trade places, so the change reads the other way.
+  const swap = useCallback(() => {
+    if (!shown) return;
+    navigateTo(
+      versionsHref(scope, { from: shown.to, to: shown.from }, locale, view)
+    );
+  }, [shown, scope, locale, view]);
+
+  // The language the versions are listed in, as the history panel's filter.
+  const { locales } = useLocalization();
+  const localized = versions.some(v => v.locale !== null);
+  const chooseLocale = useCallback(
+    (code: string) =>
+      navigateTo(versionsHref(scope, undefined, code || undefined, view)),
+    [scope, view]
+  );
+
+  // The address names the comparison on screen, so it is the link to share.
+  const copyLink = useCallback(() => {
+    const href = window.location.href;
+    void navigator.clipboard
+      ?.writeText(href)
+      .then(() => toast.success("Link copied. It opens this comparison."))
+      .catch(() =>
+        toast.error("Couldn't copy the link. Copy it from the address bar.")
+      );
+  }, []);
+
+  // Hands the version on screen to the editor, as "Restore…" does: every
+  // field it changed, or one field asked for by name.
+  const handToEditor = useCallback(
+    (fieldName?: string) => {
+      if (!restoreTarget) return;
+      // The editor restores it: the values go back as unsaved edits through
+      // its list, and nothing is saved from here. The version's language goes
+      // with it, under the key the editor reads its language from: the editor
+      // offers a version's restore only while open in that version's
+      // language, so one opened in its default language would take the
+      // hand-off and never show the restore list. Absent for a version in no
+      // language, as the editor expects.
+      navigateTo(
+        withQuery(documentHref, {
+          [HISTORY_PARAM]: 1,
+          [VERSION_PARAM]: restoreTarget.versionNo,
+          [RESTORE_PARAM]: fieldName ?? RESTORE_ALL,
+          [LOCALE_PARAM]: restoreTarget.locale ?? undefined,
+        })
+      );
+    },
+    [restoreTarget, documentHref]
+  );
+  const mayRestore = canEditDocument && restoreTarget !== null;
+  // "Restore this field" on each field the version changed that the form
+  // still has; the editor's list judges whether the person may restore it.
+  const fieldAction = useCallback(
+    (node: FieldDiff) =>
+      isFieldChange(node) && "label" in node ? (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="h-auto gap-1.5 px-0 text-xs"
+          aria-label={`Restore this field: ${node.label}`}
+          onClick={() => handToEditor(node.name)}
+        >
+          <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+          Restore this field
+        </Button>
+      ) : null,
+    [handToEditor]
+  );
+
+  const trail: BreadcrumbItem[] = [
+    ...(listCrumb ? [listCrumb] : []),
+    { label: documentTitle || "Document", href: backHref },
+    { label: "Compare" },
+  ];
+  const olderValue =
+    typeof from === "string" ? from : String(from ?? shown?.from ?? "");
+  const newerValue = String(shown?.to ?? to ?? "");
+  const newerMeta = metaOf(Number(newerValue));
+  // A version the older side may be: one in the newer side's language.
+  const olderChoices = versions.filter(
+    v =>
+      v.versionNo !== null &&
+      (newerMeta === undefined || v.locale === newerMeta.locale)
   );
 
   return (
     <div className={HISTORY_FRAME}>
-      <header data-frame-part="history-head" className={HISTORY_HEAD}>
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label={canEditDocument ? "Back to the document" : "Back"}
-          onClick={() => navigateTo(backHref)}
+      <div className={HISTORY_COLUMN}>
+        <Breadcrumbs items={trail} placement="inline" />
+        <div
+          data-frame-part="history-head"
+          className="flex flex-wrap items-center gap-3"
         >
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <div className={HISTORY_TITLES}>
-          <h1 className="truncate text-base font-semibold text-foreground">
-            Version history
+          <h1 className="text-xl font-semibold text-foreground">
+            Compare versions
           </h1>
-          {/* The document's name keeps its line while it is read, so the
-              header does not grow under the reader when the name arrives. */}
-          <p
-            className="truncate text-xs text-muted-foreground"
-            aria-hidden={documentTitle ? undefined : true}
-          >
-            {documentTitle || "\u00a0"}
-          </p>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={copyLink}
+            >
+              <Link2 className="h-4 w-4" aria-hidden="true" />
+              Copy link
+            </Button>
+            {canEditDocument && restoreTarget ? (
+              <Button type="button" size="sm" onClick={() => handToEditor()}>
+                {/* Names the version it restores, as the page names it. */}
+                Restore {restoreName(restoreTarget.versionNo)}…
+              </Button>
+            ) : null}
+          </div>
         </div>
-      </header>
-
-      {/* Stacked below `lg`, side by side above it. The rail is a fixed 18rem,
-          and at a 375px viewport that leaves the comparison roughly 87px before
-          borders and padding — its pair description, filter and field values
-          all clipped. `DashboardLayout` already switches to a mobile header at
-          the same breakpoint, so the split is what has to give, not the
-          content beside it. Stacked, the rail keeps a bounded height so the
-          comparison is reachable without scrolling past the whole history. */}
-      <div className={HISTORY_SPLIT}>
-        <aside className={HISTORY_RAIL}>
-          <VersionTimelineRail
-            scope={scope}
-            versions={versions}
-            compared={shown}
-            onSelect={selectPair}
-            isLoading={list.isLoading}
-            isError={historyUnavailable}
-            hasNextPage={list.hasNextPage}
-            isFetchingNextPage={list.isFetchingNextPage}
-            onLoadMore={() => void list.fetchNextPage()}
-            // Page-specific, not the aggregate: `historyUnavailable` above
-            // answers whether the history could be read at all, and a later
-            // page failing is a different event with a different remedy.
-            nextPageError={list.isFetchNextPageError ? list.error : null}
-          />
-        </aside>
 
         {/* A labelled region rather than `main`: the dashboard shell already
             provides the document's one primary landmark, and nesting a second
             makes landmark navigation announce two. */}
-        <section
-          aria-label="Comparison"
-          className="flex min-h-0 flex-1 flex-col"
-        >
-          <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
-            <label className="flex items-center gap-2 text-sm text-foreground">
-              Compare with
+        <section aria-label="Comparison" className="flex flex-col gap-4">
+          <div className={HISTORY_PICKER}>
+            <label className="flex min-w-[14rem] flex-1 flex-col gap-1.5 text-xs font-medium text-muted-foreground">
+              Compare
               <select
-                aria-label="Compare with"
-                className="rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground"
-                value={typeof from === "string" ? from : "chosen"}
-                onChange={event => {
-                  const value = event.target.value;
-                  if (value !== "chosen") rewrite({ from: value });
-                }}
+                aria-label="Compare"
+                className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground"
+                value={olderValue}
+                onChange={event => chooseFrom(event.target.value)}
               >
-                {typeof from === "string" ? null : (
-                  <option value="chosen">The version chosen in the list</option>
-                )}
+                {olderValue === "" ? <option value="">Choose…</option> : null}
                 {/* A baseline another feature registered, named by the
                     address, is offered as itself, so the control says what
                     is compared rather than showing another choice. */}
@@ -593,48 +728,113 @@ export function VersionComparePage({
                     {option.label}
                   </option>
                 ))}
+                <optgroup label="Versions">
+                  {typeof from === "number" &&
+                  !olderChoices.some(v => v.versionNo === from) ? (
+                    <option value={String(from)}>{nameOf(from)}</option>
+                  ) : null}
+                  {olderChoices.map(v => (
+                    <option key={v.versionNo} value={String(v.versionNo)}>
+                      {versionChoice(v)}
+                    </option>
+                  ))}
+                </optgroup>
               </select>
             </label>
-            {canEditDocument && restoreTarget ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="ml-auto"
-                // The editor restores it: the values go back as unsaved
-                // edits through its list, and nothing is saved from here.
-                // The version's language goes with it, under the key the
-                // editor reads its language from: the editor offers a
-                // version's restore only while open in that version's
-                // language, so one opened in its default language would take
-                // the hand-off and never show the restore list. Absent for a
-                // version in no language, as the editor expects.
-                onClick={() =>
-                  navigateTo(
-                    withQuery(documentHref, {
-                      [HISTORY_PARAM]: 1,
-                      [VERSION_PARAM]: restoreTarget.versionNo,
-                      [RESTORE_PARAM]: 1,
-                      [LOCALE_PARAM]: restoreTarget.locale ?? undefined,
-                    })
-                  )
-                }
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 w-9 px-0"
+              aria-label="Swap the two versions"
+              title="Swap the two versions"
+              disabled={!shown || typeof from === "string"}
+              onClick={swap}
+            >
+              <ArrowLeftRight className="h-4 w-4" aria-hidden="true" />
+            </Button>
+            <label className="flex min-w-[14rem] flex-1 flex-col gap-1.5 text-xs font-medium text-muted-foreground">
+              with
+              <select
+                aria-label="with"
+                className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground"
+                value={newerValue}
+                disabled={versions.length === 0}
+                onChange={event => chooseTo(Number(event.target.value))}
               >
-                Restore…
+                {newerValue === "" ? <option value="">Choose…</option> : null}
+                {newerValue !== "" && newerMeta === undefined ? (
+                  <option value={newerValue}>
+                    {nameOf(Number(newerValue))}
+                  </option>
+                ) : null}
+                {versions.map(v =>
+                  v.versionNo === null ? null : (
+                    <option key={v.versionNo} value={String(v.versionNo)}>
+                      {versionChoice(v)}
+                    </option>
+                  )
+                )}
+              </select>
+            </label>
+            {localized && locales.length > 1 ? (
+              <label className="flex min-w-[12rem] flex-col gap-1.5 text-xs font-medium text-muted-foreground">
+                Languages
+                <select
+                  aria-label="Languages"
+                  className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground"
+                  value={locale ?? ""}
+                  onChange={event => chooseLocale(event.target.value)}
+                >
+                  <option value="">All languages</option>
+                  {locales.map(l => (
+                    <option key={l.code} value={l.code}>
+                      {`${l.label} and shared fields`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {list.hasNextPage ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-9"
+                disabled={list.isFetchingNextPage}
+                onClick={() => void list.fetchNextPage()}
+              >
+                {list.isFetchingNextPage
+                  ? "Loading older versions…"
+                  : "Load older versions"}
               </Button>
             ) : null}
+            {list.isFetchNextPageError && versions.length > 0 ? (
+              // A later page failing is not the history failing: what is
+              // listed stays, and the retry says what it retries.
+              <p role="alert" className="basis-full text-xs text-destructive">
+                Older versions could not be loaded. Choose Load older versions
+                to try again.
+              </p>
+            ) : null}
           </div>
-          <ComparisonPane
-            scope={scope}
-            pair={pair}
-            baselineDiff={baselineDiff}
-            refusal={refusal}
-            {...(view ? { view } : {})}
-            onViewChange={onViewChange}
-            onShown={onShown}
-            isError={historyUnavailable}
-            isLoading={list.isLoading}
-            onRetry={() => void list.refetch()}
-          />
+
+          <div className="flex min-h-[16rem] flex-col rounded-lg border border-border bg-background">
+            <ComparisonPane
+              scope={scope}
+              pair={pair}
+              baselineDiff={baselineDiff}
+              refusal={refusal}
+              {...(view ? { view } : {})}
+              onViewChange={onViewChange}
+              onShown={onShown}
+              isError={historyUnavailable}
+              isLoading={list.isLoading}
+              onRetry={() => void list.refetch()}
+              nameOf={nameOf}
+              {...(mayRestore ? { fieldAction } : {})}
+            />
+          </div>
         </section>
       </div>
     </div>

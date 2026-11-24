@@ -69,6 +69,30 @@ export function useDrawnContainers(): number {
   return useContext(DrawnContainersContext);
 }
 
+/** What the two sides of a comparison are called, older first. */
+export interface SideLabels {
+  before: string;
+  after: string;
+}
+
+const SideLabelsContext = createContext<SideLabels>({
+  before: "Before",
+  after: "After",
+});
+
+/**
+ * Names the two sides of every change below it: drawn over each side of a
+ * field split side by side, so a field far down a long document still says
+ * which version each column is.
+ */
+export const SideLabelsProvider: Provider<SideLabels> =
+  SideLabelsContext.Provider;
+
+/** What the two sides of the changes here are called. */
+export function useSideLabels(): SideLabels {
+  return useContext(SideLabelsContext);
+}
+
 /**
  * What a surface offers on one field of a comparison, such as "Restore this
  * field", drawn in that field's heading row beside its name and its change,
