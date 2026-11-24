@@ -9,7 +9,11 @@ import {
 import { MIGRATION_TARGET } from "../manifest";
 import type { MigrationStep } from "../runner";
 
-import { createTableWorld, type TableFixture } from "./helpers/table-world";
+import {
+  createTableWorld,
+  type TableFixture,
+  type TableWorldOptions,
+} from "./helpers/table-world";
 
 const RUN = "run-1";
 
@@ -26,35 +30,41 @@ function registry(rows: Record<string, unknown>[]): TableFixture {
   return { columns: ["id", "fields", "configPath"], rows };
 }
 
-function world(over: Record<string, TableFixture> = {}) {
-  return createTableWorld({
-    dynamic_collections: registry([
-      { id: "c1", fields: storedFields(), configPath: "collections/post.ts" },
-    ]),
-    dynamic_singles: registry([
-      { id: "s1", fields: storedFields(), configPath: "singles/home.ts" },
-    ]),
-    [STORAGE_FORMAT.registryTable]: registry([
-      { id: "f1", fields: storedFields(), configPath: "components/hero.ts" },
-    ]),
-    nextly_schema_events: {
-      columns: ["id", "scopeKind"],
-      rows: [
-        { id: "e1", scopeKind: "component" },
-        { id: "e2", scopeKind: "collection" },
-        { id: "e3", scopeKind: "core" },
-      ],
+function world(
+  over: Record<string, TableFixture> = {},
+  options: TableWorldOptions = {}
+) {
+  return createTableWorld(
+    {
+      dynamic_collections: registry([
+        { id: "c1", fields: storedFields(), configPath: "collections/post.ts" },
+      ]),
+      dynamic_singles: registry([
+        { id: "s1", fields: storedFields(), configPath: "singles/home.ts" },
+      ]),
+      [STORAGE_FORMAT.registryTable]: registry([
+        { id: "f1", fields: storedFields(), configPath: "components/hero.ts" },
+      ]),
+      nextly_schema_events: {
+        columns: ["id", "scopeKind"],
+        rows: [
+          { id: "e1", scopeKind: "component" },
+          { id: "e2", scopeKind: "collection" },
+          { id: "e3", scopeKind: "core" },
+        ],
+      },
+      nextly_versions: {
+        columns: ["id", "snapshot"],
+        rows: [{ id: "v1", snapshot: { _componentType: "hero" } }],
+      },
+      nextly_events: {
+        columns: ["id", "payload"],
+        rows: [{ id: "n1", payload: { data: { _componentType: "cta" } } }],
+      },
+      ...over,
     },
-    nextly_versions: {
-      columns: ["id", "snapshot"],
-      rows: [{ id: "v1", snapshot: { _componentType: "hero" } }],
-    },
-    nextly_events: {
-      columns: ["id", "payload"],
-      rows: [{ id: "n1", payload: { data: { _componentType: "cta" } } }],
-    },
-    ...over,
-  });
+    options
+  );
 }
 
 function steps(target: ReturnType<typeof world>): MigrationStep[] {
@@ -189,21 +199,27 @@ describe("rewriting the wire key inside the ledgers", () => {
     ).toEqual({ _fieldGroupType: "late" });
   });
 
-  /** A versions ledger that records when each row was written, as the real one does. */
-  function timedWorld() {
-    return world({
-      nextly_versions: {
-        columns: ["id", "snapshot", "updatedAt", "createdAt"],
-        rows: [
-          {
-            id: "v1",
-            snapshot: { _componentType: "hero" },
-            updatedAt: new Date("2026-01-01T00:00:00Z"),
-            createdAt: new Date("2026-01-01T00:00:00Z"),
-          },
-        ],
+  /**
+   * A versions ledger that records when each row was written, as the real one does, on a database
+   * whose clock reads `databaseNow` (this process's, unless given).
+   */
+  function timedWorld(databaseNow?: () => Date) {
+    return world(
+      {
+        nextly_versions: {
+          columns: ["id", "snapshot", "updatedAt", "createdAt"],
+          rows: [
+            {
+              id: "v1",
+              snapshot: { _componentType: "hero" },
+              updatedAt: new Date("2026-01-01T00:00:00Z"),
+              createdAt: new Date("2026-01-01T00:00:00Z"),
+            },
+          ],
+        },
       },
-    });
+      databaseNow === undefined ? {} : { databaseNow }
+    );
   }
 
   /** A session that writes an old-spelling row stamped `at()` before every transaction. */
@@ -259,6 +275,41 @@ describe("rewriting the wire key inside the ledgers", () => {
         table: "nextly_versions",
         row: expect.stringMatching(/^late-/),
       },
+    });
+  });
+
+  // The cutoff is the database's clock, which stamps the rows, never this process's: a host
+  // whose clock runs apart from the database's would misjudge which rows the site wrote since.
+  const HOUR = 60 * 60 * 1000;
+
+  it("passes under traffic when the database's clock is behind this process's", async () => {
+    // Every row the site writes during the step is stamped after the database's start, yet before
+    // this process's own time: judged on this process's clock, each would read as one the walk
+    // missed.
+    const databaseNow = (): Date => new Date(Date.now() - HOUR);
+    const target = timedWorld(databaseNow);
+    const step = stepNamed(target, "data:nextly_versions.snapshot");
+    await step.run(target.session);
+
+    await expect(
+      step.verify(
+        alwaysWriting(target, () => new Date(databaseNow().getTime() + 1000))
+      )
+    ).resolves.toBe(true);
+  });
+
+  it("refuses a missed row when the database's clock is ahead of this process's", async () => {
+    // A row the database stamped before the step began, yet after this process's own time: judged
+    // on this process's clock it would read as traffic, and the missed row would pass.
+    const databaseNow = (): Date => new Date(Date.now() + HOUR);
+    const target = timedWorld(databaseNow);
+    const step = stepNamed(target, "data:nextly_versions.snapshot");
+    await step.run(target.session);
+
+    await expect(
+      step.verify(alwaysWriting(target, () => new Date(Date.now() + HOUR / 2)))
+    ).rejects.toMatchObject({
+      logContext: { reason: "row rewrite did not reach every row" },
     });
   });
 });

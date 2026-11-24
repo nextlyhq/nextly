@@ -14,7 +14,8 @@
  *   rename again what the database already holds under its new name; here every row ends as one
  *   complete rewrite would leave it (the ledger check the run's own settlement makes), and each
  *   group has exactly the rows it had;
- * - a preview that read only a settled marker would report a stopped run as "not running".
+ * - a preview that read only a settled marker would report a stopped run as "not running", and one
+ *   that read only the marker would call a run stopped while its claim may still be a live run's.
  *
  * @module domains/field-groups/migration/__tests__/storage-migration-resumes.integration.test
  */
@@ -55,6 +56,7 @@ import {
   LIVE_COLLECTION,
   LIVE_DECLARED,
   LIVE_GROUP,
+  LIVE_LOCALIZATION,
 } from "../../__tests__/helpers/live-site-entities";
 import {
   legacyObjects,
@@ -99,6 +101,7 @@ describe.each(cases)(
         loaded,
         legacy: true,
         sqliteFile: true,
+        localization: LIVE_LOCALIZATION,
       });
       // Several entries, each saved twice, so the ledgers hold rows enough for more than one
       // batch of the content rewrite to commit before the kill.
@@ -136,17 +139,24 @@ describe.each(cases)(
       expect(exited).not.toBe(0);
       vi.unstubAllEnvs();
 
-      // The next preview reports the stopped run.
-      const preview = await site.migrateStorage({ dryRun: true });
-      expect(preview).toMatchObject({
-        ran: false,
-        stopped: { direction: "up", step: expect.any(Number) },
-      });
+      // While the killed run's claim is unexpired, a preview cannot tell it from a run still
+      // going, so it says the lock is held and nothing about a stop.
+      const early = await site.migrateStorage({ dryRun: true });
+      expect(early).toMatchObject({ ran: false, lock: { kind: "held" } });
+      expect(early).not.toHaveProperty("stopped");
 
-      // The next --apply finishes from it, once the killed run's lease has lapsed.
+      // Once the claim has lapsed, the next preview reports the stopped run.
       await new Promise(resolve =>
         setTimeout(resolve, (LEASE_SECONDS + 1) * 1000)
       );
+      const preview = await site.migrateStorage({ dryRun: true });
+      expect(preview).toMatchObject({
+        ran: false,
+        lock: { kind: "not-held" },
+        stopped: { direction: "up", step: expect.any(Number) },
+      });
+
+      // The next --apply finishes from it.
       expect((await site.migrateStorage()).ran).toBe(true);
       expect((await site.marker())?.status).toBe("settled");
       expect(await legacyObjects(site.adapter, dialect)).toEqual([]);

@@ -14,12 +14,34 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import { registerComponentRuntimeSchema } from "../../services/field-group-table-provisioning";
 import {
   followingMovedRegistry,
+  followMovedFieldGroupTables,
   hasMovedStorageCause,
   isMovedStorageError,
   storageMovingRefusal,
 } from "../moved-storage";
+
+// What a follow registers, and the columns it reads, stand in for the catalog: these cases are
+// about which tables are followed, not how one is registered.
+vi.mock("../../services/field-group-table-provisioning", () => ({
+  registerComponentRuntimeSchema: vi.fn(() => ({ registered: true })),
+}));
+vi.mock("../../storage/resolve-storage-names", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../storage/resolve-storage-names")
+  >()),
+  resolveTableColumns: vi.fn(
+    async (_adapter: unknown, names: readonly string[]) =>
+      new Map(
+        names.map(name => [
+          name,
+          { typeColumn: "_field_group_type", columns: [] },
+        ])
+      )
+  ),
+}));
 
 const ADAPTER = {} as never;
 
@@ -106,6 +128,52 @@ describe("followingMovedRegistry", () => {
       "dynamic_components"
     );
     expect(getComponent).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("followingMovedRegistry on a caller's transaction", () => {
+  it("refuses to be retried without looking up again, as the failure aborted the transaction", async () => {
+    const getComponent = vi
+      .fn()
+      .mockRejectedValue(new Error("no such table: dynamic_components"));
+    const registry = followingMovedRegistry({ getComponent }, ADAPTER);
+    // A Drizzle transaction, as a lookup on one is handed it.
+    const executor = { select: () => undefined };
+
+    await expect(registry.getComponent("hero", executor)).rejects.toMatchObject(
+      { publicData: { errors: [{ code: "FIELD_GROUP_STORAGE_MOVING" }] } }
+    );
+    expect(getComponent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("followMovedFieldGroupTables", () => {
+  it("follows every table it is given, past one that answers without having moved", async () => {
+    // `comp_cta` is where it was; `comp_hero` moved to `fg_hero`. A follow that stopped at the
+    // first answer registered `comp_cta` alone and left the table that failed unregistered.
+    const existing = new Set(["comp_cta", "fg_hero"]);
+    const adapter = {
+      tableExists: async (name: string) => existing.has(name),
+      getCapabilities: () => ({ dialect: "sqlite" }),
+    } as never;
+    const rows = {
+      getAllComponents: async () =>
+        [
+          { slug: "cta", tableName: "comp_cta", fields: [] },
+          { slug: "hero", tableName: "fg_hero", fields: [] },
+        ] as never,
+    };
+
+    await expect(
+      followMovedFieldGroupTables({
+        adapter,
+        rows,
+        tableNames: ["comp_cta", "comp_hero"],
+      })
+    ).resolves.toEqual(["comp_cta", "fg_hero"]);
+    expect(
+      vi.mocked(registerComponentRuntimeSchema).mock.calls.map(call => call[2])
+    ).toContain("fg_hero");
   });
 });
 

@@ -630,6 +630,66 @@ describe("FieldGroupDataService", () => {
         expect(tx.insert).toHaveBeenCalledTimes(1);
       });
     });
+
+    // A save on the caller's transaction that meets a table the storage migration moved holds the
+    // transaction's connection: on a pool of one, a read on another connection waits for it for
+    // ever. The registry's own listing never answers here, so a save that followed the move before
+    // refusing would never settle.
+    describe("when the storage migration moved its table", () => {
+      it.each([
+        [
+          "a single instance",
+          [seoComponentField()],
+          { seo: { metaTitle: "About" } },
+        ],
+        [
+          "repeatable instances",
+          [repeatableComponentField()],
+          { features: [{ title: "One" }] },
+        ],
+        [
+          "multi-component instances",
+          [multiComponentField()],
+          { layout: [{ _componentType: "hero", heading: "Welcome" }] },
+        ],
+      ])(
+        "refuses %s to be retried, reading nothing more while it holds the transaction",
+        async (_shape, fields, data) => {
+          ctx.registry.getAllComponents = vi.fn(
+            () => new Promise<never>(() => {})
+          );
+          const tx = createMockTxContext({
+            insert: vi
+              .fn()
+              .mockRejectedValue(new Error("no such table: comp_moved")),
+          });
+
+          const error = await ctx.service
+            .saveComponentDataInTransaction(
+              tx as unknown as Parameters<
+                typeof ctx.service.saveComponentDataInTransaction
+              >[0],
+              {
+                parentId: "entry-1",
+                parentTable: "dc_pages",
+                access: TRUSTED,
+                fields,
+                data,
+              } as unknown as Parameters<
+                typeof ctx.service.saveComponentDataInTransaction
+              >[1]
+            )
+            .then(
+              () => undefined,
+              (caught: unknown) => caught
+            );
+
+          expect(
+            (error as { publicData?: unknown } | undefined)?.publicData
+          ).toMatchObject({ errors: [{ code: "FIELD_GROUP_STORAGE_MOVING" }] });
+        }
+      );
+    });
   });
 
   describe("a virtual field-group field", () => {
@@ -1120,6 +1180,30 @@ describe("FieldGroupDataService", () => {
   // A caller judging documents by what they hold (a publish) reads strictly:
   // a field it failed to read must not stand in as an empty one, which an
   // optional field or a permissive validator would then accept.
+  describe("a read on a write's transaction meeting a table the storage migration moved", () => {
+    it("refuses the write to be retried, reading nothing more while it holds the transaction", async () => {
+      // As a save on the transaction: the registry's listing never answers, so a read that
+      // followed the move before refusing would never settle.
+      ctx.registry.getAllComponents = vi.fn(() => new Promise<never>(() => {}));
+      ctx.adapter.select.mockRejectedValue(
+        new Error("no such table: comp_seo")
+      );
+
+      await expect(
+        ctx.service.populateComponentData({
+          entry: { id: "entry-1" },
+          parentTable: "dc_pages",
+          fields: [seoComponentField()] as never,
+          executor: TX_DRIZZLE_HANDLE,
+          strict: true,
+          depth: 0,
+        })
+      ).rejects.toMatchObject({
+        publicData: { errors: [{ code: "FIELD_GROUP_STORAGE_MOVING" }] },
+      });
+    });
+  });
+
   describe("populateComponentDataMany (batch), strict", () => {
     const strictRead = (fields: Record<string, unknown>[]) =>
       ctx.service.populateComponentDataMany({

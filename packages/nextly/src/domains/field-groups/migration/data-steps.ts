@@ -26,8 +26,11 @@
  * @module domains/field-groups/migration/data-steps
  */
 
+import { sql } from "drizzle-orm";
+
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { databaseNowMs } from "../../limits/store-clock";
 import type { MetaService } from "../../meta/services/meta-service";
 
 import { MIGRATION_TARGET } from "./manifest";
@@ -119,12 +122,31 @@ const CONTENT_TARGETS: readonly RowRewriteTarget[] = [
 ];
 
 /**
- * The moment a content step began, to the whole second: the precision SQLite keeps its timestamps
- * at. A row written in the same second counts as written during the step; one that existed then
- * was read by the step's walk, which rewrites every row it reads.
+ * The moment a content step began, on the database's clock, to the whole second: the precision
+ * SQLite keeps its timestamps at. A row written in the same second counts as written during the
+ * step; one that existed then was read by the step's walk, which rewrites every row it reads.
+ *
+ * The database's clock, not this process's: the database stamps the events ledger's rows itself,
+ * and a host whose clock runs apart from it would count rows written during the step as older
+ * than it (and refuse a run under traffic), or a row the walk missed as newer (and pass over it).
  */
-function stepBeganAt(now: Date): Date {
-  return new Date(Math.floor(now.getTime() / 1000) * 1000);
+async function stepBeganAt(session: MigrationSession): Promise<Date> {
+  const rows = await session.inTransaction(ctx =>
+    ctx.queryStatement<{ now: unknown }>(
+      sql`SELECT ${databaseNowMs(session.dialect)} AS ${sql.identifier("now")}`
+    )
+  );
+  // PostgreSQL hands a bigint back as a string; every dialect's answer reads as a number.
+  const now = Number(rows[0]?.now);
+  if (!Number.isFinite(now)) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "the database did not answer its clock",
+        answer: String(rows[0]?.now),
+      },
+    });
+  }
+  return new Date(Math.floor(now / 1000) * 1000);
 }
 
 /** What rewrites a stored document's wire key from one vocabulary to the other. */
@@ -289,7 +311,7 @@ function contentStep(args: {
   return {
     id: stepId,
     async run(session) {
-      began = stepBeganAt(new Date());
+      began = await stepBeganAt(session);
       await rewriteRowsInBatches({
         session,
         meta,

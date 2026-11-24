@@ -11,6 +11,9 @@
  * What separates a correct server from a plausibly broken one:
  * - every read returns the group's content, never an empty group: a server still reading the
  *   legacy table would find it gone and read nothing;
+ * - a read returns the group's translation with the rest of it: a server that found the moved
+ *   table and then read the translations under the companion's old name would return the shared
+ *   values alone;
  * - every save either succeeds, and is found afterwards under the current names, or is refused
  *   with `FIELD_GROUP_STORAGE_MOVING`, and then succeeds when retried as the refusal says: a server
  *   that wrote under a legacy name would leave its save where no reader looks;
@@ -44,7 +47,11 @@ import {
 import { getConfiguredTestDialects } from "../../../plugins/test-nextly";
 import { perLanguageStorageEnabled } from "../../i18n/per-language-storage";
 
-import { LIVE_COLLECTION, LIVE_DECLARED } from "./helpers/live-site-entities";
+import {
+  LIVE_COLLECTION,
+  LIVE_DECLARED,
+  LIVE_LOCALIZATION,
+} from "./helpers/live-site-entities";
 import {
   legacyObjects,
   openStorageGenerationSite,
@@ -82,12 +89,23 @@ async function ask(holder: Holder, request: string): Promise<string> {
   }
 }
 
-/** A read's answer as the group's heading, or the whole answer when it was not a read. */
+/**
+ * A read's answer as the group's heading, or the whole answer when it was not a read. Every save
+ * writes the heading as the translated tagline too, so a read whose translation did not come back
+ * with it answers saying so rather than as the heading.
+ */
 async function readHeading(holder: Holder, id: string): Promise<unknown> {
   const answer = await ask(holder, `read ${id}`);
   if (!answer.startsWith("OK ")) return answer;
-  const card = JSON.parse(answer.slice(3)) as { heading?: unknown } | null;
-  return card?.heading ?? "(empty group)";
+  const card = JSON.parse(answer.slice(3)) as {
+    heading?: unknown;
+    tagline?: unknown;
+  } | null;
+  if (card === null) return "(empty group)";
+  if (card.tagline !== card.heading) {
+    return `heading ${String(card.heading)} without its translation (${String(card.tagline)})`;
+  }
+  return card.heading;
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -99,12 +117,16 @@ describe.each(getConfiguredTestDialects())(
         loaded,
         legacy: true,
         sqliteFile: true,
+        localization: LIVE_LOCALIZATION,
       });
       // The legacy site, with content in the group.
       const first = await site.developmentStart(LIVE_DECLARED);
       const created = await first.nextly.create({
         collection: LIVE_COLLECTION as never,
-        data: { title: "P", card: { heading: "Kept" } } as never,
+        data: {
+          title: "P",
+          card: { heading: "Kept", tagline: "Kept" },
+        } as never,
       });
       const id = (created.item as { id: string }).id;
 

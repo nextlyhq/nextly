@@ -54,7 +54,7 @@ import {
   followingMovedRegistry,
   hasMovedStorageCause,
   isMovedStorageError,
-  storageMovingRefusal,
+  refusedOnTransaction,
 } from "../migration/moved-storage";
 import { passwordReachOf } from "../password-reach";
 import {
@@ -1413,6 +1413,7 @@ export class FieldGroupQueryService extends BaseService {
       strict,
       await this.oneLanguagePlan(meta, languages, executor)
     );
+    const current = await this.metaAfterRead(componentSlug, executor);
 
     if (rows.length === 0) return languages.map(() => null);
 
@@ -1430,7 +1431,7 @@ export class FieldGroupQueryService extends BaseService {
     }));
     // i18n: overlay translatable fields from the companion for each requested locale.
     await this.overlayLocalizedComponentByLanguage(
-      meta,
+      current,
       byLanguage,
       executor,
       strict,
@@ -1483,6 +1484,7 @@ export class FieldGroupQueryService extends BaseService {
       strict,
       await this.oneLanguagePlan(meta, languages, executor)
     );
+    const current = await this.metaAfterRead(componentSlug, executor);
 
     const reach = await this.passwordReach(componentFields, executor);
     const byLanguage = languages.map(language => ({
@@ -1499,7 +1501,7 @@ export class FieldGroupQueryService extends BaseService {
 
     // i18n: overlay translatable fields per instance from the companion.
     await this.overlayLocalizedComponentByLanguage(
-      meta,
+      current,
       byLanguage,
       executor,
       strict,
@@ -1645,7 +1647,7 @@ export class FieldGroupQueryService extends BaseService {
       read
     );
     return {
-      meta,
+      meta: await this.metaAfterRead(componentSlug, read.executor),
       componentFields,
       rows,
       reach: await this.passwordReach(componentFields, read.executor),
@@ -2041,6 +2043,21 @@ export class FieldGroupQueryService extends BaseService {
     }
   }
 
+  /**
+   * A field group's registry row as it stands after its instances were read, for what is read
+   * next from where the row says: its translations. A read that followed a move
+   * (`movedTable`) cleared the registry's cache, so this is the row the migration rewrote, naming
+   * the companion table under its current name; with no move, the cache answers it unread. The
+   * row taken before the read would send the translations to the companion's old name, and a
+   * read that tolerates a failed overlay would return the shared values alone.
+   */
+  private async metaAfterRead(
+    componentSlug: string,
+    executor: unknown
+  ): Promise<DynamicFieldGroupRecord> {
+    return this.registryService.getComponent(componentSlug, executor);
+  }
+
   // Results are ordered by `(_parent_id ASC, _order ASC)` so grouped
   // results maintain correct array ordering.
   /**
@@ -2048,8 +2065,9 @@ export class FieldGroupQueryService extends BaseService {
    * (`followMovedFieldGroupTable`), registered in this process; `undefined` otherwise.
    *
    * A read on a write's transaction is not retried: a failed statement has aborted it on
-   * PostgreSQL. The write it serves is refused instead (`storageMovingRefusal`), the names now
-   * registered, so the whole write succeeds when retried.
+   * PostgreSQL. The write it serves is refused instead (`refusedOnTransaction`), and the table is
+   * followed once the transaction has let its connection go, so the whole write succeeds when
+   * retried.
    */
   private async movedTable(
     tableName: string,
@@ -2065,16 +2083,18 @@ export class FieldGroupQueryService extends BaseService {
         ? isMovedStorageError(error)
         : hasMovedStorageCause(error);
     if (followed || !isMove) return undefined;
-    const moved = await followMovedFieldGroupTable({
+    if (executor !== undefined) {
+      throw refusedOnTransaction({
+        adapter: this.adapter,
+        rows: this.registryService,
+        tableNames: [tableName],
+      });
+    }
+    return followMovedFieldGroupTable({
       adapter: this.adapter,
       rows: this.registryService,
       tableName,
     });
-    if (executor !== undefined) {
-      if (moved !== undefined) throw storageMovingRefusal(moved);
-      return undefined;
-    }
-    return moved;
   }
 
   private async batchGetInstances(

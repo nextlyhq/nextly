@@ -91,9 +91,10 @@ import {
   directFieldGroupFields,
 } from "../field-group-write-access";
 import {
-  followMovedFieldGroupTable,
+  followMovedFieldGroupTables,
   followingMovedRegistry,
   hasMovedStorageCause,
+  refusedOnTransaction,
   storageMovingRefusal,
 } from "../migration/moved-storage";
 import {
@@ -1277,7 +1278,11 @@ export class FieldGroupMutationService extends BaseService {
         { locale, req, write: params.write, assembledFromStorage }
       );
     } catch (error) {
-      throw await this.saveFailure([componentSlug], error);
+      throw await this.saveFailure(
+        { onTransaction: false },
+        [componentSlug],
+        error
+      );
     }
   }
 
@@ -1407,7 +1412,11 @@ export class FieldGroupMutationService extends BaseService {
         false
       );
     } catch (error) {
-      throw await this.saveFailure([componentSlug], error);
+      throw await this.saveFailure(
+        { onTransaction: true },
+        [componentSlug],
+        error
+      );
     }
   }
 
@@ -1523,7 +1532,11 @@ export class FieldGroupMutationService extends BaseService {
         count: instances.length,
       });
     } catch (error) {
-      throw await this.saveFailure([componentSlug], error);
+      throw await this.saveFailure(
+        { onTransaction: false },
+        [componentSlug],
+        error
+      );
     }
   }
 
@@ -1679,7 +1692,11 @@ export class FieldGroupMutationService extends BaseService {
         incomingIds
       );
     } catch (error) {
-      throw await this.saveFailure([componentSlug], error);
+      throw await this.saveFailure(
+        { onTransaction: true },
+        [componentSlug],
+        error
+      );
     }
   }
 
@@ -1846,7 +1863,11 @@ export class FieldGroupMutationService extends BaseService {
         count: instances.length,
       });
     } catch (error) {
-      throw await this.saveFailure(allowedSlugs, error);
+      throw await this.saveFailure(
+        { onTransaction: false },
+        allowedSlugs,
+        error
+      );
     }
   }
 
@@ -2026,7 +2047,11 @@ export class FieldGroupMutationService extends BaseService {
         incomingIds
       );
     } catch (error) {
-      throw await this.saveFailure(allowedSlugs, error);
+      throw await this.saveFailure(
+        { onTransaction: true },
+        allowedSlugs,
+        error
+      );
     }
   }
 
@@ -2116,27 +2141,32 @@ export class FieldGroupMutationService extends BaseService {
   /**
    * What a failed save of the field groups named by slugs is raised with. The storage-moving
    * refusal when the save met a field-group table, column or registry the storage migration moved
-   * under this process (followMovedFieldGroupTable), the process now addressing it under its
-   * current name, so the same save succeeds when retried. Otherwise an already-mapped NextlyError
-   * (and ServiceError shims, which share the cross-realm brand) as it is, so a factory-thrown error
-   * is not wrapped twice, and anything else as a raw database error, normalised first (toDbError)
-   * so its kind survives.
+   * under this process, the process then addressing it under its current name, so the same save
+   * succeeds when retried. Otherwise an already-mapped NextlyError (and ServiceError shims, which
+   * share the cross-realm brand) as it is, so a factory-thrown error is not wrapped twice, and
+   * anything else as a raw database error, normalised first (toDbError) so its kind survives.
+   *
+   * Every slug's table is followed, not the first that answers: the field group whose table failed
+   * need not be the first the field allows. A save on the caller's transaction follows them once
+   * the transaction has let its connection go (`refusedOnTransaction`), reading nothing while it
+   * holds it.
    */
   private async saveFailure(
+    where: { onTransaction: boolean },
     slugs: readonly string[],
     error: unknown
   ): Promise<NextlyError> {
     // A refusal already decided carries no database error and is left as it is; a database error
     // saying a table or column is missing, however it was wrapped, may be storage that moved.
     if (hasMovedStorageCause(error)) {
-      for (const slug of slugs) {
-        const moved = await followMovedFieldGroupTable({
-          adapter: this.adapter,
-          rows: this.registryService,
-          tableName: resolveComponentTableName(slug),
-        });
-        if (moved !== undefined) return storageMovingRefusal(moved);
-      }
+      const follow = {
+        adapter: this.adapter,
+        rows: this.registryService,
+        tableNames: slugs.map(slug => resolveComponentTableName(slug)),
+      };
+      if (where.onTransaction) return refusedOnTransaction(follow);
+      const moved = await followMovedFieldGroupTables(follow);
+      if (moved.length > 0) return storageMovingRefusal(moved.join(", "));
     }
     if (NextlyError.is(error)) return error;
     return NextlyError.fromDatabaseError(toDbError(this.dialect, error));

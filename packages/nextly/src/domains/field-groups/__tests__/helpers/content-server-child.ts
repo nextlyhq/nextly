@@ -9,7 +9,8 @@
  * one request per line on stdin, each `<id> <command> [args]`, with one line `<id> <answer>`:
  *
  * - `<id> read <entryId>` answers `OK <json>`: the entry's field-group value as a read returns it.
- * - `<id> save <entryId> <heading>` answers `OK` when the save succeeded.
+ * - `<id> save <entryId> <heading>` answers `OK` when the save succeeded, the heading saved as
+ *   the group's translated tagline too.
  *
  * Either answers `REFUSED <code> <message>` for an error a caller is meant to act on, and
  * `ERROR <code> <message>` for any other failure, so the suite tells a refusal from a crash.
@@ -35,13 +36,16 @@ const { setPerLanguageStorage } = await import(
 );
 setPerLanguageStorage(layout === "on");
 const { createTestNextly } = await import("../../../../plugins/test-nextly");
-const { LIVE_COLLECTION, LIVE_DECLARED } = await import("./live-site-entities");
+const { LIVE_COLLECTION, LIVE_DECLARED, LIVE_LOCALIZATION } = await import(
+  "./live-site-entities"
+);
 
 const adapter = await createAdapter({ type: dialect, url } as never);
 const instance = await createTestNextly({
   adapter: adapter as never,
   collections: LIVE_DECLARED.collections,
   fieldGroups: LIVE_DECLARED.fieldGroups,
+  localization: LIVE_LOCALIZATION,
 });
 
 /** The refusals a caller is told to act on: retry, or restart. */
@@ -101,8 +105,12 @@ async function answer(command: string, args: string[]): Promise<string> {
     await instance.nextly.update({
       collection: LIVE_COLLECTION as never,
       id: args[0]!,
-      // Last write wins: a server saving what its form holds, as the suite asks it to.
-      data: { card: { heading: args[1] }, _overwrite: true } as never,
+      // Last write wins: a server saving what its form holds, as the suite asks it to. The
+      // translation carries the same text, so a read shows whether it came back with the rest.
+      data: {
+        card: { heading: args[1], tagline: args[1] },
+        _overwrite: true,
+      } as never,
     });
     return "OK";
   }

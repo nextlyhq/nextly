@@ -192,8 +192,10 @@ export type MigrationOutcome =
       lock: LockObservation;
       /**
        * A run that stopped part-way, as the marker records it: killed, its connection dropped, or
-       * stopped on a busy table. Absent when no run is in flight. The next `--apply` finishes it,
-       * working out where it stopped from the names and rows the database holds.
+       * stopped on a busy table. Reported only beside a `not-held` lock: a marker mid-run is also
+       * what a run still going looks like, and only nobody holding the lock says it stopped. The
+       * next `--apply` finishes it, working out where it stopped from the names and rows the
+       * database holds.
        */
       stopped?: { direction: MigrationDirection; step: number };
     }
@@ -446,15 +448,25 @@ export async function runFieldGroupMigration(
   const previewOutcome = async (args: {
     renames: readonly { readonly from: string; readonly to: string }[];
     basis: PlanBasis;
-  }): Promise<MigrationOutcome> => ({
-    ran: false,
-    reason: "dry-run",
-    direction,
-    renames: args.renames,
-    basis: args.basis,
-    lock: await observeContention(),
-    ...(observedStop === undefined ? {} : { stopped: observedStop }),
-  });
+  }): Promise<MigrationOutcome> => {
+    const lock = await observeContention();
+    // A marker mid-run is what a run still going looks like too. It reads as stopped only when no
+    // one holds the lock: a claim a dead run left lapses when it is no longer renewed, so `held`
+    // means a run may still be going, and `unknown` says nothing either way.
+    const stopped =
+      observedStop !== undefined && lock.kind === "not-held"
+        ? observedStop
+        : undefined;
+    return {
+      ran: false,
+      reason: "dry-run",
+      direction,
+      renames: args.renames,
+      basis: args.basis,
+      lock,
+      ...(stopped === undefined ? {} : { stopped }),
+    };
+  };
 
   /**
    * What the last attempt saw, so the next one can tell whether anything moved.

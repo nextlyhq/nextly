@@ -24,7 +24,6 @@ import { resolveComponentTableName } from "../../schema/utils/resolve-table-name
 import { registerComponentRuntimeSchema } from "../services/field-group-table-provisioning";
 import {
   forgetFieldGroupStorageNames,
-  resolveRegistryTableName,
   resolveTableColumns,
 } from "../storage/resolve-storage-names";
 
@@ -97,11 +96,11 @@ export function hasMovedStorageCause(error: unknown): boolean {
  * renames the registry last, after the tables, so a name re-resolved between the two goes stale
  * again; this is where that is caught, whichever lookup meets it first.
  *
- * A lookup on a write's transaction cannot always run once more: the failure has aborted that
- * transaction on PostgreSQL, and the second try fails for that alone. Then the first failure
- * decides: the write is refused to be retried (`storageMovingRefusal`) when the registry's name
- * really did change under this process, and the first failure is raised as it was otherwise, never
- * the second, which says nothing about storage.
+ * A lookup on a caller's transaction (an argument that is a database executor) does not run again
+ * and reads nothing more: the failure has aborted that transaction on PostgreSQL, and a read on
+ * another connection would wait for the one the transaction holds where the pool has no other. It
+ * is refused to be retried instead (`refusedOnTransaction`), the names re-resolved once the
+ * transaction has let its connection go.
  */
 export function followingMovedRegistry<T extends object>(
   registry: T,
@@ -117,20 +116,19 @@ export function followingMovedRegistry<T extends object>(
         if (!(first instanceof Promise)) return first;
         return first.catch(async (error: unknown) => {
           if (!hasMovedStorageCause(error)) throw error;
-          const before = await registryNameOf(adapter);
+          if (args.some(isExecutor)) {
+            throw refusedOnTransaction({
+              adapter,
+              rows: undefined,
+              tableNames: [],
+            });
+          }
           forgetFieldGroupStorageNames(adapter);
           clearRegistryRowCache();
           try {
             return await run();
           } catch {
-            const after = await registryNameOf(adapter);
-            if (
-              before !== undefined &&
-              after !== undefined &&
-              before !== after
-            ) {
-              throw storageMovingRefusal(after);
-            }
+            // The second failure says no more than the first, which is the one raised.
             throw error;
           }
         });
@@ -139,15 +137,63 @@ export function followingMovedRegistry<T extends object>(
   });
 }
 
-/** The registry's name as this process resolves it, or undefined where it cannot be read. */
-async function registryNameOf(
-  adapter: DrizzleAdapter
-): Promise<string | undefined> {
-  try {
-    return await resolveRegistryTableName(adapter);
-  } catch {
-    return undefined;
+/**
+ * Whether `value` is a database executor, as a registry lookup on a caller's transaction is handed:
+ * a Drizzle database or transaction, told by the `select` it is queried through.
+ */
+function isExecutor(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { select?: unknown }).select === "function"
+  );
+}
+
+/**
+ * The refusal for a statement on a caller's transaction that failed as moved storage fails, with
+ * the move followed once the transaction is done with its connection.
+ *
+ * Nothing is read on the transaction, which PostgreSQL has aborted, or on another connection while
+ * it is open: where the pool has one connection the transaction holds it, and a read waiting for it
+ * inside the transaction would wait for ever. What this process resolved is forgotten at once, and
+ * `tableNames` are followed (`followMovedFieldGroupTable`) without being awaited, so each follow
+ * runs once the caller has rolled back and its connection is free. The caller's retry then
+ * addresses storage under its current names.
+ */
+export function refusedOnTransaction(args: {
+  adapter: DrizzleAdapter;
+  /** What the tables' registry rows are read through; absent when there are no tables to follow. */
+  rows: FieldGroupRows | undefined;
+  tableNames: readonly string[];
+}): NextlyError {
+  const { adapter, rows, tableNames } = args;
+  forgetFieldGroupStorageNames(adapter);
+  clearRegistryRowCache();
+  if (rows !== undefined && tableNames.length > 0) {
+    // Not awaited: a follow never rejects, and it needs a connection the caller still holds.
+    void followMovedFieldGroupTables({ adapter, rows, tableNames });
   }
+  return storageMovingRefusal(
+    tableNames.length > 0 ? tableNames.join(", ") : "the field-group registry"
+  );
+}
+
+/**
+ * Each of `tableNames` followed (`followMovedFieldGroupTable`), every one of them rather than the
+ * first that answers: a save names every field group it may write, and the one whose table failed
+ * need not be the first. The names they are stored under now, for those that moved.
+ */
+export async function followMovedFieldGroupTables(args: {
+  adapter: DrizzleAdapter;
+  rows: FieldGroupRows;
+  tableNames: readonly string[];
+}): Promise<string[]> {
+  const moved: string[] = [];
+  for (const tableName of new Set(args.tableNames)) {
+    const current = await followMovedFieldGroupTable({ ...args, tableName });
+    if (current !== undefined) moved.push(current);
+  }
+  return moved;
 }
 
 /**
