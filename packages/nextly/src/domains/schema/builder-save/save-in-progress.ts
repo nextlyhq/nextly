@@ -48,7 +48,7 @@ import { dirname, join, relative } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { eq, like, or, type SQL } from "drizzle-orm";
+import { like, type SQL } from "drizzle-orm";
 import { z } from "zod";
 
 import { loadedDialect } from "../../../database/dialect-tables";
@@ -1047,10 +1047,22 @@ interface RecordRows {
 export async function readSavesInProgress(
   adapter: DrizzleAdapter
 ): Promise<ReadRow[]> {
-  const table = loadedDialect(adapter.getCapabilities().dialect).tables
-    .nextlyMeta;
-  const rows = await adapter
-    .getDrizzle<RecordRows>()
+  return readStandingSaves(
+    adapter.getDrizzle(),
+    adapter.getCapabilities().dialect
+  );
+}
+
+/**
+ * Every record standing, in one read through `db` (the adapter's handle, or an open transaction's,
+ * so a write already inside one reads on its own connection). None in the common case.
+ */
+export async function readStandingSaves(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<ReadRow[]> {
+  const table = loadedDialect(dialect).tables.nextlyMeta;
+  const rows = await (db as RecordRows)
     .select({ key: table.key, value: table.value })
     .from(table)
     .where(like(table.key, `${KEY_PREFIX}%`));
@@ -1058,37 +1070,24 @@ export async function readSavesInProgress(
 }
 
 /**
- * The records standing over one entity's entries, in one read through `db` (the adapter's handle,
- * or an open transaction's, so a write already inside one reads on its own connection): the
- * entity's own, undefined where none stands, and every field group's, since a field group's save
- * changes the component tables an entity's entries reach. None in the common case.
+ * Of the records standing (`readStandingSaves`), those over one entity's entries: its own,
+ * undefined where none stands, and every field group's, since a field group's save changes the
+ * component tables an entity's entries reach.
  */
-export async function readSavesStandingOver(
-  db: unknown,
-  dialect: SupportedDialect,
+export function savesStandingOver(
+  rows: readonly ReadRow[],
   kind: SaveInProgressKind,
   slug: string
-): Promise<{
+): {
   own: ReadRow | undefined;
   fieldGroups: Array<{ slug: string; row: ReadRow }>;
-}> {
-  const table = loadedDialect(dialect).tables.nextlyMeta;
+} {
   const key = saveInProgressKey(kind, slug);
   const groupKey = saveInProgressKey("fieldGroup", "");
-  const rows = await (db as RecordRows)
-    .select({ key: table.key, value: table.value })
-    .from(table)
-    .where(
-      or(
-        eq(table.key, key),
-        like(table.key, `${groupKey}%`)
-      ) as SQL
-    );
-  const read = rows.map(readRowOf);
   return {
-    own: read.find(row => row.key === key),
-    fieldGroups: read
-      .filter(row => row.key !== key)
+    own: rows.find(row => row.key === key),
+    fieldGroups: rows
+      .filter(row => row.key.startsWith(groupKey))
       .map(row => ({ slug: row.key.slice(groupKey.length), row })),
   };
 }

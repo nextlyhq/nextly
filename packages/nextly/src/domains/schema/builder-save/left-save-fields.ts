@@ -15,15 +15,17 @@
  * failing closed.
  *
  * What it costs: nothing in production, where Builder saves never run, and nothing on PostgreSQL or
- * SQLite, where a save's change commits whole or not at all. On MySQL in development, one
- * primary-key read of the entity's record per write or read; where one stands, the comparison,
- * kept per record id once the schema lock was free while it was made (a live save holds the lock,
- * so its tables may still move; a record standing with the lock free is a save no process runs).
+ * SQLite, where a save's change commits whole or not at all. On MySQL outside production, one read
+ * of the standing records per request, whatever it reads and writes, and one per check outside a
+ * request; where one stands over the entity, the comparison, kept per record id once the schema
+ * lock was free while it was made (a live save holds the lock, so its tables may still move; a
+ * record standing with the lock free is a save no process runs).
  *
  * @module domains/schema/builder-save/left-save-fields
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { onceForRequestAbout } from "../../../auth/access/request-memo";
 import { getService } from "../../../di/service-access";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -33,7 +35,8 @@ import { toSnakeCase } from "../field-rules";
 import { readSchemaLockState } from "../pipeline/schema-lock";
 
 import {
-  readSavesStandingOver,
+  readStandingSaves,
+  savesStandingOver,
   type LeftSave,
   type ReadRow,
   type SaveInProgressKind,
@@ -157,7 +160,10 @@ async function heldFieldsOf(args: {
   if (args.adapter.getCapabilities().dialect !== "mysql") return undefined;
   // A check made inside a transaction it was not handed (a rule's own read, say) joins it, so
   // nothing it reads takes another connection while that one is held. Only what it found is
-  // handed out: the refusal is thrown by the caller, past the join.
+  // handed out: the refusal is thrown by the caller, past the join. Not joined where the request
+  // knows already that no record stands, as nothing is then read.
+  const known = await keptForRequest().standing;
+  if (known?.length === 0 && narrowedBy.size === 0) return undefined;
   if (args.tx === undefined && args.adapter.inTransaction()) {
     return args.adapter.transaction(tx =>
       heldIn({ ...args, tx: tx.getDrizzle() })
@@ -327,27 +333,51 @@ function embeddedGroup(
 }
 
 /**
- * The records standing over the entity, read on the write's transaction where it has one: none
- * where its database's meta table is not made yet.
+ * What the request has read of the records standing, kept with it (`onceForRequestAbout`): one read
+ * answers every check the request makes, over any entity. Outside a request it keeps nothing, so
+ * each check reads. A save that starts while the request runs is not seen by it.
+ */
+function keptForRequest(): { standing?: Promise<ReadRow[]> } {
+  return onceForRequestAbout("builder-saves-left-standing", () => ({}));
+}
+
+/**
+ * The records standing over the entity: the request's, read once for it, or read on the check's
+ * transaction where that opened first. A read on a transaction, and one that fails, is never kept.
  */
 async function standingRecordsOf(args: {
   adapter: DrizzleAdapter;
   kind: EntryKind;
   slug: string;
   tx?: unknown;
-}): Promise<Awaited<ReturnType<typeof readSavesStandingOver>>> {
-  const dialect = args.adapter.getCapabilities().dialect;
-  try {
-    return await readSavesStandingOver(
-      args.tx ?? args.adapter.getDrizzle(),
-      dialect,
-      args.kind,
-      args.slug
-    );
-  } catch (error) {
-    if (isMissingTable(error, dialect)) {
-      return { own: undefined, fieldGroups: [] };
+}): Promise<ReturnType<typeof savesStandingOver>> {
+  const kept = keptForRequest();
+  if (kept.standing === undefined) {
+    if (args.tx !== undefined) {
+      return savesStandingOver(
+        await standingOn(args.adapter, args.tx),
+        args.kind,
+        args.slug
+      );
     }
+    kept.standing = standingOn(args.adapter, args.adapter.getDrizzle());
+    kept.standing.catch(() => {
+      delete kept.standing;
+    });
+  }
+  return savesStandingOver(await kept.standing, args.kind, args.slug);
+}
+
+/** Every record standing, read on `db`: none where the database's meta table is not made yet. */
+async function standingOn(
+  adapter: DrizzleAdapter,
+  db: unknown
+): Promise<ReadRow[]> {
+  const dialect = adapter.getCapabilities().dialect;
+  try {
+    return await readStandingSaves(db, dialect);
+  } catch (error) {
+    if (isMissingTable(error, dialect)) return [];
     throw error;
   }
 }

@@ -13,6 +13,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { runWithAccessMemo } from "../../../../auth/access/request-memo";
 import { loadDialectTables } from "../../../../database/dialect-tables";
 import {
   compareBeforeTransaction,
@@ -125,5 +126,55 @@ describe("the left-save guard's cost", () => {
     expect(counted.statements()).toBe(5);
     expect(counted.handles()).toBe(4);
     expect(counted.txUses()).toBeGreaterThan(0);
+  });
+
+  // Inside a request, every check is answered by the one read it made first, over any entity, the
+  // check inside a transaction included. A later request reads again.
+  it("reads the records standing once per request on MySQL in development", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const counted = countingAdapter("mysql");
+    await runWithAccessMemo(async () => {
+      await everyRoad(counted.adapter, counted.tx);
+      await refuseReadOverLeftSave({
+        adapter: counted.adapter,
+        kind: "single",
+        slug: "settings",
+      });
+    });
+    expect(counted.statements()).toBe(1);
+    expect(counted.txUses()).toBe(0);
+
+    await runWithAccessMemo(() => everyRoad(counted.adapter, counted.tx));
+    expect(counted.statements()).toBe(2);
+  });
+
+  it("keeps no read that failed: the next check in the request reads again", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const counted = countingAdapter("mysql");
+    let failed = false;
+    // The first read is sent and rejected, as a connection dropped under it.
+    const dropped = {
+      select: () => ({
+        from: () => ({
+          where: () => Promise.reject(new Error("the connection dropped")),
+        }),
+      }),
+    };
+    const adapter = {
+      ...counted.adapter,
+      getDrizzle: () => {
+        if (failed) return counted.adapter.getDrizzle();
+        failed = true;
+        return dropped;
+      },
+    } as unknown as DrizzleAdapter;
+    const read = () =>
+      refuseReadOverLeftSave({ adapter, kind: "collection", slug: "posts" });
+
+    await runWithAccessMemo(async () => {
+      await expect(read()).rejects.toThrow("the connection dropped");
+      await expect(read()).resolves.toBeUndefined();
+    });
+    expect(counted.statements()).toBe(1);
   });
 });

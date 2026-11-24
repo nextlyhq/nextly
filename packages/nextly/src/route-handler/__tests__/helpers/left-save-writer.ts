@@ -10,8 +10,12 @@
  * "single-read"; via: "rest" | "api"; data?; id?; slug?; depth? }`, an update naming the entry it
  * changes, `slug` another collection or a Single to send it to, and a read's `depth` how far it
  * populates relationships. `registry-moved` moves the stored schema version, as a registry write
- * anywhere does, so the next request loads every definition again from the registry rows.
+ * anywhere does, so the next request loads every definition again from the registry rows. `request`
+ * makes its `within` operations in one request, and `pause` stops until the test lets it go on.
  */
+import { existsSync, writeFileSync } from "node:fs";
+
+import { runWithAccessMemo } from "../../../auth/access/request-memo";
 import { createAdapter } from "../../../database/factory";
 import { writeRegistryRows } from "../../../domains/schema/schema-version";
 import { createTestNextly } from "../../../plugins/test-nextly";
@@ -24,9 +28,16 @@ type Operation = {
     | "update"
     | "single-write"
     | "single-read"
-    | "registry-moved";
+    | "registry-moved"
+    | "pause"
+    | "request";
   via: "rest" | "api";
   data?: Record<string, unknown>;
+  /** A pause's files: the one it writes once reached, and the one it waits for. */
+  reached?: string;
+  until?: string;
+  /** What a request does, one after the other, all in the one request. */
+  within?: Operation[];
   /** The entry an update changes. */
   id?: string;
   /** The collection, or the Single, the operation goes to, where not the one named on the line. */
@@ -195,6 +206,14 @@ async function apiOf(operation: Operation, target: string): Promise<Outcome> {
     case "write":
       await copy.nextly.create({ collection: target, data } as never);
       return { ...operation, ok: true };
+    case "pause": {
+      writeFileSync(operation.reached ?? "", "reached");
+      const giveUp = Date.now() + 120_000;
+      while (!existsSync(operation.until ?? "") && Date.now() < giveUp) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return { ...operation, ok: existsSync(operation.until ?? "") };
+    }
     case "registry-moved":
       await writeRegistryRows(copy.adapter, () => Promise.resolve());
       return { ...operation, ok: true };
@@ -219,9 +238,15 @@ async function apiOf(operation: Operation, target: string): Promise<Outcome> {
   }
 }
 
-const outcomes: Outcome[] = [];
-for (const operation of JSON.parse(operations) as Operation[]) {
-  const target = operation.slug ?? slug;
+/** Make one operation and keep what it came to; a request's own, each after the other within it. */
+async function make(operation: Operation, outcomes: Outcome[]): Promise<void> {
+  if (operation.kind === "request") {
+    await runWithAccessMemo(async () => {
+      for (const each of operation.within ?? []) await make(each, outcomes);
+    });
+    return;
+  }
+  const target = operation.slug ?? slug ?? "";
   try {
     outcomes.push(
       operation.via === "rest"
@@ -231,6 +256,11 @@ for (const operation of JSON.parse(operations) as Operation[]) {
   } catch (error) {
     outcomes.push(fromError(operation, error));
   }
+}
+
+const outcomes: Outcome[] = [];
+for (const operation of JSON.parse(operations) as Operation[]) {
+  await make(operation, outcomes);
 }
 await copy.destroy();
 process.stdout.write(`${JSON.stringify(outcomes)}\n`);

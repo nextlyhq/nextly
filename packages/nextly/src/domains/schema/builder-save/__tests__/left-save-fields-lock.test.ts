@@ -35,13 +35,12 @@ vi.mock("../../pipeline/schema-lock", async original => ({
 }));
 vi.mock("../save-in-progress", async original => ({
   ...(await original<typeof import("../save-in-progress")>()),
-  readSavesStandingOver: async () => ({
-    own: {
+  readStandingSaves: async () => [
+    {
       key: "builder-save-in-progress:collection:posts",
       record: { id: stubs.record, applies: true },
     },
-    fieldGroups: [],
-  }),
+  ],
 }));
 // The comparison finds `heading`'s column gone, as a committed rename leaves it.
 vi.mock("../settle-left-save", () => ({
