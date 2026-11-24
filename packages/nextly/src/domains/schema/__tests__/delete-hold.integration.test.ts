@@ -1919,7 +1919,13 @@ describe.each(getConfiguredTestDialects())(
         saved();
 
         const { setsNote, keepsNote } = await writing;
-        expect(JSON.stringify(setsNote)).toContain("FIELD_REMOVED");
+        // A batch tells an item's refusal by its code and message, which names the field.
+        expect(setsNote).toMatchObject({
+          code: "VALIDATION_ERROR",
+          error: expect.stringContaining(
+            "note was removed from this collection"
+          ) as string,
+        });
         // One that sets only what the save keeps, made from the old snapshot, still lands.
         expect(keepsNote).toBe("created");
       },
