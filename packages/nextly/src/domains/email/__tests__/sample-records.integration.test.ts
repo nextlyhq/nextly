@@ -19,7 +19,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
-import { defineCollection, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../config";
 import { seedAllPermissions } from "../../../init/seed-permissions";
 import type { PluginEmailTemplate } from "../../../plugins/contributions";
 import { definePlugin } from "../../../plugins/plugin-context";
@@ -42,6 +47,9 @@ const OWN_SHIPPED = "sample-own-order-shipped";
 /** Orders with a field only some may read. */
 const NOTED_ORDERS = "sample_noted_orders";
 const NOTED_SHIPPED = "sample-noted-order-shipped";
+/** Orders whose rule sits in a field group they hold. */
+const GROUPED_ORDERS = "sample_grouped_orders";
+const GROUPED_SHIPPED = "sample-grouped-order-shipped";
 
 type Headers = Record<string, string>;
 
@@ -129,6 +137,40 @@ const notedShippedTemplate = {
     },
   },
 } as unknown as PluginEmailTemplate;
+
+/** A template offering the orders holding a group whose field has a rule. */
+const groupedShippedTemplate = {
+  ...shippedTemplate,
+  slug: GROUPED_SHIPPED,
+  name: "Grouped order shipped",
+  sampleRecords: {
+    label: "A real grouped order",
+    reads: { collection: GROUPED_ORDERS },
+    list: async () => {
+      loaderCalls.push("grouped-list");
+      return [{ id: "o-5", label: "Order A-5" }];
+    },
+    load: async (id: string) => {
+      loaderCalls.push(`grouped-load:${id}`);
+      return { orderNumber: id, customer: "the group's note" };
+    },
+  },
+} as unknown as PluginEmailTemplate;
+
+/** A group whose note a field read rule keeps from everyone. */
+const orderNotes = defineFieldGroup({
+  slug: "sample-order-notes",
+  fields: [text({ name: "note", access: { read: () => false } })],
+});
+
+/** Orders holding that group, with no rule of their own. */
+const groupedOrders = defineCollection({
+  slug: GROUPED_ORDERS,
+  fields: [
+    text({ name: "number" }),
+    fieldGroup({ name: "notes", component: "sample-order-notes" }),
+  ],
+});
 
 /** Orders whose note a field read rule keeps from everyone. */
 const notedOrders = defineCollection({
@@ -228,6 +270,7 @@ for (const dialect of getConfiguredTestDialects()) {
     let shippedId: string;
     let ownShippedId: string;
     let notedShippedId: string;
+    let groupedShippedId: string;
     let welcomeId: string;
     let adaId: string;
 
@@ -235,7 +278,8 @@ for (const dialect of getConfiguredTestDialects()) {
       t = await createTestNextly({
         dialect,
         plugins: [shop],
-        collections: [ownOrders, notedOrders],
+        collections: [ownOrders, notedOrders, groupedOrders],
+        fieldGroups: [orderNotes],
       });
       try {
         const services = new ServiceContainer(t.adapter);
@@ -252,6 +296,7 @@ for (const dialect of getConfiguredTestDialects()) {
           `read-${ORDERS}`,
           `read-${OWN_ORDERS}`,
           `read-${NOTED_ORDERS}`,
+          `read-${GROUPED_ORDERS}`,
           "read-users",
         ]));
         ({ headers: templatesOnly } = await sessionFor(
@@ -283,6 +328,7 @@ for (const dialect of getConfiguredTestDialects()) {
                 shippedTemplate,
                 ownShippedTemplate,
                 notedShippedTemplate,
+                groupedShippedTemplate,
               ],
             },
           ],
@@ -301,12 +347,22 @@ for (const dialect of getConfiguredTestDialects()) {
         const notedShipped = await t.nextly.emailTemplates.findBySlug({
           slug: NOTED_SHIPPED,
         });
-        if (!shipped || !welcome || !ownShipped || !notedShipped) {
+        const groupedShipped = await t.nextly.emailTemplates.findBySlug({
+          slug: GROUPED_SHIPPED,
+        });
+        if (
+          !shipped ||
+          !welcome ||
+          !ownShipped ||
+          !notedShipped ||
+          !groupedShipped
+        ) {
           throw new Error("templates not seeded");
         }
         shippedId = String(shipped.id);
         ownShippedId = String(ownShipped.id);
         notedShippedId = String(notedShipped.id);
+        groupedShippedId = String(groupedShipped.id);
         welcomeId = String(welcome.id);
       } catch (error) {
         await t?.destroy();
@@ -396,6 +452,16 @@ for (const dialect of getConfiguredTestDialects()) {
         const refused = await get(path, reader);
         expect(REFUSED, `${path}: ${refused.text}`).toContain(refused.status);
       }
+      expect(loaderCalls).toEqual([]);
+    });
+
+    it("refuses a person reading a collection that holds a group whose field carries a rule", async () => {
+      loaderCalls.length = 0;
+      const refused = await get(
+        `email-templates/${groupedShippedId}/sample-records`,
+        reader
+      );
+      expect(REFUSED, refused.text).toContain(refused.status);
       expect(loaderCalls).toEqual([]);
     });
 

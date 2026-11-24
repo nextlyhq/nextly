@@ -27,6 +27,10 @@ import {
 import { canReadSystemResource } from "../../auth/resource-readable";
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors";
+import {
+  anyFieldGroupHasAccessRule,
+  hasFieldAccessRule,
+} from "../../shared/lib/field-level-registry";
 import type { FieldGroupDataService } from "../field-groups/services/field-group-data-service";
 import { fieldsCarryingReadRules } from "../versions/component-read-access";
 import { resolveComponentFieldMap } from "../versions/tag-component-types";
@@ -132,8 +136,14 @@ async function mayRead(
 /**
  * Whether no field of the collection carries a read rule, on itself, beneath
  * it or in a component it reaches. A schema that cannot be read answers no.
+ *
+ * Field rules live in code, so the collection's own are answered from the
+ * registry; the schema is read only where some field group carries a read
+ * rule, which is when a component the collection reaches might.
  */
 async function noFieldReadRules(collection: string): Promise<boolean> {
+  if (hasFieldAccessRule("collection", collection, "read")) return false;
+  if (!anyFieldGroupHasAccessRule("read")) return true;
   const fields = await tryResolveCurrentFields("collection", collection);
   if (fields === null) return false;
   const groups = container.has("fieldGroupDataService")
