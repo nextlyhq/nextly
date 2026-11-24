@@ -205,7 +205,7 @@ export function demoteLosesUniqueIndex(
   const named = indexes.map(fields => `(${fields.join(", ")})`).join(" and ");
   return new CliError("DEMOTE_LOSES_UNIQUE_INDEX", {
     what: `Collection '${slug}' was not demoted: it would lose its unique index${indexes.length === 1 ? "" : "es"} on ${named}.`,
-    why: "The Schema Builder cannot hold an index declared in `indexes`. The next schema sync would drop it, and entries that repeat those values would be accepted from then on.",
+    why: "The Schema Builder cannot hold an index declared in `indexes`. The next schema sync would drop it, and entries that repeat those values would be accepted from then on, unless another unique field refuses them.",
     next: `Keep '${slug}' in code, or give the rule up first: take it out of \`indexes\` in \`nextly.config.ts\` (an index on one field can be \`unique: true\` on that field instead), then demote.`,
   });
 }

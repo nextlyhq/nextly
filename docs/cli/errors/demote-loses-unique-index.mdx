@@ -7,7 +7,7 @@ description: "`db:sync --demote` names a collection with a unique index declared
 
 `db:sync --demote` names a collection with a unique index declared in `indexes`, which the Schema Builder cannot hold.
 
-`nextly db:sync --demote <slug>` hands a collection to the Schema Builder, whose record holds no index declared in `indexes`. The next schema sync would drop the index, and entries that repeat its values would be accepted from then on. Nothing was changed.
+`nextly db:sync --demote <slug>` hands a collection to the Schema Builder, whose record holds no index declared in `indexes`. The next schema sync would drop the index, and entries that repeat its values would be accepted from then on, unless another unique field refuses them. Nothing was changed.
 
 A collection demoted before this check, and not synced since, is not protected: its next schema sync drops the index. So does a Schema Builder save, of another collection too.
 
@@ -20,7 +20,7 @@ A collection demoted before this check, and not synced since, is not protected: 
 
 ```text
 ✗ Collection 'posts' was not demoted: it would lose its unique index on (tenant, code).
-  Why:  The Schema Builder cannot hold an index declared in `indexes`. The next schema sync would drop it, and entries that repeat those values would be accepted from then on.
+  Why:  The Schema Builder cannot hold an index declared in `indexes`. The next schema sync would drop it, and entries that repeat those values would be accepted from then on, unless another unique field refuses them.
   Next: Keep 'posts' in code, or give the rule up first: take it out of `indexes` in `nextly.config.ts` (an index on one field can be `unique: true` on that field instead), then demote.
   Docs: https://nextlyhq.com/docs/cli/errors/demote-loses-unique-index  (DEMOTE_LOSES_UNIQUE_INDEX)
 ```

@@ -429,8 +429,9 @@ async function writeDemotedRecord(
 
 /**
  * What `db:sync --demote <slug> --dry-run` reports: the registry write the real demote makes, from
- * the same record it reads, with the refusals it asks along the way, in its order (a field-group
- * storage migration in flight, then what the registry refuses the write on), and nothing asked,
+ * the same record it reads, with the refusals it asks along the way, in its order (a unique
+ * index it would lose, a field-group storage migration in flight, then what the registry refuses
+ * the write on), and nothing asked,
  * locked or written.
  */
 export async function previewDemotion(args: {
@@ -443,12 +444,12 @@ export async function previewDemotion(args: {
     const current = await args.registry.getCollectionBySlug(
       args.collection.slug
     );
+    assertNoUniqueIndexLost(args.collection, current, args.adapter.dialect);
     await assertNoMigrationInFlight({
       adapter: args.adapter,
       logger: args.logger,
       action: "db:sync --demote",
     });
-    assertNoUniqueIndexLost(args.collection, current, args.adapter.dialect);
     const write = demotedWrite(args.collection, current);
     await assertDemotedWriteAllowed(args.registry, write);
     const note = droppedOnDemoteNote(args.collection, args.adapter.dialect);

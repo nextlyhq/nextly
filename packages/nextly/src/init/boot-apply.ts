@@ -664,14 +664,23 @@ async function applyPendingMigrations(label: string): Promise<number> {
     const { compileExtensionSchema } = await import(
       "../domains/schema/extension/publish"
     );
-    const extensionSchema = await compileExtensionSchema({
+    const compileInput = {
       dialect: drizzleAdapter.dialect,
       plugins: configResult.config.plugins ?? [],
       config: configResult.config,
       // The connected server's limits: refuse constructs it cannot hold
       // before any boot migration runs.
       server: drizzleAdapter.getCapabilities(),
-      logger: { warn: m => consoleLogger.warn(m) },
+      logger: { warn: (m: string) => consoleLogger.warn(m) },
+    };
+    // A collection handed to the Schema Builder as its record has it, as this
+    // start's registration compiled its hooks.
+    const { developmentStartConfig } = await import(
+      "../di/development-start-hooks"
+    );
+    const extensionSchema = await compileExtensionSchema({
+      ...compileInput,
+      config: await developmentStartConfig(drizzleAdapter, compileInput),
     });
     const result = await migrateAtDevBoot({
       migrateCore,
