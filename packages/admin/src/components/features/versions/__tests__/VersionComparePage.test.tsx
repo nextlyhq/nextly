@@ -424,6 +424,49 @@ describe("VersionComparePage — choosing the two versions", () => {
     );
   });
 
+  it("keeps the older version the page resolved when the address named none", async () => {
+    // The ordinary route names no pair: the page resolves one (here 9 and
+    // 10), and the Compare picker shows its older side, so choosing another
+    // version in "with" keeps that side rather than moving both.
+    useVersionsMock.mockReturnValue(listing([row(10), row(9), row(8)]));
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+      />
+    );
+    expect(screen.getByRole("combobox", { name: "Compare" })).toHaveValue("9");
+
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "with" }),
+      "8"
+    );
+    expect(navigateMock).toHaveBeenCalledWith(
+      versionsHref(collection("e1"), { from: 9, to: 8 })
+    );
+  });
+
+  it("asks for the version before when the newer one chosen is the older one shown", async () => {
+    // A version compared with itself says nothing.
+    useVersionsMock.mockReturnValue(listing([row(10), row(9), row(8)]));
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+      />
+    );
+
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "with" }),
+      "9"
+    );
+    expect(navigateMock).toHaveBeenCalledWith(
+      versionsHref(collection("e1"), { from: "previous", to: 9 })
+    );
+  });
+
   it("swaps the two versions, so the change reads the other way", async () => {
     render(
       <VersionComparePage

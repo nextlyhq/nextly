@@ -550,21 +550,24 @@ export function VersionComparePage({
   const chooseTo = useCallback(
     (versionNo: number) => {
       const chosen = metaOf(versionNo);
-      const olderMeta = typeof from === "number" ? metaOf(from) : undefined;
+      // The older side as the Compare picker shows it: the address's, or the
+      // one the page resolved where the address named none.
+      const older = from ?? shown?.from;
+      const olderMeta = typeof older === "number" ? metaOf(older) : undefined;
       const nextFrom: ComparisonFrom =
-        typeof from === "string"
-          ? from
-          : typeof from === "number" &&
+        typeof older === "string"
+          ? older
+          : typeof older === "number" &&
+              older !== versionNo &&
               olderMeta !== undefined &&
               olderMeta.locale === (chosen?.locale ?? null)
-            ? from
+            ? older
             : "previous";
       // Compared as the VALUES that decide the comparison, not as URL text:
       // `navigateTo` skips a push only for an identical path, which a target
       // carrying a query never is, so choosing what is already on screen
       // would stack copies of one comparison for Back to walk through.
-      if (versionNo === (shown?.to ?? to) && nextFrom === (from ?? shown?.from))
-        return;
+      if (versionNo === (shown?.to ?? to) && nextFrom === older) return;
       // The language comes from the chosen version, so choosing one in
       // another language moves the page to that language.
       navigateTo(
@@ -623,12 +626,18 @@ export function VersionComparePage({
           window.location.origin
         ).href
       : window.location.href;
+    const failed = () =>
+      toast.error("Couldn't copy the link. Copy it from the address bar.");
+    // A page served without HTTPS, or a browser that withholds it, has no
+    // clipboard to write to: said, rather than a press that does nothing.
+    if (typeof navigator.clipboard?.writeText !== "function") {
+      failed();
+      return;
+    }
     void navigator.clipboard
-      ?.writeText(href)
+      .writeText(href)
       .then(() => toast.success("Link copied. It opens this comparison."))
-      .catch(() =>
-        toast.error("Couldn't copy the link. Copy it from the address bar.")
-      );
+      .catch(failed);
   }, [shown, scope, seen, locale, view]);
 
   // Hands the version on screen to the editor, as "Restore…" does: every

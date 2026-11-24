@@ -204,6 +204,20 @@ describe("RestoreFieldsDialog", () => {
     ).toBeInTheDocument();
   });
 
+  it("says a restore of shared fields alone changes no language's own fields", () => {
+    renderDialog({
+      language: "Spanish",
+      rows: [{ ...rows[1]!, shared: true }],
+    });
+
+    expect(
+      screen.getByText(
+        "Changes 1 shared field, which changes every language. Spanish's own fields stay as they are."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Changes Spanish/)).toBeNull();
+  });
+
   it("says what a restore does and does not do, under the list", () => {
     renderDialog();
 

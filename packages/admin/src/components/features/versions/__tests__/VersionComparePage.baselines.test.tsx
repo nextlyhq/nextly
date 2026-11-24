@@ -7,7 +7,8 @@
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, waitFor } from "@admin/__tests__/utils";
+import { toast } from "@admin/components/ui";
 
 const {
   useVersionsMock,
@@ -416,6 +417,30 @@ describe("VersionComparePage, its choices", () => {
     expect(copied.pathname).toBe("/admin/collections/posts/e1/versions");
     expect(copied.searchParams.get("from")).toBe("3");
     expect(copied.searchParams.get("to")).toBe("5");
+  });
+
+  it("says where to copy the link from when the browser offers no clipboard", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    const error = vi.spyOn(toast, "error");
+    try {
+      renderPage({ from: 4, to: 5 });
+      // Not through userEvent, which would put its own clipboard back.
+      screen.getByRole("button", { name: "Copy link" }).click();
+
+      await waitFor(() =>
+        expect(error).toHaveBeenCalledWith(
+          "Couldn't copy the link. Copy it from the address bar."
+        )
+      );
+    } finally {
+      error.mockRestore();
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
   });
 
   it("names the version it restores", () => {

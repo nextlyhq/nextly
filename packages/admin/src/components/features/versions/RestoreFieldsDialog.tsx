@@ -77,15 +77,22 @@ function placedLabel(row: RestoreRow): string {
 }
 
 /**
- * What the restore changes, from the fields chosen: the language, and how
- * many shared fields, which change every language.
+ * What the restore changes, from the fields chosen: the language's own
+ * fields, the shared ones, which change every language, or both.
  */
-function scopeLine(language: string, sharedChosen: number): string {
+function scopeLine(
+  language: string,
+  translatedChosen: number,
+  sharedChosen: number
+): string {
   if (sharedChosen === 0) {
     return `Changes ${language} only. Other languages and shared fields stay as they are.`;
   }
   const fields = sharedChosen === 1 ? "field" : "fields";
   const verb = sharedChosen === 1 ? "changes" : "change";
+  if (translatedChosen === 0) {
+    return `Changes ${sharedChosen} shared ${fields}, which ${verb} every language. ${language}'s own fields stay as they are.`;
+  }
   return `Changes ${language} and ${sharedChosen} shared ${fields}, which ${verb} every language.`;
 }
 
@@ -253,7 +260,7 @@ export function RestoreFieldsDialog({
           {language ? (
             <li className="flex items-start gap-2">
               <Globe className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-              {scopeLine(language, sharedChosen)}
+              {scopeLine(language, count - sharedChosen, sharedChosen)}
             </li>
           ) : null}
           <li className="flex items-start gap-2">
