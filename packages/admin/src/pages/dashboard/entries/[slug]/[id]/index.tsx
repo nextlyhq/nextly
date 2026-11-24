@@ -33,7 +33,10 @@ import {
   UnsavedWorkProvider,
   useUnsavedWork,
 } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
-import { useDocumentPublishing } from "@admin/components/features/entries/publish-parts/useDocumentPublishing";
+import {
+  pageActions,
+  useDocumentPublishing,
+} from "@admin/components/features/entries/publish-parts/useDocumentPublishing";
 import {
   isRemovedFromCode,
   removedEntityHasNoTable,
@@ -904,18 +907,7 @@ export default function EditEntryPage({
             documentActions={
               removedFromCode
                 ? []
-                : [
-                    ...(publishing.contributed === null
-                      ? []
-                      : [publishing.contributed]),
-                    ...(schedule.contributed === null
-                      ? []
-                      : [schedule.contributed]),
-                    ...(publishing.withoutReview === null
-                      ? []
-                      : [publishing.withoutReview]),
-                    ...(pin === null ? [] : [pin]),
-                  ]
+                : pageActions(publishing, schedule.contributed, pin)
             }
             locale={locale}
             onLocaleChange={changeLocale}

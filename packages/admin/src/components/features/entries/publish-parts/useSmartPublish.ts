@@ -75,6 +75,33 @@ async function describeEveryLanguage(
   }
 }
 
+/**
+ * Whether the shared fields hold changes nobody has published: stored ones, or unsaved edits to
+ * them on a document somebody reads.
+ */
+function sharedChangesHeld(
+  host: SmartPublishHost,
+  held: { sharedPending: boolean; live: boolean; unsaved: boolean }
+): boolean {
+  return (
+    held.sharedPending || (held.live && held.unsaved && host.sharedEdited())
+  );
+}
+
+/**
+ * Publishes the language on screen in one click. `onPublished` is told only where it was published
+ * and the language is still on screen: what it is told is about that language.
+ */
+async function publishOnScreen(
+  host: SmartPublishHost,
+  stillHere: () => boolean,
+  onPublished: () => void
+): Promise<SubmitOutcome> {
+  const outcome = await host.publish();
+  if (outcome.ok && stillHere()) onPublished();
+  return outcome;
+}
+
 export interface UseSmartPublishOptions {
   /** The document; absent while the page is loading. */
   target: PartsTarget | undefined;
@@ -124,36 +151,35 @@ export function useSmartPublish({
         return host.publish();
       }
       const startedIn = visit.current;
+      const stillHere = () => visit.current === startedIn;
       const everyLanguage = await describeEveryLanguage(target);
       // The form holds another document's or language's values by now: storing or publishing
       // them would write them into the one the press was for.
-      if (visit.current !== startedIn) return submitMoved;
+      if (!stillHere()) return submitMoved;
 
       const unsaved = host.unsaved();
       const path = smartPublishPath({
         languages,
         currentLocale,
-        sharedPending:
-          sharedPending || (live && unsaved && host.sharedEdited()),
+        sharedPending: sharedChangesHeld(host, {
+          sharedPending,
+          live,
+          unsaved,
+        }),
         everyLanguage,
       });
       // Unsaved work a document can only store by publishing it (a live one that keeps no
       // drafts) is published as it always was: there is no stored change to choose from.
       if (path.kind === "one-click" || (unsaved && host.save === undefined)) {
-        const outcome = await host.publish();
-        // Said only where it was published: the notice is about the language on screen.
-        if (outcome.ok && visit.current === startedIn) {
-          onPublished({ published: [currentLocale] });
-        }
-        return outcome;
+        return publishOnScreen(host, stillHere, () =>
+          onPublished({ published: [currentLocale] })
+        );
       }
 
-      if (unsaved) {
-        const saved = await host.save?.();
-        if (saved?.ok === false) return saved;
-      }
+      const saved = unsaved ? await host.save?.() : undefined;
+      if (saved?.ok === false) return saved;
       // Moved while it was stored: the choice is not opened over another document or language.
-      if (visit.current === startedIn) {
+      if (stillHere()) {
         open(
           defaultPartsChoice({
             languages,

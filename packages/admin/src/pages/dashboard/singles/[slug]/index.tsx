@@ -27,7 +27,10 @@ import type { DocumentViewMount } from "@admin/components/features/entries/Entry
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
 import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
-import { useDocumentPublishing } from "@admin/components/features/entries/publish-parts/useDocumentPublishing";
+import {
+  pageActions,
+  useDocumentPublishing,
+} from "@admin/components/features/entries/publish-parts/useDocumentPublishing";
 import {
   isRemovedFromCode,
   removedEntityHasNoTable,
@@ -458,18 +461,7 @@ export default function SingleEditPage({
             documentActions={
               removedFromCode
                 ? []
-                : [
-                    ...(publishing.contributed === null
-                      ? []
-                      : [publishing.contributed]),
-                    ...(schedule.contributed === null
-                      ? []
-                      : [schedule.contributed]),
-                    ...(publishing.withoutReview === null
-                      ? []
-                      : [publishing.withoutReview]),
-                    ...(pin === null ? [] : [pin]),
-                  ]
+                : pageActions(publishing, schedule.contributed, pin)
             }
             onSubmit={handleSubmit}
             isSubmitting={isUpdating}

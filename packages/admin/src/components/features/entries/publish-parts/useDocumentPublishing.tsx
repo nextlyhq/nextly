@@ -14,6 +14,7 @@
 
 import type { ReactNode } from "react";
 
+import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
 import type { PartsTarget } from "@admin/hooks/queries/usePublishParts";
 import type { ShownCopy } from "@admin/lib/document-version";
 import { entryApi } from "@admin/services/entryApi";
@@ -99,6 +100,23 @@ export interface DocumentPublishing
   smartPublish: SmartPublish | undefined;
   /** The notice after a publish, drawn under the editor's header. */
   notice: ReactNode;
+}
+
+/**
+ * What a page contributes to its editor's actions, in the order the menu offers them: choosing
+ * what to publish, then scheduling, then publishing past the review, then pinning.
+ */
+export function pageActions(
+  publishing: Pick<DocumentPublishing, "contributed" | "withoutReview">,
+  schedule: ContributedAction | null,
+  pin: ContributedAction | null
+): ContributedAction[] {
+  return [
+    publishing.contributed,
+    schedule,
+    publishing.withoutReview,
+    pin,
+  ].filter((action): action is ContributedAction => action !== null);
 }
 
 export function useDocumentPublishing({

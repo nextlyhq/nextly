@@ -213,6 +213,20 @@ interface DescribedParts {
   error: Error | null;
 }
 
+/** Whether what publishing every language would do is asked: for a publish among languages. */
+function asksOfEveryLanguage({
+  open,
+  direction,
+  languages,
+}: Pick<PublishPartsDialogProps, "open" | "direction" | "languages">): boolean {
+  return open && direction === "publish" && languages.length > 0;
+}
+
+/** Whether a query asked has no answer yet, or is asking again. */
+function beingAsked(query: { isPending: boolean; isFetching: boolean }) {
+  return query.isPending || query.isFetching;
+}
+
 /**
  * The request the choice makes, and what the server says of it. For a publish, what publishing
  * every language does is asked first, since it says which parts have anything to publish; where
@@ -234,14 +248,14 @@ function useDescribedParts({
   sharedPending: boolean | undefined;
 }): DescribedParts {
   const publishing = direction === "publish";
-  const asksEvery = open && publishing && languages.length > 0;
+  const asksEvery = asksOfEveryLanguage({ open, direction, languages });
   const every = usePublishPartsDescription({
     target,
     direction,
     request: EVERY_LANGUAGE_REQUEST,
     enabled: asksEvery,
   });
-  const settling = asksEvery && (every.isPending || every.isFetching);
+  const settling = asksEvery && beingAsked(every);
   // Where a language's change holds the shared values too, the editor's read does not say they
   // changed; the server does, refusing the language without them. From then on they are a choice
   // to make for as long as the dialog is open.
