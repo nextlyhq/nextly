@@ -593,21 +593,24 @@ describe.each(getConfiguredTestDialects())(
     const LINKS = { ...LINK, hasMany: true };
 
     /**
-     * A Single's settings save that carries values (here, how a relationship keeps its links, which
-     * the service plans from the live table) keeps the service's own statements, which the writer
-     * runs inside its step: a failure after the table changed keeps the files, recorded applied
-     * nowhere.
+     * A Single's settings save that carries values (here, the default its one row is filled with in
+     * a field new to its table) keeps the service's own statements, which the writer runs inside its
+     * step: a failure after the table changed keeps the files, recorded applied nowhere.
      */
-    async function changeLinks(t: TestNextly) {
+    async function fillsItsRow(t: TestNextly) {
       await dispatchSingles(
         "createSingle",
         {},
         {
           slug: "notice",
           label: "Notice",
-          fields: [{ name: "heading", type: "text" }, LINK],
+          fields: [{ name: "heading", type: "text" }],
         }
       );
+      await t.nextly.updateSingle({
+        slug: "notice",
+        data: { heading: "Hello", _overwrite: true },
+      } as never);
       return () =>
         dispatchSingles(
           "updateSingleSchema",
@@ -615,8 +618,12 @@ describe.each(getConfiguredTestDialects())(
           {
             fields: [
               { name: "heading", type: "text" },
-              LINKS,
-              { name: "body", type: "text" },
+              {
+                name: "rank",
+                type: "number",
+                required: true,
+                defaultValue: 1,
+              },
             ],
           }
         );
@@ -626,7 +633,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("keeps a value-carrying Single update's files, recorded nowhere, when its companion fails to follow", async () => {
       const t = await boot({ translated: true });
-      const save = await changeLinks(t);
+      const save = await fillsItsRow(t);
 
       companionFails.single = true;
       const thrown = await save().then(
@@ -647,7 +654,7 @@ describe.each(getConfiguredTestDialects())(
     // drift a hand-added column makes is refused before they run, naming the column.
     it("refuses a value-carrying Single update over a column the history does not record, naming it, and changes nothing", async () => {
       const t = await boot();
-      const save = await changeLinks(t);
+      const save = await fillsItsRow(t);
       await t.adapter.executeQuery(
         `ALTER TABLE single_notice ADD COLUMN extra text`
       );
@@ -682,7 +689,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("records a value-carrying Single update's files applied only once its row is written", async () => {
       const t = await boot({ translated: true });
-      const save = await changeLinks(t);
+      const save = await fillsItsRow(t);
       const rowWrite = vi
         .spyOn(SingleRegistryService.prototype, "updateSingle")
         .mockRejectedValueOnce(new Error("the row could not be written"));

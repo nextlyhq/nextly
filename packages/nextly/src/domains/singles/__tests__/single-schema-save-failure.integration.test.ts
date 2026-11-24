@@ -282,15 +282,6 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
   // push lands, through the service the dispatcher resolves: the writer's own comparison of the
   // table with the file then refuses, as it would after any change the file does not describe.
   it("answers that it failed, naming the kept file and the steps that finish it, when the change landed but could not be recorded applied", async () => {
-    // How a relationship keeps its links changes with the field's type, so the service's own
-    // statements apply the save: a save of the type change alone converts its values in its file.
-    const link = { name: "rel", type: "relationship", relationTo: "users" };
-    const added = await attempt([
-      { name: "count", type: "text" },
-      { name: "score", type: "text" },
-      link,
-    ]);
-    expect(added.thrown, "the relationship is added").toBeUndefined();
     const before = await recorded();
     const folderBefore = await migrationFiles();
     // The running server's shape of the table, which reads and writes use until a restart.
@@ -332,7 +323,9 @@ describeEachDialect("a Single schema save whose statements fail", dialect => {
     const { thrown, said } = await attempt([
       { name: "count", type: "text" },
       { name: "score", type: "number" },
-      { ...link, hasMany: true },
+      // The row filled in a field new to its table, so the service's own statements apply the save:
+      // a save of the type change alone converts its values in its file.
+      { name: "rank", type: "number", required: true, defaultValue: 1 },
     ]);
 
     // Control: the column was added once the change had landed.

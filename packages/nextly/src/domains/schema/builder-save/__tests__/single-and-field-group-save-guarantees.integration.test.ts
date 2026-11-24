@@ -48,6 +48,7 @@ import { setNonInteractive } from "../../migrate/can-prompt";
 import { NO_CONSENT } from "../../migrate/data-loss-consent";
 import { RealPreCleanupExecutor } from "../../pipeline/pre-cleanup/executor";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
+import { rewritesValuesOn } from "../../value-conversion/type-change/field-type-changes";
 
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
 // `cli/program` imports every command; the commands driven here are handed their context.
@@ -906,7 +907,14 @@ describe.each(getConfiguredTestDialects())(
               type: "relationship",
               relationTo: "users",
             };
-            await kind.create([text("heading"), link]);
+            // Where no road rewrites values (MySQL) a type change keeps the push; elsewhere the save's
+            // file converts it, and how a relationship keeps its links is what keeps the push.
+            const converts = rewritesValuesOn(
+              adapterOf(t).getCapabilities().dialect
+            );
+            await kind.create(
+              converts ? [text("heading"), link] : [text("heading")]
+            );
             const filesBefore = migrationFiles();
             const definitionOf = () =>
               readTableDefinition(
@@ -940,11 +948,19 @@ describe.each(getConfiguredTestDialects())(
                 }
               });
 
-            // How a relationship keeps its links, which keeps the push, and a field added: two
-            // statements.
-            const links = { ...link, hasMany: true };
+            // What keeps the push, and fields added: at least two statements.
             const refused: unknown = await kind
-              .change(t, [text("heading"), links, text("body")])
+              .change(
+                t,
+                converts
+                  ? [
+                      text("heading"),
+                      { ...link, hasMany: true } as Field,
+                      text("body"),
+                      text("more"),
+                    ]
+                  : [{ name: "heading", type: "number" }, text("body")]
+              )
               .then(
                 () => undefined,
                 (error: unknown) => error
