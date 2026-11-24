@@ -176,6 +176,9 @@ export async function holdEntityOnPostgresSession(
   };
 }
 
+/** SQLite's busy timeout where a site sets none, as its adapter opens the database. */
+const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+
 /** One entity's hold in this process: the writes sharing it, and whether a save holds it. */
 interface ProcessHold {
   sharing: number;
@@ -183,6 +186,8 @@ interface ProcessHold {
   /** Saves waiting for it: while one waits, a new write waits behind it. */
   saving: number;
   waiting: Array<() => void>;
+  /** The database's busy timeout as the latest save found it: how long a write waits for one. */
+  busyTimeoutMs: number;
 }
 
 /** The holds of the entities written through each adapter in this process, by `entityHoldKey`. */
@@ -197,7 +202,13 @@ function processHoldOf(owner: object, entity: EntityRef): ProcessHold {
   const key = entityHoldKey(entity);
   let hold = holds.get(key);
   if (hold === undefined) {
-    hold = { sharing: 0, held: false, saving: 0, waiting: [] };
+    hold = {
+      sharing: 0,
+      held: false,
+      saving: 0,
+      waiting: [],
+      busyTimeoutMs: SQLITE_BUSY_TIMEOUT_MS,
+    };
     holds.set(key, hold);
   }
   return hold;
@@ -233,19 +244,28 @@ async function waitInProcess(
  * An entry write's share of `entity`'s hold in this process, through `owner` (the adapter it
  * writes through), on SQLite: taken BEFORE the write's transaction opens, since every transaction
  * of the process waits its turn on one connection and a save holding the entity needs turns of its
- * own to finish. Waits while a save holds it or waits for it, at most `waitMs`, then refused.
+ * own to finish. Waits while a save holds it or waits for it, as long as a write waits for a busy
+ * SQLite file, which is the database's busy timeout, then refused as such a write is: the database
+ * busy, nothing written. `waitOf` says how much of that time this write has left, all of it where it
+ * is left out.
  */
 export async function shareEntityInProcess(
   owner: object,
   entity: EntityRef,
-  waitMs = ENTITY_HOLD_WAIT_MS
+  waitOf: (busyTimeoutMs: number) => number = whole => whole
 ): Promise<() => void> {
   const hold = processHoldOf(owner, entity);
   await waitInProcess(
     hold,
     () => !hold.held && hold.saving === 0,
-    () => entityBeingChanged(entity, "entity-share-timeout"),
-    waitMs
+    () =>
+      NextlyError.databaseBusy({
+        logContext: {
+          reason: "entity-share-timeout",
+          entity: entityHoldKey(entity),
+        },
+      }),
+    waitOf(hold.busyTimeoutMs)
   );
   hold.sharing += 1;
   let released = false;
@@ -276,15 +296,21 @@ export function refuseWhileHeldInProcess(
 /**
  * A deleting save's hold of `entity` in this process, through `owner`, on SQLite: exclusive, taken
  * once the writes sharing it have ended (new ones wait behind it), at most `waitMs`, then refused
- * before anything changes. Held until `release`.
+ * before anything changes. Held until `release`. `busyTimeoutMs` is the database's busy timeout as
+ * the save finds it, before its own statements bound their tries by another: how long a write waits
+ * for this save.
  */
 export async function holdEntityInProcess(
   owner: object,
   entity: EntityRef,
-  waitMs = ENTITY_HOLD_WAIT_MS
+  {
+    waitMs = ENTITY_HOLD_WAIT_MS,
+    busyTimeoutMs = SQLITE_BUSY_TIMEOUT_MS,
+  }: { waitMs?: number; busyTimeoutMs?: number } = {}
 ): Promise<() => void> {
   const hold = processHoldOf(owner, entity);
   hold.saving += 1;
+  hold.busyTimeoutMs = busyTimeoutMs;
   try {
     await waitInProcess(
       hold,

@@ -23210,12 +23210,11 @@ export class CollectionMutationService extends BaseService {
     // flow already opened, the turn is held, and the hold refuses rather than waits.
     const sharesFirst =
       this.dialect === "sqlite" && !this.adapter.transactionOpenInFlow();
-    const waitMs = holdWaitOf(loaded);
     const release = sharesFirst
       ? await shareEntityInProcess(
           this.adapter,
           { kind: "collection", slug: collectionName },
-          waitMs
+          busyTimeoutMs => holdWaitOf(loaded, busyTimeoutMs)
         )
       : undefined;
     // On PostgreSQL a write whose transaction is its own gives it up where a save holds the
@@ -23247,7 +23246,7 @@ export class CollectionMutationService extends BaseService {
           }
         }, options);
         return made.outcome;
-      }, waitMs);
+      }, holdWaitOf(loaded));
     } finally {
       release?.();
     }

@@ -154,8 +154,12 @@ export function loadedRegistryRowOf(
 }
 
 /** How long a write made from `loaded` may wait for its hold: one time over all its tries. */
-export function holdWaitOf(loaded: LoadedRegistryRow | undefined): number {
-  return loaded?.tries?.waitLeft(ENTITY_HOLD_WAIT_MS) ?? ENTITY_HOLD_WAIT_MS;
+export function holdWaitOf(
+  loaded: LoadedRegistryRow | undefined,
+  /** The whole of that time: on SQLite, the database's busy timeout. */
+  whole = ENTITY_HOLD_WAIT_MS
+): number {
+  return loaded?.tries?.waitLeft(whole) ?? whole;
 }
 
 /**

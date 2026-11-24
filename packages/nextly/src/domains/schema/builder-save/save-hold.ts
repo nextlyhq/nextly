@@ -74,6 +74,17 @@ export function saveHoldScope(logger: {
   };
 }
 
+/**
+ * SQLite's busy timeout as the connection has it: how long a write waits for this save, as it waits
+ * for any other hold of the file. Read before the save's own tries bound it by theirs.
+ */
+async function busyTimeoutOf(adapter: DrizzleAdapter): Promise<number> {
+  const [row] = await adapter.executeQuery<Record<string, unknown>>(
+    "PRAGMA busy_timeout"
+  );
+  return Number(Object.values(row ?? {})[0] ?? 0);
+}
+
 /** Collection `slug`'s hold for a save through `adapter`, and what lets it go. */
 async function takeSaveHold(
   adapter: DrizzleAdapter,
@@ -81,10 +92,11 @@ async function takeSaveHold(
 ): Promise<() => Promise<void>> {
   const dialect = adapter.getCapabilities().dialect;
   if (dialect === "sqlite") {
-    const release = await holdEntityInProcess(adapter, {
-      kind: "collection",
-      slug,
-    });
+    const release = await holdEntityInProcess(
+      adapter,
+      { kind: "collection", slug },
+      { busyTimeoutMs: await busyTimeoutOf(adapter) }
+    );
     return () => Promise.resolve(release());
   }
   const { session, close } =
