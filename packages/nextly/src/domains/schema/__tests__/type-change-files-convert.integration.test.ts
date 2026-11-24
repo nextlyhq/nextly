@@ -263,6 +263,77 @@ async function read(
   );
 }
 
+/** The Builder's answer that `v` is renamed to `w`, sent with a save. */
+const RENAMED_TO_W = {
+  renameResolutions: [
+    {
+      tableName: "dc_tcf_posts",
+      fromColumn: "v",
+      toColumn: "w",
+      choice: "rename",
+    },
+  ],
+};
+
+/** A statement on `t`'s database, outside any save. */
+async function exec<R>(t: TestNextly, statement: string): Promise<R[]> {
+  return (
+    t.adapter as unknown as { executeQuery<T>(s: string): Promise<T[]> }
+  ).executeQuery<R>(statement);
+}
+
+/** Whether `column` of the entries' table takes a null, as the database defines it. */
+async function takesNull(t: TestNextly, column: string): Promise<boolean> {
+  const postgres =
+    (t.adapter as unknown as DrizzleAdapter).getCapabilities().dialect ===
+    "postgresql";
+  const [row] = await exec<{ n: unknown }>(
+    t,
+    postgres
+      ? `SELECT is_nullable AS n FROM information_schema.columns WHERE table_name = 'dc_tcf_posts' AND column_name = '${column}'`
+      : `SELECT "notnull" AS n FROM pragma_table_info('dc_tcf_posts') WHERE name = '${column}'`
+  );
+  // The column is there: an absent one would read as one that takes a null.
+  expect(row).toBeDefined();
+  return postgres ? row?.n === "YES" : Number(row?.n) === 0;
+}
+
+/** The entries' table's columns, on SQLite. */
+async function columnNames(t: TestNextly): Promise<string[]> {
+  return (
+    await exec<{ name: string }>(
+      t,
+      `SELECT name FROM pragma_table_info('dc_tcf_posts')`
+    )
+  ).map(column => column.name);
+}
+
+/** On SQLite, the entries' table, its rows kept, made again with `v`'s definition as `columns`. */
+async function remadeWith(t: TestNextly, columns: string): Promise<void> {
+  const [made] = await exec<{ sql: string }>(
+    t,
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'dc_tcf_posts'`
+  );
+  const create = made?.sql ?? "";
+  const edited = create.replace(/["`]?v["`]?\s+text[^,)]*/i, columns);
+  // An edit that changes nothing would leave the fixture without what it is for.
+  expect(edited).not.toBe(create);
+  const indexes = await exec<{ name: string; sql: string | null }>(
+    t,
+    `SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'dc_tcf_posts' AND sql IS NOT NULL`
+  );
+  const names = (await columnNames(t)).join(", ");
+  await exec(t, `ALTER TABLE dc_tcf_posts RENAME TO dc_tcf_posts_was`);
+  for (const index of indexes) await exec(t, `DROP INDEX "${index.name}"`);
+  await exec(t, edited);
+  await exec(
+    t,
+    `INSERT INTO dc_tcf_posts (${names}) SELECT ${names} FROM dc_tcf_posts_was`
+  );
+  await exec(t, `DROP TABLE dc_tcf_posts_was`);
+  for (const index of indexes) await exec(t, index.sql ?? "");
+}
+
 /** `v` of each entry by title, as the table holds it. */
 async function storedV(t: TestNextly): Promise<Record<string, unknown>> {
   const rows = await (
@@ -547,6 +618,78 @@ describe.each(getConfiguredTestDialects())(
 
         // The registry still names the field `w`, whose column is `v` again: read from the table.
         expect(await storedV(second)).toEqual({ whole: "34" });
+      }
+    );
+
+    // A renamed column's file states only its rename, so on SQLite nothing but the conversion gives it
+    // its new type: a column of that type takes its place, which takes no constraint with it. One
+    // that is NOT NULL is refused, naming it, rather than left taking no value; on PostgreSQL the
+    // column changes in place and stays NOT NULL.
+    converts(
+      "keeps a required field required when one save renames it and changes its type, or refuses it",
+      async () => {
+        const t = await boot(dialect);
+        await createPosts([{ name: "v", type: "text", required: true }]);
+        await write(t, "kept", { v: "12" });
+        const written = await filesWritten();
+
+        const outcome = await save(
+          t,
+          [
+            {
+              name: "w",
+              type: "number",
+              required: true,
+              options: { format: "float" },
+            },
+          ],
+          RENAMED_TO_W
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+        if (dialect === "postgresql") {
+          expect(outcome).toBeUndefined();
+          expect(await takesNull(t, "w")).toBe(false);
+          expect(await read(t, "w")).toEqual({ kept: 12 });
+          return;
+        }
+        expect(outcome).toMatchObject(refusedSaying("NOT NULL"));
+        expect(await takesNull(t, "v")).toBe(false);
+        expect(await filesWritten()).toBe(written);
+        expect(await read(t)).toEqual({ kept: "12" });
+      }
+    );
+
+    // What else the column's own definition holds goes with the column too, or stops the statement
+    // that drops it: each is refused by name before any file is written.
+    it.runIf(dialect === "sqlite").each([
+      ["a default", "v text DEFAULT 'none'", "has a default"],
+      ["a CHECK", "v text CHECK (length(v) < 9)", "CHECK"],
+      ["a named CHECK", "v text CONSTRAINT v_short CHECK (length(v) < 9)", "v_short"],
+      ["a UNIQUE", "v text UNIQUE", "UNIQUE"],
+      ["a foreign key", "v text REFERENCES dc_tcf_posts(id)", "foreign key"],
+      ["a generated column of it", "v text, g text AS (v || 'x')", "generated"],
+    ])(
+      "refuses to replace a renamed column carrying %s, naming it, and changes nothing",
+      async (_, columns, says) => {
+        const t = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        await write(t, "kept", { v: null });
+        await remadeWith(t, columns);
+        const written = await filesWritten();
+
+        await expect(
+          save(
+            t,
+            [{ name: "w", type: "number", options: { format: "float" } }],
+            RENAMED_TO_W
+          )
+        ).rejects.toMatchObject(refusedSaying(says));
+
+        expect(await filesWritten()).toBe(written);
+        expect(await columnNames(t)).toContain("v");
       }
     );
 

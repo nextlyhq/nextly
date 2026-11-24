@@ -71,10 +71,18 @@ afterEach(async () => {
   }
 });
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
-  instance = await createTestNextly({ dialect, basePath, db: DB });
+async function boot(
+  dialect: TestDialect,
+  options: { localization?: { locales: string[]; defaultLocale: string } } = {}
+): Promise<TestNextly> {
+  instance = await createTestNextly({ dialect, basePath, db: DB, ...options });
   return instance;
 }
+
+/** Two languages, English the default. */
+const LANGUAGES = {
+  localization: { locales: ["en", "es"], defaultLocale: "en" },
+};
 
 async function filesWritten(): Promise<number> {
   return (await readdir(join(basePath, "migrations"))).filter(f =>
@@ -194,6 +202,72 @@ async function write(
     collection: SLUG,
     data: { title, ...data },
   } as never);
+}
+
+/** A collection with a translated field, so its translations table is there, and a shared `v`. */
+async function createTranslated(): Promise<void> {
+  await dispatchCollections(
+    {} as ServiceContainer,
+    "createCollection",
+    {},
+    {
+      name: SLUG,
+      label: "Post",
+      localized: true,
+      fields: [
+        { name: "s", type: "text", localized: true },
+        { name: "v", type: "text", localized: false },
+      ],
+    }
+  );
+}
+
+/** `createTranslated`'s fields with `v` translated and an email. */
+const JOINED = [
+  { name: "s", type: "text", localized: true },
+  { name: "v", type: "email", localized: true },
+];
+
+/** The migration files written, in the order they run. */
+async function filesNamed(): Promise<string[]> {
+  return (await readdir(join(basePath, "migrations")))
+    .filter(f => f.endsWith(".sql"))
+    .sort();
+}
+
+/** A statement on `t`'s database, outside any save. */
+async function exec<R>(t: TestNextly, statement: string): Promise<R[]> {
+  return (
+    t.adapter as unknown as { executeQuery<T>(s: string): Promise<T[]> }
+  ).executeQuery<R>(statement);
+}
+
+/** The columns of `table`, as the database names them. */
+async function columnsOf(t: TestNextly, table: string): Promise<string[]> {
+  const { dialect } = (t.adapter as unknown as DrizzleAdapter).getCapabilities();
+  const columns = await exec<{ name: string }>(
+    t,
+    dialect === "sqlite"
+      ? `SELECT name FROM pragma_table_info('${table}')`
+      : `SELECT column_name AS name FROM information_schema.columns WHERE table_name = '${table}'`
+  );
+  // An absent table would read as one with no column.
+  expect(columns.length).toBeGreaterThan(0);
+  return columns.map(column => column.name);
+}
+
+/** `v` of each entry, by title, as the entries' table or their translations table stores it. */
+async function storedIn(
+  t: TestNextly,
+  where: "main" | "locales"
+): Promise<Record<string, unknown>> {
+  const rows = await exec<{ title: string; v: unknown }>(
+    t,
+    where === "main"
+      ? `SELECT title, v FROM dc_${SLUG}`
+      : `SELECT m.title AS title, l.v AS v FROM dc_${SLUG}_locales l JOIN dc_${SLUG} m ON m.id = l._parent WHERE l._locale = 'en'`
+  );
+  return Object.fromEntries(rows.map(row => [row.title, row.v]));
 }
 
 /** `v` of each entry, by title, read through the Direct API. */
@@ -409,6 +483,87 @@ describe.each(getConfiguredTestDialects())(
         // The fixture's control: the translations table is there, with the column it had.
         expect(columns.map(c => c.name)).toContain("v");
         expect(columns.map(c => c.name)).not.toContain("w");
+      }
+    );
+
+    // The file that moves a field into the translations table copies its values there before the
+    // change's own file, which would convert them in a column it then drops: what could not convert
+    // would stay in the translations table as it was. Refused unless every value is one the new type
+    // keeps as it is, on a save and on a deploy, naming the two saves.
+    converts(
+      "refuses a value to convert or clear in a field that becomes translated in the same save, and changes nothing",
+      async () => {
+        const t = await boot(dialect, LANGUAGES);
+        await createTranslated();
+        await write(t, "kept", { v: "a@b.co" });
+        await write(t, "lost", { v: "zzz" });
+        const written = await filesWritten();
+
+        for (const extra of [
+          {},
+          {
+            confirmedTypeChanges: [
+              { field: "v", kept: 1, changed: 0, lost: 1 },
+            ],
+          },
+        ]) {
+          await expect(
+            save(t, JOINED, { localized: true, ...extra })
+          ).rejects.toMatchObject(
+            refusedSaying("becomes translated in the same save")
+          );
+        }
+
+        expect(await filesWritten()).toBe(written);
+        expect(await storedIn(t, "main")).toEqual({
+          kept: "a@b.co",
+          lost: "zzz",
+        });
+        expect(await columnsOf(t, `dc_${SLUG}_locales`)).not.toContain("v");
+      }
+    );
+
+    converts(
+      "refuses to deploy a value to convert or clear in a field that becomes translated in the same change, and changes nothing",
+      async () => {
+        const first = await boot(dialect, LANGUAGES);
+        await createTranslated();
+        const created = await filesWritten();
+        await write(first, "kept", { v: "a@b.co" });
+        // Every value is one an email keeps: the save goes ahead, and each stands in its language.
+        await save(first, JOINED, { localized: true });
+        expect(await storedIn(first, "locales")).toEqual({ kept: "a@b.co" });
+        // The control: the file that copies the values was written ahead of the change's own.
+        const [copies, own] = (await filesNamed()).slice(created);
+        expect([copies, own]).toEqual([
+          expect.stringContaining("joins_localization"),
+          expect.stringContaining("update"),
+        ]);
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect, LANGUAGES);
+        await migrateFolder(second, created);
+        await write(second, "address", { v: "c@d.co" });
+        await write(second, "word", { v: "zzz" });
+
+        await expect(
+          migrateFolder(
+            second,
+            undefined,
+            resolveDataLossConsent({ flag: true, env: {} })
+          )
+        ).rejects.toMatchObject(
+          refusedSaying("becomes translated in the same save")
+        );
+
+        expect(await storedIn(second, "main")).toEqual({
+          address: "c@d.co",
+          word: "zzz",
+        });
+        expect(await columnsOf(second, `dc_${SLUG}_locales`)).not.toContain(
+          "v"
+        );
       }
     );
 

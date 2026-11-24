@@ -772,6 +772,89 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // A required column refuses a cleared value until it is optional, which the file's own statement
+    // makes it only after the conversion: the clear waits for no constraint on any database, whether
+    // the column keeps its type (an email, kept as text) or takes another.
+    it.skipIf(!rewritesValuesOn(dialect)).each([
+      { to: "email", kept: "a@b.co", reads: "a@b.co", counts: [1, 0] },
+      { to: "number", kept: "12", reads: 12, counts: [0, 1] },
+    ])(
+      "clears a confirmed value of a required text becoming an optional $to",
+      async ({ to, kept, reads, counts: [keeps, changes] }) => {
+        const t = await boot([{ name: "v", type: "text", required: true }]);
+        await write(t, "kept", { v: kept });
+        await write(t, "lost", { v: "no such value" });
+
+        expect(
+          await save(t, [{ name: "v", type: to }], {
+            confirmedTypeChanges: [
+              { field: "v", kept: keeps, changed: changes, lost: 1 },
+            ],
+          })
+        ).toBeUndefined();
+
+        expect(await read(t, "v")).toEqual({ kept: reads, lost: null });
+        // The column takes no value now, as an optional field's does.
+        await write(t, "later", {});
+        expect((await read(t, "v")).later).toBeNull();
+      }
+    );
+
+    // A value the new type keeps as no value (a list's `[]`) empties its row as a cleared one does,
+    // with nothing lost to confirm: a required list keeps one it held while it was optional.
+    it.skipIf(!rewritesValuesOn(dialect))(
+      "writes a required list's empty list as no value of the optional text it becomes",
+      async () => {
+        const t = await boot([{ name: "v", type: "chips" }]);
+        await write(t, "one", { v: ["x"] });
+        await write(t, "none", { v: [] });
+        expect(
+          await save(t, [{ name: "v", type: "chips", required: true }])
+        ).toBeUndefined();
+        // The fixture's control: the empty list is stored, under a column that takes no null.
+        expect((await stored(t)).none).not.toBeNull();
+
+        expect(await save(t, [{ name: "v", type: "text" }])).toBeUndefined();
+
+        expect(await read(t, "v")).toEqual({ one: "x", none: null });
+      }
+    );
+
+    // PostgreSQL's driver hands a JSON column's string back as a text, which the read path reads as
+    // JSON once more: a text that is itself JSON would come back as what it says rather than as the
+    // text it is. Refused, naming the rows, rather than counted as kept; SQLite reads each back as
+    // it was.
+    it.skipIf(!rewritesValuesOn(dialect)).each([
+      { name: "an object", text: '{"a":1}' },
+      { name: "a list", text: "[1]" },
+      { name: "a number", text: "12" },
+      { name: "a number with an exponent", text: "-1.5e3" },
+      { name: "true", text: "true" },
+      { name: "null", text: "null" },
+      { name: "a quoted text", text: '"quoted"' },
+    ])(
+      "keeps a text that is itself JSON ($name) as that text, or refuses it by its row",
+      async ({ text }) => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        const id = await write(t, "json", { v: text });
+        await write(t, "word", { v: "word" });
+
+        const outcome = await save(t, [{ name: "v", type: "json" }]);
+
+        if (dialect === "postgresql") {
+          expect(outcome).toMatchObject(refusedSaying(`id ${id}`));
+          expect(outcome).toMatchObject({
+            publicData: {
+              errors: [expect.objectContaining({ code: "TYPE_CHANGE_BLOCKED" })],
+            },
+          });
+        } else {
+          expect(outcome).toBeUndefined();
+        }
+        expect(await read(t, "v")).toEqual({ json: text, word: "word" });
+      }
+    );
+
     // Each value is written by an UPDATE of its row, which a table's update trigger fires on once per
     // row, doing whatever it does: refused before any value is written, naming the trigger.
     it.skipIf(!rewritesValuesOn(dialect))(
