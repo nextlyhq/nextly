@@ -61,6 +61,7 @@ import {
 } from "./move-keeps-definition";
 import {
   buildLeavingFieldsArchiveStatements,
+  disableDroppingOverlays,
   type FieldRename,
   fieldsLeavingTranslation,
 } from "./reconcile-companion";
@@ -221,6 +222,18 @@ export async function archiveFieldsLeavingTranslation(args: {
     return;
   }
   if (!args.isLocalized) {
+    // A repeater's or group's text kept per language has no way home onto its structure, so
+    // turning translation off is refused before anything changes, naming each one the companion
+    // holds an overlay for (`disableDroppingOverlays`), as a migration file's refusal names them.
+    const overlays = disableDroppingOverlays({
+      slug: args.entity,
+      kind: args.kind,
+      oldFields: args.oldFields,
+      dialect: args.adapter.dialect,
+      builtBy: args.builtBy,
+      liveCompanionColumns: (await companionColumns()).map(c => c.name),
+    });
+    if (overlays) throw overlays;
     await refuseRenameAsTranslationEnds(args);
     // Turning translation off restores each field from the companion under the name it had, so
     // a translated field removed beside an added one is restored under a name no field has.

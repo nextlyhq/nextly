@@ -68,12 +68,17 @@ for (const dialect of getConfiguredTestDialects()) {
         localization: { locales: ["en", "es"], defaultLocale: "en" },
       });
       const registry = current.getService("fieldGroupRegistryService");
-      await current.nextly.fieldGroups.create({
+      const created = await current.nextly.fieldGroups.create({
         slug,
         label: "Overlay subject",
         localized: true,
         fields: FIELDS,
       } as never);
+      // Its translations table made whole by the create's own migration, the overlay column among
+      // it, and not added again after: a second ADD would record the create as failed.
+      expect((created as { message: string }).message).toBe(
+        "Field group created."
+      );
       const row = await registry.getComponent(slug);
       return { registry, table: row.tableName };
     }
@@ -156,6 +161,47 @@ for (const dialect of getConfiguredTestDialects()) {
           kind: "column-on-both-tables",
         }),
       ]);
+    });
+
+    // A group added to a translated field group in a Builder save gets its overlay column in that
+    // save, recorded as the save's own, so the next save finds the per-language table as the
+    // history says and goes ahead. Broken, either the column is missing and the group's text has
+    // nowhere to go in another language, or it is made outside the save's record and the next save
+    // is refused as drift.
+    it("gives a group added in a save its overlay column, and the next save goes ahead", async () => {
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+      const registry = current.getService("fieldGroupRegistryService");
+      await current.nextly.fieldGroups.create({
+        slug,
+        label: "Overlay subject",
+        localized: true,
+        fields: [FIELDS[0]],
+      } as never);
+      const { tableName: table } = await registry.getComponent(slug);
+
+      // As the Schema Builder applies a change: its fields, confirmed, at the version it read.
+      const apply = async (fields: unknown[]) => {
+        const { schemaVersion } = await registry.getComponent(slug);
+        const { dispatchComponents } = await import(
+          "../../../dispatcher/handlers/component-dispatcher"
+        );
+        await dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug },
+          { fields, confirmed: true, schemaVersion }
+        );
+      };
+
+      await apply(FIELDS.slice(0, 2));
+      expect(await columnsOf(`${table}_locales`)).toContain("box");
+
+      await apply([...FIELDS.slice(0, 2), { name: "caption", type: "text" }]);
+      expect(await columnsOf(`${table}_locales`)).toEqual(
+        expect.arrayContaining(["box", "caption"])
+      );
     });
   });
 }
