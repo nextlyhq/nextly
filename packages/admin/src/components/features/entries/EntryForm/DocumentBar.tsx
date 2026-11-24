@@ -33,6 +33,7 @@ import { useFormContext } from "react-hook-form";
 import { useHistoryAddress } from "@admin/components/features/versions/history-address";
 import { useHistoryOffered } from "@admin/components/features/versions/history-offered";
 import { LazyVersionHistorySheet } from "@admin/components/features/versions/LazyVersionHistorySheet";
+import { PastVersionActions } from "@admin/components/features/versions/PastVersionActions";
 import { useVersionActions } from "@admin/components/features/versions/version-actions";
 import {
   Globe,
@@ -697,7 +698,7 @@ type HostedActions = ReturnType<typeof useHostedDocumentActions>;
 
 /**
  * While a past version is on screen, its own actions take the document's
- * place: Back to current, and Restore this version where the primary action
+ * place: Compare, Back to current, and Restore… where the primary action
  * sits. Save and
  * Publish act on the LIVE document, which is not what is being read, so they
  * are replaced rather than greyed. On a phone these two sit in the bar at the
@@ -714,32 +715,17 @@ function VersionOnScreenActions({
 }) {
   return (
     <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className={WIDE_ONLY}
-        onClick={versionActions.returnToCurrent}
-      >
-        Back to current
-      </Button>
-      {versionActions.restore ? (
-        <Button
-          type="button"
-          size="sm"
-          className={WIDE_ONLY}
-          disabled={versionActions.restoreDisabled}
-          onClick={versionActions.restore}
-        >
-          {/* Names what it restores, beside Back to current; the confirmation
-              that follows says what happens to the live document. */}
-          Restore this version
-        </Button>
-      ) : null}
+      {/* The version's own actions: Compare, Back to current, and Restore…
+          where the primary action sits; the confirmation that follows says
+          what happens to the live document. */}
+      <PastVersionActions
+        versionActions={versionActions}
+        buttonClassName={WIDE_ONLY}
+      />
       {/* The menu stays, with only its own rows: View API response reads what
         the server returns and is most useful while reading a version; each
         writing row carries the model's reason it is held. The primary and
-        toolbar verbs are what the two buttons above replace. */}
+        toolbar verbs are what the version's actions above replace. */}
       <DocumentActionBar
         actions={actionsAt(documentActions.actions, "menu")}
         bindings={documentActions.bindings}

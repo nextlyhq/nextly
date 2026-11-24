@@ -14,9 +14,11 @@
 
 import type { FieldConfig } from "nextly/config";
 
+import { fieldLabel } from "@admin/lib/field-label";
+
 import { sameFieldValue } from "./same-form-value";
 import {
-  formFieldsOf,
+  formFieldsWithin,
   snapshotToFormValues,
   type NamedField,
 } from "./snapshot-to-form-values";
@@ -32,7 +34,13 @@ export type RestoreRowDisabled =
 /** One field the version holds differently from the editor. */
 export interface RestoreRow {
   name: string;
+  /** The field's name as the editor shows it: its label, else its key made readable. */
   label: string;
+  /**
+   * The named containers the editor lays the field out in, outermost first,
+   * so the list names it as the form places it ("Search result › Meta title").
+   */
+  place?: readonly string[];
   /** Chosen for the restore; a disabled field never is. */
   chosen: boolean;
   disabled?: RestoreRowDisabled;
@@ -83,12 +91,15 @@ const REASONS: Record<RestoreRowDisabled, string> = {
 export function restorePlan(input: RestorePlanInput): RestoreRow[] {
   const withheld = new Set(input.withheld.map(path => path.split(".")[0]));
   const versionValues = snapshotToFormValues(input.fields, input.snapshot);
-  const formFields = formFieldsOf(input.fields);
+  const laidOut = formFieldsWithin(input.fields);
+  const formFields = laidOut.map(entry => entry.field);
   const rows: RestoreRow[] = [];
 
-  for (const field of formFields) {
+  for (const { field, within } of laidOut) {
     const row = rowFor(field, input, withheld, versionValues);
-    if (row) rows.push(row);
+    if (!row) continue;
+    const place = placeOf(within);
+    rows.push(place.length > 0 ? { ...row, place } : row);
   }
 
   // A field the version holds that the content type no longer has, as the
@@ -99,7 +110,9 @@ export function restorePlan(input: RestorePlanInput): RestoreRow[] {
     if (known.has(key) || !Object.hasOwn(input.snapshot, key)) continue;
     rows.push({
       name: key,
-      label: key,
+      // Named as the comparison names a field gone from the content type:
+      // its key made readable, since no label survives it.
+      label: fieldLabel({ name: key }),
       replacesUnsaved: false,
       shared: false,
       ...disabledAs("removed"),
@@ -173,9 +186,30 @@ export function restoreRowReason(disabled: RestoreRowDisabled): string {
   return REASONS[disabled];
 }
 
+/**
+ * A field's name as the editor shows it, by the editor's own rule: its label,
+ * else its key made readable. The key itself ("metaTitle") is what the person
+ * never sees in the form.
+ */
 function labelOf(field: NamedField): string {
   const label = (field as { label?: unknown }).label;
-  return typeof label === "string" && label.length > 0 ? label : field.name;
+  return fieldLabel({
+    name: field.name,
+    ...(typeof label === "string" ? { label } : {}),
+  });
+}
+
+/**
+ * The containers a field is laid out in, by their labels, outermost first.
+ * One nobody labelled draws no heading in the form, so it adds no step.
+ */
+function placeOf(within: readonly FieldConfig[]): string[] {
+  return within.flatMap(container => {
+    const label = (container as { label?: unknown }).label;
+    return typeof label === "string" && label.trim() !== ""
+      ? [label.trim()]
+      : [];
+  });
 }
 
 /**
