@@ -203,7 +203,8 @@ export function leftSaveSuite({
    * as a collection demoted from code does; with `status`, the Draft/Published switch alone;
    * with `headingDefault`, `heading` given that default; with `card`, a field `card` holding
    * the field group `card`; with `translatable`, `heading` translatable and left empty, so its
-   * column is the translations table's where values are kept per language.
+   * column is the translations table's where values are kept per language; with `numeric`,
+   * `heading` a number, so a save that makes it text changes its column's type.
    */
   async function boot(
     options: {
@@ -212,6 +213,7 @@ export function leftSaveSuite({
       headingDefault?: string;
       card?: boolean;
       translatable?: boolean;
+      numeric?: boolean;
     } = {}
   ): Promise<TestNextly> {
     if (dialect === "sqlite") {
@@ -263,7 +265,9 @@ export function leftSaveSuite({
           options.headingDefault === undefined
             ? options.translatable === true
               ? text("heading")
-              : field("heading")
+              : options.numeric === true
+                ? { ...field("heading"), type: "number" }
+                : field("heading")
             : { ...field("heading"), defaultValue: options.headingDefault },
           field("note"),
           ...(options.card === true
@@ -290,7 +294,9 @@ export function leftSaveSuite({
         title: "First",
         slug: "first",
         note: "n",
-        ...(options.translatable === true ? {} : { heading: "h" }),
+        ...(options.translatable === true
+          ? {}
+          : { heading: options.numeric === true ? 7 : "h" }),
       },
     } as never);
     return current;
