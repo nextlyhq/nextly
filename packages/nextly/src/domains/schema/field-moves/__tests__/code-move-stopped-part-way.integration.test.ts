@@ -391,20 +391,25 @@ describe.runIf(getConfiguredTestDialects().includes("mysql"))(
         expect(sqlFiles()).toBeGreaterThan(created);
 
         let stops = 0;
-        for (let n = 1; n < 40; n++) {
+        let ranToTheEnd = false;
+        for (let n = 1; n < 60; n++) {
           // A database of its own for each stop, holding the entries before the move runs.
           const url = await openDatabase();
           await migrate(created);
           await writeEntries(url, before, required);
-          if ((await stoppedAfter(n, () => migrate())) === "ran") break;
+          if ((await stoppedAfter(n, () => migrate())) === "ran") {
+            ranToTheEnd = true;
+            break;
+          }
           stops += 1;
           await expectEveryValueKept(
             await start(url),
             `after statement ${String(n)}`
           );
         }
-        // The move's files ran statements, so the stops reached them.
+        // The move's files ran statements, so the stops reached them, and every one was stopped after.
         expect(stops).toBeGreaterThan(0);
+        expect(ranToTheEnd).toBe(true);
       },
       600_000
     );
@@ -420,17 +425,22 @@ describe.runIf(getConfiguredTestDialects().includes("mysql"))(
 
         const killed: string[] = [];
         for (const file of sqlFileNames().slice(created)) {
-          for (let n = 1; n < 40; n++) {
+          let ranToTheEnd = false;
+          for (let n = 1; n < 60; n++) {
             const url = await openDatabase();
             await migrate(created);
             await writeEntries(url, before, required);
-            if (!(await killedAfter(url, afterConfig, file, n))) break;
+            if (!(await killedAfter(url, afterConfig, file, n))) {
+              ranToTheEnd = true;
+              break;
+            }
             killed.push(`${file}: ${String(n)}`);
             await expectEveryValueKept(
               await start(url),
               `killed in ${file} after statement ${String(n)}`
             );
           }
+          expect(ranToTheEnd, `${file} ran to its end`).toBe(true);
         }
         // Each of the move's files was killed in.
         for (const file of sqlFileNames().slice(created)) {

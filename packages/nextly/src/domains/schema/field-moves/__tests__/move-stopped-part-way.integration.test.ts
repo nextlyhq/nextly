@@ -340,6 +340,7 @@ describe.runIf(getConfiguredTestDialects().includes("mysql"))(
     describe.each(SCENARIOS)("$name", ({ before, after, moves, files }) => {
       it("through the Builder's schema dialog, stopped after each statement", async () => {
         let stops = 0;
+        let ranToTheEnd = false;
         for (let n = 1; n < 60; n++) {
           await instance?.destroy();
           instance = undefined;
@@ -348,13 +349,15 @@ describe.runIf(getConfiguredTestDialects().includes("mysql"))(
           await createPosts(t, before);
           await seed(t, before);
           if ((await stoppedAfter(n, () => save(t, after, moves))) === "ran") {
+            ranToTheEnd = true;
             break;
           }
           stops += 1;
           await expectEveryValueReadable(t, `after statement ${String(n)}`);
         }
-        // The file ran statements, so the stops reached it.
+        // The files ran statements, so the stops reached them, and every one was stopped after.
         expect(stops).toBeGreaterThan(0);
+        expect(ranToTheEnd).toBe(true);
       }, 600_000);
 
       it("through nextly migrate, replaying the dialog's files, stopped after each statement", async () => {
@@ -365,12 +368,14 @@ describe.runIf(getConfiguredTestDialects().includes("mysql"))(
         expect((await filesWritten()) - created).toBe(files);
 
         let stops = 0;
+        let ranToTheEnd = false;
         for (let n = 1; n < 60; n++) {
           const second = await boot();
           await migrateFolder(second, created);
           await seed(second, before);
           // Counted from the save's files alone: the earlier ones have run.
           if ((await stoppedAfter(n, () => migrateFolder(second))) === "ran") {
+            ranToTheEnd = true;
             break;
           }
           stops += 1;
@@ -380,6 +385,7 @@ describe.runIf(getConfiguredTestDialects().includes("mysql"))(
           );
         }
         expect(stops).toBeGreaterThan(0);
+        expect(ranToTheEnd).toBe(true);
       }, 600_000);
     });
   }
