@@ -270,6 +270,27 @@ describe.each(getConfiguredTestDialects())(
     // values writes: what one that rewrites none (MySQL) does is in `type-change-writes-wait`.
     const converts = it.skipIf(!rewritesValuesOn(dialect));
 
+    /**
+     * Mark the newest file as converting `v`, where no road rewrites values and so no save marks one
+     * (MySQL): a file the mark's own guards are asked of there too.
+     */
+    async function markedWhereNoSaveMarks(): Promise<void> {
+      if (rewritesValuesOn(dialect)) return;
+      const dir = join(basePath, "migrations");
+      const newest =
+        (await readdir(dir))
+          .filter(f => f.endsWith(".sql"))
+          .sort()
+          .at(-1) ?? "";
+      const text = await readFile(join(dir, newest), "utf8");
+      const marked = text.replace(
+        /^-- Generated at:/m,
+        "-- Converts values: rules 1; dc_tcf_posts.v\n-- Generated at:"
+      );
+      expect(readConvertsMark(marked, newest)).not.toBeNull();
+      await writeFile(join(dir, newest), marked);
+    }
+
     converts(
       "converts a deploy's own lists of one item into that item",
       async () => {
@@ -338,6 +359,7 @@ describe.each(getConfiguredTestDialects())(
       await write(first, "kept", { v: "12" });
       await save(first, [{ name: "v", type: "number" }]);
       expect(await read(first)).toEqual({ kept: 12 });
+      await markedWhereNoSaveMarks();
       await first.destroy();
       instance = undefined;
       return created;
@@ -346,27 +368,24 @@ describe.each(getConfiguredTestDialects())(
     // A deploy judges a marked change from the newest snapshot before its file to the file's own:
     // with that one gone from meta/, which values convert cannot be told, so the file is refused
     // before any statement, never left to the database's cast.
-    converts(
-      "refuses to deploy a marked change whose earlier snapshot is missing, and changes nothing",
-      async () => {
-        const created = await textBecomesNumber();
-        const second = await boot(dialect);
-        await migrateFolder(second, created);
-        await write(second, "whole", { v: "34" });
-        const meta = join(basePath, "migrations", "meta");
-        const snapshots = (await readdir(meta))
-          .filter(file => file.endsWith(".snapshot.json"))
-          .sort();
-        // The fixture's control: the folder holds the two snapshots the change is judged between.
-        expect(snapshots).toHaveLength(2);
-        await unlink(join(meta, snapshots[0] ?? ""));
+    it("refuses to deploy a marked change whose earlier snapshot is missing, and changes nothing", async () => {
+      const created = await textBecomesNumber();
+      const second = await boot(dialect);
+      await migrateFolder(second, created);
+      await write(second, "whole", { v: "34" });
+      const meta = join(basePath, "migrations", "meta");
+      const snapshots = (await readdir(meta))
+        .filter(file => file.endsWith(".snapshot.json"))
+        .sort();
+      // The fixture's control: the folder holds the two snapshots the change is judged between.
+      expect(snapshots).toHaveLength(2);
+      await unlink(join(meta, snapshots[0] ?? ""));
 
-        await expect(
-          migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"))
-        ).rejects.toMatchObject(refusedSaying("do not both record the fields"));
-        expect(await read(second)).toEqual({ whole: "34" });
-      }
-    );
+      await expect(
+        migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"))
+      ).rejects.toMatchObject(refusedSaying("do not both record the fields"));
+      expect(await read(second)).toEqual({ whole: "34" });
+    });
 
     // `migrate:check` holds each file to the hash its snapshot recorded when it was written: the
     // mark is part of the file that hash was taken of.
@@ -471,40 +490,38 @@ describe.each(getConfiguredTestDialects())(
     // Which values a rollback converts back is read from the file's own snapshot and the newest
     // one before it: with that one gone from meta/, the rollback is refused before any statement,
     // never left to the database's cast.
-    converts(
-      "refuses to roll back a marked change whose earlier snapshot is missing, and changes nothing",
-      async () => {
-        const float = {
-          name: "v",
-          type: "number",
-          options: { format: "float" },
-        };
-        const first = await boot(dialect);
-        await createPosts([{ name: "v", type: "text" }]);
-        const created = await filesWritten();
-        await write(first, "kept", { v: "12" });
-        await save(first, [float]);
-        await first.destroy();
-        instance = undefined;
+    it("refuses to roll back a marked change whose earlier snapshot is missing, and changes nothing", async () => {
+      const float = {
+        name: "v",
+        type: "number",
+        options: { format: "float" },
+      };
+      const first = await boot(dialect);
+      await createPosts([{ name: "v", type: "text" }]);
+      const created = await filesWritten();
+      await write(first, "kept", { v: "12" });
+      await save(first, [float]);
+      await markedWhereNoSaveMarks();
+      await first.destroy();
+      instance = undefined;
 
-        const second = await boot(dialect);
-        await migrateFolder(second, created);
-        await write(second, "whole", { v: "34" });
-        await migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"));
-        const meta = join(basePath, "migrations", "meta");
-        const snapshots = (await readdir(meta))
-          .filter(file => file.endsWith(".snapshot.json"))
-          .sort();
-        // The fixture's control: the folder holds the two snapshots the rollback is judged between.
-        expect(snapshots).toHaveLength(2);
-        await unlink(join(meta, snapshots[0] ?? ""));
+      const second = await boot(dialect);
+      await migrateFolder(second, created);
+      await write(second, "whole", { v: "34" });
+      await migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"));
+      const meta = join(basePath, "migrations", "meta");
+      const snapshots = (await readdir(meta))
+        .filter(file => file.endsWith(".snapshot.json"))
+        .sort();
+      // The fixture's control: the folder holds the two snapshots the rollback is judged between.
+      expect(snapshots).toHaveLength(2);
+      await unlink(join(meta, snapshots[0] ?? ""));
 
-        await expect(migrateDown(second)).rejects.toMatchObject(
-          refusedSaying("do not both record the fields")
-        );
-        expect(await read(second)).toEqual({ whole: 34 });
-      }
-    );
+      await expect(migrateDown(second)).rejects.toMatchObject(
+        refusedSaying("do not both record the fields")
+      );
+      expect(await read(second)).toEqual({ whole: 34 });
+    });
 
     // Undoing a list becoming a text makes each text a list again, which no conversion writes:
     // a text no list reads stops the rollback before its statements, naming its row, and the
@@ -583,25 +600,22 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
-    converts(
-      "refuses a file marked with conversion rules this version does not know, and changes nothing",
-      async () => {
-        const created = await textBecomesNumber();
-        const second = await boot(dialect);
-        await migrateFolder(second, created);
-        await write(second, "whole", { v: "34" });
-        await editMarkedFile(text =>
-          text.replace(
-            "-- Converts values: rules 1;",
-            "-- Converts values: rules 2;"
-          )
-        );
+    it("refuses a file marked with conversion rules this version does not know, and changes nothing", async () => {
+      const created = await textBecomesNumber();
+      const second = await boot(dialect);
+      await migrateFolder(second, created);
+      await write(second, "whole", { v: "34" });
+      await editMarkedFile(text =>
+        text.replace(
+          "-- Converts values: rules 1;",
+          "-- Converts values: rules 2;"
+        )
+      );
 
-        await expect(migrateFolder(second)).rejects.toMatchObject(
-          refusedSaying("conversion rules 2")
-        );
-        expect(await read(second)).toEqual({ whole: "34" });
-      }
-    );
+      await expect(migrateFolder(second)).rejects.toMatchObject(
+        refusedSaying("conversion rules 2")
+      );
+      expect(await read(second)).toEqual({ whole: "34" });
+    });
   }
 );
