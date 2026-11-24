@@ -645,7 +645,7 @@ describe("VersionDiffView, drawn as the comparison page draws it", () => {
         to={7}
         fieldAction={node =>
           node.status === "unchanged" ? null : (
-            <button type="button">{`Restore this field: ${node.label}`}</button>
+            <button type="button">{`Restore this field: ${node.name}`}</button>
           )
         }
       />
@@ -653,10 +653,10 @@ describe("VersionDiffView, drawn as the comparison page draws it", () => {
 
     const heading = screen.getByRole("heading", { name: "Title" });
     expect(heading.parentElement).toContainElement(
-      screen.getByRole("button", { name: "Restore this field: Title" })
+      screen.getByRole("button", { name: "Restore this field: title" })
     );
     expect(
-      screen.queryByRole("button", { name: /Restore this field: Excerpt/ })
+      screen.queryByRole("button", { name: /Restore this field: excerpt/ })
     ).toBeNull();
   });
 });

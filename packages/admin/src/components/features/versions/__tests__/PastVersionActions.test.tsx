@@ -166,7 +166,7 @@ describe("where Compare goes", () => {
           viewing({
             versionNo: 9,
             locale: null,
-            scope: { kind: "single", slug: "homepage" },
+            scope: { kind: "single", slug: "homepage", documentId: "h1" },
           })
         )}
       />
