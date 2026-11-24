@@ -277,6 +277,45 @@ describe("snapshot-io", () => {
       ).toBe("current");
     });
 
+    // Storage moved before any group existed, then an earlier release made the first one: its
+    // table is the slug's current name, still on the legacy type column. The snapshot's own record
+    // of the group says the name is its slug's, so the snapshot is on the current names.
+    it("reads an unmarked snapshot holding a recorded group's fg_ table as current, whatever its type column", () => {
+      const snapshot = {
+        tables: [
+          {
+            name: "fg_banner",
+            columns: [
+              { name: "_parent_id", type: "text", nullable: false },
+              { name: "_parent_table", type: "text", nullable: false },
+              { name: "_parent_field", type: "text", nullable: false },
+              { name: "_order", type: "integer", nullable: false },
+              { name: "_component_type", type: "text", nullable: true },
+            ],
+          },
+        ],
+      } as never;
+      const recorded = (settings: Record<string, unknown>) => ({
+        collections: {},
+        singles: {},
+        fieldGroups: { banner: { source: "ui" as const, settings } },
+      });
+
+      expect(
+        snapshotFieldGroupNaming({
+          snapshot,
+          entities: recorded({ fields: [] }),
+        })
+      ).toBe("current");
+      // A table its author named fg_banner says nothing about the names.
+      expect(
+        snapshotFieldGroupNaming({
+          snapshot,
+          entities: recorded({ fields: [], dbName: "fg_banner" }),
+        })
+      ).toBe("legacy");
+    });
+
     // A slug-derived legacy table beside them cannot be on the same names: no reading of the
     // snapshot plans against the tables the database holds, so it is refused.
     it("refuses an unmarked snapshot that holds field groups under both namings", () => {
