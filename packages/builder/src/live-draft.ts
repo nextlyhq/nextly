@@ -29,7 +29,11 @@
 import { trimCssWhitespace } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { useFieldEdit, useTypedFieldEdit } from "./field-edit";
+import {
+  useDraftFieldEdit,
+  useFieldEdit,
+  useTypedFieldEdit,
+} from "./field-edit";
 import { joinTyping, typingEpoch } from "./typing-run";
 
 /** A field's draft over the stored value, written as it is typed. */
@@ -127,6 +131,10 @@ export function useLiveDraft(
   // Set without typing: a draft over the stored value, as every field's is.
   const setDraft = useFieldEdit(stored, show);
   const edit = useTypedFieldEdit();
+  // The edit while the text shown is a keystroke the field did not write (a
+  // colour name, which is written when the edit ends): a draft of the
+  // document's, so the page counts it as unsaved and a save writes it first.
+  const held = useDraftFieldEdit();
   const cancelTyping = React.useContext(TypingCancel);
   const stretch = React.useRef<Stretch>({
     run: null,
@@ -154,8 +162,9 @@ export function useLiveDraft(
     // Moved underneath the field, so what it was typing no longer applies.
     idle(stretch);
     edit.end();
+    held.end();
     show(stored);
-  }, [stored, stretch, edit]);
+  }, [stored, stretch, edit, held]);
   return React.useMemo(() => {
     // Escape mid-stretch: the document as it was before the first keystroke,
     // with nothing recorded, and the field showing it again.
@@ -182,11 +191,19 @@ export function useLiveDraft(
           stretch.epoch = typingEpoch();
           stretch.before = stored;
         }
-        edit.begin(putBack);
-        if (joinTyping(stretch.run, () => write(next))) {
+        const wrote = joinTyping(stretch.run, () => write(next));
+        if (wrote) {
           stretch.own = true;
           stretch.wrote = next;
           stretch.answered = null;
+        }
+        // Text the document does not hold is a draft until the edit ends.
+        if (wrote || next === stored) {
+          held.end();
+          edit.begin(putBack);
+        } else {
+          edit.end();
+          held.begin(putBack);
         }
       },
       join: write =>
@@ -198,6 +215,7 @@ export function useLiveDraft(
         }
         idle(stretch);
         edit.end();
+        held.end();
       },
       withdraw: () => {
         const { run, wrote, before } = stretch;
@@ -209,7 +227,7 @@ export function useLiveDraft(
         return true;
       },
     };
-  }, [draft, setDraft, stored, stretch, edit, cancelTyping]);
+  }, [draft, setDraft, stored, stretch, edit, held, cancelTyping]);
 }
 
 /**

@@ -40,7 +40,7 @@ import {
 } from "vitest";
 
 import { useEditorState, type EditorState } from "../editor-state";
-import { escapeFieldEdit } from "../field-edit";
+import { escapeFieldEdit, finishFieldEdit } from "../field-edit";
 import { InspectorPanel } from "./inspector-panel";
 
 beforeAll(() => {
@@ -438,6 +438,22 @@ describe("the Style tab's typed fields", () => {
     expect(styleOf("color")).toBe("#0000ff");
     expect(editor().undoDepth).toBe(0);
     expect(field.value).toBe("#ff0000x");
+    // And its refusal, which the colour going back must not clear.
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("writes a colour name still being typed when the page is saved from the field", () => {
+    // Not in the page while it is typed, so the page counts it as unsaved
+    // work, and a save made with focus still in the field writes it first.
+    mount();
+    openStyle();
+    const field = colourField();
+    act(() => field.focus());
+    fireEvent.change(field, { target: { value: "" } });
+    typeInto(field, "red");
+    expect(styleOf("color")).toBe("#0000ff");
+    act(() => finishFieldEdit());
+    expect(styleOf("color")).toBe("red");
   });
 
   it("keeps a unit picked straight after typing in the same undo step", () => {
