@@ -326,11 +326,16 @@ describe.each(getConfiguredTestDialects())(
     /** The registry row as a write made now would load it, `data` the write's. */
     async function loadedNow(
       t: TestNextly,
-      data?: Record<string, unknown>
+      data?: Record<string, unknown>,
+      options?: { insertsOnly?: boolean }
     ): Promise<LoadedRegistryRow | undefined> {
       clearRegistryRowCache();
       const registry = new DynamicCollectionService(t.adapter, consoleLogger);
-      return loadedRegistryRowOf(await registry.getCollection(SLUG), data);
+      return loadedRegistryRowOf(
+        await registry.getCollection(SLUG),
+        data,
+        options
+      );
     }
 
     // A write made for a collection deleted before it held it finds no row under the slug, and is
@@ -365,11 +370,14 @@ describe.each(getConfiguredTestDialects())(
 
     // A save that removed a field while the write waited moves the definition's version: a field the
     // write sets that the held definition no longer has is refused by name, before anything is
-    // written. A write that sets only fields the definition keeps goes on.
+    // written. A write that sets only fields the definition keeps was still made from the earlier
+    // definition, whose removed column it would read, so it is refused as made for a definition
+    // that changed, to be made again from the new one.
     it("refuses, by name, a field the write sets that a save removed after it loaded the definition", async () => {
       const t = await boot();
       const setsNote = await loadedNow(t, { title: "t", note: "n" });
       const setsTitle = await loadedNow(t, { title: "t" });
+      const createsTitle = await loadedNow(t, { title: "t" }, { insertsOnly: true });
       expect(setsNote?.setsFields).toEqual(["title", "note"]);
       // The save's registry write: the definition without `note`, its version moved.
       const registry = new DynamicCollectionService(t.adapter, consoleLogger);
@@ -394,6 +402,48 @@ describe.each(getConfiguredTestDialects())(
           ],
         },
       });
+      await expect(heldFor(t, setsTitle)).rejects.toMatchObject({
+        code: "COLLECTION_BEING_CHANGED",
+      });
+      // A create reads no entry through the earlier definition and writes only what it sets.
+      await expect(heldFor(t, createsTitle)).resolves.toBeUndefined();
+      // Made from the definition as the save left it, the write goes on.
+      await expect(
+        heldFor(t, await loadedNow(t, { title: "t" }))
+      ).resolves.toBeUndefined();
+    }, 30_000);
+
+    // The held definition's version is read as the registry keeps it: where it is the one the write
+    // loaded, nothing more is compared, so a write goes on whatever its loaded fields hold. A version
+    // read as no number would compare every write's fields against the held definition, a read per
+    // write, and refuse one made from a definition the cache still held.
+    it("compares nothing further where the definition's version is the one the write loaded", async () => {
+      const t = await boot();
+      const loaded = await loadedNow(t, { title: "t" });
+      expect(loaded).toBeDefined();
+
+      await expect(
+        heldFor(t, loaded && { ...loaded, fields: [...loaded.fields, "ghost"] })
+      ).resolves.toBeUndefined();
+    }, 30_000);
+
+    // A save that only adds a field moves the version too, but every field the write was made from
+    // is still there: the write goes on.
+    it("lets a write go on when a save since only added a field", async () => {
+      const t = await boot();
+      const setsTitle = await loadedNow(t, { title: "t" });
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      const row = (await registry.getCollection(SLUG)) as {
+        fields: Array<{ name: string }>;
+      };
+      const grown = JSON.stringify([
+        ...row.fields,
+        { name: "extra", type: "text" },
+      ]);
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET fields = '${grown.replace(/'/g, "''")}', schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+      );
+
       await expect(heldFor(t, setsTitle)).resolves.toBeUndefined();
     }, 30_000);
 

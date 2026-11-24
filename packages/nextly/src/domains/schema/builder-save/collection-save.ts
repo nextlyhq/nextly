@@ -112,10 +112,11 @@ import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type { FieldMoveRequest } from "../field-moves/check-move";
+import { movesFileFacts, planMovingEntity } from "../field-moves/entity-moves";
 import { keptValuesOf, type KeptValues } from "../field-moves/kept-values";
 import { heldValueAt, holdsValueAt } from "../field-moves/move-statements";
 import { movedColumnSentences } from "../field-moves/moved-column-facts";
-import { planEntityMoves, type EntityMoves } from "../field-moves/plan-moves";
+import type { EntityMoves } from "../field-moves/plan-moves";
 import { checksumOf } from "../migrate/applied-checksums";
 import { migrationDriftError, type DriftItem } from "../migrate/drift-error";
 import {
@@ -595,8 +596,14 @@ async function writeCollectionSaveHeld(
             deps.adapter.getCapabilities().dialect
           );
         }
-        const hold = deletionHoldOfSave(deps, save, written.table);
-        await heldForFileRoad(deps, save.slug, hold, scope);
+        // Where the caller writes the registry row after the file, the hold lasts until it does.
+        const hold = await heldForFileRoad(
+          deps,
+          save.slug,
+          deletionHoldOfSave(deps, save, written.table),
+          scope,
+          options.inLastTransaction !== undefined
+        );
         await runWritten(
           deps,
           written.files,
@@ -1511,6 +1518,8 @@ async function refuseSaveTypeChanges(
     dialect,
     builtBy: kind.builtBy,
     ...componentRow,
+    // A field inside a named group or a repeater too, held in its container's column.
+    nested: true,
   });
   if (changes.length === 0) return;
   const translatedBefore = perLanguageBefore(save.previous, table, previous);
@@ -3305,21 +3314,8 @@ async function movesOf(
   const sentences = await moveSentencesOf(deps, moves);
   return {
     appended: addedStatements(deps, save, table, moves),
-    valueMoves: moves.movedColumns.map(moved => ({
-      table: moved.table,
-      column: moved.column,
-      reason:
-        sentences.get(moved.column) ??
-        `moved into the group ${moved.into}; its values are copied there first`,
-    })),
-    refilledColumns: moves.refilledColumns,
-    valuesMovedIn: carriesValues(moves) ? [table] : [],
+    ...movesFileFacts(moves, table, sentences),
   };
-}
-
-/** Whether a save's planned moves carry any values, so its file changes the table's rows. */
-function carriesValues(moves: EntityMoves): boolean {
-  return moves.up.first.length + moves.up.last.length > 0;
 }
 
 /**
@@ -3410,7 +3406,7 @@ function draftScopeOf(save: CollectionSave): {
   holds: (values: Record<string, unknown>, path: readonly string[]) => boolean;
 } {
   if (save.kind === "fieldGroup") {
-    return { where: [], holds: holdsValueAtPathAnywhere };
+    return { where: [], holds: holdsKeyAtPathAnywhere };
   }
   return {
     where: [
@@ -3421,28 +3417,33 @@ function draftScopeOf(save: CollectionSave): {
       },
       { column: "scopeSlug", op: "=", value: save.slug },
     ],
-    holds: holdsValueAtPath,
+    holds: holdsKeyAtPath,
   };
 }
 
-/** Whether a document's values hold something other than null at `path`, at any depth. */
-function holdsValueAtPathAnywhere(
+/** Whether a document's values hold `path`'s key, a null included, at any depth (`holdsKeyAtPath`). */
+function holdsKeyAtPathAnywhere(
   values: Record<string, unknown>,
   path: readonly string[]
 ): boolean {
-  if (holdsValueAtPath(values, path)) return true;
+  if (holdsKeyAtPath(values, path)) return true;
   return Object.values(values).some(value =>
     (Array.isArray(value) ? value : [value]).some(
       item =>
         item !== null &&
         typeof item === "object" &&
-        holdsValueAtPathAnywhere(item as Record<string, unknown>, path)
+        holdsKeyAtPathAnywhere(item as Record<string, unknown>, path)
     )
   );
 }
 
-/** Whether a document's values hold something other than null at `path`. */
-function holdsValueAtPath(
+/**
+ * Whether a document's values hold `path`'s key, a null included, or a group on the way to it
+ * cleared to null: a working draft that clears the field, itself or with its group, may be a
+ * pending clear, which the move would drop as it drops a value. The file's own stop asks the same
+ * (`workingDraftsStop`).
+ */
+function holdsKeyAtPath(
   values: Record<string, unknown>,
   path: readonly string[]
 ): boolean {
@@ -3452,8 +3453,10 @@ function holdsValueAtPath(
       return false;
     }
     at = (at as Record<string, unknown>)[key];
+    // The field's key holding null, or a group above it cleared with it.
+    if (at === null) return true;
   }
-  return at !== null && at !== undefined;
+  return at !== undefined;
 }
 
 /**
@@ -3484,40 +3487,32 @@ function plannedMovesOf(
   ) {
     return NO_MOVES;
   }
-  const planned = planEntityMoves({
-    before: (save.previous.fields ?? []) as FieldDefinition[],
-    after: (save.entity.fields ?? []) as FieldDefinition[],
-    moves: save.moves,
-    // Where the values are stored, not whether the entity is translated: under per-language
-    // storage a shared entity keeps its translatable fields in the language table too.
-    localized: storesPerLanguage(save.entity),
-    renames: save.renamedFields ?? [],
-    table,
-    dialect: deps.adapter.getCapabilities().dialect,
-    // A field group's table is made by its own generator; a Single's by the collection's.
-    builtBy: save.kind === "fieldGroup" ? "fieldGroup" : "collection",
-    // The settings the save's definition keeps, which may name a field the save moves.
-    ...(save.entity.admin === undefined ? {} : { admin: save.entity.admin }),
-    // The hooks it stores, whose settings name top-level fields as the admin settings do.
-    ...(save.entity.hooks === undefined ? {} : { hooks: save.entity.hooks }),
-    // The media library records each use by the field's path under its collection or Single; a
-    // field group's uses are recorded under each entity that uses it, so none are moved here.
-    ...(save.kind === "fieldGroup"
-      ? {}
-      : {
-          mediaUses: {
-            kind:
-              save.kind === "single"
-                ? ("single" as const)
-                : ("collection" as const),
-            slug: save.slug,
-          },
-        }),
-    // A fill answer writes every entry's value before the copy, so it needs no stop.
-    filledColumns: (save.resolutions ?? [])
-      .filter(resolution => resolution.kind === "fill")
-      .map(resolution => toSnakeCase(resolution.column)),
-  });
+  const planned = planMovingEntity(
+    {
+      // A collection when the save names no kind.
+      kind: save.kind ?? "collection",
+      slug: save.slug,
+      before: (save.previous.fields ?? []) as FieldDefinition[],
+      after: (save.entity.fields ?? []) as FieldDefinition[],
+      moves: save.moves,
+      // Where the values are stored, not whether the entity is translated: under per-language
+      // storage a shared entity keeps its translatable fields in the language table too.
+      localized: storesPerLanguage(save.entity),
+      renames: save.renamedFields ?? [],
+      table,
+      // A field group's table is made by its own generator; a Single's by the collection's.
+      builtBy: save.kind === "fieldGroup" ? "fieldGroup" : "collection",
+      // The settings the save's definition keeps, which may name a field the save moves.
+      ...(save.entity.admin === undefined ? {} : { admin: save.entity.admin }),
+      // The hooks it stores, whose settings name top-level fields as the admin settings do.
+      ...(save.entity.hooks === undefined ? {} : { hooks: save.entity.hooks }),
+      // A fill answer writes every entry's value before the copy, so it needs no stop.
+      filledColumns: (save.resolutions ?? [])
+        .filter(resolution => resolution.kind === "fill")
+        .map(resolution => toSnakeCase(resolution.column)),
+    },
+    deps.adapter.getCapabilities().dialect
+  );
   refuseDeletesBeforeRefill(save, planned);
   return planned;
 }
@@ -4475,8 +4470,22 @@ function triedHoldOf(
   if (deps.adapter.getCapabilities().dialect !== "mysql") {
     return { before: check };
   }
-  const { slug } = hold;
   const standing = hold.standingIn(scope);
+  if (hold.heldOutside === true) {
+    // Held through the save's scope on a connection of its own for the whole run
+    // (`heldForFileRoad`): each try counts, and a resumed try counts again what still stands.
+    return {
+      before: check,
+      beforeResume: async db => {
+        try {
+          await standing(db);
+        } catch (error) {
+          throw resumedRefusal(error);
+        }
+      },
+    };
+  }
+  const { slug } = hold;
   // This try's hold: `before` (or `beforeResume`) and `settled` run in turn, one pair per try.
   let held: Awaited<ReturnType<typeof holdCollectionOnConnection>> | undefined;
   return {
@@ -4493,13 +4502,7 @@ function triedHoldOf(
         held = await holdCollectionOnConnection(deps.adapter, db, slug);
         await standing(db);
       } catch (error) {
-        const refusal = holdRefusalOf(error);
-        throw NextlyError.is(refusal)
-          ? refusedPartway(
-              refusal,
-              "What of its migration file ran stayed applied, so the file is kept: settle it with `nextly migrate:resolve` before saving again."
-            )
-          : error;
+        throw resumedRefusal(error);
       }
     },
     settled: async () => {
@@ -4516,6 +4519,22 @@ function triedHoldOf(
       });
     },
   };
+}
+
+/**
+ * A failure met by a resumed MySQL try, which runs past statements an earlier try made durable: a
+ * hold's refusal there comes after part of the file landed, schema or data, so it is told as
+ * part-way (`refusedPartway`), with the step to settle it, and the file is kept rather than
+ * withdrawn. Any other failure, a wait that ends the try among them, goes on as it is.
+ */
+function resumedRefusal(error: unknown): unknown {
+  const refusal = holdRefusalOf(error);
+  return NextlyError.is(refusal)
+    ? refusedPartway(
+        refusal,
+        "What of its migration file ran stayed applied, so the file is kept: settle it with `nextly migrate:resolve` before saving again."
+      )
+    : error;
 }
 
 /**
@@ -4544,20 +4563,32 @@ async function runHeld<T>(
 }
 
 /**
- * The save's hold for its file road, taken through `scope` where it deletes values (`hold`): on
- * PostgreSQL and SQLite the collection is held from before the file's count until the caller has
- * written the registry row, so an entry write that waited meets the definition the save recorded.
- * On MySQL the file's try holds it on its own connection instead (`runHeld`).
+ * The save's hold for its file road, where it deletes values (`hold`), and the hold its file's
+ * tries count under:
+ *
+ * - PostgreSQL and SQLite: taken through `scope` here, from before the file's count until the
+ *   caller has written the registry row, so an entry write that waited meets the definition the
+ *   save recorded (`heldOutside`).
+ * - MySQL, where the row is written in the file's last transaction (`registryInFile`): the file's
+ *   try holds the collection on its own connection instead (`triedHoldOf`), until that
+ *   transaction ends with the row written.
+ * - MySQL, where the caller writes the row after the file (a translations table brought in step
+ *   after it): taken through `scope` here, as on the other databases, on a session of its own
+ *   outside the pool, and the tries only count, so no write lands between the file and the row.
  */
 async function heldForFileRoad(
   deps: CollectionSaveDeps,
   slug: string,
   hold: SaveDeletionHold | undefined,
-  scope: SaveHoldScope
-): Promise<void> {
-  if (hold === undefined) return;
-  if (deps.adapter.getCapabilities().dialect === "mysql") return;
+  scope: SaveHoldScope,
+  registryInFile: boolean
+): Promise<SaveDeletionHold | undefined> {
+  if (hold === undefined) return undefined;
+  if (deps.adapter.getCapabilities().dialect === "mysql" && registryInFile) {
+    return hold;
+  }
   await scope.take(deps.adapter, slug);
+  return { ...hold, heldOutside: true };
 }
 
 /**
@@ -4751,6 +4782,11 @@ function deletionHoldOfSave(
 /** A save's deletion hold, with the collection it holds on MySQL (`triedHoldOf`). */
 interface SaveDeletionHold extends DeletionHold {
   readonly slug: string;
+  /**
+   * Held through the save's scope on a connection of its own for the whole file run
+   * (`heldForFileRoad`), so a MySQL try takes no hold of its own and only counts.
+   */
+  readonly heldOutside?: boolean;
 }
 
 /**

@@ -22,8 +22,12 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { conversionBetweenShapes } from "../../schema/pipeline/diff/types";
 import { postgresAlterTypeUsing } from "../../schema/pipeline/sql-templates/postgres-alter-type-using";
-import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
+import {
+  relationStorageShape,
+  type ColumnOrigin,
+} from "../../schema/services/field-column-descriptor";
 
 import {
   companionUniqueIndexChanges,
@@ -107,6 +111,18 @@ export function retypedCompanionColumns(args: {
   builtBy: ColumnOrigin;
 }): Retyped[] {
   return args.fields.flatMap(({ from, to }) => {
+    // A relation switched between storage shapes (one id and a list of them, or to or from naming
+    // several collections) has its translations column converted by the switch's own statements,
+    // which carry or guard each value (`migrationCompanionSwitches`). A plain cast ahead of them
+    // would meet an id where a list is wanted, so the switch is left to them.
+    if (
+      conversionBetweenShapes(
+        relationStorageShape(from),
+        relationStorageShape(to)
+      ) !== undefined
+    ) {
+      return [];
+    }
     const before = fieldToLocalizedColumnSpec(from, args.dialect, args.builtBy);
     const after = fieldToLocalizedColumnSpec(to, args.dialect, args.builtBy);
     if (before === null || after === null || before.name !== after.name) {

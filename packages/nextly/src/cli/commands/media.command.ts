@@ -8,6 +8,7 @@
 import { Command } from "commander";
 
 import { withDryRun } from "../dry-run";
+import { declareFirstLine, startLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -28,38 +29,47 @@ export function createMediaCommand(): Command {
   const media = new Command("media").description(
     "Work with the media library's stored files"
   );
-  media
-    .command("orphans")
-    .description(
-      "List upload-time thumbnails no media item refers to; remove them with --apply"
-    )
-    .option("--apply", "Remove the thumbnails listed", false)
-    .action(
-      lazyAction(async () => (await import("./media")).mediaOrphansAction)
-    );
-  media
-    .command("remove-sizes")
-    .description(
-      "List the image size files stored before sizes were removed; remove them and clear each item's sizes with --apply; then drop the sizes column and the image_sizes table with --apply --drop"
-    )
-    .option("--apply", "Remove the size files listed", false)
-    .option(
-      "--drop",
-      "With --apply, once no item names a size file, drop the media table's sizes column and the image_sizes table",
-      false
-    )
-    .action(
-      lazyAction(async () => (await import("./media")).mediaRemoveSizesAction)
-    );
-  // `--dry-run` carries the one meaning and help line it has everywhere.
-  withDryRun(
+  declareFirstLine(
     media
-      .command("reindex-usage")
+      .command("orphans")
       .description(
-        "Rebuild the record of where each media item is used, from the stored content"
+        "List upload-time thumbnails no media item refers to; remove them with --apply"
       )
-  ).action(
-    lazyAction(async () => (await import("./media")).mediaReindexUsageAction)
+      .option("--apply", "Remove the thumbnails listed", false)
+      .action(
+        lazyAction(async () => (await import("./media")).mediaOrphansAction)
+      ),
+    startLine("Looking for unused thumbnails...")
+  );
+  declareFirstLine(
+    media
+      .command("remove-sizes")
+      .description(
+        "List the image size files stored before sizes were removed; remove them and clear each item's sizes with --apply; then drop the sizes column and the image_sizes table with --apply --drop"
+      )
+      .option("--apply", "Remove the size files listed", false)
+      .option(
+        "--drop",
+        "With --apply, once no item names a size file, drop the media table's sizes column and the image_sizes table",
+        false
+      )
+      .action(
+        lazyAction(async () => (await import("./media")).mediaRemoveSizesAction)
+      ),
+    startLine("Looking for stored image sizes...")
+  );
+  // `--dry-run` carries the one meaning and help line it has everywhere.
+  declareFirstLine(
+    withDryRun(
+      media
+        .command("reindex-usage")
+        .description(
+          "Rebuild the record of where each media item is used, from the stored content"
+        )
+    ).action(
+      lazyAction(async () => (await import("./media")).mediaReindexUsageAction)
+    ),
+    startLine("Reindexing where media is used...")
   );
   return media;
 }

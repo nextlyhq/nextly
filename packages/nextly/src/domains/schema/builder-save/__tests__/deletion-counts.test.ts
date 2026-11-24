@@ -184,6 +184,31 @@ describe("the fields a save that removes fields compares", () => {
     }
   });
 
+  // A rename answer carries a many-to-many's links only where the save pairs the two fields itself
+  // (`relationshipsDroppingLinks`): the same target under the same relation kind. An answer naming
+  // a field that points elsewhere renames nothing, and the old field's link table goes with every
+  // link in it, so they are counted.
+  it("counts the links of a many-to-many a rename answer names, where the save pairs it with nothing", async () => {
+    for (const next of [[manyTo("labels", "labels")], []]) {
+      const hold = deletionHoldOf({
+        dialect: "sqlite",
+        tableName: "dc_posts",
+        localized: false,
+        previous: [text("title"), manyTo("tags")],
+        next: [text("title"), ...next],
+        renamed: [{ from: "tags", to: "labels" }],
+        confirmed: [{ field: "tags", count: 2 }],
+      });
+
+      expect(hold?.tables).toEqual([
+        junctionTableNameFor("dc_posts", manyTo("tags")),
+      ]);
+      expect(await refusedFields(hold!.compare(countingSqlite(3)))).toEqual([
+        "fields.tags",
+      ]);
+    }
+  });
+
   it("compares a removed field that a rename answer names, where the save renames nothing", async () => {
     // A rename answer whose new field is not in the save pairs no drop with an add: the pipeline
     // renames nothing, and the column goes with its values.

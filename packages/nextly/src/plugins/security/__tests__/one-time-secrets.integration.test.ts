@@ -126,6 +126,99 @@ describe.each(getConfiguredTestDialects())(
       expect(stored).not.toContain(`"${code}"`);
     });
 
+    it("derives a token and a code again from their refs while live, and never another plugin's", async () => {
+      const { a, b, elsewhere } = await boot();
+      const minted = await a.security.secrets.mintToken({
+        purpose: "invitation",
+        subject,
+        expiresInMs: 60 * 60_000,
+      });
+      const code = await a.security.secrets.mintCode({
+        purpose: "sign-in",
+        subject,
+        expiresInMs: 10 * 60_000,
+        digits: 8,
+        maxWrongTries: 3,
+      });
+      // The ref names the row, and is not the secret.
+      expect(minted.ref).not.toContain(minted.token);
+      expect(code.ref).not.toBe(code.code);
+
+      expect(await a.security.secrets.reveal({ ref: minted.ref })).toEqual({
+        ok: true,
+        secret: minted.token,
+        expiresAt: minted.expiresAt,
+      });
+      // Any instance of the install derives it, as a job runs on any one.
+      expect(await elsewhere.reveal({ ref: code.ref })).toEqual({
+        ok: true,
+        secret: code.code,
+        expiresAt: code.expiresAt,
+      });
+      // Another plugin's ref names nothing of this plugin's, and the reverse.
+      expect(await b.security.secrets.reveal({ ref: minted.ref })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+      expect(await a.security.secrets.reveal({ ref: "no-such-ref" })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+
+      // Once spent or voided, it is derived no more.
+      await a.security.secrets.consumeToken({
+        purpose: "invitation",
+        token: minted.token,
+      });
+      expect(await a.security.secrets.reveal({ ref: minted.ref })).toEqual({
+        ok: false,
+        reason: "spent",
+      });
+      await a.security.secrets.voidFor({ subject });
+      expect(await a.security.secrets.reveal({ ref: code.ref })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+    });
+
+    it("derives nothing under another install secret, and a previous one still derives what it minted", async () => {
+      vi.stubEnv(
+        "NEXTLY_SECRET",
+        "the-first-install-secret-long-enough-for-prod"
+      );
+      _resetEnvCache();
+      const { a } = await boot();
+      const minted = await a.security.secrets.mintToken({
+        purpose: "reset",
+        subject,
+        expiresInMs: 60_000,
+      });
+
+      // The database, under an install secret it was not minted under: the
+      // ref and the row name nothing the secret can be derived from.
+      vi.stubEnv(
+        "NEXTLY_SECRET",
+        "another-install-secret-long-enough-for-prod"
+      );
+      _resetEnvCache();
+      expect(await a.security.secrets.reveal({ ref: minted.ref })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+
+      // Rotated, with the first kept for reading: it derives it again.
+      vi.stubEnv(
+        "NEXTLY_SECRET_PREVIOUS",
+        "the-first-install-secret-long-enough-for-prod"
+      );
+      _resetEnvCache();
+      expect(await a.security.secrets.reveal({ ref: minted.ref })).toEqual({
+        ok: true,
+        secret: minted.token,
+        expiresAt: minted.expiresAt,
+      });
+    });
+
     it("refuses another purpose, another plugin, an expired, a spent and a voided token, changing nothing", async () => {
       const { a, b } = await boot();
       const mint = () =>

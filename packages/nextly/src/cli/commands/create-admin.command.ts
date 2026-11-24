@@ -6,6 +6,7 @@ import type { Command } from "commander";
 
 import type { CommandContext, GlobalOptions } from "../context";
 import { withDryRun } from "../dry-run";
+import { DATABASE_LINE, declareFirstLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 export const CREATE_ADMIN_COMMAND = "users:create-admin";
@@ -19,18 +20,21 @@ export function registerCreateAdminCommand(
   createContext: (options: GlobalOptions) => CommandContext
 ): void {
   // `--dry-run` carries the one meaning and help line it has everywhere.
-  withDryRun(
-    program
-      .command(CREATE_ADMIN_COMMAND)
-      .description(
-        `Create the first administrator in this install's database (password from ${ADMIN_PASSWORD_ENV} or a prompt)`
-      )
-  )
-    .option("--email <email>", "The administrator's email")
-    .option("--name <name>", "The administrator's name")
-    .action(
-      lazyAction(async () =>
-        (await import("./create-admin")).createAdminAction(createContext)
-      )
-    );
+  declareFirstLine(
+    withDryRun(
+      program
+        .command(CREATE_ADMIN_COMMAND)
+        .description(
+          `Create the first administrator in this install's database (password from ${ADMIN_PASSWORD_ENV} or a prompt)`
+        )
+    )
+      .option("--email <email>", "The administrator's email")
+      .option("--name <name>", "The administrator's name")
+      .action(
+        lazyAction(async () =>
+          (await import("./create-admin")).createAdminAction(createContext)
+        )
+      ),
+    DATABASE_LINE
+  );
 }

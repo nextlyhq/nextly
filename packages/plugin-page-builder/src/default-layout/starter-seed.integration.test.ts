@@ -55,6 +55,7 @@ import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilderLayouts } from "../page-layouts";
 import { pageBuilder } from "../plugin";
 import { siteOptions } from "../schema/tables";
+import { settleDefaultLayout } from "../__tests__/settle-default-layout";
 
 import { ensureDefaultLayout, type EnsureDefaultDeps } from "./ensure-default";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./settings-single";
@@ -208,12 +209,16 @@ describe.each(getConfiguredTestDialects())(
             }
           : {}),
       });
-      // Joins the boot's own run, which `onReady` starts without awaiting,
-      // with what the installed plugin seeds with: a starter only where the
-      // plugin draws the header and footer from its own store (which
+      // The boot's own run, which `onReady` starts without awaiting, waited
+      // out (`settleDefaultLayout`), and the default then settled with what
+      // the installed plugin seeds with: a starter only where the plugin
+      // draws the header and footer from its own store (which
       // `install.test.ts` pins).
-      await ensureDefaultLayout(
-        deps(current, mode === "page-builder" ? {} : { starter: undefined })
+      const t = current;
+      await settleDefaultLayout(() =>
+        ensureDefaultLayout(
+          deps(t, mode === "page-builder" ? {} : { starter: undefined })
+        )
       );
       return current;
     }

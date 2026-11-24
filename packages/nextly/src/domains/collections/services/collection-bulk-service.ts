@@ -1780,10 +1780,12 @@ export class CollectionBulkService extends BaseService {
         },
         { isolationLevel: "read committed" },
         // Compared, under the hold, with the registry row the batch was made for: a field its
-        // entries set that a save removed while it waited is refused by name.
+        // entries set that a save removed while it waited is refused by name. Creates, so a save
+        // that took out other fields lets the batch go on.
         await this.mutationService.loadedRegistryRowFor(
           params.collectionName,
-          entries
+          entries,
+          { insertsOnly: true }
         )
       );
     } catch (error: unknown) {

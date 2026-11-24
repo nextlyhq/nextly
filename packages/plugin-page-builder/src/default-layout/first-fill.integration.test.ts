@@ -40,6 +40,7 @@ import { fenceStore } from "../host-rewrite/fence";
 import { layoutRemovalStore } from "../layout-removal/store";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import { settleDefaultLayout } from "../__tests__/settle-default-layout";
 
 import { ensureDefaultLayout } from "./ensure-default";
 import { fillMarkStore, type FillMarkStore } from "./fill-mark";
@@ -153,16 +154,20 @@ describe.each(getConfiguredTestDialects())(
           probePlugin(probe),
         ],
       });
-      // Joins the boot's own seed, which `onReady` starts without awaiting,
-      // with what the installed plugin seeds with.
-      await ensureDefaultLayout({
-        nextly: current.nextly,
-        slugs: SLUGS,
-        pagesSlug: PAGES_SLUG,
-        removals: layoutRemovalStore(db(), dialectOf()),
-        warn: () => {},
-        ...(mode === "code" ? {} : { starter: starterParts() }),
-      });
+      // The boot's own seed, which `onReady` starts without awaiting, waited
+      // out, and the default then settled with what the installed plugin
+      // seeds with (`settleDefaultLayout`).
+      const t = current;
+      await settleDefaultLayout(() =>
+        ensureDefaultLayout({
+          nextly: t.nextly,
+          slugs: SLUGS,
+          pagesSlug: PAGES_SLUG,
+          removals: layoutRemovalStore(db(), dialectOf()),
+          warn: () => {},
+          ...(mode === "code" ? {} : { starter: starterParts() }),
+        })
+      );
       return current;
     }
 

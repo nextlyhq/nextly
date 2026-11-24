@@ -90,6 +90,19 @@ const RECORD_KEYS: Record<SettingsEntityKind, keyof EntitySettingsRecord> = {
   fieldGroup: "fieldGroups",
 };
 
+/** One entity's declaration as `record` holds it, if it holds one. */
+export function recordedSettingsOf(
+  record: EntitySettingsRecord | undefined,
+  kind: SettingsEntityKind,
+  slug: string
+): RecordedEntitySettings | undefined {
+  const ofKind = record?.[RECORD_KEYS[kind]];
+  // Own keys only: a slug such as `constructor` is not a declaration the record holds.
+  return ofKind !== undefined && Object.hasOwn(ofKind, slug)
+    ? ofKind[slug]
+    : undefined;
+}
+
 const KIND_ORDER: readonly SettingsEntityKind[] = [
   "collection",
   "single",

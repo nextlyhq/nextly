@@ -188,6 +188,22 @@ export function stopConfigWatch(): void {
   delete g.__nextly_configWatch;
 }
 
+/**
+ * Stops applying config edits: closes every watcher and drops a reload a save
+ * has scheduled but not started. For a Nextly that shuts down: a save after
+ * that, or a folder removed with the config in it, must not reload the
+ * configuration into whatever starts next in the process, which reads the
+ * config itself and watches it again. A reload already running ends on its
+ * own.
+ */
+export function stopHmrListener(): void {
+  stopConfigWatch();
+  if (debounceCache.__nextly_hmrDebounce) {
+    clearTimeout(debounceCache.__nextly_hmrDebounce);
+    delete debounceCache.__nextly_hmrDebounce;
+  }
+}
+
 /** The files a save of which reloads the config. For tests and diagnostics. */
 export function watchedConfigFiles(): string[] {
   return [...(g.__nextly_configWatch?.files ?? [])];

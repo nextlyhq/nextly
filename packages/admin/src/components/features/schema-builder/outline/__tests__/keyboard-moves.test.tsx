@@ -144,19 +144,12 @@ describe("moving a field by key", () => {
     expect(region().trim()).toBe(first.trim());
   });
 
-  it("refuses a change of container today, saying so, and still reorders", async () => {
+  it("moves a saved field into a group today, its values moving with it", async () => {
     const { probe, user } = setup(TODAY);
     row("body").focus();
 
     await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
-    says(
-      "Moving a field into or out of a group or repeating rows is not available yet. Nothing moved."
-    );
-    expect(shape(probe.fields)).toEqual(["title", "details[subtitle]", "body"]);
-
-    // Up past Details stays at the top level, so it goes ahead.
-    await user.keyboard("{Alt>}{ArrowUp}{/Alt}");
-    expect(shape(probe.fields)).toEqual(["title", "body", "details[subtitle]"]);
+    expect(shape(probe.fields)).toEqual(["title", "details[subtitle,body]"]);
     expect(probe.commits).toBe(1);
   });
 
