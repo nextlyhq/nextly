@@ -44,6 +44,7 @@ import type { CLIDatabaseAdapter } from "../../../utils/adapter";
 import { createLogger } from "../../../utils/logger";
 import { findPendingFiles, runMigrate } from "../../migrate";
 import { runMigrateCheck } from "../../migrate-check";
+import { runMigrateResolve } from "../../migrate-resolve";
 
 import { throwawayDatabase } from "./sync-target";
 
@@ -550,28 +551,60 @@ export function settleAnswerCases(args: {
         }
 
         it.runIf(dialect === "mysql")(
-          `goes on where a stopped run of ${translated ? "a translated" : "an untranslated"} collection's file left off`,
+          `leaves ${translated ? "a translated" : "an untranslated"} collection's file whole where a run stopped between its ALTER and its fill, and finishes once that is undone`,
           async () => {
             const [answered] = savesFor(translated);
             const { before, after } = await built(translated, answered!);
             const target = await seeded(before, translated);
             reach(target.url);
+            const ids = [target.kept, target.empty, target.bare].sort();
+            const notes = await languageRowsOf(target.adapter, "note");
 
-            // The file's ALTER has committed, and its fill is refused: a run stopped between them.
+            // The file's ALTER has committed, and its fill is refused: a run stopped between
+            // them. A table with a trigger asks for the data-loss consent before anything runs.
             await target.adapter.executeQuery(
               `CREATE TRIGGER ${q("stop_fill")} BEFORE UPDATE ON ${q(COMPANION)} FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'stopped'`
             );
-            const stopped = await migrate(after);
+            const stopped = await migrate(after, { acceptDataLoss: true });
             expect(stopped.code, stopped.said).not.toBeUndefined();
-            const columns = await target.adapter.executeQuery<{ c: unknown }>(
-              `SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${COMPANION}' AND COLUMN_NAME = 'summary'`
-            );
-            expect(columns.length).toBe(1);
-
+            expect(stopped.said).toMatch(/stopped/);
             await target.adapter.executeQuery(`DROP TRIGGER ${q("stop_fill")}`);
-            const resumed = await migrate(after);
 
-            expect(resumed.code, resumed.said).toBeUndefined();
+            // Nothing is filled and nothing is lost: every entry is there with its notes, and the
+            // new column, which the ALTER left, holds no value.
+            expect(await entriesOf(target.adapter)).toEqual(ids);
+            expect(await languageRowsOf(target.adapter, "note")).toEqual(notes);
+            expect(await languageRowsOf(target.adapter, "summary")).toEqual(
+              notes.map(row => [row[0], row[1], null])
+            );
+
+            // A rerun refuses: it says which statement has run and which it cannot judge, and
+            // what to do about each, and changes nothing.
+            const refused = await migrate(after, { acceptDataLoss: true });
+            expect(refused.code, refused.said).not.toBeUndefined();
+            expect(refused.said).toMatch(/NEXTLY_MIGRATION_PARTIALLY_APPLIED/);
+            expect(refused.said).toMatch(
+              /ALTER TABLE [^)]*ADD COLUMN `summary`[^)]*\) is done/
+            );
+            expect(refused.said).toMatch(/UPDATE [^)]*\) is unknown/);
+            expect(await languageRowsOf(target.adapter, "note")).toEqual(notes);
+
+            // Undone as the message says, the file runs whole.
+            const file = files(after).find(name =>
+              name.includes("adds_localization")
+            )!;
+            await target.adapter.executeQuery(
+              `ALTER TABLE ${q(COMPANION)} DROP COLUMN ${q("summary")}`
+            );
+            const resolved = await ran(() =>
+              runMigrateResolve(
+                { cwd: after, failedCleanup: file } as never,
+                context
+              )
+            );
+            expect(resolved.code, resolved.said).toBeUndefined();
+            const finished = await migrate(after);
+            expect(finished.code, finished.said).toBeUndefined();
             expect(await englishOf(target.adapter, "summary")).toEqual({
               [target.kept]: "summed",
               [target.empty]: "summed",
@@ -586,12 +619,12 @@ export function settleAnswerCases(args: {
       async function languageRowsOf(
         adapter: DrizzleAdapter,
         column: string
-      ): Promise<unknown[]> {
+      ): Promise<[string, string, unknown][]> {
         const rows = await adapter.executeQuery<Record<string, unknown>>(
           `SELECT ${q("_parent")} AS parent, ${q("_locale")} AS locale, ${q(column)} AS value FROM ${q(COMPANION)}`
         );
         return rows
-          .map(row => [
+          .map((row): [string, string, unknown] => [
             String(row.parent),
             String(row.locale),
             row.value ?? null,
