@@ -311,6 +311,11 @@ export interface CollectionSave {
    */
   acknowledgedConversions?: readonly string[];
   /**
+   * The translated fields, by name, whose translations column the caller's own statements give their
+   * new type where they apply the save (`singleCompanionRetype`): where the save's file does not run.
+   */
+  retypedTranslations?: ReadonlySet<string>;
+  /**
    * How many values of each removed field the person confirmed deleting, in the save's review.
    * Where given, the save counts them again in the file that deletes them, with other writes held
    * on PostgreSQL and SQLite, and deletes only where every count still matches
@@ -1632,21 +1637,15 @@ async function judgeSaveTypeChanges(
     table,
     ...translations,
     ...translatedAfter,
-    // The save's file gives a translated field's translations column its new type where that
-    // column changes on this database (`retypes`), so only a column it leaves behind is refused.
-    // Only a collection's save runs that file (in development) or leaves it for `nextly migrate`:
-    // a Single's or field group's save in production is applied by its push, which changes no
-    // translations column's type, so theirs stays refused whatever the file carries.
-    ...(kind.kind === "collection"
-      ? await retypedBySaveFile(deps, {
-          slug: save.slug,
-          table,
-          next,
-          translatedAfter: translatedAfter.translatedAfter ?? new Set(),
-          dialect,
-          builtBy: kind.builtBy,
-        })
-      : {}),
+    // Whichever road gives a translated field's translations column its new type, only a column it
+    // leaves behind is refused.
+    ...(await retypedBySave(deps, save, road, {
+      table,
+      next,
+      translatedAfter: translatedAfter.translatedAfter ?? new Set(),
+      dialect,
+      builtBy: kind.builtBy,
+    })),
     previous,
     next,
     renamed,
@@ -1670,7 +1669,32 @@ async function judgeSaveTypeChanges(
 }
 
 /**
- * The fields whose translations column a collection's save's own file gives the new type: those
+ * The fields whose translations column the save gives the new type (`retypedTranslations`): those its
+ * own file does (`retypes`), where the file is what runs. A collection's save runs it in development
+ * or leaves it for `nextly migrate`; a Single's runs it in development, and is otherwise applied by its
+ * own statements, which say which they retype (`CollectionSave.retypedTranslations`). A field group's
+ * push changes no translations column's type.
+ */
+async function retypedBySave(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  road: { pushes?: boolean },
+  of: Omit<Parameters<typeof retypedBySaveFile>[1], "slug" | "kind">
+): Promise<Pick<EntityTypeChangeInput, "retypedTranslations">> {
+  const { kind } = kindOf(save);
+  const runsFile =
+    kind === "collection" ||
+    (kind === "single" && deps.applies && road.pushes !== true);
+  if (runsFile) {
+    return retypedBySaveFile(deps, { ...of, kind, slug: save.slug });
+  }
+  return save.retypedTranslations === undefined
+    ? {}
+    : { retypedTranslations: save.retypedTranslations };
+}
+
+/**
+ * The fields whose translations column the save's own file gives the new type: those
  * `migrate:create` plans its `retypes` file for, from the folder's newest snapshot, which the file
  * is written after (`fieldsTranslatedThrough`, then `retypedCompanionColumns`), so the save counts
  * on no column's new type the file does not carry. None where that snapshot records no fields for
@@ -1679,6 +1703,7 @@ async function judgeSaveTypeChanges(
 async function retypedBySaveFile(
   deps: CollectionSaveDeps,
   args: {
+    kind: "collection" | "single";
     slug: string;
     table: string;
     next: readonly FieldDefinition[];
@@ -1692,7 +1717,10 @@ async function retypedBySaveFile(
     previousTable: latest?.data.snapshot.tables.find(
       t => t.name === args.table
     ),
-    recorded: latest?.data.entities?.collections[args.slug]?.settings.fields,
+    recorded:
+      latest?.data.entities?.[
+        args.kind === "single" ? "singles" : "collections"
+      ][args.slug]?.settings.fields,
     next: args.next,
     translatedAfter: field => args.translatedAfter.has(field.name),
     dialect: args.dialect,

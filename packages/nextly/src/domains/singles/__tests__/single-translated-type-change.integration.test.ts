@@ -32,6 +32,11 @@ import {
   resolveDataLossConsent,
 } from "../../schema/migrate/data-loss-consent";
 
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+
+// The layout every installation runs: a translated field's values are in its translations table alone.
+perLanguageStorageSuite();
+
 const SLUG = "stc_hero";
 const TABLE = `single_${SLUG}`;
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
@@ -77,11 +82,14 @@ describe.each(getConfiguredTestDialects())(
       ).executeQuery<R>(statement);
     }
 
-    /** A database whose Single has `fields` and these values, saved from then on in production. */
+    /**
+     * A database whose Single has `fields` and these values, saved from then on in production unless
+     * `options` says where.
+     */
     async function boot(
       fields: Field[],
       values: Record<string, Record<string, unknown>>,
-      options: { writer?: boolean } = {}
+      options: { writer?: boolean; saves?: "development" } = {}
     ): Promise<TestNextly> {
       vi.stubEnv("NODE_ENV", "development");
       instance = await createTestNextly({
@@ -95,7 +103,7 @@ describe.each(getConfiguredTestDialects())(
         { slug: SLUG, label: "Hero", localized: true, fields }
       );
       await write(instance, values);
-      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("NODE_ENV", options.saves ?? "production");
       return instance;
     }
 
@@ -170,6 +178,25 @@ describe.each(getConfiguredTestDialects())(
         expect(await read(t)).toEqual({ en: 12, es: 56 });
       }
     );
+
+    // In development the save's own file gives the column its type, whatever the database: by the
+    // conversion where the road rewrites values, by its `retypes` statements where none does (MySQL).
+    it("converts each language's value where the save's file applies the change", async () => {
+      const t = await boot(
+        [text],
+        { en: { v: "12" }, es: { v: "34" } },
+        { saves: "development" }
+      );
+      const before = (await written()).length;
+
+      expect(await save([number])).toBeUndefined();
+
+      expect(await columnType(t)).toEqual(isNumber);
+      expect(await read(t)).toEqual({ en: 12, es: 34 });
+      expect(
+        (await written()).slice(before).some(file => file.includes("retypes"))
+      ).toBe(true);
+    });
 
     it.each([
       ["no number", "abc", /parent .* locale es/],

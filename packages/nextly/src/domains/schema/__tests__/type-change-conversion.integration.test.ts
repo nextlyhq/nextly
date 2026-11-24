@@ -1780,10 +1780,10 @@ describe.each(getConfiguredTestDialects())(
       expect(read?.item?.v ?? read?.v).toBe(12);
     });
 
-    // A Single's save in production is applied by its push, which changes no translations column's
-    // type: the file it writes carries the column's new type, but that file is not what runs. So a
-    // translated field's type change is refused there, with its reason, and nothing changes.
-    it("refuses a translated Single's type change in production, where its push runs rather than its file", async () => {
+    // A Single's save in production is applied by its push, which gives the translations column its new
+    // type by the database's cast (`single-translated-type-change`): a value the cast does not read as
+    // the rules do is refused there, as one it would lose is, and nothing changes.
+    it("refuses a translated Single's value to rewrite in production, where its push casts it", async () => {
       vi.stubEnv("NODE_ENV", "development");
       project = await mkdtemp(join(tmpdir(), "type-change-conversion-single-"));
       const t = await createTestNextly({
@@ -1808,7 +1808,7 @@ describe.each(getConfiguredTestDialects())(
       );
       for (const [locale, v] of [
         ["en", "12"],
-        ["es", "34"],
+        ["es", "034"],
       ] as const) {
         await t.nextly.updateSingle({
           slug: "tcc_hero",
@@ -1827,10 +1827,10 @@ describe.each(getConfiguredTestDialects())(
         (error: unknown) => error
       );
 
-      expect(JSON.stringify(refused)).toMatch(/kept per language/);
+      expect(JSON.stringify(refused)).toMatch(/Rewriting values into/);
       for (const [locale, v] of [
         ["en", "12"],
-        ["es", "34"],
+        ["es", "034"],
       ] as const) {
         const held = (await t.nextly.findSingle({
           slug: "tcc_hero",
