@@ -1,0 +1,544 @@
+-- Migration: mfu_posts_update
+-- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_mfu_posts.summary (or NEXTLY_ACCEPT_DATA_LOSS=dc_mfu_posts.summary)
+-- Deletes: column dc_mfu_posts.summary: Moving summary into meta keeps every value; not carried, since a JSON value has no place for them: type text.
+-- Collections: mfu_posts
+-- Entity scope: touched
+-- Settings: mfu_posts: fields.subtitle (added), fields.extra (added), fields.author (added), fields.tags (added), fields.meta.fields.summary (added), fields.meta.fields.label (added), fields.meta.fields.subtitle (removed), fields.other.fields.label (removed), fields.summary (removed)
+-- Generated at: <moment>
+-- Dialect: PostgreSQL
+
+-- UP
+UPDATE "dc_mfu_posts" SET "meta" = jsonb_set(COALESCE("meta", '{}'::jsonb), '{"summary"}', 'null'::jsonb, true) WHERE "summary" IS NULL;;
+
+UPDATE "dc_mfu_posts" SET "meta" = jsonb_set(COALESCE("meta", '{}'::jsonb), '{"summary"}', to_jsonb("summary"), true) WHERE "summary" IS NOT NULL;;
+
+UPDATE "nextly_media_usage" SET "field_path" = ('meta.summary' || SUBSTR("field_path", 8)) WHERE "subject_kind" = 'collection' AND "subject_slug" = 'mfu_posts' AND ("field_path" = 'summary' OR SUBSTR("field_path", 1, 8) = 'summary.') AND NOT EXISTS (SELECT 1 FROM (SELECT "subject_kind", "subject_slug", "document_id", "locale", "media_id", "field_path" FROM "nextly_media_usage" WHERE "subject_kind" = 'collection' AND "subject_slug" = 'mfu_posts') AS "taken" WHERE "taken"."subject_kind" = "nextly_media_usage"."subject_kind" AND "taken"."subject_slug" = "nextly_media_usage"."subject_slug" AND "taken"."document_id" = "nextly_media_usage"."document_id" AND "taken"."locale" = "nextly_media_usage"."locale" AND "taken"."media_id" = "nextly_media_usage"."media_id" AND "taken"."field_path" = ('meta.summary' || SUBSTR("nextly_media_usage"."field_path", 8)));;
+
+CREATE TEMP TABLE "nextly_unfilled_subtitle" ("needs_a_value_subtitle" INTEGER NOT NULL);;
+
+INSERT INTO "nextly_unfilled_subtitle" ("needs_a_value_subtitle") SELECT NULL FROM "dc_mfu_posts" WHERE 1 = 1 AND (CASE WHEN jsonb_typeof("meta" #> '{"subtitle"}') IS NOT NULL AND jsonb_typeof("meta" #> '{"subtitle"}') <> 'null' THEN 0 ELSE 1 END) = 1 LIMIT 1;;
+
+DROP TABLE "nextly_unfilled_subtitle";;
+
+UPDATE "dc_mfu_posts" SET "meta" = "meta" #- '{"label"}' WHERE NOT (COALESCE(("other" #> '{"label"}') IS NOT NULL, FALSE)) AND ("meta" #> '{"label"}') IS NOT NULL;;
+
+UPDATE "dc_mfu_posts" SET "meta" = jsonb_set(COALESCE("meta", '{}'::jsonb), '{"label"}', "other" #> '{"label"}', true) WHERE ("other" #> '{"label"}') IS NOT NULL;;
+
+UPDATE "dc_mfu_posts" SET "other" = "other" #- '{"label"}' WHERE ("other" #> '{"label"}') IS NOT NULL AND ("meta" #> '{"label"}') IS NOT NULL;;
+
+UPDATE "nextly_media_usage" SET "field_path" = ('meta.label' || SUBSTR("field_path", 12)) WHERE "subject_kind" = 'collection' AND "subject_slug" = 'mfu_posts' AND ("field_path" = 'other.label' OR SUBSTR("field_path", 1, 12) = 'other.label.') AND NOT EXISTS (SELECT 1 FROM (SELECT "subject_kind", "subject_slug", "document_id", "locale", "media_id", "field_path" FROM "nextly_media_usage" WHERE "subject_kind" = 'collection' AND "subject_slug" = 'mfu_posts') AS "taken" WHERE "taken"."subject_kind" = "nextly_media_usage"."subject_kind" AND "taken"."subject_slug" = "nextly_media_usage"."subject_slug" AND "taken"."document_id" = "nextly_media_usage"."document_id" AND "taken"."locale" = "nextly_media_usage"."locale" AND "taken"."media_id" = "nextly_media_usage"."media_id" AND "taken"."field_path" = ('meta.label' || SUBSTR("nextly_media_usage"."field_path", 12)));;
+
+ALTER TABLE "dc_mfu_posts" DROP COLUMN "summary";
+
+ALTER TABLE "dc_mfu_posts" ADD COLUMN "author" text;
+
+ALTER TABLE "dc_mfu_posts" ADD COLUMN "extra" text;
+
+ALTER TABLE "dc_mfu_posts" ADD COLUMN "subtitle" text;
+
+CREATE INDEX IF NOT EXISTS "idx_dc_mfu_posts_author" ON "dc_mfu_posts" ("author");
+
+-- Junction table for many-to-many: mfu_posts.tags -> mfu_people
+CREATE TABLE IF NOT EXISTS "dc_mfu_people_dc_mfu_posts_tags" (
+  "id" text PRIMARY KEY NOT NULL,
+  "mfu_posts_id" text NOT NULL,
+  "mfu_people_id" text NOT NULL,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  CONSTRAINT "fk_dc_mfu_people_dc_mfu_posts_tags_mfu_posts" FOREIGN KEY ("mfu_posts_id") REFERENCES "dc_mfu_posts"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "fk_dc_mfu_people_dc_mfu_posts_tags_mfu_people" FOREIGN KEY ("mfu_people_id") REFERENCES "dc_mfu_people"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+  CONSTRAINT "uq_dc_mfu_people_dc_mfu_posts_tags_pair" UNIQUE ("mfu_posts_id", "mfu_people_id")
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_mfu_people_dc_mfu_posts_tags_mfu_posts" ON "dc_mfu_people_dc_mfu_posts_tags"("mfu_posts_id");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_dc_mfu_people_dc_mfu_posts_tags_mfu_people" ON "dc_mfu_people_dc_mfu_posts_tags"("mfu_people_id");;
+
+ALTER TABLE "dc_mfu_posts" ADD CONSTRAINT "fk_dc_mfu_posts_author" FOREIGN KEY ("author") REFERENCES "dc_mfu_people" ("id") ON DELETE SET NULL ON UPDATE NO ACTION;
+
+UPDATE "dc_mfu_posts" SET "subtitle" = "meta" #>> '{"subtitle"}' WHERE jsonb_typeof("meta" #> '{"subtitle"}') IS NOT NULL AND jsonb_typeof("meta" #> '{"subtitle"}') <> 'null';;
+
+UPDATE "dc_mfu_posts" SET "subtitle" = NULL WHERE ("meta" #> '{"subtitle"}') IS NOT NULL AND NOT (jsonb_typeof("meta" #> '{"subtitle"}') IS NOT NULL AND jsonb_typeof("meta" #> '{"subtitle"}') <> 'null');;
+
+UPDATE "dc_mfu_posts" SET "meta" = "meta" #- '{"subtitle"}' WHERE ("meta" #> '{"subtitle"}') IS NOT NULL AND ("subtitle" IS NOT NULL OR NOT (jsonb_typeof("meta" #> '{"subtitle"}') IS NOT NULL AND jsonb_typeof("meta" #> '{"subtitle"}') <> 'null'));;
+
+UPDATE "nextly_media_usage" SET "field_path" = ('subtitle' || SUBSTR("field_path", 14)) WHERE "subject_kind" = 'collection' AND "subject_slug" = 'mfu_posts' AND ("field_path" = 'meta.subtitle' OR SUBSTR("field_path", 1, 14) = 'meta.subtitle.') AND NOT EXISTS (SELECT 1 FROM (SELECT "subject_kind", "subject_slug", "document_id", "locale", "media_id", "field_path" FROM "nextly_media_usage" WHERE "subject_kind" = 'collection' AND "subject_slug" = 'mfu_posts') AS "taken" WHERE "taken"."subject_kind" = "nextly_media_usage"."subject_kind" AND "taken"."subject_slug" = "nextly_media_usage"."subject_slug" AND "taken"."document_id" = "nextly_media_usage"."document_id" AND "taken"."locale" = "nextly_media_usage"."locale" AND "taken"."media_id" = "nextly_media_usage"."media_id" AND "taken"."field_path" = ('subtitle' || SUBSTR("nextly_media_usage"."field_path", 14)));;
+
+ALTER TABLE "dc_mfu_posts" ALTER COLUMN "subtitle" SET NOT NULL;
+
+INSERT INTO "dynamic_collections" ("id", "slug", "labels", "table_name", "fields", "source", "schema_hash", "status", "localized", "versions", "revalidate", "webhooks", "migration_status", "admin", "created_at", "updated_at") VALUES ('9f1539c2-63bd-4ccc-0811-ccb4899941ae', 'mfu_posts', '{"singular":"mfu_posts","plural":"mfu_postss"}'::jsonb, 'dc_mfu_posts', '[{"name":"subtitle","type":"text","required":true,"localized":false},{"name":"extra","type":"text","localized":false},{"name":"author","type":"relationship","options":{"target":"mfu_people"}},{"name":"tags","type":"relationship","options":{"target":"mfu_people","relationType":"manyToMany"}},{"name":"meta","type":"group","fields":[{"name":"note","type":"text","localized":false},{"name":"summary","type":"text","localized":false},{"name":"label","type":"text","localized":false}]},{"name":"other","type":"group","fields":[{"name":"kept","type":"text","localized":false}]}]'::jsonb, 'ui', '44acdf80bc9ba0fd3d18effa2ece36e9c9f4a3d0dce89d6c08c00ee0e27d2fd3', false, false, NULL, NULL, NULL, 'applied', '{}'::jsonb, now(), now()) ON CONFLICT ("slug") DO UPDATE SET "labels" = EXCLUDED."labels", "fields" = EXCLUDED."fields", "schema_hash" = EXCLUDED."schema_hash", "status" = EXCLUDED."status", "localized" = EXCLUDED."localized", "versions" = EXCLUDED."versions", "revalidate" = EXCLUDED."revalidate", "webhooks" = EXCLUDED."webhooks", "admin" = EXCLUDED."admin", "updated_at" = EXCLUDED."updated_at";
+
+INSERT INTO "nextly_meta" ("key", "value", "updated_at") VALUES ('schema_version', to_jsonb('{"migration":null,"seq":1}'::text), now()) ON CONFLICT ("key") DO UPDATE SET "value" = to_jsonb(jsonb_build_object('migration', ("nextly_meta"."value" #>> '{}')::jsonb -> 'migration', 'seq', COALESCE((("nextly_meta"."value" #>> '{}')::jsonb ->> 'seq')::bigint, 0) + 1)::text), "updated_at" = now();;
+
+-- DOWN
+UPDATE "dc_mfu_posts" SET "meta" = jsonb_set(COALESCE("meta", '{}'::jsonb), '{"subtitle"}', 'null'::jsonb, true) WHERE "subtitle" IS NULL;;
+
+UPDATE "dc_mfu_posts" SET "meta" = jsonb_set(COALESCE("meta", '{}'::jsonb), '{"subtitle"}', to_jsonb("subtitle"), true) WHERE "subtitle" IS NOT NULL;;
+
+UPDATE "nextly_media_usage" SET "field_path" = ('meta.subtitle' || SUBSTR("field_path", 9)) WHERE "subject_kind" = 'collection' AND "subject_slug" = 'mfu_posts' AND ("field_path" = 'subtitle' OR SUBSTR("field_path", 1, 9) = 'subtitle.') AND NOT EXISTS (SELECT 1 FROM (SELECT "subject_kind", "subject_slug", "document_id", "locale", "media_id", "field_path" FROM "nextly_media_usage" WHERE "subject_kind" = 'collection' AND "subject_slug" = 'mfu_posts') AS "taken" WHERE "taken"."subject_kind" = "nextly_media_usage"."subject_kind" AND "taken"."subject_slug" = "nextly_media_usage"."subject_slug" AND "taken"."document_id" = "nextly_media_usage"."document_id" AND "taken"."locale" = "nextly_media_usage"."locale" AND "taken"."media_id" = "nextly_media_usage"."media_id" AND "taken"."field_path" = ('meta.subtitle' || SUBSTR("nextly_media_usage"."field_path", 9)));;
+
+UPDATE "dc_mfu_posts" SET "other" = "other" #- '{"label"}' WHERE NOT (COALESCE(("meta" #> '{"label"}') IS NOT NULL, FALSE)) AND ("other" #> '{"label"}') IS NOT NULL;;
+
+UPDATE "dc_mfu_posts" SET "other" = jsonb_set(COALESCE("other", '{}'::jsonb), '{"label"}', "meta" #> '{"label"}', true) WHERE ("meta" #> '{"label"}') IS NOT NULL;;
+
+UPDATE "dc_mfu_posts" SET "meta" = "meta" #- '{"label"}' WHERE ("meta" #> '{"label"}') IS NOT NULL AND ("other" #> '{"label"}') IS NOT NULL;;
+
+UPDATE "dc_mfu_posts" SET "meta" = NULL WHERE ("meta" #> '{}') = '{}'::jsonb;;
+
+UPDATE "nextly_media_usage" SET "field_path" = ('other.label' || SUBSTR("field_path", 11)) WHERE "subject_kind" = 'collection' AND "subject_slug" = 'mfu_posts' AND ("field_path" = 'meta.label' OR SUBSTR("field_path", 1, 11) = 'meta.label.') AND NOT EXISTS (SELECT 1 FROM (SELECT "subject_kind", "subject_slug", "document_id", "locale", "media_id", "field_path" FROM "nextly_media_usage" WHERE "subject_kind" = 'collection' AND "subject_slug" = 'mfu_posts') AS "taken" WHERE "taken"."subject_kind" = "nextly_media_usage"."subject_kind" AND "taken"."subject_slug" = "nextly_media_usage"."subject_slug" AND "taken"."document_id" = "nextly_media_usage"."document_id" AND "taken"."locale" = "nextly_media_usage"."locale" AND "taken"."media_id" = "nextly_media_usage"."media_id" AND "taken"."field_path" = ('other.label' || SUBSTR("nextly_media_usage"."field_path", 11)));;
+
+ALTER TABLE "dc_mfu_posts" DROP CONSTRAINT IF EXISTS "fk_dc_mfu_posts_author";
+
+DROP TABLE IF EXISTS "dc_mfu_people_dc_mfu_posts_tags";;
+
+DROP INDEX IF EXISTS "idx_dc_mfu_posts_author";
+
+ALTER TABLE "dc_mfu_posts" DROP COLUMN "subtitle";
+
+ALTER TABLE "dc_mfu_posts" DROP COLUMN "extra";
+
+ALTER TABLE "dc_mfu_posts" DROP COLUMN "author";
+
+ALTER TABLE "dc_mfu_posts" ADD COLUMN "summary" text;
+
+UPDATE "dc_mfu_posts" SET "summary" = "meta" #>> '{"summary"}' WHERE jsonb_typeof("meta" #> '{"summary"}') IS NOT NULL AND jsonb_typeof("meta" #> '{"summary"}') <> 'null';;
+
+UPDATE "dc_mfu_posts" SET "summary" = NULL WHERE ("meta" #> '{"summary"}') IS NOT NULL AND NOT (jsonb_typeof("meta" #> '{"summary"}') IS NOT NULL AND jsonb_typeof("meta" #> '{"summary"}') <> 'null');;
+
+UPDATE "dc_mfu_posts" SET "meta" = "meta" #- '{"summary"}' WHERE ("meta" #> '{"summary"}') IS NOT NULL AND ("summary" IS NOT NULL OR NOT (jsonb_typeof("meta" #> '{"summary"}') IS NOT NULL AND jsonb_typeof("meta" #> '{"summary"}') <> 'null'));;
+
+UPDATE "dc_mfu_posts" SET "meta" = NULL WHERE ("meta" #> '{}') = '{}'::jsonb;;
+
+UPDATE "nextly_media_usage" SET "field_path" = ('summary' || SUBSTR("field_path", 13)) WHERE "subject_kind" = 'collection' AND "subject_slug" = 'mfu_posts' AND ("field_path" = 'meta.summary' OR SUBSTR("field_path", 1, 13) = 'meta.summary.') AND NOT EXISTS (SELECT 1 FROM (SELECT "subject_kind", "subject_slug", "document_id", "locale", "media_id", "field_path" FROM "nextly_media_usage" WHERE "subject_kind" = 'collection' AND "subject_slug" = 'mfu_posts') AS "taken" WHERE "taken"."subject_kind" = "nextly_media_usage"."subject_kind" AND "taken"."subject_slug" = "nextly_media_usage"."subject_slug" AND "taken"."document_id" = "nextly_media_usage"."document_id" AND "taken"."locale" = "nextly_media_usage"."locale" AND "taken"."media_id" = "nextly_media_usage"."media_id" AND "taken"."field_path" = ('summary' || SUBSTR("nextly_media_usage"."field_path", 13)));;
+
+-- snapshot
+{
+  "entities": {
+    "collections": {
+      "mfu_people": {
+        "settings": {
+          "fields": [
+            {
+              "localized": false,
+              "name": "label",
+              "type": "text"
+            }
+          ],
+          "labels": {
+            "plural": "mfu_peoples",
+            "singular": "mfu_people"
+          },
+          "localized": false,
+          "slug": "mfu_people",
+          "status": false
+        },
+        "source": "builder"
+      },
+      "mfu_posts": {
+        "settings": {
+          "admin": {},
+          "fields": [
+            {
+              "localized": false,
+              "name": "subtitle",
+              "required": true,
+              "type": "text"
+            },
+            {
+              "localized": false,
+              "name": "extra",
+              "type": "text"
+            },
+            {
+              "name": "author",
+              "options": {
+                "target": "mfu_people"
+              },
+              "type": "relationship"
+            },
+            {
+              "name": "tags",
+              "options": {
+                "relationType": "manyToMany",
+                "target": "mfu_people"
+              },
+              "type": "relationship"
+            },
+            {
+              "fields": [
+                {
+                  "localized": false,
+                  "name": "note",
+                  "type": "text"
+                },
+                {
+                  "localized": false,
+                  "name": "summary",
+                  "type": "text"
+                },
+                {
+                  "localized": false,
+                  "name": "label",
+                  "type": "text"
+                }
+              ],
+              "name": "meta",
+              "type": "group"
+            },
+            {
+              "fields": [
+                {
+                  "localized": false,
+                  "name": "kept",
+                  "type": "text"
+                }
+              ],
+              "name": "other",
+              "type": "group"
+            }
+          ],
+          "labels": {
+            "plural": "mfu_postss",
+            "singular": "mfu_posts"
+          },
+          "localized": false,
+          "slug": "mfu_posts",
+          "status": false
+        },
+        "source": "builder"
+      }
+    },
+    "fieldGroups": {},
+    "singles": {}
+  },
+  "migration": "<stamp>_mfu_posts_update",
+  "migrationHash": "<hash>",
+  "parent": "<stamp>_mfu_posts_create",
+  "permissions": {
+    "app": {},
+    "collections": {
+      "mfu_people": {
+        "create-mfu_people": {
+          "action": "create",
+          "danger": false,
+          "description": "Permission to create mfu_people",
+          "group": null,
+          "name": "Create Mfu_people",
+          "resource": "mfu_people"
+        },
+        "delete-mfu_people": {
+          "action": "delete",
+          "danger": false,
+          "description": "Permission to delete mfu_people",
+          "group": null,
+          "name": "Delete Mfu_people",
+          "resource": "mfu_people"
+        },
+        "publish-mfu_people": {
+          "action": "publish",
+          "danger": false,
+          "description": "Permission to publish mfu_people",
+          "group": null,
+          "name": "Publish Mfu_people",
+          "resource": "mfu_people"
+        },
+        "read-mfu_people": {
+          "action": "read",
+          "danger": false,
+          "description": "Permission to read mfu_people",
+          "group": null,
+          "name": "Read Mfu_people",
+          "resource": "mfu_people"
+        },
+        "unpublish-mfu_people": {
+          "action": "unpublish",
+          "danger": false,
+          "description": "Permission to unpublish mfu_people",
+          "group": null,
+          "name": "Unpublish Mfu_people",
+          "resource": "mfu_people"
+        },
+        "update-mfu_people": {
+          "action": "update",
+          "danger": false,
+          "description": "Permission to update mfu_people",
+          "group": null,
+          "name": "Update Mfu_people",
+          "resource": "mfu_people"
+        }
+      },
+      "mfu_posts": {
+        "create-mfu_posts": {
+          "action": "create",
+          "danger": false,
+          "description": "Permission to create mfu_posts",
+          "group": null,
+          "name": "Create Mfu_posts",
+          "resource": "mfu_posts"
+        },
+        "delete-mfu_posts": {
+          "action": "delete",
+          "danger": false,
+          "description": "Permission to delete mfu_posts",
+          "group": null,
+          "name": "Delete Mfu_posts",
+          "resource": "mfu_posts"
+        },
+        "publish-mfu_posts": {
+          "action": "publish",
+          "danger": false,
+          "description": "Permission to publish mfu_posts",
+          "group": null,
+          "name": "Publish Mfu_posts",
+          "resource": "mfu_posts"
+        },
+        "read-mfu_posts": {
+          "action": "read",
+          "danger": false,
+          "description": "Permission to read mfu_posts",
+          "group": null,
+          "name": "Read Mfu_posts",
+          "resource": "mfu_posts"
+        },
+        "unpublish-mfu_posts": {
+          "action": "unpublish",
+          "danger": false,
+          "description": "Permission to unpublish mfu_posts",
+          "group": null,
+          "name": "Unpublish Mfu_posts",
+          "resource": "mfu_posts"
+        },
+        "update-mfu_posts": {
+          "action": "update",
+          "danger": false,
+          "description": "Permission to update mfu_posts",
+          "group": null,
+          "name": "Update Mfu_posts",
+          "resource": "mfu_posts"
+        }
+      }
+    },
+    "plugins": {},
+    "singles": {}
+  },
+  "snapshot": {
+    "tables": [
+      {
+        "columns": [
+          {
+            "name": "_changed_at",
+            "nullable": true,
+            "type": "timestamp"
+          },
+          {
+            "name": "_changed_by_id",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "_changed_by_kind",
+            "nullable": true,
+            "type": "varchar"
+          },
+          {
+            "name": "_changed_by_principal_kind",
+            "nullable": true,
+            "type": "varchar"
+          },
+          {
+            "default": "1",
+            "name": "_revision",
+            "nullable": false,
+            "type": "int4"
+          },
+          {
+            "default": "now()",
+            "name": "created_at",
+            "nullable": true,
+            "type": "timestamp"
+          },
+          {
+            "name": "created_by",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "id",
+            "nullable": false,
+            "primaryKey": true,
+            "type": "text"
+          },
+          {
+            "name": "label",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "slug",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "name": "title",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "default": "now()",
+            "name": "updated_at",
+            "nullable": true,
+            "type": "timestamp"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "created_at"
+            ],
+            "name": "idx_dc_mfu_people_created_at",
+            "unique": false
+          },
+          {
+            "columns": [
+              "created_by"
+            ],
+            "name": "idx_dc_mfu_people_created_by",
+            "unique": false
+          },
+          {
+            "columns": [
+              "slug"
+            ],
+            "name": "idx_dc_mfu_people_slug",
+            "unique": true
+          }
+        ],
+        "localized": true,
+        "name": "dc_mfu_people"
+      },
+      {
+        "columns": [
+          {
+            "name": "_changed_at",
+            "nullable": true,
+            "type": "timestamp"
+          },
+          {
+            "name": "_changed_by_id",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "_changed_by_kind",
+            "nullable": true,
+            "type": "varchar"
+          },
+          {
+            "name": "_changed_by_principal_kind",
+            "nullable": true,
+            "type": "varchar"
+          },
+          {
+            "default": "1",
+            "name": "_revision",
+            "nullable": false,
+            "type": "int4"
+          },
+          {
+            "holdsSingleReference": true,
+            "name": "author",
+            "nullable": true,
+            "referenceShape": "one",
+            "type": "text"
+          },
+          {
+            "default": "now()",
+            "name": "created_at",
+            "nullable": true,
+            "type": "timestamp"
+          },
+          {
+            "name": "created_by",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "extra",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "id",
+            "nullable": false,
+            "primaryKey": true,
+            "type": "text"
+          },
+          {
+            "name": "meta",
+            "nullable": true,
+            "type": "jsonb"
+          },
+          {
+            "name": "other",
+            "nullable": true,
+            "type": "jsonb"
+          },
+          {
+            "name": "slug",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "name": "subtitle",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "name": "title",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "default": "now()",
+            "name": "updated_at",
+            "nullable": true,
+            "type": "timestamp"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "author"
+            ],
+            "name": "idx_dc_mfu_posts_author",
+            "unique": false
+          },
+          {
+            "columns": [
+              "created_at"
+            ],
+            "name": "idx_dc_mfu_posts_created_at",
+            "unique": false
+          },
+          {
+            "columns": [
+              "created_by"
+            ],
+            "name": "idx_dc_mfu_posts_created_by",
+            "unique": false
+          },
+          {
+            "columns": [
+              "slug"
+            ],
+            "name": "idx_dc_mfu_posts_slug",
+            "unique": true
+          }
+        ],
+        "localized": true,
+        "name": "dc_mfu_posts"
+      }
+    ]
+  },
+  "translatedFieldsRecorded": true,
+  "version": 1
+}
