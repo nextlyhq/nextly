@@ -127,7 +127,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       for (const [from, to] of [
         ["text", "textarea"],
         ["textarea", "code"],
-      ]) {
+      ] as const) {
         expect(targetOf({ type: from }, to, SINGLE), to).toMatchObject({
           blocked: null,
           refusal: null,

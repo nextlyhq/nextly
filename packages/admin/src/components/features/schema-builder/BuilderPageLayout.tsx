@@ -61,6 +61,7 @@ import { BuilderOverlays, type ActiveOverlay } from "./BuilderOverlays";
 import { BuilderReadOnlyNotice } from "./BuilderReadOnlyNotice";
 import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 import { BuilderToolbar } from "./BuilderToolbar";
+import { ChangeTypeProvider } from "./change-type-context";
 import {
   NO_REFUSED_MOVES,
   RefusedMovesProvider,
@@ -212,12 +213,17 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onShowError={fieldId => onActiveChange({ kind: "edit", fieldId })}
         />
         {/* The field's row and its settings read the refused moves from here. */}
-        <RefusedMovesProvider value={refusedMoves}>
-          {/* The panel's conditions are judged against the saved definition too. */}
-          <SavedFieldsProvider value={pending.saved}>
-            <BuilderWorkspace {...props} />
-          </SavedFieldsProvider>
-        </RefusedMovesProvider>
+        {/* Change type…, as the field's settings open it on a field. */}
+        <ChangeTypeProvider
+          value={fieldId => onActiveChange({ kind: "change-type", fieldId })}
+        >
+          <RefusedMovesProvider value={refusedMoves}>
+            {/* The panel's conditions are judged against the saved definition too. */}
+            <SavedFieldsProvider value={pending.saved}>
+              <BuilderWorkspace {...props} />
+            </SavedFieldsProvider>
+          </RefusedMovesProvider>
+        </ChangeTypeProvider>
 
         <BuilderOverlays
           active={active}
@@ -418,7 +424,6 @@ function EditedFieldSettings({
         close();
       }}
       onClose={close}
-      onChangeType={fieldId => onActiveChange({ kind: "change-type", fieldId })}
     />
   );
 }

@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@admin/__tests__/utils";
 
 import { BuilderFieldSettings } from "../BuilderFieldSettings";
+import { ChangeTypeProvider } from "../change-type-context";
 import type { BuilderField } from "../types";
 
 // The installed plugins the panel sees, so a test can contribute a field type
@@ -78,21 +79,22 @@ function Builder({
 }) {
   const [fields, setFields] = useState(initial);
   return (
-    <BuilderFieldSettings
-      kind="collection"
-      fields={fields}
-      fieldId={fieldId}
-      savedFieldIds={new Set(saved)}
-      readOnly={readOnly}
-      docked={false}
-      onFieldChange={next => {
-        onUpdate(next);
-        setFields(all => all.map(f => (f.id === next.id ? next : f)));
-      }}
-      onFieldDelete={onDelete}
-      onClose={() => {}}
-      onChangeType={onChangeType}
-    />
+    <ChangeTypeProvider value={onChangeType}>
+      <BuilderFieldSettings
+        kind="collection"
+        fields={fields}
+        fieldId={fieldId}
+        savedFieldIds={new Set(saved)}
+        readOnly={readOnly}
+        docked={false}
+        onFieldChange={next => {
+          onUpdate(next);
+          setFields(all => all.map(f => (f.id === next.id ? next : f)));
+        }}
+        onFieldDelete={onDelete}
+        onClose={() => {}}
+      />
+    </ChangeTypeProvider>
   );
 }
 

@@ -67,6 +67,7 @@ import {
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
 import { AdvancedTab } from "./builder-field-settings/AdvancedTab";
 import { RenameFieldAction } from "./builder-field-settings/RenameFieldAction";
+import { useOpenChangeType } from "./change-type-context";
 import { FieldErrorNotice } from "./FieldErrorNotice";
 import type { BuilderField } from "./types";
 
@@ -149,8 +150,6 @@ type Props = {
   lifecycleEnabled?: boolean;
   /** How Rename… stands for the field (`FieldRename`). */
   rename?: FieldRename;
-  /** Opens Change type… for the field; absent, the panel offers none. */
-  onChangeType?: (fieldId: string) => void;
 };
 
 /** The names of the named containers above a field, outermost first: the path the save finds it by. */
@@ -241,6 +240,8 @@ function panelStateOf(
   fieldTitle: string;
   /** Whether Rename… is offered: a saved, changeable field with a column of its own. */
   renamable: boolean;
+  /** Whether Change type… is offered (`changeTypeOffered`), as a row's menu asks it. */
+  typeChangeable: boolean;
   /** What the panel says beside a saved field's fixed name. */
   nameFixedReason: string;
 } {
@@ -260,6 +261,7 @@ function panelStateOf(
       fieldReadOnly,
       namedByHooks
     ),
+    typeChangeable: changeTypeOffered(field, fieldReadOnly),
     nameFixedReason: unavailable ?? RENAME_HOW,
   };
 }
@@ -270,7 +272,7 @@ function panelStateOf(
  */
 function FieldActions({
   field,
-  onChangeType,
+  typeChangeable,
   renamable,
   startRenaming,
   checkName,
@@ -279,8 +281,7 @@ function FieldActions({
   onDelete,
 }: {
   field: BuilderField;
-  /** Absent where Change type… is not offered. */
-  onChangeType: (() => void) | undefined;
+  typeChangeable: boolean;
   renamable: boolean;
   startRenaming: boolean;
   checkName: (name: string) => string | null;
@@ -288,15 +289,17 @@ function FieldActions({
   canDelete: boolean;
   onDelete: () => void;
 }): JSX.Element {
+  // The page's Change type…, where it offers one (`ChangeTypeProvider`).
+  const openChangeType = useOpenChangeType();
   return (
     <>
-      {onChangeType && (
+      {typeChangeable && openChangeType && (
         <Button
           type="button"
           variant="ghost"
           size="sm"
           className="h-7 px-2 text-muted-foreground"
-          onClick={onChangeType}
+          onClick={() => openChangeType(field.id)}
         >
           Change type…
         </Button>
@@ -381,7 +384,6 @@ export function BuilderFieldSettings({
   savedFields,
   lifecycleEnabled = false,
   rename,
-  onChangeType,
 }: Props): JSX.Element | null {
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const placement = findFieldPlacement(fields, fieldId) ?? fallbackPlacement;
@@ -434,11 +436,7 @@ export function BuilderFieldSettings({
       actions={
         <FieldActions
           field={field}
-          onChangeType={
-            onChangeType && changeTypeOffered(field, fieldReadOnly)
-              ? () => onChangeType(field.id)
-              : undefined
-          }
+          typeChangeable={state.typeChangeable}
           renamable={state.renamable}
           startRenaming={rename?.asked === true}
           checkName={checkName}

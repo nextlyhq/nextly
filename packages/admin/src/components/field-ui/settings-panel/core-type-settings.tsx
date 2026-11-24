@@ -239,9 +239,7 @@ const CORE_FIELD_TYPE_SETTINGS: Readonly<
  * built in. Either stored spelling of the field-group type finds the
  * field-group entry, so a migrated definition gets the same controls.
  */
-export function coreFieldTypeSettings(
-  type: string
-): FieldTypeSettings | undefined {
+function coreFieldTypeSettings(type: string): FieldTypeSettings | undefined {
   if (isFieldGroupFieldType(type)) return CORE_FIELD_TYPE_SETTINGS.component;
   return Object.prototype.hasOwnProperty.call(CORE_FIELD_TYPE_SETTINGS, type)
     ? CORE_FIELD_TYPE_SETTINGS[type as keyof typeof CORE_FIELD_TYPE_SETTINGS]

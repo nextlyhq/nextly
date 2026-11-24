@@ -7,9 +7,8 @@
  *
  * @module lib/builder/type-change-refusals
  */
-import { validationIssues } from "@admin/lib/api/parseApiError";
-
 import type { PendingChange } from "./pending-changes";
+import { refusalsAtFields } from "./refusals-at-fields";
 
 /** The codes a save refuses a field's type change with. */
 const TYPE_CHANGE_REFUSALS: ReadonlySet<string> = new Set([
@@ -33,20 +32,5 @@ export function refusedTypeChangesOf(
       fieldAt.set(`fields.${change.path.join(".")}`, change.fieldId);
     }
   }
-  const refused = new Map<string, string>();
-  for (const issue of validationIssues(error)) {
-    if (
-      issue.code === undefined ||
-      !TYPE_CHANGE_REFUSALS.has(issue.code) ||
-      issue.message === undefined
-    ) {
-      continue;
-    }
-    const fieldId =
-      issue.path === undefined ? undefined : fieldAt.get(issue.path);
-    if (fieldId !== undefined && !refused.has(fieldId)) {
-      refused.set(fieldId, issue.message);
-    }
-  }
-  return refused;
+  return refusalsAtFields(error, TYPE_CHANGE_REFUSALS, fieldAt);
 }
