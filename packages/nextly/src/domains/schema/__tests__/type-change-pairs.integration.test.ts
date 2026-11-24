@@ -37,7 +37,7 @@ import { textsOf } from "./helpers/document-texts";
 import { readTableDefinition } from "./helpers/table-definition";
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
-const SLUG = "tcp_posts";
+const SLUG = "tcm_posts";
 const TABLE = `dc_${SLUG}`;
 const READER = "type-change-pairs-reader";
 const ORIGIN = "http://localhost";
