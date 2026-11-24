@@ -5,6 +5,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
   SelectOptions,
   SupportedDialect,
+  SqlParam,
   TransactionContext,
   WhereClause,
 } from "@nextlyhq/adapter-drizzle/types";
@@ -773,8 +774,8 @@ export class FieldGroupMutationService extends BaseService {
     if (overlays && overlays.written.length > 0) {
       await pruneOverlaysOfRemovedRows(
         overlays.tx ?? {
-          getDrizzle: <T = unknown>() => this.adapter.getDrizzle(),
-          execute: <T = unknown>(sql: string, params?: unknown[]) =>
+          getDrizzle: <T = unknown>() => this.adapter.getDrizzle<T>(),
+          execute: <T = unknown>(sql: string, params?: SqlParam[]) =>
             this.adapter.executeQuery<T>(sql, params),
         },
         this.adapter.dialect,
