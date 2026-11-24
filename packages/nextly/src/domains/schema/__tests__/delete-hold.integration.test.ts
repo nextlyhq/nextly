@@ -40,6 +40,7 @@ import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database
 import { childLayoutArgs } from "../../../__tests__/storage-layout";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
+import { verifyPassword } from "../../../auth/password";
 import { createAdapter } from "../../../database/factory";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import {
@@ -52,6 +53,7 @@ import type { ServiceContainer } from "../../../services";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { _resetEnvCache } from "../../../shared/lib/env";
+import { registerFieldFunctions } from "../../../shared/lib/field-level-registry";
 import { consoleLogger } from "../../../shared/types";
 import { holdEntityForWrite } from "../../collections/services/entry-write-hold";
 import {
@@ -526,6 +528,51 @@ describe.each(getConfiguredTestDialects())(
           ...(resolutions === undefined ? {} : { resolutions }),
         }
       );
+    }
+
+    /** The first entry's id. */
+    async function firstEntry(t: TestNextly): Promise<string> {
+      const [first] = await sql<{ id: unknown }>(
+        t,
+        `SELECT ${q("id")} AS id FROM ${q(TABLE)} ORDER BY ${q("id")}`
+      );
+      return String(first?.id);
+    }
+
+    /**
+     * Sends `write` while a save that removes `note` (to `remaining`) holds the collection, after
+     * its count, and lets the save finish: whether the write was held back until then, and what
+     * came of it once the save was applied.
+     */
+    async function whileSaving(
+      t: TestNextly,
+      write: () => Promise<unknown>,
+      remaining: unknown[] = REMAINING
+    ): Promise<{ heldBack: boolean; outcome: unknown }> {
+      const { paused, release } = gated(afterCount);
+      const applying = apply(t, 3, remaining).then(
+        () => "applied",
+        (error: unknown) => error
+      );
+      const reached = await Promise.race([
+        paused.then(() => true),
+        applying.then(() => false),
+      ]);
+      expect(reached || (await applying)).toBe(true);
+      let settled = false;
+      const writing = write()
+        .then(
+          () => "written",
+          (error: unknown) => error
+        )
+        .finally(() => {
+          settled = true;
+        });
+      await new Promise(resolve => setTimeout(resolve, 1_000));
+      const heldBack = !settled;
+      release();
+      expect(await applying).toBe("applied");
+      return { heldBack, outcome: await writing };
     }
 
     /**
@@ -1382,59 +1429,176 @@ describe.each(getConfiguredTestDialects())(
 
     // An update sent between the count and the drop, setting only a field the save keeps, was made
     // from the definition with the removed field, which its read of the entry as it stands names.
-    // It waits for the collection, and once the save let go it is refused as made for a definition
-    // that changed, with nothing written, to be made again from the new one: never failed by the
+    // It waits for the collection, and once the save let go it is made again from the definition
+    // the save left, and applied: never refused for what it does not set, nor failed by the
     // database on the removed column.
-    it("keeps an update of a kept field waiting from the count until the save is over, then refuses it as made for the earlier definition", async () => {
+    it("keeps an update of a kept field waiting from the count until the save is over, then applies it", async () => {
       const t = await boot();
       for (const note of ["a", "b", "c"]) await insert(t, note);
-      const [first] = await sql<{ id: unknown }>(
-        t,
-        `SELECT ${q("id")} AS id FROM ${q(TABLE)} ORDER BY ${q("id")}`
-      );
-      const id = String(first?.id);
-      const { paused, release } = gated(afterCount);
-      const applying = apply(t, 3).then(
-        () => "applied",
-        (error: unknown) => error
-      );
-      const reached = await Promise.race([
-        paused.then(() => true),
-        applying.then(() => false),
-      ]);
-      expect(reached || (await applying)).toBe(true);
-
-      let settled = false;
-      const writing = t.nextly
-        .update({
+      const id = await firstEntry(t);
+      const { heldBack, outcome } = await whileSaving(t, () =>
+        t.nextly.update({
           collection: SLUG,
           id,
           // Written over whatever the entry holds now, as an editor saving over it does.
           data: { label: "changed", _overwrite: true },
         } as never)
-        .then(
-          () => "updated",
-          (error: unknown) => error
-        )
-        .finally(() => {
-          settled = true;
-        });
-      await new Promise(resolve => setTimeout(resolve, 1_000));
-      const heldBack = !settled;
-      release();
+      );
       expect(heldBack).toBe(true);
-      expect(await applying).toBe("applied");
-      const outcome = await writing;
-      // Refused as made for a definition that changed, not as held past the hold's wait.
-      expect(outcome, told(outcome)).toMatchObject({
-        code: "COLLECTION_BEING_CHANGED",
-        message: expect.stringContaining("changed while this write waited"),
-      });
+      expect(outcome, told(outcome)).toBe("written");
       const [row] = await sql<{ label: unknown }>(
         t,
         `SELECT ${q("label")} AS label FROM ${q(TABLE)} WHERE ${q("id")} = '${id}'`
       );
-      expect(row?.label).toBe(id);
+      expect(row?.label).toBe("changed");
+      expect(await hasNoteColumn(t)).toBe(false);
+    }, 60_000);
+
+    // A delete sets nothing, and reads the entry first: made again as an update is, its hooks run
+    // once.
+    it("keeps a delete waiting until the save is over, then deletes the entry, its before hook run once", async () => {
+      const t = await boot();
+      for (const note of ["a", "b", "c"]) await insert(t, note);
+      const id = await firstEntry(t);
+      let runs = 0;
+      t.hooks.register("beforeDelete", SLUG, () => {
+        runs += 1;
+      });
+      const { heldBack, outcome } = await whileSaving(t, () =>
+        t.nextly.delete({ collection: SLUG, id })
+      );
+      expect(heldBack).toBe(true);
+      expect(outcome, told(outcome)).toBe("written");
+      expect(runs).toBe(1);
+      const [left] = await sql<{ n: number | string }>(
+        t,
+        `SELECT COUNT(*) AS n FROM ${q(TABLE)}`
+      );
+      expect(Number(left?.n)).toBe(2);
+    }, 60_000);
+
+    // A create's own defaults are part of what it writes, and nobody set them: a removed field's is
+    // left out of the entry made again, rather than refusing a create that never named the field, or
+    // failing it on the column that is gone.
+    it("applies a held create whose only value for the removed field is its default", async () => {
+      const t = await boot([
+        { name: "label", type: "text" },
+        { name: "note", type: "text", defaultValue: "by default" },
+      ]);
+      for (const note of ["a", "b", "c"]) await insert(t, note);
+      const { heldBack, outcome } = await whileSaving(t, () =>
+        t.nextly.create({
+          collection: SLUG,
+          data: { title: "made", slug: "made", label: "sent" },
+        })
+      );
+      expect(heldBack).toBe(true);
+      expect(outcome, told(outcome)).toBe("written");
+      const made = await sql<{ label: unknown }>(
+        t,
+        `SELECT ${q("label")} AS label FROM ${q(TABLE)} WHERE ${q("slug")} = 'made'`
+      );
+      expect(made.map(row => row.label)).toEqual(["sent"]);
+    }, 60_000);
+
+    // A write is shaped for its columns in place, and a password is hashed there. Made again from
+    // what its first try shaped, the hash would be hashed, and the person could not sign in with
+    // what they set: the stored hash is the password's own only where the copy the second try is
+    // made from was taken before.
+    it("hashes a password once for a held update made again", async () => {
+      const withPassword = [
+        { name: "label", type: "text" },
+        { name: "secret", type: "password" },
+      ];
+      const t = await boot([...withPassword, { name: "note", type: "text" }]);
+      for (const note of ["a", "b", "c"]) await insert(t, note);
+      const id = await firstEntry(t);
+      const { heldBack, outcome } = await whileSaving(
+        t,
+        () =>
+          t.nextly.update({
+            collection: SLUG,
+            id,
+            data: { secret: "correct horse", _overwrite: true },
+          } as never),
+        withPassword
+      );
+      expect(heldBack).toBe(true);
+      expect(outcome, told(outcome)).toBe("written");
+      const [row] = await sql<{ secret: unknown }>(
+        t,
+        `SELECT ${q("secret")} AS secret FROM ${q(TABLE)} WHERE ${q("id")} = '${id}'`
+      );
+      expect(await verifyPassword("correct horse", String(row?.secret))).toBe(
+        true
+      );
+    }, 60_000);
+
+    // The definition's rules judge the value as it stood before the last hooks, as they judge any
+    // write's: what a `beforeChange` hook makes of it is a write the rules never saw. Judged on the
+    // final value, a write its first try let through would be refused by its second.
+    it("judges a held update made again on the value the rules judged first", async () => {
+      const label = { name: "label", type: "text", required: true };
+      const t = await boot([label, { name: "note", type: "text" }]);
+      for (const note of ["a", "b", "c"]) await insert(t, note);
+      const id = await firstEntry(t);
+      let runs = 0;
+      t.hooks.register("beforeChange", SLUG, context => {
+        runs += 1;
+        // Blank, which the rule on a required field refuses in what it judges.
+        return { ...(context.data as Record<string, unknown>), label: "" };
+      });
+      const { heldBack, outcome } = await whileSaving(
+        t,
+        () =>
+          t.nextly.update({
+            collection: SLUG,
+            id,
+            data: { label: "sent", _overwrite: true },
+          } as never),
+        [label]
+      );
+      expect(heldBack).toBe(true);
+      expect(outcome, told(outcome)).toBe("written");
+      expect(runs).toBe(1);
+      const [row] = await sql<{ label: unknown }>(
+        t,
+        `SELECT ${q("label")} AS label FROM ${q(TABLE)} WHERE ${q("id")} = '${id}'`
+      );
+      expect(row?.label).toBe("");
+    }, 60_000);
+
+    // A field's own validator is the site's code too: it judged the data once, and the same data is
+    // what a write made again stores. The definition's rules are judged again.
+    it("asks a field's own validator once for a held update made again", async () => {
+      const t = await boot();
+      for (const note of ["a", "b", "c"]) await insert(t, note);
+      const id = await firstEntry(t);
+      let asked = 0;
+      registerFieldFunctions("collection", SLUG, [
+        {
+          name: "label",
+          type: "text",
+          validate: () => {
+            asked += 1;
+            return true;
+          },
+        },
+      ]);
+      try {
+        const { heldBack, outcome } = await whileSaving(t, () =>
+          t.nextly.update({
+            collection: SLUG,
+            id,
+            data: { label: "changed", _overwrite: true },
+          } as never)
+        );
+        expect(heldBack).toBe(true);
+        expect(outcome, told(outcome)).toBe("written");
+      } finally {
+        registerFieldFunctions("collection", SLUG, []);
+      }
+      expect(asked).toBe(1);
     }, 60_000);
 
     // A before hook is the site's own code: it may send mail, call another service or count. A write
@@ -1447,10 +1611,7 @@ describe.each(getConfiguredTestDialects())(
       async ({ phase, write }) => {
         const t = await boot();
         for (const note of ["a", "b", "c"]) await insert(t, note);
-        const [first] = await sql<{ id: unknown }>(
-          t,
-          `SELECT ${q("id")} AS id FROM ${q(TABLE)} ORDER BY ${q("id")}`
-        );
+        const id = await firstEntry(t);
         let runs = 0;
         t.hooks.register(phase, SLUG, context => {
           runs += 1;
@@ -1459,33 +1620,9 @@ describe.each(getConfiguredTestDialects())(
             label: `set by run ${String(runs)}`,
           };
         });
-        const { paused, release } = gated(afterCount);
-        const applying = apply(t, 3).then(
-          () => "applied",
-          (error: unknown) => error
-        );
-        const reached = await Promise.race([
-          paused.then(() => true),
-          applying.then(() => false),
-        ]);
-        expect(reached || (await applying)).toBe(true);
-
-        let settled = false;
-        const writing = write(t, String(first?.id))
-          .then(
-            () => "written",
-            (error: unknown) => error
-          )
-          .finally(() => {
-            settled = true;
-          });
-        await new Promise(resolve => setTimeout(resolve, 1_000));
         // Held with its hook already run, so the definition changes under what the hook left.
-        const before = { heldBack: !settled, runs };
-        release();
-        expect(before).toEqual({ heldBack: true, runs: 1 });
-        expect(await applying).toBe("applied");
-        const outcome = await writing;
+        const { heldBack, outcome } = await whileSaving(t, () => write(t, id));
+        expect(heldBack).toBe(true);
         expect(outcome, told(outcome)).toBe("written");
         expect(runs).toBe(1);
         const stored = await sql<{ label: unknown }>(
@@ -1505,10 +1642,7 @@ describe.each(getConfiguredTestDialects())(
       async ({ phase, write }) => {
         const t = await boot();
         for (const note of ["a", "b", "c"]) await insert(t, note);
-        const [first] = await sql<{ id: unknown }>(
-          t,
-          `SELECT ${q("id")} AS id FROM ${q(TABLE)} ORDER BY ${q("id")}`
-        );
+        const id = await firstEntry(t);
         let runs = 0;
         t.hooks.register(phase, SLUG, context => {
           runs += 1;
@@ -1517,26 +1651,8 @@ describe.each(getConfiguredTestDialects())(
             note: "set by the hook",
           };
         });
-        const { paused, release } = gated(afterCount);
-        const applying = apply(t, 3).then(
-          () => "applied",
-          (error: unknown) => error
-        );
-        const reached = await Promise.race([
-          paused.then(() => true),
-          applying.then(() => false),
-        ]);
-        expect(reached || (await applying)).toBe(true);
-        const writing = write(t, String(first?.id)).then(
-          () => "written",
-          (error: unknown) => error
-        );
-        await new Promise(resolve => setTimeout(resolve, 1_000));
-        const runsWhileHeld = runs;
-        release();
-        expect(runsWhileHeld).toBe(1);
-        expect(await applying).toBe("applied");
-        const outcome = await writing;
+        const { heldBack, outcome } = await whileSaving(t, () => write(t, id));
+        expect(heldBack).toBe(true);
         expect(outcome, told(outcome)).toMatchObject({
           code: "VALIDATION_ERROR",
           publicData: {

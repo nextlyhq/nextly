@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import { CollectionMutationService } from "../collection-mutation-service";
+import { fieldsMoved, loadedRegistryRowOf } from "../entry-write-hold";
 
 describe("the registry row a batch write is made for", () => {
   it("reads the fields a very large batch sets, each item in turn", async () => {
@@ -42,5 +43,46 @@ describe("the registry row a batch write is made for", () => {
       schemaVersion: 3,
       setsFields: ["title", "note"],
     });
+  });
+
+  it("tells a field the data sets from a default nobody changed, and names both", () => {
+    const row = {
+      id: "c1",
+      schemaVersion: 3,
+      fields: [
+        { name: "title", type: "text" },
+        { name: "note", type: "text" },
+        { name: "unset", type: "text" },
+      ],
+    };
+    const loaded = loadedRegistryRowOf(
+      row,
+      { title: "t", note: "by default" },
+      { insertsOnly: true, untouchedDefaults: new Set(["note"]) }
+    );
+
+    expect(loaded?.setsFields).toEqual(["title"]);
+    expect(loaded?.namesFields).toEqual(["title", "note"]);
+  });
+
+  it("says which fields a later definition took out or stores differently, and which it added", () => {
+    const row = (fields: Record<string, unknown>[]) =>
+      loadedRegistryRowOf({ id: "c1", schemaVersion: 1, fields })!;
+    const { gone, added } = fieldsMoved(
+      row([
+        { name: "kept", type: "text", label: "Kept" },
+        { name: "removed", type: "text" },
+        { name: "retyped", type: "text" },
+      ]),
+      row([
+        { name: "kept", type: "text", label: "Kept, relabelled" },
+        { name: "retyped", type: "number" },
+        { name: "made", type: "text" },
+      ]),
+      "sqlite"
+    );
+
+    expect([...gone].sort()).toEqual(["removed", "retyped"]);
+    expect([...added]).toEqual(["made"]);
   });
 });
