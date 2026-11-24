@@ -23,6 +23,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { _resetEnvCache } from "../../shared/lib/env";
 import { clearConfigCache } from "../utils/config-loader";
 
 import {
@@ -43,6 +44,27 @@ vi.mock("../utils/config-bundler", () => ({
 vi.mock("../../route-handler/auth-handler", () => ({
   setBootedConfig: () => undefined,
 }));
+
+/** How many times a database was opened: no statement reaches one without it. */
+const opened = vi.hoisted(() => ({ times: 0 }));
+
+vi.mock("../../database/factory", async importOriginal => {
+  const original =
+    await importOriginal<typeof import("../../database/factory")>();
+  return {
+    ...original,
+    createAdapter: (...args: Parameters<typeof original.createAdapter>) => {
+      opened.times += 1;
+      return original.createAdapter(...args);
+    },
+    createAdapterFromEnv: (
+      ...args: Parameters<typeof original.createAdapterFromEnv>
+    ) => {
+      opened.times += 1;
+      return original.createAdapterFromEnv(...args);
+    },
+  };
+});
 
 const { createProgram } = await import("../program");
 const { createAdapter } = await import("../../database/factory");
@@ -88,6 +110,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  _resetEnvCache();
   vi.restoreAllMocks();
   clearConfigCache();
   process.exitCode = undefined;
@@ -205,38 +228,56 @@ describe("the commands the program registers", () => {
 });
 
 describe("an invalid configuration, given to every command that loads it", () => {
-  it("is refused alike by each, with the same report, writing nothing", async () => {
-    writeFileSync(join(dir, "nextly.config.ts"), "export default {};\n");
-    exported.config = THREE_PROBLEMS;
-    const reports = new Map<string, string>();
-    // Each departure is named, so one run shows every command that does not refuse alike.
-    const wrong: string[] = [];
+  // Each dialect's own address; the server databases' answer nothing, so a command that connected
+  // would be seen to, whichever it is.
+  it.each([
+    ["sqlite", () => `file:${join(dir, "site.db")}`],
+    ["postgresql", () => "postgres://nextly:nextly@127.0.0.1:1/absent"],
+    ["mysql", () => "mysql://nextly:nextly@127.0.0.1:1/absent"],
+  ])(
+    "is refused alike by each, with the same report, writing nothing (%s)",
+    async (dialect, url) => {
+      vi.stubEnv("DB_DIALECT", dialect);
+      vi.stubEnv("DATABASE_URL", url());
+      _resetEnvCache();
+      opened.times = 0;
+      writeFileSync(join(dir, "nextly.config.ts"), "export default {};\n");
+      exported.config = THREE_PROBLEMS;
+      const reports = new Map<string, string>();
+      // Each departure is named, so one run shows every command that does not refuse alike.
+      const wrong: string[] = [];
 
-    for (const args of [...READ_ENTITIES, ...LOAD_CONFIGURATION]) {
-      const ran = await run(args);
-      const name = args.join(" ");
-      const first = ran.stderr.trim().split("\n")[0] ?? "";
+      for (const args of [...READ_ENTITIES, ...LOAD_CONFIGURATION]) {
+        const ran = await run(args);
+        const name = args.join(" ");
+        const first = ran.stderr.trim().split("\n")[0] ?? "";
 
-      if (ran.status !== 1) wrong.push(`${name}: exit ${String(ran.status)}`);
-      if (
-        !ran.stderr.includes("CONFIG_INVALID") ||
-        !/3 problems/.test(ran.stderr)
-      ) {
-        wrong.push(`${name}: ${first}`);
+        if (ran.status !== 1) wrong.push(`${name}: exit ${String(ran.status)}`);
+        if (
+          !ran.stderr.includes("CONFIG_INVALID") ||
+          !/3 problems/.test(ran.stderr)
+        ) {
+          wrong.push(`${name}: ${first}`);
+        }
+        reports.set(name, reportOf(ran.stderr));
+        if (opened.times > 0) wrong.push(`${name}: opened a database`);
+        opened.times = 0;
+        // Nothing written, and no database opened.
+        const left = readdirSync(dir).filter(
+          file => file !== "nextly.config.ts"
+        );
+        if (left.length > 0) wrong.push(`${name}: wrote ${left.join(", ")}`);
       }
-      reports.set(name, reportOf(ran.stderr));
-      // Nothing written, and no database opened.
-      const left = readdirSync(dir).filter(file => file !== "nextly.config.ts");
-      if (left.length > 0) wrong.push(`${name}: wrote ${left.join(", ")}`);
-    }
 
-    const [report] = reports.values();
-    for (const [name, each] of reports) {
-      if (each !== report) wrong.push(`${name}: a different report`);
-    }
-    expect(wrong).toEqual([]);
-    expect(existsSync(join(dir, "site.db"))).toBe(false);
-  }, 300_000);
+      const [report] = reports.values();
+      for (const [name, each] of reports) {
+        if (each !== report) wrong.push(`${name}: a different report`);
+      }
+      expect(wrong).toEqual([]);
+      expect(existsSync(join(dir, "site.db"))).toBe(false);
+    },
+    300_000
+  );
 });
 
 describe("a project with no configuration file", () => {
