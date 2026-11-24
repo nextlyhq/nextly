@@ -17,6 +17,7 @@ import {
   DEFAULT_POSTGRES_SCHEMA,
 } from "../../domains/schema/services/postgres-schema";
 import { dialectFromUrl } from "../../shared/lib/env";
+import { DIALECTS } from "../../shared/lib/stated-dialect";
 import { reportDryRun } from "../dry-run";
 import { announceMode } from "../environment";
 import { connectionFailure, databaseEnvError } from "../errors/areas/database";
@@ -109,7 +110,7 @@ export function environmentDialect(
     env.DB_DIALECT ||
     (env.DATABASE_URL ? detectDialectFromUrl(env.DATABASE_URL) : undefined);
   if (!named) return { problem: "dialect-undetected" };
-  if (!["postgresql", "mysql", "sqlite"].includes(named)) {
+  if (!(DIALECTS as readonly string[]).includes(named)) {
     return { problem: "dialect-invalid", named };
   }
   return { dialect: named as SupportedDialect };

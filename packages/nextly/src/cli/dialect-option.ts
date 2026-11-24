@@ -7,14 +7,9 @@
  */
 import { Option } from "commander";
 
-import type { SupportedDialect } from "./utils/adapter";
-
-/** The dialects, as `--dialect` and `DB_DIALECT` spell them. Kept here, light, for the help. */
-export const DIALECTS: readonly SupportedDialect[] = [
-  "postgresql",
-  "mysql",
-  "sqlite",
-];
+// The one list of dialects, as `--dialect` and `DB_DIALECT` spell them; it imports nothing, so the
+// command file stays light.
+import { DIALECTS } from "../shared/lib/stated-dialect";
 
 /** The option, its values limited to the dialects Nextly runs on. */
 export function dialectOption(): Option {
