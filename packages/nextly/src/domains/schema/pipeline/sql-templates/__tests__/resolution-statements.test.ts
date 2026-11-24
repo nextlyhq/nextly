@@ -65,7 +65,7 @@ describe("resolutionStatements for a field kept per language", () => {
       )
     ).toEqual([
       "DELETE FROM `dc_posts` WHERE `id` NOT IN (SELECT DISTINCT `_parent` FROM `dc_posts_locales` WHERE `_locale` = 'en' AND `note` IS NOT NULL);",
-      "DELETE FROM `dc_posts_locales` WHERE `_parent` NOT IN (SELECT `_parent` FROM (SELECT DISTINCT `_parent` FROM `dc_posts_locales` WHERE `_locale` = 'en' AND `note` IS NOT NULL) AS `fitting`);",
+      "DELETE FROM `dc_posts_locales` WHERE `_parent` NOT IN (SELECT `_parent` FROM (SELECT DISTINCT `_parent` FROM `dc_posts_locales` WHERE `_locale` = 'en' AND `note` IS NOT NULL) AS `fitting`) AND `_parent` NOT IN (SELECT `id` FROM `dc_posts`);",
     ]);
   });
 

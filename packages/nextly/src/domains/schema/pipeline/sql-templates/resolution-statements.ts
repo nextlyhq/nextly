@@ -139,10 +139,12 @@ function fillLiteral(
  * The statements settling the entries with no value for a field kept per language, in its
  * default language: those whose row in that language holds NULL, or that have no row in it.
  *
- * - A delete removes such an entry first, then every language's row of it: the database's cascade
- *   has already taken them where keys are enforced, and the second statement takes them where the
- *   statements run with keys off (a migration on SQLite). In this order a refused entry delete
- *   leaves every row in place, even where each statement commits as it runs (MySQL).
+ * - A delete removes such an entry first, then the language rows of the entries that are gone from
+ *   the main table: the database's cascade has already taken them where keys are enforced, and the
+ *   second statement takes them where the statements run with keys off (a migration on SQLite). A
+ *   refused entry delete leaves every row in place, even where each statement commits as it runs
+ *   (MySQL), and so does an entry a trigger keeps: its row is not gone, so neither are its language
+ *   rows.
  * - A fill gives each default-language row holding NULL the value, then adds a default-language
  *   row holding it for each entry that has none; the row's other columns take their defaults. Each
  *   row it writes is stamped (`_updated_at`) with the moment the statement runs, in the form the
@@ -173,7 +175,7 @@ function perLanguageStatements(
   if (resolution.kind === "delete_nonconforming") {
     return [
       `DELETE FROM ${main} WHERE ${q("id")} NOT IN (${fitting});`,
-      `DELETE FROM ${companion} WHERE ${parent} NOT IN (SELECT ${parent} FROM (${fitting}) AS ${q("fitting")});`,
+      `DELETE FROM ${companion} WHERE ${parent} NOT IN (SELECT ${parent} FROM (${fitting}) AS ${q("fitting")}) AND ${parent} NOT IN (SELECT ${q("id")} FROM ${main});`,
     ];
   }
   const value = fillLiteral(resolution, dialect);

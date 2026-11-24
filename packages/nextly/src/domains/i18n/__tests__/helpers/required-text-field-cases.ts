@@ -540,6 +540,23 @@ export function requiredTextFieldCases(
         );
       }
 
+      /** Keeps entry `id` of `main` through any DELETE of it, by a trigger of the database's own. */
+      async function keepEntry(main: string, id: string): Promise<void> {
+        const q = (name: string) => quote(dialect, name);
+        if (dialect === "sqlite") {
+          await query(
+            `CREATE TRIGGER ${q(`${main}_keep`)} BEFORE DELETE ON ${q(main)} FOR EACH ROW WHEN OLD.id = '${id}' BEGIN SELECT RAISE(IGNORE); END`
+          );
+          return;
+        }
+        await query(
+          `CREATE FUNCTION ${q(`${main}_keep`)}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.id = '${id}' THEN RETURN NULL; END IF; RETURN OLD; END $$`
+        );
+        await query(
+          `CREATE TRIGGER ${q(`${main}_keep`)} BEFORE DELETE ON ${q(main)} FOR EACH ROW EXECUTE FUNCTION ${q(`${main}_keep`)}()`
+        );
+      }
+
       /** The type of `table`'s id column as the database declares it, for a key to match. */
       async function idColumnType(table: string): Promise<string> {
         if (dialect === "sqlite") return "TEXT";
@@ -1062,6 +1079,37 @@ export function requiredTextFieldCases(
                 await query(`DROP TABLE ${quote(dialect, holder)}`);
               }
             });
+
+            // A trigger that keeps an entry keeps its language rows too: the translations rows go
+            // only with an entry the database has removed. MySQL's triggers cannot keep a row.
+            it.runIf(road === "push" && dialect !== "mysql")(
+              `keeps every language's row of ${kind} collection's entry a trigger keeps (${road})`,
+              async () => {
+                const answer: Answer = { kind: "delete_nonconforming" };
+                const slug = `${slugOf(answer)}_trig`;
+                const ids = await notesWithEntries(slug, translated);
+                const rows = async () =>
+                  (await languageRows(slug)).filter(
+                    row => row.parent === ids.empty || row.parent === ids.kept
+                  );
+                await keepEntry(`dc_${slug}`, ids.empty);
+                const before = await rows();
+
+                await throughPush(slug, translated, answer);
+
+                // The entry the trigger kept is there with every language's row of it; the one
+                // without a value that it let go is gone with its rows.
+                expect(await idsOf(`dc_${slug}`)).toEqual(
+                  [ids.empty, ids.kept].sort()
+                );
+                expect(await rows()).toEqual(before);
+                expect(
+                  (await languageRows(slug)).some(
+                    row => row.parent === ids.bare
+                  )
+                ).toBe(false);
+              }
+            );
 
             it(`stamps the default-language rows a fill writes for ${kind} collection (${road})`, async () => {
               const answer: Answer = { kind: "fill", value: "filled" };
