@@ -850,6 +850,54 @@ describe.each(
       600_000
     );
 
+    // The hold is the whole entity's, so a write naming no field of it, the status alone, is held
+    // too. Kept to the earlier layout: on per-language storage the save that drops the column has
+    // not reached a kill point here.
+    it.runIf(dialect === "mysql" && !perLanguage)(
+      "refuses an update naming only the status of a collection whose committed change dropped its status column",
+      async () => {
+        const t = await boot({ status: true });
+        const [first] = (await t.adapter.executeQuery(
+          `SELECT id FROM ${table} WHERE slug = 'first'`
+        )) as unknown as Array<{ id: unknown }>;
+        const id = String(first?.id);
+        await killSave(t, afterStatement(dropsColumn("status")), () =>
+          dispatchCollections(
+            {} as ServiceContainer,
+            "updateCollection",
+            { collectionName: slug },
+            { fields: [field("heading"), field("note")], status: false }
+          )
+        );
+        expect(await liveColumns(t), `killed at ${killedAt}`).not.toContain(
+          "status"
+        );
+
+        const outcomes = await fromAnotherProcess([
+          {
+            kind: "update",
+            via: "rest",
+            id,
+            data: { status: "published", _overwrite: true },
+          },
+          {
+            kind: "update",
+            via: "api",
+            id,
+            data: { status: "published", _overwrite: true },
+          },
+        ]);
+
+        for (const refused of outcomes) {
+          expect(refused.ok, JSON.stringify(refused)).toBe(false);
+          expect(refused.code, JSON.stringify(refused)).toBe(
+            "BUILDER_SAVE_FIELD_UNSETTLED"
+          );
+        }
+      },
+      600_000
+    );
+
     // A field group's rows are kept in its own table, which its save changed: each field of the
     // collection holding the group is held, and the collection's reads, which reach that table.
     it.runIf(dialect === "mysql")(
