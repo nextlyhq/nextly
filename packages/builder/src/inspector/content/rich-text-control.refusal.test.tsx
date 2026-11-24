@@ -43,13 +43,19 @@ interface ParagraphOptions {
 
 /** A shared editor whose words are `words.current`, read when asked. */
 function sharedEditor(words: { current: unknown }) {
-  const detach = vi.fn();
+  // Detaching puts back what the element held when it attached, as the real
+  // shared editor does.
+  let opened: { element: HTMLElement; text: string | null } | null = null;
+  const detach = vi.fn(() => {
+    if (opened !== null) opened.element.textContent = opened.text;
+  });
   const hold = vi.fn();
   const options: { current: ParagraphOptions | undefined } = {
     current: undefined,
   };
   const attach = vi.fn(
-    (_element: HTMLElement, _value: unknown, given?: ParagraphOptions) => {
+    (element: HTMLElement, _value: unknown, given?: ParagraphOptions) => {
+      opened = { element, text: element.textContent };
       options.current = given;
       return {
         status: "attached",
@@ -154,6 +160,8 @@ describe("the panel's text box, left after typing", () => {
     expect(field.detach).toHaveBeenCalledTimes(1);
     // Released, so the page no longer counts an open passage as unsaved.
     expect(field.passages.isOpen()).toBe(false);
+    // And showing the words the page holds, not those it opened with.
+    expect(field.box.textContent).toBe("A paragraph, browse by category");
   });
 
   it("finishes the same way when a save finishes it before the box is left", async () => {

@@ -423,6 +423,10 @@ export function RichTextField({
     session.current = null;
     typing.current = null;
     live.detach();
+    // Detaching puts back what the element held when the editor attached:
+    // the words from before this edit. The page's words are shown instead,
+    // and a write that has yet to reach `preview` shows when it does.
+    if (field.current !== null) field.current.textContent = previewNow.current;
     setRefused(null);
     setReason(undefined);
     setDropped(false);
@@ -430,17 +434,14 @@ export function RichTextField({
 
   /**
    * Escape on a refused passage: the words are let go, and so is what its
-   * typing wrote, so the page and the canvas go back to what the box shows.
-   * Where the typing can no longer be taken back (a save or another edit came
-   * after it), the box shows what the page holds instead.
+   * typing wrote, so the page and the canvas go back to the words from
+   * before the edit. Where the typing can no longer be taken back (a save or
+   * another edit came after it), the box shows what the page holds.
    */
   const discard = (live: RichTextSession): void => {
     const run = typing.current;
     letGo(live);
-    const cancelled = run !== null && cancelTyping?.(run) === true;
-    if (!cancelled && field.current !== null) {
-      field.current.textContent = previewNow.current;
-    }
+    if (run !== null) cancelTyping?.(run);
   };
 
   // A write as the author types, through the latest render's write path.
