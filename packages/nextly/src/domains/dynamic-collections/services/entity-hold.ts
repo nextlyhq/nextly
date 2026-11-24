@@ -79,9 +79,24 @@ async function got(rows: RowsOn, lock: SQL): Promise<boolean> {
 }
 
 /**
+ * Whether an entry write has its share of `entity`'s hold on PostgreSQL, at one attempt, in its
+ * transaction (`rows` runs there), held until that transaction ends: false while a save holds it.
+ */
+export function tryShareEntityOnPostgres(
+  rows: RowsOn,
+  entity: EntityRef
+): Promise<boolean> {
+  return got(
+    rows,
+    sql`pg_try_advisory_xact_lock_shared(${advisoryKeysOf(entity)})`
+  );
+}
+
+/**
  * An entry write's share of `entity`'s hold on PostgreSQL, in its transaction (`rows` runs there),
  * held until that transaction ends. Writes share it with each other; a save holding it waits them
- * out, and they wait for it, each at most `waitMs`, then refused with nothing written.
+ * out, and they wait for it, each at most `waitMs`, then refused with nothing written. It waits in
+ * the transaction, so for a write that may not give its transaction up and open it again.
  */
 export function shareEntityOnPostgres(
   rows: RowsOn,
@@ -89,14 +104,45 @@ export function shareEntityOnPostgres(
   waitMs = ENTITY_HOLD_WAIT_MS
 ): Promise<void> {
   return attemptUntil(
-    () =>
-      got(
-        rows,
-        sql`pg_try_advisory_xact_lock_shared(${advisoryKeysOf(entity)})`
-      ),
+    () => tryShareEntityOnPostgres(rows, entity),
     () => entityBeingChanged(entity, "entity-share-timeout"),
     waitMs
   );
+}
+
+/**
+ * The refusal, at once, of an entry write's share of `entity` on PostgreSQL where a save holds it and
+ * the write may not wait: on a transaction its caller opened, which keeps a connection the save
+ * needs to finish.
+ */
+export async function refuseUnlessSharedOnPostgres(
+  rows: RowsOn,
+  entity: EntityRef
+): Promise<void> {
+  if (!(await tryShareEntityOnPostgres(rows, entity))) {
+    throw entityBeingChanged(entity, "entity-held-in-open-transaction");
+  }
+}
+
+/**
+ * A write made by `attempt`, each time on a transaction of its own, until it is had: an attempt that
+ * finds `entity` held by a save ends (`held: false`) with nothing written, and the write waits for
+ * the save with no transaction open, so the save has every connection of the pool for the rest of
+ * its work. Refused once `waitMs` has passed without it.
+ */
+export async function attemptWithoutWaitingInside<T>(
+  entity: EntityRef,
+  attempt: () => Promise<{ held: true; value: T } | { held: false }>,
+  waitMs = ENTITY_HOLD_WAIT_MS
+): Promise<T> {
+  const deadline = Date.now() + waitMs;
+  for (let pause = 20; ; pause = Math.min(pause * 2, 500)) {
+    const outcome = await attempt();
+    if (outcome.held) return outcome.value;
+    const left = deadline - Date.now();
+    if (left <= 0) throw entityBeingChanged(entity, "entity-share-timeout");
+    await new Promise(resolve => setTimeout(resolve, Math.min(pause, left)));
+  }
 }
 
 /**

@@ -33,15 +33,20 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
   type EntityRef,
   entityHoldKey,
+  refuseUnlessSharedOnPostgres,
   refuseWhileHeldInProcess,
+  type RowsOn,
   shareEntityOnPostgres,
+  tryShareEntityOnPostgres,
 } from "../../dynamic-collections/services/entity-hold";
 import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
+import { fieldsStoredDifferently } from "../../schema/services/fields-stored-differently";
 
 /** What the hold is taken through: the registry's `holdCollectionsIn`. */
 export type CollectionHolder = Pick<
@@ -60,14 +65,15 @@ export interface HoldingAdapter {
 
 /**
  * The registry row a write was made for: the id and schema version of the row its operation loaded
- * its fields from, the fields of that definition (`fields`), and those of them the write sets.
- * `insertsOnly` marks a create, which writes only the columns its data sets and reads no entry
- * through the definition first.
+ * its fields from, the fields of that definition (`fields`, and as they are stored on the row,
+ * `stored`), and those of them the write sets. `insertsOnly` marks a create, which writes only the
+ * columns its data sets and reads no entry through the definition first.
  */
 export interface LoadedRegistryRow {
   readonly id: string;
   readonly schemaVersion: number | undefined;
   readonly fields: readonly string[];
+  readonly stored: readonly FieldDefinition[];
   readonly setsFields: readonly string[];
   readonly insertsOnly?: true;
 }
@@ -95,12 +101,14 @@ export function loadedRegistryRowOf(
   };
   if (typeof id !== "string" && typeof id !== "number") return undefined;
   const version = Number(schemaVersion);
-  const names = fieldNamesOf(fields);
+  const stored = storedFieldsOf(fields);
+  const names = stored.map(field => field.name);
   const sets = data === undefined ? [] : names.filter(setBy(data));
   return {
     id: String(id),
     schemaVersion: Number.isFinite(version) ? version : undefined,
     fields: names,
+    stored,
     setsFields: sets,
     ...(options?.insertsOnly === true ? { insertsOnly: true as const } : {}),
   };
@@ -125,12 +133,12 @@ function isItems(
   return Array.isArray(data);
 }
 
-/** The names a definition's `fields` answer to in an entry's data (`fieldsStoredOnRow`). */
-function fieldNamesOf(fields: unknown): string[] {
+/** A definition's fields as they are stored on the entry's row (`fieldsStoredOnRow`), by name. */
+function storedFieldsOf(fields: unknown): FieldDefinition[] {
   const list = typeof fields === "string" ? parsedFields(fields) : fields;
   if (!Array.isArray(list)) return [];
-  return fieldsStoredOnRow(list as Array<{ name?: unknown }>).flatMap(field =>
-    typeof field?.name === "string" ? [field.name] : []
+  return fieldsStoredOnRow(list as FieldDefinition[]).filter(
+    field => typeof field?.name === "string"
   );
 }
 
@@ -143,6 +151,12 @@ function parsedFields(text: string): unknown {
   }
 }
 
+/**
+ * What a write does where a save holds its entity on PostgreSQL: waits in its transaction, gives it
+ * up to wait outside it and be made again, or is refused at once.
+ */
+export type WhenHeld = "wait" | "leave" | "refuse";
+
 /** The collections each open transaction already holds for its entry writes. */
 const heldIn = new WeakMap<TransactionContext, Set<string>>();
 
@@ -152,6 +166,10 @@ const heldIn = new WeakMap<TransactionContext, Set<string>>();
  * hold's wait. With `loaded`, the registry row held is compared with it (`refuseChanged`).
  * `sharedInProcess` says the write's SQLite share was taken before `tx` opened
  * (`entryTransaction`); without it, on SQLite, the write is refused while a save holds the entity.
+ *
+ * On PostgreSQL, where a save holds the entity, `whenHeld` says what the write does: it waits in
+ * `tx` (`"wait"`), it gives `tx` up to wait outside it and be made again (`"leave"`, answering
+ * false), or it is refused at once (`"refuse"`). Answers whether the entity is held for the write.
  */
 export async function holdEntityForWrite(
   tx: TransactionContext,
@@ -159,43 +177,95 @@ export async function holdEntityForWrite(
   holder: CollectionHolder,
   adapter: HoldingAdapter,
   loaded?: LoadedRegistryRow,
-  options?: { sharedInProcess?: boolean }
-): Promise<void> {
+  options?: { sharedInProcess?: boolean; whenHeld?: WhenHeld }
+): Promise<boolean> {
   const key = entityHoldKey(entity);
   const held = heldIn.get(tx);
-  if (held?.has(key)) return;
+  if (held?.has(key)) return true;
   const dialect = adapter.getCapabilities().dialect;
-  if (dialect === "postgresql") {
-    await shareEntityOnPostgres(query => tx.queryStatement(query), entity);
-  } else if (dialect === "sqlite" && options?.sharedInProcess !== true) {
-    refuseWhileHeldInProcess(adapter, entity);
+  if (!(await sharedForWrite(tx, entity, adapter, dialect, options))) {
+    return false;
   }
-  // The registry row as it stands once held: on MySQL the share side's own read, `FOR SHARE`;
-  // elsewhere a plain read, the entity's lock being the hold, so concurrent writes lock no row of
-  // the registry. A row read through the adapter is keyed by the table's property names, so the
-  // version is `schemaVersion`.
-  const row =
-    dialect === "mysql"
-      ? await heldRegistryRowOnMysql(tx, entity, holder)
-      : await tx.selectOne<{ id: unknown; schemaVersion: unknown }>(
-          "dynamic_collections",
-          {
-            columns: ["id", "schema_version"],
-            where: { and: [{ column: "slug", op: "=", value: entity.slug }] },
-          }
-        );
+  const row = await heldRegistryRow(tx, entity, holder, dialect);
   if (loaded !== undefined) {
-    await refuseChanged(tx, entity, loaded, {
-      present: row !== null && row !== undefined,
-      id: row === null || row === undefined ? undefined : String(row.id),
-      version:
-        row === null || row === undefined
-          ? undefined
-          : Number(row.schemaVersion),
-    });
+    await refuseChanged(tx, entity, loaded, dialect, heldRowOf(row));
   }
   if (held === undefined) heldIn.set(tx, new Set([key]));
   else held.add(key);
+  return true;
+}
+
+/** Whether an entry write has its share of `entity` in `tx`, as each database holds it. */
+async function sharedForWrite(
+  tx: TransactionContext,
+  entity: EntityRef,
+  adapter: HoldingAdapter,
+  dialect: SupportedDialect,
+  options: { sharedInProcess?: boolean; whenHeld?: WhenHeld } | undefined
+): Promise<boolean> {
+  if (dialect === "postgresql") {
+    const rows: RowsOn = query => tx.queryStatement(query);
+    return sharedOnPostgres(rows, entity, options?.whenHeld);
+  }
+  // MySQL's share is its registry row's own read (`heldRegistryRow`).
+  if (dialect === "sqlite" && options?.sharedInProcess !== true) {
+    refuseWhileHeldInProcess(adapter, entity);
+  }
+  return true;
+}
+
+/** A write's share of `entity` on PostgreSQL, where a save holds it as `whenHeld` says. */
+async function sharedOnPostgres(
+  rows: RowsOn,
+  entity: EntityRef,
+  whenHeld: WhenHeld | undefined
+): Promise<boolean> {
+  if (whenHeld === "leave") return tryShareEntityOnPostgres(rows, entity);
+  if (whenHeld === "refuse") await refuseUnlessSharedOnPostgres(rows, entity);
+  else await shareEntityOnPostgres(rows, entity);
+  return true;
+}
+
+/**
+ * The registry row as it stands once held: on MySQL the share side's own read, `FOR SHARE`;
+ * elsewhere a plain read, the entity's lock being the hold, so concurrent writes lock no row of
+ * the registry. A row read through the adapter is keyed by the table's property names, so the
+ * version is `schemaVersion`.
+ */
+function heldRegistryRow(
+  tx: TransactionContext,
+  entity: EntityRef,
+  holder: CollectionHolder,
+  dialect: SupportedDialect
+): Promise<HeldRegistryRow | null | undefined> {
+  return dialect === "mysql"
+    ? heldRegistryRowOnMysql(tx, entity, holder)
+    : tx.selectOne<HeldRegistryRow>("dynamic_collections", {
+        columns: ["id", "schema_version"],
+        where: { and: [{ column: "slug", op: "=", value: entity.slug }] },
+      });
+}
+
+/** The registry row a hold reads: its id and the version its definition is at. */
+interface HeldRegistryRow {
+  id: unknown;
+  schemaVersion: unknown;
+}
+
+/** A row read, as `refuseChanged` compares it: whether it is there, its id and its version. */
+function heldRowOf(row: HeldRegistryRow | null | undefined): {
+  present: boolean;
+  id: string | undefined;
+  version: number | undefined;
+} {
+  if (row === null || row === undefined) {
+    return { present: false, id: undefined, version: undefined };
+  }
+  return {
+    present: true,
+    id: String(row.id),
+    version: Number(row.schemaVersion),
+  };
 }
 
 /** The collection's registry row read by MySQL's share side (`holdCollectionsIn`), or none. */
@@ -223,13 +293,16 @@ async function heldRegistryRowOnMysql(
  * (its schema version moved), a field the write sets that the held definition no longer has is
  * refused by name; and a write that reads the entry as it stands, made from a definition with a
  * field the held one no longer has, is refused as made for a definition that changed
- * (`COLLECTION_BEING_CHANGED`), since its read names that field's column. A create reads no entry
- * first and writes only the columns its data sets, so it goes on. Nothing of the write has run.
+ * (`COLLECTION_BEING_CHANGED`), since its read names that field's column; the same for a field
+ * kept by name but stored differently (`fieldsStoredDifferently`). A create reads no entry first
+ * and writes only the columns its data sets, so it is refused where one of those is removed or
+ * stored differently, and otherwise goes on. Nothing of the write has run.
  */
 async function refuseChanged(
   tx: TransactionContext,
   entity: EntityRef,
   loaded: LoadedRegistryRow,
+  dialect: SupportedDialect,
   held: {
     present: boolean;
     id: string | undefined;
@@ -256,20 +329,14 @@ async function refuseChanged(
     columns: ["fields"],
     where: { and: [{ column: "slug", op: "=", value: entity.slug }] },
   });
-  const remaining = new Set(fieldNamesOf(row?.fields));
+  const heldFields = storedFieldsOf(row?.fields);
+  const remaining = new Set(heldFields.map(field => field.name));
   const removed = loaded.setsFields.filter(name => !remaining.has(name));
+  // Made again from the definition as it stands, however it is refused: the rows this process
+  // keeps of it are cleared, so a retry reads it rather than the one the write was made from.
+  clearRegistryRowCache();
   if (removed.length === 0) {
-    // A save that only added fields leaves every one the write was made from, and a create reads
-    // nothing through them: either goes on.
-    if (
-      loaded.insertsOnly === true ||
-      loaded.fields.every(name => remaining.has(name))
-    ) {
-      return;
-    }
-    // Made again from the definition as it stands: the rows this process keeps of it are cleared,
-    // so a retry reads it rather than the one the write was made from.
-    clearRegistryRowCache();
+    if (madeFromWhatHolds(loaded, heldFields, dialect)) return;
     throw changedWhileHeld(entity.slug);
   }
   throw NextlyError.validation({
@@ -287,8 +354,32 @@ async function refuseChanged(
 }
 
 /**
- * The refusal of a write made from a definition a save changed while it waited, taking out a field
- * the write does not set: to be made again from the definition as it stands.
+ * Whether a write made from `loaded` still reads and writes every field where, and as, the held
+ * definition (`held`) stores it: a create, the fields it sets; any other write, which reads the
+ * entry through the definition first, every field.
+ */
+function madeFromWhatHolds(
+  loaded: LoadedRegistryRow,
+  held: readonly FieldDefinition[],
+  dialect: SupportedDialect
+): boolean {
+  const names = new Set(held.map(field => field.name));
+  const concerned = loaded.insertsOnly === true ? loaded.setsFields : loaded.fields;
+  if (concerned.some(name => !names.has(name))) return false;
+  const different = fieldsStoredDifferently({
+    previous: loaded.stored,
+    next: held,
+    dialect,
+    // A collection's table is built by the collection's generator.
+    builtBy: "collection",
+  });
+  return !concerned.some(name => different.has(name));
+}
+
+/**
+ * The refusal of a write made from a definition a save changed while it waited, taking out, or
+ * storing differently, a field the write does not set: to be made again from the definition as it
+ * stands.
  */
 function changedWhileHeld(slug: string): NextlyError {
   return new NextlyError({
