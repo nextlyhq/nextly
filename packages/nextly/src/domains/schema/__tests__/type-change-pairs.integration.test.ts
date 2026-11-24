@@ -441,6 +441,29 @@ afterEach(async () => {
   }
 });
 
+/**
+ * How the database holds `v` in each entry, by title, as its storage class and its writing: a value
+ * stored in another form than an entry write stores it would sort and filter apart from the rest,
+ * and read alike.
+ */
+async function heldAs(
+  t: TestNextly,
+  dialect: TestDialect
+): Promise<Record<string, string>> {
+  const kind = dialect === "sqlite" ? "typeof(v)" : "'column'";
+  const held = dialect === "mysql" ? "CAST(v AS CHAR)" : "CAST(v AS text)";
+  const rows = await (
+    t.adapter as unknown as {
+      executeQuery<R>(statement: string): Promise<R[]>;
+    }
+  ).executeQuery<{ title: string; kind: string; held: string | null }>(
+    `SELECT title, ${kind} AS kind, ${held} AS held FROM ${TABLE}`
+  );
+  return Object.fromEntries(
+    rows.map(row => [row.title, `${row.kind} ${String(row.held)}`])
+  );
+}
+
 /** The collection's fields, `v` as `field` beside one the change leaves as it is. */
 const fieldsWith = (field: Field): Field[] => [
   { name: "v", ...field },
@@ -567,7 +590,7 @@ describe.each(getConfiguredTestDialects())(
           expect(typeChanges[0]?.lost).toBe(pair.lost ?? 0);
         }
 
-        const held = valuesOf(await direct(t));
+        const unchanged = valuesOf(await direct(t));
         const saved = dispatchCollections(
           {} as ServiceContainer,
           "applySchemaChanges",
@@ -598,7 +621,7 @@ describe.each(getConfiguredTestDialects())(
               ],
             },
           });
-          expect(valuesOf(await direct(t))).toEqual(held);
+          expect(valuesOf(await direct(t))).toEqual(unchanged);
           expect(await definition(t, dialect)).toEqual(before);
           return;
         }
@@ -612,6 +635,25 @@ describe.each(getConfiguredTestDialects())(
         await userWhoMay(t, READER, "read", [SLUG]);
         expect(valuesOf(await overRest(), pair.as)).toEqual(expected);
         expect(await definition(t, dialect)).toEqual(before);
+
+        // A date and a checkbox are held as an entry write holds the same value.
+        if (pair.to.type !== "date" && pair.to.type !== "checkbox") return;
+        for (const [title, [, read]] of Object.entries(pair.values)) {
+          if (read === null) continue;
+          await t.nextly.create({
+            collection: SLUG,
+            data: {
+              title: `${title}-written`,
+              v: read,
+              beside: `${title}-written`,
+            },
+          } as never);
+        }
+        const held = await heldAs(t, dialect);
+        for (const [title, [, read]] of Object.entries(pair.values)) {
+          if (read === null) continue;
+          expect(held[title], title).toBe(held[`${title}-written`]);
+        }
       }
     );
   }
