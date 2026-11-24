@@ -3207,15 +3207,15 @@ jobs:
   # The commands come from the program's own list, so a new command's help is
   # timed by being defined. Then every command is timed to its first line, and
   # to the moment its own code has loaded (5 runs each, reported with the
-  # modules it resolved; no budget is held to yet). Linux only: the budgets are
-  # stated for this runner.
+  # modules it resolved; no budget is held to yet). Last, every command that
+  # uses a database is timed to its connection (reported the same way). Linux
+  # only: the budgets are stated for this runner.
   cli-startup:
     name: CLI start-up timing
     needs: [changes]
     if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
-    # The code-load pass runs about 50 commands 6 times each, a second or more a run.
-    timeout-minutes: 35
+    timeout-minutes: 20
 
     steps:
       - name: Checkout

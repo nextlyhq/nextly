@@ -15,13 +15,17 @@
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 
+import { declareFirstLine, startLine } from "../first-line";
+
 import { commandAt, commandPaths } from "./helpers/answer-only-invocations";
 import { hasAction } from "./helpers/first-line-invocations";
 // The list the start-up timing script loads, from the one module it loads it from.
 import {
   codeLoadInvocations,
   commandPathOf,
+  connectInvocations,
   createProgram,
+  wrongFirstLine,
 } from "./helpers/startup-checks";
 
 const program = createProgram();
@@ -42,6 +46,15 @@ describe("whether a command has an action of its own", () => {
     expect(hasAction(parentOnly)).toBe(false);
     expect(hasAction(parentOnly.commands[0])).toBe(true);
   });
+
+  it("decides the first line it is held to: its own, or its help", () => {
+    declareFirstLine(parentWithAction, startLine("Syncing..."));
+    const help = "Usage: nextly sync [options]";
+    expect(wrongFirstLine(built, ["sync"], "Syncing...")).toBeUndefined();
+    expect(wrongFirstLine(built, ["sync"], help)).toBeDefined();
+    expect(wrongFirstLine(built, ["media"], help)).toBeUndefined();
+    expect(wrongFirstLine(built, ["media"], "Syncing...")).toBeDefined();
+  });
 });
 
 describe("the runs timed to their code loaded", () => {
@@ -60,5 +73,33 @@ describe("the runs timed to their code loaded", () => {
     // The program has parents, so their absence below is a choice, not an empty set.
     expect(parents).toContain("telemetry");
     expect(named.filter(name => parents.includes(name))).toEqual([]);
+  });
+});
+
+describe("the runs timed to their connection", () => {
+  const connect = connectInvocations(program);
+  const timedNames = connect.timed.map(args =>
+    commandPathOf(program, args).join(" ")
+  );
+
+  it("are the commands that name a database, and those that connect after a line of their own", () => {
+    expect(timedNames).toEqual(
+      expect.arrayContaining([
+        "migrate:status",
+        "db:sync",
+        "setup-token",
+        "build",
+      ])
+    );
+  });
+
+  it("leave out, by name, every other command, so none runs its work to the end", () => {
+    // Installing a package and scaffolding a project would do so.
+    expect(connect.untimed).toEqual(
+      expect.arrayContaining(["add", "init", "generate:types"])
+    );
+    expect([...timedNames, ...connect.untimed].sort()).toEqual(
+      [...named].sort()
+    );
   });
 });

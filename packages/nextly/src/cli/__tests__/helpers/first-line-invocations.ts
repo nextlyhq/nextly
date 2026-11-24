@@ -148,7 +148,7 @@ export function commandPathOf(
  * one it declared, or `undefined` when it is: the `Database: …` line, its
  * start line, or, for a command that prints its own at once, any line but
  * Commander's refusal (the arguments never reached it). A parent that only
- * holds subcommands answers with its help.
+ * holds subcommands (`hasAction`) answers with its help.
  */
 export function wrongFirstLine(
   program: Command,
@@ -158,7 +158,7 @@ export function wrongFirstLine(
   if (line === undefined) return "printed nothing";
   if (line.startsWith("error:")) return `refused before it ran: ${line}`;
   const command = commandAt(program, path);
-  if (command.commands.length > 0) {
+  if (!hasAction(command)) {
     return line.startsWith("Usage:")
       ? undefined
       : `expected its help, got: ${line}`;
@@ -195,6 +195,62 @@ export function codeLoadInvocations(program: Command): string[][] {
 }
 
 /**
+ * The commands that say what they start before they know whether they will
+ * use a database: each declares a start line rather than the `Database: …`
+ * line, and can connect all the same. `add` is not among them: it installs a
+ * package before it connects.
+ */
+export const CONNECTS_AFTER_START_LINE: readonly string[] = [
+  "build",
+  "media orphans",
+  "media reindex-usage",
+  "media remove-sizes",
+  "setup-token",
+  "webhooks:prune",
+];
+
+/**
+ * The runs the start-up timing stops once their command has connected: every
+ * command that declares the `Database: …` line, and those that connect after
+ * a start line of their own (`CONNECTS_AFTER_START_LINE`), each with the
+ * arguments its other timings use. `untimed` names the rest of the commands
+ * with an action. They are not run: a command that connects to nothing would
+ * run on to the end of its work, a package install among it. Throws naming an
+ * entry of the list that no longer needs to be there.
+ */
+export function connectInvocations(program: Command): {
+  timed: string[][];
+  untimed: string[];
+} {
+  const runs = codeLoadInvocations(program).map(args => ({
+    args,
+    path: commandPathOf(program, args),
+  }));
+  const names = runs.map(({ path }) => path.join(" "));
+  const onDatabaseLine = ({ path }: { path: readonly string[] }) =>
+    declaredFirstLine(commandAt(program, path))?.kind === "database";
+  const stale = CONNECTS_AFTER_START_LINE.filter(
+    name =>
+      !names.includes(name) ||
+      onDatabaseLine({ path: runs[names.indexOf(name)].path })
+  );
+  if (stale.length > 0) {
+    throw new Error(
+      `CONNECTS_AFTER_START_LINE names ${stale.join(", ")}, which starts with the Database line or is no command.`
+    );
+  }
+  const connects = (run: { path: readonly string[] }) =>
+    onDatabaseLine(run) ||
+    CONNECTS_AFTER_START_LINE.includes(run.path.join(" "));
+  return {
+    timed: runs.filter(connects).map(({ args }) => args),
+    untimed: runs
+      .filter(run => !connects(run))
+      .map(({ path }) => path.join(" ")),
+  };
+}
+
+/**
  * Whether `command` has an action of its own: a leaf's, or a parent's that
  * Commander runs instead of answering with its help. Read from the handler
  * Commander keeps (`_actionHandler`, set by `.action()`, the one its own run
@@ -205,14 +261,6 @@ export function codeLoadInvocations(program: Command): string[][] {
 export function hasAction(command: Command): boolean {
   const handler: unknown = Reflect.get(command, "_actionHandler");
   return typeof handler === "function";
-}
-
-/** Whether the command `path` names under `program` runs an action itself, holding no subcommands. */
-export function runsAnAction(
-  program: Command,
-  path: readonly string[]
-): boolean {
-  return commandAt(program, path).commands.length === 0;
 }
 
 /** The first line of `output` that is not blank, its colour codes removed. */
