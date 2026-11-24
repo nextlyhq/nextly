@@ -38,18 +38,20 @@
  * answer-only budget, so code that action imports for itself cannot load
  * untimed.
  *
- * Last, every command that declares it may reach a database is timed until it
- * has connected (`connectInvocations`), by the probe's second point. Code a command imports
- * after its own module, on the way to its database, is in this time and not in
- * the one before, so moving an import past the first point does not read as a
- * saving. Each command runs in a copy of the project of its own, on that
+ * Last, every command that declares it may reach a database, except one that
+ * declares why it must not be run, is timed until it has connected
+ * (`connectInvocations`), by the probe's second point. Code a
+ * command imports after its own module, on the way to its database, is in this
+ * time and not in the one before, so moving an import past the first point
+ * does not read as a saving. Each command runs in a copy of the project of its own, on that
  * copy's SQLite file, which it is handed by an absolute URL: a run that stops
  * short of the connection goes on with its work, and must find no other
  * command's leftovers and no database but the copy. The pass reports, and
  * enforces no budget: a command that ends without connecting (it asked for
  * consent, or refused) is named as not reached, as are the commands it does
- * not run. A run that hangs, or connects without ending there, fails the check,
- * and so does a pass in which no command connects.
+ * not run, each with why. A run that hangs, starts a package manager, or
+ * connects without ending there fails the check, and so does a pass in which
+ * no command connects.
  *
  * Run after the build: `node scripts/check-cli-startup.mjs`.
  */
@@ -59,11 +61,12 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 
@@ -96,6 +99,20 @@ const CODE_LOAD_RUNS = 5;
 const CODE_LOAD_TIMEOUT_MS = 60_000;
 // The one dialect the connect pass runs on, whose database is a file of its own.
 const CONNECT_DIALECT = "sqlite";
+// What a command could install a package with, stood in for in the connect pass.
+const PACKAGE_MANAGERS = [
+  "npm",
+  "npx",
+  "pnpm",
+  "pnpx",
+  "yarn",
+  "bun",
+  "bunx",
+  "corepack",
+];
+// The variable that names the file a stand-in notes itself in, and its exit code.
+const NOTES_ENV = "NEXTLY_STARTUP_CHECK_NOTES";
+const STUB_EXIT = 99;
 // The file of the project's database, within it.
 const PROJECT_DATABASE = "startup.db";
 // The line the module-counting hook writes as a run ends.
@@ -134,7 +151,7 @@ async function loadSource() {
     commands: source.firstLineInvocations(createProgram()),
     // Every command that runs an action, and the variants timed beside them.
     codeLoads: source.codeLoadInvocations(createProgram()),
-    // Every command that uses a database, and the names of those that do not.
+    // Every command timed to its connection, and those that are not, each with why.
     connects: source.connectInvocations(createProgram()),
     // The variable that stops a run at a named point, and the line it writes at each.
     probe: {
@@ -501,13 +518,59 @@ function codeLoadFailures(runs, where, probe) {
 }
 
 /**
+ * A folder of stand-ins for the package managers, each of which notes its name
+ * in the file `NOTES_ENV` names and fails: a run that goes on to its work and
+ * installs a package reaches a stand-in, and the note outlasts whatever the
+ * run does with the stand-in's output.
+ */
+function packageManagerStubs(scratch) {
+  const folder = join(scratch, "package-managers");
+  mkdirSync(folder);
+  for (const name of PACKAGE_MANAGERS) {
+    writeFileSync(
+      join(folder, name),
+      `#!/bin/sh\necho ${name} >> "$${NOTES_ENV}"\nexit ${STUB_EXIT}\n`,
+      { mode: 0o755 }
+    );
+  }
+  return folder;
+}
+
+/**
+ * Throws where a package manager's name does not start its stand-in, such as
+ * in a folder mounted so that nothing in it runs: the real one would be found
+ * instead, and no run of the pass would be held to anything. `where` is one no
+ * command runs in, so its notes hold only what is started here.
+ */
+function assertStubsAnswer({ env, notes }) {
+  const answered = [];
+  for (const name of PACKAGE_MANAGERS) {
+    const run = spawnSync(name, ["--version"], { env, encoding: "utf8" });
+    answered.push(name);
+    if (run.status !== STUB_EXIT || notesOf(notes) !== answered.join(", ")) {
+      throw new Error(
+        `The connect pass could not stand in for ${name}, so it runs nothing.`
+      );
+    }
+  }
+}
+
+/** The package managers noted in `notes`, or nothing. */
+function notesOf(notes) {
+  return existsSync(notes)
+    ? readFileSync(notes, "utf8").trim().split("\n").join(", ")
+    : "";
+}
+
+/**
  * A copy of the project as it was made, for one command of the connect pass, and the
  * environment that hands the command the copy's own database: its dialect and
  * an absolute URL, which win over the project's `.env` and over anything the
  * shell names.
  */
-function connectWhere({ pristine, env }, index) {
+function connectWhere({ pristine, env, stubs }, index) {
   const copy = `${pristine}-${String(index)}`;
+  const notes = `${copy}-package-managers`;
   cpSync(pristine, copy, { recursive: true });
   const database = join(copy, PROJECT_DATABASE);
   return {
@@ -517,7 +580,11 @@ function connectWhere({ pristine, env }, index) {
       ...env,
       DB_DIALECT: CONNECT_DIALECT,
       DATABASE_URL: `file:${database}`,
+      // Found before the real ones, so no run of this pass installs anything.
+      PATH: `${stubs}${delimiter}${env.PATH ?? ""}`,
+      [NOTES_ENV]: notes,
     },
+    notes,
   };
 }
 
@@ -587,23 +654,50 @@ function measureConnect(args, where, probe) {
   return { connected: true };
 }
 
-/** Every command that uses a database, each timed to its connection: the failures. */
+/** Of `runs`, those that started a package manager, each with the names noted for it. */
+function startedPackageManagers(runs) {
+  return new Map(
+    runs
+      .map(run => [run, notesOf(run.ranIn.notes)])
+      .filter(([, names]) => names !== "")
+  );
+}
+
+/** Every command `connectInvocations` names, each timed to its connection: the failures. */
 function connectFailures({ timed, untimed }, where, probe) {
   console.log(
     `\nconnections: ${timed.length}, ${CODE_LOAD_RUNS} runs each to the line written once a command has connected (median); reported, no budget yet`
   );
-  const results = timed.map((args, index) =>
-    measureConnect(args, connectWhere(where, index), probe)
+  // Starts every stand-in, so what reads the notes is always given some to find.
+  const control = { args: [], ranIn: connectWhere(where, "stubs") };
+  assertStubsAnswer(control.ranIn);
+  const runs = timed.map((args, index) => ({
+    args,
+    ranIn: connectWhere(where, index),
+  }));
+  const results = runs.map(({ args, ranIn }) =>
+    measureConnect(args, ranIn, probe)
   );
   const failures = results.flatMap(({ failure }) => failure ?? []);
+  // Read once every run has ended: a run may start one that outlives it.
+  const installers = startedPackageManagers([...runs, control]);
+  if (!installers.has(control)) {
+    failures.push(
+      "the package managers the pass started itself went unnoticed, so it would notice none"
+    );
+  }
+  for (const run of runs) {
+    if (!installers.has(run)) continue;
+    failures.push(
+      `nextly ${run.args.join(" ")}: started a package manager (${installers.get(run)})`
+    );
+  }
   // A probe nothing reaches would otherwise read as commands that all ended early.
   if (!results.some(({ connected }) => connected)) {
     failures.push("no command connected, so the pass timed nothing");
   }
-  for (const name of untimed) {
-    console.log(
-      `     not run      nextly ${name}  (declares that it reaches no database)`
-    );
+  for (const { name, why } of untimed) {
+    console.log(`     not run      nextly ${name}  (${why})`);
   }
   return failures;
 }
@@ -617,7 +711,8 @@ async function withProject(work) {
     // Kept as made: the runs of the other passes, stopped partway, leave marks.
     const pristine = `${project}-as-made`;
     cpSync(project, pristine, { recursive: true });
-    return await work({ project, pristine, env });
+    const stubs = packageManagerStubs(scratch);
+    return await work({ project, pristine, env, stubs });
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

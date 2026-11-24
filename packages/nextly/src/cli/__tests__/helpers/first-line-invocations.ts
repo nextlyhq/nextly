@@ -12,7 +12,7 @@ import { stripVTControlCharacters } from "node:util";
 
 import type { Command } from "commander";
 
-import { declaredFirstLine, mayConnect } from "../../first-line";
+import { declaredFirstLine, whyUntimedToConnect } from "../../first-line";
 
 import { commandAt, commandPaths } from "./answer-only-invocations";
 
@@ -194,34 +194,41 @@ export function codeLoadInvocations(program: Command): string[][] {
   );
 }
 
+/** The runs timed to their command's connection, and the commands left out, each with why. */
+export interface ConnectRuns {
+  timed: string[][];
+  untimed: { name: string; why: string }[];
+}
+
 /**
  * The runs the start-up timing stops once their command has connected, and
- * the names of the commands it does not run: see `connectRunsOf`.
+ * the commands it does not run: see `connectRunsOf`.
  */
-export function connectInvocations(program: Command): {
-  timed: string[][];
-  untimed: string[];
-} {
+export function connectInvocations(program: Command): ConnectRuns {
   return connectRunsOf(program, codeLoadInvocations(program));
 }
 
 /**
  * Of `runs`, those whose command may connect to a database, by the first line
- * it declares: the `Database: …` line, or a start line said to come before a
- * connection. `untimed` names the rest. They are not run: a command that
- * connects to nothing would run on to the end of its work.
+ * it declares. `untimed` names the rest, which are not run, each with why: a
+ * command that connects to nothing would run on to the end of its work, and
+ * one that may connect says for itself why it must not be run.
  */
 export function connectRunsOf(
   program: Command,
   runs: readonly string[][]
-): { timed: string[][]; untimed: string[] } {
+): ConnectRuns {
   const timed: string[][] = [];
-  const untimed: string[] = [];
+  const untimed: ConnectRuns["untimed"] = [];
   for (const args of runs) {
     const path = commandPathOf(program, args);
     const first = declaredFirstLine(commandAt(program, path));
-    if (first !== undefined && mayConnect(first)) timed.push(args);
-    else untimed.push(path.join(" "));
+    const why =
+      first === undefined
+        ? "declares no first line"
+        : whyUntimedToConnect(first);
+    if (why === undefined) timed.push(args);
+    else untimed.push({ name: path.join(" "), why });
   }
   return { timed, untimed };
 }

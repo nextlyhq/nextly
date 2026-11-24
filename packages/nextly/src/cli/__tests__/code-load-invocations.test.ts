@@ -113,22 +113,28 @@ describe("the runs timed to their connection", () => {
     const at = (name: string) => commandAt(built, [name]);
     declareFirstLine(at("init"), startLine("...", "may connect"));
     declareFirstLine(at("migrate"), DATABASE_LINE);
+    declareFirstLine(
+      at("add"),
+      startLine("...", { untimed: "installs first" })
+    );
 
     const { timed: runs, untimed } = connectRunsOf(
       built,
       built.commands.map(command => [command.name()])
     );
     expect(runs.map(([name]) => name).sort()).toEqual(["init", "migrate"]);
-    expect(untimed).toContain("setup-token");
+    expect(untimed.map(({ name }) => name)).toContain("setup-token");
+    // A command that may connect, yet must not be run, is left out with its reason.
+    expect(untimed).toContainEqual({ name: "add", why: "installs first" });
   });
 
   it("leave out, by name, every other command, so none runs its work to the end", () => {
-    // Scaffolding a project would do so.
-    expect(connect.untimed).toEqual(
-      expect.arrayContaining(["init", "generate:types"])
+    const untimedNames = connect.untimed.map(({ name }) => name);
+    // Scaffolding a project and installing a package would.
+    expect(untimedNames).toEqual(
+      expect.arrayContaining(["init", "generate:types", "add", "plugins add"])
     );
-    expect([...timedNames, ...connect.untimed].sort()).toEqual(
-      [...named].sort()
-    );
+    expect(connect.untimed.filter(({ why }) => why.trim() === "")).toEqual([]);
+    expect([...timedNames, ...untimedNames].sort()).toEqual([...named].sort());
   });
 });
