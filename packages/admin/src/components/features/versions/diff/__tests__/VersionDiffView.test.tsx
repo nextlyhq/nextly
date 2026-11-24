@@ -454,7 +454,7 @@ describe("VersionDiffView", () => {
 
     render(<VersionDiffView scope={scope} from={1} to={2} />);
 
-    expect(screen.getByRole("button", { name: "Side by side" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "Side by side" })).toBeDisabled();
   });
 
   it("says only system fields changed, never identical, with the control to show them", async () => {

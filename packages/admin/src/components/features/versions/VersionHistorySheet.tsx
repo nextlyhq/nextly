@@ -42,7 +42,11 @@ import { navigateTo, setSearchParams } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
 
 import { useDocumentHistory } from "./document-history-context";
-import { RESTORE_PARAM, useHistoryAddress } from "./history-address";
+import {
+  RESTORE_PARAM,
+  restoreAsked,
+  useHistoryAddress,
+} from "./history-address";
 import { loadedWindow } from "./history-story";
 import { HistoryStoryList } from "./HistoryStoryList";
 import { restoreIntoEditor } from "./restore-into-editor";
@@ -184,6 +188,9 @@ export function VersionHistorySheet({
   // link names it; the list shows while none is chosen.
   const { version: selected, setVersion: setSelected } = useHistoryAddress();
   const [confirmingRestore, setConfirmingRestore] = useState(false);
+  // The one field a hand-off asked for by name, chosen alone when the list
+  // opens; cleared by any other way of opening it.
+  const [restoreOnly, setRestoreOnly] = useState<string | undefined>();
   // The version being renamed, which is not necessarily the one being previewed
   // — an editor can name a row without opening it.
   const [renaming, setRenaming] = useState<number | null>(null);
@@ -393,11 +400,14 @@ export function VersionHistorySheet({
     restoresInEditor(viewedAbout?.locale, editor.locale);
   useEffect(() => {
     if (!open || selected === null || !detail.data) return;
-    const asked =
-      new URLSearchParams(window.location.search).get(RESTORE_PARAM) === "1";
+    const asked = restoreAsked(
+      new URLSearchParams(window.location.search).get(RESTORE_PARAM)
+    );
     if (!asked) return;
     setSearchParams({ [RESTORE_PARAM]: null }, { replace: true });
-    if (offersRestore) setConfirmingRestore(true);
+    if (!offersRestore) return;
+    setRestoreOnly(asked.kind === "field" ? asked.name : undefined);
+    setConfirmingRestore(true);
   }, [open, selected, detail.data, offersRestore]);
 
   const restoreChosen = useCallback(
@@ -487,7 +497,10 @@ export function VersionHistorySheet({
   // Restoring is offered beside the version in the document, where the
   // reader is looking — but it stays THIS component's mutation, guarded by
   // this component's confirmation. Only the trigger travels.
-  const requestRestore = useCallback(() => setConfirmingRestore(true), []);
+  const requestRestore = useCallback(() => {
+    setRestoreOnly(undefined);
+    setConfirmingRestore(true);
+  }, []);
   // Clears this panel's own selection as well as the shared one, so the list
   // stops marking a row active for a version that is no longer on screen.
   // Where the panel is a page, the live document is reached by leaving history
@@ -924,6 +937,7 @@ export function VersionHistorySheet({
             versionNo={selected}
             rows={restoreRows}
             {...(editor.language ? { language: editor.language } : {})}
+            {...(restoreOnly !== undefined ? { only: restoreOnly } : {})}
             // Re-checked at confirm time: the restore trigger can vanish while
             // the dialog is open (a claim arriving mid-dialog), and an open
             // dialog must not restore past a refusal that arrived after it.

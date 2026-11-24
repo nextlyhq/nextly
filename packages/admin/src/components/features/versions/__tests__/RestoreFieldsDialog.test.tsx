@@ -170,22 +170,103 @@ describe("RestoreFieldsDialog", () => {
       ],
     });
 
-    expect(screen.getByText(/Spanish/)).toBeInTheDocument();
     const views = screen.getByRole("checkbox", { name: /Views/ }).closest("li");
     expect(
-      within(views as HTMLElement).getByText("Changes every language")
+      within(views as HTMLElement).getByText("Shared · every language")
     ).toBeInTheDocument();
     const title = screen.getByRole("checkbox", { name: /Title/ }).closest("li");
     expect(
-      within(title as HTMLElement).queryByText("Changes every language")
+      within(title as HTMLElement).queryByText("Shared · every language")
     ).toBeNull();
+    // Under the list, what the restore changes, counted from what is chosen.
+    expect(
+      screen.getByText(
+        "Changes Spanish and 1 shared field, which changes every language."
+      )
+    ).toBeInTheDocument();
   });
 
-  it("says nothing is saved until the person saves or publishes", () => {
+  it("says a restore of translated fields alone leaves the other languages as they are", async () => {
+    renderDialog({
+      language: "Spanish",
+      rows: [
+        { ...rows[0]!, shared: false },
+        { ...rows[1]!, shared: true },
+      ],
+    });
+    // Unchoosing the shared field changes what the restore reaches.
+    await userEvent.click(screen.getByRole("checkbox", { name: /Views/ }));
+
+    expect(
+      screen.getByText(
+        "Changes Spanish only. Other languages and shared fields stay as they are."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("says what a restore does and does not do, under the list", () => {
     renderDialog();
 
     expect(
-      screen.getByText(/Nothing is saved until you save/)
+      screen.getByText("Readers see nothing change until you publish.")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Your other unsaved edits stay, and every version stays in History."
+      )
+    ).toBeInTheDocument();
+    // An untranslated document has no language to name.
+    expect(screen.queryByText(/^Changes /)).toBeNull();
+  });
+
+  it("names each field as the editor lays it out, and the value it puts back", () => {
+    renderDialog({
+      rows: [{ ...rows[0]!, place: ["Content"] }, rows[1]!, rows[2]!],
+    });
+
+    const title = screen.getByRole("checkbox", { name: /Title/ }).closest("li");
+    expect(
+      within(title as HTMLElement).getByText("Content › Title")
+    ).toBeInTheDocument();
+    expect(
+      within(title as HTMLElement).getByText("Puts back “Old”")
+    ).toBeInTheDocument();
+    const views = screen.getByRole("checkbox", { name: /Views/ }).closest("li");
+    expect(
+      within(views as HTMLElement).getByText("Puts back “1”")
+    ).toBeInTheDocument();
+    // A hidden field's value never reaches the dialog, so nothing is quoted.
+    const secret = screen
+      .getByRole("checkbox", { name: /Secret/ })
+      .closest("li");
+    expect(within(secret as HTMLElement).queryByText(/Puts back/)).toBeNull();
+  });
+
+  it("shortens a long value to one line's worth", () => {
+    renderDialog({
+      rows: [{ ...rows[0]!, value: "word ".repeat(60).trim() }],
+    });
+
+    const line = screen.getByText(/^Puts back “/);
+    expect(line.textContent).toMatch(/…”$/);
+    expect(line.textContent!.length).toBeLessThan(110);
+  });
+
+  it("chooses one field alone when it was asked for by name", () => {
+    renderDialog({ only: "views" });
+
+    expect(screen.getByRole("checkbox", { name: /Views/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Title/ })).not.toBeChecked();
+    expect(
+      screen.getByRole("button", { name: "Restore 1 field" })
+    ).toBeEnabled();
+  });
+
+  it("asks a question naming the version", () => {
+    renderDialog();
+
+    expect(
+      screen.getByRole("alertdialog", { name: "Restore from version 3?" })
     ).toBeInTheDocument();
   });
 });

@@ -70,6 +70,30 @@ export function useDrawnContainers(): number {
 }
 
 /**
+ * What a surface offers on one field of a comparison, such as "Restore this
+ * field", drawn in that field's heading row beside its name and its change,
+ * so the action reads with the field it acts on. Taken by the outermost row
+ * below it only: a group's own fields are part of the field it acts on, and
+ * offering it again on each would act on the whole from inside a part.
+ */
+const FieldRowActionContext = createContext<React.ReactNode>(null);
+
+/** Offers `action` in the heading row of the field drawn below it. */
+export function FieldRowAction({
+  action,
+  children,
+}: {
+  action: React.ReactNode;
+  children: React.ReactNode;
+}): JSX.Element {
+  return (
+    <FieldRowActionContext.Provider value={action}>
+      {children}
+    </FieldRowActionContext.Provider>
+  );
+}
+
+/**
  * A labelled block wrapping one field's diff.
  *
  * Given the node, it names the field as the editor does, after the containers
@@ -88,11 +112,12 @@ export function FieldRow({
   children: React.ReactNode;
 }): JSX.Element {
   const drawn = useDrawnContainers();
+  const action = useContext(FieldRowActionContext);
   const place = node ? placeOf(node.path, drawn) : [];
   const name = node ? fieldNameOf(node) : (label ?? "Field");
   return (
     <div className="py-2.5 border-b border-border last:border-b-0">
-      <div className="flex items-center gap-2 mb-1.5">
+      <div className="flex flex-wrap items-center gap-2 mb-1.5">
         {/* A heading, so a screen reader can move from one changed field to
             the next as from one section to the next. */}
         <h3 className="text-xs font-medium text-muted-foreground">
@@ -106,8 +131,13 @@ export function FieldRow({
           <span className="text-foreground">{name}</span>
         </h3>
         <StatusBadge status={status} />
+        {action ? <div className="ml-auto">{action}</div> : null}
       </div>
-      <div className="text-sm text-foreground">{children}</div>
+      {/* The field's own parts take no action of theirs: it acts on the
+          whole field, which this row heads. */}
+      <FieldRowActionContext.Provider value={null}>
+        <div className="text-sm text-foreground">{children}</div>
+      </FieldRowActionContext.Provider>
     </div>
   );
 }
