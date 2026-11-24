@@ -511,7 +511,9 @@ export async function runDbSync(
     // the sync could not see, ends the run with the sync applied.
     if (takesDataSteps) {
       await runWithFieldTypes(configResult.fieldTypes, () =>
-        storedData.takeAfterSchemaChanges()
+        storedData.takeAfterSchemaChanges(
+          "the schema changes this sync applied"
+        )
       );
     }
     const storedDataRefused = storedData.refusal();

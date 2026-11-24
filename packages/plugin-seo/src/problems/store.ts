@@ -39,26 +39,47 @@ export function problemsCollection(): CollectionConfig {
     labels: { singular: "SEO check", plural: "SEO checks" },
     // Bookkeeping the plugin keeps, never authored.
     internal: true,
+    // Every text value here is the plugin's own bookkeeping (keys, ids, languages,
+    // paths, states, actors), never translated: each says `localized: false`, so its
+    // column stays on the main table, where a lookup by it finds it in every language.
     fields: [
       // A hash of the page's type and id, or of the site's own row: the one
       // unique column, which keeps a page to one row however two checks of
       // it race.
-      text({ name: "rowKey", label: "Row key", required: true, unique: true }),
-      text({ name: "kind", label: "Kind", required: true, index: true }),
+      text({
+        name: "rowKey",
+        localized: false,
+        label: "Row key",
+        required: true,
+        unique: true,
+      }),
+      text({
+        name: "kind",
+        localized: false,
+        label: "Kind",
+        required: true,
+        index: true,
+      }),
       text({
         name: "holderCollection",
+        localized: false,
         label: "Holder collection",
         index: true,
       }),
       // Indexed with the collection, since a page's every language is read
       // together.
-      text({ name: "holderId", label: "Holder id", index: true }),
-      text({ name: "locale", label: "Language" }),
+      text({
+        name: "holderId",
+        localized: false,
+        label: "Holder id",
+        index: true,
+      }),
+      text({ name: "locale", localized: false, label: "Language" }),
       // Long text: a title or address of any length fits on every dialect.
-      textarea({ name: "label", label: "Label" }),
-      textarea({ name: "path", label: "Path" }),
-      textarea({ name: "title", label: "Title" }),
-      textarea({ name: "description", label: "Description" }),
+      textarea({ name: "label", localized: false, label: "Label" }),
+      textarea({ name: "path", localized: false, label: "Path" }),
+      textarea({ name: "title", localized: false, label: "Title" }),
+      textarea({ name: "description", localized: false, label: "Description" }),
       json({ name: "problems", label: "Problems" }),
       // The pages the page's content links to, and whether it is listed and
       // its language's home, for the site's link counts and orphan pages.
@@ -66,10 +87,14 @@ export function problemsCollection(): CollectionConfig {
       // On a page's row, when a check last found this page changed; on the
       // site's row, when the site was last checked in full. ISO text, which
       // orders and compares alike on every dialect.
-      text({ name: "checkedAt", label: "Checked at" }),
+      text({ name: "checkedAt", localized: false, label: "Checked at" }),
       checkbox({ name: "outOfDate", label: "Out of date" }),
       // When the full check was last marked out of date, as ISO text.
-      text({ name: "markedAt", label: "Marked out of date at" }),
+      text({
+        name: "markedAt",
+        localized: false,
+        label: "Marked out of date at",
+      }),
       number({ name: "pagesChecked", label: "Pages checked" }),
     ],
     access: {
