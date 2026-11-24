@@ -56,7 +56,13 @@ describe("VersionDiffView", () => {
 
     expect(screen.getByText("Views")).toBeInTheDocument();
     expect(
-      screen.getByText(/Changes from Version 1 to Version 2\./)
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === "P" &&
+          (element.textContent ?? "").startsWith(
+            "Changes from Version 1 to Version 2."
+          )
+      )
     ).toBeInTheDocument();
     expect(screen.getByText(/1 of 1 fields changed/)).toBeInTheDocument();
     // Every field is read, so the count and the fold cover the whole document.
