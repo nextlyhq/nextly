@@ -2226,6 +2226,33 @@ interface StructureSelect {
 }
 
 /**
+ * `data` with each repeater or group keeping one structure that `split` wrote laid back as written
+ * (`localizedFieldValues`), its text with its structure, where the split left the structure alone.
+ * `data` as it is where there is no split or none of its fields keeps one structure.
+ */
+function withWrittenStructures(
+  data: Record<string, unknown>,
+  split:
+    | {
+        localizedFieldValues?: Record<string, unknown>;
+        sharedStructures?: readonly SharedStructureWritten[];
+      }
+    | null
+    | undefined
+): Record<string, unknown> {
+  const written = split?.localizedFieldValues;
+  if (!written || !split?.sharedStructures?.length) return data;
+  const out = { ...data };
+  for (const structure of split.sharedStructures) {
+    if (!Object.hasOwn(written, structure.field)) continue;
+    // Held under the field's name; a column of another spelling goes with it.
+    if (structure.column !== structure.field) delete out[structure.column];
+    out[structure.field] = written[structure.field];
+  }
+  return out;
+}
+
+/**
  * Lay a write's translated values back onto the row it returns, by field name: each value as the
  * translation row holds it, and for a repeater or group keeping one structure in every language,
  * whose translation row holds its text alone (keyed by row id), the value as written, its rows
@@ -14846,6 +14873,14 @@ export class CollectionMutationService extends BaseService {
       snapshot: unknown;
       /** The caller's shaped payload, after its translated values were split off. */
       finalData: Record<string, unknown>;
+      /**
+       * The split those values went to: a repeater or group keeping one structure is left in
+       * `finalData` as its structure alone, and is laid back as written from here.
+       */
+      callerSplit?: {
+        localizedFieldValues?: Record<string, unknown>;
+        sharedStructures?: readonly SharedStructureWritten[];
+      } | null;
       componentFieldData: Record<string, unknown>;
       manyToManyData: Record<string, string[]>;
       /** The document as it stands before the write, read on this transaction. */
@@ -14867,14 +14902,13 @@ export class CollectionMutationService extends BaseService {
       grants?: () => Promise<CallerGrants>;
     }
   ) {
-    const {
-      fields,
-      manyToManyFields,
-      componentSchemas,
-      finalData,
-      componentFieldData,
-      manyToManyData,
-    } = args;
+    const { fields, manyToManyFields, componentSchemas, componentFieldData } =
+      args;
+    const { manyToManyData } = args;
+    // The caller's repeaters and groups keeping one structure as written, their text with them:
+    // the split left each in `finalData` as its structure alone, which would replace the pending
+    // change's whole value and lose both its text and the caller's.
+    const finalData = withWrittenStructures(args.finalData, args.callerSplit);
     const { payload: draftInput } = buildRestorePayload(
       args.snapshot,
       fields as unknown as FieldConfig[],
@@ -18861,6 +18895,7 @@ export class CollectionMutationService extends BaseService {
               const folded = await this.foldWorkingDraft(tx, {
                 snapshot: workingDraft.snapshot,
                 finalData,
+                callerSplit: localizedUpdate,
                 componentFieldData,
                 manyToManyData,
                 live: previousDocument ?? {},

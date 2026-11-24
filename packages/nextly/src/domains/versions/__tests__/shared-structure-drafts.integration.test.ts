@@ -21,6 +21,7 @@ import {
   defineFieldGroup,
   defineSingle,
   fieldGroup,
+  group,
   number,
   repeater,
   text,
@@ -676,6 +677,80 @@ describe.each(getConfiguredTestDialects())(
           "segundo",
         ]);
         expect(captions(await slidesIn("en"))).toEqual(["first", "second"]);
+      },
+      BOOT_TIMEOUT
+    );
+  }
+);
+
+// A group's text on a type that is not translated, on a site with no languages, as the SEO
+// plugin's `seo` group is on a page: one structure, its text the default language's. A change
+// held as the working draft and then published with the same change puts it live, never losing
+// the text the page had or the change.
+describe.each(getConfiguredTestDialects())(
+  "a group's text held and then published on an untranslated type (integration, %s)",
+  dialect => {
+    it(
+      "publishes the held text of a group, and keeps the live text while it is held",
+      async () => {
+        current = await createTestNextly({
+          dialect,
+          collections: [
+            defineCollection({
+              slug: "heldpages",
+              status: true,
+              versions: { drafts: true },
+              access: { read: () => true, update: () => true },
+              fields: [
+                text({ name: "title" }),
+                group({
+                  name: "seo",
+                  fields: [text({ name: "metaTitle", localized: true })],
+                }),
+              ],
+            }),
+          ],
+        });
+        const nextly = current.nextly;
+        const created = await nextly.create({
+          collection: "heldpages",
+          data: {
+            title: "About",
+            status: "published",
+            seo: { metaTitle: "About Acme" },
+          },
+        });
+        const id = (created.item as { id: string }).id;
+        const live = async () =>
+          (
+            (await nextly.findByID({ collection: "heldpages", id })) as {
+              seo?: { metaTitle?: string | null };
+            }
+          ).seo?.metaTitle;
+        expect(await live()).toBe("About Acme");
+
+        // Held as the working draft: the live text stays.
+        await nextly.update({
+          collection: "heldpages",
+          id,
+          data: {
+            seo: { metaTitle: "About Acme, rewritten" },
+            _overwrite: true,
+          },
+        });
+        expect(await live()).toBe("About Acme");
+
+        // Published with the same change: the change is live.
+        await nextly.update({
+          collection: "heldpages",
+          id,
+          data: {
+            seo: { metaTitle: "About Acme, rewritten" },
+            status: "published",
+            _overwrite: true,
+          },
+        });
+        expect(await live()).toBe("About Acme, rewritten");
       },
       BOOT_TIMEOUT
     );
