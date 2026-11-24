@@ -125,4 +125,53 @@ describe("a Builder field group's overlay columns", () => {
     );
     expect(off(["heading"])).not.toThrow();
   });
+
+  // A save's own migration file makes a new group's overlay column before the companion is
+  // reconciled, so the reconcile must not add it again. Broken, the save fails on a duplicate column.
+  it("adds no overlay column the companion already has, as a save's own file made it", () => {
+    const statements = statementsOf({
+      oldFields: [heading],
+      newFields: [heading, box],
+      liveCompanionColumns: ["heading", "box"],
+    });
+    expect(statements.filter(addsBox)).toHaveLength(0);
+  });
+
+  // A group already there whose overlay is missing keeps its text on the main table, so the
+  // default language's overlay is seeded from it; a group new in the save has nothing to copy.
+  // Broken, the default language reads no text once another language saves the group.
+  it("seeds a missing overlay of a group already there from the main table, and not a new group's", () => {
+    const seeds = (s: string) =>
+      s.includes(`"comp_badge_locales"`) && /^(UPDATE|INSERT)/.test(s);
+    const lacking = statementsOf({
+      oldFields: [heading, box],
+      newFields: [heading, box],
+      liveCompanionColumns: ["heading"],
+    });
+    expect(lacking.findIndex(addsBox)).toBeGreaterThanOrEqual(0);
+    expect(lacking.findIndex(seeds)).toBeGreaterThan(
+      lacking.findIndex(addsBox)
+    );
+    expect(
+      statementsOf({
+        oldFields: [heading],
+        newFields: [heading, box],
+        liveCompanionColumns: ["heading"],
+      }).some(seeds)
+    ).toBe(false);
+  });
+
+  // A Builder create's own migration makes the whole translations table, overlay columns among it,
+  // before the companion is reconciled as translation starting, so the reconcile adds none of them
+  // again. Broken, the create fails on a duplicate column and records the field group as failed.
+  it("adds no overlay column the companion has when translation starts over a table the save made", () => {
+    const statements = statementsOf({
+      wasLocalized: false,
+      oldFields: [],
+      newFields: [heading, box],
+      companionExists: true,
+      liveCompanionColumns: ["heading", "box"],
+    });
+    expect(statements.filter(addsBox)).toHaveLength(0);
+  });
 });
