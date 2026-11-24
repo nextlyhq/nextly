@@ -45,8 +45,9 @@ export function stoppingUnits(actual: typeof RunUnit): typeof RunUnit {
 
 /**
  * A save brings a translations table in step after its file, through this function, whose statements
- * the file's stop points do not name: the save may be stopped once it has run, as a process killed
- * there, with the file applied, its registry row with it, and the column gone.
+ * the file's stop points do not name: the save may be stopped before it, as a process killed with
+ * the file applied, its registry row with it, and the translations table still the old one; or once
+ * it has run, with that table the new one.
  */
 export function stoppingCompanion(
   actual: typeof HeldLeavingDrops
@@ -56,6 +57,7 @@ export function stoppingCompanion(
     applyCompanionTransition: async (
       ...args: Parameters<typeof actual.applyCompanionTransition>
     ) => {
+      await stopHere("companion: before");
       const answer = await actual.applyCompanionTransition(...args);
       await stopHere("companion: after");
       return answer;
