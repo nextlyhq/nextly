@@ -132,7 +132,7 @@ test.describe("history by keyboard alone", () => {
 
     // The restore dialog, opened by keyboard and closed with Escape: focus goes
     // back to the control that opened it, not to the top of the page.
-    await tabTo(page, "Restore this version", "back");
+    await tabTo(page, "Restore…", "back");
     await expectFocusShown(page);
     await page.keyboard.press("Enter");
     const dialog = page.getByRole("alertdialog");
@@ -141,9 +141,7 @@ test.describe("history by keyboard alone", () => {
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
     await expect(
-      page
-        .getByRole("banner")
-        .getByRole("button", { name: "Restore this version" })
+      page.getByRole("banner").getByRole("button", { name: "Restore…" })
     ).toBeFocused();
   });
 });

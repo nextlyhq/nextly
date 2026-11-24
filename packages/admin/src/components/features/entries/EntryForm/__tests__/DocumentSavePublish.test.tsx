@@ -217,6 +217,18 @@ describe("Save and Publish say the page's state themselves", () => {
       await screen.findByRole("menuitem", { name: "Unpublish" })
     ).toBeTruthy();
   });
+
+  it("offers Save once, as its own button, never again on Publish's arrow", async () => {
+    // A draft keeps its save on the main button's menu in the entry header;
+    // this pair draws Save beside Publish, so the arrow leaves it out.
+    drawn({ entry: draftPage, isDirty: true });
+    expect(saveButton()).not.toBeNull();
+    // With Save left out, a draft has nothing else for the arrow to hold: an
+    // arrow drawn here would be one holding Save a second time.
+    expect(
+      screen.queryByRole("button", { name: "More ways to publish" })
+    ).toBeNull();
+  });
 });
 
 describe("what holds them", () => {
