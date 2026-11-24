@@ -525,7 +525,8 @@ describe.each(getConfiguredTestDialects())(
     async function plantMarker(
       url: string,
       main = TABLE,
-      recorded: (rows: OwnerRecord[]) => OwnerRecord[] = rows => rows
+      recorded: (rows: OwnerRecord[]) => OwnerRecord[] = rows => rows,
+      indexed = true
     ): Promise<void> {
       const q = (name: string) =>
         dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
@@ -545,9 +546,11 @@ describe.each(getConfiguredTestDialects())(
         await adapter.executeQuery(
           `ALTER TABLE ${q(main)} ADD COLUMN ${q(MARKER)} ${dialect === "mysql" ? "varchar(64)" : "text"}`
         );
-        await adapter.executeQuery(
-          `CREATE INDEX ${q(MARKER_INDEX)} ON ${q(main)} (${q(MARKER)})`
-        );
+        if (indexed) {
+          await adapter.executeQuery(
+            `CREATE INDEX ${q(MARKER_INDEX)} ON ${q(main)} (${q(MARKER)})`
+          );
+        }
         await adapter.executeQuery(
           `UPDATE ${q(main)} SET ${q(MARKER)} = 'kept by the plugin'`
         );
@@ -835,6 +838,8 @@ describe.each(getConfiguredTestDialects())(
       options: {
         recorded?: (rows: OwnerRecord[]) => OwnerRecord[];
         after?: Parameters<typeof shaped>[0];
+        /** Whether the plugin's column has its index too. */
+        indexed?: boolean;
         /** The file's UP, rewritten by hand before it runs. */
         edit?: (up: string) => string;
       } = {}
@@ -843,7 +848,7 @@ describe.each(getConfiguredTestDialects())(
       use(url);
       wentThrough(await migrateCreate("add_posts", shaped({})));
       wentThrough(await migrate(shaped({})));
-      await plantMarker(url, TABLE, options.recorded);
+      await plantMarker(url, TABLE, options.recorded, options.indexed);
       await on(url, async adapter => {
         await adapter.executeQuery(
           dialect === "mysql"
@@ -989,12 +994,16 @@ describe.each(getConfiguredTestDialects())(
     });
 
     // SQLite makes a column required by rebuilding its table from what the app's history describes,
-    // so what the history does not describe goes with the old table.
-    it.runIf(dialect === "sqlite")(
-      "nextly migrate refuses a file that rebuilds a table as drift over a plugin's part on it, changing nothing",
-      async () => {
+    // so what the history does not describe goes with the old table. A generated rebuild stops of its
+    // own accord where the table has an index the history does not track, and says nothing of a column.
+    it.runIf(dialect === "sqlite").each([
+      { part: "column and its index", indexed: true },
+      { part: "column alone", indexed: false },
+    ])(
+      "nextly migrate refuses a file that rebuilds a table as drift over a plugin's $part on it, changing nothing",
+      async ({ indexed }) => {
         await expectDrift(
-          await changedOverTheParts({ after: { required: ["extra"] } })
+          await changedOverTheParts({ after: { required: ["extra"] }, indexed })
         );
       }
     );
