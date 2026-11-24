@@ -35,15 +35,16 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
-import { lookingUpRegistry } from "../migration/moved-storage";
+import {
+  lookingUpRegistry,
+  notedRegistryName,
+  noteRegistryName,
+} from "../migration/moved-storage";
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
 } from "../storage/field-group-field-type";
-import {
-  forgetFieldGroupStorageNames,
-  resolveRegistryTableName,
-} from "../storage/resolve-storage-names";
+import { resolveFieldGroupRegistryName } from "../storage/resolve-storage-names";
 
 import {
   fieldGroupTableNameFor,
@@ -325,21 +326,20 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * of us. Resolved from the catalog and memoized per adapter, so the answer
    * costs one catalog read per process rather than one per query.
    *
-   * A transaction that found the registry moved addresses it as it found it
-   * until it ends (`lookingUp`); the first lookup after it resolves again.
+   * Never on a transaction: resolving reads the catalog on another
+   * connection, which a pool of one has not got while the transaction holds
+   * it. A lookup there uses the name this process last found, and one that
+   * name fails for finds the other on its own connection (`lookingUp`).
    */
   protected override async resolveRegistryTableName(): Promise<string> {
-    if (this.movedName !== undefined) {
-      if (this.adapter.transactionOpenInFlow()) return this.movedName;
-      this.movedName = undefined;
-      forgetFieldGroupStorageNames(this.adapter);
-      clearRegistryRowCache();
+    const noted = notedRegistryName(this.adapter);
+    if (noted !== undefined && this.adapter.transactionOpenInFlow()) {
+      return noted;
     }
-    return resolveRegistryTableName(this.adapter);
+    const name = await resolveFieldGroupRegistryName(this.adapter);
+    noteRegistryName(this.adapter, name);
+    return name;
   }
-
-  /** The name a transaction found the registry under, when the storage migration moved it. */
-  private movedName: string | undefined;
 
   /**
    * One lookup of the registry, following it when the storage migration moved it
@@ -350,14 +350,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     executor: unknown,
     lookup: () => Promise<T>
   ): Promise<T> {
-    return lookingUpRegistry({
-      adapter: this.adapter,
-      executor,
-      lookup,
-      useName: name => {
-        this.movedName = name;
-      },
-    });
+    return lookingUpRegistry({ adapter: this.adapter, executor, lookup });
   }
 
   protected override getRecordBySlug(

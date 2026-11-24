@@ -41,6 +41,7 @@ import {
   resolveFieldGroupRegistryTable,
   resolveTableColumns,
   type CatalogReadAdapter,
+  type FieldGroupRegistryName,
 } from "../storage/resolve-storage-names";
 
 import { MIGRATION_TARGET, retargetName } from "./manifest";
@@ -168,9 +169,7 @@ function registeredTables(
  * so: it is renamed last, and a process that resolved it again still holds the tables it registered
  * before. Anything it cannot tell answers false.
  */
-async function isSettledOnCurrentNames(
-  adapter: DrizzleAdapter
-): Promise<boolean> {
+function isSettledOnCurrentNames(adapter: DrizzleAdapter): boolean {
   const tables = registeredTables(adapter);
   if (
     tables === undefined ||
@@ -178,11 +177,30 @@ async function isSettledOnCurrentNames(
   ) {
     return false;
   }
-  try {
-    return (await resolveFieldGroupRegistryTable(adapter)).migrated;
-  } catch {
-    return false;
-  }
+  return notedRegistryName(adapter) === MIGRATION_TARGET.registryTable;
+}
+
+/**
+ * The name each database's registry was last found under by this process: resolved off any
+ * transaction, or found on one that met a move. One place for it, which a lookup on a transaction
+ * reads instead of resolving (on another connection), and a write reads to know whether it may
+ * still meet a move.
+ */
+const registryNames = new WeakMap<DrizzleAdapter, FieldGroupRegistryName>();
+
+/** Remember the name `adapter`'s registry was found under. */
+export function noteRegistryName(
+  adapter: DrizzleAdapter,
+  name: FieldGroupRegistryName
+): void {
+  registryNames.set(adapter, name);
+}
+
+/** The name `adapter`'s registry was last found under, or undefined before it was found. */
+export function notedRegistryName(
+  adapter: DrizzleAdapter
+): FieldGroupRegistryName | undefined {
+  return registryNames.get(adapter);
 }
 
 /**
@@ -297,7 +315,10 @@ async function resolveAgain(adapter: DrizzleAdapter): Promise<void> {
   forgetFieldGroupStorageNames(adapter);
   clearRegistryRowCache();
   // A catalog that cannot be read is left to the next lookup to say so.
-  await resolveFieldGroupRegistryTable(adapter).catch(() => undefined);
+  await resolveFieldGroupRegistryTable(adapter).then(
+    registry => noteRegistryName(adapter, registry.name),
+    () => undefined
+  );
 }
 
 /** Whether `candidate` is the field-group registry itself. */
@@ -315,7 +336,7 @@ function isRegistry(candidate: MoveCandidate | undefined): boolean {
  * is caught, whichever caller meets it first.
  *
  * On a caller's transaction the registry's other name is read on that connection and the lookup run
- * again there (`useName`), so nothing that asks is refused, or goes on without its answer, for
+ * again there (`noteRegistryName`), so nothing that asks is refused, or goes on without its answer, for
  * asking first. PostgreSQL can do so only while nothing of the transaction came after its savepoint
  * (`takeSavepoint`): a write that did is refused to be retried instead.
  */
@@ -324,10 +345,8 @@ export async function lookingUpRegistry<T>(args: {
   /** The caller's transaction, when the lookup runs on one. */
   executor: unknown;
   lookup: () => Promise<T>;
-  /** Makes `lookup` address the registry as `name` for the rest of the transaction. */
-  useName: (name: string) => void;
 }): Promise<T> {
-  const { adapter, lookup, useName } = args;
+  const { adapter, lookup } = args;
   const executor = onTransaction(adapter, args.executor);
   const savepoint =
     executor === undefined ? undefined : await takeSavepoint(adapter, executor);
@@ -360,7 +379,8 @@ export async function lookingUpRegistry<T>(args: {
       moved &&
       (adapter.dialect !== "postgresql" || savepoint?.taken === true)
     ) {
-      useName(candidate.other);
+      const other = REGISTRY_TABLES.find(name => name === candidate.other);
+      if (other !== undefined) noteRegistryName(adapter, other);
       return lookup();
     }
     await leaveAborted(adapter, executor);
@@ -429,7 +449,7 @@ async function takeSavepoint(
   if (held !== undefined && !held.undone()) {
     return { name: held.name, taken: false };
   }
-  if (await isSettledOnCurrentNames(adapter)) return undefined;
+  if (isSettledOnCurrentNames(adapter)) return undefined;
   const name = `nextly_moved_storage_${++savepointSequence}`;
   await runOn(executor, sql`SAVEPOINT ${sql.identifier(name)}`);
   savepoints.set(transaction.transaction, {

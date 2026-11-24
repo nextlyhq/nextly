@@ -31,6 +31,8 @@ import {
   isMovedStorageError,
   isStorageMovingRefusal,
   lookingUpRegistry,
+  notedRegistryName,
+  noteRegistryName,
   raiseIfMoved,
   refusalAfterFollowing,
   refusingMovedStorage,
@@ -99,7 +101,7 @@ type Dialect = "sqlite" | "mysql" | "postgresql";
 /** An adapter whose rollback effects run when `rolledBack` says the transaction ended. */
 const adapterOf = (dialect: Dialect) => {
   const effects: (() => unknown)[] = [];
-  return Object.assign(
+  const adapter = Object.assign(
     {
       dialect,
       getDrizzle: () => POOL,
@@ -131,6 +133,11 @@ const adapterOf = (dialect: Dialect) => {
       },
     }
   );
+  noteRegistryName(
+    adapter as never,
+    held.dynamic_field_groups ? "dynamic_field_groups" : "dynamic_components"
+  );
+  return adapter;
 };
 type Adapter = ReturnType<typeof adapterOf>;
 
@@ -348,7 +355,6 @@ describe("the savepoint a transaction takes", () => {
       adapter: adapter as never,
       executor: tx.handle,
       lookup: async () => null,
-      useName: () => undefined,
     });
     expect(tx.said).toHaveLength(1);
   });
@@ -412,7 +418,7 @@ describe("the savepoint a transaction takes", () => {
     expect(await said("postgresql")).toHaveLength(1);
   });
 
-  it("is taken again once the names this process resolved are reset and resolve to the old ones", async () => {
+  it("is taken again once the registry was found under its old name, and while it is resolved again", async () => {
     held = { dynamic_field_groups: ["id"] };
     registered = { fg_hero: "_field_group_type" };
     const adapter = adapterOf("postgresql");
@@ -420,24 +426,19 @@ describe("the savepoint a transaction takes", () => {
     await guarded(adapter, settled);
     expect(settled.said).toEqual([]);
 
-    held = { dynamic_components: ["id"] };
-    forgetFieldGroupStorageNames(adapter as never);
+    noteRegistryName(adapter as never, "dynamic_components");
     const after = txOf();
     await guarded(adapter, after);
     expect(after.said).toHaveLength(1);
   });
 
-  it("is taken when the registry cannot be resolved", async () => {
+  it("is taken by a process that has not found the registry yet, asking nothing to know", async () => {
     registered = { fg_hero: "_field_group_type" };
+    const listTables = vi.fn(async () => ["dynamic_field_groups"]);
     const tx = txOf();
-    await guarded(
-      {
-        ...adapterOf("postgresql"),
-        listTables: () => Promise.reject(new Error("denied")),
-      },
-      tx
-    );
+    await guarded({ ...adapterOf("postgresql"), listTables }, tx);
     expect(tx.said).toHaveLength(1);
+    expect(listTables).not.toHaveBeenCalled();
   });
 
   it("a settled process meeting a rollback keeps its error, and follows the names once it has ended", async () => {
@@ -544,7 +545,6 @@ describe("an executor that is the pool rather than a transaction", () => {
         adapter: adapterOf("postgresql") as never,
         executor: POOL,
         lookup,
-        useName: () => undefined,
       })
     ).resolves.toEqual({ slug: "hero" });
     expect(readOn).toEqual([]);
@@ -577,14 +577,11 @@ describe("isMovedStorageError", () => {
 describe("lookingUpRegistry", () => {
   /** A lookup that finds the registry under `names`, starting with the legacy one. */
   const lookupOf = (dialect: Dialect, ...names: string[]) => {
-    let name = "dynamic_components";
     const asked: string[] = [];
     return {
       asked,
-      useName: (other: string) => {
-        name = other;
-      },
-      lookup: async () => {
+      lookup: (adapter: Adapter) => async () => {
+        const name = notedRegistryName(adapter as never)!;
         asked.push(name);
         if (!names.includes(name)) throw missingTable[dialect](name);
         return { slug: "hero" };
@@ -599,8 +596,7 @@ describe("lookingUpRegistry", () => {
     lookingUpRegistry({
       adapter: adapter as never,
       executor,
-      lookup: registry.lookup,
-      useName: registry.useName,
+      lookup: registry.lookup(adapter),
     });
 
   it("looks up once more off a transaction, and never a third time", async () => {
@@ -612,7 +608,6 @@ describe("lookingUpRegistry", () => {
       adapter: adapterOf("sqlite") as never,
       executor: undefined,
       lookup,
-      useName: () => undefined,
     };
     await expect(lookingUpRegistry(args)).resolves.toEqual({ slug: "hero" });
 
@@ -633,7 +628,6 @@ describe("lookingUpRegistry", () => {
           adapter: adapterOf("sqlite") as never,
           executor: undefined,
           lookup,
-          useName: () => undefined,
         })
       ).rejects.toBe(error);
       expect(lookup).toHaveBeenCalledTimes(1);
@@ -673,6 +667,25 @@ describe("lookingUpRegistry", () => {
       run(adapter, lookupOf("postgresql", "dynamic_field_groups"), tx.handle)
     ).rejects.toMatchObject(MOVING);
     expect(tx.said.at(-1)).toBe("SELECT 1 / 0");
+  });
+
+  it("finds the registry again after a rollback of the migration, for a retry that asks on transactions alone", async () => {
+    // Nothing of the retry asks off a transaction, so what the rolled-back attempt leaves noted is
+    // all it has: a stale name there would fail every try.
+    const adapter = adapterOf("postgresql");
+    noteRegistryName(adapter as never, "dynamic_field_groups");
+    registered = { fg_hero: "_field_group_type" };
+    held = { dynamic_components: ["id"] };
+    const registry = lookupOf("postgresql", "dynamic_components");
+    await expect(run(adapter, registry, txOf().handle)).rejects.toThrow(
+      /dynamic_field_groups/
+    );
+
+    inFlow = undefined;
+    await adapter.rolledBack();
+    await expect(run(adapter, registry, txOf().handle)).resolves.toEqual({
+      slug: "hero",
+    });
   });
 
   it.each(["sqlite", "mysql", "postgresql"] as const)(
