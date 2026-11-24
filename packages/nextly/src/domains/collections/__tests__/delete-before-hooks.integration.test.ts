@@ -8,6 +8,7 @@
  * since nothing holds one. On both, the hooks run in one order, over one context, told of the
  * entry as it is.
  */
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
@@ -121,15 +122,19 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** What each hook is handed on both roads, but for its executor. */
-    function expectHanded(handed: readonly Handed[], id: string) {
+    function expectHanded(
+      handed: readonly Handed[],
+      id: string,
+      sent: Record<string, unknown>
+    ) {
       const common = { collection: SLUG, operation: "delete", userId: DELETER };
       expect(handed).toMatchObject([
         { hook: "beforeOperation", id, ...common },
         { hook: "beforeDelete", id, title: "doomed", ...common },
         { hook: "stored beforeDelete", id, title: "doomed", ...common },
       ]);
-      // One context over the three, carrying what the caller sent.
-      expect(handed[0]?.context).toMatchObject({ source: "test" });
+      // One context over the three, holding what the caller sent.
+      expect(handed[0]?.context).toEqual(sent);
       for (const { context } of handed) {
         expect(context).toBe(handed[0]?.context);
       }
@@ -149,7 +154,7 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(result.success, result.message).toBe(true);
-      expectHanded(handed, id);
+      expectHanded(handed, id, { source: "test" });
       expect(handed.map(({ executor }) => executor)).toEqual([
         undefined,
         undefined,
@@ -157,32 +162,62 @@ describe.each(getConfiguredTestDialects())(
       ]);
     }, 60_000);
 
-    it("runs them in the same order, each handed the transaction's own connection, for a delete in a caller's transaction", async () => {
-      const { t, id, handed } = await boot();
-      const entries = (
-        t.getService("collectionsHandler") as unknown as CollectionsHandler
-      ).getEntryService() as CollectionEntryService;
+    it.each([
+      {
+        road: "one entry",
+        sent: { source: "test" },
+        remove: async (
+          entries: CollectionEntryService,
+          tx: TransactionContext,
+          id: string
+        ) =>
+          (
+            await entries.deleteEntryInTransaction(tx, {
+              collectionName: SLUG,
+              entryId: id,
+              user: { id: DELETER },
+              context: { source: "test" },
+            })
+          ).success,
+      },
+      {
+        road: "a batch",
+        sent: {},
+        remove: async (
+          entries: CollectionEntryService,
+          tx: TransactionContext,
+          id: string
+        ) =>
+          (
+            await entries.deleteEntriesInTransaction(
+              tx,
+              { collectionName: SLUG, user: { id: DELETER } },
+              [id]
+            )
+          ).successful === 1,
+      },
+    ])(
+      "runs them in the same order, each handed the transaction's own connection, for a delete of $road in a caller's transaction",
+      async ({ sent, remove }) => {
+        const { t, id, handed } = await boot();
+        const entries = (
+          t.getService("collectionsHandler") as unknown as CollectionsHandler
+        ).getEntryService() as CollectionEntryService;
 
-      let ofTheTransaction: unknown;
-      const result = await t.adapter.transaction(async tx => {
-        ofTheTransaction = tx.getDrizzle();
-        return entries.deleteEntriesInTransaction(
-          tx,
-          {
-            collectionName: SLUG,
-            user: { id: DELETER },
-            context: { source: "test" },
-          },
-          [id]
-        );
-      });
+        let ofTheTransaction: unknown;
+        const deleted = await t.adapter.transaction(async tx => {
+          ofTheTransaction = tx.getDrizzle();
+          return remove(entries, tx, id);
+        });
 
-      expect(result.successful, JSON.stringify(result.errors)).toBe(1);
-      expectHanded(handed, id);
-      expect(ofTheTransaction).toBeDefined();
-      for (const { executor } of handed) {
-        expect(executor).toBe(ofTheTransaction);
-      }
-    }, 60_000);
+        expect(deleted).toBe(true);
+        expectHanded(handed, id, sent);
+        expect(ofTheTransaction).toBeDefined();
+        for (const { executor } of handed) {
+          expect(executor).toBe(ofTheTransaction);
+        }
+      },
+      60_000
+    );
   }
 );
