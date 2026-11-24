@@ -23,7 +23,10 @@ import {
   type FieldGroupNaming,
 } from "../../field-groups/services/field-group-storage-names";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
-import { historyFieldGroupNamingIn } from "../migrate-create/snapshot-io";
+import {
+  historyFieldGroupNamingIn,
+  SnapshotFileError,
+} from "../migrate-create/snapshot-io";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 import { loadUiSchema } from "../ui-schema/loader";
 import { applyDeferredExtendsToManifest } from "../ui-schema/merge";
@@ -210,6 +213,24 @@ export async function fieldGroupNamingOfHistory(args: {
 }
 
 /**
+ * {@link fieldGroupNamingOfHistory} for a command that judges the history's files itself
+ * afterwards. A newest snapshot that is no snapshot says no names, and the command's own reading
+ * of the folder is what names the file and refuses it: a corrupt snapshot, or one beside an old
+ * Schema Builder file, which is no migration. Read here as legacy, which every history before the
+ * record was on, so that reading still happens. A history that says two names is refused by name.
+ */
+export async function declaredFieldGroupNaming(
+  args: Parameters<typeof fieldGroupNamingOfHistory>[0]
+): Promise<FieldGroupNaming> {
+  try {
+    return await fieldGroupNamingOfHistory(args);
+  } catch (error) {
+    if (error instanceof SnapshotFileError) return "legacy";
+    throw error;
+  }
+}
+
+/**
  * Merge code-first config with the Builder manifest.
  *
  * Code-first wins on a slug collision, matching generation. Order matters
@@ -226,7 +247,7 @@ export async function resolveDeclaredSchema(
 ): Promise<ResolvedSchema> {
   const resolvers = args.resolvers ?? DEFAULT_TABLE_NAME_RESOLVERS;
   const naming =
-    args.fieldGroupNaming ?? (await fieldGroupNamingOfHistory(args));
+    args.fieldGroupNaming ?? (await declaredFieldGroupNaming(args));
   // Every field group, code-first and Builder alike, by the one resolver under the history's
   // naming: the storage migration moves a derived name by its prefix alone.
   const fieldGroupTable = (e: { slug: string }) =>

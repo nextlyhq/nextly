@@ -82,7 +82,7 @@ import {
 import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
 import {
   declaredNamesOf,
-  fieldGroupNamingOfHistory,
+  declaredFieldGroupNaming,
 } from "../../domains/schema/migrate/resolved-schema";
 import {
   marksNoTransaction,
@@ -258,12 +258,9 @@ export async function runMigrateCheck(
   // A snapshot this CLI cannot read is reported by the checks below, as `INVALID_SNAPSHOT` naming
   // the file; read here first, it would end the run as an unexpected error. Until then the names
   // are taken as legacy, which every history before the record is on.
-  const fieldGroupNaming = await fieldGroupNamingOfHistory({
+  const fieldGroupNaming = await declaredFieldGroupNaming({
     projectRoot: cwd,
     config: configResult.config,
-  }).catch((error: unknown) => {
-    if (error instanceof SnapshotFileError) return "legacy" as const;
-    throw error;
   });
   const merged = withFieldGroupTables(
     definitions.merged,
