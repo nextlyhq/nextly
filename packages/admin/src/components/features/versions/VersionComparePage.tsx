@@ -574,7 +574,9 @@ export function VersionComparePage({
         versionsHref(
           scope,
           { from: nextFrom, to: versionNo },
-          chosen?.locale ?? locale,
+          // Its own record's language, none included: a shared version holds
+          // no language, and the address's earlier one would no longer fit.
+          chosen !== undefined ? chosen.locale : locale,
           view
         )
       );
@@ -710,12 +712,18 @@ export function VersionComparePage({
         : undefined;
   // A version the older side may be: one in the newer side's language, and
   // not the newer one itself, which compared with itself says nothing.
-  const olderChoices = versions.filter(
-    v =>
-      v.versionNo !== null &&
-      String(v.versionNo) !== newerValue &&
-      (newerLocale === undefined || v.locale === newerLocale)
-  );
+  // Until a chosen newer version's language is known, no number is offered:
+  // one could pair two languages, which the server refuses. The baselines
+  // stay, since the server pairs those itself.
+  const olderChoices =
+    newerValue !== "" && newerLocale === undefined
+      ? []
+      : versions.filter(
+          v =>
+            v.versionNo !== null &&
+            String(v.versionNo) !== newerValue &&
+            (newerLocale === undefined || v.locale === newerLocale)
+        );
 
   return (
     <div className={HISTORY_FRAME}>
