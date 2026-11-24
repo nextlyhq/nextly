@@ -71,13 +71,14 @@ export interface TypeChangeRefusalWords {
 }
 
 /**
- * A type the picker offers, and whether the field, changed to it, would hold several values, as the
- * Builder's change would leave it (`withTypeChanged`): a change that keeps several values is judged
- * as one, a change that keeps one value as the other. Undefined keeps the field's own.
+ * A type the picker offers, and what the Builder's change would leave the field (`withTypeChanged`):
+ * whether it would hold several values, and the options it would have to choose from, by value. The
+ * field is judged with these, as the save would write it; each left undefined keeps the saved one's.
  */
 export interface TypeChangeCandidate {
   type: string;
   hasMany?: boolean;
+  options?: readonly string[];
 }
 
 /** One type a saved field could be changed to, as the picker shows it. */
@@ -198,11 +199,14 @@ export function typeChangeTargets(args: {
   const from = typeOf(args.field);
   return args.candidates
     .filter(candidate => candidate.type !== args.field.type)
-    .map(({ type, hasMany }) => {
+    .map(({ type, hasMany, options }) => {
       const candidate = {
         ...args.field,
         type,
         ...(hasMany === undefined ? {} : { hasMany }),
+        ...(options === undefined
+          ? {}
+          : { options: options.map(value => ({ label: value, value })) }),
       } as FieldDefinition;
       const to = typeOf(candidate);
       const blocked = pairBlocked(from, to);
@@ -230,8 +234,8 @@ export function typeChangeTargets(args: {
 
 /**
  * What the type picker asks: the saved field, by its path of names through its groups and repeaters,
- * the type the page knows it as saved by, and the types it offers, each with whether the change
- * would keep several values; the field types the catalog lists where it names none.
+ * the type the page knows it as saved by, and the types it offers, each with what the change would
+ * leave the field; the field types the catalog lists where it names none.
  */
 const TargetsRequest = z.object({
   field: z.array(z.string().min(1)).min(1).max(20),
@@ -240,7 +244,11 @@ const TargetsRequest = z.object({
   type: z.string().min(1),
   candidates: z
     .array(
-      z.object({ type: z.string().min(1), hasMany: z.boolean().optional() })
+      z.object({
+        type: z.string().min(1),
+        hasMany: z.boolean().optional(),
+        options: z.array(z.string()).optional(),
+      })
     )
     .max(100)
     .optional(),

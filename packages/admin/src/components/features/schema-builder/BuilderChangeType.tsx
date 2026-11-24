@@ -118,8 +118,8 @@ function changedTo(
 
 /**
  * What the picker asks the server of the saved field `saved`: every type it offers, a plugin's among
- * them, each with whether the change would leave the field holding several values, so the server
- * judges the field as the save would write it.
+ * them, each with what picking it would leave the field (whether it holds several values, and its
+ * options), so the server judges the field as the save would write it.
  */
 function questionOf(
   config: BuilderConfig,
@@ -133,10 +133,14 @@ function questionOf(
   );
   const candidates = [...offered]
     .filter(type => type !== saved.field.type)
-    .map(type => ({
-      type,
-      hasMany: changedTo(field, saved.field, type, plugins).hasMany === true,
-    }));
+    .map(type => {
+      const next = changedTo(field, saved.field, type, plugins);
+      return {
+        type,
+        hasMany: next.hasMany === true,
+        options: (next.options ?? []).map(option => option.value),
+      };
+    });
   return { path: savedPathOf(saved), type: saved.field.type, candidates };
 }
 

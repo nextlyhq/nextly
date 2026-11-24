@@ -19,10 +19,14 @@ export interface TypeChangeTarget {
   outcome: "keeps" | "converts" | "may-lose" | null;
 }
 
-/** A type the picker offers, and whether the field changed to it would hold several values. */
+/**
+ * A type the picker offers, and what the change would leave the field: whether it would hold several
+ * values, and the values of the options it would have to choose from.
+ */
 export interface TypeChangeCandidate {
   type: string;
   hasMany: boolean;
+  options: readonly string[];
 }
 
 /** The saved field the picker asks about: where it is saved, its type there, and what is offered. */
@@ -31,7 +35,7 @@ export interface TypeChangeQuestion {
   path: readonly string[];
   /** Its type as the page knows it saved: an answer about another is refused. */
   type: string;
-  /** Each type the picker offers, with whether the change leaves the field holding several values. */
+  /** Each type the picker offers, with what the change leaves the field. */
   candidates: readonly TypeChangeCandidate[];
 }
 
