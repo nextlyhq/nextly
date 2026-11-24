@@ -42,6 +42,7 @@ import {
 import { restoreVersion } from "../../versions/restore-version";
 import { underSavepoint } from "../../versions/version-capture-service";
 import { refusingMovedStorage } from "../migration/moved-storage";
+import { forgetFieldGroupStorageNames } from "../storage/resolve-storage-names";
 
 import {
   openStorageGenerationSite,
@@ -367,6 +368,47 @@ describe.each(getConfiguredTestDialects())(
           "First",
           "First",
         ]);
+      },
+      120_000
+    );
+
+    // Another save is in flight, holding the pool's one connection, when this process forgets the
+    // name and resolves it again: the save must not wait for that, whichever side the name is on.
+    it.runIf(dialect !== "sqlite").each(["settled", "moved"])(
+      "a save in flight while the registry's name is resolved again goes on, on a pool of one connection (%s)",
+      async state => {
+        const { save, heading } = await openSite({ poolMax: 1 });
+        expect(await save("Before")).toBe("ok");
+        if (state === "moved") await moveEverything();
+
+        const adapter = site!.adapter;
+        let forgotten = false;
+        const transaction = adapter.transaction.bind(adapter);
+        // The first transaction alone: forgotten as its work begins, its connection held.
+        const spied = vi.spyOn(adapter, "transaction").mockImplementation(((
+          work: never,
+          ...rest: never[]
+        ) =>
+          transaction(
+            (async (tx: never) => {
+              if (!forgotten) {
+                forgotten = true;
+                forgetFieldGroupStorageNames(adapter);
+              }
+              return (work as (tx: never) => unknown)(tx);
+            }) as never,
+            ...rest
+          )) as never);
+        try {
+          const began = Date.now();
+          await tried(() => save("In flight"), [MOVING]);
+          expect(forgotten).toBe(true);
+          // The pool gives up after five seconds: a save that waited for it took that long.
+          expect(Date.now() - began).toBeLessThan(5000);
+        } finally {
+          spied.mockRestore();
+        }
+        expect(await heading()).toBe("In flight");
       },
       120_000
     );
