@@ -370,6 +370,11 @@ interface Taken {
  */
 export async function refuseRemovingOthersElements(args: {
   deletions: readonly Deletion[];
+  /**
+   * The deletions name tables as the database has them, as a push's do. Left out, they were read
+   * from statements, whose names are lower-cased, so every live table of the name is judged.
+   */
+  exactNames?: boolean;
   sources: RemovedElementsSources;
   dialect: SupportedDialect;
   /** How the refusal names the entity: "Collection 'posts'". */
@@ -379,13 +384,13 @@ export async function refuseRemovingOthersElements(args: {
 }): Promise<void> {
   const tablesRemoved = new Set<string>();
   const columnsRemoved = new Map<string, Set<string>>();
-  // Each table by its folded name, as the change wrote it.
-  const written = new Map<string, string>();
+  // Each table by its folded name, as the change wrote it: two of one name where it touches both.
+  const written = new Map<string, Set<string>>();
   for (const deletion of args.deletions) {
     if (deletion.core === true) continue;
     if (deletion.kind !== "table" && deletion.kind !== "column") continue;
     const table = fold(deletion.table);
-    written.set(table, deletion.table);
+    written.set(table, (written.get(table) ?? new Set()).add(deletion.table));
     if (deletion.kind === "table") {
       tablesRemoved.add(table);
     } else {
@@ -402,7 +407,8 @@ export async function refuseRemovingOthersElements(args: {
     const spellings = await tableSpellings(
       args.sources,
       [...tablesRemoved, ...columnsRemoved.keys()],
-      written
+      written,
+      args.exactNames === true
     );
     const tables = [...spellings.values()].flatMap(each => each.all);
     const all = distinctElements([
@@ -487,16 +493,18 @@ function removedTableOf(
 async function tableSpellings(
   sources: RemovedElementsSources,
   folded: readonly string[],
-  written: ReadonlyMap<string, string>
+  written: ReadonlyMap<string, ReadonlySet<string>>,
+  exactNames: boolean
 ): Promise<ReadonlyMap<string, TableSpellings>> {
   const spellings = new Map<string, TableSpellings>();
   for (const table of folded) {
-    const own = written.get(table) ?? table;
-    const alike = await sources.liveNames(own);
-    const meant = alike.includes(own) ? [own] : alike;
+    const own = [...(written.get(table) ?? [table])];
+    const alike = await sources.liveNames(table);
+    const exact = exactNames ? own.filter(name => alike.includes(name)) : [];
+    const meant = exact.length > 0 ? exact : alike;
     spellings.set(table, {
-      all: [...new Set([own, ...meant])],
-      live: meant.length > 0 ? meant : [own],
+      all: [...new Set([...own, ...meant])],
+      live: meant.length > 0 ? meant : own,
       alike,
     });
   }
@@ -977,10 +985,11 @@ async function indexColumns(
   sources: RemovedElementsSources
 ): Promise<readonly string[] | "unknown"> {
   const name = fold(element.name);
-  const live = [...(await sources.indexColumns(element.table))].find(
-    ([index]) => fold(index) === name
-  );
-  if (live !== undefined) return live[1];
+  const found = await sources.indexColumns(element.table);
+  const live =
+    found.get(element.name) ??
+    [...found].find(([index]) => fold(index) === name)?.[1];
+  if (live !== undefined) return live;
   const there = [...(await sources.indexNames(element.table))].some(
     index => fold(index) === name
   );

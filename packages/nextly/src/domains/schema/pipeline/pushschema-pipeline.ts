@@ -1405,6 +1405,7 @@ export class PushSchemaPipeline {
         // (`removed-elements.ts`).
         await refuseRemovingOthersElements({
           deletions: deletionsOfOperations(resolvedOps),
+          exactNames: true,
           dialect,
           entity: "The schema change",
           sources: removedElementsSourcesOn({
