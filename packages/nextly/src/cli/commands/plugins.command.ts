@@ -29,7 +29,7 @@ export function registerPluginsCommand(program: Command): void {
       .action(
         lazyAction(async () => (await import("./plugins")).pluginsListAction)
       ),
-    startLine("Listing plugins...")
+    startLine("Listing plugins...", "no database")
   );
 
   // `--dry-run` and the busy-table bounds carry the one meaning and help they have everywhere.
@@ -95,6 +95,6 @@ export function registerPluginsCommand(program: Command): void {
       .action(
         lazyAction(async () => (await import("./plugins")).pluginsInfoAction)
       ),
-    startLine("Reading the plugin...")
+    startLine("Reading the plugin...", "no database")
   );
 }

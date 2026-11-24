@@ -74,40 +74,82 @@ export function stageCondition(args: {
   ];
   /** A review state of `part` of the row's document, holding `holds`. */
   const recorded = (part: string | null, holds?: SQL): SQL =>
-    sql`EXISTS (SELECT 1 FROM ${states} WHERE ${and(
-      eq(states.scopeKind, "collection"),
-      eq(states.scopeSlug, args.collectionName),
-      eq(states.entryId, args.entryId),
-      part === null ? isNull(states.part) : eq(states.part, part),
-      holds
-    )})`;
+    recordedCondition(args, part, holds);
   const first = args.stage === workflow.firstStage;
   const afterPublish = args.stage === workflow.afterPublish;
   const inStage = (part: string | null): SQL | undefined => {
-    const live = partLiveCondition({
-      ...args.liveness,
-      part,
-      defaultLocale: args.defaultLocale,
-      id: args.entryId,
-      status: args.status ?? sql`NULL`,
-    });
-    const pending = pendingPartCondition({
-      dialect: args.dialect,
-      collectionName: args.collectionName,
-      entryId: args.entryId,
-      part,
-    });
-    // Where its content puts a part with no review state.
-    const implicit = or(
-      first ? sql`NOT ${live}` : undefined,
-      afterPublish ? and(live, pending) : undefined
-    );
+    // Where its content puts a part with no review state: the first stage while it is not live,
+    // the after-publish stage while it is live with a working draft.
+    const pendingLive = afterPublish
+      ? and(
+          sql`NOT ${recorded(part)}`,
+          liveCondition(args, part),
+          pendingPartCondition({
+            dialect: args.dialect,
+            collectionName: args.collectionName,
+            entryId: args.entryId,
+            part,
+          })
+        )
+      : undefined;
     return or(
       recorded(part, eq(states.stage, args.stage)),
       // A stage the workflow no longer has reads as the first stage.
       first ? recorded(part, notInArray(states.stage, known)) : undefined,
-      implicit ? and(sql`NOT ${recorded(part)}`, implicit) : undefined
+      first ? unmovedPartCondition({ ...args, part }) : undefined,
+      pendingLive
     );
   };
   return or(...parts.map(inStage)) ?? inArray(states.stage, []);
+}
+
+/** Where a document's part is read from: the document's row, and its collection's place. */
+interface PartOfRow {
+  dialect: SupportedDialect;
+  collectionName: string;
+  /** The read's id and status columns, the condition correlated with each row. */
+  entryId: SQLWrapper;
+  status: SQLWrapper | undefined;
+  defaultLocale: string | null;
+  liveness: PartLivenessInputs;
+}
+
+/** A review state of `part` of the row's document, holding `holds`. */
+function recordedCondition(
+  args: Pick<PartOfRow, "dialect" | "collectionName" | "entryId">,
+  part: string | null,
+  holds?: SQL
+): SQL {
+  const states = reviewStatesTables(args.dialect).nextlyReviewStates;
+  return sql`EXISTS (SELECT 1 FROM ${states} WHERE ${and(
+    eq(states.scopeKind, "collection"),
+    eq(states.scopeSlug, args.collectionName),
+    eq(states.entryId, args.entryId),
+    part === null ? isNull(states.part) : eq(states.part, part),
+    holds
+  )})`;
+}
+
+/** Whether `part` of the row's document is live, by the versions domain's one condition. */
+function liveCondition(args: PartOfRow, part: string | null): SQL {
+  return partLiveCondition({
+    ...args.liveness,
+    part,
+    defaultLocale: args.defaultLocale,
+    id: args.entryId,
+    status: args.status ?? sql`NULL`,
+  });
+}
+
+/**
+ * Whether `part` of the row's document has stood in its workflow's first stage since the document
+ * was created, no step having moved it: it has no review state, and it is not live. The list's
+ * stage filter and the waiting list both read an unmoved part by it, so they cannot disagree.
+ *
+ * @experimental
+ */
+export function unmovedPartCondition(
+  args: PartOfRow & { part: string | null }
+): SQL {
+  return sql`(NOT ${recordedCondition(args, args.part)} AND NOT ${liveCondition(args, args.part)})`;
 }

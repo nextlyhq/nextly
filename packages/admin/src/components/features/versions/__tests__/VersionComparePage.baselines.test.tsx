@@ -1,13 +1,14 @@
 /**
  * The comparison page's choices: a baseline the server resolves, named in the
- * address; "Compare with", which rewrites the address; the view, inline or
+ * address; "Compare", the older side, which rewrites the address; the view, inline or
  * side by side, from the address; the newer version marked as seen; and
  * "Restore…", which hands the version to the editor, in its language.
  */
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, waitFor } from "@admin/__tests__/utils";
+import { toast } from "@admin/components/ui";
 
 const {
   useVersionsMock,
@@ -44,13 +45,31 @@ vi.mock("../diff/VersionDiffView", async () => {
       onShown?: (
         pair: { from: number; to: number; locale: string | null } | null
       ) => void;
+      fieldAction?: (node: unknown) => unknown;
     }) => {
       diffMountMock(props);
       const { from, to, onShown } = props;
       useEffect(() => {
         onShown?.({ from, to, locale: drawn.locale });
       }, [from, to, onShown]);
-      return <div data-testid="diff-view">{`${from}-${to}`}</div>;
+      // One changed field, and one the comparison names as gone from the
+      // content type, so what the page offers on a field is drawn.
+      const changed = {
+        kind: "text",
+        name: "title",
+        label: "Title",
+        type: "text",
+        status: "changed",
+        segments: [],
+      };
+      const gone = { kind: "unknown", name: "subtitle", status: "removed" };
+      return (
+        <div data-testid="diff-view">
+          {`${from}-${to}`}
+          {props.fieldAction?.(changed) as React.ReactNode}
+          {props.fieldAction?.(gone) as React.ReactNode}
+        </div>
+      );
     },
   };
 });
@@ -229,7 +248,7 @@ describe("VersionComparePage, its choices", () => {
     renderPage({ from: 4, to: 5 });
 
     await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: "Compare with" }),
+      screen.getByRole("combobox", { name: "Compare" }),
       "published"
     );
 
@@ -283,7 +302,7 @@ describe("VersionComparePage, its choices", () => {
     renderPage({ from: "last-viewed" });
 
     await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: "Compare with" }),
+      screen.getByRole("combobox", { name: "Compare" }),
       "published"
     );
 
@@ -303,7 +322,7 @@ describe("VersionComparePage, its choices", () => {
     renderPage({ from: "last-viewed" });
 
     await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: "Compare with" }),
+      screen.getByRole("combobox", { name: "Compare" }),
       "previous"
     );
 
@@ -324,7 +343,9 @@ describe("VersionComparePage, its choices", () => {
   it("hands the version to the editor to restore from, rather than writing", async () => {
     renderPage({ from: 4, to: 5 });
 
-    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Restore .*…$/ })
+    );
 
     expect(navigateMock).toHaveBeenCalledWith(
       "/admin/collections/posts/e1?history=1&version=5&restore=1"
@@ -357,7 +378,9 @@ describe("VersionComparePage, its choices", () => {
     drawn.locale = "de";
     renderPage({ from: 4, to: 5, locale: "de" });
 
-    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Restore .*…$/ })
+    );
 
     const target = new URL(
       String(navigateMock.mock.calls.at(-1)?.[0]),
@@ -372,12 +395,249 @@ describe("VersionComparePage, its choices", () => {
     });
   });
 
+  it("copies a link that names the two versions drawn, not the baseline that found them", async () => {
+    // "The version you last looked at" is the reader's own, and moves: a
+    // link carrying it opens another comparison for anyone else, or later.
+    baselineMock.mockReturnValue({
+      data: {
+        from: 3,
+        to: 5,
+        baseline: { name: "last-viewed", versionNo: 3 },
+      },
+      isLoading: false,
+      isError: false,
+    });
+    // user-event stands in for the clipboard, so what was copied is read back
+    // from it.
+    const user = userEvent.setup();
+    renderPage({ from: "last-viewed" });
+    await user.click(screen.getByRole("button", { name: "Copy link" }));
+
+    const copied = new URL(await navigator.clipboard.readText());
+    expect(copied.pathname).toBe("/admin/collections/posts/e1/versions");
+    expect(copied.searchParams.get("from")).toBe("3");
+    expect(copied.searchParams.get("to")).toBe("5");
+  });
+
+  it("says where to copy the link from when the browser offers no clipboard", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    const error = vi.spyOn(toast, "error");
+    try {
+      renderPage({ from: 4, to: 5 });
+      // Not through userEvent, which would put its own clipboard back.
+      screen.getByRole("button", { name: "Copy link" }).click();
+
+      await waitFor(() =>
+        expect(error).toHaveBeenCalledWith(
+          "Couldn't copy the link. Copy it from the box below."
+        )
+      );
+    } finally {
+      error.mockRestore();
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("shows the pinned link to copy by hand when the browser offers no clipboard", async () => {
+    baselineMock.mockReturnValue({
+      data: { from: 3, to: 5, baseline: { name: "last-viewed", versionNo: 3 } },
+      isLoading: false,
+      isError: false,
+    });
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    try {
+      renderPage({ from: "last-viewed" });
+      screen.getByRole("button", { name: "Copy link" }).click();
+
+      // The address bar still names the reader's own baseline; the link
+      // shown names the two versions drawn.
+      const field = await screen.findByRole("textbox", {
+        name: "Link to this comparison",
+      });
+      const shown = new URL((field as HTMLInputElement).value);
+      expect(shown.searchParams.get("from")).toBe("3");
+      expect(shown.searchParams.get("to")).toBe("5");
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("never leaves an earlier comparison's link in the copy box", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    try {
+      const { rerender } = renderPage({ from: 4, to: 5 });
+      screen.getByRole("button", { name: "Copy link" }).click();
+      await screen.findByRole("textbox", { name: "Link to this comparison" });
+
+      // Another pair on screen: the box named the one before, so it goes.
+      rerender(
+        <VersionComparePage
+          scope={scope}
+          documentHref="/admin/collections/posts/e1"
+          readOnlyHref="/admin/collections/posts"
+          from={3}
+          to={5}
+        />
+      );
+      expect(
+        screen.queryByRole("textbox", { name: "Link to this comparison" })
+      ).toBeNull();
+
+      // A copy that works says so, and no box stands beside it.
+      screen.getByRole("button", { name: "Copy link" }).click();
+      await screen.findByRole("textbox", { name: "Link to this comparison" });
+      const writeText = vi.fn(() => Promise.resolve());
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+      });
+      screen.getByRole("button", { name: "Copy link" }).click();
+      await waitFor(() => expect(writeText).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("textbox", { name: "Link to this comparison" })
+        ).toBeNull()
+      );
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("keeps the current comparison's copy box when an earlier copy succeeds late", async () => {
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    let finishFirst: () => void = () => {};
+    const writeText = vi.fn(
+      () => new Promise<void>(resolve => (finishFirst = resolve))
+    );
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    try {
+      // Comparison A: a copy that has not answered yet.
+      const { rerender } = renderPage({ from: 4, to: 5 });
+      screen.getByRole("button", { name: "Copy link" }).click();
+      expect(writeText).toHaveBeenCalledTimes(1);
+
+      // Comparison B, where copying fails: B's link to copy by hand shows.
+      rerender(
+        <VersionComparePage
+          scope={scope}
+          documentHref="/admin/collections/posts/e1"
+          readOnlyHref="/admin/collections/posts"
+          from={3}
+          to={5}
+        />
+      );
+      Object.defineProperty(navigator, "clipboard", {
+        value: undefined,
+        configurable: true,
+      });
+      screen.getByRole("button", { name: "Copy link" }).click();
+      const box = await screen.findByRole("textbox", {
+        name: "Link to this comparison",
+      });
+      expect(
+        new URL((box as HTMLInputElement).value).searchParams.get("from")
+      ).toBe("3");
+
+      // A's copy succeeds at last: it copied A, so B's box stays.
+      finishFirst();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(
+        screen.getByRole("textbox", { name: "Link to this comparison" })
+      ).toBeInTheDocument();
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("offers older versions in the drawn comparison's language when the newer one is not loaded", () => {
+    // A shared link can name a version beyond the loaded page: the list has
+    // no record of it, but the comparison drawn says its language.
+    useVersionsMock.mockReturnValue({
+      data: {
+        pages: [
+          {
+            items: [
+              { ...row(9), locale: "fr" },
+              { ...row(8), locale: "de" },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      hasNextPage: true,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+    drawn.locale = "fr";
+
+    renderPage({ from: 19, to: 20 });
+
+    const older = screen.getByRole("combobox", { name: "Compare" });
+    const names = [...older.querySelectorAll("option")].map(o => o.textContent);
+    expect(names.some(n => n?.startsWith("Version 9"))).toBe(true);
+    expect(names.some(n => n?.startsWith("Version 8"))).toBe(false);
+  });
+
+  it("names the version it restores", () => {
+    renderPage({ from: 4, to: 5 });
+
+    expect(
+      screen.getByRole("button", { name: "Restore version 5…" })
+    ).toBeInTheDocument();
+  });
+
+  it("hands one field to the editor to restore, by its name", async () => {
+    renderPage({ from: 4, to: 5 });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Restore this field: Title" })
+    );
+
+    const target = new URL(
+      String(navigateMock.mock.calls.at(-1)?.[0]),
+      "http://admin.test"
+    );
+    expect(Object.fromEntries(target.searchParams)).toEqual({
+      history: "1",
+      version: "5",
+      restore: "title",
+    });
+    // A field gone from the content type has nowhere to go back to.
+    expect(
+      screen.queryByRole("button", { name: /Restore this field: subtitle/ })
+    ).toBeNull();
+  });
+
   it("offers no restore to a reader who may not edit the document", () => {
     canMock.mockReturnValue(false);
 
     renderPage({ from: 4, to: 5 });
 
-    expect(screen.queryByRole("button", { name: "Restore…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Restore .*…$/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Restore this field/ })
+    ).toBeNull();
   });
 
   it("hands the comparison's own language to the editor when the address names none", async () => {
@@ -386,7 +646,9 @@ describe("VersionComparePage, its choices", () => {
     drawn.locale = "fr";
     renderPage({ from: 4, to: 5 });
 
-    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Restore .*…$/ })
+    );
 
     const target = new URL(
       String(navigateMock.mock.calls.at(-1)?.[0]),
@@ -465,7 +727,7 @@ describe("VersionComparePage, its choices", () => {
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
 
-  it("names a baseline another feature registered in Compare with", () => {
+  it("names a baseline another feature registered in Compare", () => {
     baselineMock.mockReturnValue({
       data: {
         from: 3,
@@ -478,7 +740,7 @@ describe("VersionComparePage, its choices", () => {
 
     renderPage({ from: "since-approved", to: 5 });
 
-    const select = screen.getByRole("combobox", { name: "Compare with" });
+    const select = screen.getByRole("combobox", { name: "Compare" });
     expect(select).toHaveValue("since-approved");
     expect(
       screen.getByRole("option", { name: "Since approved" })
@@ -521,7 +783,9 @@ describe("VersionComparePage, its choices", () => {
     versionMock.mockReturnValue({ data: { versionNo: 5, locale: "de" } });
 
     renderPage({ from: "draft", to: 5 });
-    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Restore .*…$/ })
+    );
 
     const target = new URL(
       String(navigateMock.mock.calls.at(-1)?.[0]),
@@ -573,7 +837,9 @@ describe("VersionComparePage, its choices", () => {
     });
 
     renderPage({ from: "published", to: 5 });
-    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Restore .*…$/ })
+    );
 
     const target = new URL(
       String(navigateMock.mock.calls.at(-1)?.[0]),
