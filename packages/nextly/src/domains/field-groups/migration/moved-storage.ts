@@ -15,6 +15,7 @@
  * @module domains/field-groups/migration/moved-storage
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import {
   firstIdentifierNamed,
@@ -22,6 +23,7 @@ import {
   statementTableOf,
   tableOfMissingColumn,
 } from "../../../database/missing-column";
+import { getSchemaRegistryFromDI } from "../../../dispatcher/helpers/di";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
@@ -32,6 +34,7 @@ import { resolveComponentTableName } from "../../schema/utils/resolve-table-name
 import { registerComponentRuntimeSchema } from "../services/field-group-table-provisioning";
 import {
   forgetFieldGroupStorageNames,
+  resolveFieldGroupRegistryTable,
   resolveTableColumns,
   type CatalogReadAdapter,
 } from "../storage/resolve-storage-names";
@@ -43,7 +46,8 @@ import { MIGRATION_TARGET, retargetName } from "./manifest";
  * discriminator column, and the name the migration's other generation gives it.
  */
 type MoveCandidate = {
-  kind: "table" | "column";
+  /** `unregistered`: a name this process has not registered, refused before any statement ran. */
+  kind: "table" | "column" | "unregistered";
   missing: string;
   other: string;
   /** The table a missing column belongs to, where the error says. */
@@ -92,12 +96,12 @@ function moveCandidate(error: unknown): MoveCandidate | undefined {
     cause = (cause as { cause?: unknown }).cause;
   }
   const found = missingSchemaObject(cause);
-  if (found?.object === "table") {
+  if (found?.object === "table" || found?.object === "unregistered") {
     const missing = FIELD_GROUP_TABLE.exec(found.text)?.[1];
     const other = missing === undefined ? undefined : otherTableName(missing);
     return missing === undefined || other === undefined
       ? undefined
-      : { kind: "table", missing, other };
+      : { kind: found.object, missing, other };
   }
   if (found?.object !== "column") return undefined;
   const missing = firstIdentifierNamed(found.text, TYPE_COLUMNS);
@@ -112,32 +116,107 @@ function moveCandidate(error: unknown): MoveCandidate | undefined {
   };
 }
 
+/** A field group's own table as this process registered it, with the discriminator it addresses. */
+interface RegisteredTable {
+  name: string;
+  typeColumn: string;
+}
+
 /**
- * Whether the database holds what `candidate` names missing under its other name: what tells
- * storage that moved from storage that was never created. A field group whose table or column no
- * migration has made yet is in neither place, and its failure stays the failure it was.
+ * The field groups' tables this process has registered, or undefined when it cannot say. Read from
+ * the registry each time rather than remembered, so nothing that registers a table (a start, a
+ * development reload, a schema-version change, a follow) has to remember to say so.
  */
-async function heldUnderOtherName(
-  candidate: MoveCandidate,
-  catalog: CatalogReadAdapter,
-  tables: readonly string[]
+function registeredTables(
+  adapter: DrizzleAdapter
+): RegisteredTable[] | undefined {
+  const registry = (getSchemaRegistryFromDI() ??
+    (adapter as unknown as { tableResolver?: unknown }).tableResolver) as
+    | {
+        getDynamicTableNames?: () => string[];
+        getTable?: (name: string) => unknown;
+      }
+    | null
+    | undefined;
+  if (
+    typeof registry?.getDynamicTableNames !== "function" ||
+    typeof registry.getTable !== "function"
+  ) {
+    return undefined;
+  }
+  const tables: RegisteredTable[] = [];
+  for (const name of registry.getDynamicTableNames()) {
+    const table = registry.getTable(name) as
+      | Record<string, { name?: unknown } | undefined>
+      | null
+      | undefined;
+    // A field group's own table alone carries the discriminator, under this key in every generation.
+    const typeColumn = table?.[STORAGE_FORMAT.columns.type]?.name;
+    if (typeof typeColumn === "string") tables.push({ name, typeColumn });
+  }
+  return tables;
+}
+
+/**
+ * Whether this process addresses field-group storage under the current names only, so the
+ * migration has nothing left to move under it: the registry it resolved is the current one, and so
+ * is the discriminator of every field-group table it registered. The registry alone does not say
+ * so: it is renamed last, and a process that resolved it again still holds the tables it registered
+ * before. Anything it cannot tell answers false.
+ */
+async function isSettledOnCurrentNames(
+  adapter: DrizzleAdapter
 ): Promise<boolean> {
+  const tables = registeredTables(adapter);
+  if (
+    tables === undefined ||
+    tables.some(table => table.typeColumn !== MIGRATION_TARGET.columnType)
+  ) {
+    return false;
+  }
+  try {
+    return (await resolveFieldGroupRegistryTable(adapter)).migrated;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the database holds what `candidate` names under the migration's other generation: what
+ * tells storage that moved from storage that was never created. A field group whose table or column
+ * no migration has made yet is in neither place, and its failure stays the failure it was.
+ */
+async function heldElsewhere(
+  adapter: DrizzleAdapter,
+  candidate: MoveCandidate,
+  catalog: CatalogReadAdapter
+): Promise<boolean> {
+  const registered = registeredTables(adapter) ?? [];
+  // A name new to this process moved only when it is the other name of one it registered: any
+  // other is a table made since it started, which it must be restarted to serve.
+  if (
+    candidate.kind === "unregistered" &&
+    !registered.some(table => table.name === candidate.other)
+  ) {
+    return false;
+  }
   const asked =
     candidate.kind === "table"
       ? [candidate.other]
-      : [candidate.table, ...tables].flatMap(table =>
-          table === undefined ? [] : [table, otherTableName(table) ?? table]
-        );
+      : candidate.kind === "unregistered"
+        ? [candidate.missing]
+        : (candidate.table === undefined
+            ? registered.map(table => table.name)
+            : [candidate.table]
+          ).flatMap(table => [table, otherTableName(table) ?? table]);
   if (asked.length === 0) return false;
   const snapshot = await introspectLiveColumns(
     catalog.getDrizzle(),
     catalog.dialect,
     [...new Set(asked)]
   );
-  if (candidate.kind === "table") {
-    return snapshot.tables.some(table => table.columns.length > 0);
-  }
   return snapshot.tables.some(table => {
+    if (candidate.kind !== "column") return table.columns.length > 0;
     const names = table.columns.map(column => column.name);
     return (
       names.includes(candidate.other) && !names.includes(candidate.missing)
@@ -158,32 +237,40 @@ export function isMovedStorageError(error: unknown): boolean {
 
 /** Whether `error`'s storage was moved by the migration, as the database holds it now. */
 async function isMovedStorage(
-  catalog: CatalogReadAdapter,
+  adapter: DrizzleAdapter,
   error: unknown,
-  tables: readonly string[]
+  catalog: CatalogReadAdapter = adapter
 ): Promise<boolean> {
   const candidate = moveCandidate(error);
   if (candidate === undefined) return false;
   try {
-    return await heldUnderOtherName(candidate, catalog, tables);
+    return await heldElsewhere(adapter, candidate, catalog);
   } catch {
     // A catalog that cannot be read says nothing: the caller's own error stands.
     return false;
   }
 }
 
-/** Every table a follow of `error` looks for: those named, and the one the database named. */
-function tablesToFollow(error: unknown, tables: readonly string[]): string[] {
+/**
+ * Every field-group table this process may address under a moved name, followed
+ * (`followMovedFieldGroupTable`): each it registered, and the one the database named.
+ */
+async function followEveryTable(
+  adapter: DrizzleAdapter,
+  rows: FieldGroupRows,
+  error: unknown
+): Promise<void> {
   const candidate = moveCandidate(error);
   const named =
-    candidate?.kind === "table" ? candidate.missing : candidate?.table;
-  return [
-    ...new Set([
-      ...tables,
-      // A companion is registered with the group's own table.
-      ...(named === undefined ? [] : [named.replace(/_locales$/, "")]),
-    ]),
-  ];
+    candidate?.kind === "column" ? candidate.table : candidate?.missing;
+  const tables = new Set([
+    ...(registeredTables(adapter) ?? []).map(table => table.name),
+    // A companion is registered with the group's own table.
+    ...(named === undefined ? [] : [named.replace(/_locales$/, "")]),
+  ]);
+  for (const tableName of tables) {
+    await followMovedFieldGroupTable({ adapter, rows, tableName });
+  }
 }
 
 /**
@@ -193,9 +280,9 @@ function tablesToFollow(error: unknown, tables: readonly string[]): string[] {
  * renames the registry last, after the tables, so a name re-resolved between the two goes stale
  * again; this is where that is caught, whichever lookup meets it first.
  *
- * A lookup on a caller's transaction (an argument that is a database executor) does not run again:
- * the failure has aborted that transaction on PostgreSQL. It is refused to be retried when the
- * registry moved (`refusalOnTransaction`), and raised as it was otherwise.
+ * A lookup on a caller's transaction (an argument that is a database executor) is raised as it was:
+ * the failure has aborted that transaction on PostgreSQL, and the write that owns it decides
+ * (`refusingMovedStorage`).
  */
 export function followingMovedRegistry<T extends object>(
   registry: T,
@@ -210,17 +297,11 @@ export function followingMovedRegistry<T extends object>(
         const first = run();
         if (!(first instanceof Promise)) return first;
         return first.catch(async (error: unknown) => {
-          if (moveCandidate(error) === undefined) throw error;
-          const executor = args.find(isExecutor);
-          if (executor !== undefined) {
-            throw (
-              (await refusalOnTransaction({
-                adapter,
-                executor,
-                error,
-                tableNames: [],
-              })) ?? error
-            );
+          if (
+            !isMovedStorageError(error) ||
+            args.some(argument => isExecutor(argument))
+          ) {
+            throw error;
           }
           forgetFieldGroupStorageNames(adapter);
           clearRegistryRowCache();
@@ -248,70 +329,96 @@ function isExecutor(value: unknown): boolean {
   );
 }
 
-/** How long a failed write on PostgreSQL waits to learn whether storage moved, in milliseconds. */
-const POSTGRES_ANSWER_MS = 1000;
+let savepointSequence = 0;
 
 /**
- * The refusal for a statement on a caller's transaction that failed because the migration moved
- * its storage, or undefined when it did not move: the caller's own error then stands.
+ * Run `work`, which reads or writes field groups on the caller's transaction, refusing it to be
+ * retried when it failed because the migration moved its storage, and raising its failure as it was
+ * otherwise.
  *
- * SQLite and MySQL are asked on the transaction's own connection. PostgreSQL has aborted the
- * transaction, so it is asked on another, and for a bounded time only: where the pool has no other
- * connection the transaction holds it, and waiting for it would wait for ever. Unanswered, the
- * failure is raised as it was.
+ * Whether storage moved is read on the transaction's own connection, which a failed statement
+ * leaves usable on SQLite and MySQL. PostgreSQL aborts the transaction, so `work` runs in a
+ * savepoint there and the question is asked once it is rolled back; a process settled on the
+ * current names (`isSettledOnCurrentNames`) has nothing to ask and takes none.
  *
- * The tables are followed without being awaited, so each follow runs once the caller has rolled
- * back and its connection is free, and the retry addresses storage under its current names.
+ * The names are followed once the transaction has rolled back and its connection is free, so the
+ * retry addresses storage as the database holds it.
  */
-export async function refusalOnTransaction(args: {
+export async function refusingMovedStorage<T>(args: {
   adapter: DrizzleAdapter;
-  /** What the tables' registry rows are read through; absent when there are none to follow. */
-  rows?: FieldGroupRows;
-  executor: unknown;
-  error: unknown;
-  tableNames: readonly string[];
-}): Promise<NextlyError | undefined> {
-  const { adapter, rows, executor, error, tableNames } = args;
-  if (moveCandidate(error) === undefined) return undefined;
-  const moved =
-    adapter.dialect === "postgresql"
-      ? await withinMs(
-          isMovedStorage(adapter, error, tableNames),
-          POSTGRES_ANSWER_MS
-        )
-      : await isMovedStorage(
-          { dialect: adapter.dialect, getDrizzle: <T>() => executor as T },
-          error,
-          tableNames
-        );
-  if (moved === false) return undefined;
-  forgetFieldGroupStorageNames(adapter);
-  clearRegistryRowCache();
-  const follow = tablesToFollow(error, tableNames);
-  if (rows !== undefined) {
-    // Not awaited: a follow never rejects, and it may need the connection the caller still holds.
-    void followMovedFieldGroupTables({ adapter, rows, tableNames: follow });
+  rows: FieldGroupRows;
+  tx: TransactionContext;
+  work: () => Promise<T>;
+}): Promise<T> {
+  const { adapter, rows, tx, work } = args;
+  const savepoint =
+    adapter.dialect === "postgresql" &&
+    !(await isSettledOnCurrentNames(adapter))
+      ? `nextly_moved_storage_${++savepointSequence}`
+      : undefined;
+  if (savepoint !== undefined) await tx.savepoint?.(savepoint);
+  try {
+    const result = await work();
+    if (savepoint !== undefined) await tx.releaseSavepoint?.(savepoint);
+    return result;
+  } catch (error) {
+    const candidate = moveCandidate(error);
+    if (candidate === undefined) throw error;
+    if (savepoint !== undefined) {
+      try {
+        await tx.rollbackToSavepoint?.(savepoint);
+        await tx.releaseSavepoint?.(savepoint);
+      } catch {
+        // The transaction is gone with its savepoint: nothing can be asked on it.
+        throw error;
+      }
+    } else if (
+      adapter.dialect === "postgresql" &&
+      candidate.kind !== "unregistered"
+    ) {
+      // Nothing can be asked on the aborted transaction. Only a rollback of the migration moves
+      // storage under a process settled on the current names: the names are followed, so a retry
+      // finds them, and the failure is raised as it was.
+      await adapter.afterRollback(() => followEveryTable(adapter, rows, error));
+      throw error;
+    }
+    const catalog: CatalogReadAdapter = {
+      dialect: adapter.dialect,
+      getDrizzle: <H>() => tx.getDrizzle<H>(),
+    };
+    if (!(await isMovedStorage(adapter, error, catalog))) throw error;
+    await adapter.afterRollback(() => followEveryTable(adapter, rows, error));
+    throw storageMovingRefusal(candidate.missing);
   }
-  return moved === true
-    ? storageMovingRefusal(follow.join(", ") || "the field-group registry")
-    : undefined;
 }
 
-/** `work`'s answer, or undefined when it has not come within `ms`. */
-async function withinMs<T>(
-  work: Promise<T>,
-  ms: number
-): Promise<T | undefined> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<undefined>(resolve => {
-        timer = setTimeout(() => resolve(undefined), ms);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
+/**
+ * Raise `error` when the migration moved the storage it names, for a caller that otherwise reads a
+ * missing table as one holding nothing: read so, a save or a delete would leave behind what the
+ * table holds under its other name. On PostgreSQL the failure has aborted the transaction, so the
+ * statements after it cannot run either, and any missing field-group storage is raised.
+ */
+export async function raiseIfMoved(args: {
+  adapter: DrizzleAdapter;
+  error: unknown;
+  /** The caller's transaction, when it runs on one. */
+  executor?: unknown;
+}): Promise<void> {
+  const { adapter, error, executor } = args;
+  const candidate = moveCandidate(error);
+  if (candidate === undefined) return;
+  if (executor === undefined) {
+    if (await isMovedStorage(adapter, error)) throw error;
+    return;
+  }
+  if (
+    adapter.dialect === "postgresql" ||
+    (await isMovedStorage(adapter, error, {
+      dialect: adapter.dialect,
+      getDrizzle: <H>() => executor as H,
+    }))
+  ) {
+    throw error;
   }
 }
 
@@ -323,31 +430,14 @@ export async function refusalAfterFollowing(args: {
   adapter: DrizzleAdapter;
   rows: FieldGroupRows;
   error: unknown;
-  tableNames: readonly string[];
 }): Promise<NextlyError | undefined> {
-  const { adapter, rows, error, tableNames } = args;
-  if (!(await isMovedStorage(adapter, error, tableNames))) return undefined;
-  const follow = tablesToFollow(error, tableNames);
-  await followMovedFieldGroupTables({ adapter, rows, tableNames: follow });
-  return storageMovingRefusal(follow.join(", "));
-}
-
-/**
- * Each of `tableNames` followed (`followMovedFieldGroupTable`), every one of them rather than the
- * first that answers: a save names every field group it may write, and the one whose table failed
- * need not be the first. The names they are stored under now, for those that moved.
- */
-async function followMovedFieldGroupTables(args: {
-  adapter: DrizzleAdapter;
-  rows: FieldGroupRows;
-  tableNames: readonly string[];
-}): Promise<string[]> {
-  const moved: string[] = [];
-  for (const tableName of new Set(args.tableNames)) {
-    const current = await followMovedFieldGroupTable({ ...args, tableName });
-    if (current !== undefined) moved.push(current);
+  const { adapter, rows, error } = args;
+  const candidate = moveCandidate(error);
+  if (candidate === undefined || !(await isMovedStorage(adapter, error))) {
+    return undefined;
   }
-  return moved;
+  await followEveryTable(adapter, rows, error);
+  return storageMovingRefusal(candidate.missing);
 }
 
 /**

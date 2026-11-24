@@ -1,4 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, asc, eq, getColumns, type SQL } from "drizzle-orm";
 
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -53,7 +54,8 @@ import {
   followMovedFieldGroupTable,
   followingMovedRegistry,
   isMovedStorageError,
-  refusalOnTransaction,
+  raiseIfMoved,
+  refusingMovedStorage,
 } from "../migration/moved-storage";
 import { passwordReachOf } from "../password-reach";
 import {
@@ -971,9 +973,20 @@ export class FieldGroupQueryService extends BaseService {
       "locale" | "fallbackLocale" | "skipLanguages"
     > & {
       languages: readonly ComponentReadLanguage[];
+      /** The write's transaction `executor` reads on, for a read the write is refused by. */
+      tx?: TransactionContext;
     }
   ): Promise<Record<string, unknown>[]> {
-    return this.populateComponentDataInEach(params, params.languages);
+    const { tx, languages, ...read } = params;
+    const work = () => this.populateComponentDataInEach(read, languages);
+    return tx === undefined
+      ? work()
+      : refusingMovedStorage({
+          adapter: this.adapter,
+          rows: this.registryService,
+          tx,
+          work,
+        });
   }
 
   private async populateComponentDataInEach(
@@ -2063,10 +2076,8 @@ export class FieldGroupQueryService extends BaseService {
    * The name `tableName` has now, when a read of it failed because the storage migration moved it
    * (`followMovedFieldGroupTable`), registered in this process; `undefined` otherwise.
    *
-   * A read on a write's transaction is not retried: a failed statement has aborted it on
-   * PostgreSQL. The write it serves is refused instead (`refusalOnTransaction`), and the table is
-   * followed once the transaction has let its connection go, so the whole write succeeds when
-   * retried.
+   * A read on a write's transaction is not retried: the write that owns it is refused instead
+   * (`refusingMovedStorage`), and the table followed once the transaction has ended.
    */
   private async movedTable(
     tableName: string,
@@ -2077,14 +2088,7 @@ export class FieldGroupQueryService extends BaseService {
   ): Promise<string | undefined> {
     if (followed || !isMovedStorageError(error)) return undefined;
     if (executor !== undefined) {
-      const refusal = await refusalOnTransaction({
-        adapter: this.adapter,
-        rows: this.registryService,
-        executor,
-        error,
-        tableNames: [tableName],
-      });
-      if (refusal !== undefined) throw refusal;
+      await raiseIfMoved({ adapter: this.adapter, error, executor });
       return undefined;
     }
     return followMovedFieldGroupTable({

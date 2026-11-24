@@ -81,7 +81,6 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
-import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   containedComponentResolver,
   type ComponentFieldResolver,
@@ -92,8 +91,9 @@ import {
 } from "../field-group-write-access";
 import {
   followingMovedRegistry,
+  raiseIfMoved,
   refusalAfterFollowing,
-  refusalOnTransaction,
+  refusingMovedStorage,
 } from "../migration/moved-storage";
 import {
   isFieldGroupFieldType,
@@ -1023,7 +1023,13 @@ export class FieldGroupMutationService extends BaseService {
     };
     await writeScope.run(
       newWriteScope(tx.getDrizzle(), params.access, connection),
-      () => this.writeFieldGroupsInTx(tx, params, validateOnly)
+      () =>
+        refusingMovedStorage({
+          adapter: this.adapter,
+          rows: this.registryService,
+          tx,
+          work: () => this.writeFieldGroupsInTx(tx, params, validateOnly),
+        })
     );
   }
 
@@ -1148,15 +1154,22 @@ export class FieldGroupMutationService extends BaseService {
     const { parentId, parentTable, fields } = params;
 
     // Same fields, resolved the same way, as the pooled delete path above.
-    for (const f of this.storedFieldGroupFields(fields)) {
-      await this.deleteFieldComponentDataInTx(
-        tx,
-        parentId,
-        parentTable,
-        f.name,
-        f
-      );
-    }
+    await refusingMovedStorage({
+      adapter: this.adapter,
+      rows: this.registryService,
+      tx,
+      work: async () => {
+        for (const f of this.storedFieldGroupFields(fields)) {
+          await this.deleteFieldComponentDataInTx(
+            tx,
+            parentId,
+            parentTable,
+            f.name,
+            f
+          );
+        }
+      },
+    });
   }
 
   private async saveSingleComponent(params: {
@@ -1276,7 +1289,7 @@ export class FieldGroupMutationService extends BaseService {
         { locale, req, write: params.write, assembledFromStorage }
       );
     } catch (error) {
-      throw await this.saveFailure(undefined, [componentSlug], error);
+      throw await this.saveFailure(error);
     }
   }
 
@@ -1406,7 +1419,7 @@ export class FieldGroupMutationService extends BaseService {
         false
       );
     } catch (error) {
-      throw await this.saveFailure(tx.getDrizzle(), [componentSlug], error);
+      throw this.mappedFailure(error);
     }
   }
 
@@ -1522,7 +1535,7 @@ export class FieldGroupMutationService extends BaseService {
         count: instances.length,
       });
     } catch (error) {
-      throw await this.saveFailure(undefined, [componentSlug], error);
+      throw await this.saveFailure(error);
     }
   }
 
@@ -1678,7 +1691,7 @@ export class FieldGroupMutationService extends BaseService {
         incomingIds
       );
     } catch (error) {
-      throw await this.saveFailure(tx.getDrizzle(), [componentSlug], error);
+      throw this.mappedFailure(error);
     }
   }
 
@@ -1845,7 +1858,7 @@ export class FieldGroupMutationService extends BaseService {
         count: instances.length,
       });
     } catch (error) {
-      throw await this.saveFailure(undefined, allowedSlugs, error);
+      throw await this.saveFailure(error);
     }
   }
 
@@ -1914,6 +1927,11 @@ export class FieldGroupMutationService extends BaseService {
           // As in `getExistingInstancesInTx`: an unregistered table is never
           // taken for one holding no instances.
           if (isUnregisteredTable(error)) throw error;
+          await raiseIfMoved({
+            adapter: this.adapter,
+            error,
+            executor: tx.getDrizzle(),
+          });
           this.logger.debug(
             "Could not load component for multi-component field",
             {
@@ -2025,7 +2043,7 @@ export class FieldGroupMutationService extends BaseService {
         incomingIds
       );
     } catch (error) {
-      throw await this.saveFailure(tx.getDrizzle(), allowedSlugs, error);
+      throw this.mappedFailure(error);
     }
   }
 
@@ -2058,6 +2076,13 @@ export class FieldGroupMutationService extends BaseService {
         );
         await this.adapter.delete(meta.tableName, where);
       } catch (error) {
+        // As in the transaction's delete: rows under a moved table are not gone.
+        const refusal = await refusalAfterFollowing({
+          adapter: this.adapter,
+          rows: this.registryService,
+          error,
+        });
+        if (refusal !== undefined) throw refusal;
         this.logger.debug("Could not delete component data for field", {
           slug,
           fieldName,
@@ -2103,6 +2128,12 @@ export class FieldGroupMutationService extends BaseService {
         );
         await tx.delete(meta.tableName, where);
       } catch (error) {
+        // Rows under a moved table are not gone: the delete is refused rather than skipping them.
+        await raiseIfMoved({
+          adapter: this.adapter,
+          error,
+          executor: tx.getDrizzle(),
+        });
         this.logger.debug("Could not delete component data for field in tx", {
           slug,
           fieldName,
@@ -2113,34 +2144,26 @@ export class FieldGroupMutationService extends BaseService {
   }
 
   /**
-   * What a failed save of the field groups named by slugs is raised with. The storage-moving
-   * refusal when the save met a field-group table, column or registry the storage migration moved
-   * under this process, the process then addressing it under its current name, so the same save
-   * succeeds when retried. Otherwise an already-mapped NextlyError (and ServiceError shims, which
-   * share the cross-realm brand) as it is, so a factory-thrown error is not wrapped twice, and
-   * anything else as a raw database error, normalised first (toDbError) so its kind survives.
-   *
-   * Every slug's table is followed, not the first that answers: the field group whose table failed
-   * need not be the first the field allows. Storage no migration has made yet is not a move, and
-   * keeps the error it raised.
+   * What a failed save off any transaction is raised with: the storage-moving refusal when it met
+   * field-group storage the migration moved under this process, the process then addressing it
+   * under its current names, so the same save succeeds when retried. Otherwise as `mappedFailure`;
+   * storage no migration has made yet is not a move.
    */
-  private async saveFailure(
-    // The caller's transaction, when the save runs on one.
-    executor: unknown,
-    slugs: readonly string[],
-    error: unknown
-  ): Promise<NextlyError> {
-    const failure = {
+  private async saveFailure(error: unknown): Promise<NextlyError> {
+    const refusal = await refusalAfterFollowing({
       adapter: this.adapter,
       rows: this.registryService,
       error,
-      tableNames: slugs.map(slug => resolveComponentTableName(slug)),
-    };
-    const refusal =
-      executor === undefined
-        ? await refusalAfterFollowing(failure)
-        : await refusalOnTransaction({ ...failure, executor });
-    if (refusal !== undefined) return refusal;
+    });
+    return refusal ?? this.mappedFailure(error);
+  }
+
+  /**
+   * A failure as a save raises it: an already-mapped NextlyError (and ServiceError shims, which
+   * share the cross-realm brand) as it is, so a factory-thrown error is not wrapped twice, and
+   * anything else as a raw database error, normalised first (toDbError) so its kind survives.
+   */
+  private mappedFailure(error: unknown): NextlyError {
     if (NextlyError.is(error)) return error;
     return NextlyError.fromDatabaseError(toDbError(this.dialect, error));
   }
@@ -2159,6 +2182,8 @@ export class FieldGroupMutationService extends BaseService {
         })
       );
     } catch (error) {
+      // As on a transaction: a moved table still holds its instances.
+      await raiseIfMoved({ adapter: this.adapter, error });
       this.logger.debug("Could not query component table", {
         tableName,
         error: error instanceof Error ? error.message : String(error),
@@ -2186,6 +2211,12 @@ export class FieldGroupMutationService extends BaseService {
       // read as empty: taken for empty, the save judges an update a create
       // and writes a second instance beside the one it could not see.
       if (isUnregisteredTable(error)) throw error;
+      // A moved table still holds its instances: the save is refused rather than judged a create.
+      await raiseIfMoved({
+        adapter: this.adapter,
+        error,
+        executor: tx.getDrizzle(),
+      });
       this.logger.debug("Could not query component table in tx", {
         tableName,
         error: error instanceof Error ? error.message : String(error),

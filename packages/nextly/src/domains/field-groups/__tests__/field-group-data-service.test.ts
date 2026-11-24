@@ -656,6 +656,13 @@ describe("FieldGroupDataService", () => {
     // ever. The registry's own listing never answers here, so a save that followed the move before
     // refusing would never settle.
     describe("when the storage migration moved its table", () => {
+      beforeEach(() => {
+        Object.assign(ctx.adapter, {
+          dialect: "sqlite",
+          afterRollback: vi.fn(),
+        });
+      });
+
       it.each([
         [
           "a single instance",
@@ -708,6 +715,9 @@ describe("FieldGroupDataService", () => {
           expect(
             (error as { publicData?: unknown } | undefined)?.publicData
           ).toMatchObject({ errors: [{ code: "FIELD_GROUP_STORAGE_MOVING" }] });
+          // The names are followed once the transaction has rolled back, and not before.
+          expect(ctx.adapter.afterRollback).toHaveBeenCalledTimes(1);
+          expect(ctx.registry.getAllComponents).not.toHaveBeenCalled();
         }
       );
 
@@ -1236,45 +1246,64 @@ describe("FieldGroupDataService", () => {
   // a field it failed to read must not stand in as an empty one, which an
   // optional field or a permissive validator would then accept.
   describe("a read on a write's transaction meeting a table the storage migration moved", () => {
-    it("refuses the write to be retried, reading nothing more while it holds the transaction", async () => {
-      // As a save on the transaction: the registry's listing never answers, so a read that
-      // followed the move before refusing would never settle.
-      ctx.registry.getAllComponents = vi.fn(() => new Promise<never>(() => {}));
+    const read = () => {
+      Object.assign(ctx.adapter, { dialect: "sqlite", afterRollback: vi.fn() });
       ctx.adapter.select.mockRejectedValue(
         new Error("no such table: comp_seo")
       );
-      catalogHolds("fg_seo");
+      return ctx.service.populateComponentDataByLanguage({
+        entry: { id: "entry-1" },
+        parentTable: "dc_pages",
+        fields: [seoComponentField()] as never,
+        executor: TX_DRIZZLE_HANDLE,
+        tx: createMockTxContext() as never,
+        strict: true,
+        depth: 0,
+        languages: [{}],
+      });
+    };
 
-      await expect(
-        ctx.service.populateComponentData({
-          entry: { id: "entry-1" },
+    it("refuses the write to be retried, following the table after the rollback", async () => {
+      catalogHolds("fg_seo");
+      await expect(read()).rejects.toMatchObject({
+        publicData: { errors: [{ code: "FIELD_GROUP_STORAGE_MOVING" }] },
+      });
+      expect(ctx.adapter.afterRollback).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads the group as empty when no migration has made its table yet", async () => {
+      catalogHolds();
+      await expect(read()).resolves.toMatchObject([{ seo: null }]);
+    });
+  });
+
+  describe("a delete on a transaction meeting a table that is missing", () => {
+    const remove = () => {
+      Object.assign(ctx.adapter, { dialect: "sqlite", afterRollback: vi.fn() });
+      return ctx.service.deleteComponentDataInTransaction(
+        createMockTxContext({
+          select: vi
+            .fn()
+            .mockRejectedValue(new Error("no such table: comp_seo")),
+        }) as never,
+        {
+          parentId: "entry-1",
           parentTable: "dc_pages",
           fields: [seoComponentField()] as never,
-          executor: TX_DRIZZLE_HANDLE,
-          strict: true,
-          depth: 0,
-        })
-      ).rejects.toMatchObject({
+        }
+      );
+    };
+
+    it("is refused when the migration moved it, rather than leaving its rows behind", async () => {
+      catalogHolds("fg_seo");
+      await expect(remove()).rejects.toMatchObject({
         publicData: { errors: [{ code: "FIELD_GROUP_STORAGE_MOVING" }] },
       });
     });
 
-    it("reads the group as empty when no migration has made its table yet", async () => {
-      ctx.adapter.select.mockRejectedValue(
-        new Error("no such table: comp_seo")
-      );
+    it("has nothing to delete when no migration has made it yet", async () => {
       catalogHolds();
-
-      await expect(
-        ctx.service.populateComponentData({
-          entry: { id: "entry-1" },
-          parentTable: "dc_pages",
-          fields: [seoComponentField()] as never,
-          executor: TX_DRIZZLE_HANDLE,
-          strict: true,
-          depth: 0,
-        })
-      ).resolves.toMatchObject({ seo: null });
+      await expect(remove()).resolves.toBeUndefined();
     });
   });
 

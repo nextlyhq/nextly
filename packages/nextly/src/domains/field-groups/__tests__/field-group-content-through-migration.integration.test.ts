@@ -209,5 +209,46 @@ describe.each(getConfiguredTestDialects())(
       expect(upPoints).toBeGreaterThan(2);
       expect(atPoints.length - upPoints).toBeGreaterThan(2);
     }, 300_000);
+
+    it("saves first after the migration, with no read before it, and is refused no more than it is told to retry", async () => {
+      // A read follows a move by itself, so a server that reads first has found the new names by
+      // the time it saves. One that saves first has only the names it started with.
+      site = await openStorageGenerationSite({
+        dialect,
+        loaded,
+        legacy: true,
+        sqliteFile: true,
+        localization: LIVE_LOCALIZATION,
+      });
+      const first = await site.developmentStart(LIVE_DECLARED);
+      const created = await first.nextly.create({
+        collection: LIVE_COLLECTION as never,
+        data: {
+          title: "P",
+          card: { heading: "Kept", tagline: "Kept" },
+        } as never,
+      });
+      const id = (created.item as { id: string }).id;
+      server = startScript(SERVER, [
+        dialect,
+        site.url!,
+        perLanguageStorageEnabled() ? "on" : "off",
+      ]);
+      await server.printed("READY");
+
+      expect((await site.migrateStorage()).ran).toBe(true);
+
+      const answers: string[] = [];
+      for (let tries = 0; tries < 3; tries++) {
+        answers.push(await ask(server, `save ${id} saved-first`));
+        if (answers.at(-1) === "OK") break;
+      }
+      expect(answers.at(-1), answers.join(" / ")).toBe("OK");
+      for (const refused of answers.slice(0, -1)) {
+        expect(refused).toMatch(/^REFUSED FIELD_GROUP_STORAGE_MOVING /);
+      }
+      expect(await readHeading(server, id)).toBe("saved-first");
+      expect(await legacyObjects(site.adapter, dialect)).toEqual([]);
+    }, 300_000);
   }
 );
