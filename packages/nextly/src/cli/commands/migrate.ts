@@ -1385,6 +1385,11 @@ export interface MigrateCoreDeps {
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
   /**
+   * Seam for tests; defaults to the real settling of the retirement captures before any file
+   * applies (`settleRetiredDocumentEvents`).
+   */
+  settleRetirementsFn?: typeof settleRetiredDocumentEvents;
+  /**
    * For tests: called at each named point the run reaches (`stop-points.ts`): before and after
    * each statement of a file, once a file is recorded applied, as a dropped entity's registry row
    * goes, once the registry write commits, and as what a dropped entity left goes. One that throws
@@ -3377,7 +3382,10 @@ export async function migrateCore(
           retiredDocumentEvents: () =>
             deletionEventsOfRetiredDocuments(metadataArgs()),
           settleRetirements: () =>
-            settleRetiredDocumentEvents(metadataArgs(), "down"),
+            (deps.settleRetirementsFn ?? settleRetiredDocumentEvents)(
+              metadataArgs(),
+              "down"
+            ),
         }
       );
       // A file that deletes data runs only with consent covering each
