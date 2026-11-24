@@ -140,7 +140,7 @@ function triggerTablesQuery(
  * change still fires them. Read from the privilege tables the account sees of its own grants. A
  * grant this does not find (on single tables, through a role, by a schema pattern) answers no,
  * which only makes the reading more cautious. Asked by `triggerTables`, and by a type change's
- * conversion before it writes a table's rows (`refuseOverUpdateTriggers`).
+ * conversion before it writes a table's rows (`overUpdateTriggers`).
  */
 export function mysqlSeesEveryTriggerQuery(): SQL {
   // `CURRENT_USER()` is `name@host`; the privilege tables name the grantee as `'name'@'host'`.
