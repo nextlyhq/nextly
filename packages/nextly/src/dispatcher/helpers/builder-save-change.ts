@@ -351,23 +351,28 @@ export function reviewOf(preview: CollectionSavePreview): BuilderSaveReview {
 }
 
 /**
+ * Counts by field a review confirmed, as an apply's body sends them: each field's name and a whole
+ * number of values, at most 500. The one shape of a confirmed deletion's count and a confirmed
+ * clear's, so the two are read alike.
+ */
+export const FieldCountsBody = z
+  .array(
+    z.object({
+      field: z.string().min(1),
+      count: z.number().int().min(0),
+    })
+  )
+  .max(500)
+  .optional();
+
+/**
  * The counts of values the person confirmed clearing for fields changing type, as an apply's body
  * sends them: each field's name and a whole number of values that cannot convert. Absent where the
  * body sends none, and a change that loses values is then refused as it always has been
  * (`CollectionSave.confirmedClears`). One reading for the collection's, the Single's and the field group's
  * apply, so the three take the same consent.
  */
-const ConfirmedClearsBody = z.object({
-  confirmedClears: z
-    .array(
-      z.object({
-        field: z.string().min(1),
-        count: z.number().int().min(0),
-      })
-    )
-    .max(500)
-    .optional(),
-});
+const ConfirmedClearsBody = z.object({ confirmedClears: FieldCountsBody });
 
 export function readConfirmedClears(
   body: unknown

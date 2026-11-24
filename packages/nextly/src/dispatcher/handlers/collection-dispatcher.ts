@@ -130,6 +130,7 @@ import {
 } from "../helpers/authenticated-user";
 import {
   NOTHING_TO_REVIEW,
+  FieldCountsBody,
   readConfirmedClears,
   reviewOf,
   type BuilderSaveReview,
@@ -366,15 +367,7 @@ const TogetherParam = z
  * and the save then deletes as it always has (`CollectionSave.confirmedDeletions`).
  */
 const ConfirmedDeletionsBody = z.object({
-  confirmedDeletions: z
-    .array(
-      z.object({
-        field: z.string().min(1),
-        count: z.number().int().min(0),
-      })
-    )
-    .max(500)
-    .optional(),
+  confirmedDeletions: FieldCountsBody,
 });
 
 function readConfirmedDeletions(

@@ -17,10 +17,10 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { isUpMarker } from "./sql-sections";
 
 /** The version of the conversion rules this Nextly converts by, and writes into the mark. */
-export const CONVERSION_RULES_VERSION = 1;
+const CONVERSION_RULES_VERSION = 1;
 
 /** The header line's start: `-- Converts values: rules 1; posts.price, posts_locales.title`. */
-export const CONVERTS_HEADER = "-- Converts values:";
+const CONVERTS_HEADER = "-- Converts values:";
 
 /** One column a file converts. */
 export interface ConvertedColumnName {

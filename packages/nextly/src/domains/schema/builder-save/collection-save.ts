@@ -1272,9 +1272,12 @@ async function writeSave(
   });
   // Each field whose type the save changes is judged over the values its column holds, before any
   // file is written: a blocked change, or a lossy one not consented to, refuses the save.
-  const conversion = await refuseSaveTypeChanges(deps, save, plan.table, {
-    pushes: options.pushes === true,
-  });
+  const conversion = await refuseSaveTypeChanges(
+    deps,
+    save,
+    plan.table,
+    options
+  );
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   // A move that cannot keep its values is refused here, before the definition is written.
@@ -1369,7 +1372,7 @@ async function writeSave(
       },
       // The change's file marks the columns whose values the save converts, so `nextly migrate`
       // converts each database's own values alike (`convertsHeaderLine`).
-      conversion?.columns
+      conversion
     );
     // The definition last, once the migration files and their snapshots are in place, and only
     // while the save still holds the migration folder: a save stopped or failed before it leaves
@@ -1505,7 +1508,7 @@ async function refuseSaveTypeChanges(
   save: CollectionSave,
   table: string,
   /** Whether a push applies the save, which converts by the database's cast (`judgeSaveTypeChanges`). */
-  road: { pushes: boolean }
+  road: { pushes?: boolean }
 ): Promise<SaveConversion | undefined> {
   const judgement = await judgeSaveTypeChanges(deps, save, table, road);
   if (judgement === undefined) return undefined;
@@ -1573,7 +1576,7 @@ async function judgeSaveTypeChanges(
    * Whether a push applies the save: its statements convert by the database's cast, outside any
    * transaction a conversion could share, so it is judged as that cast. Absent, the save's file.
    */
-  road: { pushes: boolean } = { pushes: false }
+  road: { pushes?: boolean } = {}
 ): Promise<
   | {
       label: string;
@@ -1638,7 +1641,7 @@ async function judgeSaveTypeChanges(
     // pair it converts as the new type reads it, in the transaction of the file that changes the
     // column (`typeConversionOf`), and marks the file so `nextly migrate` converts alike. A save a
     // push applies, and one applied elsewhere, is the database's cast, judged as such.
-    rewrites: deps.applies && !road.pushes,
+    rewrites: deps.applies && road.pushes !== true,
     builtBy: kind.builtBy,
     ...componentRow,
   };
@@ -2405,8 +2408,8 @@ async function writeFiles(
   save: CollectionSave,
   plan: SavePlan,
   onWritten: (names: string[]) => Promise<void>,
-  /** The columns whose values the change converts, which its file marks (`convertsValues`). */
-  convertsValues?: readonly ConvertedColumnName[]
+  /** The conversion of the change's values, whose columns its file marks (`markedColumnsOf`). */
+  conversion?: TypeConversion
 ): Promise<SaveFiles> {
   // An adopted collection's address and sibling fields predate those rules.
   const held =
@@ -2478,9 +2481,7 @@ async function writeFiles(
     name: `${migrationSlug(save.slug)}_${save.change}`,
     table: plan.table,
     now: new Date(now.getTime() + offset),
-    ...(convertsValues === undefined || convertsValues.length === 0
-      ? {}
-      : { convertsValues }),
+    ...markedColumnsOf(conversion),
     ...(await movesOf(deps, save, plan.table)),
     ...fileResolutions(save, plan.table),
     ...(save.keys === undefined
@@ -3362,6 +3363,14 @@ async function generateFor(
   }
   if (result === null) return [];
   return (await sqlFiles(deps.migrationsDir)).filter(f => !before.has(f));
+}
+
+/** The columns a change's file marks as converted value by value (`convertsValues`), if any. */
+function markedColumnsOf(conversion: TypeConversion | undefined): {
+  convertsValues?: readonly ConvertedColumnName[];
+} {
+  const columns = conversion?.columns ?? [];
+  return columns.length === 0 ? {} : { convertsValues: columns };
 }
 
 /**
@@ -4606,24 +4615,16 @@ function triedHoldOf(
   beforeResume?: (db: unknown) => Promise<void>;
   settled?: (db: unknown) => Promise<void>;
 } {
-  const scope = tables === "whole" ? undefined : tables;
-  const count =
-    hold === undefined || tables === undefined
-      ? undefined
-      : scope === undefined
-        ? hold.check
-        : hold.checkIn(scope);
+  const { count, standing } = holdCountOf(hold, tables);
   const check = bothChecks(count, converting?.run);
   if (check === undefined) return {};
-  if (deps.adapter.getCapabilities().dialect !== "mysql") {
+  const slug = hold?.slug ?? converting?.slug;
+  if (
+    deps.adapter.getCapabilities().dialect !== "mysql" ||
+    slug === undefined
+  ) {
     return { before: check };
   }
-  const slug = hold?.slug ?? converting?.slug;
-  if (slug === undefined) return { before: check };
-  const standing =
-    hold === undefined || count === undefined
-      ? undefined
-      : hold.standingIn(scope);
   // This try's hold: `before` (or `beforeResume`) and `settled` run in turn, one pair per try.
   let held: Awaited<ReturnType<typeof holdCollectionOnConnection>> | undefined;
   return {
@@ -4663,6 +4664,24 @@ function triedHoldOf(
       });
     },
   };
+}
+
+/**
+ * The count a try's files take of the removed fields stored in `tables` (`DeletionHold.check`, or
+ * `checkIn` for some), and the one a resumed MySQL try takes of those whose column still stands
+ * (`standingIn`); neither where the save holds no count or the files change none of its tables.
+ */
+function holdCountOf(
+  hold: SaveDeletionHold | undefined,
+  tables: readonly string[] | "whole" | undefined
+): {
+  count?: (db: unknown) => Promise<void>;
+  standing?: (db: unknown) => Promise<void>;
+} {
+  if (hold === undefined || tables === undefined) return {};
+  const scope = tables === "whole" ? undefined : tables;
+  const count = scope === undefined ? hold.check : hold.checkIn(scope);
+  return count === undefined ? {} : { count, standing: hold.standingIn(scope) };
 }
 
 /**

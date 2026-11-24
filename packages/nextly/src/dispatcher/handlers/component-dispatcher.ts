@@ -701,7 +701,6 @@ export const COMPONENTS_METHODS: Record<
         localized?: boolean;
         acknowledgedConversions?: string[];
       };
-      const confirmedClears = readConfirmedClears(body);
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
       if (!fields) throw new Error("fields is required in request body");
@@ -711,6 +710,8 @@ export const COMPONENTS_METHODS: Record<
       assertValidFieldsPayload(fields, { stored: "under-lock" });
       // The fields the save moves, each kept by statements its migration file carries.
       const moves = readRequestedMoves(body);
+      // The values the person confirmed clearing, read with the body's other answers.
+      const confirmedClears = readConfirmedClears(body);
 
       return withSchemaChangeExcluded(
         {

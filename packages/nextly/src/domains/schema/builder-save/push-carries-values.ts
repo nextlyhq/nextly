@@ -183,36 +183,43 @@ function columnTypeChanges(args: {
       field => [toSnakeCase(field.name), field] as const
     )
   );
-  // The type as the database declares it, sizes included (`varchar(255)`, `numeric(10, 2)`): a
-  // field whose column keeps it (a Unique text on PostgreSQL stays `text`) changes nothing there.
-  const shape = (field: FieldDefinition) =>
-    args.columnOf(field)?.dialectType ?? null;
   return namedOnRow(args.newFields).some(field => {
     const column = toSnakeCase(field.name);
     const from =
       args.renames.find(rename => rename.to === column)?.from ?? column;
     const old = before.get(from);
-    if (old === undefined) return false;
-    // Kept per language before the save and after it: the field has no column on this table, and
-    // its translations column takes the new type in the save's own file.
-    if (
-      isFieldLocalized(old, args.wasStored) &&
-      isFieldLocalized(field, args.isStored)
-    ) {
-      return false;
-    }
-    // A field gaining or losing a column of its own (a many-to-many, kept in a junction table, made
-    // one-to-one) changes no column's type: the column is added or dropped, as the file writes it.
-    const was = shape(old);
-    const is = shape(field);
-    if (was === null || is === null || was === is) return false;
-    // A change the save converts value by value: its file judges and converts each value.
-    const converts = args.convertsValues;
-    return (
-      converts === undefined ||
-      !convertsByValue(old, field, converts.dialect, converts)
-    );
+    return old !== undefined && fieldColumnTypeChanges(old, field, args);
   });
+}
+
+/**
+ * Whether `old` becoming `field` changes a column's type that the push must judge: not a field
+ * kept per language before the save and after it, which has no column on this table and whose
+ * translations column takes the new type in the save's own file; not one gaining or losing a column
+ * of its own (a many-to-many, kept in a junction table, made one-to-one), whose column is added or
+ * dropped as the file writes it; and not one the save converts value by value, whose file judges
+ * and converts each value. The type is the one the database declares, sizes included
+ * (`varchar(255)`, `numeric(10, 2)`): a field whose column keeps it changes nothing there.
+ */
+function fieldColumnTypeChanges(
+  old: FieldDefinition,
+  field: FieldDefinition,
+  args: Parameters<typeof columnTypeChanges>[0]
+): boolean {
+  if (
+    isFieldLocalized(old, args.wasStored) &&
+    isFieldLocalized(field, args.isStored)
+  ) {
+    return false;
+  }
+  const was = args.columnOf(old)?.dialectType ?? null;
+  const is = args.columnOf(field)?.dialectType ?? null;
+  if (was === null || is === null || was === is) return false;
+  const converts = args.convertsValues;
+  return (
+    converts === undefined ||
+    !convertsByValue(old, field, converts.dialect, converts)
+  );
 }
 
 /** Whether a field new to a Single's table is filled in its row, which the table holds. */

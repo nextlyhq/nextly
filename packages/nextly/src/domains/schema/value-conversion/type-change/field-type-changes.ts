@@ -443,7 +443,7 @@ type JudgeArgs = Parameters<typeof judgeFieldTypeChanges>[0];
 
 /**
  * A change of a field kept on the row, judged over its column (`judgeFieldTypeChanges`).
- * Undefined where neither table holds its column.
+ * Undefined where neither table holds its column, or a pass judges only other columns (`only`).
  */
 async function judgeOnRow(
   change: FieldTypeChange,
@@ -453,55 +453,109 @@ async function judgeOnRow(
 ): Promise<JudgedFieldTypeChange | undefined> {
   const held = await whereHeld(change, args, columnsOf);
   if (held === undefined) return undefined;
-  const { table, column } = held;
-  if (args.only !== undefined && !args.only(table, column)) return undefined;
-  const perLanguage = table === args.translationsTable;
-  const text = await textOf(table);
+  if (args.only !== undefined && !args.only(held.table, held.column)) {
+    return undefined;
+  }
+  const text = await textOf(held.table);
+  const how = rowJudging(change, args, held, text);
+  return {
+    ...change,
+    ...held,
+    result: await storedJudgementOnRow(change, args, held, text, how),
+    ...rowFlags(change, args, held, how),
+  };
+}
+
+/** How a change on the row is judged (`rowJudging`). */
+interface RowJudging {
+  /** The road writes its values as the new type reads them (`rewrites`, `rewritesPair`). */
+  rewritten: boolean;
+  /** Two values that read as one are refused: the new field's Unique, or a rewrite's old index. */
+  unique: boolean;
+  /** A unique MySQL text, whose repeats only the database's collation weighs. */
+  collated: boolean;
+}
+
+/**
+ * How a change of a field on the row is judged where it is `held`: whether the road rewrites it;
+ * whether two values that read as one block it (the new field is unique, or a rewritten column
+ * takes its values while the old field's unique index still stands, the save's own statements
+ * dropping it only after); and whether a unique MySQL text's repeats are weighed by its collation,
+ * which only the database can, after the scan rather than as they come.
+ */
+function rowJudging(
+  change: FieldTypeChange,
+  args: JudgeArgs,
+  held: { table: string; column: string },
+  text: TableText | undefined
+): RowJudging {
   const rewritten =
-    rewritesAt(args.rewrites, table, column) &&
+    rewritesAt(args.rewrites, held.table, held.column) &&
     rewritesPair(change.fromType, change.toType);
-  // A rewritten column takes its values while the old field's unique index still stands, the
-  // save's own statements dropping it only after: two values that read as one are refused there
-  // as they are where the new field is unique.
   const unique =
     change.to.unique === true || (rewritten && change.from.unique === true);
-  // A unique MySQL text compares values by its collation, which only the database can weigh:
-  // the readings are gathered and weighed after the scan instead of compared as they come.
   const collated =
     text !== undefined && unique && COLLATED_FAMILIES.has(change.toType.family);
+  return { rewritten, unique, collated };
+}
+
+/** A row's change judged over the values its column holds, as `rowJudging` says to judge it. */
+async function storedJudgementOnRow(
+  change: FieldTypeChange,
+  args: JudgeArgs,
+  held: { table: string; column: string },
+  text: TableText | undefined,
+  how: RowJudging
+): Promise<StoredTypeChangeJudgement> {
   const readings: { key: RowKey; readsAs: string }[] = [];
-  const pages = rewritten ? args.readingPages?.(table, column) : undefined;
+  const pages = how.rewritten
+    ? args.readingPages?.(held.table, held.column)
+    : undefined;
   const judgedHere = await judgeStoredTypeChange({
     db: args.db,
     dialect: args.dialect,
-    table,
-    column,
-    keyedBy: perLanguage ? "translation" : "id",
+    table: held.table,
+    column: held.column,
+    keyedBy: held.table === args.translationsTable ? "translation" : "id",
     from: change.fromType,
     // A MySQL text column counts its bytes in the table's character set, which a column the
     // change converts takes.
     to: withCharset(change.toType, text?.charset),
     accepts: fieldAccepts(change.toType, change.to),
     // A unique field holds each value once: two that read as one value of the new type block.
-    unique: unique && !collated,
-    ...readingOptions(collated, rewritten, readings),
+    unique: how.unique && !how.collated,
+    ...readingOptions(how.collated, how.rewritten, readings),
     ...(pages === undefined ? {} : { readingPages: pages }),
   });
-  const result =
-    collated && text !== undefined
-      ? withRepeats(
-          judgedHere,
-          await repeatsByCollation(args.db, readings, text)
-        )
-      : judgedHere;
+  if (!how.collated || text === undefined) return judgedHere;
+  return withRepeats(
+    judgedHere,
+    await repeatsByCollation(args.db, readings, text)
+  );
+}
+
+/**
+ * What a row's judged change says beyond its values: its translations table's flags, and where the
+ * road rewrites it, that it is converted and judged under the old field's unique index.
+ */
+function rowFlags(
+  change: FieldTypeChange,
+  args: JudgeArgs,
+  held: { table: string; column: string },
+  how: RowJudging
+): Pick<
+  JudgedFieldTypeChange,
+  | "changesTranslationsColumn"
+  | "leavesWithEntity"
+  | "converted"
+  | "uniqueBefore"
+> {
   return {
-    ...change,
-    table,
-    column,
-    result,
-    ...(perLanguage ? translationsTableFlags(change, args, rewritten) : {}),
-    ...(rewritten ? { converted: true as const } : {}),
-    ...(rewritten && unique && change.to.unique !== true
+    ...(held.table === args.translationsTable
+      ? translationsTableFlags(change, args, how.rewritten)
+      : {}),
+    ...(how.rewritten ? { converted: true as const } : {}),
+    ...(how.rewritten && how.unique && change.to.unique !== true
       ? { uniqueBefore: true as const }
       : {}),
   };
@@ -950,22 +1004,35 @@ function refusalReasons(of: {
       "Its entity stops being translated in the same save, which moves each language's value out of the translations table as it is stored: turn off translation and save first, then change the field's type."
     );
   }
-  if (of.clearsRequired) {
-    why.push(
-      "It is required, so a cleared value would leave its row with none: make it optional first, or change the values that cannot convert, then save again."
-    );
-  } else if (of.lossy && of.converted) {
-    why.push(of.clearsBy());
-  } else if (of.lossy) {
-    why.push(
-      `Clearing the values that cannot convert can't be deployed yet: ${DEPLOYED_BY_CAST}.`
-    );
-  } else if (of.rewritten && !of.converted) {
-    why.push(
-      `Rewriting values into the new type's form can't be deployed yet: ${DEPLOYED_BY_CAST}.`
-    );
-  }
+  const values = valuesReason(of);
+  if (values !== undefined) why.push(values);
   return why;
+}
+
+/**
+ * Why the change's values themselves stop it, beyond their own reasons: a clear into a required
+ * field; a lost value the road clears once consented to (`clearsBy`); or one, or a value read only
+ * once rewritten, that the deploying cast would not clear or rewrite. Undefined where none does.
+ */
+function valuesReason(of: {
+  lossy: boolean;
+  clearsRequired: boolean;
+  rewritten: boolean;
+  converted: boolean;
+  clearsBy: () => string;
+}): string | undefined {
+  if (of.clearsRequired) {
+    return "It is required, so a cleared value would leave its row with none: make it optional first, or change the values that cannot convert, then save again.";
+  }
+  if (of.lossy) {
+    return of.converted
+      ? of.clearsBy()
+      : `Clearing the values that cannot convert can't be deployed yet: ${DEPLOYED_BY_CAST}.`;
+  }
+  if (of.rewritten && !of.converted) {
+    return `Rewriting values into the new type's form can't be deployed yet: ${DEPLOYED_BY_CAST}.`;
+  }
+  return undefined;
 }
 
 /** The registry statuses whose recorded fields the database already has. */

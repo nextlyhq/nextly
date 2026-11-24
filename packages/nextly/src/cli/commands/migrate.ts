@@ -2050,29 +2050,59 @@ async function previewFileTypeChanges(
       at += 1;
       continue;
     }
-    const source = change.source(before, args.dialect);
-    if (first) {
-      const judged = await judgeFileTypeChanges(args.db, source);
-      for (const conversion of judged.conversions) {
-        for (const column of conversion.columns) {
-          logger.info(
-            `    ↻ ${source.filename} converts ${column.table}.${column.column} value by value, as ${column.field}'s new type reads each: ${String(column.converted)} converted, ${String(column.cleared)} that cannot convert cleared`
-          );
-        }
-      }
-      for (const refusal of judged.refusals) {
-        logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
-      }
-    } else if (fileTypeChangesOf(source).length > 0) {
-      logger.info(
-        args.behindModules
-          ? `  ⚠ field type changes in ${source.filename} were not checked: plugin modules run first, so a real run judges them only after those`
-          : `  ⚠ field type changes in ${source.filename} are judged when the run reaches it: a dry run does not run the files before it`
-      );
-    }
+    await previewChange(
+      change.source(before, args.dialect),
+      first,
+      args,
+      logger
+    );
     before = change.target;
     first = false;
     at += change.files.length;
+  }
+}
+
+/**
+ * One change's field type changes in a dry run: the first change a real run applies judged on the
+ * database (`previewJudgedChange`); a later one, or any behind plugin modules, named as judged when
+ * the run reaches it, where it changes a field's type.
+ */
+async function previewChange(
+  source: Parameters<typeof judgeFileTypeChanges>[1],
+  first: boolean,
+  args: { db: unknown; behindModules: boolean },
+  logger: Pick<CommandContext["logger"], "info">
+): Promise<void> {
+  if (first) {
+    await previewJudgedChange(args.db, source, logger);
+    return;
+  }
+  if (fileTypeChangesOf(source).length === 0) return;
+  logger.info(
+    args.behindModules
+      ? `  ⚠ field type changes in ${source.filename} were not checked: plugin modules run first, so a real run judges them only after those`
+      : `  ⚠ field type changes in ${source.filename} are judged when the run reaches it: a dry run does not run the files before it`
+  );
+}
+
+/**
+ * A change's field type changes judged on the database as a real run judges them before its
+ * first statement: each column a marked change converts, with how many of its values convert and
+ * how many are cleared, then each refusal.
+ */
+async function previewJudgedChange(
+  db: unknown,
+  source: Parameters<typeof judgeFileTypeChanges>[1],
+  logger: Pick<CommandContext["logger"], "info">
+): Promise<void> {
+  const judged = await judgeFileTypeChanges(db, source);
+  for (const column of judged.conversions.flatMap(c => c.columns)) {
+    logger.info(
+      `    ↻ ${source.filename} converts ${column.table}.${column.column} value by value, as ${column.field}'s new type reads each: ${String(column.converted)} converted, ${String(column.cleared)} that cannot convert cleared`
+    );
+  }
+  for (const refusal of judged.refusals) {
+    logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
   }
 }
 
@@ -2170,30 +2200,15 @@ function conversionsByFile(
 ): Map<string, (db: unknown) => Promise<void>> {
   const byFile = new Map<string, (db: unknown) => Promise<void>>();
   if (conversions.length === 0 || files.length === 0) return byFile;
-  const changes = files.map(file => {
-    const named = splitSqlStatements(file.upSql, dialect, file).map(statement =>
-      tablesChangedIn(statement, dialect)
-    );
-    return named.some(tables => tables === undefined)
-      ? undefined
-      : new Set(
-          named.flatMap(tables => tables ?? []).map(t => t.toLowerCase())
-        );
-  });
+  const changes = files.map(file => tablesChangedByFile(file, dialect));
   const runsOf = new Map<string, ((db: unknown) => Promise<void>)[]>();
   for (const conversion of conversions) {
-    const tablesOf = new Map<string, string[]>();
-    for (const table of conversion.tables) {
-      const at = changes.findIndex(
-        changed => changed === undefined || changed.has(table.toLowerCase())
-      );
-      const name = files[at === -1 ? 0 : at].name;
-      tablesOf.set(name, [...(tablesOf.get(name) ?? []), table]);
-    }
-    for (const [name, tables] of tablesOf) {
-      const run = conversion.runIn(tables);
-      if (run !== undefined)
-        runsOf.set(name, [...(runsOf.get(name) ?? []), run]);
+    for (const [name, run] of conversionRunsByFile(
+      conversion,
+      files,
+      changes
+    )) {
+      runsOf.set(name, [...(runsOf.get(name) ?? []), run]);
     }
   }
   for (const [name, runs] of runsOf) {
@@ -2202,6 +2217,48 @@ function conversionsByFile(
     });
   }
   return byFile;
+}
+
+/**
+ * The tables a file's statements change, lower-cased, or undefined where a statement's tables
+ * cannot be named, and the file may change any.
+ */
+function tablesChangedByFile(
+  file: ParsedMigration,
+  dialect: SupportedDialect
+): ReadonlySet<string> | undefined {
+  const named = splitSqlStatements(file.upSql, dialect, file).map(statement =>
+    tablesChangedIn(statement, dialect)
+  );
+  if (named.some(tables => tables === undefined)) return undefined;
+  return new Set(
+    named.flatMap(tables => tables ?? []).map(table => table.toLowerCase())
+  );
+}
+
+/**
+ * One conversion's runs by the file that runs each: its tables grouped by the first of `files`
+ * whose statements change them (`changes`), the first file for a table none names.
+ */
+function conversionRunsByFile(
+  conversion: TypeConversion,
+  files: readonly ParsedMigration[],
+  changes: readonly (ReadonlySet<string> | undefined)[]
+): [string, (db: unknown) => Promise<void>][] {
+  const tablesOf = new Map<string, string[]>();
+  for (const table of conversion.tables) {
+    const at = changes.findIndex(
+      changed => changed === undefined || changed.has(table.toLowerCase())
+    );
+    const name = files[Math.max(at, 0)].name;
+    tablesOf.set(name, [...(tablesOf.get(name) ?? []), table]);
+  }
+  return [...tablesOf].flatMap(([name, tables]) => {
+    const run = conversion.runIn(tables);
+    return run === undefined
+      ? []
+      : [[name, run] as [string, (db: unknown) => Promise<void>]];
+  });
 }
 
 /**
@@ -3923,6 +3980,14 @@ export async function refuseUnresolvedAppAttempts(args: {
 }
 
 /**
+ * Refuse the first of `files` whose conversion mark this version cannot follow (`readConvertsMark`,
+ * which throws for it), before anything of the run is asked or written.
+ */
+function refuseUnfollowableMarks(files: readonly ParsedMigration[]): void {
+  for (const file of files) file.converts();
+}
+
+/**
  * Refuses, before the run changes anything, an app migration file it would
  * apply that deletes data (`pendingRunDeletions`, read from the files'
  * statements for this dialect, never from a header, each file against the
@@ -3961,9 +4026,9 @@ async function judgeFileDeletions(
   const plan = fileRunPlan(listed, deps.step);
   // A file the run reaches whose conversion mark this version cannot follow is refused here, before
   // anyone is asked to consent to the run, as its run would refuse it (`readConvertsMark`).
-  for (const { file } of listed) {
-    if (plan.runs.has(file)) file.converts();
-  }
+  refuseUnfollowableMarks(
+    listed.map(({ file }) => file).filter(file => plan.runs.has(file))
+  );
   // Each deletion keeps the file it comes from, by identity, for the listing
   // and for binding an agreement to the file as it stands.
   const sources = new Map<Deletion, DeletionSource>();

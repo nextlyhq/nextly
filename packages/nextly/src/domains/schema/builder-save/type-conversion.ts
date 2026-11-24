@@ -548,65 +548,97 @@ interface ColumnFacts {
   defaultClause?: string;
 }
 
-/** `column` of `table` as the database defines it (`ColumnFacts`). */
-async function columnFactsOf(
+/** `column` of `table` as the database defines it (`ColumnFacts`), read as each dialect states it. */
+function columnFactsOf(
   db: unknown,
   dialect: SupportedDialect,
   table: string,
   column: string
 ): Promise<ColumnFacts> {
-  if (dialect === "postgresql") {
-    const [row] = await querySqlRows<{
-      type: string;
-      not_null: boolean;
-      default_expr: string | null;
-    }>(
-      db,
-      dialect,
-      sql`SELECT format_type(a.atttypid, a.atttypmod) AS type, a.attnotnull AS not_null,
-                 pg_get_expr(d.adbin, d.adrelid) AS default_expr
-          FROM pg_attribute a
-          LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
-          WHERE a.attrelid = to_regclass(quote_ident(${table}))
-            AND a.attname = ${column} AND NOT a.attisdropped`
-    );
-    return {
-      type: row?.type ?? "text",
-      notNull: row?.not_null === true,
-      ...(row?.default_expr == null
-        ? {}
-        : { defaultClause: `DEFAULT ${row.default_expr}` }),
-    };
-  }
-  if (dialect === "mysql") {
-    const [row] = await querySqlRows<{
-      column_type: string;
-      is_nullable: string;
-      charset: string | null;
-      collation: string | null;
-    }>(
-      db,
-      dialect,
-      sql`SELECT COLUMN_TYPE AS column_type, IS_NULLABLE AS is_nullable,
-                 CHARACTER_SET_NAME AS charset, COLLATION_NAME AS collation
-          FROM information_schema.COLUMNS
-          WHERE TABLE_SCHEMA = DATABASE() AND lower(TABLE_NAME) = ${table.toLowerCase()}
-            AND lower(COLUMN_NAME) = ${column.toLowerCase()}`
-    );
-    // A character column's set and collation are part of its type; JSON's are fixed, and stated
-    // again they are refused.
-    const charset =
-      row?.charset == null || !/char|text|enum|set\(/i.test(row.column_type)
-        ? ""
-        : ` CHARACTER SET ${row.charset}${row.collation == null ? "" : ` COLLATE ${row.collation}`}`;
-    return {
-      type: `${row?.column_type ?? "longtext"}${charset}`,
-      notNull: row?.is_nullable === "NO",
-    };
-  }
+  if (dialect === "postgresql") return postgresColumnFacts(db, table, column);
+  if (dialect === "mysql") return mysqlColumnFacts(db, table, column);
+  return sqliteColumnFacts(db, table, column);
+}
+
+/** A PostgreSQL column's type as `format_type` states it, its NOT NULL and its default. */
+async function postgresColumnFacts(
+  db: unknown,
+  table: string,
+  column: string
+): Promise<ColumnFacts> {
+  const [row] = await querySqlRows<{
+    type: string;
+    not_null: boolean;
+    default_expr: string | null;
+  }>(
+    db,
+    "postgresql",
+    sql`SELECT format_type(a.atttypid, a.atttypmod) AS type, a.attnotnull AS not_null,
+               pg_get_expr(d.adbin, d.adrelid) AS default_expr
+        FROM pg_attribute a
+        LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+        WHERE a.attrelid = to_regclass(quote_ident(${table}))
+          AND a.attname = ${column} AND NOT a.attisdropped`
+  );
+  const defaultExpr = row?.default_expr ?? null;
+  return {
+    type: row?.type ?? "text",
+    notNull: row?.not_null === true,
+    ...(defaultExpr === null
+      ? {}
+      : { defaultClause: `DEFAULT ${defaultExpr}` }),
+  };
+}
+
+/** A MySQL column's type as `information_schema` states it, a character column's set included. */
+async function mysqlColumnFacts(
+  db: unknown,
+  table: string,
+  column: string
+): Promise<ColumnFacts> {
+  const [row] = await querySqlRows<{
+    column_type: string;
+    is_nullable: string;
+    charset: string | null;
+    collation: string | null;
+  }>(
+    db,
+    "mysql",
+    sql`SELECT COLUMN_TYPE AS column_type, IS_NULLABLE AS is_nullable,
+               CHARACTER_SET_NAME AS charset, COLLATION_NAME AS collation
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND lower(TABLE_NAME) = ${table.toLowerCase()}
+          AND lower(COLUMN_NAME) = ${column.toLowerCase()}`
+  );
+  const type = row?.column_type ?? "longtext";
+  return {
+    type: `${type}${characterSetOf(type, row?.charset ?? null, row?.collation ?? null)}`,
+    notNull: row?.is_nullable === "NO",
+  };
+}
+
+/**
+ * A MySQL character column's set and collation as its type restates them: part of a character
+ * column's type; nothing for JSON, whose are fixed and refused stated again.
+ */
+function characterSetOf(
+  type: string,
+  charset: string | null,
+  collation: string | null
+): string {
+  if (charset === null || !/char|text|enum|set\(/i.test(type)) return "";
+  return ` CHARACTER SET ${charset}${collation === null ? "" : ` COLLATE ${collation}`}`;
+}
+
+/** A SQLite column's declared type and NOT NULL (`pragma_table_info`). */
+async function sqliteColumnFacts(
+  db: unknown,
+  table: string,
+  column: string
+): Promise<ColumnFacts> {
   const [row] = await querySqlRows<{ type: string; notnull: number }>(
     db,
-    dialect,
+    "sqlite",
     sql`SELECT type, "notnull" FROM pragma_table_info(${table}) WHERE lower(name) = ${column.toLowerCase()}`
   );
   return { type: row?.type ?? "", notNull: row?.notnull === 1 };

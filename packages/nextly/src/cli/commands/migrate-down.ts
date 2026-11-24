@@ -1150,16 +1150,17 @@ async function previewDownConversion(
     return;
   }
   const judged = await deps.judgeDownTypeChanges?.(p, rollbackConsent(deps));
-  for (const conversion of judged?.conversions ?? []) {
-    for (const column of conversion.columns) {
-      deps.logger.info(
+  const columns = (judged?.conversions ?? []).flatMap(c => c.columns);
+  const lines = [
+    ...columns.map(
+      column =>
         `    ↻ converts ${column.table}.${column.column} back value by value, as ${column.field}'s earlier type reads each: ${String(column.converted)} converted, ${String(column.cleared)} that cannot convert cleared`
-      );
-    }
-  }
-  for (const refusal of judged?.refusals ?? []) {
-    deps.logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
-  }
+    ),
+    ...(judged?.refusals ?? []).map(
+      refusal => `    ✖ a real run would refuse it: ${refusal.message}`
+    ),
+  ];
+  for (const line of lines) deps.logger.info(line);
 }
 
 /** A rollback's plan once every guard has passed, and what the operator agreed it deletes. */
