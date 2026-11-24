@@ -350,6 +350,68 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // The change's files are the main one, whose column the conversion writes, and the one adding a
+    // translated column to the other table: refused before the first of them, whichever it is, so
+    // neither has run.
+    converts(
+      "refuses a deploy over an update trigger before any file of the change runs",
+      async () => {
+        const number = { name: "n", type: "number" };
+        const first = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }, number]);
+        const created = await filesWritten();
+        await save(first, [
+          { name: "v", type: "text" },
+          { name: "n", type: "checkbox" },
+          { name: "w", type: "text" },
+        ]);
+        // The fixture's control: the save wrote a file for each table.
+        expect((await filesWritten()) - created).toBeGreaterThan(1);
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await second.nextly.create({
+          collection: SLUG,
+          data: { title: "a", v: "x", n: 1 },
+        } as never);
+        const exec = <R>(statement: string) =>
+          (
+            second.adapter as unknown as {
+              executeQuery<T>(s: string): Promise<T[]>;
+            }
+          ).executeQuery<R>(statement);
+        if (dialect === "postgresql") {
+          await exec(
+            `CREATE FUNCTION tcpl_touch_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql`
+          );
+        }
+        await exec(
+          dialect === "postgresql"
+            ? `CREATE TRIGGER tcpl_touch AFTER UPDATE ON dc_${SLUG} FOR EACH ROW EXECUTE FUNCTION tcpl_touch_fn()`
+            : `CREATE TRIGGER tcpl_touch AFTER UPDATE ON dc_${SLUG} BEGIN SELECT 1; END`
+        );
+
+        await expect(
+          migrateFolder(
+            second,
+            undefined,
+            resolveDataLossConsent({ flag: true, env: {} })
+          )
+        ).rejects.toMatchObject(refusedSaying("tcpl_touch"));
+
+        const columns = await exec<{ name: string }>(
+          dialect === "postgresql"
+            ? `SELECT column_name AS name FROM information_schema.columns WHERE table_name = 'dc_${SLUG}_locales'`
+            : `SELECT name FROM pragma_table_info('dc_${SLUG}_locales')`
+        );
+        // The fixture's control: the translations table is there, with the column it had.
+        expect(columns.map(c => c.name)).toContain("v");
+        expect(columns.map(c => c.name)).not.toContain("w");
+      }
+    );
+
     // Where no road rewrites values, each change above that would rewrite or clear one is judged by
     // the database's cast and refused, its counts confirmed or not: the values stay as they were.
     refuses(

@@ -385,6 +385,24 @@ describe.each(getConfiguredTestDialects())(
       for (const index of indexes) await exec(index);
     }
 
+    /** An update trigger on the collection's table, which a conversion's writes would set off. */
+    async function withTrigger(t: TestNextly): Promise<void> {
+      const exec = (statement: string) =>
+        (
+          t.adapter as unknown as { executeQuery(s: string): Promise<unknown> }
+        ).executeQuery(statement);
+      if (dialect === "postgresql") {
+        await exec(
+          `CREATE FUNCTION tcf_touch_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql`
+        );
+      }
+      await exec(
+        dialect === "postgresql"
+          ? `CREATE TRIGGER tcf_touch AFTER UPDATE ON dc_tcf_posts FOR EACH ROW EXECUTE FUNCTION tcf_touch_fn()`
+          : `CREATE TRIGGER tcf_touch AFTER UPDATE ON dc_tcf_posts BEGIN SELECT 1; END`
+      );
+    }
+
     /** A first database's text field becoming a number, its file written; its folder kept. */
     async function textBecomesNumber(): Promise<number> {
       const first = await boot(dialect);
@@ -631,6 +649,61 @@ describe.each(getConfiguredTestDialects())(
           migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"))
         ).rejects.toMatchObject(refusedSaying("can't be deployed yet"));
         expect(await read(second)).toEqual({ other: ["b"] });
+      }
+    );
+
+    // What a table carries that the conversion would set off, break or lose is asked before any
+    // statement: of a save before its file is written, of a deploy and of a rollback before the
+    // change's first file, and in a dry run, as well as where the conversion runs.
+    converts(
+      "refuses a save over an update trigger before any file of it is written",
+      async () => {
+        const t = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        await write(t, "a", { v: "012" });
+        await withTrigger(t);
+        const files = await filesWritten();
+
+        await expect(
+          save(t, [{ name: "v", type: "number" }])
+        ).rejects.toMatchObject(refusedSaying("tcf_touch"));
+
+        expect(await filesWritten()).toBe(files);
+        expect(await read(t)).toEqual({ a: "012" });
+      }
+    );
+
+    converts(
+      "refuses a deploy over an update trigger, in a dry run too, and changes nothing",
+      async () => {
+        const created = await textBecomesNumber();
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await write(second, "whole", { v: "034" });
+        await withTrigger(second);
+
+        expect(await dryRun(second)).toContain("tcf_touch");
+        await expect(
+          migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"))
+        ).rejects.toMatchObject(refusedSaying("tcf_touch"));
+        expect(await read(second)).toEqual({ whole: "034" });
+      }
+    );
+
+    converts(
+      "refuses a rollback over an update trigger, and changes nothing",
+      async () => {
+        const created = await textBecomesNumber();
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await write(second, "whole", { v: "034" });
+        await migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"));
+        await withTrigger(second);
+
+        await expect(migrateDown(second)).rejects.toMatchObject(
+          refusedSaying("tcf_touch")
+        );
+        expect(await read(second)).toEqual({ whole: 34 });
       }
     );
 
