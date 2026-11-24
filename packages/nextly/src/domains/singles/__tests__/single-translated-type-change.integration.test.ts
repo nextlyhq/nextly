@@ -12,7 +12,7 @@
  *   it fails, with the registry recording the change;
  * - one that judges the default language alone casts another language's value to what it is not.
  */
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -32,6 +32,7 @@ import {
   resolveDataLossConsent,
 } from "../../schema/migrate/data-loss-consent";
 
+import { rewritesValuesOn } from "../../schema/value-conversion/type-change/field-type-changes";
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 
 // The layout every installation runs: a translated field's values are in its translations table alone.
@@ -196,6 +197,41 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (await written()).slice(before).some(file => file.includes("retypes"))
       ).toBe(true);
+    });
+
+    // Where the file is what applies the save, only a column it retypes is lifted: one planned from a
+    // snapshot that keeps no record of the translations columns carries no such step, whatever the
+    // registry says. Refused as the collection's is, every value as it was.
+    it("refuses a change whose file would leave the column behind, and changes nothing", async () => {
+      const t = await boot(
+        [text],
+        { en: { v: "12" }, es: { v: "34" } },
+        { saves: "development" }
+      );
+      const meta = join(project, "migrations", "meta");
+      const newest = (await readdir(meta))
+        .filter(file => file.endsWith(".snapshot.json"))
+        .sort()
+        .at(-1);
+      const path = join(meta, newest ?? "");
+      const file = JSON.parse(await readFile(path, "utf8")) as {
+        snapshot: { tables: { name: string; localizedColumns?: string[] }[] };
+      };
+      const table = file.snapshot.tables.find(each => each.name === TABLE);
+      // The fixture's control: the snapshot records the translations columns.
+      expect(table?.localizedColumns).toContain("v");
+      delete table?.localizedColumns;
+      await writeFile(path, JSON.stringify(file, null, 2));
+
+      const refused = await save([number]);
+
+      if (rewritesValuesOn(dialect)) {
+        expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      } else {
+        expect(JSON.stringify(refused)).toMatch(/kept per language/);
+      }
+      expect(await columnType(t)).toEqual(isText);
+      expect(await read(t)).toEqual({ en: "12", es: "34" });
     });
 
     it.each([
