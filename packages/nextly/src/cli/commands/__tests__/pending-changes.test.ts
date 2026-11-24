@@ -21,7 +21,7 @@ import { dirname, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { defineCollection, defineConfig, text } from "../../../config";
+import { defineCollection, defineConfig, number, text } from "../../../config";
 import { definePlugin } from "../../../plugins/plugin-context";
 import { isNextlyOwnedDocumentColumn } from "../../../lib/system-columns";
 import { _resetEnvCache } from "../../../shared/lib/env";
@@ -209,6 +209,82 @@ describe("an app with no migration yet whose plugin declares permissions", () =>
     expect((await create(appWith(["export"]))).code).toBeUndefined();
     expect(sqlFiles()).toHaveLength(1);
     expect((await check(appWith(["export"]))).code).toBeUndefined();
+  });
+});
+
+describe("one list", () => {
+  const site = (edited: boolean) =>
+    defineConfig({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: "posts",
+          localized: true,
+          description: edited ? "Articles" : "Blog posts",
+          fields: [
+            text({ name: "headline", localized: true }),
+            edited
+              ? number({ name: "price", localized: true })
+              : text({ name: "price", localized: true }),
+            ...(edited ? [number({ name: "views" })] : []),
+          ],
+        }),
+      ],
+      db: { migrationsDir: "./migrations" },
+    });
+
+  /** The lines a failing check lists its changes in. */
+  const listed = (ran: { said: string[] }) =>
+    [...saidBy(ran).matchAll(/^\s*(?:Why:\s+)?([+~-] .+)$/gm)].map(
+      ([, line]) => line
+    );
+
+  it("migrate:check and migrate:create report the same list", async () => {
+    expect((await create(site(false))).code).toBeUndefined();
+    const before = sqlFiles().length;
+
+    const lines = listed(await check(site(true)));
+    const settings = lines.filter(line => line.startsWith("~ settings "));
+    const beside = lines.filter(line => line.startsWith("~ translations "));
+    const tables = lines.length - settings.length - beside.length;
+    // Each kind is in the list, so none of the comparisons below is over nothing.
+    expect([tables, settings.length, beside.length]).not.toContain(0);
+
+    const written = await create(site(true), { acceptDataLoss: true });
+    expect(written.code, saidBy(written)).toBeUndefined();
+    // What `migrate:create` says it wrote: its operations, its settings, and a file of its own for
+    // each change that goes beside the main one.
+    expect(written.said).toContain(`Operations: ${String(tables)}`);
+    expect(written.said.filter(line => line.startsWith("Settings: "))).toEqual(
+      settings.map(line => line.replace("~ settings ", "Settings: "))
+    );
+    expect(sqlFiles().length - before).toBe(1 + beside.length);
+
+    expect((await check(site(true))).code).toBeUndefined();
+  });
+
+  it("a description change with no column change is pending", async () => {
+    const described = (description: string) =>
+      defineConfig({
+        collections: [
+          defineCollection({
+            slug: "posts",
+            description,
+            fields: [text({ name: "headline" })],
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+    expect((await create(described("Blog posts"))).code).toBeUndefined();
+
+    const checked = await check(described("Articles"));
+    expect(checked.code).toBe(1);
+    expect(saidBy(checked)).toContain("(SETTINGS_CHANGE_WITHOUT_MIGRATION)");
+    expect(listed(checked)).toEqual(["~ posts: description"]);
+
+    expect((await create(described("Articles"))).code).toBeUndefined();
+    expect(sqlFiles()).toHaveLength(2);
+    expect((await check(described("Articles"))).code).toBeUndefined();
   });
 });
 

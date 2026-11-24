@@ -42,6 +42,11 @@ async function run(
       info: capture,
       success: capture,
       warn: capture,
+      // What a run reports of itself: `migrate:create`'s operations and settings.
+      item: capture,
+      keyValue: (key: string, value: unknown) => {
+        said.push(`${key}: ${String(value)}`);
+      },
     },
     options: {},
     cwd: dir,
