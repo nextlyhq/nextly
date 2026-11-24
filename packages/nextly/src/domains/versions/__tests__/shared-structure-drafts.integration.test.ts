@@ -42,6 +42,8 @@ const SLUG = "slidesite";
 const DECK = "decksite";
 /** A collection holding the same repeatable component, held through the collection's own path. */
 const DECKS = "decks";
+/** A collection holding a repeater, published one part at a time. */
+const SHOWS = "slideshows";
 const CARD = "deckcard";
 
 /** Booting a site per test takes most of the default timeout on MySQL alone. */
@@ -90,6 +92,20 @@ async function boot(dialect: TestDialect): Promise<SingleEntryService> {
       }),
     ],
     collections: [
+      defineCollection({
+        slug: SHOWS,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true },
+        fields: [
+          text({ name: "title" }),
+          repeater({
+            name: "slides",
+            fields: [text({ name: "caption" }), number({ name: "rank" })],
+          }),
+        ],
+      }),
       defineCollection({
         slug: DECKS,
         localized: true,
@@ -577,6 +593,89 @@ describe.each(getConfiguredTestDialects())(
         );
         // English's editor sees the held order, each card in English.
         expect(labels(await cardsIn("en", true))).toEqual(["second", "first"]);
+      },
+      BOOT_TIMEOUT
+    );
+
+    it(
+      "publishes one language's text inside a row alone, leaving a held reorder pending",
+      async () => {
+        await boot(dialect);
+        const nextly = current!.nextly;
+        const created = await nextly.create({
+          collection: SHOWS,
+          locale: "en",
+          data: {
+            title: "Show",
+            slides: [
+              { caption: "first", rank: 1 },
+              { caption: "second", rank: 2 },
+            ],
+            status: "published",
+          },
+        });
+        const id = (created.item as { id: string }).id;
+        const slidesIn = async (locale: string) =>
+          (
+            (await nextly.findByID({ collection: SHOWS, id, locale })) as {
+              slides: Slide[];
+            }
+          ).slides;
+        const [first, second] = await slidesIn("en");
+        await nextly.update({
+          collection: SHOWS,
+          id,
+          locale: "es",
+          data: {
+            slides: [
+              { id: first!.id, caption: "primero", rank: 1 },
+              { id: second!.id, caption: "segundo", rank: 2 },
+            ],
+            status: "published",
+            _overwrite: true,
+          },
+        });
+        // English holds a reorder: the shared part's.
+        await nextly.update({
+          collection: SHOWS,
+          id,
+          locale: "en",
+          data: {
+            slides: [
+              { id: second!.id, caption: "second", rank: 2 },
+              { id: first!.id, caption: "first", rank: 1 },
+            ],
+            _overwrite: true,
+          },
+        });
+        // Spanish holds a caption of its own: its part's.
+        await nextly.update({
+          collection: SHOWS,
+          id,
+          locale: "es",
+          data: {
+            slides: [
+              { id: second!.id, caption: "segundo", rank: 2 },
+              { id: first!.id, caption: "primero 2", rank: 1 },
+            ],
+            _overwrite: true,
+          },
+        });
+
+        // Spanish alone, not the shared part.
+        await nextly.publish({
+          collection: SHOWS,
+          id,
+          locales: ["es"],
+          data: { _overwrite: true },
+        });
+
+        // Spanish's text is live, on the order that was live: the held reorder is not Spanish's.
+        expect(captions(await slidesIn("es"))).toEqual([
+          "primero 2",
+          "segundo",
+        ]);
+        expect(captions(await slidesIn("en"))).toEqual(["first", "second"]);
       },
       BOOT_TIMEOUT
     );
