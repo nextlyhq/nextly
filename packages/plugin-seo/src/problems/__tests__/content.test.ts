@@ -126,6 +126,35 @@ describe("contentFacts", () => {
     expect(facts.links).toEqual([{ field: "layout", url: "/blog/gone" }]);
   });
 
+  it("finds the links in a page's own address fields, not only in its rich text", () => {
+    const facts = contentFacts({
+      id: "7",
+      // A repeater's rows and a group, where the address is a plain text
+      // field rather than a rich text link: how a card or a button is
+      // modelled without rich text.
+      cards: [
+        { title: "Brand voice", href: "/features/brand-voice" },
+        { title: "Pricing", linkTitle: "See pricing", linkUrl: "/pricing" },
+      ],
+      cta: { label: "Book a demo", buttonLink: "https://example.com/demo" },
+      hero: {
+        // Named like an address, but it holds words.
+        url: "Read more",
+        // The page's own heading, not a link to another page.
+        ctaHref: "#demo",
+        // A picture: the images check reads it, and it is no page link.
+        imageUrl: "/uploads/hero.png",
+        // An address under a field that does not name one.
+        note: "/not-a-link",
+      },
+    });
+    expect(facts.links).toEqual([
+      { field: "cards", url: "/features/brand-voice" },
+      { field: "cards", url: "/pricing" },
+      { field: "cta", url: "https://example.com/demo" },
+    ]);
+  });
+
   it("finds nothing in a page with no images or links", () => {
     expect(contentFacts({ id: "1", title: "Plain", count: 3 })).toEqual({
       images: [],

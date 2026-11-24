@@ -11,6 +11,7 @@
  *
  * @module problems/content
  */
+import { notAPageAddress } from "../not-found/page-address";
 import { isRecord, textOf } from "../plain-values";
 
 import type { ImageFact, LinkFact } from "./page-checks";
@@ -145,6 +146,47 @@ const NODE_READERS: Readonly<Record<string, NodeReader>> = {
   "button-group": buttonGroupNode,
 };
 
+/**
+ * Field names that hold an address: `href`, `url` and `link`, and any name
+ * ending in one, such as `linkUrl`, `buttonLink` or `ctaHref`. A card or a
+ * button is as often a group of plain text fields as it is a rich text
+ * link, and no node reader is for those: the address is in a field of its
+ * own, under a name like these.
+ */
+const ADDRESS_FIELD = /(?:href|url|link)$/i;
+
+/**
+ * The path `text` asks for, as a request would arrive: a path on this site
+ * without its query or fragment, or the path of a full http(s) address.
+ * Nothing for anything else, including a protocol-relative `//host/path`,
+ * which a request never arrives as.
+ */
+function pathAsked(text: string): string | undefined {
+  if (text.startsWith("//")) return undefined;
+  if (text.startsWith("/")) return text.split(/[?#]/, 1)[0] ?? text;
+  if (!/^https?:\/\//i.test(text)) return undefined;
+  try {
+    return new URL(text).pathname;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The address the field `key` holds in `value`, or nothing where it holds
+ * none: the name must be one an address is kept under, and the value must
+ * be an address a page is served at. So a field of words, a fragment of the
+ * page itself, and a picture's own address are each left alone, judged by
+ * the rule the Proxy reads a request by.
+ */
+function addressIn(key: string, value: unknown): string | undefined {
+  if (!ADDRESS_FIELD.test(key)) return undefined;
+  const text = textOf(value)?.trim();
+  if (text === undefined || text === "") return undefined;
+  const asked = pathAsked(text);
+  return asked !== undefined && !notAPageAddress(asked) ? text : undefined;
+}
+
 /** A media library picture, as a media field reads it. */
 function mediaImage(value: Record<string, unknown>, field: string): ImageFact {
   return {
@@ -170,7 +212,9 @@ function walkRecord(
   if (typeof value.type === "string") {
     NODE_READERS[value.type]?.(value, field, facts);
   }
-  for (const child of Object.values(value)) {
+  for (const [key, child] of Object.entries(value)) {
+    const address = addressIn(key, child);
+    if (address !== undefined) facts.links.push({ field, url: address });
     walk(child, field, facts, depth + 1);
   }
 }
@@ -190,6 +234,21 @@ function walk(
   }
 }
 
+/**
+ * Each link once per field: a node reader and the address field that node
+ * keeps its address in both name the same link, and a page linking one
+ * address twice links it once.
+ */
+function eachLinkOnce(links: readonly LinkFact[]): LinkFact[] {
+  const seen = new Set<string>();
+  return links.filter(link => {
+    const key = `${link.field}\u0000${link.url}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /** The images and links in `document`'s content, by the field holding each. */
 export function contentFacts(
   document: Readonly<Record<string, unknown>>
@@ -199,5 +258,5 @@ export function contentFacts(
     if (NOT_CONTENT.has(field)) continue;
     walk(value, field, facts, 0);
   }
-  return facts;
+  return { images: facts.images, links: eachLinkOnce(facts.links) };
 }
