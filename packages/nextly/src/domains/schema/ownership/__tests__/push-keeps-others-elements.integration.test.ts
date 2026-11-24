@@ -19,7 +19,12 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { defineCollection, text } from "../../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../../config";
 import { describeEachDialect } from "../../../../plugins/__tests__/helpers/dialect-matrix";
 import { definePlugin } from "../../../../plugins/plugin-context";
 import {
@@ -40,6 +45,7 @@ import {
 } from "../../pipeline/pushschema-pipeline-stubs";
 import { RegexRenameDetector } from "../../pipeline/rename-detector";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
+import { resolveComponentTableName } from "../../utils/resolve-table-name";
 import * as keptElements from "../kept-elements";
 import { SchemaOwnersRepository } from "../schema-owners-repository";
 
@@ -176,19 +182,20 @@ async function pushAnsweringRenames(
 async function buildMigratedIndex(
   instance: TestNextly,
   dialect: TestDialect,
-  column: string
+  column: string,
+  table = TABLE
 ): Promise<void> {
   const q = (name: string) =>
     dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
   await instance.adapter.executeQuery(
-    `CREATE INDEX ${q(MIGRATED_INDEX)} ON ${q(TABLE)} (${q(column)})`
+    `CREATE INDEX ${q(MIGRATED_INDEX)} ON ${q(table)} (${q(column)})`
   );
   await new SchemaOwnersRepository(
     (instance.adapter as unknown as DrizzleAdapter).getDrizzle(),
     dialect
   ).upsert([
     {
-      tableName: TABLE,
+      tableName: table,
       elementKind: "index",
       elementName: MIGRATED_INDEX,
       ownerKind: "plugin",
@@ -201,16 +208,19 @@ async function buildMigratedIndex(
   ]);
 }
 
-/** The names of the table's indexes. */
-async function indexNamesOf(instance: TestNextly, dialect: TestDialect) {
+/** The columns the migrated index stands on, or undefined where the table has no such index. */
+async function migratedIndexColumns(
+  instance: TestNextly,
+  dialect: TestDialect
+) {
   const snapshot = await introspectLiveSnapshot(
     instance.adapter.getDrizzle(),
     dialect,
     [TABLE]
   );
-  return (snapshot.tables.find(t => t.name === TABLE)?.indexes ?? [])
-    .map(index => index.name)
-    .sort();
+  return snapshot.tables
+    .find(t => t.name === TABLE)
+    ?.indexes?.find(index => index.name === MIGRATED_INDEX)?.columns;
 }
 
 describeEachDialect(
@@ -278,6 +288,72 @@ describeEachDialect(
       expect(await shapeOf(handle, dialect)).toEqual(before);
     });
 
+    it("refuses removing a field group's field whose column in its shared table a plugin's migration indexed", async () => {
+      const GROUP = "rk_cards";
+      const groupTable = resolveComponentTableName(GROUP);
+      const group = (withCode: boolean) =>
+        defineFieldGroup({
+          slug: GROUP,
+          fields: [
+            text({ name: "note" }),
+            ...(withCode ? [text({ name: "code" })] : []),
+          ],
+        });
+      const posts = defineCollection({
+        slug: SLUG,
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "card", component: GROUP }),
+        ],
+      });
+      handle = await createTestNextly({
+        dialect,
+        fieldGroups: [group(true)],
+        collections: [posts],
+      });
+      await buildMigratedIndex(handle, dialect, "code", groupTable);
+      const shape = async () => {
+        const snapshot = await introspectLiveSnapshot(
+          handle!.adapter.getDrizzle(),
+          dialect,
+          [groupTable]
+        );
+        const table = snapshot.tables.find(t => t.name === groupTable);
+        return {
+          columns: (table?.columns ?? []).map(c => c.name).sort(),
+          indexes: (table?.indexes ?? []).map(i => i.name).sort(),
+        };
+      };
+      const before = await shape();
+      expect(before.indexes).toContain(MIGRATED_INDEX);
+      vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", `${groupTable}.code`);
+
+      const pushed = await applyDesiredSchema(
+        {
+          collections: {
+            [SLUG]: { slug: SLUG, tableName: TABLE, fields: posts.fields },
+          },
+          singles: {},
+          components: {
+            [GROUP]: {
+              slug: GROUP,
+              tableName: groupTable,
+              fields: group(false).fields,
+            },
+          },
+        },
+        "code",
+        { promptChannel: "terminal" }
+      );
+
+      expect(pushed.success, JSON.stringify(pushed)).toBe(false);
+      const message = pushed.success ? "" : pushed.error.message;
+      for (const part of ["code", PLUGIN, MIGRATED_INDEX, groupTable]) {
+        expect(message).toContain(part);
+      }
+      expect(await shape()).toEqual(before);
+    });
+
     it("records no owner row when the push is refused", async () => {
       handle = await createTestNextly({
         dialect,
@@ -322,7 +398,7 @@ describeEachDialect(
         plugins: [noteIndexer],
       });
       await buildMigratedIndex(handle, dialect, "code");
-      expect(await indexNamesOf(handle, dialect)).toContain(MIGRATED_INDEX);
+      expect(await migratedIndexColumns(handle, dialect)).toEqual(["code"]);
 
       const pushed = await pushAnsweringRenames(
         handle,
@@ -336,7 +412,8 @@ describeEachDialect(
       expect(after.columns).toContain("ref");
       expect(after.columns).not.toContain("code");
       expect(after.indexes).toContain("ref");
-      expect(await indexNamesOf(handle, dialect)).toContain(MIGRATED_INDEX);
+      // The plugin's own index, on the renamed column.
+      expect(await migratedIndexColumns(handle, dialect)).toEqual(["ref"]);
     });
   }
 );

@@ -625,11 +625,11 @@ export interface PushElementOwners {
   /** The owners the configuration still declares schema for. */
   declaring: Set<string>;
   /**
-   * Writes what `rows` already counts: retires the rows it left out and records the new ones.
-   * Run once the push has passed every refusal, before its first statement, so a refused push
-   * leaves no owner row claiming an element it never built.
+   * Writes what `rows` already counts: retires the rows it left out and records the new ones, on
+   * `db` where given (the apply's own transaction). Run once the push has passed every refusal, so a
+   * refused push leaves no owner row claiming an element it never built.
    */
-  write(): Promise<void>;
+  write(db?: unknown): Promise<void>;
 }
 
 /**
@@ -705,15 +705,19 @@ export async function pushElementOwners(input: {
     new Set(input.schema?.owners.keys() ?? []),
     rows
   );
-  const write = async (): Promise<void> => {
+  const write = async (db?: unknown): Promise<void> => {
+    const on =
+      db === undefined
+        ? repository
+        : new SchemaOwnersRepository(db, input.dialect);
     for (const row of retired) {
-      await repository.deleteElement(
+      await on.deleteElement(
         row.tableName,
         row.elementKind,
         row.elementName ?? ""
       );
     }
-    await repository.upsert(added);
+    await on.upsert(added);
   };
   return { rows: [...rows, ...added], declaring, write };
 }

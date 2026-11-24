@@ -44,6 +44,7 @@ import type {
 import {
   readForeignKeyColumns,
   readIndexColumns,
+  readIndexNames,
   readReferencingKeys,
   readReferencingTables,
 } from "../pipeline/live-table-facts";
@@ -66,6 +67,14 @@ import {
 import type { OwnerRecord } from "./owner-registry";
 import { SchemaOwnersRepository } from "./schema-owners-repository";
 
+/**
+ * An identifier as the check compares it: ASCII letters folded, nothing else, as SQLite folds a
+ * name (`Ä` and `ä` are two names) and as unquoted names fold on PostgreSQL and MySQL.
+ */
+function fold(name: string): string {
+  return name.replace(/[A-Z]/g, letter => letter.toLowerCase());
+}
+
 /** Where the change's check reads who built what, and the columns each element stands on. */
 export interface RemovedElementsSources {
   /** The compiled extension schema, or `null` when nothing declares one. */
@@ -76,6 +85,8 @@ export interface RemovedElementsSources {
   ): Promise<readonly ElementOnTable[]>;
   /** The table's indexes that stand on whole columns, with those columns, by index name. */
   indexColumns(table: string): Promise<ReadonlyMap<string, readonly string[]>>;
+  /** The names of every index the table has, expression and prefix indexes included. */
+  indexNames(table: string): Promise<ReadonlySet<string>>;
   /** The table's foreign keys by the column each is on: their names, none where the database keeps none. */
   foreignKeyColumns(
     table: string
@@ -114,7 +125,7 @@ export async function liveKeysInto(
   }
   if (dialect !== "sqlite") {
     return (await readReferencingKeys(db, dialect, { table })).map(key => ({
-      table: key.child,
+      table: key.childTable,
       name: key.name,
       columns: key.columns,
       referencesColumns: key.referencesColumns,
@@ -126,10 +137,10 @@ export async function liveKeysInto(
     "../pipeline/diff/introspect-live"
   );
   const snapshot = await introspectLiveSnapshot(db, dialect, referencing);
-  const target = table.toLowerCase();
+  const target = fold(table);
   return snapshot.tables.flatMap(on =>
     (on.foreignKeys ?? [])
-      .filter(key => key.referencesTable.toLowerCase() === target)
+      .filter(key => fold(key.referencesTable) === target)
       .map(key => ({
         table: on.name,
         name: key.name,
@@ -163,6 +174,7 @@ export function removedElementsSourcesOn(input: {
             )
           ),
     indexColumns: table => readIndexColumns(db, dialect, table),
+    indexNames: table => readIndexNames(db, dialect, table),
     foreignKeyColumns: table => readForeignKeyColumns(db, dialect, table),
     keysInto: table => liveKeysInto(db, dialect, table),
   };
@@ -206,6 +218,7 @@ export function databaseRemovedElementsSources(
     recordedElements: tables => readRecordedElementsOn(adapter, tables),
     indexColumns: table =>
       readIndexColumns(adapter.getDrizzle(), dialect, table),
+    indexNames: table => readIndexNames(adapter.getDrizzle(), dialect, table),
     foreignKeyColumns: table =>
       readForeignKeyColumns(adapter.getDrizzle(), dialect, table),
     keysInto: table => liveKeysInto(adapter.getDrizzle(), dialect, table),
@@ -247,10 +260,9 @@ export function withoutOthersElements(
       others
         .filter(
           element =>
-            element.kind === kind &&
-            element.table.toLowerCase() === table.name.toLowerCase()
+            element.kind === kind && fold(element.table) === fold(table.name)
         )
-        .map(element => element.name.toLowerCase())
+        .map(element => fold(element.name))
     );
   const keep = <T extends { name: string }>(
     list: T[] | undefined,
@@ -258,13 +270,13 @@ export function withoutOthersElements(
   ): T[] | undefined =>
     list === undefined || gone.size === 0
       ? list
-      : list.filter(each => !gone.has(each.name.toLowerCase()));
+      : list.filter(each => !gone.has(fold(each.name)));
   return {
     ...snapshot,
     tables: snapshot.tables.map(table => {
       const hidden = named(table, "column");
       const onHidden = (on: { columns?: readonly string[] }) =>
-        (on.columns ?? []).some(column => hidden.has(column.toLowerCase()));
+        (on.columns ?? []).some(column => hidden.has(fold(column)));
       const columns = keep(table.columns, hidden) ?? [];
       const indexes = keep(table.indexes, named(table, "index"))?.filter(
         index => !onHidden(index)
@@ -318,7 +330,7 @@ export async function refuseRemovingOthersElements(args: {
     if (deletion.kind === "table") tablesRemoved.add(deletion.table);
     if (deletion.kind === "column") {
       const columns = columnsRemoved.get(deletion.table) ?? new Set<string>();
-      columns.add(deletion.column.toLowerCase());
+      columns.add(fold(deletion.column));
       columnsRemoved.set(deletion.table, columns);
     }
   }
@@ -388,7 +400,7 @@ function removedOwners(
   all: readonly ElementOnTable[],
   schema: ExtensionSchemaRecord | null
 ): RemovedOwners {
-  const lower = (name: string) => name.toLowerCase();
+  const lower = (name: string) => fold(name);
   return {
     table: table => schema?.owners.get(table),
     column: (table, column) =>
@@ -455,7 +467,7 @@ async function elementTaken(
       ...(fields.length > 0 ? { field: fields.join('", "') } : {}),
     };
   }
-  const column = stands.find(each => removed.has(each.toLowerCase()));
+  const column = stands.find(each => removed.has(fold(each)));
   return column === undefined
     ? undefined
     : { element, column, ...fieldOf(args, element.table, column) };
@@ -499,7 +511,7 @@ async function keysTaken(
 
 /** A key by its table and name, as two readings of one key are matched. */
 function keyId(key: { table: string; name: string }): string {
-  return `${key.table}\u0000${key.name}`.toLowerCase();
+  return fold(`${key.table}\u0000${key.name}`);
 }
 
 /** The keys into `target` the change takes, less those `named` already holds. */
@@ -536,8 +548,10 @@ async function keysIntoTaken(
   return keys.flatMap(key => {
     const owner = ownerOfKey(key, known, schema);
     if (!countsKeyOf(owner, removed)) return [];
-    const taken = keyTaken(args, key, owner, target, removed);
-    return ownsWhatItPointsAt(owner, taken, removedBy) ? [] : [taken];
+    const pointed = pointedAt(key, removed);
+    return ownsWhatItPointsAt(owner, target, pointed, removedBy)
+      ? []
+      : [keyTaken(args, key, owner, target, pointed)];
   });
 }
 
@@ -554,18 +568,31 @@ function countsKeyOf(
   return owner !== null || removed !== undefined;
 }
 
-/** Whether a key's owner is the owner of the removed table or column it points at. */
+/** The removed columns of its table a key points at: none where the table goes whole. */
+function pointedAt(
+  key: KeyInto,
+  removed: ReadonlySet<string> | undefined
+): string[] {
+  return removed === undefined
+    ? []
+    : key.referencesColumns.filter(column => removed.has(fold(column)));
+}
+
+/**
+ * Whether a key's owner is the owner of what it points at that the change removes: the table, or
+ * every removed column it points at, so one other owner's column among them keeps it taken.
+ */
 function ownsWhatItPointsAt(
   owner: SchemaOwner | null,
-  taken: Taken,
+  target: string,
+  pointed: readonly string[],
   removedBy: RemovedOwners
 ): boolean {
-  if (owner === null || taken.pointsAt === undefined) return false;
-  const of =
-    taken.column === undefined
-      ? removedBy.table(taken.pointsAt)
-      : removedBy.column(taken.pointsAt, taken.column);
-  return sameOwner(of, owner);
+  if (owner === null) return false;
+  if (pointed.length === 0) return sameOwner(removedBy.table(target), owner);
+  return pointed.every(column =>
+    sameOwner(removedBy.column(target, column), owner)
+  );
 }
 
 /**
@@ -582,29 +609,33 @@ function pointsAtRemoved(
   columnsRemoved: ReadonlyMap<string, ReadonlySet<string>>
 ): boolean {
   if (removed !== undefined) {
-    return key.referencesColumns.some(column =>
-      removed.has(column.toLowerCase())
-    );
+    return key.referencesColumns.some(column => removed.has(fold(column)));
   }
   return !goesWithItsColumns(key, tablesRemoved, columnsRemoved);
 }
 
-/** A key into `target` as a taken element: the removed column it points at, and its field. */
+/** A key into `target` as a taken element: the removed columns it points at, and their fields. */
 function keyTaken(
   args: { fieldOf?: (table: string, column?: string) => string | undefined },
   key: KeyInto,
   owner: SchemaOwner | null,
   target: string,
-  removed: ReadonlySet<string> | undefined
+  pointed: readonly string[]
 ): Taken {
-  const column = key.referencesColumns.find(
-    each => removed?.has(each.toLowerCase()) === true
+  const fields = pointed.flatMap(
+    column => fieldOf(args, target, column).field ?? []
   );
+  const named =
+    pointed.length === 0
+      ? fieldOf(args, target)
+      : fields.length > 0
+        ? { field: fields.join('", "') }
+        : {};
   return {
     element: { owner, kind: "fk", name: key.name, table: key.table },
     pointsAt: target,
-    ...(column === undefined ? {} : { column }),
-    ...fieldOf(args, target, column),
+    ...(pointed.length === 0 ? {} : { column: pointed.join(", ") }),
+    ...named,
   };
 }
 
@@ -618,7 +649,7 @@ function ownerOfKey(
   known: readonly ElementOnTable[],
   schema: ExtensionSchemaRecord | null
 ): SchemaOwner | null {
-  const lower = (name: string) => name.toLowerCase();
+  const lower = (name: string) => fold(name);
   const onItsTable = known.filter(
     element => lower(element.table) === lower(key.table)
   );
@@ -647,7 +678,7 @@ function goesWithItsColumns(
   return (
     removed !== undefined &&
     key.columns.length > 0 &&
-    key.columns.every(column => removed.has(column.toLowerCase()))
+    key.columns.every(column => removed.has(fold(column)))
   );
 }
 
@@ -667,14 +698,53 @@ export function fieldOfColumn(
   dialect: SupportedDialect,
   builtBy: Parameters<typeof getColumnDescriptor>[2]
 ): string | undefined {
-  const wanted = column.toLowerCase();
+  const wanted = fold(column);
   return fieldsStoredOnRow(fields).find(
     field =>
-      (
+      fold(
         getColumnDescriptor(field, dialect, builtBy)?.name ??
-        toSnakeCase(field.name)
-      ).toLowerCase() === wanted
+          toSnakeCase(field.name)
+      ) === wanted
   )?.name;
+}
+
+/**
+ * Refuse, before any statement of a change, what the reconcile of its per-language table would drop
+ * where another owner built on it: a removed field's per-language column, or the table itself. The
+ * reconcile runs once the entity's own table has changed, so its plan's statements are judged here,
+ * read as the data-loss consent reads a file's (`fileDeletions`). One judgement for collections,
+ * Singles and field groups, each passing the plan its own reconcile runs.
+ */
+export async function refuseCompanionPlanTakingOthersElements(args: {
+  adapter: RecordedElementsAdapter;
+  /** The plan's statements, in the order the reconcile runs them. */
+  statements: readonly string[];
+  /** How the refusal names the entity: "Single 'home'". */
+  entity: string;
+  /** The entity's fields before the change, which name the columns the plan drops. */
+  oldFields: readonly FieldDefinition[];
+  builtBy: Parameters<typeof getColumnDescriptor>[2];
+}): Promise<void> {
+  if (args.statements.length === 0) return;
+  const dialect = args.adapter.dialect;
+  const db = args.adapter.getDrizzle();
+  const { fileDeletions, readDeletionFacts } = await import(
+    "../migrate/file-deletions"
+  );
+  await refuseRemovingOthersElements({
+    deletions: fileDeletions(
+      args.statements,
+      dialect,
+      await readDeletionFacts(db, dialect, args.statements)
+    ),
+    dialect,
+    entity: args.entity,
+    sources: databaseRemovedElementsSources(args.adapter, dialect),
+    fieldOf: (_table, column) =>
+      column === undefined
+        ? undefined
+        : fieldOfColumn(args.oldFields, column, dialect, args.builtBy),
+  });
 }
 
 /** The field the caller names for a removed table or column, where it names one. */
@@ -706,31 +776,40 @@ async function columnsOf(
   return "unknown";
 }
 
-/** An index's columns: as the compiled schema declares them, else as the catalog lists them. */
+/**
+ * An index's columns, as the database has the index: what a drop takes is the live index, whatever
+ * its owner now declares. One the database no longer has stands on nothing. One it has but does not
+ * describe by whole columns (a prefix or an expression) is told by the compiled schema where that
+ * declares its columns, and is otherwise unknown.
+ */
 async function indexColumns(
   element: ElementOnTable,
   schema: ExtensionSchemaRecord | null,
   sources: RemovedElementsSources
 ): Promise<readonly string[] | "unknown"> {
-  const name = element.name.toLowerCase();
+  const name = fold(element.name);
+  const live = [...(await sources.indexColumns(element.table))].find(
+    ([index]) => fold(index) === name
+  );
+  if (live !== undefined) return live[1];
+  const there = [...(await sources.indexNames(element.table))].some(
+    index => fold(index) === name
+  );
+  if (!there) return [];
   const { resolveIndexName } = await import("../extension/compile");
   const declared = (schema?.entityIndexes.get(element.table) ?? []).find(
-    index => resolveIndexName(element.table, index).toLowerCase() === name
+    index => fold(resolveIndexName(element.table, index)) === name
   );
-  // An index on an expression names no columns, and is told by the catalog or not at all.
-  if (declared !== undefined && declared.expression === undefined) {
-    return declared.columns;
-  }
-  const live = [...(await sources.indexColumns(element.table))].find(
-    ([index]) => index.toLowerCase() === name
-  );
-  return live === undefined ? "unknown" : live[1];
+  return declared !== undefined && declared.expression === undefined
+    ? declared.columns
+    : "unknown";
 }
 
 /**
- * A foreign key's columns: as the compiled schema declares them, else the catalog's columns that
- * carry a key of its name. SQLite keeps no constraint names, so a key on a removed column there may
- * be this one, and its columns are unknown.
+ * A foreign key's columns, as the database has the key: the catalog's columns that carry a key of
+ * its name, and none where PostgreSQL or MySQL no longer has it. SQLite keeps no constraint names,
+ * so there it is the compiled schema's declaration, else, where a removed column carries a key, one
+ * that may be this one, whose columns are unknown.
  */
 async function foreignKeyColumns(
   element: ElementOnTable,
@@ -739,19 +818,17 @@ async function foreignKeyColumns(
   dialect: SupportedDialect,
   removed: ReadonlySet<string>
 ): Promise<readonly string[] | "unknown"> {
-  const name = element.name.toLowerCase();
-  const declared = schema?.specs
-    .find(spec => spec.name === element.table)
-    ?.foreignKeys?.find(key => key.name.toLowerCase() === name);
-  if (declared !== undefined) return declared.columns;
+  const name = fold(element.name);
   const keys = [...(await sources.foreignKeyColumns(element.table))];
   const on = keys
-    .filter(([, names]) => names.some(each => each.toLowerCase() === name))
+    .filter(([, names]) => names.some(each => fold(each) === name))
     .map(([column]) => column);
   if (on.length > 0 || dialect !== "sqlite") return on;
-  return keys.some(([column]) => removed.has(column.toLowerCase()))
-    ? "unknown"
-    : [];
+  const declared = schema?.specs
+    .find(spec => fold(spec.name) === fold(element.table))
+    ?.foreignKeys?.find(key => fold(key.name) === name);
+  if (declared !== undefined) return declared.columns;
+  return keys.some(([column]) => removed.has(fold(column))) ? "unknown" : [];
 }
 
 /** One taken element as a person reads it. */

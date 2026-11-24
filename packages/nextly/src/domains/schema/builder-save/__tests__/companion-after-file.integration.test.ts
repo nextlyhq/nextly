@@ -7,7 +7,9 @@
  *
  * Every plan the companion step makes is recorded (`buildCompanionTransitionStatements`): a save
  * the push applied instead would plan the companion's change itself, as the push leaves the
- * companion alone.
+ * companion alone. The save also plans the companion once before any statement, to judge what the
+ * step would drop of another owner's; that plan, made before the file, sees the change still to
+ * come, so it is the step's last plan, made after the file, that must have nothing to run.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -194,15 +196,18 @@ for (const dialect of getConfiguredTestDialects()) {
     ];
 
     describe.each(KINDS)("$name", kind => {
-      /** The plans the companion step made during `save`: at least one, each with nothing to run. */
+      /**
+       * The companion step's plan after the file `save` runs, the last made, has nothing to run.
+       * The plan judged before any statement comes first and may carry the change the file makes.
+       */
       async function plansNothingDuring(save: () => Promise<unknown>) {
         plans.length = 0;
         await save();
-        expect(plans.length).toBeGreaterThan(0);
-        for (const plan of plans) {
-          expect(plan.statements).toEqual([]);
-          expect(plan.beforeMain ?? []).toEqual([]);
-        }
+        // The judged plan and the step's own: with one alone, the step planned nothing at all.
+        expect(plans.length).toBeGreaterThan(1);
+        const afterTheFile = plans.at(-1);
+        expect(afterTheFile?.statements).toEqual([]);
+        expect(afterTheFile?.beforeMain ?? []).toEqual([]);
       }
 
       it("adds a translated field and a shared one, the companion step planning nothing after the file", async () => {

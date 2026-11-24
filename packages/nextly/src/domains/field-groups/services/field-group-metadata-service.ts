@@ -584,6 +584,26 @@ export class FieldGroupMetadataService {
       });
     }
 
+    // What the companion reconcile below would drop of another owner's, refused before it runs or
+    // the writer writes anything (`removed-elements.ts`).
+    if (
+      this.adapter &&
+      (input.fields !== undefined || localized !== wasLocalized)
+    ) {
+      const { refuseComponentCompanionTakingOthersElements } = await import(
+        "./field-group-table-provisioning"
+      );
+      await refuseComponentCompanionTakingOthersElements({
+        slug: existing.slug,
+        tableName: existing.tableName,
+        oldFields: existing.fields as unknown as FieldDefinition[],
+        newFields: fields,
+        localized,
+        wasLocalized,
+        adapter: this.adapter,
+      });
+    }
+
     // 2. MOVE the physical schema, when this edit implies one. A `localized` toggle alone does:
     // enabling seeds the companion from the main table and drops those columns, disabling restores
     // and archives them. A save that skipped that would persist the flag while the content stayed

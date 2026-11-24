@@ -381,12 +381,13 @@ export async function readReferencingTables(
 
   // SQLite has no reverse foreign-key view, but `pragma_foreign_key_list` is a table-valued
   // function, so one join over `sqlite_master` reads every table's outgoing keys and filters to
-  // those aimed at the parent.
+  // those aimed at the parent, its name matched as SQLite matches names: ASCII letters folded, as
+  // its `lower` folds them, since a key may spell the parent in another case.
   const rows = (await (db as SqliteAll).all(
     sql`SELECT DISTINCT m.name AS table_name
         FROM sqlite_master AS m
         JOIN pragma_foreign_key_list(m.name) AS fk
-        WHERE m.type = 'table' AND fk."table" = ${tableName}`
+        WHERE m.type = 'table' AND lower(fk."table") = lower(${tableName})`
   )) as { table_name: string }[];
   for (const row of rows) names.add(row.table_name);
   return [...names];
@@ -417,6 +418,12 @@ export interface ReferencingKey {
   columns: string[];
   /** The key's constraint name. */
   name: string;
+  /**
+   * The referencing table's own name, unquoted: bare where an unqualified name reaches it, else
+   * qualified by its schema (PostgreSQL) or database (MySQL). `child` is the same table as a
+   * statement spells it, quoted where its name needs quotes.
+   */
+  childTable: string;
   /** The referenced table's columns the key points at, in key order. */
   referencesColumns: string[];
 }
@@ -472,8 +479,12 @@ export async function readReferencingKeys(
     const result = (await (db as PgMysqlExecute).execute(
       sql`SELECT c.oid::text AS key_id, c.conname::text AS key_name,
                  c.conrelid::regclass::text AS child, c.confdeltype::text AS action,
+                 r.relname::text AS child_name, n.nspname::text AS child_schema,
+                 pg_table_is_visible(c.conrelid) AS child_visible,
                  a.attname::text AS column_name, f.attname::text AS referenced_column
           FROM pg_constraint c
+          JOIN pg_class r ON r.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = r.relnamespace
           CROSS JOIN LATERAL unnest(c.conkey, c.confkey) WITH ORDINALITY AS k(attnum, fattnum, ord)
           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
           JOIN pg_attribute f ON f.attrelid = c.confrelid AND f.attnum = k.fattnum
@@ -484,6 +495,9 @@ export async function readReferencingKeys(
         key_id: string;
         key_name: string;
         child: string;
+        child_name: string;
+        child_schema: string;
+        child_visible: boolean;
         action: string;
         column_name: string;
         referenced_column: string;
@@ -496,6 +510,9 @@ export async function readReferencingKeys(
         onDelete: PG_DELETE_ACTIONS[row.action] ?? "none",
         columns: [],
         name: row.key_name,
+        childTable: row.child_visible
+          ? row.child_name
+          : `${row.child_schema}.${row.child_name}`,
         referencesColumns: [],
       };
       key.columns.push(row.column_name);
@@ -543,6 +560,7 @@ export async function readReferencingKeys(
       onDelete: MYSQL_DELETE_ACTIONS[row.DELETE_RULE] ?? "none",
       columns: [],
       name: row.CONSTRAINT_NAME,
+      childTable: child,
       referencesColumns: [],
     };
     key.columns.push(row.COLUMN_NAME);

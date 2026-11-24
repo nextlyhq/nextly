@@ -2996,6 +2996,26 @@ export class SingleMetadataService {
       };
     }
 
+    // What the companion reconcile after the main table's change would drop of another owner's,
+    // refused before anything here runs (`removed-elements.ts`).
+    const { refuseSingleCompanionTakingOthersElements } = await import(
+      "./reconcile-single-companion"
+    );
+    await refuseSingleCompanionTakingOthersElements({
+      slug: input.slug,
+      tableName,
+      oldFields: plan.previousFields,
+      newFields: plan.fields,
+      localized: input.isLocalized,
+      wasLocalized: input.wasLocalized,
+      status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
+      wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
+      statusFromEntryInEveryLanguage:
+        input.layout?.statusFromEntryInEveryLanguage,
+      adapter,
+      renamed: await this.detectedFieldRename(plan.previousFields, plan.fields),
+    });
+
     // Before the try below, as the migration is: a failure here stops the save before the main
     // table changes.
     const { joinedBefore, undoRename } = await this.movesBeforeMain(

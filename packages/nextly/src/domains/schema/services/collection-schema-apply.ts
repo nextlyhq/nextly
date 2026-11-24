@@ -69,12 +69,7 @@ import {
 } from "../builder-save/landing-push";
 import { pushCarriesValues } from "../builder-save/push-carries-values";
 import { renamedFieldsOf } from "../builder-save/schema-change-save";
-import { fileDeletions, readDeletionFacts } from "../migrate/file-deletions";
-import {
-  databaseRemovedElementsSources,
-  fieldOfColumn,
-  refuseRemovingOthersElements,
-} from "../ownership/removed-elements";
+import { refuseCompanionPlanTakingOthersElements } from "../ownership/removed-elements";
 import { runStatement } from "../pipeline/_internal/run-statement";
 import {
   createApplyDesiredSchema,
@@ -1365,23 +1360,12 @@ async function refuseCompanionTakingOthersElements(
     joinedBefore: [],
     holdLeavingDrops: false,
   });
-  const statements = [...(plan.beforeMain ?? []), ...plan.statements];
-  if (statements.length === 0) return;
-  const db = adapter.getDrizzle();
-  const { dialect } = adapter;
-  await refuseRemovingOthersElements({
-    deletions: fileDeletions(
-      statements,
-      dialect,
-      await readDeletionFacts(db, dialect, statements)
-    ),
-    dialect,
+  await refuseCompanionPlanTakingOthersElements({
+    adapter,
+    statements: [...(plan.beforeMain ?? []), ...plan.statements],
     entity: entityLabel("collection", change.slug),
-    sources: databaseRemovedElementsSources(adapter, dialect),
-    fieldOf: (_table, column) =>
-      column === undefined
-        ? undefined
-        : fieldOfColumn(oldFields, column, dialect, "collection"),
+    oldFields,
+    builtBy: "collection",
   });
 }
 

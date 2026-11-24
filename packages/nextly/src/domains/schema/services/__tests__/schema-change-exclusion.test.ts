@@ -64,6 +64,9 @@ vi.mock("../../../singles/services/reconcile-single-companion", () => ({
   reconcileSingleCompanion: vi.fn(async (args: Record<string, unknown>) => {
     companionCalls.push(args);
   }),
+  // The judgement of what the reconcile would drop of another owner's finds nothing to refuse:
+  // what these tests record is which flags the save claims, not that judgement.
+  refuseSingleCompanionTakingOthersElements: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../../field-groups/migration/sync-guard", () => ({

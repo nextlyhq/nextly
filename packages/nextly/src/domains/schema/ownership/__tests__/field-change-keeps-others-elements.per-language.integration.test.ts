@@ -3,9 +3,10 @@
  * never takes with it an index another owner built on the field's column. A text field's column
  * lives in the entity's per-language table there. Removing a translated one drops that column, so
  * the Builder save is refused, naming the field, the plugin, the index and that table, with nothing
- * changed. Removing an untranslated one keeps its per-language column with its values, so nothing
- * of the plugin's goes and the save applies. A number field's column is on the entity's own table
- * in either layout, and removing it is refused through the Builder save and the development push.
+ * changed. So is removing an untranslated one, whose per-language column the save's companion
+ * reconcile drops after the entity's own table changes: the reconcile's plan is judged before any
+ * statement. A number field's column is on the entity's own table in either layout, and removing
+ * it is refused through the Builder save and the development push.
  *
  * On SQLite, PostgreSQL and MySQL. The rest of the cases run on the earlier layout in
  * `field-change-keeps-others-elements.integration.test.ts` and `push-keeps-others-elements.integration.test.ts`.
@@ -262,26 +263,17 @@ describe.each(getConfiguredTestDialects())(
       expect(await shapeOf(t, table)).toEqual(before);
     });
 
-    it("applies a Builder save removing an untranslated text field, whose per-language column it keeps with the plugin's index", async () => {
+    it("refuses a Builder save removing an untranslated text field whose per-language column a plugin's index is built on, changing nothing", async () => {
       const t = await bootBuilt();
       const table = await tableHolding(t, BUILT_TABLE, "code");
+      expect(table).toBe(companionTableOf(BUILT_TABLE));
       await buildIndex(t, table, "code", true);
+      const before = await shapeOf(t, table);
 
-      const saved = await save(t, without("code"), dropping("code"));
+      const refused = await save(t, without("code"), dropping("code"));
 
-      expect(
-        saved,
-        NextlyError.is(saved)
-          ? JSON.stringify({
-              message: saved.logMessage,
-              context: saved.logContext,
-              cause: String(saved.cause),
-            })
-          : String(saved)
-      ).toBeUndefined();
-      const after = await shapeOf(t, table);
-      expect(after.columns).toContain("code");
-      expect(after.indexes).toContain(INDEX);
+      expectNamesTheIndex(refused, "code", table);
+      expect(await shapeOf(t, table)).toEqual(before);
     });
 
     it("refuses a development push removing a number field whose column a plugin's index is built on, changing nothing", async () => {

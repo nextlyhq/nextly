@@ -144,6 +144,7 @@ import {
   builderSchemaPush,
   leavingSettingsStep,
   pushAndReconcileCompanion,
+  refuseBuilderCompanionTakingOthersElements,
   reconcileBuilderCompanion,
   refuseRefusedLeavingSettings,
   type BuilderCompanionReconcile,
@@ -1859,7 +1860,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               fields: {
                 tableName,
                 builtBy: "collection",
-                oldFields: (single.fields ?? []) as unknown as FieldDefinition[],
+                oldFields: (single.fields ??
+                  []) as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
                 wasLocalized,
                 isLocalized,
@@ -1971,6 +1973,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               );
             }
           };
+          // What the companion reconcile would drop of another owner's, refused before either road runs.
+          await refuseBuilderCompanionTakingOthersElements("single", companion);
           const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
             () => pushAndReconcileCompanion(push, desired, "single", companion),

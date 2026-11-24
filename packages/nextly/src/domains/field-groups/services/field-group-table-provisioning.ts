@@ -168,6 +168,81 @@ export function registerComponentRuntimeSchema(
   }
 }
 
+/** What a field group's companion reconcile is given: the save's before and after. */
+type ReconcileComponentCompanionArgs = Parameters<
+  typeof reconcileComponentCompanion
+>[0];
+
+/**
+ * The companion transition `reconcileComponentCompanion` runs for a save, planned from the
+ * translations table as this database holds it now: one plan for the reconcile and for the check
+ * that judges its drops before any statement of the save
+ * (`refuseComponentCompanionTakingOthersElements`).
+ */
+async function componentCompanionPlanOf(
+  args: ReconcileComponentCompanionArgs
+): Promise<ReturnType<typeof buildCompanionTransitionStatements>> {
+  const { slug, tableName, oldFields, newFields, localized, adapter } = args;
+  const companionExists = await adapter.tableExists(`${tableName}_locales`);
+  return buildCompanionTransitionStatements({
+    // The companion mirrors the main table, and a field group's builder reads a width from a different key.
+    builtBy: "fieldGroup" as const,
+    slug,
+    kind: "fieldGroup",
+    tableName,
+    dialect: adapter.dialect,
+    defaultLocale: appLocalization()?.defaultLocale ?? "en",
+    languageOrder: appLanguageOrder(),
+    // Components are never Draft/Published — companion has no `_status`.
+    status: false,
+    // And never had one, so the disable restore has no status to carry back.
+    wasStatus: false,
+    wasLocalized: args.wasLocalized,
+    isLocalized: localized,
+    oldFields,
+    newFields,
+    companionExists,
+    joinedBefore: args.joinedBefore,
+    renamed: args.renamed,
+    holdLeavingDrops: args.settleLeaving !== undefined,
+    // What this database holds now, so a re-save after a part-applied one finishes it.
+    ...(await liveCompanionShape(adapter, {
+      tableName,
+      oldFields,
+      newFields,
+      builtBy: "fieldGroup",
+      companionExists,
+    })),
+  });
+}
+
+/**
+ * Refuse, before any statement of a field group's save, what its companion reconcile would drop
+ * where another owner built on it (`refuseCompanionPlanTakingOthersElements`): the reconcile can run
+ * once the field group's own table has changed, so its plan is judged here first.
+ */
+export async function refuseComponentCompanionTakingOthersElements(
+  args: ReconcileComponentCompanionArgs
+): Promise<void> {
+  if (!args.wasLocalized && !args.localized) return;
+  const plan = await componentCompanionPlanOf({
+    ...args,
+    settleLeaving: undefined,
+  });
+  const [{ refuseCompanionPlanTakingOthersElements }, { entityLabel }] =
+    await Promise.all([
+      import("../../schema/ownership/removed-elements"),
+      import("../../schema/value-conversion/type-change/field-type-changes"),
+    ]);
+  await refuseCompanionPlanTakingOthersElements({
+    adapter: args.adapter,
+    statements: [...(plan.beforeMain ?? []), ...plan.statements],
+    entity: entityLabel("fieldGroup", args.slug),
+    oldFields: args.oldFields,
+    builtBy: "fieldGroup",
+  });
+}
+
 /**
  * Provision (create / ADD-DROP columns) the component's companion `comp_<slug>_locales` table
  * out-of-band after a schema change, then register its runtime table. The push pipeline excludes
@@ -211,9 +286,6 @@ export async function reconcileComponentCompanion(args: {
   // Nothing to do when the component was and remains non-localized.
   if (!wasLocalized && !localized) return false;
 
-  const dialect = adapter.dialect;
-  const defaultLocale = appLocalization()?.defaultLocale ?? "en";
-
   // A translated field made unique is refused before any DDL where the rule cannot hold: on a
   // server that cannot key its index, or where a language already holds a value twice. Asked here,
   // where every field-group path that changes the companion arrives, so the service's own update
@@ -229,37 +301,7 @@ export async function reconcileComponentCompanion(args: {
     isLocalized: localized,
   });
 
-  const companionExists = await adapter.tableExists(`${tableName}_locales`);
-  const plan = buildCompanionTransitionStatements({
-    // The companion mirrors the main table, and a field group's builder reads a width from a different key.
-    builtBy: "fieldGroup" as const,
-    slug,
-    kind: "fieldGroup",
-    tableName,
-    dialect,
-    defaultLocale,
-    languageOrder: appLanguageOrder(),
-    // Components are never Draft/Published — companion has no `_status`.
-    status: false,
-    // And never had one, so the disable restore has no status to carry back.
-    wasStatus: false,
-    wasLocalized,
-    isLocalized: localized,
-    oldFields,
-    newFields,
-    companionExists,
-    joinedBefore: args.joinedBefore,
-    renamed: args.renamed,
-    holdLeavingDrops: args.settleLeaving !== undefined,
-    // What this database holds now, so a re-save after a part-applied one finishes it.
-    ...(await liveCompanionShape(adapter, {
-      tableName,
-      oldFields,
-      newFields,
-      builtBy: "fieldGroup",
-      companionExists,
-    })),
-  });
+  const plan = await componentCompanionPlanOf(args);
 
   await applyCompanionTransition({
     adapter,

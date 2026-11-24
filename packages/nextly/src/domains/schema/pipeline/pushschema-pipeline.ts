@@ -1484,10 +1484,6 @@ export class PushSchemaPipeline {
         // of the prompt stage, so the plan's own refusals come first.
         await refuseUnconfirmedDropsBeside(args.unconfirmedDropsBeside);
 
-        // The owner rows this push planned (`pushElementOwners`) are written only now, past every
-        // refusal above and before the first statement, so a refused push leaves none behind.
-        await elementOwners?.write();
-
         // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
         //
         // What a drizzle-kit rebuild of a SQLite table would lose that the
@@ -1725,6 +1721,13 @@ export class PushSchemaPipeline {
           } catch (err) {
             throw preCleanupFailure(err);
           }
+
+          // The owner rows this push planned (`pushElementOwners`), written once every refusal
+          // above has passed, before the first statement: on the apply's own transaction where its
+          // statements are transactional, so a refusal still to come (the executor's own) rolls
+          // them back with it. MySQL commits each statement as it runs, so there they wait for the
+          // apply's last statement (below).
+          if (dialect !== "mysql") await elementOwners?.write(tx);
 
           // Phase C: pre-resolution executor runs renames + drops, led by the
           // kit route's check and foreign-key drops: a constraint still in
@@ -2272,6 +2275,9 @@ export class PushSchemaPipeline {
           // that connection (`assertHeld`), so the lease extended commits with the change and
           // outlasts a push however long it ran.
           if (dialect !== "mysql") await assertSchemaLockHeld();
+          // MySQL: the owner rows once every statement has run, so a refused or failed apply
+          // records no element it did not build.
+          if (dialect === "mysql") await elementOwners?.write(tx);
           return (
             safe.length +
             preCreatedStatements +

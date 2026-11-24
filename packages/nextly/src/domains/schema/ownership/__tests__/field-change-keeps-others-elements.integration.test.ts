@@ -19,7 +19,7 @@
  * a drop takes with it differs between them: PostgreSQL drops an index on a dropped column
  * silently, MySQL narrows or drops it, SQLite refuses part-way.
  */
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -171,11 +171,31 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   return t;
 }
 
-async function filesWritten(): Promise<number> {
-  const names = await readdir(join(basePath, "migrations")).catch(
-    () => [] as string[]
+/**
+ * Every file in the migrations folder, by its path there and its contents: a save that writes,
+ * replaces or removes one changes this. A folder not made yet holds none; any other failure to
+ * read it is thrown, never taken for an empty folder.
+ */
+async function filesWritten(): Promise<Array<[string, string]>> {
+  const folder = join(basePath, "migrations");
+  const names = await readdir(folder, { recursive: true }).catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [] as string[];
+      throw error;
+    }
   );
-  return names.filter(name => name.endsWith(".sql")).length;
+  const files: Array<[string, string]> = [];
+  for (const name of [...names].sort()) {
+    const content = await readFile(join(folder, name), "utf8").catch(
+      (error: NodeJS.ErrnoException) => {
+        // A folder within it, such as the snapshots' `meta`, is listed too.
+        if (error.code === "EISDIR") return undefined;
+        throw error;
+      }
+    );
+    if (content !== undefined) files.push([name, content]);
+  }
+  return files;
 }
 
 async function stored(t: TestNextly): Promise<Field[]> {
@@ -495,7 +515,7 @@ describe.each(getConfiguredTestDialects())(
         table: LINKS_TABLE,
       });
       expect(await columnsOf(t, LINKS_TABLE)).toContain(MARKER);
-      expect(await filesWritten()).toBe(files);
+      expect(await filesWritten()).toEqual(files);
     });
 
     it("refuses removing a field whose column a plugin's foreign key points at, changing nothing", async () => {
@@ -660,11 +680,73 @@ describe.each(getConfiguredTestDialects())(
           expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
         } finally {
           // The referencing table first: MySQL drops no table another database's key points at.
-          await t.adapter.executeQuery(
-            `DROP TABLE IF EXISTS ${q(elsewhere.name)}.${q("fco_refs")}`
-          );
-          await elsewhere.drop();
+          // The second database is dropped even where that fails.
+          try {
+            await t.adapter.executeQuery(
+              `DROP TABLE IF EXISTS ${q(elsewhere.name)}.${q("fco_refs")}`
+            );
+          } finally {
+            await elsewhere.drop();
+          }
         }
+      }
+    );
+
+    // PostgreSQL names a table whose name needs quotes with them; the owner record keeps it bare.
+    it.skipIf(dialect !== "postgresql")(
+      "refuses removing a many-to-many whose join table a key on a plugin's mixed-case table points at",
+      async () => {
+        const t = await boot(dialect);
+        const audit = "FcoAuditLog";
+        await t.adapter.executeQuery(
+          `CREATE TABLE ${q(audit)} (${q("id")} text PRIMARY KEY, ${q("link_ref")} text, CONSTRAINT ${q("fco_fk_audit")} FOREIGN KEY (${q("link_ref")}) REFERENCES ${q(LINKS_TABLE)} (${q("id")}))`
+        );
+        await record(t, [{ table: audit, kind: "fk", name: "fco_fk_audit" }]);
+        const links = await columnsOf(t, LINKS_TABLE);
+
+        const refused = await savePosts(
+          t,
+          without(await stored(t), "tags"),
+          dropping("tags")
+        );
+
+        expectNamesTheElement(refused, {
+          field: "tags",
+          kind: "fk",
+          table: audit,
+        });
+        expect(await columnsOf(t, LINKS_TABLE)).toEqual(links);
+      }
+    );
+
+    // SQLite resolves a key's parent by name in any ASCII case, and keeps it as written.
+    it.skipIf(dialect !== "sqlite")(
+      "refuses removing a field a plugin's key points at when the key spells the table in another case",
+      async () => {
+        const t = await boot(dialect);
+        expect(
+          await savePosts(t, [...(await stored(t)), SERIAL_FIELD])
+        ).toBeUndefined();
+        await buildKey(t, {
+          name: "fco_fk_upper",
+          column: "upper_serial",
+          type: "integer",
+          references: { table: POSTS_TABLE.toUpperCase(), column: "serial" },
+        });
+        const before = await stateOf(t, POSTS_TABLE);
+
+        const refused = await savePosts(
+          t,
+          without(await stored(t), "serial"),
+          dropping("serial")
+        );
+
+        expectNamesTheElement(refused, {
+          field: "serial",
+          kind: "fk",
+          table: POSTS_TABLE,
+        });
+        expect(await stateOf(t, POSTS_TABLE)).toEqual(before);
       }
     );
 

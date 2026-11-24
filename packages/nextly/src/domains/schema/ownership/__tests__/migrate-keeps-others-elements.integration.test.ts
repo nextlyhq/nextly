@@ -31,6 +31,8 @@ import { createLogger } from "../../../../cli/utils/logger";
 import {
   defineCollection,
   defineConfig,
+  defineFieldGroup,
+  fieldGroup,
   number,
   text,
 } from "../../../../config";
@@ -42,6 +44,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { companionTableOf } from "../../../i18n/migration/derive-companion-spec";
+import { resolveComponentTableName } from "../../utils/resolve-table-name";
 import { setNonInteractive } from "../../migrate/can-prompt";
 import { SchemaOwnersRepository } from "../schema-owners-repository";
 
@@ -84,6 +87,34 @@ const PLUGIN = "@test/mko-indexer";
 const INDEX = "mko_code_idx";
 /** The consent to delete what the change deletes, as `--accept-data-loss` alone gives it. */
 const CONSENT = { acceptDataLoss: true };
+
+const GROUP = "mko_cards";
+const GROUP_TABLE = resolveComponentTableName(GROUP);
+
+/** The app's configuration with a field group whose `rank` field is there or not. */
+const groupConfigWith = (withRank: boolean) =>
+  defineConfig({
+    fieldGroups: [
+      defineFieldGroup({
+        slug: GROUP,
+        fields: [
+          text({ name: "note" }),
+          ...(withRank ? [number({ name: "rank" })] : []),
+        ],
+      }),
+    ],
+    collections: [
+      defineCollection({
+        slug: SLUG,
+        access: { read: () => true },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "card", component: GROUP }),
+        ],
+      }),
+    ],
+    db: { migrationsDir: "./migrations" },
+  });
 
 /** The app's configuration, with `code` or without it. */
 const configWith = (withCode: boolean) =>
@@ -276,17 +307,21 @@ describe.each(getConfiguredTestDialects())(
      * per-language table) as the plugin's migration does, records it as that run records it, and
      * names that table.
      */
-    async function buildIndex(url: string): Promise<string> {
-      const snapshot = await snapshotOf(url, [TABLE, companionTableOf(TABLE)]);
+    async function buildIndex(
+      url: string,
+      column = "code",
+      main = TABLE
+    ): Promise<string> {
+      const snapshot = await snapshotOf(url, [main, companionTableOf(main)]);
       const table = snapshot.tables.find(each =>
-        each.columns.some(column => column.name === "code")
+        each.columns.some(each => each.name === column)
       )?.name;
-      if (table === undefined) throw new Error("no table holds code");
+      if (table === undefined) throw new Error(`no table holds ${column}`);
       const q = (name: string) =>
         dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
       await on(url, async adapter => {
         await adapter.executeQuery(
-          `CREATE INDEX ${q(INDEX)} ON ${q(table)} (${q("code")})`
+          `CREATE INDEX ${q(INDEX)} ON ${q(table)} (${q(column)})`
         );
         await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert([
           {
@@ -360,6 +395,30 @@ describe.each(getConfiguredTestDialects())(
       expect(migrated.code, migrated.said).not.toBe(undefined);
       expectNamesTheIndex(migrated.said, table);
       expect(await shapeOf(url, table)).toEqual(before);
+    });
+
+    it("migrate:create refuses removing a field group's field whose column in its shared table a plugin's migration indexed, writing nothing", async () => {
+      const url = await emptyDatabase();
+      use(url);
+      expect(
+        (await migrateCreate("add_cards", groupConfigWith(true))).code
+      ).toBe(undefined);
+      expect((await migrate(groupConfigWith(true))).code).toBe(undefined);
+      const table = await buildIndex(url, "rank", GROUP_TABLE);
+      expect(table).toBe(GROUP_TABLE);
+      const written = files();
+
+      const created = await migrateCreate(
+        "remove_rank",
+        groupConfigWith(false)
+      );
+
+      expect(created.code, created.said).not.toBe(undefined);
+      for (const part of ["rank", PLUGIN, INDEX, GROUP_TABLE]) {
+        expect(created.said).toContain(part);
+      }
+      expect(files()).toEqual(written);
+      expect((await shapeOf(url, table)).indexes).toContain(INDEX);
     });
 
     it("migrate:create writes the file and says it was not checked where no database is there", async () => {
