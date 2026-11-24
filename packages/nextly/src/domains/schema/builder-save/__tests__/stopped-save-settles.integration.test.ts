@@ -1019,14 +1019,20 @@ describe.each(getConfiguredTestDialects())(
 
     // Where values are kept per language a save that stops while its process lives is not judged: it
     // is left as it stopped, its file as written and recorded nowhere, for `nextly migrate:resolve`.
-    it.runIf(dialect === "mysql")(
-      "a save kept per language, stopped at its second addition while its process lives, is not judged: its file stays as written",
-      async () => {
-        const path = PATHS.find(
-          each => each.name === "a collection's Builder apply"
-        )!;
+    // Asked of the roads that settle such a stop at all there: the update a push applies, and the
+    // Single schema save. The Builder's own apply hands no settle where the registry row is written
+    // after the file.
+    it
+      .runIf(dialect === "mysql")
+      .each(["a collection's update (the push)", "the Single schema save"])(
+      "%s, kept per language, stopped at its second addition while its process lives, is not judged: its file stays as written",
+      async name => {
+        const path = PATHS.find(each => each.name === name)!;
         // Shared, so the save changes the main table alone, in one file.
-        const shared = (name: string) => ({ ...text(name), localized: false });
+        const shared = (field: string) => ({
+          ...text(field),
+          localized: false,
+        });
         const t = await boot({ perLanguage: true });
         await path.create(t, [shared("heading")]);
         const folderBefore = filesBelow(history());
