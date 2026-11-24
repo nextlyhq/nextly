@@ -899,7 +899,13 @@ describe.each(getConfiguredTestDialects())(
       {
         record: "the owner row names another kind of part",
         recorded: (rows: OwnerRecord[]) =>
-          rows.map(row => ({ ...row, elementKind: "check" as const })),
+          rows.map(row => ({
+            ...row,
+            elementKind:
+              row.elementKind === "column"
+                ? ("index" as const)
+                : ("column" as const),
+          })),
       },
       {
         record: "the owner row spells its name in another case",
@@ -961,14 +967,20 @@ describe.each(getConfiguredTestDialects())(
       };
       const after = shaped({ without: ["extra"] });
       wentThrough(await migrateCreate("change_posts", after));
-      await on(url, async adapter => {
-        await adapter.executeQuery(`DROP TABLE nextly_schema_owners`);
-        await adapter.executeQuery(
-          `CREATE TABLE nextly_schema_owners (unrelated integer)`
-        );
-      });
+      // The run's own read of the whole record fails, as it does while its table cannot be read.
+      const read = SchemaOwnersRepository.prototype.read;
+      const unreadable = vi
+        .spyOn(SchemaOwnersRepository.prototype, "read")
+        .mockImplementation(function (
+          this: SchemaOwnersRepository,
+          tables?: readonly string[]
+        ) {
+          if (tables !== undefined) return read.call(this, tables);
+          return Promise.reject(new Error("the owner record is unreadable"));
+        });
 
       const migrated = await migrate(after);
+      unreadable.mockRestore();
 
       expect(migrated.code, migrated.said).not.toBe(undefined);
       expect(migrated.said).toContain("could not be read");
