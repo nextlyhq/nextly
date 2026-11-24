@@ -337,16 +337,23 @@ class TypeChangeTally {
       return;
     }
     this.counts[verdict.outcome] += 1;
-    if (verdict.outcome === "lost") this.cleared.push(key);
-    if (stored !== null && leavesNone(verdict)) this.emptied += 1;
-    if (
-      verdict.outcome === "lost" ||
-      this.outcomeAsStored(verdict, stored) !== verdict.outcome
-    ) {
-      this.written += 1;
-    }
+    this.countWritten(key, verdict, stored);
     if (verdict.reason === "same-value" || verdict.reason === "empty") return;
     this.note(REPORTED_AS[verdict.reason], key);
+  }
+
+  /** A value the change writes, counted: one cleared, one emptied, one stored in another form. */
+  private countWritten(
+    key: RowKey,
+    verdict: ValueVerdict,
+    stored: string | null
+  ): void {
+    const lost = verdict.outcome === "lost";
+    if (lost) this.cleared.push(key);
+    if (stored !== null && leavesNone(verdict)) this.emptied += 1;
+    if (lost || this.outcomeAsStored(verdict, stored) !== verdict.outcome) {
+      this.written += 1;
+    }
   }
 
   /** The class the worst value gives, every reason with its rows, and the rows to clear. */
