@@ -36,8 +36,6 @@ export interface SavedFieldSettings {
   options: readonly string[];
   /** The rules its values are held to, Required among them. */
   validation: Readonly<Record<string, unknown>>;
-  /** What is stated on the field itself that the Builder carries as it is, a rule among them. */
-  own: Readonly<Record<string, unknown>>;
 }
 
 /** The saved field the picker asks about: where it is saved, its type there, and what is offered. */

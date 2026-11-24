@@ -499,16 +499,7 @@ describe("the route's answer for a field found by its path", () => {
             hasMany: true,
           },
         },
-        {
-          ...UNSET,
-          own: {
-            max: 5,
-            pattern: "^a",
-            required: true,
-            unique: true,
-            hasMany: true,
-          },
-        },
+        UNSET,
       ],
       [
         "with Required said one way on the field and another under its rules",

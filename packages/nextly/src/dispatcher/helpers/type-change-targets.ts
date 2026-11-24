@@ -353,9 +353,8 @@ const SavedSettings = z.object({
   /** Left out where the saved definition does not say: the type's own default. */
   localized: z.boolean().optional(),
   options: z.array(z.string()),
-  /** Its rules, and the settings stated on the field itself that the Builder carries as they are. */
+  /** Its rules, Required among them. */
   validation: z.record(z.string(), z.unknown()).default({}),
-  own: z.record(z.string(), z.unknown()).default({}),
 });
 
 /**
@@ -381,24 +380,28 @@ const TargetsRequest = z.object({
  * Whether the stored field reads by the settings the page knows it as saved by. Each is compared as
  * it reads, never as it is written, so a definition that leaves a default out and one that states it
  * are the same: whether it is translated by `isFieldLocalized`, its options by their values, and what
- * it asks of a value by `asksOf`. A rule the Builder's save never writes, and a number's or a text's
- * storage, which no Builder save changes and the page does not keep as stored, are not compared.
+ * it asks of a value by `asksOf`, over the rules a Builder save writes: Required, and those under
+ * `validation`, taken together as the page loads them. Not compared: a rule of another name or stated
+ * on the field itself, a plugin type's own options, and a number's or a text's storage. No Builder save
+ * writes or changes these, and the page does not keep each as it is stored.
  */
 function savedAsKnown(
   stored: FieldDefinition,
   known: z.infer<typeof SavedSettings>
 ): boolean {
   const asKnown = { ...stored, localized: known.localized };
-  const page = {
-    ...known.own,
-    unique: known.unique,
-    validation: known.validation,
-  } as unknown as FieldDefinition;
+  const asking = (unique: unknown, validation: unknown) =>
+    JSON.stringify(
+      asksOf({ unique, validation } as unknown as FieldDefinition)
+    );
   const values = (options: readonly string[]) =>
     JSON.stringify([...options].sort());
   return (
     (stored.hasMany === true) === known.hasMany &&
-    JSON.stringify(asksOf(stored)) === JSON.stringify(asksOf(page)) &&
+    asking(stored.unique, {
+      required: stored.required,
+      ...stored.validation,
+    }) === asking(known.unique, known.validation) &&
     isFieldLocalized(stored, true) === isFieldLocalized(asKnown, true) &&
     values(selectOptionValues(stored)) === values(known.options)
   );
