@@ -8,7 +8,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { BuilderField } from "@admin/components/features/schema-builder/types";
+import type {
+  BuilderField,
+  FieldCondition,
+} from "@admin/components/features/schema-builder/types";
 
 import { brokenConditions, followRename } from "../condition-identity";
 
@@ -423,5 +426,80 @@ describe("a saved dropdown source whose type changes", () => {
     ];
     // Nothing saved under that name: a text source compared with a value reads it.
     expect(brokenConditions(now, []).has("f-teaser")).toBe(false);
+  });
+});
+
+// The entry form reads a document as no text at all, so a comparison made of a text would answer the
+// same of every document.
+describe("a saved source that became rich text", () => {
+  const reading = (
+    condition: Partial<FieldCondition>,
+    source: Partial<BuilderField>
+  ) => [
+    field("teaser", {
+      admin: { condition: { field: "summary", ...condition } },
+    }),
+    field("summary", source),
+  ];
+  const brokenNow = (
+    condition: Partial<FieldCondition>,
+    was: Partial<BuilderField> = {}
+  ) =>
+    brokenConditions(
+      reading(condition, { type: "richText" }),
+      reading(condition, was)
+    ).get("f-teaser");
+
+  it.each([
+    "equals",
+    "notEquals",
+    "contains",
+    "notContains",
+    "startsWith",
+    "endsWith",
+  ] as const)("breaks a comparison by %s inherited from it", operator => {
+    expect(brokenNow({ operator, value: "news" })).toEqual({
+      reason: "operator-unsupported",
+      message:
+        "Teaser's condition compares the value of Summary, whose rich text it cannot read. Choose another field for it, or remove the condition.",
+    });
+  });
+
+  it("breaks an older equality condition, and one comparing with nothing", () => {
+    expect(brokenNow({ equals: "news" })?.reason).toBe("operator-unsupported");
+    expect(brokenNow({ operator: "equals", value: "" })?.reason).toBe(
+      "operator-unsupported"
+    );
+  });
+
+  it("breaks one naming a dropdown's former option, which no other value would mend", () => {
+    expect(
+      brokenNow(
+        { operator: "equals", value: "draft" },
+        { type: "select", options: status(["draft"]).options }
+      )?.reason
+    ).toBe("operator-unsupported");
+  });
+
+  it.each(["isEmpty", "isNotEmpty"] as const)(
+    "leaves a comparison by %s, which reads no text",
+    operator => {
+      expect(brokenNow({ operator })).toBeUndefined();
+    }
+  );
+
+  it("leaves a source saved as rich text, and a comparison made or changed since", () => {
+    const now = reading(
+      { operator: "equals", value: "news" },
+      { type: "richText" }
+    );
+    const was = (condition: Partial<FieldCondition>, type: string) =>
+      brokenConditions(now, reading(condition, { type })).has("f-teaser");
+    expect(was({ operator: "equals", value: "news" }, "richText")).toBe(false);
+    expect(was({ operator: "equals", value: "views" }, "text")).toBe(false);
+    expect(was({ operator: "contains", value: "news" }, "text")).toBe(false);
+    expect(
+      brokenConditions(now, [field("teaser"), field("summary")]).has("f-teaser")
+    ).toBe(false);
   });
 });

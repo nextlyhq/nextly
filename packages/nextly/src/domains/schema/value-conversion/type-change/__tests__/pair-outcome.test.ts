@@ -33,6 +33,16 @@ const choices = {
 
 const several = { hasMany: true } as Partial<FieldDefinition>;
 
+/** The writings of every date and every number the mark judges a field by. */
+const DATES = ["2026-01-02T03:04:05Z", "2026-01-02T03:04:05.123Z"];
+const NUMBERS = ["0", "7", "-3", "3.5", "123456789012345678901234567890"];
+
+/** A choice's settings with these options. */
+const named = (values: string[]) =>
+  ({
+    options: values.map(value => ({ label: value, value })),
+  }) as Partial<FieldDefinition>;
+
 describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
   const outcome = (
     from: string,
@@ -70,6 +80,58 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
         hasMany: true,
       } as Partial<FieldDefinition>)
     ).toBe("may-lose");
+  });
+
+  // A date, a number, an address and a list of numbers have no list of all they may hold: options
+  // naming every value judged here still refuse the rest of what is stored.
+  it.each([
+    ["a date becoming a dropdown", "date", {}, "select", {}, DATES],
+    ["a date becoming radio buttons", "date", {}, "radio", {}, DATES],
+    ["a date becoming several choices", "date", {}, "select", several, DATES],
+    ["a number becoming a dropdown", "number", {}, "select", {}, NUMBERS],
+    ["a number becoming radio buttons", "number", {}, "radio", {}, NUMBERS],
+    [
+      "a list of numbers becoming several choices",
+      "number",
+      several,
+      "select",
+      several,
+      NUMBERS,
+    ],
+    [
+      "an email becoming a dropdown",
+      "email",
+      {},
+      "select",
+      {},
+      ["someone@example.com"],
+    ],
+  ] as const)(
+    "may lose values: %s whose options name every value judged",
+    (_change, from, fromExtra, to, toExtra, options) => {
+      expect(
+        outcome(from, to, fromExtra, { ...named([...options]), ...toExtra })
+      ).toBe("may-lose");
+    }
+  );
+
+  // A checkbox holds two values and a choice its options, each judged: the mark says what the
+  // options hold of them.
+  it("judges a checkbox or a choice becoming a choice over every value it holds", () => {
+    const yesNo = named(["true", "false"]);
+    expect(outcome("checkbox", "select", {}, yesNo)).toBe("converts");
+    expect(outcome("checkbox", "radio", {}, yesNo)).toBe("converts");
+    expect(outcome("checkbox", "select", {}, { ...yesNo, ...several })).toBe(
+      "converts"
+    );
+    expect(outcome("checkbox", "select", {}, named(["true"]))).toBe("may-lose");
+    expect(outcome("select", "radio", choices, choices)).toBe("keeps");
+    expect(outcome("select", "radio", choices, named(["draft"]))).toBe(
+      "may-lose"
+    );
+    const many = { ...choices, ...several };
+    expect(outcome("select", "select", many, many)).toBe("keeps");
+    expect(outcome("select", "select", choices, many)).toBe("converts");
   });
 
   // An email field holds addresses, which none of the plain text probes is: judged over one.
