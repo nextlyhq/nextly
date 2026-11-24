@@ -3,7 +3,8 @@
  * their rows, order and shared values are the same everywhere, and only the fields inside them
  * that are translatable are translated, row by row. No field type offers a structure of its own
  * per language, so `localized: true` on one of these containers, which once kept a whole tree per
- * language, is refused, naming the field and the fix: mark the fields inside as localized.
+ * language, is refused, naming the field, where it is, and the fix: mark the fields inside it
+ * `localized: true`, which the upgrade keeps each language's values for.
  *
  * The plausible broken configurations: accepting the flag and quietly keeping a tree per language,
  * or accepting it and quietly ignoring it, so the developer believes a choice was honoured.
@@ -65,7 +66,7 @@ describe.each(Object.entries(refusals))(
             code: "FIELD_STRUCTURE_NOT_TRANSLATABLE",
             path: "fields[0].localized",
             message: expect.stringMatching(
-              /"(slides|seo|hero)"[\s\S]*mark the fields inside as localized instead/
+              /"(slides|seo|hero)" \([^)]+\)[\s\S]*mark the fields inside "(slides|seo|hero)" `localized: true` instead; the upgrade \(`nextly migrate`\) keeps each language's values\./
             ),
           })
         );

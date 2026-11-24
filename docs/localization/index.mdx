@@ -132,7 +132,7 @@ export const Pages = defineCollection({
 - Reordering, adding or removing a row in any language does it in every language. Each row keeps its own translations, and a removed row's translations go with it.
 - A row that has no translation in a language reads that field from the [fallback chain](#fallback-chains), one field at a time.
 - The same holds at every depth: a repeater inside a group, and a component placed in a repeater's rows, are translated row by row with their container.
-- `localized: true` on a repeater, a group or a component field is refused when the configuration loads (`FIELD_STRUCTURE_NOT_TRANSLATABLE`). Mark the fields inside instead.
+- `localized: true` on a repeater, a group or a component field is refused when the configuration loads (`FIELD_STRUCTURE_NOT_TRANSLATABLE`), in your own config or a plugin's. Remove it from the container and mark the fields inside `localized: true` instead; `nextly migrate` keeps each language's values.
 
 In a held change, the structure is the shared part's and the text is each language's ([Publishing one language at a time](#publishing-one-language-at-a-time)). A reorder held in Spanish goes live with the next publish of any language. A caption edited in Spanish goes live only when Spanish is published.
 

@@ -791,7 +791,7 @@ export function validateFieldBasicsShared(
   ) {
     errors.push({
       path: `${path}.localized`,
-      message: `Field "${String(field.name)}" keeps one structure in every language and cannot be translated as a whole: remove \`localized: true\` and mark the fields inside as localized instead.`,
+      message: `Field "${String(field.name)}" (${path}) keeps one structure in every language and cannot be translated as a whole: remove \`localized: true\` from it and mark the fields inside "${String(field.name)}" \`localized: true\` instead; the upgrade (\`nextly migrate\`) keeps each language's values.`,
       code: "FIELD_STRUCTURE_NOT_TRANSLATABLE",
     });
   }
