@@ -123,9 +123,12 @@ test.describe("changing a field's type in the Builder", () => {
     await expect(number).toContainText(
       "Unavailable: Its type, length or precision changes in the same change that stops it being translated. Turn off Localized and save. Change how it is stored and save."
     );
-    await number.click();
-    // Not picked: the picker stays open, and nothing changed.
-    await expect(page.getByRole("dialog")).toBeVisible();
+    // Not picked by Enter: the picker stays open, and nothing changed.
+    await page
+      .getByRole("combobox", { name: "Search field types" })
+      .fill("number");
+    await page.keyboard.press("Enter");
+    await expect(number).toBeVisible();
     for (const scheme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme: scheme });
       await expectNoAxeViolations(page, { include: '[role="dialog"]' });
