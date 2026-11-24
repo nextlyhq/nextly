@@ -105,9 +105,9 @@ const SCENARIOS: {
 
 /** Entries holding a value in every moved field, characters JSON escapes among them. */
 const ENTRIES = [
-  { title: "One", summary: "First", subtitle: "a" },
-  { title: "Two", summary: 'He said "hi" \\ — ü', subtitle: "b" },
-  { title: "Three", summary: "Third", subtitle: "c" },
+  { title: "One", slug: "one", summary: "First", subtitle: "a" },
+  { title: "Two", slug: "two", summary: 'He said "hi" \\ — ü', subtitle: "b" },
+  { title: "Three", slug: "three", summary: "Third", subtitle: "c" },
 ];
 
 let dir: string;
@@ -281,12 +281,13 @@ async function expectEveryValueKept(
       : registry?.fields
   ) as { name?: string }[] | undefined;
   for (const entry of ENTRIES) {
-    const row = rows.find(r => r.title === entry.title);
+    // By slug: on per-language storage the title is translated, kept in the language table.
+    const row = rows.find(r => r.slug === entry.slug);
     const meta = (
       typeof row?.meta === "string" ? JSON.parse(row.meta) : (row?.meta ?? {})
     ) as Record<string, unknown>;
     for (const name of MOVED) {
-      const at = `${label}: ${entry.title}.${name}`;
+      const at = `${label}: ${entry.slug}.${name}`;
       const expected = entry[name];
       const inColumn = columns.includes(name) ? row?.[name] : undefined;
       const inGroup = meta[name];
@@ -333,12 +334,12 @@ describe.runIf(getConfiguredTestDialects().includes("mysql"))(
           const url = await openDatabase();
           await migrate(created);
           const writer = await start(url, posts(before, required));
-          for (const { title, ...values } of ENTRIES) {
+          for (const { title, slug, ...values } of ENTRIES) {
             await writer.nextly.create({
               collection: SLUG as never,
               data: (before === "grouped"
-                ? { title, meta: { note: "n", ...values } }
-                : { title, ...values, meta: { note: "n" } }) as never,
+                ? { title, slug, meta: { note: "n", ...values } }
+                : { title, slug, ...values, meta: { note: "n" } }) as never,
             });
           }
           await shutdownServices().catch(() => {});
