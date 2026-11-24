@@ -146,7 +146,7 @@ async function save(
 }
 
 /** `nextly migrate:down` of the newest migration on `t`'s database, reading the files the saves wrote. */
-async function migrateDown(t: TestNextly): Promise<void> {
+async function migrateDown(t: TestNextly, step = 1): Promise<void> {
   const adapter = t.adapter as unknown as DrizzleAdapter;
   const migrationsDir = join(basePath, "migrations");
   await migrateDownCore({
@@ -158,7 +158,7 @@ async function migrateDown(t: TestNextly): Promise<void> {
     nodeEnv: "test",
     logger: createLogger({ quiet: true }),
     options: {
-      step: 1,
+      step,
       consent: resolveDataLossConsent({ flag: true, env: {} }),
       yes: true,
       dryRun: false,
@@ -298,7 +298,8 @@ describe.each(getConfiguredTestDialects())(
         moves: [{ from: ["summary"], to: ["meta", "summary"] }],
       });
 
-      await migrateDown(t);
+      // On MySQL the save wrote two files, the moves' own and the one that drops the column they left.
+      await migrateDown(t, dialect === "mysql" ? 2 : 1);
 
       const rows = await run<{ summary: string }>(
         t,

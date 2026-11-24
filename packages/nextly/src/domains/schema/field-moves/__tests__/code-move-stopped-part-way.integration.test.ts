@@ -52,6 +52,7 @@ import {
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { setNonInteractive } from "../../migrate/can-prompt";
 import { KILL_AT_VARIABLE, withStopPoints } from "../../migrate/stop-points";
+import { forceUnlock } from "../../pipeline/locks";
 
 // Written for per-language storage as every installation runs it (`storage-layout`). The moved fields
 // are shared, kept on the entry's own row in every language: a translated field's move goes through
@@ -264,7 +265,25 @@ async function killedAfter(
   expect(ran.stderr, `${ran.stdout}\n${ran.stderr}`).toContain(
     "stopped by SIGKILL"
   );
+  await clearDeadLock(url);
   return true;
+}
+
+/**
+ * The schema lock a killed process left is held until its lease lapses, which a start does not wait
+ * out. With nothing else running it is cleared here, as an operator does after a crash, by what
+ * `--force-unlock` runs.
+ */
+async function clearDeadLock(url: string): Promise<void> {
+  const adapter = (await createAdapter({
+    type: "mysql",
+    url,
+  } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
+  try {
+    await forceUnlock(adapter.getDrizzle(), "mysql");
+  } finally {
+    await adapter.disconnect().catch(() => {});
+  }
 }
 
 /**
