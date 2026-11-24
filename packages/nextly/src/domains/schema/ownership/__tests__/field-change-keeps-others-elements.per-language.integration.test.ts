@@ -6,8 +6,8 @@
  * changed. So is removing an untranslated one, whose per-language column the save's companion
  * reconcile drops after the entity's own table changes: the reconcile's plan is judged before any
  * statement. A number field's column is on the entity's own table in either layout, and removing
- * it is refused through the Builder save and the development push. A Single's own schema save
- * (`updateSingleSchema`) is refused before its migration file is written or run: the file changes
+ * it is refused through the Builder save and the development push. A Single's save, through
+ * its own route or the schema dialog, is refused before its migration file is written or run: the file changes
  * the Single's own table first, and its reconcile would drop the index only after.
  *
  * What the plugin built elsewhere on those tables stops no change and is kept: its own column, index
@@ -539,46 +539,69 @@ describe.each(getConfiguredTestDialects())(
       expect(await shapeOf(t, table)).toEqual(before);
     });
 
-    it("refuses a Single's schema save that removes a text field whose per-language column a plugin's index is built on, before its migration file is written or run", async () => {
-      const t = await start();
-      await dispatchSingles(
-        "createSingle",
-        {},
-        { slug: HOME, label: "Home", fields: FIELDS }
-      );
-      const table = await tableHolding(t, HOME_TABLE, "code");
-      expect(table).toBe(companionTableOf(HOME_TABLE));
-      await buildIndex(t, table, "code", true);
-      const written = async () =>
-        (
-          await readdir(join(basePath, "migrations"), { recursive: true })
-        ).sort();
-      const before = {
-        companion: await shapeOf(t, table),
-        main: await shapeOf(t, HOME_TABLE),
-        files: await written(),
-      };
+    it.each([
+      {
+        road: "its own route",
+        send: (fields: Field[]) =>
+          dispatchSingles("updateSingleSchema", { slug: HOME }, { fields }),
+      },
+      {
+        road: "the schema dialog",
+        send: async (fields: Field[], t: TestNextly) =>
+          dispatchSingles(
+            "applySingleSchemaChanges",
+            { slug: HOME },
+            {
+              fields,
+              confirmed: true,
+              schemaVersion: await versionOf(t, "dynamic_singles", HOME),
+              resolutions: {
+                code: { action: "confirm_drop" },
+                rank: { action: "confirm_drop" },
+              },
+            }
+          ),
+      },
+    ])(
+      "refuses a Single's save through $road that removes a text field whose per-language column a plugin's index is built on, before its migration file is written or run",
+      async ({ send }) => {
+        const t = await start();
+        await dispatchSingles(
+          "createSingle",
+          {},
+          { slug: HOME, label: "Home", fields: FIELDS }
+        );
+        const table = await tableHolding(t, HOME_TABLE, "code");
+        expect(table).toBe(companionTableOf(HOME_TABLE));
+        await buildIndex(t, table, "code", true);
+        const written = async () =>
+          (
+            await readdir(join(basePath, "migrations"), { recursive: true })
+          ).sort();
+        const before = {
+          companion: await shapeOf(t, table),
+          main: await shapeOf(t, HOME_TABLE),
+          files: await written(),
+        };
 
-      const refused = await dispatchSingles(
-        "updateSingleSchema",
-        { slug: HOME },
-        {
-          fields: FIELDS.filter(
+        const refused = await send(
+          FIELDS.filter(
             field => !["code", "rank"].includes(String(field.name))
           ),
-        }
-      ).then(
-        () => undefined,
-        (error: unknown) => error
-      );
+          t
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
 
-      expectNamesTheIndex(refused, "code", table);
-      expect({
-        companion: await shapeOf(t, table),
-        main: await shapeOf(t, HOME_TABLE),
-        files: await written(),
-      }).toEqual(before);
-    });
+        expectNamesTheIndex(refused, "code", table);
+        expect({
+          companion: await shapeOf(t, table),
+          main: await shapeOf(t, HOME_TABLE),
+          files: await written(),
+        }).toEqual(before);
+      }
+    );
 
     // The push of a change nothing of the plugin's is built on: its own column, index and values stay
     // on the collection's table and on its per-language table.

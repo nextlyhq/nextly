@@ -404,9 +404,14 @@ describe.each(getConfiguredTestDialects())(
       },
     ];
 
+    /** The Builder's definition file, byte for byte; one that is not there is thrown. */
+    const definitionFile = async () =>
+      (await readFile(join(basePath, "ui-schema.json"))).toString("base64");
+
     /** What a refusal must leave as it was. */
     async function stateOf(t: TestNextly, table: string) {
       return {
+        definition: await definitionFile(),
         columns: await columnsOf(t, table),
         indexes: await indexesOf(t, table),
         fields: JSON.stringify(await stored(t)),
@@ -484,6 +489,7 @@ describe.each(getConfiguredTestDialects())(
         indexes: await indexesOf(t, CARDS_TABLE),
         files: await filesWritten(),
         registry: await registryRow(),
+        definition: await definitionFile(),
       };
 
       const refused = await saveCards(
@@ -502,6 +508,7 @@ describe.each(getConfiguredTestDialects())(
         indexes: await indexesOf(t, CARDS_TABLE),
         files: await filesWritten(),
         registry: await registryRow(),
+        definition: await definitionFile(),
       }).toEqual(before);
     });
 
