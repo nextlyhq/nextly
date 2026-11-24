@@ -241,7 +241,7 @@ describe("one list", () => {
 
   it("migrate:check and migrate:create report the same list", async () => {
     expect((await create(site(false))).code).toBeUndefined();
-    const before = sqlFiles().length;
+    const before = sqlFiles();
 
     const lines = listed(await check(site(true)));
     const settings = lines.filter(line => line.startsWith("~ settings "));
@@ -252,13 +252,36 @@ describe("one list", () => {
 
     const written = await create(site(true), { acceptDataLoss: true });
     expect(written.code, saidBy(written)).toBeUndefined();
-    // What `migrate:create` says it wrote: its operations, its settings, and a file of its own for
-    // each change that goes beside the main one.
+    // What `migrate:create` says it wrote, and what its files hold: the operation in the main file,
+    // by its column, the settings by name, and a file of its own, on the translations table, for
+    // the change that goes beside it.
+    expect(lines).toEqual([
+      expect.stringMatching(/^\+ add_column dc_posts\.views\b/),
+      "~ translations column types dc_posts",
+      "~ settings posts: description, fields.price.type, fields.views (added)",
+    ]);
+    const added = await Promise.all(
+      sqlFiles()
+        .filter(file => !before.includes(file))
+        .map(file => readFile(join(dir, "migrations", file), "utf-8"))
+    );
+    const alters = added.map(sql =>
+      [
+        ...sql.split("-- DOWN")[0].matchAll(/ALTER TABLE\s+["`]?(\w+)["`]?/g),
+      ].map(([, table]) => table)
+    );
+    expect(added.some(sql => /"views"/.test(sql.split("-- DOWN")[0]))).toBe(
+      true
+    );
+    expect(alters.flat()).toContain("dc_posts");
+    expect(added.some(sql => /dc_posts_locales[\s\S]*price/.test(sql))).toBe(
+      true
+    );
     expect(written.said).toContain(`Operations: ${String(tables)}`);
     expect(written.said.filter(line => line.startsWith("Settings: "))).toEqual(
       settings.map(line => line.replace("~ settings ", "Settings: "))
     );
-    expect(sqlFiles().length - before).toBe(1 + beside.length);
+    expect(added).toHaveLength(1 + beside.length);
 
     expect((await check(site(true))).code).toBeUndefined();
   });

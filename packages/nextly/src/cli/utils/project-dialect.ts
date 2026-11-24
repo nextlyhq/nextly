@@ -42,7 +42,7 @@ const HEADER = /^-- Dialect: (\S+)\s*$/m;
 /**
  * The dialect the migration history was written for, from its newest migration that says: one
  * written as one dialect's file alone (`<base>.sqlite.sql`) by that file's name, one written as a
- * single file by the dialect its header names (`headerLinesOf`, never a comment among its
+ * single file by the dialect its header names (`leadingComments`, never a comment among its
  * statements). None where the folder holds no such migration, or its newest is written as files
  * for several dialects, which says it serves several.
  */
@@ -81,8 +81,18 @@ async function headerDialect(
   } catch {
     return undefined;
   }
-  const header = headerLinesOf(text).join("\n");
-  return BY_HEADER[HEADER.exec(header)?.[1] ?? ""];
+  return BY_HEADER[HEADER.exec(leadingComments(text).join("\n"))?.[1] ?? ""];
+}
+
+/**
+ * The comments a migration file opens with: its header (`headerLinesOf`) up to the first line that
+ * is neither blank nor a comment. A file with no UP line is all header to `headerLinesOf`, its
+ * statements included, and a comment among those says nothing of the file.
+ */
+function leadingComments(text: string): string[] {
+  const lines = headerLinesOf(text);
+  const body = lines.findIndex(line => !/^\s*(--|$)/.test(line));
+  return body === -1 ? lines : lines.slice(0, body);
 }
 
 /**

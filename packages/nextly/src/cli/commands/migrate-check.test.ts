@@ -1113,9 +1113,15 @@ describe("runChecks (F11 PR 4)", () => {
       expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("15 pending schema change(s) detected.")
       );
-      expect(printed).toHaveBeenCalledWith(
-        expect.stringContaining("add_table dc_t14")
-      );
+      // Each of them, and nothing else: one line per table, in the diff's order.
+      expect(
+        [
+          ...printed.mock.calls
+            .flat()
+            .join("\n")
+            .matchAll(/([+~-] .*)$/gm),
+        ].map(([, line]) => line)
+      ).toEqual(collections.map(({ tableName }) => `+ add_table ${tableName}`));
       // The check reads no database, so it says nothing of one, nor of running `nextly migrate`.
       const said = printed.mock.calls.flat().join("\n");
       expect(said).not.toContain("The database is not reported");

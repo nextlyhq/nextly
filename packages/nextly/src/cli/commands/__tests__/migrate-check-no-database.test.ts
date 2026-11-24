@@ -103,6 +103,32 @@ function environment(env: { DB_DIALECT?: string; DATABASE_URL?: string }) {
   _resetEnvCache();
 }
 
+/** `run` with stdin and stdout a terminal's or not, whatever launched the suite. */
+async function withTerminal<T>(
+  terminal: boolean,
+  run: () => Promise<T>
+): Promise<T> {
+  const streams = [process.stdin, process.stdout] as const;
+  const before = streams.map(stream =>
+    Object.getOwnPropertyDescriptor(stream, "isTTY")
+  );
+  for (const stream of streams) {
+    Object.defineProperty(stream, "isTTY", {
+      value: terminal,
+      configurable: true,
+    });
+  }
+  try {
+    return await run();
+  } finally {
+    streams.forEach((stream, i) => {
+      const was = before[i];
+      if (was) Object.defineProperty(stream, "isTTY", was);
+      else Reflect.deleteProperty(stream, "isTTY");
+    });
+  }
+}
+
 describe("with no DATABASE_URL", () => {
   it("runs on a project with migrations, the dialect read from them", async () => {
     environment({ DB_DIALECT: "sqlite" });
@@ -134,8 +160,8 @@ describe("with no DATABASE_URL", () => {
 
   it("refuses naming --dialect where nothing says and no terminal can be asked", async () => {
     for (const ran of [
-      await create(project("title")),
-      await check(project("title")),
+      await withTerminal(false, () => create(project("title"))),
+      await withTerminal(false, () => check(project("title"))),
     ]) {
       expect(ran.code).toBe(1);
       expect(ran.said.join("\n")).toContain("(DIALECT_NOT_STATED)");
@@ -213,32 +239,41 @@ describe("the history's dialect", () => {
     expect(dialectHeaders()).toEqual(["SQLite", "SQLite"]);
   });
 
-  it("is read from a file's header, never from a comment among its statements", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-01-01T12:00:00.000Z"));
-    environment({ DB_DIALECT: "postgresql", DATABASE_URL: UNOPENED_POSTGRES });
-    expect((await create(project("title"))).code).toBeUndefined();
-    // Written by hand after it: its header names no dialect, and a statement's comment does.
-    writeFileSync(
-      join(dir, "migrations", "20260101_120001_000_by_hand.sql"),
-      "-- UP\n-- Dialect: MySQL\nSELECT 1;\n\n-- DOWN\n"
-    );
-
-    vi.setSystemTime(new Date("2026-01-01T12:00:02.000Z"));
-    environment({});
-    const next = await create(project("title", "summary"));
-    expect(next.code, next.said.join("\n")).toBeUndefined();
-    const generated = readdirSync(join(dir, "migrations"))
-      .filter(file => file.endsWith(".sql") && !file.includes("by_hand"))
-      .sort()
-      .map(
-        file =>
-          /^-- Dialect: (\S+)\s*$/m.exec(
-            readFileSync(join(dir, "migrations", file), "utf-8")
-          )?.[1]
+  it.each([
+    ["with its UP line", "-- UP\n-- Dialect: MySQL\nSELECT 1;\n\n-- DOWN\n"],
+    ["with no UP line", "SELECT 1;\n-- Dialect: MySQL\nSELECT 2;\n"],
+  ])(
+    "is read from a file's header, never from a comment among its statements, in a file %s",
+    async (_what, byHand) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-01-01T12:00:00.000Z"));
+      environment({
+        DB_DIALECT: "postgresql",
+        DATABASE_URL: UNOPENED_POSTGRES,
+      });
+      expect((await create(project("title"))).code).toBeUndefined();
+      // Written by hand after it: its header names no dialect, and a statement's comment does.
+      writeFileSync(
+        join(dir, "migrations", "20260101_120001_000_by_hand.sql"),
+        byHand
       );
-    expect(generated).toEqual(["PostgreSQL", "PostgreSQL"]);
-  });
+
+      vi.setSystemTime(new Date("2026-01-01T12:00:02.000Z"));
+      environment({});
+      const next = await create(project("title", "summary"));
+      expect(next.code, next.said.join("\n")).toBeUndefined();
+      const generated = readdirSync(join(dir, "migrations"))
+        .filter(file => file.endsWith(".sql") && !file.includes("by_hand"))
+        .sort()
+        .map(
+          file =>
+            /^-- Dialect: (\S+)\s*$/m.exec(
+              readFileSync(join(dir, "migrations", file), "utf-8")
+            )?.[1]
+        );
+      expect(generated).toEqual(["PostgreSQL", "PostgreSQL"]);
+    }
+  );
 });
 
 describe("migrate:create --record-snapshot", () => {
@@ -272,40 +307,18 @@ describe("migrate:create --record-snapshot", () => {
 });
 
 describe("at a terminal", () => {
-  /** stdin and stdout as a terminal's, for `run`. */
-  async function atTerminal<T>(run: () => Promise<T>): Promise<T> {
-    const stdin = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-    const stdout = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-    Object.defineProperty(process.stdin, "isTTY", {
-      value: true,
-      configurable: true,
-    });
-    Object.defineProperty(process.stdout, "isTTY", {
-      value: true,
-      configurable: true,
-    });
-    try {
-      return await run();
-    } finally {
-      if (stdin) Object.defineProperty(process.stdin, "isTTY", stdin);
-      else delete (process.stdin as { isTTY?: boolean }).isTTY;
-      if (stdout) Object.defineProperty(process.stdout, "isTTY", stdout);
-      else delete (process.stdout as { isTTY?: boolean }).isTTY;
-    }
-  }
-
   it("asks for the dialect only where nothing else says", async () => {
     asked.select.mockResolvedValue("sqlite");
 
     environment({ DB_DIALECT: "sqlite" });
-    const said = await atTerminal(() => check(project("title")));
+    const said = await withTerminal(true, () => check(project("title")));
     expect(asked.select).not.toHaveBeenCalled();
     // Compared in the dialect the environment names: the new table is pending.
     expect(said.code).toBe(1);
     expect(said.said.join("\n")).toContain("(SCHEMA_DRIFT)");
 
     environment({});
-    const answered = await atTerminal(() => check(project("title")));
+    const answered = await withTerminal(true, () => check(project("title")));
     expect(asked.select).toHaveBeenCalledTimes(1);
     expect(answered.code).toBe(1);
     expect(answered.said.join("\n")).toContain("(SCHEMA_DRIFT)");
