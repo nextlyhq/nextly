@@ -1285,6 +1285,83 @@ describe.each(getConfiguredTestDialects())(
       60_000
     );
 
+    // MySQL commits each deleting statement as it runs, and the hold belongs to the save, not to
+    // either: a write sent after the first statement has ended waits until the second has.
+    it.runIf(dialect === "mysql")(
+      "keeps an entry write sent between two deleting statements waiting until the second has ended, then applies it",
+      async () => {
+        const t = await boot([...NOTED, { name: "memo", type: "text" }]);
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        await sql(t, `UPDATE ${q(TABLE)} SET ${q("memo")} = ${q("note")}`);
+        const version = await schemaVersion(t);
+
+        let atSecond: () => void = () => undefined;
+        const between = new Promise<void>(resolve => {
+          atSecond = resolve;
+        });
+        let goOn: () => void = () => undefined;
+        const go = new Promise<void>(resolve => {
+          goOn = resolve;
+        });
+        const applying = withStopPoints(
+          async point => {
+            if (/: before statement 2$/.test(point)) {
+              atSecond();
+              await go;
+            }
+          },
+          () =>
+            dispatchCollections(
+              {} as ServiceContainer,
+              "applySchemaChanges",
+              { collectionName: SLUG },
+              {
+                fields: REMAINING,
+                confirmed: true,
+                schemaVersion: version,
+                resolutions: {
+                  note: { action: "confirm_drop" },
+                  memo: { action: "confirm_drop" },
+                },
+                confirmedDeletions: [
+                  { field: "note", count: 3 },
+                  { field: "memo", count: 3 },
+                ],
+              }
+            ).then(
+              () => "applied",
+              (error: unknown) => error
+            )
+        );
+        await between;
+
+        let settled = false;
+        const writing = t.nextly
+          .create({ collection: SLUG, data: { label: "between" } } as never)
+          .then(
+            () => "created",
+            (error: unknown) => error
+          )
+          .finally(() => {
+            settled = true;
+          });
+        await new Promise(resolve => setTimeout(resolve, 1_000));
+        const heldBack = !settled;
+        goOn();
+        expect(heldBack).toBe(true);
+        expect(await applying).toBe("applied");
+        const outcome = await writing;
+        expect(outcome, told(outcome)).toBe("created");
+        expect(await hasNoteColumn(t)).toBe(false);
+        const [gone] = await sql<{ n: number | string }>(
+          t,
+          `SELECT COUNT(*) AS n FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = '${TABLE}' AND column_name = 'memo'`
+        );
+        expect(Number(gone?.n)).toBe(0);
+      },
+      60_000
+    );
+
     // An update sent between the count and the drop, setting only a field the save keeps, was made
     // from the definition with the removed field, which its read of the entry as it stands names.
     // It waits for the collection, and once the save let go it is refused as made for a definition
@@ -1795,7 +1872,12 @@ describe.each(getConfiguredTestDialects())(
      */
     async function otherCopy(
       shared: { t: TestNextly; url: string; cookie: string },
-      way: "direct" | "rest"
+      way: "direct" | "rest",
+      /** What the write sets, once it is let go. */
+      data: Record<string, unknown> = {
+        label: "from the other copy",
+        note: "raced",
+      }
     ): Promise<{
       go: () => void;
       outcome: Promise<Record<string, unknown>>;
@@ -1813,7 +1895,7 @@ describe.each(getConfiguredTestDialects())(
           shared.t.basePath,
           SLUG,
           way,
-          JSON.stringify({ label: "from the other copy", note: "raced" }),
+          JSON.stringify(data),
           // Sets only the field the save keeps, so the notes it counts stay three.
           JSON.stringify({ label: "warming up" }),
         ],
@@ -1929,6 +2011,58 @@ describe.each(getConfiguredTestDialects())(
                   ],
                 });
               }
+            } finally {
+              await instance?.destroy();
+              instance = undefined;
+              await shared.drop();
+              _resetEnvCache();
+            }
+          },
+          120_000
+        );
+      }
+    }
+
+    // A write from another copy that sets only a field the save keeps waits while the save holds the
+    // collection, then is applied as it would have been before the hold: the rows it writes are the
+    // ones the save left, and the field the save removed is not there to set.
+    for (const way of ["direct", "rest"] as const) {
+      for (const road of ["file", "push"] as const) {
+        it.skipIf(road === "push" && dialect === "sqlite")(
+          `applies a write of a kept field from another copy through the ${way === "direct" ? "Direct API" : "REST API"}, once the save on the ${road} road has let it go`,
+          async () => {
+            const shared = await bootShared();
+            try {
+              const writer = await otherCopy(shared, way, { label: "kept" });
+              pushRoad.forced = road === "push";
+              const { paused, release } = gated(afterCount);
+              const applying = apply(shared.t, 3, REMAINING, {
+                note: { action: "confirm_drop" },
+              }).then(
+                () => "applied",
+                (error: unknown) => error
+              );
+              const reached = await Promise.race([
+                paused.then(() => true),
+                applying.then(() => false),
+              ]);
+              expect(reached || (await applying)).toBe(true);
+
+              writer.go();
+              await new Promise(resolve => setTimeout(resolve, 1_500));
+              const heldBack = !writer.settled();
+              release();
+              expect(heldBack).toBe(true);
+              expect(await applying).toBe("applied");
+              const outcome = await writer.outcome;
+              expect(outcome, JSON.stringify(outcome)).toEqual({ ok: true });
+              // Applied: one entry beside the three, none of it lost, the removed field gone.
+              const [rows] = await sql<{ n: number | string }>(
+                shared.t,
+                `SELECT COUNT(*) AS n FROM ${q(TABLE)}`
+              );
+              expect(Number(rows?.n)).toBe(4);
+              expect(await hasNoteColumn(shared.t)).toBe(false);
             } finally {
               await instance?.destroy();
               instance = undefined;
