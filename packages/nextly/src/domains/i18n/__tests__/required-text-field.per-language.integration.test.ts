@@ -5,8 +5,11 @@
  */
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 
+import { fieldGroupAnswerCases } from "./helpers/field-group-answer-cases";
 import { requiredTextFieldCases } from "./helpers/required-text-field-cases";
 
 perLanguageStorageSuite();
 
 requiredTextFieldCases("per-language", "rq_l");
+
+fieldGroupAnswerCases("rq_fg");
