@@ -7,12 +7,12 @@
  * description:
  * a table change, a change only a file beside the main migration carries on per-language storage,
  * and a settings change. `migrate:check` and `nextly migrate` both name it, `migrate:create`
- * writes it, and then neither names anything and `nextly migrate` applies it. What would separate
+ * writes it, and then none of the three names anything and `nextly migrate` applies it. What would separate
  * a correct run from a broken one: a surface that passes over part of the edit while
- * `migrate:create` still writes it, a check or a migrate that still reports it once written, or a
- * migration that `nextly migrate` cannot apply.
+ * `migrate:create` still writes it, a check, a migrate or a create that still names it once
+ * written, or a migration that `nextly migrate` cannot apply.
  */
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -145,6 +145,11 @@ export function pendingChangesRoundTrip(loaded: Loaded, layout: string) {
           ).finally(() => setNonInteractive(false));
         });
       };
+      /** The migration files in the folder. */
+      const sqlFiles = () =>
+        readdirSync(join(dir, "migrations"))
+          .filter(file => file.endsWith(".sql"))
+          .sort();
       const check = (config: unknown) =>
         run(config, context => runMigrateCheck({ cwd: dir }, context));
       const migrate = (config: unknown, acceptDataLoss?: true) =>
@@ -155,7 +160,7 @@ export function pendingChangesRoundTrip(loaded: Loaded, layout: string) {
           )
         );
 
-      it("edits the config, both report it, migrate:create captures it, both then report nothing", async () => {
+      it("edits the config, migrate:check and nextly migrate report it, migrate:create captures it, and all three then report nothing", async () => {
         const before = configAt(false);
         const after = configAt(true);
         const first = await create(before);
@@ -184,6 +189,13 @@ export function pendingChangesRoundTrip(loaded: Loaded, layout: string) {
         // The translated field's values are converted, which needs consent to write and to apply.
         const written = await create(after, true);
         expect(written.code, written.said).toBeUndefined();
+        const files = sqlFiles();
+
+        // Nothing is left for `migrate:create` either: it says so and writes no file.
+        const nothing = await create(after, true);
+        expect(nothing.code, nothing.said).toBe(0);
+        expect(nothing.said).toContain("No changes detected");
+        expect(sqlFiles()).toEqual(files);
 
         const clean = await check(after);
         expect(clean.code, clean.said).toBeUndefined();
