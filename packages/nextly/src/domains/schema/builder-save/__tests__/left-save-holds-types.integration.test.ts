@@ -465,8 +465,9 @@ describe.each(LEFT_SAVE_SUITES)(
         expectRefused(api!, "note");
         const after = await rows(t);
         expect(after.filter(row => before.includes(row))).toEqual(before);
+        // Each road is looked at whatever the other came to.
         for (const through of [restOther!, apiOther!]) {
-          expect(through.ok, JSON.stringify(through)).toBe(true);
+          expect.soft(through.ok, JSON.stringify(through)).toBe(true);
         }
         for (const read of [restRead!, apiRead!]) {
           expect(databaseError(read), JSON.stringify(read)).toBe(false);
