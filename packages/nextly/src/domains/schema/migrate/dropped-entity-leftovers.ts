@@ -356,6 +356,24 @@ export function tablesHeldBy(record: EntitySettingsRecord): Set<string> {
 }
 
 /**
+ * Whether a registry row of an entity an applied migration dropped still stands: its removal was
+ * stopped, and a registry write owes it. One that cannot be read is not counted.
+ */
+export async function droppedRegistryRowStands(args: {
+  adapter: DrizzleAdapter;
+  chain: readonly EntitySettingsRecord[];
+}): Promise<boolean> {
+  const dropped = droppedEntities(args.chain);
+  for (const [kind] of RECORDED_KINDS) {
+    for (const slug of dropped[kind]) {
+      if (await readRegistryHolds(args.adapter, kind, "slug", slug))
+        return true;
+    }
+  }
+  return false;
+}
+
+/**
  * The dropped entities nothing can still own: each whose registry row is
  * gone and whose every recorded table is gone and claimed by no entity of
  * the newest record and no registry row. Anything that cannot be read counts

@@ -35,8 +35,7 @@ import {
 import { commitsOnMysql } from "./mysql-implicit-commit";
 import { requiredColumnCheckpoint } from "./required-column-guard";
 import {
-  captureRetiredDocuments,
-  forgetCapturesOfStandingTables,
+  retirementCheckpoint,
   type RetirementContext,
 } from "./retired-documents";
 import { leadingWords } from "./split-sql";
@@ -379,8 +378,9 @@ export interface MigrationUnit {
    */
   direction?: "up" | "down";
   /**
-   * What the run tells the capture of the documents the unit's drops retire: given by a run of
-   * `nextly migrate`, absent for a Builder save, whose delete records its own.
+   * The entities the unit retires, whose documents end with it (`retired-documents.ts`): given by a
+   * run of `nextly migrate` or `migrate:down`, absent for a Builder save, whose delete records its
+   * own.
    */
   retirements?: RetirementContext;
 }
@@ -866,12 +866,21 @@ async function runUnitStatements(
   // way (`uniqueIndexCheckpoint`).
   const required = requiredColumnCheckpoint(statements, dialect, unit);
   const unique = uniqueIndexCheckpoint(statements, dialect, unit);
+  // The documents of each entity the unit retires are named just before the statement that drops
+  // its table, after whatever the unit's own statements wrote there (`retirementCheckpoint`).
+  const retirement = retirementCheckpoint(
+    statements,
+    dialect,
+    unit,
+    unit.transaction
+  );
   const checkpoint =
-    required === undefined && unique === undefined
+    required === undefined && unique === undefined && retirement === undefined
       ? undefined
       : async (db: unknown, index: number) => {
           await required?.(db, index);
           await unique?.(db, index);
+          await retirement?.before(db, index);
         };
   // Each statement is marked with the lock's claim on the servers, where a run taking over a
   // lapsed lock looks for an earlier holder's statements still running. SQLite runs one writer at
@@ -913,16 +922,7 @@ async function runUnitStatements(
         // MySQL try resumed after statements that committed on their own skips it, as below.
         if (from > 0) await bound?.beforeResume?.(tx.db);
         if (from === 0) await bound?.before?.(tx.db);
-        // The documents of each entity whose main table the unit drops, named before the drop and
-        // committed or rolled back with it (`retired-documents.ts`).
-        await captureRetiredDocuments(
-          tx.db,
-          dialect,
-          unit,
-          statements,
-          from,
-          true
-        );
+        if (from === 0) await retirement?.begin(tx.db);
         // Whether the ledger write is left outside the unit's transaction (MySQL only).
         let outside = await commitBeforeLedgerOnlyTry(
           tx,
@@ -956,11 +956,12 @@ async function runUnitStatements(
             index,
             total: statements.length,
           });
+          await retirement?.after(tx.db, index);
           await reachStopPoint(`${unit.source}: after statement ${index + 1}`);
         }
         bound?.onStatement?.(statements.length);
         // A capture whose table the drop left standing goes with the unit's own commit.
-        await forgetCapturesOfStandingTables(tx.db, dialect, unit, statements);
+        await retirement?.done(tx.db);
         // A unit may rewrite registry rows (a schema save's upsert of its own
         // row): what the transaction read of them before is read again.
         clearRegistryRowCache();
@@ -1003,15 +1004,6 @@ async function runUnitStatements(
     // already changed by them, and a refusal now would undo none of them.
     if (from > 0) await bound?.beforeResume?.(checkpointDb);
     if (from === 0) await bound?.before?.(checkpointDb);
-    // Outside a transaction nothing holds the table between the capture and the drop: best effort.
-    await captureRetiredDocuments(
-      checkpointDb,
-      dialect,
-      unit,
-      statements,
-      from,
-      false
-    );
     for (const [offset, statement] of statements.slice(from).entries()) {
       const index = from + offset;
       // Asked before the statement, outside the failure below: refused here, nothing of it ran.
@@ -1036,15 +1028,11 @@ async function runUnitStatements(
         if (passesOver(bound, error, statement, dialect)) continue;
         throw partialFailure(unit, index, statements.length, error);
       }
+      await retirement?.after(checkpointDb, index);
       await reachStopPoint(`${unit.source}: after statement ${index + 1}`);
     }
     bound?.onStatement?.(statements.length);
-    await forgetCapturesOfStandingTables(
-      checkpointDb,
-      dialect,
-      unit,
-      statements
-    );
+    await retirement?.done(checkpointDb);
     await bound?.settle?.();
   };
   // `settled` follows on the handle the statements ran on, however they ended.

@@ -1,31 +1,33 @@
 /**
  * The deletion events of the documents a migration's drop takes with an entity's table: every
  * document a retired collection or Single held when its table was dropped ends its history with
- * exactly one `deleted` event, whether `migrate:create` wrote the drop or a person did, and however
- * the run stopped after it.
+ * exactly one `deleted` event, however the run stopped after it.
  *
- * Only a unit a run of `nextly migrate` or `migrate:down` hands a `RetirementContext`, or a DOWN, is
- * captured: a Builder save removes its entity's registry row before its drops, and records its
- * documents' events itself.
+ * Which entities a unit retires is the run's to say (`retired-entities.ts`): a unit it names none
+ * for, as a Builder save's is, whose delete records its own, is captured for nothing.
  *
- * Two steps, so a document is named once its table is gone. Before a migration file's first
- * statement the ids of every document in each entity main table the file drops are captured into
- * `nextly_meta` (`captureRetiredDocuments`): a head row naming the file and the entity, then the
- * ids in rows of at most `CHUNK` each, with how many `deleted` events each document had then.
- * Where the file runs in a transaction on PostgreSQL, the table is first locked as the drop locks
- * it, so a write by another instance either lands before the capture or waits for the drop and
- * fails; SQLite's one writer holds the same. MySQL commits at its first drop, and a file run
- * outside a transaction commits each statement, so there the capture is best effort: a document
+ * Two steps, so a document is named once its table is gone. Immediately before the statement that
+ * drops a retired entity's table, so a row the unit's own earlier statements wrote is among them,
+ * the ids of the documents it holds are captured into `nextly_meta` (`retirementCheckpoint`): a
+ * head row naming the file and the entity, then the ids in rows of at most `CHUNK` each. Where the
+ * unit runs in a transaction on PostgreSQL, the table is locked before its first statement as the
+ * drop locks it, so a write by another instance either lands before the capture or waits for the
+ * drop and fails; SQLite's one writer holds the same. MySQL commits at its first drop, and a unit
+ * run outside a transaction commits each statement, so there the capture is best effort: a document
  * another instance writes between the capture and the drop is not named (the documented limit).
- * Once the file's statements have run, a capture whose table still stands is forgotten
- * (`forgetCapturesOfStandingTables`): the drop took another table of that name.
+ *
+ * A document deleted between the two was ended by that delete. Nothing of a dropped table can be
+ * deleted after the drop, so a capture is final once its statement has run: where nothing held the
+ * table, the ids whose `deleted` events grew since the capture are taken out then
+ * (`finishCapture`), and never later, when the entity may have been made again and a document of
+ * the same id deleted in its own right. Once the unit's statements have run, a capture whose table
+ * still stands is forgotten: the drop took another table of that name, or one was made again.
  *
  * Then, once the file is recorded applied, every run records one `deleted` event for each captured
- * document whose deletions have not grown since the capture, and forgets the ids, one transaction
- * per row of ids (`recordRetiredDocumentEvents`). A run stopped part-way leaves the rest, and the
- * next run finishes it, with nothing pending; a document never gets a second event. A capture
- * whose file did not apply is forgotten where the entity's table still stands: nothing of it was
- * retired.
+ * document and forgets the ids, one transaction per row of ids (`recordRetiredDocumentEvents`). A
+ * run stopped part-way leaves the rest, and the next run finishes it, with nothing pending; a
+ * document never gets a second event. A capture whose file did not apply is forgotten where the
+ * entity's table still stands: nothing of it was retired.
  *
  * @module domains/schema/migrate/retired-documents
  */
@@ -40,17 +42,13 @@ import { loadedDialect } from "../../../database/dialect-tables";
 import { contentEventsTables } from "../../../schemas/content-events";
 import { recordWriteEvent } from "../../content-events/write-event";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
-import {
-  tablesCreatedBy,
-  tablesDroppedBy as tablesTheListDrops,
-} from "../ownership/drop-guard";
+import { tablesDroppedIn } from "../ownership/drop-guard";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectTableNames } from "../pipeline/diff/introspect-live";
 import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 
-import { readCoveredEntities } from "./entity-coverage";
 import type { MigrationUnit } from "./migration-transaction";
-import { renamesIn, tablesDroppedBy } from "./statement-targets";
+import type { RetiredEntity } from "./retired-entities";
 import { endsTheRun, reachStopPoint } from "./stop-points";
 
 /** Every capture's `nextly_meta` keys start with this. */
@@ -73,6 +71,10 @@ const headSchema = z.object({
   direction: z.enum(["up", "down"]),
   /** The order the captures were taken in, which is the order their events are recorded in. */
   seq: z.number(),
+  /** The statement that drops the table, by its place in the unit. */
+  at: z.number(),
+  /** Whether the ids are those the drop took (`finishCapture`). */
+  final: z.boolean(),
 });
 type CaptureHead = z.infer<typeof headSchema>;
 
@@ -83,153 +85,141 @@ const idsSchema = z.object({
 });
 type CapturedIds = z.infer<typeof idsSchema>;
 
-/**
- * What a run tells the capture of a unit it runs (`MigrationUnit.retirements`): the tables its
- * earlier units renamed, by their names now, to the names they had before the run, which the
- * registry still holds until Phase 3.
- */
+/** What a run tells a unit it runs of the entities the unit retires (`MigrationUnit.retirements`). */
 export interface RetirementContext {
-  renamedBefore: ReadonlyMap<string, string>;
+  /** Each entity whose documents end with the unit, by its main table. */
+  entities: readonly RetiredEntity[];
+  /** Told of each whose table still stands once the unit's statements have run: nothing is recorded. */
+  kept?: (entity: RetiredEntity) => void;
+}
+
+/** What a unit that retires entities does at its statements. */
+export interface RetirementCheckpoint {
+  /** In the unit's transaction, before its first statement: holds the tables, on PostgreSQL. */
+  begin(db: unknown): Promise<void>;
+  /** Before the statement at `index` is sent: captures the documents of each entity it drops. */
+  before(db: unknown, index: number): Promise<void>;
+  /** Once it has run: what it captured is now final. */
+  after(db: unknown, index: number): Promise<void>;
+  /** Once the unit's statements have run: forgets the capture of a table that still stands. */
+  done(db: unknown): Promise<void>;
 }
 
 /**
- * Carries `statements`' table renames into `renamed` (`RetirementContext.renamedBefore`), each
- * name now mapped to the name the table had before the run, lower-cased.
+ * What `unit`, made of `statements`, does for the entities it retires; undefined where it retires
+ * none. `held` where its statements run in one transaction that holds the tables until it commits
+ * (any dialect's but MySQL's, whose schema statements commit it).
  */
-export function followRenames(
-  renamed: Map<string, string>,
+export function retirementCheckpoint(
   statements: readonly string[],
-  dialect: SupportedDialect
-): void {
-  for (const statement of statements) {
-    for (const rename of renamesIn(statement, dialect) ?? []) {
-      if (rename.kind !== "table") continue;
-      const original = renamed.get(rename.from) ?? rename.from;
-      renamed.delete(rename.from);
-      renamed.set(rename.to, original);
-    }
-  }
-}
-
-/**
- * The tables a list of statements drops, lower-cased, as the drop guard reads them (a
- * schema-qualified name, a quoted one, a rename followed, `RESTRICT`); statement by statement in
- * the Builder's shape where the guard cannot read the list, which it then refuses on its own.
- */
-export function tablesTheStatementsDrop(
-  statements: readonly string[],
-  dialect: SupportedDialect
-): Set<string> {
-  let names: readonly string[];
-  try {
-    names = tablesTheListDrops(statements, dialect);
-  } catch {
-    names = statements.flatMap(
-      statement => tablesDroppedBy(statement, dialect) ?? []
-    );
-  }
-  return new Set(names.map(name => name.toLowerCase()));
-}
-
-/**
- * The tables a list of statements leaves gone: those it drops (`tablesTheStatementsDrop`) and does
- * not create again under the same name. A table rebuilt in place (created under another name,
- * filled, dropped, the copy renamed back) is not among them: its documents live on.
- */
-export function tablesTheStatementsRetire(
-  statements: readonly string[],
-  dialect: SupportedDialect
-): Set<string> {
-  const created = new Set(
-    tablesCreatedBy(statements, dialect).map(name => name.toLowerCase())
-  );
-  return new Set(
-    [...tablesTheStatementsDrop(statements, dialect)].filter(
-      name => !created.has(name)
-    )
-  );
-}
-
-/**
- * Before `unit`'s first statement (`from` 0), on `db`: captures the documents of each collection
- * or Single whose main table `statements` drop, under the name the run's earlier units renamed it
- * to (`RetirementContext`). `locking` where `db` is the unit's transaction, on PostgreSQL: the
- * table is locked as the drop will lock it. Nothing for a later try, a unit no run hands a context
- * (a Builder save), or a file that drops no entity's main table.
- */
-export async function captureRetiredDocuments(
-  db: unknown,
   dialect: SupportedDialect,
   unit: MigrationUnit,
-  statements: readonly string[],
-  from: number,
-  locking: boolean
-): Promise<void> {
-  if (from > 0 || !capturesFor(unit)) return;
-  // Each table the unit leaves gone, by the name the registry holds it under.
-  const renamedBefore = unit.retirements?.renamedBefore ?? new Map();
-  const dropped = new Map(
-    [...tablesTheStatementsRetire(statements, dialect)].map(name => [
-      renamedBefore.get(name) ?? name,
-      name,
-    ])
-  );
-  if (dropped.size === 0) return;
-  const retiring = (await readCoveredEntities(db, dialect, true)).flatMap(
-    entity => {
-      const droppedAs = dropped.get(entity.table.toLowerCase());
-      if (
-        entity.excluded === true ||
-        entity.kind === "fieldGroup" ||
-        droppedAs === undefined
-      ) {
-        return [];
-      }
-      // Read and locked by the name the catalog holds it under: the registry's own spelling (a
-      // quoted mixed-case name on PostgreSQL), or the name an earlier unit renamed it to.
-      const table = renamedBefore.has(droppedAs) ? droppedAs : entity.table;
-      return [{ entity, table }];
-    }
-  );
-  if (retiring.length === 0) return;
+  inTransaction: boolean
+): RetirementCheckpoint | undefined {
+  const entities = unit.retirements?.entities ?? [];
+  if (entities.length === 0) return undefined;
+  const held = inTransaction && dialect !== "mysql";
+  const droppedAt = statements.map(statement => {
+    const names = new Set(tablesDroppedIn(statement, dialect));
+    return entities.filter(({ table }) => names.has(table.toLowerCase()));
+  });
+  /** The captures of the statement at `at`, as their heads name them. */
+  const headsAt = (at: number) =>
+    (droppedAt[at] ?? []).map(({ kind, slug, table }) => ({
+      file: unit.source,
+      kind,
+      slug,
+      table,
+      direction: unit.direction ?? ("up" as const),
+      at,
+    }));
   // A database whose `nextly_meta` is not there yet (one `migrate:down` rolls back from before it)
   // has nowhere to keep a capture: its documents are retired with no event, as before.
-  if (!(await metaStands(db, dialect))) return;
-  // Only a table still there is read: a statement naming a missing table aborts the transaction on
-  // PostgreSQL.
-  const standing = await standingTables(
-    db,
-    dialect,
-    retiring.map(({ table }) => table)
-  );
-  let seq = await lastSeq(db, dialect);
-  for (const { entity, table } of retiring) {
-    if (!standing.has(tableKey(table, dialect))) continue;
-    seq += 1;
-    const head: CaptureHead = {
-      file: unit.source,
-      kind: entity.kind as CaptureHead["kind"],
-      slug: entity.slug,
-      table,
-      direction: unit.direction ?? "up",
-      seq,
-    };
-    if (locking && dialect === "postgresql") {
-      // The mode the drop takes, taken first: a write waits for the file's transaction, which
-      // drops the table, so none lands unnamed, and no lock is upgraded behind a waiting writer.
-      await runStatement(
+  return {
+    begin: async db => {
+      if (dialect !== "postgresql") return;
+      if (!(await metaStands(db, dialect))) return;
+      const standing = await standingTables(
         db,
         dialect,
-        sql`LOCK TABLE ${sql.identifier(head.table)} IN ACCESS EXCLUSIVE MODE`
+        entities.map(({ table }) => table)
       );
-    }
-    await captureOne(db, dialect, head);
-  }
+      for (const { table } of entities) {
+        if (!standing.has(tableKey(table, dialect))) continue;
+        // The mode the drop takes, taken first: a write waits for the unit's transaction, which
+        // drops the table, so none lands unnamed, and no lock is upgraded behind a waiting writer.
+        await runStatement(
+          db,
+          dialect,
+          sql`LOCK TABLE ${sql.identifier(table)} IN ACCESS EXCLUSIVE MODE`
+        );
+      }
+    },
+    before: async (db, index) => {
+      const heads = headsAt(index);
+      if (heads.length === 0 || !(await metaStands(db, dialect))) return;
+      // Only a table still there is read: a statement naming a missing table aborts the
+      // transaction on PostgreSQL, and a capture an earlier try stored is kept.
+      const standing = await standingTables(
+        db,
+        dialect,
+        heads.map(head => head.table)
+      );
+      let seq = await lastSeq(db, dialect);
+      for (const head of heads) {
+        if (!standing.has(tableKey(head.table, dialect))) continue;
+        seq += 1;
+        // At the unit's first drop of it, whatever an earlier attempt of the unit captured goes:
+        // the table stands, so that attempt dropped nothing.
+        const first = droppedAt.findIndex(dropped =>
+          dropped.some(({ table }) => table === head.table)
+        );
+        if (first === index)
+          await forgetPrefix(db, dialect, entityPrefix(head));
+        await captureOne(db, dialect, { ...head, seq, final: held });
+        await reachStopPoint(`${head.kind} ${head.slug}: captured`);
+      }
+    },
+    after: async (db, index) => {
+      const heads = held ? [] : headsAt(index);
+      if (heads.length === 0 || !(await metaStands(db, dialect))) return;
+      for (const head of heads) {
+        const stored = await readHead(db, dialect, capturePrefix(head));
+        if (stored !== undefined) await finishCapture(db, dialect, stored);
+      }
+    },
+    done: async db => {
+      if (!(await metaStands(db, dialect))) return;
+      const standing = await standingTables(
+        db,
+        dialect,
+        entities.map(({ table }) => table)
+      );
+      for (const entity of entities) {
+        if (!standing.has(tableKey(entity.table, dialect))) continue;
+        await forgetPrefix(
+          db,
+          dialect,
+          entityPrefix({
+            file: unit.source,
+            kind: entity.kind,
+            slug: entity.slug,
+            direction: unit.direction ?? "up",
+          })
+        );
+        unit.retirements?.kept?.(entity);
+      }
+    },
+  };
 }
 
-/** Whether `unit` is one a run captures for: one handed a context, or a DOWN. */
-function capturesFor(unit: MigrationUnit): boolean {
-  return unit.retirements !== undefined || unit.direction === "down";
+/** Whether any capture waits for its events, for a run that asks before it takes the lock. */
+export async function capturesWait(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<boolean> {
+  if (!(await metaStands(db, dialect))) return false;
+  return (await readHeads(db, dialect, KEY_PREFIX)).length > 0;
 }
 
 /** The highest `seq` of the captures stored, 0 when there is none. */
@@ -242,19 +232,16 @@ async function lastSeq(
 }
 
 /**
- * Captures one entity's documents: any capture an earlier attempt left replaced, then its rows. A
- * document's count of `deleted` events counts each capture of the same entity still waiting to
- * record one too: a run that drops an entity, makes it again under an id it reused, and drops it
- * again, ends each of the two lives with an event, the earlier capture's first.
+ * Captures one entity's documents at one drop, each id with the `deleted` events it has then; a try
+ * of the same drop before this one is replaced.
  */
 async function captureOne(
   db: unknown,
   dialect: SupportedDialect,
   head: CaptureHead
 ): Promise<void> {
-  const prefix = entityPrefix(head);
+  const prefix = capturePrefix(head);
   await forgetPrefix(db, dialect, prefix);
-  const waiting = await idsWaitingFor(db, dialect, head);
   await store(db, dialect, `${prefix}${HEAD}`, head);
   let after: unknown;
   for (let n = 0; ; n += 1) {
@@ -269,78 +256,41 @@ async function captureOne(
     );
     if (page.length === 0) return;
     const ids = page.map(row => String(row.id));
-    const recorded = await deletionCounts(db, dialect, head, ids);
-    const captured: CapturedIds = {
-      ids,
-      deletions: Object.fromEntries(
-        ids.flatMap(id => {
-          const count = (recorded.get(id) ?? 0) + (waiting.get(id) ?? 0);
-          return count === 0 ? [] : [[id, count]];
-        })
-      ),
-    };
-    await store(db, dialect, `${prefix}${String(n)}`, captured);
+    const deletions = head.final
+      ? {}
+      : Object.fromEntries(await deletionCounts(db, dialect, head, ids));
+    await store(db, dialect, `${prefix}${String(n)}`, { ids, deletions });
     if (page.length < CHUNK) return;
     after = page[page.length - 1].id;
   }
 }
 
 /**
- * How many captures of `head`'s entity, other than `head`'s own, still wait to record an event for
- * each id they hold. Read only where one waits: almost never.
+ * Makes a capture final: the ids whose `deleted` events grew since it are taken out, each ended by
+ * the delete that recorded it, and the head says so. Counted, not timed, so no two hosts' clocks are
+ * compared, and asked as soon as the drop has run, or by the first run after one that stopped there,
+ * before it records any event. Nothing for a capture already final.
  */
-async function idsWaitingFor(
+async function finishCapture(
   db: unknown,
   dialect: SupportedDialect,
   head: CaptureHead
-): Promise<Map<string, number>> {
-  const waiting = new Map<string, number>();
-  const others = (await readHeads(db, dialect, KEY_PREFIX)).filter(
-    other =>
-      other.head.kind === head.kind &&
-      other.head.slug === head.slug &&
-      entityPrefix(other.head) !== entityPrefix(head)
-  );
-  for (const { head: other } of others) {
-    for (const key of await idKeys(db, dialect, entityPrefix(other))) {
-      for (const id of (await readIds(db, dialect, key))?.ids ?? []) {
-        waiting.set(id, (waiting.get(id) ?? 0) + 1);
-      }
-    }
-  }
-  return waiting;
-}
-
-/**
- * Once `unit`'s statements have run, on `db`, the unit's own transaction where it has one: the
- * captures it made whose table still stands are forgotten, since its drop took another table of
- * that name (one in another schema). Nothing for a file that drops no table.
- */
-export async function forgetCapturesOfStandingTables(
-  db: unknown,
-  dialect: SupportedDialect,
-  unit: MigrationUnit,
-  statements: readonly string[]
 ): Promise<void> {
-  if (!capturesFor(unit)) return;
-  if (tablesTheStatementsDrop(statements, dialect).size === 0) return;
-  if (!(await metaStands(db, dialect))) return;
-  const heads = await readHeads(
-    db,
-    dialect,
-    `${KEY_PREFIX}${hashOf(unit.source)}:`
-  );
-  if (heads.length === 0) return;
-  const standing = await standingTables(
-    db,
-    dialect,
-    heads.map(({ head }) => head.table)
-  );
-  for (const { head } of heads) {
-    if (standing.has(tableKey(head.table, dialect))) {
-      await forgetPrefix(db, dialect, entityPrefix(head));
-    }
+  if (head.final) return;
+  const prefix = capturePrefix(head);
+  for (const key of await idKeys(db, dialect, prefix)) {
+    const captured = await readIds(db, dialect, key);
+    if (captured === undefined) continue;
+    const now = await deletionCounts(db, dialect, head, captured.ids);
+    const ids = captured.ids.filter(
+      id => (now.get(id) ?? 0) <= (captured.deletions[id] ?? 0)
+    );
+    if (ids.length === captured.ids.length) continue;
+    // The counts stay, so a pass stopped part-way asks the same again.
+    await replace(db, dialect, key, { ...captured, ids });
   }
+  // Last, so a run stopped before it finds the capture not final.
+  await replace(db, dialect, `${prefix}${HEAD}`, { ...head, final: true });
 }
 
 /**
@@ -363,6 +313,8 @@ export interface RetiredDocumentEvents {
    * leaves it (applied, or rolled back for a DOWN), and its table is gone.
    */
   left: string[];
+  /** Each capture forgotten because its file is applied and its table still stands. */
+  kept: string[];
   /**
    * Each capture whose events could not be recorded, kept for a later run, with which way its
    * file's drop ran and why it failed.
@@ -377,25 +329,34 @@ export interface RetiredDocumentEvents {
  * drop leaves it: applied for an UP, rolled back for a DOWN. Answers which entities' events went
  * and which captures wait.
  *
+ * Every capture a stopped run left unfinished is made final first, before any event is recorded.
  * A capture that fails is kept for the next run, and the captures of other entities still settle;
- * a later capture of the same entity waits behind it, since its counts take the earlier one's
- * events as recorded. A lost lock, or a test's stop, ends the pass at once. The failures are
- * answered with the rest, for the caller to judge.
+ * a later capture of the same entity waits behind it, so each life's event follows the last one's.
+ * A lost lock, or a test's stop, ends the pass at once. The failures are answered with the rest,
+ * for the caller to judge.
  */
 export async function recordRetiredDocumentEvents(
   run: RetirementRun
 ): Promise<RetiredDocumentEvents> {
   const { db, dialect } = run;
-  const result: RetiredDocumentEvents = { recorded: [], left: [], failed: [] };
+  const result: RetiredDocumentEvents = {
+    recorded: [],
+    left: [],
+    kept: [],
+    failed: [],
+  };
   if (!(await metaStands(db, dialect))) return result;
   const heads = (await readHeads(db, dialect, KEY_PREFIX)).sort(
     (a, b) => a.head.seq - b.head.seq
   );
   const waiting = new Set<string>();
+  const unfinished = await finishCaptures(run, heads);
   for (const { head } of heads) {
     const name = `${head.kind} ${head.slug}`;
     if (waiting.has(name)) continue;
     try {
+      const failure = unfinished.get(capturePrefix(head));
+      if (failure !== undefined) throw failure.error;
       const outcome = await settleCapture(run, head);
       if (outcome !== "forgotten") result[outcome].push(name);
     } catch (error) {
@@ -412,16 +373,40 @@ export async function recordRetiredDocumentEvents(
 }
 
 /**
+ * Makes final each capture of `heads` a stopped run left unfinished, where its table is gone: one
+ * whose table stands was not dropped, and is forgotten or captured again. Answers those that fail.
+ */
+async function finishCaptures(
+  { db, dialect }: RetirementRun,
+  heads: readonly { head: CaptureHead }[]
+): Promise<Map<string, { error: unknown }>> {
+  const failed = new Map<string, { error: unknown }>();
+  for (const { head } of heads) {
+    if (head.final) continue;
+    try {
+      const standing = await standingTables(db, dialect, [head.table]);
+      if (standing.has(tableKey(head.table, dialect))) continue;
+      await finishCapture(db, dialect, head);
+    } catch (error) {
+      if (endsTheRun(error)) throw error;
+      failed.set(capturePrefix(head), { error });
+    }
+  }
+  return failed;
+}
+
+/**
  * Settles one capture: forgotten where its file is not where its drop leaves it and the table
- * stands, left where the table is gone, and otherwise its events recorded, row by row.
+ * stands, left where the table is gone, kept where the file applied and the table still stands, and
+ * otherwise its events recorded, row by row.
  */
 async function settleCapture(
   run: RetirementRun,
   head: CaptureHead
-): Promise<"recorded" | "left" | "forgotten"> {
+): Promise<"recorded" | "left" | "kept" | "forgotten"> {
   const { adapter, db, dialect } = run;
   const name = `${head.kind} ${head.slug}`;
-  const prefix = entityPrefix(head);
+  const prefix = capturePrefix(head);
   const applied = await new SchemaEventsRepository(db, dialect).isFileApplied(
     head.file
   );
@@ -433,12 +418,21 @@ async function settleCapture(
     await forgetPrefix(db, dialect, prefix);
     return "forgotten";
   }
+  // A capture not final here has its table still there (`finishCaptures`): the run that took it
+  // stopped before the drop, and the file was recorded applied without it.
+  if (!head.final) {
+    const standing = await standingTables(db, dialect, [head.table]);
+    if (standing.has(tableKey(head.table, dialect))) {
+      await forgetPrefix(db, dialect, prefix);
+      return "kept";
+    }
+  }
   for (const key of await idKeys(db, dialect, prefix)) {
     await adapter.transaction(async tx => {
       await assertSchemaLockHeld();
       const captured = await readIds(tx.getDrizzle(), dialect, key);
       if (captured !== undefined) {
-        await recordDeletions(tx, adapter, dialect, head, captured);
+        await recordDeletions(tx, adapter, head, captured);
       }
       await reachStopPoint(`${name}: recorded deletion events`);
       await forgetKey(tx.getDrizzle(), dialect, key);
@@ -450,26 +444,14 @@ async function settleCapture(
   return "recorded";
 }
 
-/**
- * Records, on `tx`, the deletion event of each of `captured`'s documents whose `deleted` events
- * have not grown since the capture: one that grew was deleted meanwhile, its event recorded then.
- * Counted, not timed, so no two hosts' clocks are compared.
- */
+/** Records, on `tx`, the deletion event of each of `captured`'s documents. */
 async function recordDeletions(
   tx: Parameters<typeof recordWriteEvent>[0],
   adapter: DrizzleAdapter,
-  dialect: SupportedDialect,
   head: CaptureHead,
   captured: CapturedIds
 ): Promise<void> {
-  const now = await deletionCounts(
-    tx.getDrizzle(),
-    dialect,
-    head,
-    captured.ids
-  );
   for (const id of captured.ids) {
-    if ((now.get(id) ?? 0) > (captured.deletions[id] ?? 0)) continue;
     await recordWriteEvent(
       tx,
       { adapter },
@@ -505,7 +487,14 @@ async function deletionCounts(
   );
 }
 
-/** The key every row of `head`'s capture starts with: the file's hash, then the entity's and the direction's. */
+/** The key every row of one capture starts with: its entity's, then the drop's place in the unit. */
+function capturePrefix(
+  head: Pick<CaptureHead, "file" | "kind" | "slug" | "direction" | "at">
+): string {
+  return `${entityPrefix(head)}${String(head.at)}:`;
+}
+
+/** The key every capture of an entity by a file starts with: the file's hash, then the entity's and the direction's. */
 function entityPrefix(
   head: Pick<CaptureHead, "file" | "kind" | "slug" | "direction">
 ): string {
@@ -551,6 +540,21 @@ async function readHeads(
     const head = parsed(headSchema, row.value);
     return head === undefined ? [] : [{ key: String(row.key), head }];
   });
+}
+
+/** The head of the capture whose keys start with `prefix`, or undefined when it has none. */
+async function readHead(
+  db: unknown,
+  dialect: SupportedDialect,
+  prefix: string
+): Promise<CaptureHead | undefined> {
+  const { nextlyMeta } = loadedDialect(dialect).tables;
+  const [row] = await metaRows(
+    db,
+    dialect,
+    eq(nextlyMeta.key, `${prefix}${HEAD}`)
+  );
+  return row === undefined ? undefined : parsed(headSchema, row.value);
 }
 
 /** The keys of the rows of ids under `prefix`. */
@@ -609,6 +613,21 @@ async function store(
     db,
     dialect,
     sql`INSERT INTO ${nextlyMeta} (${sql.identifier(nextlyMeta.key.name)}, ${sql.identifier(nextlyMeta.value.name)}, ${sql.identifier(nextlyMeta.updatedAt.name)}) VALUES (${sql.param(key, nextlyMeta.key)}, ${sql.param(JSON.stringify(value), nextlyMeta.value)}, ${sql.param(new Date(), nextlyMeta.updatedAt)})`
+  );
+}
+
+/** Stores `value` under `key` in place of what is there, in one statement, on `db`. */
+async function replace(
+  db: unknown,
+  dialect: SupportedDialect,
+  key: string,
+  value: unknown
+): Promise<void> {
+  const { nextlyMeta } = loadedDialect(dialect).tables;
+  await runStatement(
+    db,
+    dialect,
+    sql`UPDATE ${nextlyMeta} SET ${sql.identifier(nextlyMeta.value.name)} = ${sql.param(JSON.stringify(value), nextlyMeta.value)}, ${sql.identifier(nextlyMeta.updatedAt.name)} = ${sql.param(new Date(), nextlyMeta.updatedAt)} WHERE ${eq(nextlyMeta.key, key)}`
   );
 }
 

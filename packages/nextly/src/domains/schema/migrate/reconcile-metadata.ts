@@ -81,6 +81,7 @@ import {
 
 import { outstandingEntityChanges } from "./applied-entity-changes";
 import {
+  droppedRegistryRowStands,
   everyEntityRegistered,
   removeDroppedEntityLeftovers,
 } from "./dropped-entity-leftovers";
@@ -91,9 +92,11 @@ import {
   readPendingEntities,
   type PendingEntities,
 } from "./pending-entities";
+import { anySlugs, droppedEntities } from "./registry-history";
 import { readRegistrySource, type RegistrySource } from "./registry-source";
 import { writeRegistryFromSource } from "./registry-writer";
 import {
+  capturesWait,
   recordRetiredDocumentEvents,
   type RetiredDocumentEvents,
   type RetirementRun,
@@ -636,15 +639,6 @@ async function holdersInPlace(deps: ReconcileMetadataDeps): Promise<boolean> {
 }
 
 /**
- * Removes what the entities the applied migrations dropped left in the tables
- * every entity shares, once the registry write above has committed their
- * rows' removal (`removeDroppedEntityLeftovers`). Not inside a registry write
- * a caller holds open (a first run's), whose transaction each entity's
- * removal would join: the next run, finding the entity still gone, removes
- * them. A pass that cannot read the applied records removes nothing, and says
- * why.
- */
-/**
  * The deletion events the documents of entities an applied migration dropped still owe
  * (`retired-documents.ts`), recorded once the registry write has committed, every run, so a run
  * stopped part-way is finished by the next. A failure costs only this step, which the next run
@@ -713,6 +707,11 @@ function retirementRunOf(deps: RetirementDeps): RetirementRun {
   };
 }
 
+/** What a run says of a retired entity whose table still stands: `name` as `<kind> <slug>`. */
+export function keptDespiteItsDrop(name: string): string {
+  return `The migration that retires ${name} ran, and its table is still there, so no deletion of its documents was recorded.`;
+}
+
 /**
  * Says what a pass over the captures did: each entity whose events went, and each capture that
  * could not be recorded, warned of unless its direction is `blocking`; answers those that are.
@@ -725,6 +724,7 @@ function reportRetiredDocumentEvents(
   for (const name of events.recorded) {
     logger.info(`Recorded the deletion of every document of ${name}.`);
   }
+  for (const name of events.kept) logger.warn(keptDespiteItsDrop(name));
   const blocked: string[] = [];
   for (const failure of events.failed) {
     const said = `${failure.name} (${failure.reason})`;
@@ -739,6 +739,49 @@ function reportRetiredDocumentEvents(
   return blocked;
 }
 
+/**
+ * Finishes the retirements the applied migrations still owe, for a run that then refuses: the whole
+ * registry pass (`reconcile`) where a retired entity's registry row stands or its documents' events
+ * wait, what retired entities left in shared tables where only that may remain, and nothing, with no
+ * lock taken (`underLock`), where no applied migration dropped an entity.
+ */
+export async function finishOwedRetirements(
+  deps: ReconcileMetadataDeps,
+  reconcile: typeof reconcileMigrationMetadata,
+  underLock: (work: () => Promise<void>) => Promise<unknown>
+): Promise<void> {
+  const { adapter, dialect, migrationsDir } = deps;
+  const { db } = retirementRunOf(deps);
+  const events = new SchemaEventsRepository(db, dialect);
+  const source = await readRegistrySource({
+    migrationsDir,
+    isApplied: filename => events.isFileApplied(filename),
+  });
+  const chain =
+    source.kind === "snapshot" ? (source.chain ?? [source.entities]) : [];
+  const registryOwed =
+    (await capturesWait(db, dialect)) ||
+    (await droppedRegistryRowStands({ adapter, chain }));
+  if (registryOwed) {
+    await underLock(async () => {
+      await reconcile(deps);
+    });
+  } else if (anySlugs(droppedEntities(chain))) {
+    await underLock(async () => {
+      await leftoversOfDroppedEntities(deps);
+    });
+  }
+}
+
+/**
+ * Removes what the entities the applied migrations dropped left in the tables
+ * every entity shares, once the registry write above has committed their
+ * rows' removal (`removeDroppedEntityLeftovers`). Not inside a registry write
+ * a caller holds open (a first run's), whose transaction each entity's
+ * removal would join: the next run, finding the entity still gone, removes
+ * them. A pass that cannot read the applied records removes nothing, and says
+ * why.
+ */
 async function leftoversOfDroppedEntities(
   deps: ReconcileMetadataDeps
 ): Promise<{ removed: string[]; left: string[] }> {

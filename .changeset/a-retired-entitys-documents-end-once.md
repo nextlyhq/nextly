@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A migration that deletes a collection or Single ends every one of its documents with one `deleted` history event, whether `migrate:create` wrote the drop or you did, and however the run stopped after it: the next `nextly migrate` finishes it, and no document gets a second event. On MySQL, and for a file run outside a transaction, a document another instance saves while the drop runs can be missed.
+A migration that deletes a collection or Single ends every one of its documents with one `deleted` history event, however the run stopped after the drop: the next `nextly migrate` finishes it, and no document gets a second event. What a migration deletes is read from its snapshot, so a migration whose snapshot says a collection or Single is deleted while its file does not plainly drop the table is refused before any statement runs, and one with no snapshot applies as it did, with a warning where it drops one. On MySQL, and for a file run outside a transaction, a document another instance saves while the drop runs can be missed.

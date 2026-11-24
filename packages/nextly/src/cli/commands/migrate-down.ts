@@ -68,6 +68,7 @@ import {
   runStatements,
   type DeletionFacts,
 } from "../../domains/schema/migrate/file-deletions";
+import { readMigrationSnapshot } from "../../domains/schema/migrate/migration-snapshot-file";
 import {
   outsideTransactionNotice,
   runMigrationStatements,
@@ -81,12 +82,18 @@ import {
 import { recordPluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import {
   deletionEventsOfRetiredDocuments,
+  keptDespiteItsDrop,
   type ReconcileLogger,
   settleRetiredDocumentEvents,
 } from "../../domains/schema/migrate/reconcile-metadata";
 import { refuseRequiredColumnsOverNulls } from "../../domains/schema/migrate/required-column-guard";
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
+import {
+  fileRetirements,
+  type RetiredEntity,
+  unsettledRetirement,
+} from "../../domains/schema/migrate/retired-entities";
 import {
   planRollbackBookkeeping,
   type RollbackBookkeeping,
@@ -98,6 +105,7 @@ import {
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { refuseUniqueIndexesOverRepeats } from "../../domains/schema/migrate/unique-column-guard";
+import type { SnapshotFile } from "../../domains/schema/migrate-create/snapshot-io";
 import {
   assertNoForeignDrops,
   columnsAfter,
@@ -136,6 +144,7 @@ import {
 import {
   compareMigrationBaseNames,
   type DeclaredNames,
+  migrationFilesInRunOrder,
 } from "../utils/migration-discovery";
 
 import { commandRun } from "./command-run";
@@ -380,6 +389,12 @@ export interface MigrateDownCoreDeps {
    * applied, before a DOWN rolls the file back and makes its table again.
    */
   settleRetirements?: () => Promise<void>;
+  /**
+   * Under the lock, once the DOWNs are planned and before the first runs: judges the entities each
+   * retires, as `nextly migrate` judges an UP's (`retired-entities.ts`), and refuses a rollback one
+   * of whose files leaves that unsettled.
+   */
+  judgeRetirements?: (planned: readonly PlannedDown[]) => Promise<void>;
   execDown: (
     statements: readonly string[],
     unit: MigrationUnit,
@@ -1158,6 +1173,7 @@ export async function migrateDownCore(
         deps.logger.info("Nothing to roll back.");
         return;
       }
+      await deps.judgeRetirements?.(current);
       for (const [at, p] of current.entries()) {
         // The last target is the one that reaches the point the rollback
         // leaves, so the bookkeeping there commits with its DOWN. A DOWN that
@@ -1372,6 +1388,60 @@ async function runDownSection(
   return ran;
 }
 
+/** The point before a project's first migration: no table and no entity. */
+const NOTHING_RECORDED: Pick<SnapshotFile, "snapshot" | "entities"> = {
+  snapshot: { tables: [] },
+  entities: { collections: {}, singles: {}, fieldGroups: {} },
+};
+
+/**
+ * The entities each of `planned`'s DOWNs retires, by its file: those its own snapshot records and
+ * the point it returns to does not, judged as an UP's (`fileRetirements`). That point is the newest
+ * snapshot of the applied files before it, or nothing at all before a project's first migration.
+ * Refused where one leaves an entity unsettled; nothing for a file nothing says it of.
+ */
+async function downRetirements(
+  folder: {
+    migrationsDir: string;
+    dialect: SupportedDialect;
+    declared: DeclaredNames | undefined;
+  },
+  repo: Pick<SchemaEventsRepository, "isFileApplied">,
+  planned: readonly PlannedDown[]
+): Promise<Map<string, readonly RetiredEntity[]>> {
+  const { migrationsDir, dialect, declared } = folder;
+  const metaDir = resolve(migrationsDir, "meta");
+  const downs = new Map(planned.map(down => [down.filename, down]));
+  const retired = new Map<string, readonly RetiredEntity[]>();
+  let point: Pick<SnapshotFile, "snapshot" | "entities"> | null = null;
+  for (const file of await migrationFilesInRunOrder(
+    migrationsDir,
+    dialect,
+    declared
+  )) {
+    const filename = `${file.baseName}.sql`;
+    const snapshot = await readMigrationSnapshot(metaDir, file.baseName);
+    const down = downs.get(filename);
+    if (down !== undefined && file.filePath !== undefined) {
+      const judged = fileRetirements({
+        content: await readFile(file.filePath, "utf-8"),
+        recordedHash: snapshot?.migrationHash,
+        before: snapshot,
+        after: point ?? (snapshot?.parent === null ? NOTHING_RECORDED : null),
+        statements: down.statements,
+        dialect,
+      });
+      const refusal = unsettledRetirement(filename, judged);
+      if (refusal !== undefined) throw refusal;
+      retired.set(filename, judged?.retired ?? []);
+    }
+    if (snapshot !== null && (await repo.isFileApplied(filename))) {
+      point = snapshot;
+    }
+  }
+  return retired;
+}
+
 export async function downDatabaseDeps(args: {
   adapter: DrizzleAdapter;
   dialect: SupportedDialect;
@@ -1418,6 +1488,7 @@ export async function downDatabaseDeps(args: {
     | "listFileApplies"
     | "execDown"
     | "settleRetirements"
+    | "judgeRetirements"
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
     | "recordSchemaVersion"
@@ -1434,6 +1505,8 @@ export async function downDatabaseDeps(args: {
   // A busy-table stop's record waits for the ledger table one try at most.
   const stoppedTryMs = args.busyTable?.bounds.tryMs;
   // The down sections this run rolled back, in order.
+  /** The entities each planned DOWN retires, by its file, once judged (`downRetirements`). */
+  const retiredBy = new Map<string, readonly RetiredEntity[]>();
   const rolledBack: string[] = [];
   const {
     SchemaOwnersRepository: OwnersRepo,
@@ -1491,10 +1564,31 @@ export async function downDatabaseDeps(args: {
       await refuseUniqueIndexesOverRepeats(db, dialect, statements, source);
     },
     settleRetirements: settlerOf({ adapter, db, dialect }, args.logger),
+    // An app's rollback only: a plugin's modules retire no app entity.
+    judgeRetirements: async planned => {
+      if (plugin !== undefined || args.migrationsDir === undefined) return;
+      const judged = await downRetirements(
+        { migrationsDir: args.migrationsDir, dialect, declared: args.declared },
+        repo,
+        planned
+      );
+      for (const [filename, entities] of judged) {
+        retiredBy.set(filename, entities);
+      }
+    },
     execDown: async (statements, unit, after) => {
       const ran = await runDownSection(adapter, args.busyTable, rolledBack, {
         statements,
-        unit,
+        unit: {
+          ...unit,
+          retirements: {
+            entities: retiredBy.get(unit.source) ?? [],
+            kept: ({ kind, slug }) =>
+              (args.logger ?? QUIET).warn(
+                keptDespiteItsDrop(`${kind} ${slug}`)
+              ),
+          },
+        },
         after,
       });
       // The documents of an entity the DOWN dropped end with their events, now it is rolled back.

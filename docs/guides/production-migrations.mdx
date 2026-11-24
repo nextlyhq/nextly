@@ -92,14 +92,24 @@ applied with:
 
 The Schema Builder's delete in development removes the same rows, before its drops.
 
-Every document a deleted collection or Single held ends its history with one `deleted` event,
-whether `migrate:create` wrote the drop or you did. Before the file's first statement, `nextly
-migrate` notes the id of every document in the entity's table, and once the file is recorded
-applied it records one `deleted` event for each. A document deleted some other way meanwhile
-keeps the one event it already has. A table the file rebuilds in place (created under another
-name, filled, dropped, and the copy renamed back) is not deleted, and its documents get no event.
-`nextly migrate:down` does the same for a DOWN that drops a collection or Single: each document
-gets its event as soon as the DOWN commits.
+Every document a deleted collection or Single held ends its history with one `deleted` event. Which
+entities a migration deletes is read from the snapshot `migrate:create` writes beside it: the entity
+is in the snapshot before the migration and not in its own, its table is gone from its own, and the
+file drops that table. A table the migration only changes or rebuilds is still in its snapshot, so
+its documents get no event, and neither do those of a collection whose `dbName` changes. Just before
+the statement that drops the table, `nextly migrate` notes the id of every document in it, and once
+the file is recorded applied it records one `deleted` event for each. A document deleted some other
+way meanwhile keeps the one event it already has. `nextly migrate:down` does the same for a DOWN that
+drops a collection or Single: each document gets its event as soon as the DOWN commits.
+
+If you edit the generated file, or run a dialect's own variant of it (`<name>.mysql.sql`), keep the drop a plain `DROP TABLE` of that table, with no rename to or from it. A file whose
+snapshot says an entity is deleted, but which does not plainly drop its table, is refused before any
+statement runs, naming the file and the entity. Line endings are not an edit.
+
+A file with no snapshot (a blank migration, for one) says nothing of what it deletes, so it runs as it
+is and its documents get no event. Where it plainly drops the table of a collection or Single,
+`nextly migrate` warns once. To record the events, remove the entity from your configuration and let
+`nextly migrate:create` write the migration.
 
 How sure that list is depends on the database:
 
