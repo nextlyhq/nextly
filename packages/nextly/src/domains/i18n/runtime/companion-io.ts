@@ -753,6 +753,8 @@ export function companionWriteVia(
 
 /** A repeater's or group's structure as one write put it on the main row. */
 export interface SharedStructureWritten {
+  /** The field's name, which its rows' provenance records are kept under. */
+  field: string;
   /** The overlay column on the translation table. */
   column: string;
   /** The structure written, as stored (JSON text allowed). */
@@ -767,7 +769,7 @@ export interface SharedStructureWritten {
  * write path takes.
  */
 export function splitSharedStructureWrite(
-  ref: Pick<LocalizedFieldRef, "column">,
+  ref: Pick<LocalizedFieldRef, "name" | "column">,
   shape: SharedStructureShape,
   value: unknown
 ): { written: SharedStructureWritten; overlay: unknown } {
@@ -776,7 +778,7 @@ export function splitSharedStructureWrite(
   // every reader that asks whether a language is translated (status, filters, the source a value
   // came from) reads this language as untranslated, as a read falling back already does.
   return {
-    written: { column: ref.column, structure, shape },
+    written: { field: ref.name, column: ref.column, structure, shape },
     overlay: sameShare(overlay, {}) ? null : overlay,
   };
 }
@@ -802,6 +804,7 @@ export function sharedStructuresIn(
       ? []
       : [
           {
+            field: field.name,
             column: field.column,
             structure: payload[key],
             shape: field.sharedStructure,

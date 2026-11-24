@@ -17,6 +17,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { LOCALISATION_DATA_STEPS } from "../../../cli/commands/upgrade-steps";
 import {
   defineCollection,
+  defineFieldGroup,
+  fieldGroup,
   group,
   number,
   repeater,
@@ -66,9 +68,31 @@ const SLIDESHOWS = defineCollection({
   ],
 });
 
+/** A component an earlier release held inline in a row's list, its instances given no id. */
+const UP_CARD = defineFieldGroup({
+  slug: "upcard",
+  fields: [text({ name: "label" }), number({ name: "size" })],
+});
+
+const BOARDS = defineCollection({
+  slug: "upboards",
+  localized: true,
+  fields: [
+    text({ name: "title" }),
+    repeater({
+      name: "panels",
+      fields: [
+        number({ name: "position" }),
+        fieldGroup({ name: "cards", component: "upcard", repeatable: true }),
+      ],
+    }),
+  ],
+});
+
 const SITE = {
-  collections: [SLIDESHOWS],
+  collections: [SLIDESHOWS, BOARDS],
   singles: [],
+  fieldGroups: [UP_CARD],
   localization: { locales: ["en", "es"], defaultLocale: "en" },
 };
 
@@ -111,7 +135,8 @@ describeEachDialect(
       _resetPerLanguageStorage();
       t = await createTestNextly({
         adapter: database.adapter as never,
-        collections: [SLIDESHOWS],
+        collections: [SLIDESHOWS, BOARDS],
+        fieldGroups: [UP_CARD],
         localization: SITE.localization,
       });
       return t;
@@ -390,6 +415,110 @@ describeEachDialect(
           [second!.id]: { caption: "segundo" },
         });
         expect(bySlot.es!.title).toBe("Muestra");
+      },
+      BOOT_TIMEOUT
+    );
+
+    /**
+     * An entry of `upboards` stored as an earlier release stored a repeater translated whole whose
+     * rows hold a list of component instances: no structure on the main table, and each language's
+     * whole value on its row, its instances with no id.
+     */
+    async function boardStoredWhole(
+      values: Record<string, unknown[]>
+    ): Promise<string> {
+      const created = await t!.nextly.create({
+        collection: "upboards",
+        locale: "en",
+        data: { title: "Board" },
+      });
+      const id = (created.item as { id: string }).id;
+      await t!.nextly.update({
+        collection: "upboards",
+        id,
+        locale: "es",
+        data: { title: "Tablero", _overwrite: true },
+      });
+      const adapter = database!.adapter;
+      await adapter.update(
+        "dc_upboards",
+        { panels: null },
+        { and: [{ column: "id", op: "=", value: id }] }
+      );
+      for (const [locale, panels] of Object.entries(values)) {
+        await adapter.update(
+          "dc_upboards_locales",
+          { panels: JSON.stringify(panels) },
+          {
+            and: [
+              { column: "_parent", op: "=", value: id },
+              { column: "_locale", op: "=", value: locale },
+            ],
+          }
+        );
+      }
+      return id;
+    }
+
+    const panelWith = (labels: string[]) => [
+      {
+        id: "p1",
+        position: 1,
+        cards: labels.map((label, index) => ({
+          _componentType: "upcard",
+          label,
+          size: index + 1,
+        })),
+      },
+    ];
+
+    it(
+      "gives instances stored without an id one id at the same place in every language, each keeping its own text",
+      async () => {
+        await boot();
+        const id = await boardStoredWhole({
+          en: panelWith(["one", "two"]),
+          es: panelWith(["uno", "dos"]),
+        });
+
+        await migrateData(database!.adapter, SITE, STRUCTURES_STEP);
+
+        const cardsIn = async (locale: string) =>
+          (
+            (await t!.nextly.findByID({
+              collection: "upboards",
+              id,
+              locale,
+            })) as { panels: { cards: { id?: string; label?: string }[] }[] }
+          ).panels[0]!.cards;
+        const en = await cardsIn("en");
+        const es = await cardsIn("es");
+        expect(en.map(card => card.label)).toEqual(["one", "two"]);
+        expect(es.map(card => card.label)).toEqual(["uno", "dos"]);
+        // One id per instance, the same in every language.
+        expect(es.map(card => card.id)).toEqual(en.map(card => card.id));
+        expect(new Set(en.map(card => card.id)).size).toBe(2);
+      },
+      BOOT_TIMEOUT
+    );
+
+    it(
+      "refuses instances stored without an id whose lists differ by language, naming the document",
+      async () => {
+        await boot();
+        const id = await boardStoredWhole({
+          en: panelWith(["one", "two"]),
+          // Spanish holds one instance fewer: its place cannot say which instance is which.
+          es: panelWith(["uno"]),
+        });
+
+        await expect(
+          migrateData(database!.adapter, SITE, STRUCTURES_STEP)
+        ).rejects.toThrow(
+          new RegExp(
+            `"upboards", field "panels": document ${id}: es has other rows`
+          )
+        );
       },
       BOOT_TIMEOUT
     );

@@ -289,6 +289,7 @@ import {
   copySourceRevisions,
   discardDraftProvenance,
   forgetDocumentProvenance,
+  forgetRemovedRowsProvenance,
   recordWrittenValues,
   translationProvenancePresent,
 } from "../../i18n/provenance/record-provenance";
@@ -2211,6 +2212,17 @@ type UpdateEntryParams = {
    */
   goingLiveBatch?: GoingLiveRelationsBatch;
 };
+
+/** The Drizzle select surface a main row's structures are read through. */
+interface StructureSelect {
+  select(projection: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(count: number): Promise<Record<string, unknown>[]>;
+      };
+    };
+  };
+}
 
 export class CollectionMutationService extends BaseService {
   /** The site's languages as they are now: the source may be the language registry. */
@@ -4237,7 +4249,9 @@ export class CollectionMutationService extends BaseService {
             args.tx ?? { getDrizzle: <T = unknown>() => this.db as T },
             args.collectionName,
             args.entryId,
-            resolveRequestedLocale(this.localization, args.locale)
+            resolveRequestedLocale(this.localization, args.locale),
+            // A container's text is carried forward with its structure.
+            args.row
           )
         : {};
     return this.readShapeEventDocument(
@@ -6197,9 +6211,10 @@ export class CollectionMutationService extends BaseService {
     locale: string,
     /**
      * The entry's main row, where the caller has it: a repeater or group
-     * keeping one structure in every language is then returned assembled in
-     * `locale` from its structure there. Without it such a field is left out,
-     * and the main row's structure stands.
+     * keeping one structure in every language is returned assembled in
+     * `locale` from its structure there. Without it, the structures are read
+     * from the main row on `tx` (`storedStructuresOf`), so every caller gets
+     * a container's text with its structure, never the structure alone.
      */
     mainRow?: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
@@ -6210,14 +6225,53 @@ export class CollectionMutationService extends BaseService {
       tx.getDrizzle()
     );
     if (!companion) return {};
+    const structures =
+      mainRow ??
+      (await this.storedStructuresOf(tx, collectionName, entryId, companion));
     const byEntry = await this.companionValuesOf(
       tx.getDrizzle(),
       companion,
       [entryId],
       locale,
-      mainRow ? new Map([[entryId, mainRow]]) : undefined
+      structures ? new Map([[entryId, structures]]) : undefined
     );
     return byEntry.get(entryId) ?? {};
+  }
+
+  /**
+   * The structures of `entryId`'s repeaters and groups keeping one structure
+   * in every language, by field name, read from its main row on `tx`: only
+   * those columns, of one row. `undefined` where the entity keeps none, or the
+   * entry has no row.
+   */
+  private async storedStructuresOf(
+    tx: { getDrizzle<T = unknown>(): T },
+    collectionName: string,
+    entryId: string,
+    companion: CompanionSchema
+  ): Promise<Record<string, unknown> | undefined> {
+    const structured = companion.localizedFields.filter(
+      field => field.sharedStructure !== undefined
+    );
+    if (structured.length === 0) return undefined;
+    const table = (await this.fileManager.loadDynamicSchema(
+      collectionName,
+      tx.getDrizzle()
+    )) as Record<string, unknown> | undefined;
+    if (!table) return undefined;
+    const projection: Record<string, unknown> = {};
+    for (const field of structured) {
+      const column = table[field.name] ?? table[field.column];
+      if (column !== undefined) projection[field.name] = column;
+    }
+    if (Object.keys(projection).length === 0) return undefined;
+    const [row] = await tx
+      .getDrizzle<StructureSelect>()
+      .select(projection)
+      .from(table)
+      .where(eq(table.id as never, entryId))
+      .limit(1);
+    return row;
   }
 
   /**
@@ -6267,9 +6321,14 @@ export class CollectionMutationService extends BaseService {
       const carried: Record<string, unknown> = {};
       if (!main) return carried;
       for (const field of companion.localizedFields) {
-        if (field.sharedStructure && Object.hasOwn(main, field.name)) {
-          carried[field.name] = main[field.name];
-        }
+        if (!field.sharedStructure) continue;
+        // A row as read names it by field, a main row as stored by column.
+        const key = Object.hasOwn(main, field.name)
+          ? field.name
+          : Object.hasOwn(main, field.column)
+            ? field.column
+            : null;
+        if (key !== null) carried[field.name] = main[key];
       }
       return carried;
     };
@@ -15055,7 +15114,8 @@ export class CollectionMutationService extends BaseService {
     await this.pruneRemovedRowTranslations(
       tx,
       args.entryId,
-      args.structuresFrom ?? args.translation
+      args.structuresFrom ?? args.translation,
+      args.provenance?.collectionName
     );
     // The translation row as it was before this write, read by the claim:
     // for an overwrite, what it replaced.
@@ -15064,7 +15124,9 @@ export class CollectionMutationService extends BaseService {
 
   /**
    * Prune every language's overlay against the shared structures a write
-   * put on the main row (`pruneOverlaysOfRemovedRows`). Nothing to do for a
+   * put on the main row (`pruneOverlaysOfRemovedRows`), and forget every
+   * language's record of the rows it removed (`forgetRemovedRowsProvenance`)
+   * where `collectionName` names whose records they are. Nothing to do for a
    * write that carried none.
    */
   private async pruneRemovedRowTranslations(
@@ -15077,7 +15139,8 @@ export class CollectionMutationService extends BaseService {
           sharedStructures?: readonly SharedStructureWritten[];
         }
       | null
-      | undefined
+      | undefined,
+    collectionName: string | undefined
   ): Promise<void> {
     if (!split?.sharedStructures?.length || !split.companionTable) return;
     await pruneOverlaysOfRemovedRows(tx, this.dialect, {
@@ -15086,6 +15149,18 @@ export class CollectionMutationService extends BaseService {
       parentId: entryId,
       written: split.sharedStructures,
     });
+    if (collectionName === undefined || !(await this.provenanceRecorded(tx))) {
+      return;
+    }
+    await forgetRemovedRowsProvenance(
+      tx,
+      { scopeKind: "collection", scopeSlug: collectionName, entryId },
+      split.sharedStructures.map(written => ({
+        field: written.field,
+        structure: written.structure,
+        kind: written.shape.kind,
+      }))
+    );
   }
 
   /**
@@ -24285,7 +24360,12 @@ export class CollectionMutationService extends BaseService {
           );
           // Removed rows' translations go in every language, as the
           // single-entry update prunes them.
-          await this.pruneRemovedRowTranslations(tx, entryId, localizedUpdate);
+          await this.pruneRemovedRowTranslations(
+            tx,
+            entryId,
+            localizedUpdate,
+            params.collectionName
+          );
           // Where the values came from, beside them on this transaction.
           await this.recordWrittenProvenance(tx, {
             entryId,

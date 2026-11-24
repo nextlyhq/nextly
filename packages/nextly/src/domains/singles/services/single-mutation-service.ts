@@ -197,7 +197,10 @@ import {
   provenanceClaimsOf,
   type ProvenanceClaims,
 } from "../../i18n/provenance/provenance-claims";
-import { discardDraftProvenance } from "../../i18n/provenance/record-provenance";
+import {
+  discardDraftProvenance,
+  forgetRemovedRowsProvenance,
+} from "../../i18n/provenance/record-provenance";
 import {
   configuredLocale,
   isValidLocale,
@@ -830,9 +833,24 @@ export class SingleMutationService extends BaseService {
           )
         : [];
     // Each translated value, by its field's name rather than its column's.
+    // A container with one structure is its stored structure with the
+    // language's text on it: the language row holds that text alone, and
+    // the structure holds what is never translated, a password's hash among
+    // it, which the carry puts back.
     const translated: Record<string, unknown> = {};
     for (const field of companion?.localizedFields ?? []) {
       const value = row?.[field.name] ?? row?.[field.column];
+      if (field.sharedStructure !== undefined) {
+        const structure = args.stored[field.name] ?? args.stored[field.column];
+        if (structure !== undefined && structure !== null) {
+          translated[field.name] = assembleStoredValue(
+            structure,
+            value === undefined || value === null ? [] : [value],
+            field.sharedStructure
+          );
+        }
+        continue;
+      }
       if (value !== undefined) translated[field.name] = value;
     }
     return { ...args.stored, ...translated };
@@ -5391,7 +5409,10 @@ export class SingleMutationService extends BaseService {
               entryId: existingDoc.id,
               locale: writeLocale,
               values: companionData,
-              localizedFields: companion.localizedFields,
+              // A container's overlay is recorded with the structure the
+              // write put on the main row.
+              structures: mainPayload,
+              localizedFields: shapedRefs,
               languagesTable: companion.companionTableName,
               savedBy,
               claims: provenanceClaims,
@@ -5418,15 +5439,35 @@ export class SingleMutationService extends BaseService {
           // A repeater's rows removed from its one structure take their
           // translations with them, in every language, on this transaction.
           if (!holdEdit && companion && companionPhysicallyExists) {
+            // By the refs the write was split by, a component placed in a
+            // container read with its fields, so a removed instance's text
+            // goes too.
+            const written = sharedStructuresIn(mainPayload, shapedRefs);
             await pruneOverlaysOfRemovedRows(tx, this.adapter.dialect, {
               companionTable: companion.table,
               companionTableName: companion.companionTableName,
               parentId: existingDoc.id,
-              written: sharedStructuresIn(
-                mainPayload,
-                companion.localizedFields
-              ),
+              written,
             });
+            // And every language's record of the rows removed, as their text.
+            if (
+              written.length > 0 &&
+              (await singleProvenanceRecorded(this.provenanceDeps, tx))
+            ) {
+              await forgetRemovedRowsProvenance(
+                tx,
+                {
+                  scopeKind: "single",
+                  scopeSlug: slug,
+                  entryId: existingDoc.id,
+                },
+                written.map(entry => ({
+                  field: entry.field,
+                  structure: entry.structure,
+                  kind: entry.shape.kind,
+                }))
+              );
+            }
           }
 
           // {@link EVERY_LOCALE}: carry the lifecycle to the languages the
@@ -5532,7 +5573,9 @@ export class SingleMutationService extends BaseService {
                 entryId: existingDoc.id,
                 locale: singleDraftLocale,
                 values: companionData,
-                localizedFields: companion.localizedFields,
+                // The held structure, as the held write split it.
+                structures: mainPayload,
+                localizedFields: shapedRefs,
                 languagesTable: companion.companionTableName,
                 savedBy,
                 claims: provenanceClaims,
