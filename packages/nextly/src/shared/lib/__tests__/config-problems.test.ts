@@ -702,3 +702,41 @@ describe("a define* entity whose own top-level field takes a system field's exac
     expect(configurationProblems(declared)).toEqual([]);
   });
 });
+
+describe("a Builder address each code of the address rule refuses", () => {
+  // The same entity in the configuration is refused with that code; in the definition file it is
+  // left to the roads that know whether the address is new. `SLUG_SAME_SNAKE_CASE` compares two
+  // entities, so no entity judged alone meets it.
+  it.each([
+    ["SLUG_INVALID_FORMAT", "Blog Posts"],
+    ["SLUG_TOO_LONG", "a".repeat(300)],
+    ["SLUG_RESERVED", "users"],
+    ["SLUG_SQL_KEYWORD", "view"],
+  ])("%s is not reported", (code, slug) => {
+    const entity = { slug, fields: [{ name: "body", type: "text" }] };
+
+    expect(
+      configurationProblems({ collections: [entity] }).map(each => each.code)
+    ).toContain(code);
+    expect(
+      builderDefinitionProblems({ collections: [entity] }, {}, "ui-schema.json")
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["missing", {}],
+    ["a number", { slug: 7 }],
+  ])("but a slug that is %s is reported", (_, slug) => {
+    const problems = builderDefinitionProblems(
+      {
+        collections: [{ ...slug, fields: [{ name: "body", type: "text" }] }],
+      },
+      {},
+      "ui-schema.json"
+    );
+
+    expect(problems.map(each => each.path)).toEqual([
+      "ui-schema.json collections[0].slug",
+    ]);
+  });
+});

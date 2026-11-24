@@ -463,8 +463,8 @@ export function configurationProblems(
  * address rule judges (`shared/address-rule`), which the Builder's save and the migrate commands
  * ask only of a new or changed address, as they know which are; one that already exists keeps
  * working. A slug that is missing or not a string is still reported: the Builder never writes one.
- * A field named by a SQL keyword (`select`, `order`) too: the Builder's own field-name rule
- * (`fieldNameProblem`) has no keyword rule, as a column's name is always quoted.
+ * A field named by a SQL keyword (`select`, `order`) too: the Builder's field save takes one
+ * (`applySchemaChanges`), though creating a collection with one is refused.
  */
 const BUILDER_ALLOWS: ReadonlySet<string> = new Set([
   "FIELDS_EMPTY",
@@ -507,7 +507,8 @@ function fieldsWithTargetsAsBuilderReads(
 /**
  * Whether `problem` is the missing name of a group that only lays its fields out: the one field
  * the definition format lets go without a name (`ui-schema.ts`), whose fields are stored where it
- * sits. The code rules ask every field for a name; a nameless field of any other type is reported.
+ * sits. The Builder's field save takes one, as its create does inside a container. The code rules
+ * ask every field for a name; a nameless field of any other type is reported.
  */
 function isLayoutGroupName(
   lists: Readonly<Record<string, readonly unknown[]>>,

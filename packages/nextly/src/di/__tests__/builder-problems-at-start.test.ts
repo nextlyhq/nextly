@@ -87,8 +87,10 @@ describe("a Builder entity with a problem, served by a start", () => {
     expect(warned[0]).toContain("490 more");
   });
 
-  it("shows a long or unprintable name cut and escaped", () => {
-    const name = `${"x".repeat(5_000)}\u001b[2J\n`;
+  it.each([
+    ["a long name is cut", "x".repeat(5_000)],
+    ["control characters are not printed", "ca\u001b[2J\nses"],
+  ])("shows no name as it came: %s", (_, name) => {
     warnOfBuilderProblemsAtStart({
       entities: entities([row(name, twice)]),
       code: {},
@@ -96,8 +98,12 @@ describe("a Builder entity with a problem, served by a start", () => {
       when: "now",
     });
 
+    expect(warned).toHaveLength(1);
     expect(warned[0]?.length).toBeLessThan(2_000);
-    expect(warned[0]).not.toMatch(/[\u0000-\u001f]/);
+    expect(
+      Array.from(warned[0] ?? "").filter(char => char < " "),
+      warned[0]
+    ).toEqual([]);
   });
 });
 
