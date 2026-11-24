@@ -109,13 +109,13 @@
  * able to vouch for it, most often because the connection dropped or the
  * computer slept past the deadline. So the beat goes on asking, with the
  * token the claim had, on every beat and at once when the browser says it is
- * online or the tab is shown again. Renewed keeps the claim; refused with
- * nobody holding a live claim claims it again with a plain claim, which
- * displaces nobody; refused by a live claim, anyone's (the same person's
- * other tab included), reports who took it, and then waits for the person as
- * any takeover does. Asked by renewal first, not by a claim, because the
- * server hands a person's own live claim to any claim of theirs: a claim
- * would take the document from their other tab.
+ * online or the tab is shown again. Refused by a live claim, anyone's (the
+ * same person's other tab included), it reports who took it, and then waits
+ * for the person as any takeover does. Otherwise nobody else holds it, and a
+ * plain claim, which displaces nobody, takes it back under a new token: the
+ * release sent with the old one may still land. Asked by renewal first, not
+ * by a claim, because the server hands a person's own live claim to any
+ * claim of theirs: a claim would take the document from their other tab.
  *
  * ## The beat also says whether the document changed
  *
@@ -389,9 +389,11 @@ export function useDocumentLock({
     // see "A claim lost to silence asks again". Null once answered, and for a
     // claim the server said someone else took.
     let lapsed: string | null = null;
-    // Whether an ask about `lapsed` is on its way, so a wake-up and a beat in
-    // the same moment send one.
-    let askingLapsed = false;
+    // The ask about `lapsed` holding its slot, so a wake-up and a beat in the
+    // same moment send one; null while none does. Counted, so an ask whose slot
+    // expired cannot free the slot of the one after it.
+    let lapsedAsk: number | null = null;
+    let lapsedAsks = 0;
     // Whether a colleague's claim has been reported since this editor last
     // held the document, and whether it has held it at all in this run. A
     // claim won after the first, and never the second, is a gain.
@@ -679,9 +681,19 @@ export function useDocumentLock({
      */
     const askAboutLapsed = () => {
       const asked = lapsed;
-      if (cancelled || asked === null || askingLapsed) return;
-      askingLapsed = true;
-      const sentAt = Date.now();
+      if (cancelled || asked === null || lapsedAsk !== null) return;
+      const seq = (lapsedAsks += 1);
+      lapsedAsk = seq;
+      const freeSlot = () => {
+        if (lapsedAsk === seq) lapsedAsk = null;
+      };
+      // 🔴 Bounded as a claim's slot is: a request that never answers must
+      // not stop every later beat and wake-up from asking again. Its reply,
+      // if it comes, is still read under the fence below.
+      const slotExpiry = setTimeout(
+        freeSlot,
+        DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS
+      );
       void protectedApi
         .patch<MutationResponse<RenewDocumentLockOutcome>>(
           "/document-lock",
@@ -690,24 +702,30 @@ export function useDocumentLock({
         .then(({ item }) => {
           // Answered already, or the person took it back meanwhile.
           if (cancelled || lapsed !== asked) return;
+          // 🔴 A live claim of someone else's: theirs, and the person decides.
+          // Anything else is a claim nobody else holds: still this editor's
+          // own, or gone. Either way it is taken with a plain claim and a NEW
+          // token, never by keeping the old one: the release sent with the
+          // old token when it was lost may still be on its way, and landing
+          // after a reinstall it would delete the claim this editor relies on.
+          const theirs =
+            item.status !== "renewed" &&
+            item.holder !== undefined &&
+            item.holder.expiresInSeconds > 0;
           lapsed = null;
-          if (item.status === "renewed") {
-            installAcquired(asked, sentAt);
-            tell(item.changed, true);
+          if (theirs) {
+            setState({ status: "taken-over", holder: item.holder });
             return;
           }
-          if (item.holder === undefined || item.holder.expiresInSeconds <= 0) {
-            surrendered = false;
-            void acquire(false);
-            return;
-          }
-          setState({ status: "taken-over", holder: item.holder });
+          surrendered = false;
+          void acquire(false);
         })
         .catch(() => {
           // Still unreachable: the next beat, or the next wake-up, asks again.
         })
         .finally(() => {
-          askingLapsed = false;
+          clearTimeout(slotExpiry);
+          freeSlot();
         });
     };
 

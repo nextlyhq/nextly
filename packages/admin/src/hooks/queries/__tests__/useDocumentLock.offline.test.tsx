@@ -82,22 +82,65 @@ afterEach(() => {
 });
 
 describe("a claim lost while offline", () => {
-  it("is renewed once the connection is back, while the server still holds it", async () => {
+  it("takes a fresh claim when its old one is still live, so a late release cannot remove it", async () => {
     const { result } = await lostWhileOffline();
 
+    // The release sent when the claim was lost is still on its way.
+    let releaseLands: () => void = () => {};
+    del.mockReturnValue(
+      new Promise<void>(resolve => {
+        releaseLands = resolve;
+      })
+    );
     patch.mockResolvedValue({
       message: "",
       item: { status: "renewed", waiting: false },
     });
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "t2" },
+    });
     await beat();
 
     await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
-    expect(patch).toHaveBeenLastCalledWith("/document-lock", {
+    // Asked about with the old token, then held under a new one: the release
+    // names the old token, so it deletes nothing when it lands.
+    expect(patch).toHaveBeenCalledWith("/document-lock", {
       ...ref,
       claimToken: "t1",
     });
-    // Nothing claimed again: the lease was still this editor's.
-    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenLastCalledWith("/document-lock", {
+      ...ref,
+      takeover: false,
+      requestAccess: false,
+    });
+    await act(async () => {
+      releaseLands();
+    });
+    await beat();
+    expect(patch).toHaveBeenLastCalledWith("/document-lock", {
+      ...ref,
+      claimToken: "t2",
+    });
+  });
+
+  it("asks again when an ask never answers", async () => {
+    const { result } = await lostWhileOffline();
+
+    // The first ask after the outage stalls; the next one is answered.
+    patch.mockReturnValueOnce(new Promise(() => {}));
+    patch.mockResolvedValue({ message: "", item: { status: "lost" } });
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "t2" },
+    });
+    const asked = patch.mock.calls.length;
+    await beat();
+    expect(patch).toHaveBeenCalledTimes(asked + 1);
+
+    await beat(2);
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(patch.mock.calls.length).toBeGreaterThan(asked + 1);
   });
 
   it("is claimed again with a plain claim when the server let it go and nobody took it", async () => {
@@ -159,10 +202,7 @@ describe("a claim lost while offline", () => {
     await beat(3);
     expect(result.current.state.status).toBe("lost");
 
-    patch.mockResolvedValue({
-      message: "",
-      item: { status: "renewed", waiting: false },
-    });
+    patch.mockResolvedValue({ message: "", item: { status: "lost" } });
     await beat();
     await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
   });
