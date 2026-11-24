@@ -856,21 +856,28 @@ describe.each(getConfiguredTestDialects())(
     // On SQLite a save holds the collection in the process, and every transaction takes its turn
     // on one connection: a write on a transaction already open, which holds that turn, is refused
     // at once while a save holds it, rather than waiting for a save that needs the turn to finish.
+    // Refused as a write that waits out its turn is, the database busy, to be sent again after a
+    // while; waited for as that one waits, it would only be refused later, the save no further on.
     it.runIf(dialect === "sqlite")(
-      "refuses at once a write on a transaction already open while a save holds the collection",
+      "refuses at once, as the database being busy, a write on a transaction already open while a save holds the collection",
       async () => {
         const t = await boot();
         const release = await holdEntityInProcess(t.adapter, {
           kind: "collection",
           slug: SLUG,
         });
+        const began = Date.now();
         try {
           await expect(heldFor(t, undefined)).rejects.toMatchObject({
-            code: "COLLECTION_BEING_CHANGED",
+            code: "DATABASE_BUSY",
+            statusCode: 503,
+            publicData: { retryAfterSeconds: 5 },
           });
         } finally {
           release();
         }
+        // Well under the five seconds a write that waits its turn would have waited.
+        expect(Date.now() - began).toBeLessThan(1_000);
         await expect(heldFor(t, undefined)).resolves.toBeUndefined();
       },
       30_000

@@ -44,6 +44,13 @@ function entityBeingChanged(entity: EntityRef, reason: string): NextlyError {
   });
 }
 
+/** The refusal of an entry write a save keeps from its turn on SQLite's one connection. */
+function entityBusy(entity: EntityRef, reason: string): NextlyError {
+  return NextlyError.databaseBusy({
+    logContext: { reason, entity: entityHoldKey(entity) },
+  });
+}
+
 /**
  * `attempt` run until it answers true, pausing a little longer each time, and `refused` thrown once
  * `waitMs` has passed without it: a wait bounded as the other databases' lock waits are.
@@ -258,13 +265,7 @@ export async function shareEntityInProcess(
   await waitInProcess(
     hold,
     () => !hold.held && hold.saving === 0,
-    () =>
-      NextlyError.databaseBusy({
-        logContext: {
-          reason: "entity-share-timeout",
-          entity: entityHoldKey(entity),
-        },
-      }),
+    () => entityBusy(entity, "entity-share-timeout"),
     waitOf(hold.busyTimeoutMs)
   );
   hold.sharing += 1;
@@ -278,9 +279,10 @@ export async function shareEntityInProcess(
 }
 
 /**
- * Refuses, at once, an entry write on a transaction already open (a caller's, or one the flow
- * opened) while a save holds `entity` in this process on SQLite: the write holds the one
- * connection's turn, and the save needs a turn to finish, so waiting for it would wait forever.
+ * Refuses, at once, as the database being busy, an entry write on a transaction already open (a
+ * caller's, or one the flow opened) while a save holds `entity` in this process on SQLite: the write
+ * holds the one connection's turn, and the save needs a turn to finish, so waiting for it would wait
+ * forever.
  * Where no save holds it, a save that takes it later counts in a turn of its own, after this
  * transaction has ended, so its count includes the write.
  */
@@ -289,7 +291,7 @@ export function refuseWhileHeldInProcess(
   entity: EntityRef
 ): void {
   if (processHoldOf(owner, entity).held) {
-    throw entityBeingChanged(entity, "entity-held-in-open-transaction");
+    throw entityBusy(entity, "entity-held-in-open-transaction");
   }
 }
 
