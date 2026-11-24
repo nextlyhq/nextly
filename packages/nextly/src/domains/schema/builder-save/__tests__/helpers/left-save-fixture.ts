@@ -54,6 +54,9 @@ import {
   SCHEMA_LOCK_TABLE,
 } from "../../../pipeline/schema-lock";
 
+import { settleLeftSaves } from "../../settle-left-save";
+import { settleRegistryWriter } from "../../settle-registry";
+
 import { kill, stopHere } from "./stop-at-kill";
 
 const run = promisify(execFile);
@@ -627,7 +630,39 @@ export function leftSaveSuite({
     o.status === 500 ||
     o.code === "INTERNAL_ERROR";
 
+  /** Every row of the collection's table, as the database holds it. */
+  async function rows(t: TestNextly): Promise<string[]> {
+    const found = (await t.adapter.executeQuery(
+      `SELECT * FROM ${table} ORDER BY slug`
+    )) as unknown as Array<Record<string, unknown>>;
+    return found.map(row => JSON.stringify(row));
+  }
+
+  /** Settled as the next development start does. */
+  const settle = (t: TestNextly) =>
+    settleLeftSaves({
+      adapter: t.adapter,
+      projectRoot: basePath,
+      migrationsDir: join(basePath, MIGRATIONS),
+      logger: { info: () => undefined, warn: () => undefined },
+      writeRegistry: settleRegistryWriter(t.adapter),
+    });
+
+  /** What a refused write answers: the field named, under its own code, over REST as a 409. */
+  function expectRefused(refused: Outcome, named = "heading"): void {
+    expect(refused.ok, JSON.stringify(refused)).toBe(false);
+    expect(databaseError(refused), JSON.stringify(refused)).toBe(false);
+    expect(refused.code, JSON.stringify(refused)).toBe(
+      "BUILDER_SAVE_FIELD_UNSETTLED"
+    );
+    expect(refused.message, JSON.stringify(refused)).toMatch(`"${named}"`);
+    if (refused.via === "rest") expect(refused.status).toBe(409);
+  }
+
   return {
+    rows,
+    settle,
+    expectRefused,
     slug,
     field,
     table,
