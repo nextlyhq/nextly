@@ -5,7 +5,8 @@
  *
  * Both roads that write one: the Schema Builder's dialog, and `nextly migrate:create --accept-moves`
  * over a code-first config. One change moves a field into a group, one out of a group into a required
- * column and one between groups, and adds a field.
+ * column and one between groups, and adds a field; in the Builder it also adds a relationship and a
+ * many-to-many, whose key and junction statements the moves' stand around.
  */
 import {
   mkdirSync,
@@ -53,6 +54,8 @@ vi.mock("../../../../cli/utils/config-loader", async importOriginal => ({
 }));
 
 const SLUG = "mfu_posts";
+/** The collection the Builder's relationships point to. */
+const OTHER = "mfu_people";
 const MOVES = [
   { from: ["summary"], to: ["meta", "summary"] },
   { from: ["meta", "subtitle"], to: ["subtitle"] },
@@ -152,6 +155,12 @@ const inBuilder = (after: boolean): Record<string, unknown>[] =>
     ? [
         field("subtitle", { required: true }),
         field("extra"),
+        { name: "author", type: "relationship", options: { target: OTHER } },
+        {
+          name: "tags",
+          type: "relationship",
+          options: { relationType: "manyToMany", target: OTHER },
+        },
         {
           name: "meta",
           type: "group",
@@ -228,15 +237,19 @@ describe.each(["sqlite", "postgresql"] as const)(
             uiSchemaFile: "./ui-schema.json",
           },
         });
-        await instance.getService("collectionService").createCollection(
-          {
-            name: SLUG,
-            label: "Post",
-            localized: false,
-            fields: inBuilder(false),
-          } as Parameters<CollectionService["createCollection"]>[0],
-          {}
-        );
+        for (const [name, fields] of [
+          [OTHER, [field("label")]],
+          [SLUG, inBuilder(false)],
+        ] as const) {
+          await instance
+            .getService("collectionService")
+            .createCollection(
+              { name, label: name, localized: false, fields } as Parameters<
+                CollectionService["createCollection"]
+              >[0],
+              {}
+            );
+        }
         const before = migrations();
         await dispatchCollections(
           {} as ServiceContainer,

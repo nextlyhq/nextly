@@ -156,7 +156,7 @@ describe("a field moved into a group, on MySQL", () => {
     // Back: the values first, then NOT NULL.
     const copied = step.down.findIndex(s => WRITES.test(s));
     const tightened = step.down.flatMap((statement, at) =>
-      /`summary`.*NOT NULL/is.test(statement) ? [at] : []
+      /MODIFY COLUMN `summary`.*NOT NULL/is.test(statement) ? [at] : []
     );
     expect(copied).toBeGreaterThanOrEqual(0);
     expect(tightened.length).toBeGreaterThan(0);
