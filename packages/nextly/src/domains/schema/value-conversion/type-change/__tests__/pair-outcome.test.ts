@@ -57,6 +57,26 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
     expect(outcome("text", "select", {}, choices)).toBe("may-lose");
   });
 
+  // A choice given no options yet takes them later, and the values are judged against those then:
+  // nothing here says every value will be one of them.
+  it("may lose values: a text becoming a choice that has no options yet", () => {
+    expect(outcome("text", "select")).toBe("may-lose");
+    expect(outcome("text", "radio")).toBe("may-lose");
+    // A dropdown taking several choices too.
+    expect(
+      outcome("text", "select", {}, {
+        hasMany: true,
+      } as Partial<FieldDefinition>)
+    ).toBe("may-lose");
+  });
+
+  // An email field holds addresses, which none of the plain text probes is: judged over one.
+  it("judges an email field over an address it holds: lost as a checkbox, rewritten as rich text", () => {
+    expect(outcome("email", "checkbox")).toBe("may-lose");
+    expect(outcome("email", "richText")).toBe("converts");
+    expect(outcome("email", "text")).toBe("keeps");
+  });
+
   it("is blocked whatever the values hold: a group, or a relationship to text", () => {
     expect(outcome("group", "text", { fields: [] })).toBeNull();
     expect(outcome("relationship", "text", { relationTo: "posts" })).toBeNull();

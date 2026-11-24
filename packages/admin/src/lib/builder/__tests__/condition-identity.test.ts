@@ -360,6 +360,62 @@ describe("a saved dropdown source whose type changes", () => {
     );
   });
 
+  // A comparison made or repaired after the change reads the field as it is now: a text can equal
+  // "archived", and no option was ever compared with it by this condition.
+  it("changed to text, does not break a condition made after, or changed to name another value", () => {
+    const asText = field("status", { type: "text" });
+    const saidNothing = [field("teaser"), status(["draft", "archived"])];
+    expect(
+      brokenConditions(
+        [gated("teaser", "status", "archived"), asText],
+        saidNothing
+      ).has("f-teaser")
+    ).toBe(false);
+    // A saved condition the person has since changed to another value or operator.
+    const draft = [gated("teaser", "status", "draft"), status(["draft"])];
+    expect(
+      brokenConditions(
+        [gated("teaser", "status", "archived"), asText],
+        draft
+      ).get("f-teaser")?.reason
+    ).toBeUndefined();
+  });
+
+  // An id can repeat across containers: the saved source is the one on the reader's own level.
+  it("reads the saved source on the reader's own level where an id repeats", () => {
+    const teaser = gated("teaser", "status", "archived");
+    const saved = [
+      field("first", {
+        type: "group",
+        fields: [teaser, status(["draft", "archived"])],
+      }),
+      // Another container whose fields share ids, with no such option.
+      field("second", {
+        type: "group",
+        fields: [teaser, field("status", { type: "select", options: [] })],
+      }),
+    ];
+    const nowStatus = field("status", { type: "text" });
+    const now = [
+      field("first", { type: "group", fields: [teaser, nowStatus] }),
+      field("second", { type: "group", fields: [teaser, nowStatus] }),
+    ];
+    // Read in each group alone, whichever the id lookup would reach first.
+    const groupFirst = now.map(each =>
+      each.name === "first" ? each : { ...each, fields: [] }
+    );
+    const groupSecond = now.map(each =>
+      each.name === "second" ? each : { ...each, fields: [] }
+    );
+    expect(
+      brokenConditions(groupFirst as BuilderField[], saved).get("f-teaser")
+        ?.reason
+    ).toBe("option-removed");
+    expect(
+      brokenConditions(groupSecond as BuilderField[], saved).has("f-teaser")
+    ).toBe(false);
+  });
+
   it("not yet saved, is judged from the fields as they stand", () => {
     const now = [
       gated("teaser", "status", "archived"),
