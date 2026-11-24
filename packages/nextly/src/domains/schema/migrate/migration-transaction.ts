@@ -32,7 +32,11 @@ import {
   markedForSchemaLock,
 } from "../pipeline/schema-lock";
 
-import { commitsOnMysql, durableRowsOf } from "./mysql-implicit-commit";
+import {
+  commitsOnMysql,
+  durableRowsOf,
+  runsAnotherStatementOnMysql,
+} from "./mysql-implicit-commit";
 import { requiredColumnCheckpoint } from "./required-column-guard";
 import { leadingWords } from "./split-sql";
 import {
@@ -693,6 +697,16 @@ async function executeTolerated(
   }
 }
 
+/** MySQL's ER_PARSE_ERROR: the server could not read the statement, so it ran none of it. */
+const MYSQL_PARSE_ERROR = { code: "ER_PARSE_ERROR", errno: 1064 };
+
+function isMysqlParseError(error: unknown): boolean {
+  return causeChain(error).some(
+    ({ code, errno }) =>
+      code === MYSQL_PARSE_ERROR.code || errno === MYSQL_PARSE_ERROR.errno
+  );
+}
+
 /** MySQL's ER_LOCK_DEADLOCK: the transaction was rolled back whole, the deadlock's victim. */
 const MYSQL_DEADLOCK = { code: "ER_LOCK_DEADLOCK", errno: 1213 };
 
@@ -937,6 +951,14 @@ async function runUnitStatements(
               bound
             );
           } catch (error) {
+            // MySQL never ran a statement it could not parse, so nothing of it was committed. A
+            // statement that runs another could have, before the one that failed to parse.
+            if (
+              isMysqlParseError(error) &&
+              !runsAnotherStatementOnMysql(statement)
+            ) {
+              durable.unread();
+            }
             throw afterDurableRows(
               durable.kept(),
               unit,
