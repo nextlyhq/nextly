@@ -77,13 +77,17 @@ answered in `_locale`, and each language is still read as the caller. Every othe
 refuses the option with a `400`.
 
 ```ts
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+
 // A French visitor is sent to the French page once it is published, and to the
 // published default until then.
-const page = await ctx.services.collections.findEntryById("pages", id, {
-  as: "public",
-  locale: "fr",
-  wholeDocumentFallback: true,
-});
+export function frenchPageFor(ctx: PluginContext, id: string) {
+  return ctx.services.collections.findEntryById("pages", id, {
+    as: "public",
+    locale: "fr",
+    wholeDocumentFallback: true,
+  });
+}
 ```
 
 What an unconfigured code means depends on the verb, and deliberately so. A **read**
@@ -159,20 +163,29 @@ service types are `@experimental` and exported from `@nextlyhq/plugin-sdk`.
 `listEntries` takes a `QueryOptions`:
 
 ```ts
-const result = await ctx.services.collections.listEntries(
-  slug,
-  {
-    where: { status: "published", authorId: someId }, // filter (key/value)
-    sort: { field: "createdAt", direction: "desc" }, // single-field sort
-    pagination: { limit: 20, page: 1 }, // page through results
-    depth: 1, // 0–5: how deep to populate relations (0 = ids only)
-    select: { title: true, slug: true }, // projection: return only these fields
-  },
-  { as: "system" }
-);
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
-result.data; // the rows for this page
-result.pagination; // { total, limit, offset, hasMore }
+export async function publishedBy(
+  ctx: PluginContext,
+  slug: string,
+  authorId: string
+) {
+  const result = await ctx.services.collections.listEntries(
+    slug,
+    {
+      where: { status: "published", authorId }, // filter (key/value)
+      sort: { field: "createdAt", direction: "desc" }, // single-field sort
+      pagination: { limit: 20, page: 1 }, // page through results
+      depth: 1, // 0–5: how deep to populate relations (0 = ids only)
+      select: { title: true, slug: true }, // projection: return only these fields
+    },
+    { as: "system" }
+  );
+
+  result.data; // the rows for this page
+  result.pagination; // { total, limit, offset, hasMore }
+  return result;
+}
 ```
 
 Use `depth: 0` when you only need scalar fields (e.g. building a sitemap) — it avoids
@@ -195,19 +208,23 @@ const res = await ctx.services.collections.createMany(slug, rows, {
 call with the patch repeated:
 
 ```ts
-const res = await ctx.services.collections.updateMany(
-  slug,
-  [
-    // Each row says which version it changes (its `_rev`), or that it
-    // replaces whatever is stored.
-    { id: "post-1", data: { status: "published", _rev: "7" } },
-    {
-      id: "post-2",
-      data: { status: "archived", pinned: false, _overwrite: true },
-    },
-  ],
-  { as: "system" }
-);
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+
+export function publishOneArchiveOther(ctx: PluginContext, slug: string) {
+  return ctx.services.collections.updateMany(
+    slug,
+    [
+      // Each row says which version it changes (its `_rev`), or that it
+      // replaces whatever is stored.
+      { id: "post-1", data: { status: "published", _rev: "7" } },
+      {
+        id: "post-2",
+        data: { status: "archived", pinned: false, _overwrite: true },
+      },
+    ],
+    { as: "system" }
+  );
+}
 ```
 
 `errors[].index` indexes **the array you passed**, so the row a failure is about is
@@ -223,27 +240,32 @@ each time on purpose: every updated row leaves the `draft` filter, so the rows t
 still match move up into it.
 
 ```ts
-let updated = 0;
-for (;;) {
-  const page = await ctx.services.collections.listEntries(
-    slug,
-    { where: { status: "draft" }, pagination: { limit: 100 }, depth: 0 },
-    { as: "system" }
-  );
-  if (page.data.length === 0) break;
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
-  const res = await ctx.services.collections.updateMany(
-    slug,
-    page.data.map((row: { id: string; _rev: string }) => ({
-      id: row.id,
-      data: { status: "published", _rev: row._rev },
-    })),
-    { as: "system" }
-  );
-  updated += res.successful;
-  // Nothing moved: the rest are failing rather than draining, so stop rather
-  // than read the same page forever.
-  if (res.successful === 0) break;
+export async function publishAllDrafts(ctx: PluginContext, slug: string) {
+  let updated = 0;
+  for (;;) {
+    const page = await ctx.services.collections.listEntries(
+      slug,
+      { where: { status: "draft" }, pagination: { limit: 100 }, depth: 0 },
+      { as: "system" }
+    );
+    if (page.data.length === 0) break;
+
+    const res = await ctx.services.collections.updateMany(
+      slug,
+      page.data.map(row => ({
+        id: row.id,
+        data: { status: "published", _rev: row._rev },
+      })),
+      { as: "system" }
+    );
+    updated += res.successful;
+    // Nothing moved: the rest are failing rather than draining, so stop rather
+    // than read the same page forever.
+    if (res.successful === 0) break;
+  }
+  return updated;
 }
 ```
 
@@ -331,19 +353,30 @@ in one transaction, without publishing anything. Each draft stays a draft, and t
 doesn't change.
 
 ```ts
-const page = await ctx.services.collections.findEntryById("pages", id, {
-  as: "system",
-});
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
-const { version, copies } = await ctx.services.collections.rewriteField({
-  collection: "pages",
-  id,
-  field: "layout",
-  expectedVersion: page._rev,
-  set: { value: null },
-  reason: `Layout "${layout.title}" was deleted`,
-});
-// copies: [{ form: "live", locale: null }, { form: "draft", locale: null }]
+export async function moveOffLayout(
+  ctx: PluginContext,
+  id: string,
+  layout: { title: string }
+) {
+  const page = await ctx.services.collections.findEntryById("pages", id, {
+    as: "system",
+  });
+  // A rewrite starts from the version read; an entry with none has nothing to rewrite from.
+  if (page._rev === undefined) return null;
+
+  const { version, copies } = await ctx.services.collections.rewriteField({
+    collection: "pages",
+    id,
+    field: "layout",
+    expectedVersion: page._rev,
+    set: { value: null },
+    reason: `Layout "${layout.title}" was deleted`,
+  });
+  // copies: [{ form: "live", locale: null }, { form: "draft", locale: null }]
+  return { version, copies };
+}
 ```
 
 A Single is rewritten through the same call, named by its slug instead of a collection and an id:
@@ -644,18 +677,23 @@ component. Each collection and Single is judged by the schema read in the same s
 as itself. A plugin that registered no field type gets both lists empty.
 
 ```ts
-await ctx.services.collections.withTransaction(async tx => {
-  const { collections, singles } =
-    await ctx.services.ownCollections.listHostTypesInTransaction(tx);
-  for (const collection of collections) {
-    const page = await ctx.services.ownCollections.listHostEntriesInTransaction(
-      tx,
-      collection.name,
-      { pagination: { limit: 50 } }
-    );
-    // ...
-  }
-});
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+
+export async function readHostContent(ctx: PluginContext) {
+  await ctx.services.collections.withTransaction(async tx => {
+    const { collections, singles } =
+      await ctx.services.ownCollections.listHostTypesInTransaction(tx);
+    for (const collection of collections) {
+      const page =
+        await ctx.services.ownCollections.listHostEntriesInTransaction(
+          tx,
+          collection.name,
+          { pagination: { limit: 50 } }
+        );
+      // ...
+    }
+  });
+}
 ```
 
 ## When to drop to `ctx.db`

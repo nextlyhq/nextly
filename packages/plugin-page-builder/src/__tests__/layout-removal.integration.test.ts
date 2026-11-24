@@ -69,6 +69,7 @@ import {
 } from "../layout-removal/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import { settleDefaultLayout } from "./settle-default-layout";
 
 const SLUGS = {
   layouts: LAYOUTS_SLUG,
@@ -242,7 +243,10 @@ describe.each(getConfiguredTestDialects())(
         plugins: [pageBuilder(), probePlugin(probe), ...extra],
         seedPublic: true,
       });
-      await ensure(current);
+      // The boot's own seed waited out, and the default then settled
+      // (`settleDefaultLayout`).
+      const t = current;
+      await settleDefaultLayout(() => ensure(t));
       return current;
     }
 

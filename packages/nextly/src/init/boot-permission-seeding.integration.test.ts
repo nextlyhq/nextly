@@ -80,11 +80,19 @@ afterEach(async () => {
  * This is deliberately `registerServices` and no more: no post-init tasks, no
  * `seedAllPermissions`, no migration step. It is the state the route handler
  * is in at the moment it reaches its own seeding call.
+ *
+ * The collection is opened to the admin preset by name, as a collection must
+ * be for a preset role to reach it: closed, the preset case below would hold
+ * nothing however the seeding ran.
  */
 async function bootRegisterServicesOnly(): Promise<TestNextly> {
   const handle = await createTestNextly({
     collections: [
-      { slug: "articles", fields: [{ name: "title", type: "text" }] },
+      {
+        slug: "articles",
+        fields: [{ name: "title", type: "text" }],
+        grants: { presets: ["admin"] },
+      },
     ],
   });
   current = handle;

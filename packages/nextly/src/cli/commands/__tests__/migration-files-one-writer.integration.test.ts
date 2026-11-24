@@ -48,6 +48,7 @@ import {
   acquireWriterHold,
   setWriterHoldBounds,
 } from "../../../domains/schema/migrate-create/writer-hold";
+import { writeRegistryRows } from "../../../domains/schema/schema-version";
 import { withSchemaChangeExcluded } from "../../../domains/schema/services/schema-change-exclusion";
 import {
   createTestNextly,
@@ -56,6 +57,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
+import type { DynamicCollectionInsert } from "../../../schemas/dynamic-collections/types";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import { toCliError } from "../../errors/from-thrown";
 import { formatCliError } from "../../errors/render";
@@ -348,7 +350,13 @@ describe.each(getConfiguredTestDialects())(
       vi.restoreAllMocks();
     });
 
-    /** A Schema Builder create of the notes collection, as the service makes it. */
+    /**
+     * A Schema Builder create of the notes collection, as the service makes it:
+     * its files through the Builder's writer, then its registry row, inside the
+     * exclusion. The registry write is what ends the save's record that it is in
+     * progress, so a save that went through leaves none behind for
+     * `migrate:create` to refuse over.
+     */
     async function builderCreate(): Promise<Ended> {
       const deps: CollectionSaveDeps = {
         adapter,
@@ -369,13 +377,32 @@ describe.each(getConfiguredTestDialects())(
             // As the service gives it: where the save's writer writes.
             migrationsDir: deps.migrationsDir,
           },
-          () =>
-            writeCollectionSave(deps, {
+          async () => {
+            await writeCollectionSave(deps, {
               slug: NOTES,
               previous: null,
               entity: notes,
               change: "create",
-            })
+            });
+            // As outside development, the row is written once the files are,
+            // with the stored schema version moved in the same transaction.
+            // Its permissions are seeded after that transaction, as the
+            // service seeds them, and nothing here reads them.
+            await writeRegistryRows(adapter, () =>
+              instance!
+                .getService("collectionRegistryService")
+                .registerCollection(
+                  {
+                    slug: NOTES,
+                    labels: notes.labels!,
+                    tableName: table(NOTES),
+                    fields: notes.fields as DynamicCollectionInsert["fields"],
+                    source: "ui",
+                  } as DynamicCollectionInsert,
+                  { seedPermissions: false }
+                )
+            );
+          }
         );
         return { code: undefined, said: "" };
       } catch (error) {
@@ -608,13 +635,14 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     /**
-     * A Builder save stopped past its lease while it writes, after it has
-     * changed its definition, with `migrate:create` taking the folder and
-     * writing meanwhile. Answers how each ended.
+     * A Builder save stopped past its lease while it writes, with
+     * `migrate:create` taking the folder meanwhile. Answers how each ended,
+     * and what the command printed as it ended.
      */
     async function stalledSaveTakenOver(): Promise<{
       saved: Ended;
       created: Ended | undefined;
+      refusal: string;
     }> {
       restoreBounds();
       restoreBounds = setWriterHoldBounds({
@@ -624,43 +652,49 @@ describe.each(getConfiguredTestDialects())(
         renewMs: 600_000,
       });
       let created: Ended | undefined;
+      let refusal = "";
       // The save holds the folder, has listed what is in it, and is about to
       // write its files. Stopped there past its lease, it resumes after
-      // `migrate:create` has taken the folder and written.
+      // `migrate:create` has taken the folder.
       stops.beforePrepared = async () => {
         await pause(1_200);
         created = await migrateCreate(WITH_PAGES, "pages");
+        refusal = printed.join("\n");
       };
 
       const saved = await builderCreate();
-      return { saved, created };
+      return { saved, created, refusal };
     }
 
-    it("a Builder save overtaken while it writes leaves the other writer's migration where it is", async () => {
-      const { saved, created } = await stalledSaveTakenOver();
+    // A save whose lease lapsed is, to the command that takes the folder, a
+    // save whose process stopped: its record that it is in progress stands,
+    // and the command refuses over it rather than plan from a folder the save
+    // may have left part-way.
+    it("migrate:create taking the folder from a Builder save stopped past its lease refuses over its record, and the save resumes to write nothing", async () => {
+      const { saved, created, refusal } = await stalledSaveTakenOver();
 
-      expect(created?.code, created?.said).toBeUndefined();
+      expect(created?.code, created?.said).toBe(1);
+      expect(refusal).toMatch(/BUILDER_SAVE_LEFT_PART_WAY/);
+      expect(refusal).toContain(`collection "${NOTES}"`);
       // The save is refused as overtaken, having written nothing of its own,
-      // and the command's migration and snapshot are still there.
+      // and neither wrote a migration.
       expect(saved.code, saved.said).toBe(-1);
       expect(sqlFiles().map(f => f.replace(/^[\d_]+/, ""))).toEqual([
         "base.sql",
-        "pages.sql",
       ]);
-      // Still one line, each file with its snapshot. The command wrote from
-      // the folder as it found it, the stalled save's definition included.
-      expect(oneLine().flat()).toEqual(
-        expect.arrayContaining([table(POSTS), table(PAGES)])
-      );
+      expect(oneLine()).toEqual([[table(POSTS)]]);
     }, 120_000);
 
-    // The save writes its definition last, after its migration, so the
-    // command that took the folder meanwhile read the definition without the
-    // save's change, and wrote only its own.
-    it("the migration written over a stalled Builder save holds only its own change", async () => {
+    // The overtaken save withdrew, so its record cleared: the command run
+    // again writes, from a folder without the save's change.
+    it("the migration written after a stalled Builder save holds only its own change", async () => {
       const { created } = await stalledSaveTakenOver();
+      expect(created?.code, created?.said).toBe(1);
+      await pause(5);
 
-      expect(created?.code, created?.said).toBeUndefined();
+      const again = await migrateCreate(WITH_PAGES, "pages");
+
+      expect(again.code, again.said).toBeUndefined();
       // The command's migration creates its own collection, and not the
       // one the stalled save was creating.
       expect(oneLine()).toEqual([[table(POSTS)], [table(PAGES)]]);

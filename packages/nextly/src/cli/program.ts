@@ -55,8 +55,8 @@ import { registerWebhooksPruneCommand } from "./commands/webhooks-prune.command"
 import { registerWorkflowStrandedCommands } from "./commands/workflow-stranded.command";
 import { createContext, type CommandContext } from "./context";
 import { CLI_MODES, setModeLineWriter } from "./environment";
-import { declareFirstLine, ownLine, printFirstLine } from "./first-line";
 import { addExitCodesHelp } from "./exit-codes";
+import { declareFirstLine, ownLine, printFirstLine } from "./first-line";
 import { refuseHelpForUnknownCommands } from "./unknown-command-help";
 
 export {

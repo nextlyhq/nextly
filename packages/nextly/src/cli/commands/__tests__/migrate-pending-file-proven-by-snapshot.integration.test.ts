@@ -723,6 +723,127 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    it.runIf(dialect !== "mysql").each([
+      ["refuses it where the key states what no snapshot records", "stating"],
+      ["records it where the key is a plain one", "plain"],
+    ] as const)(
+      "a file creating a table whose body declares a unique key: %s",
+      async (_case, key) => {
+        await dbSync(true);
+        const tags = `${SLUG}_tags`;
+        // PostgreSQL: NULLs that do not count as distinct; SQLite: a descending key.
+        const stating =
+          dialect === "postgresql"
+            ? `UNIQUE NULLS NOT DISTINCT (${q("label")})`
+            : `UNIQUE (${q("label")} DESC)`;
+        const create = `CREATE TABLE ${q(tags)} (${q("id")} varchar(36) PRIMARY KEY, ${q("label")} varchar(64), CONSTRAINT ${q(`${tags}_label_uq`)} ${key === "stating" ? stating : `UNIQUE (${q("label")})`})`;
+        // The table already there, made by the file's own statement.
+        await query(create);
+        try {
+          const text = await withUp(two, [create]);
+          await writeFile(sqlPath(two), text);
+          await rehash(two, text);
+          await retarget(two, [TABLE, tags]);
+
+          if (key === "plain") {
+            await migrate();
+            expect(await ledger(two)).toEqual([
+              { status: "applied", statementsExecuted: 0 },
+            ]);
+            return;
+          }
+          const error = await refusal();
+          expect(error.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
+          expect(error.publicMessage).toContain(
+            `CREATE TABLE ${q(tags)} (not shown by its snapshot)`
+          );
+          expect(await ledger(two)).toEqual([]);
+        } finally {
+          await query(`DROP TABLE IF EXISTS ${q(tags)}`);
+        }
+      }
+    );
+
+    it.runIf(dialect === "postgresql").each([
+      ["refuses it where the key was made by hand not deferrable", "byHand"],
+      ["records it where the key is deferred as the file declares", "same"],
+    ] as const)(
+      "a file adding a column whose key references a table named generated: %s",
+      async (_case, made) => {
+        await dbSync(true);
+        // An unquoted table name that is also a word opening a column constraint. It cannot take
+        // the file's prefix or another schema: the case is the bare word itself, and a key into
+        // another schema is not one migrate reads as the app's. No other file makes a table of
+        // this name; a leftover one is dropped first, and the table is dropped again below.
+        try {
+          await query("DROP TABLE IF EXISTS generated CASCADE");
+          await query("CREATE TABLE generated (id varchar(36) PRIMARY KEY)");
+          const inline = `${q("owner")} varchar(36) CONSTRAINT ${q(`${TABLE}_owner_fk`)} REFERENCES generated (id)`;
+          const add = `ALTER TABLE ${q(TABLE)} ADD COLUMN ${inline} DEFERRABLE INITIALLY DEFERRED`;
+          await query(
+            made === "same"
+              ? add
+              : `ALTER TABLE ${q(TABLE)} ADD COLUMN ${inline}`
+          );
+          const text = await withUp(two, [add]);
+          await writeFile(sqlPath(two), text);
+          await rehash(two, text);
+          await retarget(two);
+
+          if (made === "same") {
+            await migrate();
+            expect(await ledger(two)).toEqual([
+              { status: "applied", statementsExecuted: 0 },
+            ]);
+            return;
+          }
+          const error = await refusal();
+          expect(error.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
+          expect(error.publicMessage).toContain(
+            "(the database does not stand as it leaves it)"
+          );
+          expect(await ledger(two)).toEqual([]);
+        } finally {
+          await query("DROP TABLE IF EXISTS generated CASCADE");
+        }
+      }
+    );
+
+    it.runIf(dialect === "mysql").each([
+      ["records it where the index is a plain one", "plain"],
+      ["refuses it where the index states an order", "stating"],
+    ] as const)(
+      "a file creating a table with an index named nulls: %s",
+      async (_case, index) => {
+        await dbSync(true);
+        const tags = `${SLUG}_tags`;
+        const create = `CREATE TABLE ${q(tags)} (${q("id")} varchar(36) PRIMARY KEY, ${q("label")} varchar(64), INDEX nulls (${q("label")}${index === "stating" ? " DESC" : ""}))`;
+        await query(create);
+        try {
+          const text = await withUp(two, [create]);
+          await writeFile(sqlPath(two), text);
+          await rehash(two, text);
+          await retarget(two, [TABLE, tags]);
+
+          if (index === "plain") {
+            await migrate();
+            expect(await ledger(two)).toEqual([
+              { status: "applied", statementsExecuted: 0 },
+            ]);
+            return;
+          }
+          const error = await refusal();
+          expect(error.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
+          expect(error.publicMessage).toContain(
+            `CREATE TABLE ${q(tags)} (not shown by its snapshot)`
+          );
+          expect(await ledger(two)).toEqual([]);
+        } finally {
+          await query(`DROP TABLE IF EXISTS ${q(tags)}`);
+        }
+      }
+    );
+
     it("runs the edited file whole where the database stands at its start, backfilling the column", async () => {
       const backfill = `UPDATE ${q(TABLE)} SET ${q("summary")} = 'backfilled'`;
       await writeFile(sqlPath(two), await withUp(two, [backfill]));

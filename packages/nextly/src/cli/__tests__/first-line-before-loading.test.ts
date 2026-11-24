@@ -87,9 +87,12 @@ afterEach(() => {
 });
 
 afterAll(() => {
+  // Next.js's types declare NODE_ENV read-only, yet its loader sets it, so it
+  // is put back like the others through the environment's plain record.
+  const env: Record<string, string | undefined> = process.env;
   for (const name of KEPT) {
-    if (kept[name] === undefined) delete process.env[name];
-    else process.env[name] = kept[name];
+    if (kept[name] === undefined) delete env[name];
+    else env[name] = kept[name];
   }
   rmSync(folder, { recursive: true, force: true });
 });

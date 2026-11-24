@@ -264,9 +264,7 @@ function sharedSystemName(
   }
   const name = (field as { name?: unknown }).name;
   if (typeof name !== "string" || !systemNames.has(name)) return null;
-  return fieldProducesColumn(field as Parameters<typeof fieldProducesColumn>[0])
-    ? null
-    : name;
+  return fieldProducesColumn(field) ? null : name;
 }
 
 /**
@@ -276,7 +274,7 @@ function sharedSystemName(
  */
 function placeOf(
   fields: readonly unknown[],
-  target: object,
+  target: unknown,
   at = "fields",
   entered: WeakSet<object> = new WeakSet()
 ): string {
