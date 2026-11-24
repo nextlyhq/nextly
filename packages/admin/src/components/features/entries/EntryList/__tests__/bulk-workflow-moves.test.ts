@@ -154,6 +154,29 @@ describe("bulkMoveSteps", () => {
       expect(answer.stopped).toEqual({ reason: failure, unsent: 250 });
     });
 
+    it("counts what was not sent in documents where each document's parts are sent apart", async () => {
+      // Ten documents of two parts each, four parts a request: the second request fails, so
+      // parts 4 to 19 (documents 2 to 9) were not sent. Counted as parts it would claim 16 of
+      // the 10 documents selected.
+      const parts = Array.from({ length: 20 }, (_, n) => ({
+        document: `doc-${Math.floor(n / 2)}`,
+        part: n % 2 === 0 ? null : "es",
+      }));
+      let requests = 0;
+      const answer = await inBatches(
+        parts,
+        4,
+        batch => {
+          requests += 1;
+          return requests === 2
+            ? Promise.reject(new Error("offline"))
+            : Promise.resolve({ items: batch, errors: [] });
+        },
+        part => part.document
+      );
+      expect(answer.stopped?.unsent).toBe(8);
+    });
+
     it("sends nothing for nothing", async () => {
       const send = vi.fn();
       expect(await inBatches([], 200, send)).toEqual({ items: [], errors: [] });

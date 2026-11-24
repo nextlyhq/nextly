@@ -154,19 +154,15 @@ export function useWaitingForMe({
   if (nextBefore !== undefined && cursors[page + 1] !== nextBefore) {
     setCursors(known => ({ ...known, [page + 1]: nextBefore }));
   }
-  // The list's total, as a read by page number counted it: a read by cursor counts only its page.
-  const [counted, setCounted] = useState<{
-    total: number;
-    capped: boolean;
-  } | null>(null);
-  if (
-    meta !== undefined &&
-    before === undefined &&
-    (counted?.total !== meta.total ||
-      counted.capped !== (meta.totalCapped === true))
-  ) {
-    setCounted({ total: meta.total, capped: meta.totalCapped === true });
-  }
+  // The list's total, as its first page counts it: a read by cursor counts only its own window.
+  // On a page read by cursor, the first page's own query (one cache entry with page 1's) is what
+  // counts, so a refetch on focus or after a move refreshes the count with the rows.
+  const counting = useQuery({
+    queryKey: waitingKeys.page(1, limit, null),
+    queryFn: () => fetchWaitingForMe({ page: 1, limit }),
+    enabled: before !== undefined,
+  });
+  const counted = before === undefined ? meta : counting.data?.meta;
   const collections = useEveryNavCollection();
   const singles = useEverySingle();
   const labels = new Map<string, string>([
@@ -184,10 +180,8 @@ export function useWaitingForMe({
   ]);
   return {
     rows: (query.data?.items ?? []).map(item => waitingRow(item, labels)),
-    total: before === undefined ? (meta?.total ?? 0) : (counted?.total ?? 0),
-    totalCapped:
-      meta?.totalCapped === true ||
-      (before !== undefined && counted?.capped === true),
+    total: counted?.total ?? 0,
+    totalCapped: counted?.totalCapped === true,
     hasNext: meta?.hasNext === true,
     // A page read by cursor always has one before it: the page that handed the cursor over.
     hasPrev: page > 1 || meta?.hasPrev === true,

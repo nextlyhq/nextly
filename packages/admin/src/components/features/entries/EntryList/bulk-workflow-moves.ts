@@ -100,7 +100,8 @@ export const ASSIGNMENTS_PER_REQUEST = 500;
 export interface BatchedMoveAnswer extends BulkMoveAnswer {
   /**
    * Set where a request was not answered (the network, an expired session): why, and how many
-   * items it and every request after it held, none of which was sent.
+   * items it and every request after it held, none of which was sent; counted in the units the
+   * move reports, a document for an assignment sent part by part.
    */
   stopped?: { reason: unknown; unsent: number };
 }
@@ -115,7 +116,12 @@ export interface BatchedMoveAnswer extends BulkMoveAnswer {
 export async function inBatches<T>(
   items: readonly T[],
   size: number,
-  send: (batch: T[]) => Promise<BulkMoveAnswer>
+  send: (batch: T[]) => Promise<BulkMoveAnswer>,
+  /**
+   * What an item is counted as where some were not sent: each its own by default; the document
+   * it belongs to for a move sent part by part, so "not sent" counts documents as the rest does.
+   */
+  unitOf: (item: T) => unknown = item => item
 ): Promise<BatchedMoveAnswer> {
   const joined: BatchedMoveAnswer = { items: [], errors: [] };
   for (let at = 0; at < items.length; at += size) {
@@ -123,7 +129,10 @@ export async function inBatches<T>(
     try {
       answer = await send(items.slice(at, at + size));
     } catch (reason) {
-      joined.stopped = { reason, unsent: items.length - at };
+      joined.stopped = {
+        reason,
+        unsent: new Set(items.slice(at).map(unitOf)).size,
+      };
       return joined;
     }
     joined.items.push(...answer.items);

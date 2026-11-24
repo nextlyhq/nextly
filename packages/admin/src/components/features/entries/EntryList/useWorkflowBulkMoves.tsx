@@ -251,7 +251,9 @@ export function useWorkflowBulkMoves(args: {
             }))
         ),
         ASSIGNMENTS_PER_REQUEST,
-        assignManyWorkflowParts
+        assignManyWorkflowParts,
+        // Each document's parts are separate assignments: what was not sent is told in documents.
+        assignment => assignment.document.id
       )
     );
 

@@ -14,14 +14,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionForColumns } from "../EntryTableColumns";
 import { useEntryBulkActions } from "../useEntryBulkActions";
 
-const { canFor } = vi.hoisted(() => ({
+const { canFor, grantedFor } = vi.hoisted(() => ({
   canFor: vi.fn((_slug: string) => false),
+  // What the reader's roles grant, before a collection's code-defined access is applied.
+  grantedFor: vi.fn((_slug: string) => false),
 }));
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (slug: string) => canFor(slug),
 }));
+// The server's answer, access rules included, is what `useCan` and this both read.
+vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
+  useCurrentUserPermissions: () => ({ can: (slug: string) => canFor(slug) }),
+}));
 vi.mock("@admin/hooks/useHasPermission", () => ({
-  useHasPermission: () => (slug: string) => canFor(slug),
+  useHasPermission: () => (slug: string) => grantedFor(slug),
 }));
 
 // The reader reviews somewhere: the global waiting scope says so. It decides nothing here, since
@@ -45,6 +51,8 @@ const notes: CollectionForColumns = { slug: "notes", fields: [] };
 
 beforeEach(() => {
   canFor.mockReset();
+  grantedFor.mockReset();
+  grantedFor.mockImplementation(() => false);
   holding();
 });
 
@@ -228,5 +236,16 @@ describe("useEntryBulkActions", () => {
     expect(
       renderHook(() => useEntryBulkActions(held)).result.current
     ).toMatchObject({ workflowMoveKinds: { steps: true, assign: true } });
+
+    // A role grants approve here, but the collection's access rule refuses it: the server's
+    // answer decides, as it decides the assignment, so Assign… is not offered.
+    holding("read-posts");
+    grantedFor.mockImplementation(slug => slug === "approve-posts");
+    expect(
+      renderHook(() => useEntryBulkActions(held)).result.current
+    ).toMatchObject({
+      workflowMoves: false,
+      workflowMoveKinds: { steps: false, assign: false },
+    });
   });
 });

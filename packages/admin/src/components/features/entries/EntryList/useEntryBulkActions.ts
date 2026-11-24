@@ -1,5 +1,5 @@
 import { useCan } from "@admin/hooks/useCan";
-import { useHasPermission } from "@admin/hooks/useHasPermission";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 
 import { bulkMoveSteps } from "./bulk-workflow-moves";
 import type { CollectionForColumns } from "./EntryTableColumns";
@@ -73,13 +73,15 @@ export function useEntryBulkActions(
   const reviewsHere = submitsHere || sendsBackHere;
   // Whether the reader may assign in some stage here: its primary step's permission does, as
   // `update` does, so an approve-only reviewer is offered Assign… though no bulk step is theirs.
-  const has = useHasPermission();
+  // Asked as `useCan` asks, of the server's answer for this collection (its code-defined access
+  // included), for each stage at once.
+  const { can } = useCurrentUserPermissions();
   const assignsHere =
     slug !== "" &&
     (collection?.workflow?.stages ?? []).some(
       stage =>
         stage.primaryAction !== undefined &&
-        has(`${stage.primaryAction}-${slug}`)
+        can(`${stage.primaryAction}-${slug}`)
     );
 
   // A collection deleted through an action of its own (a plugin's) is offered

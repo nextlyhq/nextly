@@ -69,8 +69,11 @@ export interface CollectionForColumns {
   workflow?: {
     slug: string;
     label: string;
-    /** Its stages in order, by name and label: the list's stage filter offers them. */
-    stages?: readonly { name: string; label: string }[];
+    /**
+     * Its stages in order, by name and label: the list's stage filter offers them. Each names
+     * its primary step's action, whose permission here lets a reader assign in it.
+     */
+    stages?: readonly { name: string; label: string; primaryAction?: string }[];
     /**
      * Its steps, by kind: the bulk moves are found among them (`bulkMoveSteps`), and whether each
      * needs a comment, which a bulk move asks for first.
