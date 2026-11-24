@@ -41,6 +41,12 @@ interface DynamicCollectionNavProps {
    * one list per group, each under its sub-heading.
    */
   group?: string | null;
+  /**
+   * Which collections removed from code to list: `kept` leaves them out (the
+   * everyday lists), `only` lists them alone (the panel's Removed fold), and
+   * absent lists every collection as it comes.
+   */
+  removed?: "kept" | "only";
 }
 
 /**
@@ -61,6 +67,7 @@ export function DynamicCollectionNav({
   isActive,
   search = "",
   group = null,
+  removed: removedFilter,
 }: DynamicCollectionNavProps): React.JSX.Element | null {
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
@@ -75,7 +82,13 @@ export function DynamicCollectionNav({
   } = useSidebarCollectionList();
 
   const collections = searchSidebarCollections(baseCollections, search).filter(
-    collection => collectionSidebarGroup(collection) === group
+    collection =>
+      removedFilter === "only"
+        ? // The Removed fold lists every removed collection, whatever group
+          // it named: it is one list of what is left to retire.
+          isRemovedFromCode(collection)
+        : collectionSidebarGroup(collection) === group &&
+          (removedFilter !== "kept" || !isRemovedFromCode(collection))
   );
 
   if (isLoading) {
