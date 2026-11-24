@@ -1426,8 +1426,13 @@ describe("foreign keys and columns the list itself adds", () => {
 
   /** A name in another schema or database, as each dialect writes it: bare, and quoted. */
   const elsewhere = {
-    postgresql: ["auth.users", '"auth"."users"'],
-    mysql: ["auth.users", "`auth`.`users`"],
+    postgresql: [
+      "auth.users",
+      '"auth"."users"',
+      'auth."users"',
+      '"auth".users',
+    ],
+    mysql: ["auth.users", "`auth`.`users`", "auth.`users`", "`auth`.users"],
   } as const;
   const SERVERS = ["postgresql", "mysql"] as const;
 
@@ -1620,6 +1625,107 @@ describe("foreign keys and columns the list itself adds", () => {
       expect(asked).toEqual([]);
     }
   );
+
+  it.each(SERVERS)(
+    "reads every way a statement adds a key on %s, so none is silent when the list removes rows",
+    dialect => {
+      const cascade = "REFERENCES auth.users (id) ON DELETE CASCADE";
+      const adding = [
+        `ALTER TABLE posts ADD FOREIGN KEY (o) ${cascade}`,
+        `ALTER TABLE posts ADD CONSTRAINT fk FOREIGN KEY (o) ${cascade}`,
+        `ALTER TABLE posts ADD o varchar(36) ${cascade}`,
+        `ALTER TABLE posts ADD COLUMN o integer CHECK (o > 0) ${cascade}`,
+        `ALTER TABLE posts ADD COLUMN a integer, ADD COLUMN o integer ${cascade}`,
+        ...(dialect === "mysql"
+          ? [
+              `ALTER TABLE posts ADD CONSTRAINT FOREIGN KEY (o) ${cascade}`,
+              `ALTER TABLE posts ADD FOREIGN KEY fk_o (o) ${cascade}`,
+              `ALTER TABLE posts ADD (o integer, FOREIGN KEY (o) ${cascade})`,
+              `ALTER TABLE posts MODIFY COLUMN o integer ${cascade}`,
+            ]
+          : [
+              `ALTER TABLE posts ADD CONSTRAINT U&"fk" FOREIGN KEY (o) ${cascade}`,
+            ]),
+      ];
+      const silent = adding.filter(statement => {
+        const found = read(dialect, [statement, "DELETE FROM accounts"]);
+        return !found.some(
+          deletion =>
+            deletion.kind === "unnamed" ||
+            (deletion.kind === "rows" && deletion.table === "posts")
+        );
+      });
+      expect(silent).toEqual([]);
+    }
+  );
+
+  it.each(SERVERS)(
+    "follows on %s the keys a table the list makes declares, into the live tables that reference it",
+    dialect => {
+      const bodies = [
+        "id integer PRIMARY KEY, u integer REFERENCES auth.users (id) ON DELETE CASCADE",
+        "id integer PRIMARY KEY, u varchar(36), CONSTRAINT k FOREIGN KEY (u) REFERENCES auth.users (id) ON DELETE CASCADE",
+      ];
+      for (const body of bodies) {
+        for (const [made, as] of [
+          ["mid", "mid"],
+          ["app.mid", "mid"],
+          ["app.mid", "app.mid"],
+          ["IF NOT EXISTS mid", "mid"],
+        ]) {
+          expect(
+            read(dialect, [
+              `CREATE TABLE ${made} (${body})`,
+              `ALTER TABLE posts ADD CONSTRAINT m FOREIGN KEY (m_id) REFERENCES ${as} (id) ON DELETE CASCADE`,
+              "DELETE FROM accounts",
+            ]),
+            `${made} as ${as}: ${body}`
+          ).toContainEqual(rows("posts"));
+        }
+        // The table the list makes holds only the run's own rows.
+        expect(
+          read(dialect, [`CREATE TABLE mid (${body})`, "DELETE FROM accounts"])
+        ).toEqual([rows("accounts")]);
+      }
+    }
+  );
+
+  it("names what TRUNCATE CASCADE empties beyond a table the list makes or a child written with its schema", () => {
+    expect(
+      read("postgresql", [
+        "CREATE TABLE mid (id integer PRIMARY KEY, u integer REFERENCES users (id))",
+        "ALTER TABLE posts ADD COLUMN m integer REFERENCES mid (id)",
+        "TRUNCATE users CASCADE",
+      ])
+    ).toEqual([rows("users"), rows("posts")]);
+    for (const child of ["public.posts", 'public."posts"']) {
+      expect(
+        read("postgresql", [
+          `ALTER TABLE ${child} ADD CONSTRAINT k FOREIGN KEY (u) REFERENCES users (id)`,
+          "ALTER TABLE comments ADD CONSTRAINT c FOREIGN KEY (p) REFERENCES posts (id)",
+          "TRUNCATE users CASCADE",
+        ])
+      ).toEqual([rows("users"), rows("public.posts"), rows("comments")]);
+    }
+  });
+
+  it("asks nothing more for rows removed from a temporary table, which no key of a live table references", () => {
+    expect(
+      read("postgresql", [
+        "ALTER TABLE posts ADD CONSTRAINT fk FOREIGN KEY (o) REFERENCES auth.users (id) ON DELETE CASCADE",
+        "CREATE TEMP TABLE scratch (id integer)",
+        "DELETE FROM scratch",
+      ])
+    ).toEqual([]);
+  });
+
+  it("keeps asking for a key inside a statement whose keys it does not read", () => {
+    expect(
+      read("postgresql", [
+        "CREATE SCHEMA shop CREATE TABLE notes (u integer REFERENCES auth.users (id) ON DELETE CASCADE)",
+      ])
+    ).not.toEqual([]);
+  });
 
   it("asks nothing for a column the list adds and drops again, renamed or not", () => {
     expect(
