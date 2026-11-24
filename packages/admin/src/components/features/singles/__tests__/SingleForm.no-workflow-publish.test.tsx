@@ -81,6 +81,7 @@ describe("Publish on a Single, by whether its schema names a workflow", () => {
     // Once the Single's claim is read; the review state never is.
     const publish = screen.getByRole("button", { name: "Publish" });
     await waitFor(() => expect(publish).toBeEnabled());
+    await waitFor(() => expect(publish).not.toHaveAttribute("data-held"));
   });
 
   it("waits for the review state where a workflow holds it, which is the control", async () => {
@@ -97,6 +98,8 @@ describe("Publish on a Single, by whether its schema names a workflow", () => {
     await waitFor(() =>
       expect(publish).toHaveAttribute("title", "Checking the review…")
     );
-    expect(publish).toBeDisabled();
+    // Held by the model: pressable, saying why, and running nothing.
+    expect(publish).toHaveAttribute("data-held");
+    expect(publish).toHaveAccessibleDescription("Checking the review…");
   });
 });

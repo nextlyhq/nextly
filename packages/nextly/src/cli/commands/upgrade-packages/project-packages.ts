@@ -15,7 +15,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import semver from "semver";
+// Each function on its own: semver's root loads every one it has, at each
+// command's start.
+import validRange from "semver/ranges/valid.js";
 
 /** The sections of `package.json` a project declares what it installs in. */
 const SECTIONS = [
@@ -48,7 +50,7 @@ type Manifest = Partial<Record<Section, Record<string, string>>>;
  * (`workspace:*`, `file:../x`, `github:org/repo`, a URL) is not.
  */
 function isRegistrySpec(spec: string): boolean {
-  return semver.validRange(spec) !== null || /^[a-z][a-z0-9._-]*$/i.test(spec);
+  return validRange(spec) !== null || /^[a-z][a-z0-9._-]*$/i.test(spec);
 }
 
 /** `package.json` as text and parsed, or undefined where the folder has none it can read. */

@@ -5,6 +5,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 
+import { runtimeImportsOf } from "../../__tests__/helpers/runtime-imports";
+
 const order: string[] = [];
 
 vi.mock("../../utils/config-loader", () => ({
@@ -48,5 +50,19 @@ describe("nextly setup-token and the config", () => {
     order.length = 0;
     await runSetupTokenCommand({ generate: true }, context());
     expect(order).toEqual([]);
+  });
+
+  it("loads no database code until a run needs the store", async () => {
+    const { packages } = await runtimeImportsOf("cli/commands/setup-token.ts");
+    // Every package it loads: the colours its errors print in, and the light
+    // entry of the adapter's that says whether a build is running.
+    expect([...packages.keys()].sort()).toEqual([
+      "@nextlyhq/adapter-drizzle/build-phase",
+      "commander",
+      "picocolors",
+    ]);
+    // The store's module loads it, so its absence above is the command's own.
+    const store = await runtimeImportsOf("cli/commands/setup-token-store.ts");
+    expect([...store.packages.keys()]).toContain("drizzle-orm/sqlite-core");
   });
 });

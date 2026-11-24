@@ -18,7 +18,10 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import semver from "semver";
+// Each function on its own: semver's root loads every one it has, at each
+// command's start.
+import compareVersions from "semver/functions/compare.js";
+import validVersion from "semver/functions/valid.js";
 
 import type { MetaService } from "./services/meta-service";
 
@@ -42,7 +45,7 @@ function decodeRelease(raw: unknown): string | undefined {
   }
   if (typeof value !== "object" || value === null) return undefined;
   const { release } = value as Record<string, unknown>;
-  return typeof release === "string" && semver.valid(release) !== null
+  return typeof release === "string" && validVersion(release) !== null
     ? release
     : undefined;
 }
@@ -102,12 +105,12 @@ export function presetGrantsStanding(
   recorded: string | undefined,
   running: string
 ): PresetGrantsStanding {
-  const runningValid = semver.valid(running) !== null;
+  const runningValid = validVersion(running) !== null;
   if (recorded === undefined) {
     return { kind: "set", record: runningValid ? running : undefined };
   }
   if (!runningValid) return { kind: "leave", recorded };
-  const order = semver.compare(running, recorded);
+  const order = compareVersions(running, recorded);
   if (order < 0) return { kind: "leave", recorded };
   return { kind: "set", record: order > 0 ? running : undefined };
 }

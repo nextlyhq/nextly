@@ -182,3 +182,39 @@ describe("where Compare goes", () => {
     });
   });
 });
+
+describe("Compare, for the first version", () => {
+  function FirstVersion() {
+    const actions = useVersionActions(false);
+    return <output>{actions?.compareHref ?? "none"}</output>;
+  }
+
+  it("is not offered where nothing comes before the version", () => {
+    render(
+      <DocumentHistoryContext.Provider
+        value={{
+          viewing: {
+            versionNo: 1,
+            snapshot: {},
+            locale: null,
+            withheld: [],
+            isLoading: false,
+            error: null,
+            scope: { kind: "collection", slug: "posts", entryId: "p1" },
+            comparedWith: { kind: "first" },
+            about: null,
+          },
+          setViewing: vi.fn(),
+          restore: null,
+          setRestore: vi.fn(),
+        }}
+      >
+        <FirstVersion />
+      </DocumentHistoryContext.Provider>
+    );
+
+    // A comparison page that can only say there is nothing to compare is
+    // not worth the press.
+    expect(screen.getByRole("status")).toHaveTextContent("none");
+  });
+});

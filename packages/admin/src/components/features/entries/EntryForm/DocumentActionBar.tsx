@@ -30,17 +30,29 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
 } from "@nextlyhq/ui";
-import { ChevronDown, Loader2, MoreHorizontal } from "lucide-react";
-import { Fragment, type JSX } from "react";
+import { ChevronDown, Loader2, Lock, MoreHorizontal } from "lucide-react";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useState,
+  type ComponentProps,
+  type JSX,
+} from "react";
 
 import { useInTopBar } from "@admin/components/layout/header/TopBarPlaces";
+import { Link } from "@admin/components/ui/link";
 import { cn } from "@admin/lib/utils";
 
 import { BAR_CONTROLS_GAP, BAR_ICON_CONTROL } from "./bar-controls";
 import {
   actionsAt,
   menuGroups,
+  PUBLISH_WITHOUT_REVIEW_ACTION_ID,
   withContributedActions,
   type EditorDocumentAction,
 } from "./document-actions";
@@ -183,13 +195,26 @@ export interface DocumentActionBarProps {
    * folds them, so every row given is drawn, first in the menu.
    */
   narrowItems?: readonly NarrowMenuItem[];
+  /**
+   * The bar's own rows on the main button's menu, after the model's: the
+   * preview's choices and the ways into the document's other views. They are
+   * rows there at every width, so the header draws one main button and no
+   * second set of controls beside it. With no main button they lead More.
+   */
+  mainMenuItems?: readonly NarrowMenuItem[];
 }
 
-/** A header control, as a row of the menu on a narrow screen. */
+/** A header control, as a row of a menu. */
 export interface NarrowMenuItem {
   id: string;
   label: string;
   onSelect: () => void;
+  /**
+   * Where the row leads, for a way into another view: drawn as a link, so a
+   * middle or modified click opens it in a new tab as a list row's does, and
+   * `onSelect` is not called.
+   */
+  href?: string;
   disabled?: boolean;
   /**
    * The row that shows or hides the document panel. While it is folded here,
@@ -309,30 +334,30 @@ export function DocumentActionBar({
   pending = false,
   className,
   narrowItems = [],
+  mainMenuItems = [],
 }: DocumentActionBarProps): JSX.Element {
   const inTopBar = useInTopBar();
   const { available, primary } = wiredActions(actions, bindings);
   const toolbar = bound(actionsAt(available, "toolbar"), bindings);
   const groups = menuGroups(available);
   const publishItems = bound(actionsAt(available, "publish-menu"), bindings);
-  // The other ways to publish hang off whatever action leads, so a clean
+  // The main button's companions hang off whatever action leads, so a clean
   // published document, where Save leads, can still be scheduled to come
-  // down. "Publish now" heads them where Publish leads: the press itself,
-  // named in the menu beside the ways to do it later. With nothing leading,
-  // they lead More's document rows instead.
-  const publishLeads = primary?.action.id === PUBLISH_ACTION_ID;
-  const arrowItems =
-    primary === undefined || publishItems.length === 0
-      ? []
-      : [...(publishLeads ? [publishNow(primary)] : []), ...publishItems];
+  // down. Publishing past the review comes last, apart. The press itself is
+  // not repeated as a row: nothing in the header is offered twice. With
+  // nothing leading, they lead More's document rows instead.
+  const everyday = publishItems.filter(entry => !skipsReview(entry));
+  const escape = publishItems.filter(skipsReview);
   const documentItems =
     primary === undefined
-      ? [...publishItems, ...bound(groups.document, bindings)]
+      ? [...everyday, ...escape, ...bound(groups.document, bindings)]
       : bound(groups.document, bindings);
+  const moreRows =
+    primary === undefined ? [...mainMenuItems, ...narrowItems] : narrowItems;
   const dangerItems = bound(groups.danger, bindings);
   const wideMenu = documentItems.length > 0 || dangerItems.length > 0;
   // A menu is drawn when it has a row to hold, folded controls included.
-  const hasMenu = wideMenu || narrowItems.length > 0;
+  const hasMenu = wideMenu || moreRows.length > 0;
 
   return (
     // Wraps within the width it is given rather than past it, as the header's
@@ -376,14 +401,30 @@ export function DocumentActionBar({
       {primary === undefined ? null : (
         <PrimaryAction
           primary={primary}
-          options={arrowItems}
+          options={everyday}
+          rows={mainMenuItems}
+          apartOptions={escape}
+          // Named for what it holds: the ways to publish where Publish or a
+          // workflow step leads, or where the menu holds a way to publish
+          // (Schedule… on a clean live document, where Save leads); the
+          // document's other actions where it holds none (a collection with
+          // no publish lifecycle: the preview and the document's views).
+          optionsLabel={
+            primary.action.id !== SAVE_ACTION_ID ||
+            [...everyday, ...escape].some(
+              entry => entry.action.id !== SAVE_ACTION_ID
+            )
+              ? PUBLISH_OPTIONS_LABEL
+              : DOCUMENT_OPTIONS_LABEL
+          }
           pending={pending}
+          explainsHold
         />
       )}
 
       {hasMenu ? (
         <DocumentMenu
-          narrowItems={narrowItems}
+          narrowItems={moreRows}
           documentItems={documentItems}
           dangerItems={dangerItems}
           wideMenu={wideMenu}
@@ -396,24 +437,13 @@ export function DocumentActionBar({
 /** The built-in Publish's id, under both "Publish" and "Publish changes". */
 const PUBLISH_ACTION_ID = "publish";
 
-/**
- * Publish, as the arrow's first row: the same binding as the press, and so the
- * same reason when it is held.
- */
-function publishNow(primary: Bound): Bound {
-  return {
-    action: {
-      ...primary.action,
-      id: PUBLISH_NOW_ACTION_ID,
-      label: "Publish now",
-      placement: "publish-menu",
-    },
-    binding: primary.binding,
-  };
-}
+/** The built-in Save's id, under every word it is said with. */
+const SAVE_ACTION_ID = "save";
 
-/** The arrow's row for publishing at once. */
-const PUBLISH_NOW_ACTION_ID = "publish-now";
+/** Whether a row publishes past the workflow, which the menu sets apart. */
+function skipsReview(entry: Bound): boolean {
+  return entry.action.id === PUBLISH_WITHOUT_REVIEW_ACTION_ID;
+}
 
 /** What the arrow beside the primary action is called, and opens. */
 export const PUBLISH_OPTIONS_LABEL = "More ways to publish";
@@ -425,13 +455,28 @@ export const PUBLISH_OPTIONS_LABEL = "More ways to publish";
 function PrimaryAction({
   primary,
   options,
+  rows = [],
+  apartOptions = [],
   dangerOptions = [],
   optionsLabel = PUBLISH_OPTIONS_LABEL,
   pending,
   menuClassName,
+  explainsHold = false,
 }: {
   primary: Bound;
   options: Bound[];
+  /**
+   * Whether a leading action the model holds (Publish waiting for approval, a
+   * step waiting for a save, a past version on screen) stays pressable and
+   * opens its reason (`MainPress`), as the entry header draws it. A refusal of
+   * this instant (nothing to save, a submit in flight) is drawn disabled
+   * everywhere, as is every hold on a surface that leaves this off.
+   */
+  explainsHold?: boolean;
+  /** The bar's own rows, after the model's (`mainMenuItems`). */
+  rows?: readonly NarrowMenuItem[];
+  /** Rows set apart below a rule, such as publishing past the review. */
+  apartOptions?: Bound[];
   /** Destructive rows, below a rule, for a surface with no menu of its own. */
   dangerOptions?: Bound[];
   /** What the arrow is called, for what it holds. */
@@ -441,41 +486,188 @@ function PrimaryAction({
   menuClassName?: string;
 }) {
   const reason = reasonFor(primary.action, primary.binding);
+  const rowCount =
+    options.length + rows.length + apartOptions.length + dangerOptions.length;
   const press = (
-    <Button
-      size="sm"
-      {...(primary.binding.submitForm === undefined
-        ? { type: "button" as const, onClick: primary.binding.onSelect }
-        : { type: "submit" as const, form: primary.binding.submitForm })}
-      disabled={reason !== undefined}
-      /*
-        The reason is the title when there is one, so a control an author
-        cannot use says why. Three separate permissions and several document
-        states decide these, and a dead button with no explanation reads as
-        broken rather than as forbidden.
-      */
-      title={reason ?? primary.action.label}
-      data-action={primary.action.id}
-      data-primary="true"
-      className={cn(
-        options.length + dangerOptions.length > 0 && "rounded-r-none"
-      )}
-    >
-      {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-      {primary.action.label}
-    </Button>
+    <MainPress
+      primary={primary}
+      reason={reason}
+      explainsHold={explainsHold}
+      pending={pending}
+      className={cn(rowCount > 0 && "rounded-r-none")}
+    />
   );
-  if (options.length + dangerOptions.length === 0) return press;
+  if (rowCount === 0) return press;
   return (
     <div className="flex items-center" data-publish-split="">
       {press}
       <ActionOptionsMenu
         options={options}
+        rows={rows}
+        apartOptions={apartOptions}
         dangerOptions={dangerOptions}
         optionsLabel={optionsLabel}
         {...(menuClassName === undefined ? {} : { menuClassName })}
       />
     </div>
+  );
+}
+
+/**
+ * The leading action's press.
+ *
+ * While the model holds it (Publish waiting for approval, a step waiting for a
+ * save) and the surface explains holds (`explainsHold`), it is drawn visibly
+ * held, with a lock and a quiet outline, but never disabled: a disabled
+ * control can be neither focused nor pressed, so its reason would reach
+ * nobody using a keyboard or a touch screen. It is then described by its
+ * reason, and pressing it opens that reason beside it; it runs nothing. Its
+ * words take the foreground token, which reads at 4.5:1 or more on the bar in
+ * light and dark. Any other refusal draws it disabled, titled with why.
+ *
+ * ONE button in every state, so the element a person has focused, or a test
+ * holds, stays the same one as a hold comes and goes.
+ */
+function MainPress({
+  primary,
+  reason,
+  explainsHold,
+  pending,
+  className,
+}: {
+  primary: Bound;
+  /** Either kind of reason it is unusable, or undefined. */
+  reason: string | undefined;
+  explainsHold: boolean;
+  pending: boolean;
+  className?: string;
+}) {
+  const reasonId = useId();
+  const hold = explainsHold ? primary.action.disabledReason : undefined;
+  const { open, setOpen, toggle } = useHoldReason(hold !== undefined);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverAnchor asChild>
+        <Button
+          size="sm"
+          {...(hold === undefined
+            ? readyPressProps(primary, reason)
+            : heldPressProps(primary, hold, reasonId, toggle))}
+          className={cn(
+            hold !== undefined && "gap-1.5 text-foreground",
+            className
+          )}
+        >
+          <PressContents
+            label={primary.action.label}
+            held={hold !== undefined}
+            pending={pending}
+          />
+        </Button>
+      </PopoverAnchor>
+      <span id={reasonId} className="sr-only">
+        {hold ?? ""}
+      </span>
+      <PopoverContent align="end" className="w-72 text-sm">
+        <p>{hold}</p>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * Whether a held press's reason is open beside it. A hold that lifts takes
+ * its reason away with it, so the reason is never open over a press that now
+ * runs.
+ */
+function useHoldReason(held: boolean): {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  toggle: () => void;
+} {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!held) setOpen(false);
+  }, [held]);
+  return {
+    open: held && open,
+    setOpen,
+    toggle: () => setOpen(current => !current),
+  };
+}
+
+/**
+ * What the press is given, its `data-*` marks included: an object literal
+ * names them as keys, which a JSX attribute alone may spell freely.
+ */
+type PressProps = Omit<ComponentProps<typeof Button>, "children" | "size"> &
+  Partial<Record<`data-${string}`, string>>;
+
+/** The press's identity, the same in every state. */
+function pressIdentity(primary: Bound): PressProps {
+  return { "data-action": primary.action.id, "data-primary": "true" };
+}
+
+/**
+ * A press the model holds: pressable, quiet, described by its reason, and
+ * opening that reason instead of running.
+ */
+function heldPressProps(
+  primary: Bound,
+  hold: string,
+  reasonId: string,
+  toggle: () => void
+): PressProps {
+  return {
+    ...pressIdentity(primary),
+    type: "button",
+    variant: "outline",
+    onClick: toggle,
+    "aria-describedby": reasonId,
+    title: hold,
+    "data-held": "",
+  };
+}
+
+/**
+ * A press nothing in the model holds: it runs the action, or submits the
+ * form it is bound to, and is disabled while this instant refuses it (nothing
+ * to save, a submit in flight). The reason is the title when there is one,
+ * so a control an author cannot use says why: a dead button with no
+ * explanation reads as broken rather than as forbidden.
+ */
+function readyPressProps(
+  primary: Bound,
+  reason: string | undefined
+): PressProps {
+  const { submitForm, onSelect } = primary.binding;
+  return {
+    ...pressIdentity(primary),
+    variant: "default",
+    ...(submitForm === undefined
+      ? { type: "button" as const, onClick: onSelect }
+      : { type: "submit" as const, form: submitForm }),
+    disabled: reason !== undefined,
+    title: reason ?? primary.action.label,
+  };
+}
+
+/** What the press shows: a lock while held, a spinner while pending, its words. */
+function PressContents({
+  label,
+  held,
+  pending,
+}: {
+  label: string;
+  held: boolean;
+  pending: boolean;
+}) {
+  return (
+    <>
+      {held ? <Lock className="h-3.5 w-3.5" aria-hidden="true" /> : null}
+      {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+      {label}
+    </>
   );
 }
 
@@ -487,12 +679,18 @@ function PrimaryAction({
  */
 export function ActionOptionsMenu({
   options,
+  rows = [],
+  apartOptions = [],
   dangerOptions = [],
   optionsLabel,
   menuClassName,
   triggerClassName,
 }: {
   options: readonly Bound[];
+  /** The bar's own rows, after the model's. */
+  rows?: readonly NarrowMenuItem[];
+  /** Rows set apart below a rule, such as publishing past the review. */
+  apartOptions?: readonly Bound[];
   dangerOptions?: readonly Bound[];
   /** What the arrow is called, for what it holds. */
   optionsLabel: string;
@@ -524,8 +722,18 @@ export function ActionOptionsMenu({
         {options.map(entry => (
           <OptionRow key={entry.action.id} entry={entry} />
         ))}
+        {rows.map(item => (
+          <BarRow key={item.id} item={item} />
+        ))}
         {/* A rule only between two populated groups, as in More. */}
-        {options.length > 0 && dangerOptions.length > 0 ? (
+        {options.length + rows.length > 0 && apartOptions.length > 0 ? (
+          <DropdownMenuSeparator />
+        ) : null}
+        {apartOptions.map(entry => (
+          <OptionRow key={entry.action.id} entry={entry} />
+        ))}
+        {options.length + rows.length + apartOptions.length > 0 &&
+        dangerOptions.length > 0 ? (
           <DropdownMenuSeparator />
         ) : null}
         {dangerOptions.map(entry => (
@@ -533,6 +741,33 @@ export function ActionOptionsMenu({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * One of the bar's own rows in a menu: a link where it leads to another view,
+ * otherwise an item that runs it.
+ */
+function BarRow({ item }: { item: NarrowMenuItem }) {
+  if (item.href !== undefined) {
+    return (
+      <DropdownMenuItem
+        asChild
+        disabled={item.disabled === true}
+        data-menu-row={item.id}
+      >
+        <Link href={item.href}>{item.label}</Link>
+      </DropdownMenuItem>
+    );
+  }
+  return (
+    <DropdownMenuItem
+      disabled={item.disabled === true}
+      onSelect={item.onSelect}
+      data-menu-row={item.id}
+    >
+      {item.label}
+    </DropdownMenuItem>
   );
 }
 
@@ -593,9 +828,14 @@ const COMPACT_DANGER_IDS: ReadonlySet<string> = new Set(["unpublish"]);
 
 /**
  * What a compact bar draws: the leading action, the rows its arrow holds
- * (the toolbar's, then the other ways to publish) and, below a rule, the
- * destructive one it keeps. One answer for every compact drawing, so a
- * status-carrying pair and the compact bar keep the same rows.
+ * (the toolbar's, then the main button's menu: saving and the other ways to
+ * publish) and, below a rule, the destructive one it keeps. One answer for
+ * every compact drawing, so a status-carrying pair and the compact bar keep
+ * the same rows.
+ *
+ * `withToolbar: false` is for a surface that draws its own Save beside the
+ * leading action: it leaves out the toolbar's rows and Save, which would
+ * otherwise be offered twice.
  */
 export function compactRows(
   actions: readonly EditorDocumentAction[],
@@ -607,7 +847,9 @@ export function compactRows(
     primary,
     options: [
       ...(withToolbar ? bound(actionsAt(available, "toolbar"), bindings) : []),
-      ...bound(actionsAt(available, "publish-menu"), bindings),
+      ...bound(actionsAt(available, "publish-menu"), bindings).filter(
+        entry => withToolbar || entry.action.id !== SAVE_ACTION_ID
+      ),
     ],
     danger: bound(
       menuGroups(available).danger.filter(action =>
@@ -634,7 +876,7 @@ export function CompactDocumentActionBar({
   pending = false,
 }: Omit<
   DocumentActionBarProps,
-  "className" | "narrowItems"
+  "className" | "narrowItems" | "mainMenuItems"
 >): JSX.Element | null {
   const { primary, options, danger } = compactRows(actions, bindings);
   if (primary === undefined) {
@@ -713,14 +955,7 @@ function DocumentMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className={menuClassName}>
         {narrowItems.map(item => (
-          <DropdownMenuItem
-            key={item.id}
-            disabled={item.disabled === true}
-            onSelect={item.onSelect}
-            data-narrow-item={item.id}
-          >
-            {item.label}
-          </DropdownMenuItem>
+          <BarRow key={item.id} item={item} />
         ))}
         {narrowItems.length > 0 && wideMenu ? <DropdownMenuSeparator /> : null}
         {documentItems.map(({ action, binding }) => (
