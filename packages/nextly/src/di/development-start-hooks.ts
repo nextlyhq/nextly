@@ -5,7 +5,10 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { compileExtensionSchema } from "../domains/schema/extension/publish";
+import {
+  compileExtensionSchema,
+  declaresExtensionSchema,
+} from "../domains/schema/extension/publish";
 import { NextlyError } from "../errors";
 import { isProductionStart } from "../init/production-start";
 
@@ -24,13 +27,15 @@ type CompileInput = Parameters<typeof compileExtensionSchema>[0];
  * the configuration as written too, whose own compile then refuses it.
  *
  * In production the configuration as written, with no read: the migrations production runs on were
- * written from it.
+ * written from it. So too where nothing declares a schema hook, as the compile then reads no entity.
  */
 export async function developmentStartConfig(
   adapter: DrizzleAdapter,
   input: CompileInput
 ): Promise<CompileInput["config"]> {
-  if (isProductionStart()) return input.config;
+  if (isProductionStart() || !declaresExtensionSchema(input)) {
+    return input.config;
+  }
   const recorded = await configWithRecordedHandOversIn(adapter, input.config);
   if (recorded === input.config) return recorded;
   try {

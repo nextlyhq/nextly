@@ -2077,11 +2077,10 @@ async function prepareBootSchema(
   const { declaredFieldGroupStorage } = await import(
     "../domains/field-groups/services/field-group-stored-tables"
   );
-  const declared = declaresExtensionSchema({
+  const fieldGroups = declaresExtensionSchema({
     plugins: transformedPlugins,
     config: transformedConfig,
-  });
-  const fieldGroups = declared
+  })
     ? await declaredFieldGroupStorage(adapter, transformedConfig.fieldGroups)
     : undefined;
   const input = {
@@ -2107,9 +2106,7 @@ async function prepareBootSchema(
   return compileAndPublishExtensionSchema({
     ...input,
     // With a collection handed to the Schema Builder as its record has it, in development.
-    config: declared
-      ? await developmentStartConfig(adapter, input)
-      : transformedConfig,
+    config: await developmentStartConfig(adapter, input),
   });
 }
 
