@@ -384,17 +384,23 @@ describe("Change type… on a saved field", () => {
       hasMany: false,
       unique: false,
       options: [],
+      validation: {},
+      own: {},
     });
     expect(
       await askedOf(saved, {
         ...drafted,
         options: [{ label: "A", value: "a" }],
+        validation: { required: true, maxLength: 40 },
+        pluginOptions: { pattern: "^a" },
       })
     ).toEqual({
       hasMany: true,
       unique: true,
       localized: false,
       options: ["a"],
+      validation: { required: true, maxLength: 40 },
+      own: { pattern: "^a" },
     });
   });
 

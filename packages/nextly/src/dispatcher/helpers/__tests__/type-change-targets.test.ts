@@ -7,6 +7,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { FIELD_TYPE_CATALOG } from "../../../collections/fields/catalog";
 import { container } from "../../../di/container";
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../../../domains/schema/field-types/field-type-registry";
+import type { PluginFieldType } from "../../../plugins/contributions";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
   respondTypeChangeTargets,
@@ -52,18 +57,25 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       });
     });
 
-    // The draft's own settings decide the column the change makes: MySQL keeps a unique text in a
-    // bounded one, which a long text need not fit.
-    it("a long text becoming a text the draft made unique: judged as the column that makes", () => {
-      const outcomeWith = (field: Partial<FieldDefinition>) =>
+    // Two values alike refuse a field made unique, on every database. One unique already is judged as
+    // the column the change makes: MySQL keeps a unique text in a bounded one, which a long text need
+    // not fit.
+    it("a long text becoming a text the draft made unique, or one unique already", () => {
+      const outcomeOf = (before: boolean, after: boolean) =>
         typeChangeTargets({
-          field: { name: "f", type: "textarea" } as FieldDefinition,
-          candidates: [{ type: "text", field }],
+          field: {
+            name: "f",
+            type: "textarea",
+            unique: before,
+          } as FieldDefinition,
+          candidates: [{ type: "text", field: { unique: after } }],
           dialect,
           builtBy: "collection",
         })[0]?.outcome;
-      expect(outcomeWith({ unique: false })).toBe("keeps");
-      expect(outcomeWith({ unique: true })).toBe(
+      expect(outcomeOf(false, false)).toBe("keeps");
+      expect(outcomeOf(false, true)).toBe("may-lose");
+      expect(outcomeOf(true, false)).toBe("keeps");
+      expect(outcomeOf(true, true)).toBe(
         dialect === "mysql" ? "may-lose" : "keeps"
       );
     });
@@ -80,6 +92,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
 describe("the route's answer for a field found by its path", () => {
   afterEach(() => {
     container.clear();
+    clearFieldTypes();
   });
 
   it("judges a change to a type that keeps one value as one value, not as the field's list", () => {
@@ -210,12 +223,35 @@ describe("the route's answer for a field found by its path", () => {
       expect(marked(letters, {})).toBe("keeps");
     });
 
-    it("a least length of none, Required, or a message refuses no value", () => {
+    it("a least length of none, or a message, refuses no value", () => {
       expect(marked({}, rules({ minLength: 0 }))).toBe("keeps");
-      expect(marked({}, { required: true, ...rules({ required: true }) })).toBe(
+      expect(marked({}, rules({ message: "Too long" }))).toBe("keeps");
+    });
+
+    // A blank text is a value the old field held, and a required one refuses it.
+    it("Required turned on may lose values, in either spelling; carried over or turned off keeps them", () => {
+      expect(marked({}, { required: true })).toBe("may-lose");
+      expect(marked({}, rules({ required: true }))).toBe("may-lose");
+      expect(marked({ required: true }, rules({ required: true }))).toBe(
         "keeps"
       );
-      expect(marked({}, rules({ message: "Too long" }))).toBe("keeps");
+      expect(marked(rules({ required: true }), { required: true })).toBe(
+        "keeps"
+      );
+      expect(marked({ required: true }, { required: false })).toBe("keeps");
+    });
+
+    it("a rule this does not know may lose values where it is new or changed, not where it is unset", () => {
+      expect(marked({}, rules({ multipleOf: 5 }))).toBe("may-lose");
+      expect(marked(rules({ multipleOf: 2 }), rules({ multipleOf: 5 }))).toBe(
+        "may-lose"
+      );
+      expect(marked(rules({ multipleOf: 5 }), rules({ multipleOf: 5 }))).toBe(
+        "keeps"
+      );
+      for (const unset of [null, false, ""]) {
+        expect(marked({}, rules({ multipleOf: unset }))).toBe("keeps");
+      }
     });
 
     // A smallest number of none is not zero: a negative one is refused by it.
@@ -239,6 +275,29 @@ describe("the route's answer for a field found by its path", () => {
       expect(bare[0]?.outcome).toBe("keeps");
       expect(marked({}, rules({ maxLength: 40 }), "group")).toBeNull();
     });
+  });
+
+  // The save runs a plugin's own check over each stored value, and only it knows what that refuses.
+  it("a plugin's type with a check of its own may lose values; one with none is judged by what it stores", () => {
+    const stars = { type: "stars", label: "Stars", storage: "number" } as const;
+    registerFieldType({
+      ...stars,
+      validate: value => (Number(value) <= 5 ? true : "At most five stars."),
+    } as unknown as PluginFieldType);
+    registerFieldType({
+      ...stars,
+      type: "tally",
+    } as unknown as PluginFieldType);
+    const marks = typeChangeTargets({
+      field: { name: "f", type: "number" } as FieldDefinition,
+      candidates: [{ type: "stars" }, { type: "tally" }],
+      dialect: "postgresql",
+      builtBy: "collection",
+    }).map(target => [target.type, target.outcome]);
+    expect(marks).toEqual([
+      ["stars", "may-lose"],
+      ["tally", "keeps"],
+    ]);
   });
 
   it("refuses an answer for a field whose saved type is no longer the one the page knows", () => {
@@ -265,7 +324,13 @@ describe("the route's answer for a field found by its path", () => {
       ],
     };
     /** The settings a page asks with for a field stored with none of them, as it loads one. */
-    const UNSET = { hasMany: false, unique: false, options: [] };
+    const UNSET = {
+      hasMany: false,
+      unique: false,
+      options: [],
+      validation: {},
+      own: {},
+    };
     const ask = (stored: Record<string, unknown>, saved: unknown) => {
       container.registerSingleton("adapter", () => ({
         getCapabilities: () => ({ dialect: "mysql" }),
@@ -297,6 +362,31 @@ describe("the route's answer for a field found by its path", () => {
         { ...UNSET, localized: false },
       ],
       ["its options", KIND, { ...UNSET, options: ["a", "b", "c"] }],
+      [
+        "a bound",
+        { name: "v", type: "text", validation: { maxLength: 40 } },
+        { ...UNSET, validation: { maxLength: 100 } },
+      ],
+      [
+        "a least bound, off since",
+        { name: "v", type: "text" },
+        { ...UNSET, validation: { minLength: 3 } },
+      ],
+      [
+        "a bound stated on the field itself",
+        { name: "v", type: "text", maxLength: 40 },
+        { ...UNSET, own: { maxLength: 100 } },
+      ],
+      [
+        "its pattern",
+        { name: "v", type: "text", validation: { pattern: "^a" } },
+        { ...UNSET, validation: { pattern: "^b" } },
+      ],
+      [
+        "Required",
+        { name: "v", type: "text", required: true },
+        { ...UNSET, validation: { required: false } },
+      ],
     ])(
       "refuses an answer where another save changed %s, and says to reload",
       (_setting, stored, saved) => {
@@ -348,6 +438,44 @@ describe("the route's answer for a field found by its path", () => {
         UNSET,
       ],
       ["its options in another order", KIND, { ...UNSET, options: ["b", "a"] }],
+      [
+        "with its rules as stored",
+        {
+          name: "v",
+          type: "text",
+          required: true,
+          validation: { maxLength: 40, pattern: "^a", message: "Old words" },
+        },
+        {
+          ...UNSET,
+          validation: {
+            required: true,
+            maxLength: 40,
+            pattern: "^a",
+            message: "New words",
+          },
+        },
+      ],
+      [
+        "with a rule stated on the field itself, which the page carries as its own",
+        { name: "v", type: "text", maxLength: 40, pattern: "^a" },
+        { ...UNSET, own: { maxLength: 40, pattern: "^a" } },
+      ],
+      [
+        "with an empty pattern, no least length, and Required off, all said",
+        {
+          name: "v",
+          type: "text",
+          required: false,
+          validation: { pattern: "", minLength: 0 },
+        },
+        UNSET,
+      ],
+      [
+        "with no rules at all",
+        { name: "v", type: "text", validation: null },
+        UNSET,
+      ],
     ])("answers for a field %s", (_how, stored, saved) => {
       expect(ask(stored, saved).status).toBe(200);
     });
