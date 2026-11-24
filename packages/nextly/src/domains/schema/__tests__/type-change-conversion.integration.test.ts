@@ -320,9 +320,10 @@ describe.each(getConfiguredTestDialects())(
 
     // `migrate:create` plans a translations column's new type from the folder's newest snapshot: one
     // that records the fields but not which columns the translations table keeps (a snapshot written
-    // before those were kept) gives the file no `retypes` step. A change the save converts needs
-    // none: it gives the column its new type itself, with every language's value in it.
-    it("converts a translated change where the newest snapshot keeps no record of the translations columns", async () => {
+    // before those were kept) gives the file no `retypes` step. The save is refused, every value as
+    // it was: where a road rewrites values, for the column the history does not record; where none
+    // does (MySQL), as only that step could give the column its new type.
+    it("refuses a translated change where the newest snapshot keeps no record of the translations columns, and changes nothing", async () => {
       const t = await boot([{ name: "v", type: "checkbox", localized: true }], {
         localized: true,
       });
@@ -355,19 +356,13 @@ describe.each(getConfiguredTestDialects())(
         { localized: true }
       );
 
-      // Where no road rewrites values (MySQL), only the file's `retypes` step could give the column
-      // its new type, so the change is refused there, every value as it was.
-      if (!rewritesValuesOn(dialect)) {
-        expect(outcome).toMatchObject(
-          refusedAs("TYPE_CHANGE_BLOCKED", "kept per language")
-        );
-        expect(await read(t, "v", "en")).toEqual({ a: true });
-        expect(await read(t, "v", "es")).toEqual({ a: false });
-        return;
-      }
-      expect(outcome).toBeUndefined();
-      expect(await read(t, "v", "en")).toEqual({ a: 1 });
-      expect(await read(t, "v", "es")).toEqual({ a: 0 });
+      expect(outcome).toMatchObject(
+        rewritesValuesOn(dialect)
+          ? { code: "NEXTLY_MIGRATION_DRIFT" }
+          : refusedAs("TYPE_CHANGE_BLOCKED", "kept per language")
+      );
+      expect(await read(t, "v", "en")).toEqual({ a: true });
+      expect(await read(t, "v", "es")).toEqual({ a: false });
     });
 
     // Holding no value is no exception: the translations table's column takes the new type, so a
@@ -884,18 +879,23 @@ describe.each(getConfiguredTestDialects())(
 
     // A change that keeps the kind of value, and every value as it is, leaves the constraint reading
     // what it read before: no bar to it, and it holds after.
-    it("changes a column a CHECK constraint names where its kind and every value stay", async () => {
-      const t = await boot([{ name: "v", type: "text" }]);
-      await addValidationCheck(t, `LENGTH(${q("v")}) >= 2`);
-      await write(t, "a", { v: "a@b.co" });
+    // Where no road rewrites values (MySQL) the collection's push changes the column, as on dev, and
+    // it drops the constraint with it.
+    it.skipIf(!rewritesValuesOn(dialect))(
+      "changes a column a CHECK constraint names where its kind and every value stay",
+      async () => {
+        const t = await boot([{ name: "v", type: "text" }]);
+        await addValidationCheck(t, `LENGTH(${q("v")}) >= 2`);
+        await write(t, "a", { v: "a@b.co" });
 
-      expect(await save(t, [{ name: "v", type: "email" }])).toBeUndefined();
+        expect(await save(t, [{ name: "v", type: "email" }])).toBeUndefined();
 
-      expect(await read(t, "v")).toEqual({ a: "a@b.co" });
-      await expect(
-        exec(t, `UPDATE ${q(`dc_${SLUG}`)} SET ${q("v")} = 'x'`)
-      ).rejects.toThrow();
-    });
+        expect(await read(t, "v")).toEqual({ a: "a@b.co" });
+        await expect(
+          exec(t, `UPDATE ${q(`dc_${SLUG}`)} SET ${q("v")} = 'x'`)
+        ).rejects.toThrow();
+      }
+    );
 
     // The same constraint naming another column of the table is no bar to the change.
     it.skipIf(!rewritesValuesOn(dialect))(

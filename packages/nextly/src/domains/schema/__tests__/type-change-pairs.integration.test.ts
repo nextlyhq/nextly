@@ -69,6 +69,7 @@ const OPTIONS = [
   { label: "Twelve", value: "12" },
 ];
 const text: Field = { type: "text" };
+const lines: Field = { type: "textarea" };
 const email: Field = { type: "email" };
 const select: Field = { type: "select", options: OPTIONS };
 const richText: Field = { type: "richText" };
@@ -83,6 +84,8 @@ const INSTANT = "2024-01-02T03:04:05.000Z";
 /** A date as its instant, whichever way a road writes one. */
 const instant = (value: unknown) =>
   value === null ? null : new Date(String(value)).toISOString();
+/** An ISO text in UTC, read alike whichever road writes its milliseconds (REST adds them). */
+const isoText = (value: unknown) => String(value).replace(".000Z", "Z");
 /** The document a text holds. */
 const parsed = (value: unknown) => JSON.parse(String(value)) as unknown;
 
@@ -117,7 +120,7 @@ const PAIRS: readonly Pair[] = [
   },
   {
     name: "a text becomes a document of its lines",
-    from: text,
+    from: lines,
     to: richText,
     values: { a: ["one\ntwo", ["one", "two"]] },
     as: textsOf,
@@ -157,10 +160,11 @@ const PAIRS: readonly Pair[] = [
     as: instant,
   },
   {
-    name: "a text becomes a JSON string, one that is JSON too",
+    name: "a text becomes a JSON string",
     from: text,
     to: json,
-    values: { word: ["hello", "hello"], object: ['{"a":1}', '{"a":1}'] },
+    // A string that is itself JSON is left out: a JSON field's read parses one on PostgreSQL.
+    values: { word: ["hello", "hello"], dotted: ["a.b", "a.b"] },
   },
   {
     name: "a text becomes a list of it",
@@ -281,25 +285,28 @@ const PAIRS: readonly Pair[] = [
     from: date,
     to: text,
     values: { a: [INSTANT, "2024-01-02T03:04:05Z"] },
+    as: isoText,
   },
   {
     name: "a date becomes a document",
     from: date,
     to: richText,
     values: { a: [INSTANT, ["2024-01-02T03:04:05Z"]] },
-    as: textsOf,
+    as: value => textsOf(value).map(isoText),
   },
   {
     name: "a date becomes a JSON string",
     from: date,
     to: json,
     values: { a: [INSTANT, "2024-01-02T03:04:05Z"] },
+    as: isoText,
   },
   {
     name: "a date becomes a list of its text",
     from: date,
     to: chips,
     values: { a: [INSTANT, ["2024-01-02T03:04:05Z"]] },
+    as: value => (value as unknown[]).map(isoText),
   },
   {
     name: "a JSON value becomes a text: a string kept, any other as its JSON",

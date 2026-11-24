@@ -38,9 +38,10 @@ import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column
 import { runStatement } from "../pipeline/_internal/run-statement";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { kindChanges } from "../repair-columns/conversion/carry";
-import type {
-  ColumnDescriptor,
-  ColumnOrigin,
+import {
+  type ColumnDescriptor,
+  type ColumnOrigin,
+  toSnakeCase,
 } from "../services/field-column-descriptor";
 import { fieldColumnDriverValue } from "../services/runtime-schema-generator";
 import { columnDescriptorAt } from "../value-conversion/type-change/field-type";
@@ -95,8 +96,9 @@ export interface ConvertedColumn {
   /** How many values the judgement before the run found it keeps, changes and loses. */
   counts: { kept: number; changed: number; lost: number };
   /**
-   * The column's table is rebuilt to the new type by nothing else on SQLite (a translations table,
-   * which the push leaves out): the column beside, of the new type, takes its place there.
+   * Nothing else gives the column its new type on SQLite: a translations column, whose table no
+   * statement rebuilds, or one the change renames, whose file states only the rename. The column
+   * beside, of the new type, takes its place there.
    */
   takesPlaceOnSqlite: boolean;
   /**
@@ -170,7 +172,9 @@ export function typeConversionOf(args: {
         type,
         ...(kind === undefined ? {} : { kind }),
         counts: countsOf(change),
-        takesPlaceOnSqlite: translations,
+        takesPlaceOnSqlite:
+          translations ||
+          toSnakeCase(change.from.name) !== toSnakeCase(change.to.name),
         keepsType: was === type,
         changesKind:
           was === undefined ||
@@ -258,7 +262,7 @@ export function conversionRefusalsAsItStands(
   return conversionRefusals(db, dialect, label, {
     columns: conversion.columns,
     judged: judged.filter(change => change.converted === true),
-    // The translations columns the conversion swaps; a REAL column it swaps is known where it runs.
+    // The columns known to be swapped before any is read; a REAL one is known where it runs.
     swapped: conversion.columns.filter(
       column => column.takesPlaceOnSqlite && !column.keepsType
     ),
@@ -406,8 +410,8 @@ async function judgedAgain(
 
 /**
  * Whether, on SQLite, the column beside takes the converted column's place (`swapIn`) rather than
- * the column taking its values row by row: for a translations table, which no rebuild gives the
- * new type; and for a column whose REAL affinity would turn a text reading that looks like a number
+ * the column taking its values row by row: where nothing else gives it the new type
+ * (`takesPlaceOnSqlite`); and for a column whose REAL affinity would turn a text reading that looks like a number
  * back into one (a float number becoming a text keeps `34`, which the column would store as `34.0`
  * and the rebuild then copy as that text). Never for a column that keeps its type, which only
  * takes the values.

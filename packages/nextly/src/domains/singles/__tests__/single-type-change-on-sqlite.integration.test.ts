@@ -228,6 +228,18 @@ describeEachDialect("a Single's field type change", dialect => {
   it.skipIf(dialect !== "sqlite")(
     "refuses a value written after the values were judged, with nothing changed",
     async () => {
+      // How a relationship keeps its links changes in the same save, so the service's own statements
+      // apply it: a save that changes only the field's type converts its values in its file.
+      const rel = { name: "rel", type: "relationship", relationTo: "users" };
+      const unchanged = [
+        { name: "count", type: "text" },
+        { name: "score", type: "text" },
+      ];
+      await dispatchSingles(
+        "updateSingleSchema",
+        { slug: SLUG },
+        { fields: [...unchanged, rel] }
+      );
       await fillRow(null);
       const before = await recorded();
       const folderBefore = await migrationFiles();
@@ -257,6 +269,7 @@ describeEachDialect("a Single's field type change", dialect => {
             fields: [
               { name: "count", type: "text" },
               { name: "score", type: "checkbox" },
+              { ...rel, hasMany: true },
             ],
           }
         );

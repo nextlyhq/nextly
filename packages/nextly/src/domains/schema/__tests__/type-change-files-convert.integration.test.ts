@@ -263,6 +263,16 @@ async function read(
   );
 }
 
+/** `v` of each entry by title, as the table holds it. */
+async function storedV(t: TestNextly): Promise<Record<string, unknown>> {
+  const rows = await (
+    t.adapter as unknown as { executeQuery<R>(s: string): Promise<R[]> }
+  ).executeQuery<{ title: string; v: unknown }>(
+    `SELECT title, v FROM dc_tcf_posts`
+  );
+  return Object.fromEntries(rows.map(row => [row.title, row.v]));
+}
+
 describe.each(getConfiguredTestDialects())(
   "a type change's migration file converts each value on the database it deploys to (%s)",
   dialect => {
@@ -535,7 +545,8 @@ describe.each(getConfiguredTestDialects())(
 
         await migrateDown(second);
 
-        expect(await read(second)).toEqual({ whole: "34" });
+        // The registry still names the field `w`, whose column is `v` again: read from the table.
+        expect(await storedV(second)).toEqual({ whole: "34" });
       }
     );
 
@@ -575,36 +586,39 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(second)).toEqual({ whole: 34 });
     });
 
-    // Undoing a list becoming a text makes each text a list again, which no conversion writes:
-    // a text no list reads stops the rollback before its statements, naming its row, and the
-    // consent the DOWN's type change takes does not clear it.
+    // Undoing a whole number becoming a text reads each text as a number again: one that is a
+    // fraction a whole number holds only rounded, so it stops the rollback before its statements,
+    // naming its row, and no consent clears it.
     converts(
       "stops a rollback on a value its earlier type cannot hold, naming the row, and changes nothing",
       async () => {
         const first = await boot(dialect);
-        await createPosts([{ name: "v", type: "chips" }]);
+        await createPosts([{ name: "v", type: "number" }]);
         const created = await filesWritten();
-        await write(first, "one", { v: ["a"] });
+        await write(first, "one", { v: 12 });
         await save(first, [{ name: "v", type: "text" }]);
         await first.destroy();
         instance = undefined;
 
         const second = await boot(dialect);
         await migrateFolder(second, created);
-        await write(second, "listed", { v: ["b"] });
+        await write(second, "whole", { v: 34 });
         await migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"));
-        await write(second, "words", { v: "plain words" });
+        await write(second, "part", { v: "1.5" });
 
         await expect(migrateDown(second)).rejects.toMatchObject({
           code: "VALIDATION_ERROR",
           publicData: {
-            errors: [expect.objectContaining({ path: "fields.v" })],
+            errors: [
+              expect.objectContaining({
+                path: "fields.v",
+                code: "TYPE_CHANGE_BLOCKED",
+                message: expect.stringContaining("1 row: id"),
+              }),
+            ],
           },
         });
-        expect(await read(second)).toEqual({
-          listed: "b",
-          words: "plain words",
-        });
+        expect(await read(second)).toEqual({ whole: "34", part: "1.5" });
       }
     );
 
