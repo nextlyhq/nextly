@@ -125,6 +125,8 @@ export function createMockAdapter(db: MockRecord): MockRecord {
       supportsFts: true,
     }),
     dialect: "postgresql",
+    // No transaction is open around a call these tests make.
+    transactionOpenInFlow: vi.fn().mockReturnValue(false),
     insert: vi.fn().mockResolvedValue({
       id: "new-entry-id",
       title: "Test",

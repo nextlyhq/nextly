@@ -326,9 +326,9 @@ async function createInCallersTransaction(
   tx: TransactionContext,
   data: Record<string, unknown>
 ): Promise<unknown> {
-  const entries = t
-    .getService<CollectionsHandler>("collectionsHandler")
-    .getEntryService() as CollectionEntryService;
+  const entries = (
+    t.getService("collectionsHandler") as unknown as CollectionsHandler
+  ).getEntryService() as CollectionEntryService;
   const result = await entries.createEntriesInTransaction(
     tx,
     { collectionName: SLUG, user: { id: TX_WRITER } },
@@ -2263,7 +2263,7 @@ describe.runIf(getConfiguredTestDialects().includes("postgresql"))(
       // A write sent while the save holds the collection waits without keeping the pool's one
       // connection, which the save needs for the rest of its work: it ends when the save does, not
       // when the write gives up.
-      it(`finishes a save on the ${road} road while a write sent during it waits, then refuses the write's value for the removed field`, async () => {
+      it(`finishes a save on the ${road} road while a write sent during it waits`, async () => {
         const t = await bootOnPoolOfOne();
         pushRoad.forced = road === "push";
         const { paused, release } = gated(afterCount);
@@ -2275,10 +2275,18 @@ describe.runIf(getConfiguredTestDialects().includes("postgresql"))(
         expect(reached || (await applying)).toBe(true);
 
         let settled = false;
+        // On the file road the write cannot open its transaction until the file's, which keeps the
+        // pool's one connection, has ended: it is made from the definition the save left, so it
+        // sets only what that keeps. On the push road nothing of the save's keeps the connection, so
+        // the write is made from the earlier definition, and its value for the removed field is
+        // refused.
         const writing = t.nextly
           .create({
             collection: SLUG,
-            data: { label: "during", note: "late" },
+            data:
+              road === "push"
+                ? { label: "during", note: "late" }
+                : { label: "during" },
           } as never)
           .then(
             () => "created",
@@ -2293,6 +2301,10 @@ describe.runIf(getConfiguredTestDialects().includes("postgresql"))(
         expect(await within(applying, 15_000)).toBe("applied");
         expect(heldBack).toBe(true);
         const outcome = await writing;
+        if (road === "file") {
+          expect(outcome, told(outcome)).toBe("created");
+          return;
+        }
         expect(outcome, told(outcome)).toMatchObject({
           code: "VALIDATION_ERROR",
           publicData: {

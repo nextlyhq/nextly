@@ -298,15 +298,15 @@ describe.each(getConfiguredTestDialects())(
      */
     const heldFor = (t: TestNextly, loaded: LoadedRegistryRow | undefined) => {
       const registry = new DynamicCollectionService(t.adapter, consoleLogger);
-      return t.adapter.transaction(tx =>
-        holdEntityForWrite(
+      return t.adapter.transaction(async tx => {
+        await holdEntityForWrite(
           tx,
           { kind: "collection", slug: SLUG },
           registry,
           t.adapter as unknown as HoldingAdapter,
           loaded
-        )
-      );
+        );
+      });
     };
 
     /** The write's hold of the collection, kept until `whileHeld` ends, in a transaction of its own. */
