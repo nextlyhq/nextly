@@ -72,6 +72,12 @@ export interface StoredFieldGroupTables {
    */
   naming: FieldGroupNaming;
   /**
+   * True where the database has no registry at all, as this one reading found it: what a caller
+   * that names a new site's groups acts on. Asking the catalog again for it can answer otherwise,
+   * when another process creates the registry in between. Absent where a registry was read.
+   */
+  absent?: true;
+  /**
    * Why the read failed, when it did.
    *
    * Present only on the failure path, and carried so the caller's log can name
@@ -135,10 +141,12 @@ export async function readStoredFieldGroupTables(
     // nothing about whether they are looking at a permission problem, a dropped
     // connection, or a malformed row — and this is the failure that defers a
     // whole reload, so it is the one worth diagnosing.
+    const absent = (await registryIsAbsent(adapter)) === true;
     return {
       tables,
-      usable: (await registryIsAbsent(adapter)) === true,
+      usable: absent,
       naming: "legacy",
+      ...(absent ? { absent } : {}),
       reason: error instanceof Error ? error.message : String(error),
     };
   }
@@ -208,9 +216,8 @@ export async function declaredFieldGroupStorage(
   const stored = await readStoredFieldGroupTables(adapter);
   if (!stored.usable) throw fieldGroupRegistryUnreadable(stored.reason);
   const naming =
-    newDatabaseNaming !== undefined &&
-    (await registryIsAbsent(adapter)) === true
-      ? newDatabaseNaming
+    stored.absent === true
+      ? (newDatabaseNaming ?? stored.naming)
       : stored.naming;
   const tables = new Map(
     slugs.map(slug => [
