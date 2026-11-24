@@ -15,7 +15,6 @@
  */
 import { execFile } from "node:child_process";
 import {
-  appendFileSync,
   existsSync,
   mkdtempSync,
   readdirSync,
@@ -591,26 +590,6 @@ describe.each(
       const last = stdout.trim().split("\n").at(-1) ?? "[]";
       return JSON.parse(last) as Outcome[];
     }
-
-    /** What each of `operations` came to, one line each, as the output prints them. */
-    const outcomesOf = (outcomes: Outcome[]) =>
-      outcomes
-        .map(o =>
-          JSON.stringify({
-            kind: o.kind,
-            via: o.via,
-            ok: o.ok,
-            code: o.code,
-            message: o.message?.slice(0, 200),
-            detail: o.detail?.slice(0, 300),
-            items: o.items?.length,
-            item:
-              o.item === undefined
-                ? undefined
-                : Object.keys(o.item).slice(0, 12),
-          })
-        )
-        .join("\n");
 
     /** Writes setting the field under each name, one setting another field, and reads, both ways. */
     const operations = (field: string, n: number) => [
@@ -1438,11 +1417,12 @@ describe.each(
       600_000
     );
 
-    // A translatable field's column is the translations table's. A save dropping it, killed once
-    // that column is gone, holds the field the same way: refused by name, other writes let through,
-    // and no read naming the column.
+    // A translatable field's column is the translations table's, which the save brings in step once
+    // its file has run, and the file wrote the registry row. Killed once that column is gone, the
+    // row no longer declares the field, so none is held: writes of the entity's other fields go on,
+    // and no read names the column.
     it.runIf(dialect === "mysql" && perLanguage)(
-      "holds a translatable field a committed drop took from the translations table, in a collection",
+      "lets writes and reads of a collection through once a committed drop took a translatable field's column",
       async () => {
         const t = await boot({ translatable: true });
         const schemaVersion = await versionOf(t);
@@ -1466,12 +1446,7 @@ describe.each(
           "heading"
         );
 
-        const [sets, other, rest, api] = await fromAnotherProcess([
-          {
-            kind: "write",
-            via: "api",
-            data: { title: "T1", slug: "t1", heading: "x" },
-          },
+        const [other, rest, api] = await fromAnotherProcess([
           {
             kind: "write",
             via: "api",
@@ -1481,19 +1456,6 @@ describe.each(
           { kind: "read", via: "api" },
         ]);
 
-        if (process.env.KILLED_OUT) {
-          appendFileSync(
-            process.env.KILLED_OUT,
-            `${expect.getState().currentTestName?.slice(-110) ?? "?"} | killed at ${killedAt}\n` +
-              outcomesOf([sets!, other!, rest!, api!]) +
-              "\n"
-          );
-          return;
-        }
-
-        expect(sets!.code, JSON.stringify(sets)).toBe(
-          "BUILDER_SAVE_FIELD_UNSETTLED"
-        );
         expect(other!.ok, JSON.stringify(other)).toBe(true);
         for (const read of [rest!, api!]) {
           expect(read.ok, JSON.stringify(read)).toBe(true);
@@ -1507,7 +1469,7 @@ describe.each(
     );
 
     it.runIf(dialect === "mysql" && perLanguage)(
-      "holds a translatable field a committed drop took from the translations table, in a Single",
+      "lets writes and reads of a Single through once a committed drop took a translatable field's column",
       async () => {
         const t = await boot();
         await dispatchSingles(
@@ -1540,13 +1502,7 @@ describe.each(
           `killed at ${killedAt}`
         ).not.toContain("heading");
 
-        const [sets, other, rest, api] = await fromAnotherProcess([
-          {
-            kind: "single-write",
-            via: "api",
-            slug: hero,
-            data: { heading: "x", _overwrite: true },
-          },
+        const [other, rest, api] = await fromAnotherProcess([
           {
             kind: "single-write",
             via: "api",
@@ -1557,19 +1513,6 @@ describe.each(
           { kind: "single-read", via: "api", slug: hero },
         ]);
 
-        if (process.env.KILLED_OUT) {
-          appendFileSync(
-            process.env.KILLED_OUT,
-            `${expect.getState().currentTestName?.slice(-110) ?? "?"} | killed at ${killedAt}\n` +
-              outcomesOf([sets!, other!, rest!, api!]) +
-              "\n"
-          );
-          return;
-        }
-
-        expect(sets!.code, JSON.stringify(sets)).toBe(
-          "BUILDER_SAVE_FIELD_UNSETTLED"
-        );
         expect(other!.ok, JSON.stringify(other)).toBe(true);
         for (const read of [rest!, api!]) {
           expect(read.ok, JSON.stringify(read)).toBe(true);
