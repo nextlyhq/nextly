@@ -166,8 +166,8 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
     await expect(rows.first()).toBeVisible({ timeout: 30_000 });
     await rows.last().click();
     await page
-      .getByRole("button", { name: "Restore this version" })
-      .first()
+      .getByRole("banner")
+      .getByRole("button", { name: "Restore…" })
       .click();
     await page
       .getByRole("alertdialog")

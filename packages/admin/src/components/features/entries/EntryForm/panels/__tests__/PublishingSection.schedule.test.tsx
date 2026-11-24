@@ -98,7 +98,12 @@ function Editor() {
   return (
     <>
       {contributed === null ? null : (
-        <button type="button" onClick={contributed.binding.onSelect}>
+        <button
+          type="button"
+          // A contribution is handed the document as edited, as the
+          // header's row hands it; this one holds no unsaved edits.
+          onClick={() => contributed.binding.onSelect({ values: {} })}
+        >
           {contributed.action.label}
         </button>
       )}
