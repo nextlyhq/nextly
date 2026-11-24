@@ -6,6 +6,7 @@ import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
+import { keepsTranslationsInside } from "../shared-structure";
 
 import { carriedDefinition } from "./carried-definition";
 import {
@@ -47,6 +48,23 @@ export interface CompanionFieldLike {
   name: string;
   type: string;
   localized?: boolean;
+}
+
+/** A repeater or group keeping one structure in every language with its text in an overlay. */
+function keepsOverlay(field: CompanionFieldLike): boolean {
+  return keepsTranslationsInside(field, true);
+}
+
+/**
+ * The fields with a column on a translated entity's companion: each translated field
+ * (`isFieldLocalized`), and each repeater or group whose text is kept per language in its overlay
+ * column (`keepsTranslationsInside`), its structure staying on the main table. The start creates
+ * the table with the same columns (`ensureCompanionTable`), so a Builder save and a start agree.
+ */
+function companionFieldsOf<F extends CompanionFieldLike>(
+  fields: readonly F[]
+): F[] {
+  return fields.filter(f => isFieldLocalized(f, true) || keepsOverlay(f));
 }
 
 export interface ReconcileCompanionArgs {
@@ -319,13 +337,20 @@ function addedCompanionColumnStatements(
 ): string[] {
   const { dialect, builtBy } = args;
   const present = new Set(args.presentOnCompanion ?? []);
+  const live =
+    args.liveCompanionColumns === undefined
+      ? undefined
+      : new Set(args.liveCompanionColumns);
   return args.newLocalized
-    .filter(f => !oldNames.has(f.name))
-    .map(f => fieldToLocalizedColumnSpec(f, dialect, builtBy))
-    .filter(
-      (col): col is NonNullable<typeof col> =>
-        col != null && !present.has(col.name)
-    )
+    .flatMap(f => {
+      const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
+      if (col == null || present.has(col.name)) return [];
+      // A container this database's companion holds no overlay for yet (one made before overlays
+      // were kept) gains it, empty, though the field was already there.
+      const overlayMissing =
+        live !== undefined && keepsOverlay(f) && !live.has(col.name);
+      return !oldNames.has(f.name) || overlayMissing ? [col] : [];
+    })
     .map(
       col =>
         `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)}`
@@ -869,6 +894,8 @@ export function buildCompanionTransitionStatements(
   // ENABLE — relocate the existing main columns into a seeded companion.
   if (!wasLocalized && isLocalized) {
     const localizedNew = newFields.filter(f => isFieldLocalized(f, true));
+    // Created empty beside the moved columns, never seeded: nothing on main is copied into one.
+    const overlays = newFields.filter(keepsOverlay);
     const spec = deriveCompanionSpec({
       slug,
       kind,
@@ -893,7 +920,7 @@ export function buildCompanionTransitionStatements(
           tableName,
           builtBy,
           oldLocalized: [],
-          newLocalized: localizedNew,
+          newLocalized: [...localizedNew, ...overlays],
           dialect,
           status,
           companionExists,
@@ -922,6 +949,14 @@ export function buildCompanionTransitionStatements(
     return {
       statements: [
         ...buildLocalizationUpStatements(spec),
+        ...overlays.flatMap(field => {
+          const col = fieldToLocalizedColumnSpec(field, dialect, builtBy);
+          return col
+            ? [
+                `ALTER TABLE ${q(spec.companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)}`,
+              ]
+            : [];
+        }),
         // The companion is new, so every unique translated field's index is created.
         ...uniqueIndexDelta({ ...args, liveCompanionIndexes: [] }).creates,
       ],
@@ -997,8 +1032,8 @@ export function buildCompanionTransitionStatements(
     // that kept it.
     const rename = companionColumnRename(args);
     const before = rename?.oldFields ?? oldFields;
-    const oldLocalized = before.filter(f => isFieldLocalized(f, true));
-    const newLocalized = newFields.filter(f => isFieldLocalized(f, true));
+    const oldLocalized = companionFieldsOf(before);
+    const newLocalized = companionFieldsOf(newFields);
     const sharedAfter = fieldsLeavingTranslation(before, newFields);
     const archiveFirst = args.archiveBeforeMain === true;
     // The rename runs before whatever reads the column under its new name: the archive writes,
