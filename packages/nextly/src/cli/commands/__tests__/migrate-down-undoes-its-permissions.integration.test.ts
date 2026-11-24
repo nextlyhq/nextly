@@ -379,6 +379,41 @@ describe.each(getConfiguredTestDialects())(
       expect((await owners())["mdp-events"]).toBe(`plugin:${EVENTS}`);
     }, 120_000);
 
+    it("writes it back as that plugin's where another plugin has taken the vacated slug since", async () => {
+      const taker = definePlugin({
+        name: "@test/mdp-taker",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: {
+          collections: [
+            defineCollection({
+              slug: "mdp-events",
+              fields: [text({ name: "other" })],
+            }),
+          ],
+        },
+      });
+      const renamedPlugin = eventsPlugin({ "mdp-events": "mdp-shows" });
+      const before = config({ plugins: [eventsPlugin()] });
+      const renamed = config({ plugins: [renamedPlugin] });
+      const taken = config({ plugins: [renamedPlugin, taker] });
+      for (const step of [before, renamed, taken]) {
+        await migrateCreate(step);
+        await migrate(step);
+      }
+      expect(await owners()).toMatchObject({
+        "mdp-events": "plugin:@test/mdp-taker",
+        "mdp-shows": `plugin:${EVENTS}`,
+      });
+
+      // Back over the taker's collection, then over the rename, with today's configuration.
+      await migrateDown(taken);
+      expect(Object.keys(await owners())).not.toContain("mdp-events");
+      await migrateDown(taken);
+
+      expect((await owners())["mdp-events"]).toBe(`plugin:${EVENTS}`);
+    }, 180_000);
+
     it("writes the app's own collection on the vacated slug back as the app's where the point already had the rename", async () => {
       const plugins = [eventsPlugin({ "mdp-events": "mdp-shows" })];
       const both = config({ extra: ["mdp-events"], plugins });

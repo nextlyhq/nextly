@@ -54,6 +54,16 @@ describe("the plugin a collection belongs to", () => {
     expect([
       ...pluginCollectionSources(renamed, { forms: {}, pages: {} }),
     ]).toEqual([["forms", "plugin:@a/one"]]);
+    // Whichever plugin took the vacated slug since: the record is from before it could.
+    const taken = plugin("@a/two", ["forms"]);
+    for (const plugins of [
+      [...renamed, taken],
+      [taken, ...renamed],
+    ]) {
+      expect([...pluginCollectionSources(plugins, { forms: {} })]).toEqual([
+        ["forms", "plugin:@a/one"],
+      ]);
+    }
     // With both, the rename was already made: the vacated slug is the app's.
     expect([
       ...pluginCollectionSources(renamed, { forms: {}, "contact-forms": {} }),
