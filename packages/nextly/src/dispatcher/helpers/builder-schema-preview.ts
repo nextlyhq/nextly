@@ -15,6 +15,7 @@ import {
 } from "../../domains/i18n/configured-locales";
 import { offeredCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { previewBodyWithLeavingTranslation } from "../../domains/i18n/migration/preview-leaving-translation";
+import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import type { RenameCandidate } from "../../domains/schema/pipeline/pushschema-pipeline-interfaces";
@@ -108,8 +109,13 @@ async function translatedFieldRename(
     tableName: args.tableName,
     oldFields: args.currentFields,
     newFields: args.newFields,
-    wasLocalized,
-    isLocalized: args.requestedLocalized ?? wasLocalized,
+    // Where the values are kept before and after, as the apply asks it before it takes the answer
+    // back: under per-language storage an entity that is not translated keeps its text fields'
+    // values in its translations table too, so their rename is offered there.
+    wasLocalized: storesPerLanguage({ localized: wasLocalized }),
+    isLocalized: storesPerLanguage({
+      localized: args.requestedLocalized ?? wasLocalized,
+    }),
     dialect: args.dialect,
     builtBy: args.builtBy,
   });
