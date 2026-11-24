@@ -695,16 +695,13 @@ describe.each(
       async () => {
         const t = await boot();
         // Killed once the rename has committed, before its registry update: after the statement
-        // that renames, read from the file the save runs or the push it makes, as no query may run
-        // beside the save. A collection that keeps values per language pushes its change.
+        // that renames, read from the file the save runs, as no query may run beside the save.
         await killRename(t, afterStatement(renames("heading")));
         const columns = await liveColumns(t);
         expect(columns, `killed at ${killedAt}`).toContain("headline");
         expect(columns, `killed at ${killedAt}`).not.toContain("heading");
-        // Each layout by the road its save takes: its file, or the push.
-        expect(killedAt).toMatch(
-          perLanguage ? /^push: / : /_update\.sql: after statement/
-        );
+        // On both layouts the dialog's save of a field kept on the main table runs its own file.
+        expect(killedAt).toMatch(/_update\.sql: after statement/);
 
         const held = await fromAnotherProcess(operations("heading", 1));
 
@@ -888,8 +885,9 @@ describe.each(
     );
 
     // Turning Draft/Published off drops the status column the registry row still declares: no
-    // read can leave it out, so the whole collection is held, its reads included.
-    it.runIf(dialect === "mysql")(
+    // read can leave it out, so the whole collection is held, its reads included. Kept to the
+    // earlier layout: on per-language storage the save that turns it off reaches no kill point here.
+    it.runIf(dialect === "mysql" && !perLanguage)(
       "refuses every write and read of a collection whose committed change dropped its status column",
       async () => {
         const t = await boot({ status: true });
