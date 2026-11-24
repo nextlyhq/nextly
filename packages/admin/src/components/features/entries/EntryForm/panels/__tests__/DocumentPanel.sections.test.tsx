@@ -179,6 +179,23 @@ describe("the Status section", () => {
     expect(status).toHaveTextContent(`This document ${sentence}`);
   });
 
+  it("speaks of this document, not a language, on a site with one language", () => {
+    localization.current = {
+      enabled: true,
+      locales: [{ code: "en", label: "English" }],
+      defaultLocale: "en",
+    };
+    panel(
+      { documentStatus: { status: "draft", hasWorkingDraft: false } },
+      true
+    );
+    const status = screen.getByRole("region", { name: "Status" });
+    expect(status).toHaveTextContent(
+      "This document is a draft, not published yet."
+    );
+    expect(status).not.toHaveTextContent(/English/);
+  });
+
   it("reads the language being edited, not the document's main row", () => {
     localization.current = {
       enabled: true,
