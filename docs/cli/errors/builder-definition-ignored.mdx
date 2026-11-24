@@ -7,9 +7,9 @@ description: "The Schema Builder's definition file is one git ignores, so `migra
 
 The Schema Builder's definition file is one git ignores, so `migrate:check` cannot tell the changes not yet in a migration from what the project commits.
 
-The Schema Builder writes each collection, Single and field group it saves into the definition file (`db.uiSchemaFile`, `./ui-schema.json` by default). `nextly migrate:check` reports the changes not yet in a migration from what the project commits: the configuration, that file and the migrations folder. A file git ignores is not committed, so the same project would pass the check on the machine that holds the file and fail it in CI, which does not. `nextly migrate:check` refuses instead, naming the file.
+The Schema Builder writes each collection, Single and field group it saves into the definition file (`db.uiSchemaFile`, `./ui-schema.json` by default). `nextly migrate:check` reports the changes not yet in a migration from what the project commits: the configuration, that file and the migrations folder. A file git ignores is not committed, so the same project would pass the check on the machine that holds the file and fail it in CI, which does not. `nextly migrate:check` refuses instead, naming the file, whether or not the checkout holds it: a CI checkout of a project that ignores the file never does.
 
-`nextly migrate:create` writes the migration from the file all the same, and warns, naming it.
+`nextly migrate:create` writes the migration from the file where it is there, and warns, naming it.
 
 ## Fix
 

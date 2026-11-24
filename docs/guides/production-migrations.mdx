@@ -53,22 +53,25 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 
 `nextly migrate:check` and `nextly migrate:create` compute the changes not yet in a migration from
 what the project commits: `nextly.config.ts`, the Schema Builder's definition file and the
-migrations folder. They connect to no database, so neither needs `DATABASE_URL`, and both report
-the same list: `migrate:check` fails on exactly the changes `migrate:create` would write.
+migrations folder. Neither needs a database to do it, so neither needs `DATABASE_URL`, and both
+work from the same list: the check fails where `migrate:create` would write a change, apart from
+settings recorded for the first time (below).
 
 Each dialect writes its own SQL, so both commands still need to know which database the migrations
 are for. They take it from, in order:
 
 1. `--dialect`;
-2. the newest migration file whose header names its dialect (`-- Dialect: PostgreSQL`);
+2. the newest migration that says: one written as a single dialect's file (`0003_seed.sqlite.sql`)
+   by its name, any other by the dialect its header names (`-- Dialect: PostgreSQL`);
 3. `DB_DIALECT`, else the scheme of `DATABASE_URL`, read without connecting;
 4. a question, at a terminal.
 
 Where none of these says and no terminal is attached, as in CI before the first migration, the
 command refuses with [`DIALECT_NOT_STATED`](/docs/cli/errors/dialect-not-stated), naming
-`--dialect`. `migrate:create` reads a database only for what it adds to a run: the row counts of a
-migration that [deletes data](#a-migration-that-deletes-data), which it leaves out when no database
-can be read, and `--record-snapshot`, which reads one by design.
+`--dialect`. `migrate:create` still reads a database where one can be reached, for the row counts of
+a migration that [deletes data](#a-migration-that-deletes-data) and for an older unique index on a
+field that stops being unique. It goes on without them where none can. `--record-snapshot` reads one
+by design.
 
 A Schema Builder definition file that git ignores is not committed, so the same project would
 report one list on the machine that holds it and another in CI. `nextly migrate:check` refuses it

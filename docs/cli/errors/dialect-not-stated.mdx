@@ -7,10 +7,10 @@ description: "A command that reads no database could not tell which one its migr
 
 A command that reads no database could not tell which one its migrations are for: no `--dialect`, no migration file naming one, and no `DB_DIALECT` or `DATABASE_URL`.
 
-`nextly migrate:check` and `nextly migrate:create` compare the configuration with the migrations folder and connect to no database, so they run without `DATABASE_URL`. They still need to know which database the migrations are for, since each dialect writes its own SQL. They take it from, in order:
+`nextly migrate:check` and `nextly migrate:create` compare the configuration with the migrations folder, which needs no database, so they run without `DATABASE_URL`. They still need to know which database the migrations are for, since each dialect writes its own SQL. They take it from, in order:
 
 1. `--dialect`;
-2. the newest migration file whose header names its dialect (`-- Dialect: PostgreSQL`);
+2. the newest migration that says: one written as a single dialect's file (`0003_seed.sqlite.sql`) by its name, any other by the dialect its header names (`-- Dialect: PostgreSQL`);
 3. `DB_DIALECT`, else the scheme of `DATABASE_URL`, read without connecting;
 4. a question, when the command runs at a terminal.
 
