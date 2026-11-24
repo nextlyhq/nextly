@@ -159,14 +159,6 @@ A write offers five timings, in this order:
 | After the commit   | `afterCreate` / `afterUpdate` / `afterDelete`                                       | once                                         |
 | After              | field `afterChange` hooks                                                           | once                                         |
 
-A before-hook runs once for a write, also when the write is made again. A write
-that waits for a save of its collection's definition is made again, up to three
-times in all, from what its hooks left the first time: your hook is not called
-again, and an access rule and a field's `validate` function are not asked again.
-A field your hook sets that the save removed or stores differently refuses the
-write naming it, as one the caller sent would. What your hook worked out from the
-earlier definition is stored as it left it.
-
 A collection event announces the commit, so it comes before the after-hooks.
 Before this release it came after them: a listener that relied on the
 after-hooks having run should do its work in an `after*` hook instead.
