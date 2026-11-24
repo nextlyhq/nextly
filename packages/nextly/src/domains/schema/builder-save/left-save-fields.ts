@@ -33,8 +33,9 @@ import { toSnakeCase } from "../field-rules";
 import { readSchemaLockState } from "../pipeline/schema-lock";
 
 import {
-  readSaveInProgressOf,
+  readSavesStandingOver,
   type LeftSave,
+  type ReadRow,
   type SaveInProgressKind,
 } from "./save-in-progress";
 
@@ -67,17 +68,29 @@ interface RegistryRow {
 interface Unserved {
   fields: readonly string[];
   missing: readonly string[];
+  /**
+   * Whether the tables lack a column the entity's own shape needs beyond its fields (its status, a
+   * translations table's own columns): the whole entity is held, its running tables left as they
+   * are, and a read refused, since no narrowing of the fields answers it.
+   */
+  whole: boolean;
 }
 
 /**
- * Each comparison, by the id of the record it was made under: the save behind a record no process
- * runs changes nothing more, and a settle clears its record, so a later record has its own id.
+ * What a record's comparison came to, by the id of the record it was made under: final once made
+ * with the schema lock free before and after it, as the save behind a record no process runs
+ * changes nothing more (a settle clears its record, so a later record has its own id). `busy`
+ * where a schema change held the lock when last asked: its tables may still be moving, so nothing
+ * is held over them and the next check outside a transaction asks again.
  */
-const comparedById = new Map<string, Unserved>();
+const comparedById = new Map<
+  string,
+  { unserved: Unserved; final: true } | { busy: true }
+>();
 
 /**
  * The entities whose running tables this process has narrowed (`shapeRunningTables`), by kind and
- * slug, with the id of the record they were narrowed under.
+ * slug, with the record and the missing fields they were narrowed for.
  */
 const narrowedBy = new Map<string, string>();
 
@@ -100,6 +113,18 @@ export async function refuseWriteOverLeftSave(args: {
       field => field === key || toSnakeCase(field) === toSnakeCase(key)
     );
   if (Object.keys(args.data).some(named)) throw held.refusal;
+}
+
+/**
+ * The keys of `values` a write sets: those whose value is not `undefined`, which a write leaves out,
+ * so a column passed over sets no field.
+ */
+export function writtenKeys(
+  values: Readonly<Record<string, unknown>>
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(values).filter(([, value]) => value !== undefined)
+  );
 }
 
 /**
@@ -130,62 +155,121 @@ async function heldFieldsOf(args: {
 }): Promise<HeldFields | undefined> {
   if (isProductionRuntime()) return undefined;
   if (args.adapter.getCapabilities().dialect !== "mysql") return undefined;
-  const row = await standingRecordOf(args);
+  const { own, fieldGroups } = await standingRecordsOf(args);
   // A save made outside development leaves its files for `nextly migrate` and changes no table.
-  if (row === undefined || ("record" in row && row.record.applies === false)) {
+  const applying = (row: ReadRow | undefined) =>
+    row !== undefined && !("record" in row && row.record.applies === false);
+  const groups = fieldGroups.filter(group => applying(group.row));
+  if (!applying(own) && groups.length === 0) {
     await restoreRunningTables(args);
     return undefined;
   }
   const registry = await registryRowOf(args);
   if (registry === null) return undefined;
-  // A record that cannot be read could be any save's: every field is held, failing closed.
-  const record = "record" in row ? row.record : undefined;
-  const unserved =
-    record === undefined
-      ? undefined
-      : await unservedOf(args, record, registry.fields);
-  if (record !== undefined && unserved !== undefined) {
-    await shapeRunningTables(args, record.id, registry, unserved.missing);
-  }
-  return heldOf(args, unserved?.fields ?? namesOf(registry.fields), unserved);
+  const mine = applying(own)
+    ? await heldByOwnRecord(args, own as ReadRow, registry)
+    : undefined;
+  if (mine === "busy") return undefined;
+  const embedding = await heldByFieldGroups(args, groups, registry);
+  const fields = [...new Set([...(mine?.fields ?? []), ...embedding])];
+  if (fields.length === 0) return undefined;
+  return {
+    fields: new Set(fields),
+    // A field group's save is not compared: the host's reads, which reach its tables, are refused.
+    compared: (mine === undefined || mine.compared) && embedding.length === 0,
+    refusal: heldFieldsRefusal(args.kind, args.slug, fields),
+  };
 }
 
 /**
- * The record standing for the entity, read on the write's transaction where it has one: undefined
- * where none stands, a database whose meta table is not made yet included.
+ * What the entity's own record holds: the fields the comparison finds, its running tables brought
+ * to them; every field where its record cannot be read or nothing is known; `"busy"` where a schema
+ * change holds the lock.
  */
-async function standingRecordOf(args: {
+async function heldByOwnRecord(
+  args: { adapter: DrizzleAdapter; kind: EntryKind; slug: string; tx?: unknown },
+  own: ReadRow,
+  registry: RegistryRow
+): Promise<{ fields: readonly string[]; compared: boolean } | "busy"> {
+  // A record that cannot be read could be any save's: every field is held, failing closed.
+  if (!("record" in own)) {
+    return { fields: namesOf(registry.fields), compared: false };
+  }
+  const unserved = await unservedOf(args, own.record, registry);
+  if (unserved === "busy") return "busy";
+  if (unserved === undefined || unserved.whole) {
+    return { fields: namesOf(registry.fields), compared: false };
+  }
+  await shapeRunningTables(args, own.record.id, registry, unserved.missing);
+  return { fields: unserved.fields, compared: true };
+}
+
+/**
+ * The entity's fields that hold a field group a save left part-way stands over, wherever in the
+ * field they sit (a group's or a repeater's fields included). Not compared from the tables: each is
+ * held whole while that save stands. None while a schema change holds the lock, as for its own.
+ */
+async function heldByFieldGroups(
+  args: { adapter: DrizzleAdapter },
+  groups: ReadonlyArray<{ slug: string }>,
+  registry: RegistryRow
+): Promise<string[]> {
+  if (groups.length === 0) return [];
+  const slugs = new Set(groups.map(group => group.slug));
+  const embedding = registry.fields.flatMap(field =>
+    typeof field.name === "string" && embeds(field, slugs) ? [field.name] : []
+  );
+  if (embedding.length === 0) return [];
+  return (await lockFree(args.adapter)) ? embedding : [];
+}
+
+/** Whether `field`, or a field within it, holds one of the field groups `slugs` names. */
+function embeds(field: unknown, slugs: ReadonlySet<string>): boolean {
+  if (typeof field !== "object" || field === null) return false;
+  const named = field as {
+    component?: unknown;
+    components?: unknown;
+    fields?: unknown;
+  };
+  if (typeof named.component === "string" && slugs.has(named.component)) {
+    return true;
+  }
+  if (
+    Array.isArray(named.components) &&
+    named.components.some(c => typeof c === "string" && slugs.has(c))
+  ) {
+    return true;
+  }
+  return (
+    Array.isArray(named.fields) &&
+    named.fields.some(child => embeds(child, slugs))
+  );
+}
+
+/**
+ * The records standing over the entity, read on the write's transaction where it has one: none
+ * where its database's meta table is not made yet.
+ */
+async function standingRecordsOf(args: {
   adapter: DrizzleAdapter;
   kind: EntryKind;
   slug: string;
   tx?: unknown;
-}): Promise<Awaited<ReturnType<typeof readSaveInProgressOf>>> {
+}): Promise<Awaited<ReturnType<typeof readSavesStandingOver>>> {
   const dialect = args.adapter.getCapabilities().dialect;
   try {
-    return await readSaveInProgressOf(
+    return await readSavesStandingOver(
       args.tx ?? args.adapter.getDrizzle(),
       dialect,
       args.kind,
       args.slug
     );
   } catch (error) {
-    if (isMissingTable(error, dialect)) return undefined;
+    if (isMissingTable(error, dialect)) {
+      return { own: undefined, fieldGroups: [] };
+    }
     throw error;
   }
-}
-
-/** The answer over `fields`, as compared (`unserved`) or held whole; undefined where none is held. */
-function heldOf(
-  args: { kind: EntryKind; slug: string },
-  fields: readonly string[],
-  unserved: Unserved | undefined
-): HeldFields | undefined {
-  if (fields.length === 0) return undefined;
-  return {
-    fields: new Set(fields),
-    compared: unserved !== undefined,
-    refusal: heldFieldsRefusal(args.kind, args.slug, fields),
-  };
 }
 
 /** The names of `fields`, those with one. */
@@ -211,7 +295,9 @@ async function shapeRunningTables(
     await restoreRunningTables(args);
     return;
   }
-  if (narrowedBy.get(key) === recordId) return;
+  // Registered again where the record or the missing fields changed since the last narrowing.
+  const shape = `${recordId}:${[...missing].sort().join(",")}`;
+  if (narrowedBy.get(key) === shape) return;
   const gone = new Set(missing);
   await registerRunningTables(args, {
     ...registry,
@@ -219,7 +305,7 @@ async function shapeRunningTables(
       field => typeof field.name !== "string" || !gone.has(field.name)
     ),
   });
-  narrowedBy.set(key, recordId);
+  narrowedBy.set(key, shape);
 }
 
 /** Puts back the registry's own running tables for an entity this process narrowed, if it did. */
@@ -264,28 +350,56 @@ async function registerRunningTables(
 }
 
 /**
- * The record's comparison: kept from before (`comparedById`), or made where no transaction is open
- * and kept where the schema lock was free. Undefined where it cannot be made.
+ * The record's comparison: final from before (`comparedById`), or made where no transaction is open
+ * with the schema lock free before and after it, and kept as final. `"busy"` where a schema change
+ * holds the lock. Inside a transaction nothing is compared, as the tables would be read on other
+ * connections: what was found before it opened, on the road's way in, is read instead
+ * (`compareBeforeTransaction`). Undefined where nothing is known, which holds every field.
  */
 async function unservedOf(
   args: { adapter: DrizzleAdapter; tx?: unknown },
   record: LeftSave,
-  registryFields: readonly unknown[]
-): Promise<Unserved | undefined> {
+  registry: RegistryRow
+): Promise<Unserved | "busy" | undefined> {
   const known = comparedById.get(record.id);
-  if (known !== undefined) return known;
-  if (args.tx !== undefined) return undefined;
-  const free = (await readSchemaLockState(args.adapter)).state === "free";
+  if (known !== undefined && "unserved" in known) return known.unserved;
+  if (args.tx !== undefined) return known === undefined ? undefined : "busy";
+  const busy = () => {
+    comparedById.set(record.id, { busy: true });
+    return "busy" as const;
+  };
+  if (!(await lockFree(args.adapter))) return busy();
   // Loaded only where a record stands: the comparison and the settle around it never are otherwise.
   const { fieldsNotServedOf } = await import("./settle-left-save");
-  const found = await fieldsNotServedOf(args.adapter, record, registryFields);
+  const found = await fieldsNotServedOf(args.adapter, record, registry);
   if (found === undefined) return undefined;
-  const unserved = {
-    fields: found.map(f => f.field),
-    missing: found.filter(f => f.missing).map(f => f.field),
+  // Taken while the lock was free throughout: a change that took it meanwhile may have moved them.
+  if (!(await lockFree(args.adapter))) return busy();
+  const unserved: Unserved = {
+    fields: found.unserved.map(f => f.field),
+    missing: found.unserved.filter(f => f.missing).map(f => f.field),
+    whole: !found.shapeServed,
   };
-  if (free) comparedById.set(record.id, unserved);
+  comparedById.set(record.id, { unserved, final: true });
   return unserved;
+}
+
+/** Whether no schema change holds the schema lock now. */
+async function lockFree(adapter: DrizzleAdapter): Promise<boolean> {
+  return (await readSchemaLockState(adapter)).state === "free";
+}
+
+/**
+ * Compares a standing record's entity before a transaction that writes it opens, so the checks
+ * inside it (`refuseWriteOverLeftSave` with `tx`) read what holds rather than holding every field.
+ * Nothing where no record stands, or none can hold one.
+ */
+export async function compareBeforeTransaction(args: {
+  adapter: DrizzleAdapter;
+  kind: EntryKind;
+  slug: string;
+}): Promise<void> {
+  await heldFieldsOf(args);
 }
 
 /** The entity's registry row, read on the write's transaction where it has one; null where none. */

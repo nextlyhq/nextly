@@ -218,7 +218,10 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import { stopReleasesHolding } from "../../releases/early-stop";
-import { refuseWriteOverLeftSave } from "../../schema/builder-save/left-save-fields";
+import {
+  refuseWriteOverLeftSave,
+  writtenKeys,
+} from "../../schema/builder-save/left-save-fields";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
@@ -3875,6 +3878,18 @@ export class SingleMutationService extends BaseService {
             if (committed) {
               existingDoc = committed;
             } else {
+              // The document as first written, its defaults included: a field a Builder save
+              // left part-way holds is refused before it is inserted.
+              await refuseWriteOverLeftSave({
+                adapter: this.adapter,
+                kind: "single",
+                slug,
+                data: writtenKeys({
+                  ...pendingAutoCreateValues,
+                  ...pendingLocalizedDefaults,
+                }),
+                tx: tx.getDrizzle(),
+              });
               existingDoc = await tx.insert<SingleDocument>(
                 singleMeta.tableName,
                 pendingAutoCreateValues,
@@ -4716,6 +4731,17 @@ export class SingleMutationService extends BaseService {
           // everything after this reports the document as it stands, which
           // for a held edit is the published content the public still sees.
           const savedBy = actorForWrite(options.actor, options.user);
+          // The row as it is written, what the hooks added and a promoted draft included: a field
+          // a Builder save left part-way holds is refused before anything of it is written.
+          if (!holdEdit) {
+            await refuseWriteOverLeftSave({
+              adapter: this.adapter,
+              kind: "single",
+              slug,
+              data: writtenKeys(mainPayload),
+              tx: tx.getDrizzle(),
+            });
+          }
           const rows = holdEdit
             ? [existingDoc]
             : await tx.update<SingleDocument>(
@@ -5321,6 +5347,14 @@ export class SingleMutationService extends BaseService {
             );
             // Set only for an overwrite of the language this save judges.
             languageBefore = before;
+            // Its translated values too; see the main row above.
+            await refuseWriteOverLeftSave({
+              adapter: this.adapter,
+              kind: "single",
+              slug,
+              data: writtenKeys(companionData),
+              tx: tx.getDrizzle(),
+            });
             await writeCompanionValues({
               tx,
               dialect: this.adapter.dialect,

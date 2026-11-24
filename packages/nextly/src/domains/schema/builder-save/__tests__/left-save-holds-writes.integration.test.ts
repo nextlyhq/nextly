@@ -28,6 +28,8 @@ import { childLayoutArgs } from "../../../../__tests__/storage-layout";
 import { buildClaims } from "../../../../auth/jwt/claims";
 import { signAccessToken } from "../../../../auth/jwt/sign";
 import { createAdapter } from "../../../../database/factory";
+import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
+import { resolveVersionsConfig } from "../../../versions/resolve-config";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import {
   createTestNextly,
@@ -137,9 +139,11 @@ function causesOf(answer: unknown): string {
 
 /** What one of the other process's operations came to (`helpers/left-save-writer.ts`). */
 type Outcome = {
-  kind: "write" | "read";
+  kind: "write" | "read" | "update";
   via: "rest" | "api";
   data?: Record<string, unknown>;
+  /** The entry an update changes. */
+  id?: string;
   ok: boolean;
   status?: number;
   code?: string;
@@ -208,8 +212,12 @@ describe.each(
     let url: string;
     let cookie: string;
 
-    /** A new database of this dialect, the instance on it, an editor, and the collection. */
-    async function boot(): Promise<TestNextly> {
+    /**
+     * A new database of this dialect, the instance on it, an editor, and the collection: with
+     * `drafts`, Draft/Published and keeping each live entry's edits as a draft until published,
+     * as a collection demoted from code does.
+     */
+    async function boot(options: { drafts?: boolean } = {}): Promise<TestNextly> {
       if (dialect === "sqlite") {
         url = `file:${join(basePath, "site.db")}`;
       } else {
@@ -245,8 +253,22 @@ describe.each(
         {} as ServiceContainer,
         "createCollection",
         {},
-        { name: slug, label: slug, fields: [field("heading"), field("note")] }
+        {
+          name: slug,
+          label: slug,
+          fields: [field("heading"), field("note")],
+          ...(options.drafts === true ? { status: true } : {}),
+        }
       );
+      if (options.drafts === true) {
+        // Kept as a collection demoted from code keeps its code-first versions, drafts included
+        // (`db:sync --demote`): the Builder's own switch keeps history alone, never a draft.
+        const kept = JSON.stringify(resolveVersionsConfig({ drafts: true }));
+        await current.adapter.executeQuery(
+          `UPDATE dynamic_collections SET versions = '${kept}' WHERE slug = '${slug}'`
+        );
+        clearRegistryRowCache();
+      }
       await current.nextly.create({
         collection: slug,
         data: { title: "First", slug: "first", heading: "h", note: "n" },
@@ -487,6 +509,68 @@ describe.each(
         for (const outcome of settled) {
           expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
         }
+      },
+      600_000
+    );
+
+    // A publish writes the entry's held draft into the live row, whatever the request itself sets:
+    // here only the status, with the draft holding the field the rename changed. A release run
+    // publishes the same way.
+    it.runIf(dialect === "mysql")(
+      "refuses publishing a held draft that sets a field a committed rename changed, naming it, with the live entry unchanged",
+      async () => {
+        const t = await boot({ drafts: true });
+        const created = (await t.nextly.create({
+          collection: slug,
+          data: {
+            title: "Live",
+            slug: "live",
+            heading: "live heading",
+            note: "n",
+            status: "published",
+          },
+        } as never)) as { item?: { id?: unknown } };
+        const id = String(created.item?.id);
+        // The edit is held as the entry's draft, the live row as it was.
+        await t.nextly.update({
+          collection: slug,
+          id,
+          data: { heading: "held heading", _overwrite: true },
+        } as never);
+        const [before] = (await t.adapter.executeQuery(
+          `SELECT heading FROM ${table} WHERE id = '${id}'`
+        )) as unknown as Array<{ heading: unknown }>;
+        expect(before?.heading, "the edit is held, not live").toBe(
+          "live heading"
+        );
+        await killRename(t, point => {
+          if (point.startsWith("push: ")) {
+            return /RENAME\s+COLUMN\s+`?heading`?/i.test(point);
+          }
+          const after = /^(.*_update[^:]*): after statement (\d+)$/.exec(point);
+          if (after === null) return false;
+          const statement = statementsOf(after[1]!)[Number(after[2]) - 1];
+          return statement !== undefined && /^\s*EXECUTE\b/i.test(statement);
+        });
+
+        const published = { status: "published", _overwrite: true };
+        const outcomes = await fromAnotherProcess([
+          { kind: "update", via: "rest", id, data: published },
+          { kind: "update", via: "api", id, data: published },
+        ]);
+
+        for (const refused of outcomes) {
+          expect(refused.ok, JSON.stringify(refused)).toBe(false);
+          expect(refused.code, JSON.stringify(refused)).toBe(
+            "BUILDER_SAVE_FIELD_UNSETTLED"
+          );
+          expect(refused.message, JSON.stringify(refused)).toMatch(/heading/);
+        }
+        // Nothing of either publish was written: the live value is the one before the draft.
+        const [live] = (await t.adapter.executeQuery(
+          `SELECT headline FROM ${table} WHERE id = '${id}'`
+        )) as unknown as Array<{ headline: unknown }>;
+        expect(live?.headline).toBe("live heading");
       },
       600_000
     );

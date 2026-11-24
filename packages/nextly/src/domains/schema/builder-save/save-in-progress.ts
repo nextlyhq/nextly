@@ -48,7 +48,7 @@ import { dirname, join, relative } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { eq, like, type SQL } from "drizzle-orm";
+import { eq, like, or, type SQL } from "drizzle-orm";
 import { z } from "zod";
 
 import { loadedDialect } from "../../../database/dialect-tables";
@@ -1058,22 +1058,39 @@ export async function readSavesInProgress(
 }
 
 /**
- * The record standing for one entity, in one primary-key read through `db`: the adapter's handle,
- * or an open transaction's, so a write already inside one reads on its own connection. Undefined
- * where none stands.
+ * The records standing over one entity's entries, in one read through `db` (the adapter's handle,
+ * or an open transaction's, so a write already inside one reads on its own connection): the
+ * entity's own, undefined where none stands, and every field group's, since a field group's save
+ * changes the component tables an entity's entries reach. None in the common case.
  */
-export async function readSaveInProgressOf(
+export async function readSavesStandingOver(
   db: unknown,
   dialect: SupportedDialect,
   kind: SaveInProgressKind,
   slug: string
-): Promise<ReadRow | undefined> {
+): Promise<{
+  own: ReadRow | undefined;
+  fieldGroups: Array<{ slug: string; row: ReadRow }>;
+}> {
   const table = loadedDialect(dialect).tables.nextlyMeta;
-  const [row] = await (db as RecordRows)
+  const key = saveInProgressKey(kind, slug);
+  const groupKey = saveInProgressKey("fieldGroup", "");
+  const rows = await (db as RecordRows)
     .select({ key: table.key, value: table.value })
     .from(table)
-    .where(eq(table.key, saveInProgressKey(kind, slug)));
-  return row === undefined ? undefined : readRowOf(row);
+    .where(
+      or(
+        eq(table.key, key),
+        like(table.key, `${groupKey}%`)
+      ) as SQL
+    );
+  const read = rows.map(readRowOf);
+  return {
+    own: read.find(row => row.key === key),
+    fieldGroups: read
+      .filter(row => row.key !== key)
+      .map(row => ({ slug: row.key.slice(groupKey.length), row })),
+  };
 }
 
 /** A record's row parsed: its record, or why it could not be read. */

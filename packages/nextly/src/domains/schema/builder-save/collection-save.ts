@@ -4559,7 +4559,7 @@ async function liveTable(
 export async function fieldsNotServed(
   deps: CollectionSaveDeps,
   entity: { kind: AddressKind; slug: string; registered: UiSchemaEntity }
-): Promise<UnservedField[] | undefined> {
+): Promise<ServedComparison | undefined> {
   const { registered } = entity;
   const save: CollectionSave = {
     kind: entity.kind,
@@ -4585,6 +4585,9 @@ export async function fieldsNotServed(
   const declared = new Map(desired.columns.map(c => [c.name, c]));
   const standing = new Map((live?.columns ?? []).map(c => [c.name, c]));
   const unserved: UnservedField[] = [];
+  // Every declared column a field makes, so the rest are the entity's own (its status, a
+  // translations table's structural columns).
+  const ofFields = new Set<string>();
   for (const field of fieldsStoredOnRow(registered.fields)) {
     if (typeof field.name !== "string") continue;
     // The field's columns as the declared table holds them: on the main table, or in the
@@ -4597,6 +4600,7 @@ export async function fieldsNotServed(
       const column = declared.get(name);
       return column === undefined ? [] : [column];
     });
+    for (const column of columns) ofFields.add(column.name);
     const missing = columns.some(column => !standing.has(column.name));
     const differs = columns.some(column => {
       const live = standing.get(column.name);
@@ -4610,7 +4614,21 @@ export async function fieldsNotServed(
     });
     if (missing || differs) unserved.push({ field: field.name, missing });
   }
-  return unserved;
+  // A column of the entity's own the tables lack, which every read selects: no field to hold
+  // answers it. One they have beyond the row's is harmless, as nothing selects it.
+  const shapeServed = [...declared.keys()].every(
+    name => ofFields.has(name) || standing.has(name)
+  );
+  return { unserved, shapeServed };
+}
+
+/**
+ * What the comparison found (`fieldsNotServed`): each field whose columns the tables do not hold as
+ * declared, and whether the entity's own columns beyond its fields are all there.
+ */
+export interface ServedComparison {
+  unserved: UnservedField[];
+  shapeServed: boolean;
 }
 
 /** A field of a registry row its tables do not hold as declared (`fieldsNotServed`). */

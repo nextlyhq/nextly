@@ -315,7 +315,11 @@ import {
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { stopReleasesHolding } from "../../releases/early-stop";
-import { refuseWriteOverLeftSave } from "../../schema/builder-save/left-save-fields";
+import {
+  compareBeforeTransaction,
+  refuseWriteOverLeftSave,
+  writtenKeys,
+} from "../../schema/builder-save/left-save-fields";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import {
   fieldsStoredOnRow,
@@ -7779,6 +7783,7 @@ export class CollectionMutationService extends BaseService {
     }
     const given = args.check.kind === "judge" ? args.check.given : undefined;
     await this.writeRowAndTranslation(tx, {
+      collectionName: params.collectionName,
       tableName,
       entryId: params.entryId,
       columns,
@@ -9524,6 +9529,16 @@ export class CollectionMutationService extends BaseService {
         inTransactionHandlers
       );
       await this.entryTransaction(params.collectionName, async tx => {
+        // The row as it is written, its defaults and what the hooks added included: a field a
+        // Builder save left part-way holds is refused before it is inserted.
+        await this.refuseLeftSaveWriteInTransaction(
+          tx,
+          params.collectionName,
+          writtenKeys({
+            ...entryData,
+            ...(localizedWrite?.companionData ?? {}),
+          })
+        );
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
         });
@@ -11149,6 +11164,13 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code: publishing or
     // withdrawing every language is a write to the entry like any other.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // Compared before the transaction opens, where a Builder save left part-way stands: the
+    // drafts it promotes are judged inside it, on what this finds (`writeRowAndTranslation`).
+    await compareBeforeTransaction({
+      adapter: this.adapter,
+      kind: "collection",
+      slug: params.collectionName,
+    });
     // Judged against the version the caller read, when it sent one, as a save
     // is: a publish from an out-of-date view would put live what the publisher
     // never saw. Decided first thing in the `try` below, so a version that is
@@ -11877,6 +11899,7 @@ export class CollectionMutationService extends BaseService {
             ),
             async () => {
               await this.writeRowAndTranslation(tx, {
+                collectionName: params.collectionName,
                 tableName,
                 entryId: params.entryId,
                 columns: promoted.columns,
@@ -14801,6 +14824,8 @@ export class CollectionMutationService extends BaseService {
   private async writeRowAndTranslation(
     tx: TransactionContext,
     args: {
+      /** The collection written, whose left Builder save may hold a field written here. */
+      collectionName: string;
       tableName: string;
       entryId: string;
       /**
@@ -14849,6 +14874,17 @@ export class CollectionMutationService extends BaseService {
       };
     }
   ): Promise<PartState | undefined> {
+    // A field a Builder save left part-way holds is refused before anything of the row is
+    // written, whichever road brought the values: a caller's body, a draft a publish promotes, a
+    // rewrite. A key whose value is `undefined` is not written, so it sets nothing.
+    await this.refuseLeftSaveWriteInTransaction(
+      tx,
+      args.collectionName,
+      writtenKeys({
+        ...args.columns,
+        ...(args.translation?.companionData ?? {}),
+      })
+    );
     const claim =
       args.translation && args.judge
         ? await refuseIfLanguageMoved(
@@ -18758,6 +18794,7 @@ export class CollectionMutationService extends BaseService {
         // the draft it promotes.
         if (!storeAsWorkingDraft) {
           languageBefore = await this.writeRowAndTranslation(tx, {
+            collectionName: params.collectionName,
             tableName,
             entryId: params.entryId,
             columns,
@@ -22681,6 +22718,15 @@ export class CollectionMutationService extends BaseService {
       // transaction already holds it.
       await this.holdForEntryWrite(tx, params.collectionName);
       const undoesAlone = takesSavepoints(tx);
+      // The row as it is written, its defaults and what the hooks added included; see createEntryInParts.
+      await this.refuseLeftSaveWriteInTransaction(
+        tx,
+        params.collectionName,
+        writtenKeys({
+          ...entryData,
+          ...(localizedWrite?.companionData ?? {}),
+        })
+      );
       const { entry, createEffects } = await underSavepoint(tx, async () => {
         // Insert using transaction context
         const entry = await tx.insert<unknown>(tableName, entryData, {

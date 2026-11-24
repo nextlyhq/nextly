@@ -184,7 +184,11 @@ import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
-import { refuseReadOverLeftSave } from "../../schema/builder-save/left-save-fields";
+import {
+  refuseReadOverLeftSave,
+  refuseWriteOverLeftSave,
+  writtenKeys,
+} from "../../schema/builder-save/left-save-fields";
 import {
   fieldsStoredOnRow,
   getColumnDescriptor,
@@ -3171,6 +3175,14 @@ export class SingleQueryService extends BaseService {
       document,
       localizedDefaults,
     } = options?.draft ?? (await this.buildDefaultDocument(singleMeta));
+    // The document as first written, its defaults: a field a Builder save left part-way holds is
+    // refused before it is inserted, as a write that set it would be.
+    await refuseWriteOverLeftSave({
+      adapter: this.adapter,
+      kind: "single",
+      slug: singleMeta.slug,
+      data: writtenKeys({ ...snakeCaseDefaults, ...localizedDefaults }),
+    });
     const id = snakeCaseDefaults.id as string;
     const status = (document as { status?: string }).status;
 

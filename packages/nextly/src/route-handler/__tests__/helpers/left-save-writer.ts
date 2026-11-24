@@ -6,16 +6,19 @@
  * holds (`NEXTLY_TEST_COOKIE`), or through the Direct API. Run by
  * `left-save-holds-writes.integration.test.ts` through `tsx`, so this process runs the source,
  * not a build. Arguments: the dialect, the database URL, the app's folder, the collection's slug,
- * and the operations as JSON: `{ kind: "write" | "read"; via: "rest" | "api"; data? }`.
+ * and the operations as JSON: `{ kind: "write" | "read" | "update"; via: "rest" | "api"; data?;
+ * id? }`, an update naming the entry it changes.
  */
 import { createAdapter } from "../../../database/factory";
 import { createTestNextly } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
 
 type Operation = {
-  kind: "write" | "read";
+  kind: "write" | "read" | "update";
   via: "rest" | "api";
   data?: Record<string, unknown>;
+  /** The entry an update changes. */
+  id?: string;
 };
 
 /** What one operation came to: whether it went through, and what it said. */
@@ -44,7 +47,7 @@ const handlers = createDynamicHandlers();
 
 /** A request to this process's admin API, as the signed-in editor. */
 async function send(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PATCH",
   path: string,
   body?: unknown
 ): Promise<Response> {
@@ -116,9 +119,22 @@ for (const operation of JSON.parse(operations) as Operation[]) {
           operation,
           operation.kind === "write"
             ? await send("POST", `/collections/${slug}/entries`, operation.data)
-            : await send("GET", `/collections/${slug}/entries`)
+            : operation.kind === "update"
+              ? await send(
+                  "PATCH",
+                  `/collections/${slug}/entries/${operation.id ?? ""}`,
+                  operation.data
+                )
+              : await send("GET", `/collections/${slug}/entries`)
         )
       );
+    } else if (operation.kind === "update") {
+      await copy.nextly.update({
+        collection: slug,
+        id: operation.id,
+        data: operation.data ?? {},
+      } as never);
+      outcomes.push({ ...operation, ok: true });
     } else if (operation.kind === "write") {
       await copy.nextly.create({
         collection: slug,

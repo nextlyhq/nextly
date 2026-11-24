@@ -72,7 +72,7 @@ import {
   companionDriftItems,
   fieldsNotServed,
   judgeLeftStop,
-  type UnservedField,
+  type ServedComparison,
   type LeftStop,
   saveKindOf,
   settleRemovedFileAttempts,
@@ -513,19 +513,20 @@ async function leftStopOf(
 }
 
 /**
- * The fields of the entity a save the process left part-way stands over whose columns the tables do
- * not hold as its registry row declares them (`fieldsNotServed`): for the writes and reads Nextly
- * makes while the save stands unsettled (`left-save-fields`). The row's fields are laid over the
- * entity's settings as the definition holds them (the record's own definition where the file no
- * longer names it). Undefined where that cannot be read, or the app registered no Builder setup:
- * the caller then holds every field. Read with the app's Builder setup, on demand, as the settle
- * reads it.
+ * What of the entity a save the process left part-way stands over its tables do not hold as its
+ * registry row declares it (`fieldsNotServed`): for the writes and reads Nextly makes while the save
+ * stands unsettled (`left-save-fields`). The row's fields, Draft/Published switch and translation
+ * switch are laid over the entity's other settings as the definition holds them (the record's own
+ * definition where the file no longer names it): the running tables are built from the row, not
+ * from a definition the save may have written ahead of it. Undefined where that cannot be read, or
+ * the app registered no Builder setup: the caller then holds every field. Read with the app's
+ * Builder setup, on demand, as the settle reads it.
  */
 export async function fieldsNotServedOf(
   adapter: DrizzleAdapter,
   record: LeftSave,
-  registryFields: readonly unknown[]
-): Promise<UnservedField[] | undefined> {
+  registry: { fields: readonly unknown[]; status: boolean; localized: boolean }
+): Promise<ServedComparison | undefined> {
   const { container } = await import("../../../di/container");
   if (!container.has("builderSaveSetup")) return undefined;
   const setup = container.get<BuilderSaveSetup>("builderSaveSetup");
@@ -553,7 +554,9 @@ export async function fieldsNotServedOf(
     slug: record.slug,
     registered: {
       ...defined,
-      fields: registryFields as UiSchemaEntity["fields"],
+      fields: registry.fields as UiSchemaEntity["fields"],
+      status: registry.status,
+      localized: registry.localized,
     },
   });
 }
