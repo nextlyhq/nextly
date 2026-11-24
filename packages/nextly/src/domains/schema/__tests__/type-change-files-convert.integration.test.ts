@@ -48,7 +48,10 @@ import {
   NO_CONSENT,
   resolveDataLossConsent,
 } from "../migrate/data-loss-consent";
-import { marksNoTransaction } from "../migrate/split-sql";
+import {
+  marksNoTransaction,
+  NO_TRANSACTION_MARKER,
+} from "../migrate/split-sql";
 import { parseSqlSections } from "../migrate/sql-sections";
 import { verifyMigrationHash } from "../migrate-create/snapshot-io";
 import { withMigrateLock } from "../pipeline/locks";
@@ -927,6 +930,62 @@ describe.each(getConfiguredTestDialects())(
           migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"))
         ).rejects.toMatchObject(refusedSaying("has a default ('none'"));
         expect(await read(second)).toEqual({ whole: "034" });
+      }
+    );
+
+    // Outside a transaction each statement commits as it runs, so nothing holds a value written
+    // between the copy of the values and that copy taking the column's place, and a conversion that
+    // stops leaves its copy behind. Only a person's edit marks such a file, so it is refused before
+    // any statement, naming the line to remove.
+    converts(
+      "refuses to deploy a conversion in a file marked to run outside a transaction, in a dry run too, and changes nothing",
+      async () => {
+        const first = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        const created = await filesWritten();
+        await write(first, "kept", { v: "12" });
+        await save(first, [{ name: "v", type: "number" }]);
+        await editMarkedFile(text => `${NO_TRANSACTION_MARKER}\n${text}`);
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await write(second, "a", { v: "012" });
+
+        expect(await dryRun(second)).toContain("outside a transaction");
+        await expect(
+          migrateFolder(
+            second,
+            undefined,
+            resolveDataLossConsent({ flag: true, env: {} })
+          )
+        ).rejects.toMatchObject(refusedSaying(NO_TRANSACTION_MARKER));
+
+        expect(await storedV(second)).toEqual({ a: "012" });
+        // The line removed, the same file deploys.
+        await editMarkedFile(text =>
+          text.replace(`${NO_TRANSACTION_MARKER}\n`, "")
+        );
+        await migrateFolder(second);
+        expect(await read(second)).toEqual({ a: 12 });
+      }
+    );
+
+    converts(
+      "refuses to roll back a conversion in a file marked to run outside a transaction, and changes nothing",
+      async () => {
+        const first = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        await write(first, "kept", { v: "12" });
+        await save(first, [{ name: "v", type: "number" }]);
+        await editMarkedFile(text => `${NO_TRANSACTION_MARKER}\n${text}`);
+
+        await expect(migrateDown(first)).rejects.toMatchObject(
+          refusedSaying(NO_TRANSACTION_MARKER)
+        );
+
+        expect(await storedV(first)).toEqual({ kept: 12 });
       }
     );
 

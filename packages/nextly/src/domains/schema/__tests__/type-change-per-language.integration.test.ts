@@ -10,7 +10,7 @@
  * entity's own table converts nothing here, as the values are not there; a save left to the
  * database's cast cannot clear a value it keeps, so it refuses one no address reads.
  */
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -38,7 +38,10 @@ import {
   NO_CONSENT,
   resolveDataLossConsent,
 } from "../migrate/data-loss-consent";
-import { marksNoTransaction } from "../migrate/split-sql";
+import {
+  marksNoTransaction,
+  NO_TRANSACTION_MARKER,
+} from "../migrate/split-sql";
 import { parseSqlSections } from "../migrate/sql-sections";
 import { withMigrateLock } from "../pipeline/locks";
 import { rewritesValuesOn } from "../value-conversion/type-change/field-type-changes";
@@ -562,6 +565,55 @@ describe.each(getConfiguredTestDialects())(
           address: "c@d.co",
           word: "zzz",
         });
+        expect(await columnsOf(second, `dc_${SLUG}_locales`)).not.toContain(
+          "v"
+        );
+      }
+    );
+
+    // A conversion runs in the first of the change's files that changes its table, so the mark to run
+    // outside a transaction on any of them stops the change before the first.
+    converts(
+      "refuses a deploy whose change has another file marked to run outside a transaction, and runs none of it",
+      async () => {
+        const number = { name: "n", type: "text", localized: false };
+        const first = await boot(dialect, LANGUAGES);
+        await createTranslated([TRANSLATED_S, number]);
+        const created = await filesWritten();
+        await save(
+          first,
+          [
+            TRANSLATED_S,
+            { ...number, type: "number" },
+            { name: "v", type: "text", localized: true },
+          ],
+          { localized: true }
+        );
+        const [joins] = (await filesNamed()).slice(created);
+        expect(joins).toContain("joins_localization");
+        const path = join(basePath, "migrations", joins ?? "");
+        await writeFile(
+          path,
+          `${NO_TRANSACTION_MARKER}\n${await readFile(path, "utf8")}`
+        );
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect, LANGUAGES);
+        await migrateFolder(second, created);
+        await write(second, "a", { v: "x", n: "012" });
+
+        await expect(
+          migrateFolder(
+            second,
+            undefined,
+            resolveDataLossConsent({ flag: true, env: {} })
+          )
+        ).rejects.toMatchObject(refusedSaying(joins ?? ""));
+
+        expect(await exec(second, `SELECT v, n FROM dc_${SLUG}`)).toEqual([
+          { v: "x", n: "012" },
+        ]);
         expect(await columnsOf(second, `dc_${SLUG}_locales`)).not.toContain(
           "v"
         );
