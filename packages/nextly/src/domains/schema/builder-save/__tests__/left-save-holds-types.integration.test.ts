@@ -1,0 +1,262 @@
+/**
+ * A committed type change of a field, its registry update not run, while the Builder save that made
+ * it the process left part-way stands unsettled (`helpers/left-save-fixture.ts`). A write that sets
+ * the field is refused, naming it, and changes nothing; writes of other fields go on; a read is
+ * answered, never with a database error; and after the settle the writes are accepted.
+ */
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+
+import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
+import type { ServiceContainer } from "../../../../services";
+import type { TestNextly } from "../../../../plugins/test-nextly";
+import { settleLeftSaves } from "../settle-left-save";
+import { settleRegistryWriter } from "../settle-registry";
+import {
+  basePath,
+  killedAt,
+  leftSaveHooks,
+  leftSaveSuite,
+  LEFT_SAVE_SUITES,
+  MIGRATIONS,
+  type Outcome,
+} from "./helpers/left-save-fixture";
+
+vi.mock("../../busy-table/run-unit", async original =>
+  (await import("./helpers/stop-at-kill")).stoppingUnits(
+    await original<typeof import("../../busy-table/run-unit")>()
+  )
+);
+vi.mock("../../../i18n/migration/held-leaving-drops", async original =>
+  (await import("./helpers/stop-at-kill")).stoppingCompanion(
+    await original<
+      typeof import("../../../i18n/migration/held-leaving-drops")
+    >()
+  )
+);
+vi.mock("../../services/drizzle-statement-executor", async original =>
+  (await import("./helpers/stop-at-kill")).stoppingStatements(
+    await original<typeof import("../../services/drizzle-statement-executor")>()
+  )
+);
+
+leftSaveHooks();
+
+describe.each(LEFT_SAVE_SUITES)(
+  "writes and reads while a Builder save that changed a field's type is left part-way ($dialect, $layout)",
+  ({ dialect, perLanguage }) => {
+    const {
+      slug,
+      field,
+      table,
+      boot,
+      versionOf,
+      killSave,
+      fromAnotherProcess,
+      afterStatement,
+      databaseError,
+    } = leftSaveSuite({ dialect, perLanguage });
+
+    /** The statement that changes the type of `heading`'s column. */
+    const retypes = (statement: string) =>
+      /^\s*ALTER\s+TABLE\b.*MODIFY\s+COLUMN\s+`?heading`?/is.test(statement);
+
+    /** Start the save that makes `heading` text, a number until then, and kill it once its column is. */
+    async function killRetype(t: TestNextly): Promise<void> {
+      const schemaVersion = await versionOf(t);
+      await killSave(t, afterStatement(retypes), () =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: slug },
+          {
+            fields: [field("heading"), field("note")],
+            confirmed: true,
+            schemaVersion,
+          }
+        )
+      );
+    }
+
+    /** The type of `heading`'s column as the database has it. */
+    async function headingType(t: TestNextly): Promise<string> {
+      const [row] = (await t.adapter.executeQuery(
+        `SELECT DATA_TYPE AS type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = '${table}' AND column_name = 'heading'`
+      )) as unknown as Array<{ type: unknown }>;
+      return String(row?.type);
+    }
+
+    /** Every row of the collection's table, as the database holds it. */
+    async function rows(t: TestNextly): Promise<string[]> {
+      const found = (await t.adapter.executeQuery(
+        `SELECT * FROM ${table} ORDER BY slug`
+      )) as unknown as Array<Record<string, unknown>>;
+      return found.map(row => JSON.stringify(row));
+    }
+
+    /** Settled as the next development start does. */
+    const settle = (t: TestNextly) =>
+      settleLeftSaves({
+        adapter: t.adapter,
+        projectRoot: basePath,
+        migrationsDir: join(basePath, MIGRATIONS),
+        logger: { info: () => undefined, warn: () => undefined },
+        writeRegistry: settleRegistryWriter(t.adapter),
+      });
+
+    /** What a refused write answers: the field named, under its own code, over REST as a 409. */
+    function expectRefused(refused: Outcome): void {
+      expect(refused.ok, JSON.stringify(refused)).toBe(false);
+      expect(databaseError(refused), JSON.stringify(refused)).toBe(false);
+      expect(refused.code, JSON.stringify(refused)).toBe(
+        "BUILDER_SAVE_FIELD_UNSETTLED"
+      );
+      expect(refused.message, JSON.stringify(refused)).toMatch(/"heading"/);
+      if (refused.via === "rest") expect(refused.status).toBe(409);
+    }
+
+    it.runIf(dialect === "mysql")(
+      "refuses a create that sets the field, over REST and the Direct API, changing nothing; lets one of another field through; answers reads; and accepts the create once settled",
+      async () => {
+        const t = await boot({ numeric: true });
+        await killRetype(t);
+        expect(await headingType(t), `killed at ${killedAt}`).toBe("text");
+        const before = await rows(t);
+
+        const [rest, api, restOther, apiOther, restRead, apiRead] =
+          await fromAnotherProcess([
+            {
+              kind: "write",
+              via: "rest",
+              data: { title: "R1", slug: "r1", heading: 8 },
+            },
+            {
+              kind: "write",
+              via: "api",
+              data: { title: "A1", slug: "a1", heading: 8 },
+            },
+            {
+              kind: "write",
+              via: "rest",
+              data: { title: "R2", slug: "r2", note: "only the note" },
+            },
+            {
+              kind: "write",
+              via: "api",
+              data: { title: "A2", slug: "a2", note: "only the note" },
+            },
+            { kind: "read", via: "rest" },
+            { kind: "read", via: "api" },
+          ]);
+
+        expectRefused(rest!);
+        expectRefused(api!);
+        const after = await rows(t);
+        expect(after.filter(row => before.includes(row))).toEqual(before);
+        for (const through of [restOther!, apiOther!]) {
+          expect(through.ok, JSON.stringify(through)).toBe(true);
+        }
+        // Only the two writes of another field left a row.
+        expect(after).toHaveLength(before.length + 2);
+        for (const read of [restRead!, apiRead!]) {
+          expect(databaseError(read), JSON.stringify(read)).toBe(false);
+          expect(read.ok, JSON.stringify(read)).toBe(true);
+        }
+
+        await settle(t);
+        for (const accepted of await fromAnotherProcess([
+          {
+            kind: "write",
+            via: "rest",
+            data: { title: "R3", slug: "r3", heading: "x" },
+          },
+          {
+            kind: "write",
+            via: "api",
+            data: { title: "A3", slug: "a3", heading: "x" },
+          },
+        ])) {
+          expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
+        }
+      },
+      600_000
+    );
+
+    it.runIf(dialect === "mysql")(
+      "refuses an update that sets the field, over REST and the Direct API, changing nothing; lets one of another field through; and accepts the update once settled",
+      async () => {
+        const t = await boot({ numeric: true });
+        const [first] = (await t.adapter.executeQuery(
+          `SELECT id FROM ${table} WHERE slug = 'first'`
+        )) as unknown as Array<{ id: unknown }>;
+        const id = String(first?.id);
+        await killRetype(t);
+        expect(await headingType(t), `killed at ${killedAt}`).toBe("text");
+        const before = await rows(t);
+
+        const [rest, api] = await fromAnotherProcess([
+          {
+            kind: "update",
+            via: "rest",
+            id,
+            data: { heading: 8, _overwrite: true },
+          },
+          {
+            kind: "update",
+            via: "api",
+            id,
+            data: { heading: 8, _overwrite: true },
+          },
+        ]);
+
+        expectRefused(rest!);
+        expectRefused(api!);
+        expect(await rows(t), "nothing changed").toEqual(before);
+
+        const [restOther, apiOther, restRead, apiRead] =
+          await fromAnotherProcess([
+            {
+              kind: "update",
+              via: "rest",
+              id,
+              data: { note: "over REST", _overwrite: true },
+            },
+            {
+              kind: "update",
+              via: "api",
+              id,
+              data: { note: "through the API", _overwrite: true },
+            },
+            { kind: "read", via: "rest" },
+            { kind: "read", via: "api" },
+          ]);
+        for (const through of [restOther!, apiOther!]) {
+          expect(through.ok, JSON.stringify(through)).toBe(true);
+        }
+        for (const read of [restRead!, apiRead!]) {
+          expect(databaseError(read), JSON.stringify(read)).toBe(false);
+          expect(read.ok, JSON.stringify(read)).toBe(true);
+        }
+
+        await settle(t);
+        for (const accepted of await fromAnotherProcess([
+          {
+            kind: "update",
+            via: "rest",
+            id,
+            data: { heading: "x", _overwrite: true },
+          },
+          {
+            kind: "update",
+            via: "api",
+            id,
+            data: { heading: "y", _overwrite: true },
+          },
+        ])) {
+          expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
+        }
+      },
+      600_000
+    );
+  }
+);
