@@ -209,7 +209,12 @@ export async function storedOlderSpellings(
       .map(code => [code.toLowerCase(), code] as const)
   );
   if (byLowered.size === 0) return [];
-  const found = new Map<string, string>();
+  // MySQL compares codes without regard to letter case, so there `pt_BR` and `PT_br` are one
+  // spelling: one conversion rewrites the rows of both, and two would be taken for two spellings
+  // of one language kept for the same thing. PostgreSQL and SQLite keep them apart.
+  const keyOf = (code: string) =>
+    adapter.dialect === "mysql" ? code.toLowerCase() : code;
+  const found = new Map<string, StoredOlderSpelling>();
   for (const place of await codeColumnsOn(adapter, translationTables)) {
     for (const code of await underscoredCodesIn(adapter, place)) {
       // Read as the conversion reads it (`standardLanguageCode`): every underscore a hyphen, so a
@@ -218,10 +223,11 @@ export async function storedOlderSpellings(
         (standardLanguageCode(code) ?? code).toLowerCase()
       );
       // A code already in the form it is read as is no older spelling of it.
-      if (to !== undefined && to !== code) found.set(code, to);
+      if (to === undefined || to === code || found.has(keyOf(code))) continue;
+      found.set(keyOf(code), { from: code, to });
     }
   }
-  return [...found].map(([from, to]) => ({ from, to }));
+  return [...found.values()];
 }
 
 /**

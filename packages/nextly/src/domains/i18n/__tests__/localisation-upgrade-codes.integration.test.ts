@@ -668,6 +668,43 @@ describeEachDialect(
       expect(await storedLanguages()).toEqual(["en", "zh-Hant-TW"]);
     });
 
+    // MySQL compares codes without regard to letter case, so an older spelling stored in two
+    // cases (`pt_BR` in the translations, `PT_br` in the archive) is one spelling there: one
+    // conversion rewrites both. Broken, the two are taken for two spellings of one language kept
+    // for the same thing, and the run is refused with no way to upgrade.
+    it.runIf(dialect === "mysql")(
+      "takes the cases of one older spelling as one on MySQL, which compares them alike",
+      async () => {
+        await legacyArticle();
+        await ensureI18nArchive(database!.adapter as never, dialect);
+        await database!.adapter.insert(
+          "nextly_i18n_archive",
+          {
+            collection: ARTICLES,
+            entityKind: "collection",
+            entryId: "e-case",
+            locale: "PT_br",
+            field: "title",
+            value: "olá",
+            archivedAt: new Date("2026-08-01T10:00:00Z"),
+          },
+          { returning: [] }
+        );
+
+        expect(
+          await refusalBeforeSchemaChanges(database!.adapter, STANDARD)
+        ).toBeUndefined();
+        await migrateData(database!.adapter as never, STANDARD);
+
+        expect(await storedLanguages()).toEqual(["en", "pt-BR"]);
+        const archived = await database!.adapter.select<{ locale: string }>(
+          "nextly_i18n_archive",
+          { columns: ["locale"] }
+        );
+        expect(archived.map(row => row.locale)).toEqual(["pt-BR"]);
+      }
+    );
+
     // A site that manages its languages in Settings keeps them in `nextly_languages`, each with the
     // codes it falls back to. The upgrade converts that registry with the content, so the site's
     // next start names the language as its rows are stored.
