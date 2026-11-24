@@ -636,7 +636,7 @@ async function settleOrUndoThenThrow(
     await settleThenThrow(deps, save, written, error, onSettled);
   }
   return undoThenThrow(error, [
-    { files: written.names, undo: () => written.undo(error) },
+    { files: written.names, undo: () => written.undo(error, true) },
   ]);
 }
 
@@ -802,7 +802,8 @@ async function settleStoppedSave(
       deps,
       definitionPath,
       plan.next,
-      options.keepDefinition === true
+      options.keepDefinition === true,
+      definitionLeft
     );
     // Compared with the live table before it is recorded, as a pushed save's files are.
     const units = await verifiedUnits(deps, files, plan.table);
@@ -882,9 +883,20 @@ async function writeDefinitionUnlessKept(
   deps: CollectionSaveDeps,
   definitionPath: string,
   next: Parameters<typeof writeDefinitionHeld>[2],
-  kept: boolean
+  kept: boolean,
+  /** The definition as this settle found it, before the replacement was written. */
+  asFound: string | undefined
 ): Promise<void> {
-  if (!kept) await writeDefinitionHeld(deps, definitionPath, next);
+  if (kept) return;
+  // Read again at the write: one edited while the replacement was written is kept as it is, and
+  // differs from what the database now holds, which the next `migrate:create` plans.
+  if ((await readIfPresent(definitionPath)) !== asFound) {
+    deps.logger.warn(
+      `${definitionPath} was changed while the stopped save was settled, so it is left as it is.`
+    );
+    return;
+  }
+  await writeDefinitionHeld(deps, definitionPath, next);
 }
 
 /**
@@ -919,9 +931,12 @@ function asideName(filename: string): string {
   return `${filename}.stopped`;
 }
 
-/** Set a stopped migration file and its snapshot aside, under names no listing reads. */
-async function setAside(
-  deps: CollectionSaveDeps,
+/**
+ * Set a stopped migration file and its snapshot aside, under names no listing reads: kept on disk,
+ * never deleted, for a settle that removes no migration file (`nextly migrate`'s).
+ */
+export async function setAside(
+  deps: Pick<CollectionSaveDeps, "migrationsDir">,
   filename: string
 ): Promise<void> {
   await rename(
@@ -933,8 +948,8 @@ async function setAside(
 }
 
 /** Put a stopped migration file and its snapshot back from where they were set aside. */
-async function restoreAside(
-  deps: CollectionSaveDeps,
+export async function restoreAside(
+  deps: Pick<CollectionSaveDeps, "migrationsDir">,
   filename: string
 ): Promise<void> {
   await rename(
@@ -1494,7 +1509,7 @@ export async function prepareCollectionSave(
       await records.end(true);
     },
     withdraw: async () => {
-      await written.undo(undefined);
+      await written.undo(undefined, false);
       await records.end(false);
     },
   };
@@ -1523,7 +1538,8 @@ async function writeSave(
   files: SaveFiles;
   names: readonly string[];
   table: string;
-  undo(error: unknown): Promise<void>;
+  /** Withdraw what did not apply; `ran` says whether any statement may have run (`writeSave`). */
+  undo(error: unknown, ran: boolean): Promise<void>;
   /** The save's record that it is in progress, told how the save ended. */
   started: StartedSave;
 }> {
@@ -1611,7 +1627,10 @@ async function writeSave(
   // Whether the save has replaced the definition, so a withdrawal puts it back only then: one that
   // failed before its write leaves the file it never touched alone.
   let definitionReplaced = false;
-  const undo = async (error: unknown) => {
+  // `ran` says whether any of the save's statements may have run: before they did (a file or the
+  // definition not written, a prepared save withdrawn), no row of the save can have changed, so
+  // its files are withdrawn whatever it carries.
+  const undo = async (error: unknown, ran: boolean) => {
     // Only a save that withdrew everything it wrote has nothing left to settle.
     if (
       (await undoUnapplied(
@@ -1620,7 +1639,7 @@ async function writeSave(
         definitionReplaced ? { before } : undefined,
         definitionPath,
         error,
-        rowsMayHaveStayed(deps, save)
+        ran && rowsMayHaveStayed(deps, save)
       )) === "withdrawn" &&
       (await sqlFiles(deps.migrationsDir)).every(file =>
         sqlBefore.includes(file)
@@ -1670,7 +1689,9 @@ async function writeSave(
       else started.withdrawn();
       throw overtakenSaveError(error, names);
     }
-    return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
+    return undoThenThrow(error, [
+      { files: names, undo: () => undo(error, false) },
+    ]);
   }
 }
 
@@ -5368,7 +5389,10 @@ async function removeFileAndSnapshot(
 }
 
 /** Where the snapshot of the migration file `filename` is kept. */
-function snapshotPathOf(deps: CollectionSaveDeps, filename: string): string {
+function snapshotPathOf(
+  deps: Pick<CollectionSaveDeps, "migrationsDir">,
+  filename: string
+): string {
   return join(
     deps.migrationsDir,
     "meta",

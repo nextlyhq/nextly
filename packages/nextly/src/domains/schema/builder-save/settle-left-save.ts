@@ -26,6 +26,7 @@
  *
  * @module domains/schema/builder-save/settle-left-save
  */
+import { existsSync } from "node:fs";
 import { readdir, readFile, rm } from "node:fs/promises";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -73,6 +74,8 @@ import {
   fieldsNotServed,
   judgeLeftStop,
   type ServedComparison,
+  restoreAside,
+  setAside,
   type LeftStop,
   saveKindOf,
   settleRemovedFileAttempts,
@@ -191,8 +194,11 @@ export async function settleLeftSaves(
   if (!(await deps.adapter.tableExists("nextly_meta"))) return settled;
   const here = hostname();
   const rows = await readSavesInProgress(deps.adapter);
-  await checkHistoryBeforeSettling(deps, rows, here);
   for (const row of rows) {
+    // Before each record's first write, exempting only that record's own attempts: a record an
+    // earlier turn left with its attempt unresolved refuses the next one's settle, nothing of it
+    // written, rather than being passed over.
+    await checkHistoryBeforeSettling(deps, [row], here);
     const one = await settleRow(deps, row, here);
     if (one !== undefined) settled.push(one);
   }
@@ -214,8 +220,9 @@ export async function settleLeftSaves(
  * edited, an applied migration missing from the folder, or an unresolved attempt refuses the settle
  * with the check's own message, nothing written, so every record stays and the save is not settled
  * on a history those checks cannot vouch for. Asked only where a record of this host is to be
- * settled; an unresolved attempt at one of those records' own files is the stop the settle
- * resolves, and is not refused (`checkSaveHistory`'s `settling`).
+ * settled; an unresolved attempt at those records' own files is the stop the settle resolves, and
+ * is not refused (`checkSaveHistory`'s `settling`). Asked of one record at a time
+ * (`settleLeftSaves`), so only the attempt being resolved is let through.
  */
 async function checkHistoryBeforeSettling(
   deps: SettleDeps,
@@ -422,6 +429,7 @@ async function settledOutcome(
   }
   const dialect = deps.adapter.getCapabilities().dialect;
   const repo = new SchemaEventsRepository(deps.adapter.getDrizzle(), dialect);
+  await restoreSetAside(deps, record);
   const { files, unclear } = await filesOfSave(deps, record);
   if (unclear.length > 0) {
     // A file named for the save's moment, with no ledger row, that the settle cannot tell as the
@@ -442,6 +450,28 @@ async function settledOutcome(
   notes.push(...(await keepSavedDefinition(deps, record)));
   if (judged === "pending") return settlePending(deps, record);
   return settleAll(deps, repo, record, files, notes, kept);
+}
+
+/**
+ * Puts back the files a settle set aside (`setAside`) and then stopped, before writing anything in
+ * their place: every file the record names is set aside and none written since, as a replacement's
+ * names join the record as each is written. The next settle then judges them as the stop left them.
+ * Where a replacement is named already, nothing moves: putting the stopped file back beside it would
+ * leave a file no ledger row records, for `nextly migrate` to run.
+ */
+async function restoreSetAside(
+  deps: SettleDeps,
+  record: LeftSave
+): Promise<void> {
+  const named = record.files ?? [];
+  const path = (filename: string) => join(deps.migrationsDir, filename);
+  const aside = named.filter(
+    filename =>
+      !existsSync(path(filename)) && existsSync(`${path(filename)}.stopped`)
+  );
+  if (aside.length === 0 || aside.length !== named.length) return;
+  await assertWriterHold(deps.migrationsDir);
+  for (const filename of aside) await restoreAside(deps, filename);
 }
 
 /**
@@ -797,13 +827,19 @@ async function appliedOf(
 async function removeSaveFiles(
   deps: SettleDeps,
   repo: SchemaEventsRepository,
-  files: readonly string[]
+  files: readonly string[],
+  /** Set each file aside (`setAside`) rather than remove it: a settle that removes no file. */
+  keepAside = false
 ): Promise<void> {
   // Still the folder's writer, where the settle holds it (`nextly migrate`, a Builder save): one
   // that stalled past its hold's lease removes nothing beneath the writer that took the folder.
   await assertWriterHold(deps.migrationsDir);
   for (const filename of files) {
     await settleRemovedFileAttempts(deps.adapter, repo, filename);
+    if (keepAside) {
+      await setAside(deps, filename);
+      continue;
+    }
     await rm(join(deps.migrationsDir, filename), { force: true });
     await rm(
       snapshotPathOf(join(deps.migrationsDir, "meta"), baseName(filename)),
@@ -853,11 +889,12 @@ async function settleNone(
     notes.push(`${applied.join(", ")} is recorded applied`);
     return "left";
   }
-  await removeSaveFiles(deps, repo, files);
+  // `nextly migrate`'s settle removes no migration file: the stopped one is set aside instead.
+  await removeSaveFiles(deps, repo, files, deps.keepsStoppedAside === true);
   notes.push(...(await putDefinitionBack(deps, record, definition)));
   await clearSettledSave(deps.adapter, deps.projectRoot, record);
   deps.logger.info(
-    `Settled a Builder save of the ${described(record)} that stopped before any of it applied: its files are removed and the definition put back.`
+    `Settled a Builder save of the ${described(record)} that stopped before any of it applied: its files are ${deps.keepsStoppedAside === true ? "set aside" : "removed"} and the definition put back.`
   );
   return "none";
 }

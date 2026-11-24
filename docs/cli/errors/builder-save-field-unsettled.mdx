@@ -7,9 +7,9 @@ description: "A write or read of entries was refused, because a Builder save lef
 
 A write or read of entries was refused, because a Builder save left part-way changed a field it reaches and is not settled.
 
-On MySQL, a Schema Builder save applies its changes one schema statement at a time, and each one is kept as it runs. When the app stops in the middle of a save (a crash, a restart, a killed process), a change can be in the database while the record of the collection, Single or field group still describes the field as it was. Until the save is settled, Nextly refuses every write that sets such a field, from any process on the database, with nothing of the write applied, and a read that needs a column the tables no longer hold under its recorded name gets the same answer instead of a database error. Writes that set no such field go on.
+On MySQL, a Schema Builder save applies its changes one schema statement at a time, and each one is kept as it runs. When the app stops in the middle of a save (a crash, a restart, a killed process), a change can be in the database while the record of the collection, Single or field group still describes the field as it was. Until the save is settled, every Nextly process running in development on that database refuses a write that sets such a field, with nothing of the write applied, and answers reads from the tables as they stand, leaving out a column they no longer hold instead of failing with a database error. Writes that set no such field go on. Where what the tables hold cannot be told, a read is refused with the same answer.
 
-Builder saves run only in development, so this never reaches a production site. PostgreSQL and SQLite apply a save's file whole or not at all, so they never meet it.
+A process running in production does not refuse these writes: Builder saves run only in development, so a production site never stands over one. PostgreSQL and SQLite apply a save's change whole or not at all, so they never meet it.
 
 ## Fix
 
