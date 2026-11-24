@@ -1185,7 +1185,7 @@ export const MIGRATION_CODES = defineCodes({
   },
   NEXTLY_MIGRATION_PARTIALLY_APPLIED: {
     cause:
-      "A migration that runs outside a transaction failed part-way, now or in its newest attempt, and the statements before the failure stayed applied.",
+      "A migration failed part-way, now or in its newest attempt, and the statements before the failure stayed applied: it runs outside a transaction, or on MySQL a schema statement committed the rows it changed before it.",
     from: [
       {
         code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
