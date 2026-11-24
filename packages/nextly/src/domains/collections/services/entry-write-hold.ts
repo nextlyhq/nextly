@@ -225,8 +225,8 @@ function parsedFields(text: string): unknown {
  */
 export type WhenHeld = "wait" | "leave" | "refuse";
 
-/** The collections each open transaction already holds for its entry writes. */
-const heldIn = new WeakMap<TransactionContext, Set<string>>();
+/** The collections each open transaction already holds for its entry writes, as each was held. */
+const heldIn = new WeakMap<TransactionContext, Map<string, HeldRow>>();
 
 /**
  * Holds `entity` for an entry write in `tx`, through `adapter`, before the write's first row
@@ -255,12 +255,14 @@ export async function holdEntityForWrite(
   if (!(await sharedForWrite(tx, entity, adapter, dialect, waits))) {
     return false;
   }
-  const row = await heldRegistryRow(tx, entity, holder, dialect, waits.waitMs);
+  const row = heldRowOf(
+    await heldRegistryRow(tx, entity, holder, dialect, waits.waitMs)
+  );
   if (loaded !== undefined) {
-    await refuseChanged(tx, entity, loaded, dialect, heldRowOf(row));
+    await refuseChanged(tx, entity, loaded, dialect, row);
   }
-  if (held === undefined) heldIn.set(tx, new Set([key]));
-  else held.add(key);
+  if (held === undefined) heldIn.set(tx, new Map([[key, row]]));
+  else held.set(key, row);
   return true;
 }
 
@@ -388,9 +390,10 @@ async function refuseChanged(
 /**
  * On MySQL, a write on a transaction its caller opened and read in first (its snapshot older than
  * the hold) reads its collection's definition from that snapshot, whatever the hold then found: so
- * the definition the write was made from (`loaded`) is compared with the one that stands now,
- * read once for the transaction and locked, past the snapshot (`currentRow`). Elsewhere a
- * transaction's read is of the latest commit, and the write holds before it reads.
+ * the definition the write was made from (`loaded`) is compared with the one that stands now. The
+ * row as the hold found it stands until the transaction ends, locked: only where its version is
+ * another is its definition read, once for the transaction and past the snapshot (`currentRow`).
+ * Elsewhere a transaction's read is of the latest commit, and the write holds before it reads.
  */
 export async function refuseOnEarlierSnapshot(
   tx: TransactionContext,
@@ -401,8 +404,11 @@ export async function refuseOnEarlierSnapshot(
   if (adapter.getCapabilities().dialect !== "mysql" || loaded === undefined) {
     return;
   }
+  const held =
+    heldIn.get(tx)?.get(entityHoldKey(entity)) ??
+    heldRowOf(await currentRow(tx, entity));
+  if (!refuseUnlessSameRow(entity, loaded, held)) return;
   const current = await currentRow(tx, entity);
-  if (!refuseUnlessSameRow(entity, loaded, heldRowOf(current))) return;
   refuseMadeFromEarlier(entity, loaded, heldDefinitionOf(current), "mysql");
 }
 
