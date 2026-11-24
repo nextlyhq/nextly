@@ -7,37 +7,43 @@ import type { Command } from "commander";
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { withBusyTableBounds } from "../busy-table-options";
 import { withDryRun } from "../dry-run";
+import { DATABASE_LINE, declareFirstLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 export function registerMigrateDownCommand(program: Command): void {
   // `--dry-run` and the busy-table bounds carry the one meaning and help they have everywhere.
-  withBusyTableBounds(
-    withDryRun(
-      program
-        .command("migrate:down")
-        .description(
-          "Roll back the most-recently-applied migration(s) using their -- DOWN section"
+  declareFirstLine(
+    withBusyTableBounds(
+      withDryRun(
+        program
+          .command("migrate:down")
+          .description(
+            "Roll back the most-recently-applied migration(s) using their -- DOWN section"
+          )
+      )
+    )
+      .option("--step <n>", "Roll back the last N migrations", parseInt)
+      .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
+      .option("--allow-data-loss", "Deprecated: use --accept-data-loss", false)
+      .option(
+        "--yes",
+        "Confirm rollback in production (NODE_ENV=production)",
+        false
+      )
+      .option(
+        "--force-unlock",
+        "Clear a stale migrate lock before running",
+        false
+      )
+      .option(
+        "--plugin <name>",
+        "Roll back <name>'s migrations instead of the app's"
+      )
+      .action(
+        lazyAction(
+          async () => (await import("./migrate-down")).migrateDownAction
         )
-    )
-  )
-    .option("--step <n>", "Roll back the last N migrations", parseInt)
-    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
-    .option("--allow-data-loss", "Deprecated: use --accept-data-loss", false)
-    .option(
-      "--yes",
-      "Confirm rollback in production (NODE_ENV=production)",
-      false
-    )
-    .option(
-      "--force-unlock",
-      "Clear a stale migrate lock before running",
-      false
-    )
-    .option(
-      "--plugin <name>",
-      "Roll back <name>'s migrations instead of the app's"
-    )
-    .action(
-      lazyAction(async () => (await import("./migrate-down")).migrateDownAction)
-    );
+      ),
+    DATABASE_LINE
+  );
 }

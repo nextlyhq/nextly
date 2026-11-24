@@ -12,6 +12,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Table } from "drizzle-orm";
 
 import type { SchemaRegistry } from "../database/schema-registry";
+import type { RegisteredCollectionRow } from "../domains/schema/pipeline/registered-collections";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { Logger } from "../services/shared";
 
@@ -90,7 +91,11 @@ export async function registerConfigTablesInResolver(
     registerEntityRuntimeTables(observed, entity, dialect);
 
   // Collections: table name convention is `dc_<slug-with-underscores>`.
-  for (const collection of config.collections ?? []) {
+  for (const collection of await collectionsLeftToConfig(
+    registry,
+    config,
+    adapter
+  )) {
     registerConfigEntity(
       collection,
       "collection",
@@ -121,6 +126,64 @@ export async function registerConfigTablesInResolver(
       logger
     );
   }
+}
+
+/**
+ * The configuration's collections whose runtime table this registers: every one but a collection a
+ * demote handed to the Schema Builder, which keeps the runtime table the registry pass registered
+ * from its record. Its entry, while still in the configuration, describes columns the table no
+ * longer follows (`withoutHandedToBuilder`). Only a record whose table that pass did register
+ * counts, so where it failed (the case this registration is the fallback for) the entry is still
+ * registered, as before; so is every entry when the registry cannot be read here.
+ */
+async function collectionsLeftToConfig(
+  registry: SchemaRegistry,
+  config: NextlyServiceConfig,
+  adapter: DrizzleAdapter
+): Promise<NonNullable<NextlyServiceConfig["collections"]>> {
+  const [{ withoutHandedToBuilder }, sources] = await Promise.all([
+    import("../domains/schema/pipeline/registered-collections"),
+    import("../domains/schema/migrate/plugin/plugin-collection-sources"),
+  ]);
+  const registered = await registeredCollections(adapter).catch(() => []);
+  return withoutHandedToBuilder(
+    config.collections ?? [],
+    registered.filter(
+      row =>
+        typeof row.tableName === "string" && registry.hasTable(row.tableName)
+    ),
+    sources.pluginCollectionSources(config.plugins ?? [])
+  );
+}
+
+/**
+ * The collections' registry rows, as far as `collectionsLeftToConfig` reads them. A production
+ * start takes them from the reading it shares (`di/start-reads`), which already holds every row
+ * and column: asking the registry again here was one more wait on the database before the start
+ * resolved. Any other caller reads them as stored.
+ */
+async function registeredCollections(
+  adapter: DrizzleAdapter
+): Promise<RegisteredCollectionRow[]> {
+  const { startRegistryNow } = await import("./start-reads");
+  const shared = startRegistryNow();
+  if (shared !== undefined) {
+    const read = await shared.read("dynamic_collections");
+    if (!read.exists) return [];
+    const text = (value: unknown) =>
+      typeof value === "string" ? value : undefined;
+    return (await read.rows()).map(row => ({
+      slug: text(row.slug),
+      tableName: text(row.table_name),
+      source: text(row.source),
+      configPath: text(row.config_path) ?? null,
+    }));
+  }
+  const { CollectionRegistryService } = await import(
+    "../domains/collections/services/collection-registry-service"
+  );
+  const quiet = { info() {}, warn() {}, error() {}, debug() {} };
+  return new CollectionRegistryService(adapter, quiet).getAllCollections();
 }
 
 /**

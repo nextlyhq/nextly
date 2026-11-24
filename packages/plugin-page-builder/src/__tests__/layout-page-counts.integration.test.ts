@@ -42,6 +42,7 @@ import {
 } from "../layout-counts-route";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import { settleDefaultLayout } from "./settle-default-layout";
 
 const SLUGS = {
   layouts: LAYOUTS_SLUG,
@@ -69,12 +70,12 @@ describe.each(getConfiguredTestDialects())(
         plugins: [pageBuilder()],
         seedPublic: true,
       });
-      // Joins the boot's own seed, so every case starts from it settled.
-      await ensureDefaultLayout({
-        nextly: current.nextly,
-        slugs: SLUGS,
-        warn: () => {},
-      });
+      // The boot's own seed waited out, and the default then settled, so
+      // every case starts from it (`settleDefaultLayout`).
+      const t = current;
+      await settleDefaultLayout(() =>
+        ensureDefaultLayout({ nextly: t.nextly, slugs: SLUGS, warn: () => {} })
+      );
       return current;
     }
 

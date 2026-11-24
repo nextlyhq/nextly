@@ -118,6 +118,8 @@ type AccountsOptionsShape = {
   passwordMinLength: z.ZodDefault<z.ZodNumber>;
   /** Whether new passwords are checked against known breached passwords. */
   breachedPasswordCheck: z.ZodDefault<z.ZodBoolean>;
+  /** The site's time zone, which times in its emails are written in. */
+  timeZone: z.ZodDefault<z.ZodString>;
 };
 
 const accountsOptionsSchema: z.ZodObject<AccountsOptionsShape, z.core.$strict> =
@@ -209,6 +211,15 @@ const accountsOptionsSchema: z.ZodObject<AccountsOptionsShape, z.core.$strict> =
       passwordMinLength: whole(8, 64).default(8),
       /** Whether new passwords are checked against known breached passwords. */
       breachedPasswordCheck: z.boolean().default(false),
+      /**
+       * The site's time zone, as an IANA name such as `Asia/Karachi`, which
+       * times in its emails are written in, such as when an invitation's
+       * link stops working. UTC when the site names none.
+       */
+      timeZone: z
+        .string()
+        .refine(isTimeZone, { message: "not a known IANA time zone" })
+        .default("UTC"),
       // No option of its own for a site that runs one instance: the plugin
       // reads core's `rateLimit.singleInstance`, through the limiter's store.
     })
@@ -221,6 +232,19 @@ const accountsOptionsSchema: z.ZodObject<AccountsOptionsShape, z.core.$strict> =
         message: "the idle expiry is longer than the absolute lifetime",
       }
     );
+
+/** Whether the runtime knows a time zone by this IANA name. */
+function isTimeZone(name: string): boolean {
+  // The formatter refuses a name it does not know with a RangeError.
+  try {
+    return (
+      Intl.DateTimeFormat("en", { timeZone: name }).resolvedOptions().timeZone
+        .length > 0
+    );
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The plugin's options as a site passes them.

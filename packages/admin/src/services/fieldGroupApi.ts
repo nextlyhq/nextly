@@ -19,18 +19,17 @@ import type { ApiFieldGroup } from "@admin/types/entities";
 import { buildQuery as buildQueryUtil } from "../lib/api/buildQuery";
 import { fetcher } from "../lib/api/fetcher";
 import { protectedApi } from "../lib/api/protectedApi";
-import type {
-  ActionResponse,
-  MutationResponse,
-} from "../lib/api/response-types";
+import type { MutationResponse } from "../lib/api/response-types";
 
 import { withListOwner, type ListOwner } from "./list-owner";
 import {
-  acknowledgedConversionsBody,
+  applySchemaAt,
+  previewSchemaAt,
   type FieldResolution,
   type SchemaApplyResponse,
   type SchemaPreviewResponse,
   type SchemaRenameResolution,
+  type SchemaSaveHints,
 } from "./schemaApi";
 
 /**
@@ -153,7 +152,8 @@ type FieldGroupApiType = {
   readonly previewSchemaChanges: (
     fieldGroupSlug: string,
     fields: unknown[],
-    localized?: boolean
+    localized?: boolean,
+    hints?: SchemaSaveHints
   ) => Promise<SchemaPreviewResponse>;
   readonly applySchemaChanges: (
     fieldGroupSlug: string,
@@ -162,7 +162,8 @@ type FieldGroupApiType = {
     resolutions?: Record<string, FieldResolution>,
     renameResolutions?: SchemaRenameResolution[],
     localized?: boolean,
-    acknowledgedConversions?: readonly string[]
+    acknowledgedConversions?: readonly string[],
+    hints?: SchemaSaveHints
   ) => Promise<SchemaApplyResponse>;
   readonly previewReconcile: (
     fieldGroupSlug: string
@@ -246,13 +247,14 @@ export const fieldGroupApi: FieldGroupApiType = {
     fields: unknown[],
     // i18n: mirrors schemaApi.preview and the apply below, so the preview diffs against the
     // localization state the apply will run with, and reports fields leaving translation.
-    localized?: boolean
-  ): Promise<SchemaPreviewResponse> => {
-    return protectedApi.post<SchemaPreviewResponse>(
-      `/field-groups/schema/${fieldGroupSlug}/preview`,
-      { fields, ...(localized !== undefined ? { localized } : {}) }
-    );
-  },
+    localized?: boolean,
+    // The fields the save moves into or out of a group, as its apply sends them.
+    hints?: SchemaSaveHints
+  ): Promise<SchemaPreviewResponse> =>
+    previewSchemaAt(`/field-groups/schema/${fieldGroupSlug}`, fields, {
+      localized,
+      hints,
+    }),
 
   /**
    * Apply confirmed component schema changes via PushSchemaPipeline.
@@ -268,26 +270,21 @@ export const fieldGroupApi: FieldGroupApiType = {
     // fields provisions the companion in the same request. Undefined leaves the persisted value.
     localized?: boolean,
     // The keys of the conversions the review listed and its Save confirmed.
-    acknowledgedConversions?: readonly string[]
-  ): Promise<SchemaApplyResponse> => {
-    const result = await protectedApi.post<
-      ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
-    >(`/field-groups/schema/${fieldGroupSlug}/apply`, {
+    acknowledgedConversions?: readonly string[],
+    // The fields the save moves into or out of a group, as its preview sent them.
+    hints?: SchemaSaveHints
+  ): Promise<SchemaApplyResponse> =>
+    applySchemaAt(
+      `/field-groups/schema/${fieldGroupSlug}`,
       fields,
-      confirmed: true,
-      schemaVersion,
-      resolutions,
-      renameResolutions,
-      ...(localized !== undefined ? { localized } : {}),
-      ...acknowledgedConversionsBody(acknowledgedConversions),
-    });
-    return {
-      success: true,
-      message: result.message,
-      newSchemaVersion: result.newSchemaVersion,
-      toastSummary: result.toastSummary,
-    };
-  },
+      {
+        schemaVersion,
+        resolutions,
+        renameResolutions,
+        acknowledgedConversions,
+      },
+      { localized, hints }
+    ),
 
   /**
    * What repairing this field group's stored definition WOULD change.

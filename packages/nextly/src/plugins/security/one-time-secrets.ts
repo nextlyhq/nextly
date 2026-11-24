@@ -9,6 +9,13 @@
  * A secret minted under the install's previous secret is still accepted while
  * that secret is configured for reading.
  *
+ * A secret is not drawn at random but derived, under another key from the
+ * install's secret, from its row's id, which a mint returns as its `ref`. So
+ * a plugin that sends a secret later, from a job, queues the `ref` and asks
+ * `reveal` for the secret at send time: the secret itself is never at rest,
+ * in this table or in the job's, and a copy of the database without the
+ * install's secret cannot derive it.
+ *
  * Single use holds through the database, never the limit store: spending is
  * one conditional update that only one caller can win, on every instance. A
  * code's wrong tries are counted the same way, each a compare-and-set of the
@@ -29,8 +36,6 @@ import {
   createHash,
   createHmac,
   hkdfSync,
-  randomBytes,
-  randomInt,
   randomUUID,
   timingSafeEqual,
 } from "node:crypto";
@@ -86,7 +91,12 @@ export interface OneTimeSecrets {
       voidEarlier?: boolean;
     },
     options?: TxOption
-  ): Promise<{ token: string; expiresAt: Date }>;
+  ): Promise<{
+    token: string;
+    expiresAt: Date;
+    /** Names the token for `reveal`, which derives it again while it is live; not itself a secret. */
+    ref: string;
+  }>;
 
   /** A new code always voids the earlier unspent code of this purpose and subject. */
   mintCode(
@@ -102,7 +112,27 @@ export interface OneTimeSecrets {
       data?: SecretData;
     },
     options?: TxOption
-  ): Promise<{ code: string; expiresAt: Date }>;
+  ): Promise<{
+    code: string;
+    expiresAt: Date;
+    /** Names the code for `reveal`, which derives it again while it is live; not itself a secret. */
+    ref: string;
+  }>;
+
+  /**
+   * The token or code a mint returned, derived again from the `ref` it
+   * returned with it, while it is unspent, unvoided and unexpired: for a job
+   * that sends it later, so the job's input holds the `ref` and never the
+   * secret. Only this plugin's own secrets, and only under an install secret
+   * the install still reads with. Refused inside an open transaction that
+   * passes none, as a read is.
+   */
+  reveal(input: {
+    ref: string;
+  }): Promise<
+    | { ok: true; secret: string; expiresAt: Date }
+    | { ok: false; reason: "invalid" | "expired" | "spent" }
+  >;
 
   /**
    * Reads without spending, for a page that shows what a link will do. Reads
@@ -188,8 +218,11 @@ const BOUNDS = {
 } as const;
 const PURPOSE = /^[a-z][a-z0-9.-]{0,63}$/;
 const DIGITS = new Set([6, 7, 8]);
-const TOKEN_BYTES = 32;
 const KEY_INFO = "nextly/one-time-secrets/v1";
+/** A separate key, so the key a secret is derived under is not the one its hash is kept under. */
+const DERIVATION_KEY_INFO = "nextly/one-time-secrets/derive/v1";
+/** A ref is a row id: a UUID, which no longer value can be. */
+const REF_LENGTH = 64;
 
 /** A row as the helper reads it. */
 interface SecretRow {
@@ -206,6 +239,9 @@ interface SecretRow {
   issueSeq: number | null;
 }
 
+/** A row as `reveal` reads it: what its secret is derived from. */
+type RevealRow = SecretRow & { purpose: string; kind: "token" | "code" };
+
 /** Build the helper a plugin receives as `ctx.security.secrets`. */
 export function createOneTimeSecrets(
   options: OneTimeSecretsOptions
@@ -213,16 +249,69 @@ export function createOneTimeSecrets(
   const { owner } = options;
   const now = options.now ?? (() => new Date());
 
-  /** Every key the install can read with, current first. */
-  const keys = (): Buffer[] => {
-    const generations = options.secrets();
+  /** Every install secret the install can read with, current first. */
+  const generations = (): string[] => {
+    const configured = options.secrets();
     // No secret configured, which production refuses at boot: one key from
     // the empty secret, so development still works and stays consistent. The
     // unkeyed generation derives that same key, so what was minted before a
     // secret was configured stays readable while it is kept.
-    return (generations.length > 0 ? generations : [undefined]).map(
-      generation => secretKey(generation ?? "")
+    return (configured.length > 0 ? configured : [undefined]).map(
+      generation => generation ?? ""
     );
+  };
+  /** Every key the install can read with, current first. */
+  const keys = (): Buffer[] => generations().map(secretKey);
+  // A secret is derived from its row's id under the install's secret, never
+  // drawn and kept, so `reveal` can derive it again at send time and nothing
+  // that holds the id alone (the row, a queued job's input) holds the secret.
+  const tokenFrom = (secret: string, purpose: string, id: string): string =>
+    createHmac("sha256", derivationKey(secret))
+      .update(["token", owner, purpose, id].join("\u0000"), "utf8")
+      .digest("base64url");
+  const codeFrom = (
+    secret: string,
+    purpose: string,
+    subject: string,
+    id: string,
+    digits: number
+  ): string => {
+    const drawn = createHmac("sha256", derivationKey(secret))
+      .update(["code", owner, purpose, subject, id].join("\u0000"), "utf8")
+      .digest()
+      .readBigUInt64BE(0);
+    // 2^64 is so much larger than 10^8 that the remainder is uniform to
+    // within one part in 10^11.
+    return String(drawn % 10n ** BigInt(digits)).padStart(digits, "0");
+  };
+  /**
+   * A row's secret, derived again under whichever install secret its hash was
+   * kept under, and checked against that hash; null when none derives it.
+   */
+  const derivedSecretOf = (row: RevealRow): string | null => {
+    for (const secret of generations()) {
+      const key = secretKey(secret);
+      if (row.kind === "token") {
+        const token = tokenFrom(secret, row.purpose, row.id);
+        if (
+          sameHex(
+            hmac(key, ["token", owner, row.purpose, token]),
+            row.secretHash
+          )
+        )
+          return token;
+        continue;
+      }
+      // A code's length is not kept, so each length a code may have is tried.
+      for (const digits of DIGITS) {
+        const code = codeFrom(secret, row.purpose, row.subject, row.id, digits);
+        if (
+          sameHex(codeHash(key, row.purpose, row.subject, code), row.secretHash)
+        )
+          return code;
+      }
+    }
+    return null;
   };
   const tokenHashes = (purpose: string, token: string): string[] =>
     keys().map(key => hmac(key, ["token", owner, purpose, token]));
@@ -298,10 +387,12 @@ export function createOneTimeSecrets(
         BOUNDS.tokenExpiry
       );
       const data = serialiseData(input.data);
-      const token = randomBytes(TOKEN_BYTES).toString("base64url");
+      const id = randomUUID();
+      const [currentSecret = ""] = generations();
+      const token = tokenFrom(currentSecret, purpose, id);
       const createdAt = now();
       const expiresAt = wholeSecondExpiry(createdAt, expiresInMs);
-      const [current] = keys();
+      const current = secretKey(currentSecret);
       // A token minted to replace the earlier ones takes the subject's token
       // live key, whose unique index admits one holder: two such mints at once
       // cannot both commit with the other's token left unvoided, as each would
@@ -319,18 +410,13 @@ export function createOneTimeSecrets(
           );
         }
         await adapterTx.insert(ONE_TIME_SECRETS_TABLE, {
-          id: randomUUID(),
+          id,
           owner,
           purpose,
           subject,
           subjectKey: subjectKeyFor(subject),
           kind: "token",
-          secretHash: hmac(current ?? secretKey(""), [
-            "token",
-            owner,
-            purpose,
-            token,
-          ]),
+          secretHash: hmac(current, ["token", owner, purpose, token]),
           liveKey: tokenLiveKey,
           issueSeq: null,
           data,
@@ -349,7 +435,7 @@ export function createOneTimeSecrets(
       } else {
         await retryLostRace(() => write("secrets.mintToken", undefined, mint));
       }
-      return { token, expiresAt };
+      return { token, expiresAt, ref: id };
     },
 
     async mintCode(input, txOption) {
@@ -369,11 +455,12 @@ export function createOneTimeSecrets(
       if (!DIGITS.has(digits))
         throw invalid("digits", "digits must be 6, 7 or 8.");
       const data = serialiseData(input.data);
-      const draw = (): string =>
-        String(randomInt(0, 10 ** digits)).padStart(digits, "0");
-      let code = draw();
+      const [currentSecret = ""] = generations();
+      const current = secretKey(currentSecret);
+      // A new row id is a new code: the code is derived from it.
+      let id = randomUUID();
+      let code = codeFrom(currentSecret, purpose, subject, id, digits);
       const liveKey = liveKeyFor(purpose, subject);
-      const [current] = keys();
 
       const mint = async (adapterTx: TransactionContext): Promise<Date> => {
         const createdAt = now();
@@ -392,7 +479,10 @@ export function createOneTimeSecrets(
           keys().some(key =>
             sameHex(codeHash(key, purpose, subject, candidate), live.secretHash)
           );
-        while (repeatsLive(code)) code = draw();
+        while (repeatsLive(code)) {
+          id = randomUUID();
+          code = codeFrom(currentSecret, purpose, subject, id, digits);
+        }
         // The earlier live code is voided in the same transaction as the new
         // one is inserted, and the new row takes the plugin, purpose and
         // subject's live key, whose unique index admits one holder at a time.
@@ -417,18 +507,13 @@ export function createOneTimeSecrets(
         const issueSeq = (latest?.issueSeq ?? 0) + 1;
         const expiresAt = wholeSecondExpiry(createdAt, expiresInMs);
         await adapterTx.insert(ONE_TIME_SECRETS_TABLE, {
-          id: randomUUID(),
+          id,
           owner,
           purpose,
           subject,
           subjectKey: subjectKeyFor(subject),
           kind: "code",
-          secretHash: codeHash(
-            current ?? secretKey(""),
-            purpose,
-            subject,
-            code
-          ),
+          secretHash: codeHash(current, purpose, subject, code),
           liveKey,
           issueSeq,
           data,
@@ -447,7 +532,7 @@ export function createOneTimeSecrets(
         // the failed insert ends that transaction: it surfaces, and the
         // plugin's transaction rolls back with nothing minted.
         const expiresAt = await write("secrets.mintCode", txOption.tx, mint);
-        return { code, expiresAt };
+        return { code, expiresAt, ref: id };
       }
       // Two mints at once for one subject: the second insert meets the
       // first's live key once the first commits, or the database ends one of
@@ -456,7 +541,7 @@ export function createOneTimeSecrets(
       const expiresAt = await retryLostRace(() =>
         write("secrets.mintCode", undefined, mint)
       );
-      return { code, expiresAt };
+      return { code, expiresAt, ref: id };
     },
 
     async peekToken(input, txOption) {
@@ -603,6 +688,37 @@ export function createOneTimeSecrets(
       }
     },
 
+    async reveal(input) {
+      const ref = input.ref;
+      const adapter = options.adapter();
+      // Refused beside an open transaction, as `peekToken` is, so it answers
+      // the same on every dialect.
+      assertNoOpenTransaction(adapter, "secrets.reveal");
+      if (
+        typeof ref !== "string" ||
+        ref.length === 0 ||
+        ref.length > REF_LENGTH
+      )
+        return { ok: false, reason: "invalid" };
+      // Only this plugin's own: another plugin's ref names no row here.
+      const [row] = await adapter.select<RevealRow>(ONE_TIME_SECRETS_TABLE, {
+        where: {
+          and: [
+            { column: "owner", op: "=", value: owner },
+            { column: "id", op: "=", value: ref },
+          ],
+        },
+      });
+      const reason = refusal(row ?? null, now());
+      if (reason !== null || row === undefined)
+        return { ok: false, reason: reason ?? "invalid" };
+      const secret = derivedSecretOf(row);
+      // A secret minted before secrets were derived, or under an install
+      // secret no longer read with, cannot be derived again.
+      if (secret === null) return { ok: false, reason: "invalid" };
+      return { ok: true, secret, expiresAt: row.expiresAt };
+    },
+
     async voidFor(input, txOption) {
       const subject = checkSubject(input.subject);
       const purposes = input.purposes?.map(checkPurpose);
@@ -700,6 +816,17 @@ function secretKey(secret: string): Buffer {
   if (!key) {
     key = Buffer.from(hkdfSync("sha256", secret, "", KEY_INFO, 32));
     keyCache.set(secret, key);
+  }
+  return key;
+}
+
+/** The key secrets are derived under, for one of the install's secrets. */
+const derivationKeyCache = new Map<string, Buffer>();
+function derivationKey(secret: string): Buffer {
+  let key = derivationKeyCache.get(secret);
+  if (!key) {
+    key = Buffer.from(hkdfSync("sha256", secret, "", DERIVATION_KEY_INFO, 32));
+    derivationKeyCache.set(secret, key);
   }
   return key;
 }

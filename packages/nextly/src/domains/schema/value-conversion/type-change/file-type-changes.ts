@@ -437,6 +437,9 @@ function entityTypeChange(args: {
     dialect,
     ...at,
     ...(builtByBefore !== at.builtBy ? { builtByBefore } : {}),
+    // A field inside a named group or a repeater too: the file changes no column for it, so its
+    // values are judged where the file runs, as the save that wrote it judged them.
+    nested: true,
   });
   const unread = unreadRenameFields({
     statements: source.statements,
@@ -453,10 +456,11 @@ function entityTypeChange(args: {
   // a single reference's, or the guard that refuses a held link), which runs first with its own
   // message on every database. Any other change, a relationship becoming another type or one
   // keeping its shape under other targets (a relationship becoming an upload), is judged here: no
-  // statement of the file converts or guards it.
+  // statement of the file converts or guards it. Never one held inside JSON, which no statement
+  // converts: it stays judged under its path, and its own name names no field on the row.
   const relationsShaped = new Set(
     changes
-      .filter(change => guardedByTheFile(change))
+      .filter(change => change.within === undefined && guardedByTheFile(change))
       .map(change => change.to.name)
   );
   return [

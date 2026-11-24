@@ -11,6 +11,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { configTheCodeOwnsIn } from "../../di/load-dynamic-tables";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { dashboardPinsPresent } from "../../domains/dashboard/dashboard-pins";
@@ -1298,11 +1299,16 @@ export async function ensureLocalizedCompanions(
   // table is the one its registry row names: on a site whose field-group storage was migrated that
   // is `fg_<slug>`, which no slug rule derives, and a derived name would provision a translation
   // table beside a main table that is not there.
-  const [{ localizableConfigEntities }, fieldGroupTable] = await Promise.all([
-    import("../../domains/i18n/runtime/localizable-config-entities"),
-    storedFieldGroupTableOf(adapter, config),
-  ]);
-  const groups = localizableConfigEntities(config, fieldGroupTable);
+  // The entities are the configuration's as code still owns it (`configTheCodeOwnsIn`): a
+  // collection a demote handed to the Schema Builder keeps the translations table the Builder's
+  // collection has, so its code entry's `localized` setting provisions or restores nothing.
+  const [{ localizableConfigEntities }, fieldGroupTable, owned] =
+    await Promise.all([
+      import("../../domains/i18n/runtime/localizable-config-entities"),
+      storedFieldGroupTableOf(adapter, config),
+      configTheCodeOwnsIn(adapter as unknown as DrizzleAdapter, config),
+    ]);
+  const groups = localizableConfigEntities(owned, fieldGroupTable);
 
   const failures: string[] = [];
   for (const [kind, group, resolveTableName] of groups) {

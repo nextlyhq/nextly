@@ -248,7 +248,7 @@ function withoutRenamedFields(
  * How the review judges the save once the renames are decided: interactive while something is
  * still the person's to answer, destructive while something still deletes values, else safe.
  */
-function classificationOf(
+export function classificationOf(
   previewed: SchemaPreviewResponse["classification"],
   deletesData: boolean,
   stillAsks: boolean

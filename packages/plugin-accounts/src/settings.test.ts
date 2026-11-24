@@ -52,6 +52,7 @@ describe("resolveAccountsSettings", () => {
       knownBrowsers: { days: 90, perAccount: 10 },
       passwordMinLength: 8,
       breachedPasswordCheck: false,
+      timeZone: "UTC",
     });
   });
 
@@ -139,6 +140,15 @@ describe("resolveAccountsSettings", () => {
     );
     for (const signUp of ["off", false, "Closed"]) {
       expect(refusalOf({ origin, signUp })?.paths).toEqual(["signUp"]);
+    }
+  });
+
+  it("takes the site's time zone by its IANA name, and refuses one the runtime does not know", () => {
+    expect(
+      resolveAccountsSettings({ origin, timeZone: "Asia/Karachi" }).timeZone
+    ).toBe("Asia/Karachi");
+    for (const timeZone of ["Mars/Olympus", "", "PKT+5"]) {
+      expect(refusalOf({ origin, timeZone })?.paths).toEqual(["timeZone"]);
     }
   });
 

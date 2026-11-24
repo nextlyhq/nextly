@@ -9,7 +9,10 @@
  * @module domains/schema/builder-save/type-change-clears
  */
 import { NextlyError } from "../../../errors/nextly-error";
-import type { JudgedFieldTypeChange } from "../value-conversion/type-change/field-type-changes";
+import {
+  changedFieldName,
+  type JudgedFieldTypeChange,
+} from "../value-conversion/type-change/field-type-changes";
 
 /** How many values of a field changing type the person confirmed clearing, by the field's name. */
 export interface ConfirmedClear {
@@ -41,7 +44,8 @@ export function refuseChangedClearCounts(
   if (confirmed === undefined || confirmed.length === 0) return;
   const clearing = new Map<string, number>();
   for (const change of judged) {
-    const name = change.to.name;
+    // Named as its refusal and its consent name it: by its path where it is held inside JSON.
+    const name = changedFieldName(change);
     clearing.set(
       name,
       (clearing.get(name) ?? 0) + change.result.cleared.length
