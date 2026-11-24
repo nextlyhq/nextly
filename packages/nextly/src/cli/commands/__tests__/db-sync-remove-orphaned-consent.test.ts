@@ -113,8 +113,14 @@ vi.mock("../../../database/schema-registry", () => ({
     registerStaticSchemas() {}
   },
 }));
+// An empty registry, in the shape the reader answers: the sync reads its
+// collections to leave out any a demote handed to the Schema Builder.
 vi.mock("../../../di/load-dynamic-tables", () => ({
-  loadBuilderEntities: async () => [],
+  loadBuilderEntities: async () => ({
+    collections: [],
+    singles: [],
+    components: [],
+  }),
 }));
 vi.mock("../../../domains/field-groups/migration/sync-guard", () => ({
   withMigrationExcluded: async (_args: unknown, work: () => Promise<unknown>) =>

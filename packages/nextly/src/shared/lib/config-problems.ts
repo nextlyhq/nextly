@@ -275,7 +275,7 @@ function sharedSystemName(
  */
 function placeOf(
   fields: readonly unknown[],
-  target: object,
+  target: unknown,
   at = "fields",
   entered: WeakSet<object> = new WeakSet()
 ): string {

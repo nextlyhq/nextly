@@ -81,6 +81,7 @@ import {
   ACCEPT_DATA_LOSS_ENV,
   resolveDataLossConsent,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { configTheCodeOwns } from "../../domains/schema/pipeline/registered-collections";
 import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
@@ -438,17 +439,19 @@ export async function runDbSync(
           // The configuration's new addresses, judged by the one address rule as a start judges
           // them, before this sync reads or writes any schema.
           // Its sibling fields too: a pair the registry row does not hold is new and refused.
+          // A collection a demote handed to the Schema Builder is judged by its record, not by the
+          // code entry still in the configuration, which this sync ignores (`configTheCodeOwns`).
           const liveAdapter = adapter as unknown as DrizzleAdapter;
           const registered = await loadBuilderEntities(liveAdapter);
-          await assertConfiguredAddresses(
+          const owned = configTheCodeOwns(
             configResult.config,
-            registered,
-            table => liveAdapter.tableExists(table)
+            registered.collections
           );
-          await assertConfiguredSiblingFields(
-            configResult.config,
-            registered,
-            table => liveAdapter.tableExists(table)
+          await assertConfiguredAddresses(owned, registered, table =>
+            liveAdapter.tableExists(table)
+          );
+          await assertConfiguredSiblingFields(owned, registered, table =>
+            liveAdapter.tableExists(table)
           );
           // A Builder save left part-way refuses the sync before it reads or writes any schema,
           // asked under the schema lock so a save that started while the sync waited is seen: the
