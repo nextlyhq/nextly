@@ -1843,12 +1843,13 @@ describe.each(getConfiguredTestDialects())(
           ["read", PAGES],
           ["sign-off", PAGES],
         ]);
-        for (let n = 0; n < 1000; n += 1) {
-          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
-            definitionHash: HASH,
-            assignee: { kind: "user", id: "sam" },
-          });
-        }
+        // In batched inserts: a thousand statements one by one is slow on a busy database.
+        await seedStates(
+          app(),
+          Array.from({ length: 1000 }, () => partOf(PAGES, randomUUID(), null)),
+          "legal",
+          { definitionHash: HASH, assignee: { kind: "user", id: "sam" } }
+        );
         const orphan = await entry(app(), PAGES);
         await seedState(app(), partOf(PAGES, orphan, null), "legal", {
           definitionHash: HASH,
@@ -1923,7 +1924,9 @@ describe.each(getConfiguredTestDialects())(
           many.length,
           `3 assignees:\n${few.join("\n")}\n\n15 assignees:\n${many.join("\n")}`
         ).toBe(few.length);
-      });
+        // Fifteen documents and five people made one by one, and four lists read: more than the
+        // file's 30 s on a busy MySQL, so the case has a budget of its own.
+      }, 90_000);
 
       it("marks the total a floor when it stops before reading everything", async () => {
         // 6 parts Sam may move come first, then 1,000 no one may read. Page 1 needs 6 (its 5 and one
@@ -1944,11 +1947,13 @@ describe.each(getConfiguredTestDialects())(
             { definitionHash: HASH, enteredAt: earlier }
           );
         }
-        for (let n = 0; n < 1000; n += 1) {
-          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
-            definitionHash: HASH,
-          });
-        }
+        // In batched inserts: a thousand statements one by one is slow on a busy database.
+        await seedStates(
+          app(),
+          Array.from({ length: 1000 }, () => partOf(PAGES, randomUUID(), null)),
+          "legal",
+          { definitionHash: HASH }
+        );
         const SAM: Who = { kind: "person", id: "sam" };
 
         const first = await door.waiting(SAM, { page: 1, limit: 5 });
