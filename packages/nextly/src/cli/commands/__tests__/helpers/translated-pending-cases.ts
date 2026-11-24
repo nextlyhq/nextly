@@ -4,9 +4,10 @@
  *
  * A translated collection's change can be written only in the files `migrate:create` writes beside
  * the main migration: a translated field that takes another column type changes its translations
- * table alone. `migrate:check` reports it as `migrate:create` plans it, so it fails before the
- * migration is written and passes after; a check that compared only the main tables would pass
- * on a project whose migration is still to be written.
+ * table alone. `migrate:check` reports it as `migrate:create` plans it, naming the file, so it
+ * fails before the migration is written and passes after. A check that compared only the main
+ * tables and the recorded settings names the field's settings and never the file
+ * `migrate:create` writes.
  */
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
