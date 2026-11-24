@@ -212,13 +212,29 @@ function fieldColumnTypeChanges(
   ) {
     return false;
   }
-  const was = args.columnOf(old)?.dialectType ?? null;
-  const is = args.columnOf(field)?.dialectType ?? null;
+  const was = dialectTypeOf(args, old);
+  const is = dialectTypeOf(args, field);
   if (was === null || is === null || was === is) return false;
-  const converts = args.convertsValues;
+  return !convertsInFile(old, field, args.convertsValues);
+}
+
+/** The type the database declares for a field's column on this dialect, or none. */
+function dialectTypeOf(
+  args: Parameters<typeof columnTypeChanges>[0],
+  field: FieldDefinition
+): string | null {
+  return args.columnOf(field)?.dialectType ?? null;
+}
+
+/** Whether the save's file converts `old` becoming `field` value by value (`convertsByValue`). */
+function convertsInFile(
+  old: FieldDefinition,
+  field: FieldDefinition,
+  converts: Parameters<typeof columnTypeChanges>[0]["convertsValues"]
+): boolean {
   return (
-    converts === undefined ||
-    !convertsByValue(old, field, converts.dialect, converts)
+    converts !== undefined &&
+    convertsByValue(old, field, converts.dialect, converts)
   );
 }
 

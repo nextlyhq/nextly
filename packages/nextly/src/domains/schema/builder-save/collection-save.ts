@@ -1270,31 +1270,7 @@ async function writeSave(
     definitionAfter: after,
     notify: line => deps.logger.warn(line),
   });
-  // Each field whose type the save changes is judged over the values its column holds, before any
-  // file is written: a blocked change, or a lossy one not consented to, refuses the save.
-  const conversion = await refuseSaveTypeChanges(
-    deps,
-    save,
-    plan.table,
-    options
-  );
-  refuseUnconfirmedConversions(plan, save);
-  refuseUnenforceableUniques(deps, save, plan.table);
-  // A move that cannot keep its values is refused here, before the definition is written.
-  const planned = plannedMovesOf(deps, save, plan.table);
-  await refuseEmptyRequiredRefills(deps, planned);
-  await refuseUnkeptValues(deps, planned);
-  await refuseMovesUnderWorkingDrafts(deps, save);
-  await settledRows(deps, save, plan.table);
-  // The translations table is judged before anything is written wherever the change reaches it:
-  // the file's statements are planned from the history's record of it, and a push changes it too,
-  // after which only the main table is compared (`recordWhatWasPushed`).
-  if (options.runsFile === true || options.pushes === true) {
-    await refuseCompanionDrift(deps, save, plan.table, {
-      runsFile: options.runsFile === true,
-      buildsWholeTable: options.buildsWholeTable === true,
-    });
-  }
+  const conversion = await refuseUnwritableSave(deps, save, plan, options);
   // Every check before the first write has passed: what the caller writes ahead of the save.
   await options.beforeWrite?.();
 
@@ -1413,6 +1389,45 @@ async function writeSave(
     }
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
   }
+}
+
+/**
+ * The save's checks over what the database holds, each run before anything is written: a type
+ * change, a Unique setting, a move or a translations table the save cannot carry refuses it. The
+ * save's type changes written value by value come back, where it converts any.
+ */
+async function refuseUnwritableSave(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  plan: Awaited<ReturnType<typeof planSave>>,
+  options: Parameters<typeof writeSave>[2]
+): Promise<SaveConversion | undefined> {
+  // Each field whose type the save changes is judged over the values its column holds, before any
+  // file is written: a blocked change, or a lossy one not consented to, refuses the save.
+  const conversion = await refuseSaveTypeChanges(
+    deps,
+    save,
+    plan.table,
+    options
+  );
+  refuseUnconfirmedConversions(plan, save);
+  refuseUnenforceableUniques(deps, save, plan.table);
+  // A move that cannot keep its values is refused here, before the definition is written.
+  const planned = plannedMovesOf(deps, save, plan.table);
+  await refuseEmptyRequiredRefills(deps, planned);
+  await refuseUnkeptValues(deps, planned);
+  await refuseMovesUnderWorkingDrafts(deps, save);
+  await settledRows(deps, save, plan.table);
+  // The translations table is judged before anything is written wherever the change reaches it:
+  // the file's statements are planned from the history's record of it, and a push changes it too,
+  // after which only the main table is compared (`recordWhatWasPushed`).
+  if (options.runsFile === true || options.pushes === true) {
+    await refuseCompanionDrift(deps, save, plan.table, {
+      runsFile: options.runsFile === true,
+      buildsWholeTable: options.buildsWholeTable === true,
+    });
+  }
+  return conversion;
 }
 
 /**
