@@ -314,6 +314,31 @@ function articleOf(type: EmailTemplateVariableType | undefined): string {
 /** A date as a date input holds one: `YYYY-MM-DD`. */
 const DATE_VALUE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** A number as a number input holds one, or nothing typed. */
+function fitsNumber(value: unknown): boolean {
+  return value === "" || Number.isFinite(value);
+}
+
+/** A text as a text input holds one, and what it writes out as text. */
+function fitsText(value: unknown): boolean {
+  return (
+    value === null || ["string", "number", "boolean"].includes(typeof value)
+  );
+}
+
+/** Whether a value is shown as it is, by the type its control is drawn for. */
+const FITS: Record<EmailTemplateVariableType, (value: unknown) => boolean> = {
+  text: fitsText,
+  link: fitsText,
+  number: fitsNumber,
+  money: fitsNumber,
+  date: value =>
+    typeof value === "string" && (value === "" || DATE_VALUE.test(value)),
+  boolean: value => typeof value === "boolean",
+  list: value => Array.isArray(value),
+  object: isRecord,
+};
+
 /**
  * Whether the control drawn for `type` shows `value` as it is. Nothing yet
  * (undefined) fits every type: the field starts empty.
@@ -323,30 +348,10 @@ function fitsType(
   value: unknown
 ): boolean {
   if (value === undefined) return true;
-  switch (type) {
-    case "boolean":
-      return typeof value === "boolean";
-    case "number":
-    case "money":
-      return (
-        value === "" || (typeof value === "number" && Number.isFinite(value))
-      );
-    case "date":
-      return (
-        typeof value === "string" && (value === "" || DATE_VALUE.test(value))
-      );
-    case "list":
-      return Array.isArray(value);
-    case "object":
-      return isRecord(value);
-    default:
-      return (
-        value === null ||
-        typeof value === "string" ||
-        typeof value === "number" ||
-        typeof value === "boolean"
-      );
-  }
+  // A stored declaration can name a type this admin doesn't draw: it is text.
+  const fits =
+    type !== undefined && Object.hasOwn(FITS, type) ? FITS[type] : fitsText;
+  return fits(value);
 }
 
 /** Each name's first declaration: a name declared twice is one value. */

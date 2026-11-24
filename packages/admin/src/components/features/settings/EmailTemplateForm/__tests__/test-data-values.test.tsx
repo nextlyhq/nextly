@@ -167,6 +167,54 @@ describe("a field of the test data", () => {
     expect(screen.queryByRole("switch", { name: "Gift" })).toBeNull();
   });
 
+  it.each([
+    ["text", ["", "Ada", 5, true, null], [["a"], { a: 1 }]],
+    ["link", ["https://example.com"], [{ url: "x" }]],
+    ["number", [0, -1.5, ""], ["5", Number.NaN, null, true]],
+    ["money", [19.99, ""], ["19.99", [1]]],
+    ["date", ["2026-10-01", ""], ["next week", "2026-10-01T00:00:00Z", 5]],
+    ["boolean", [true, false], ["false", 0, null]],
+    ["list", [[], ["a"]], ["a", {}, null]],
+    ["object", [{}, { a: 1 }], ["a", [], null]],
+  ] as const)(
+    "draws a %s's control only for a value it can show",
+    (type, shown, said) => {
+      const says = (value: unknown) => {
+        const { unmount } = render(
+          <DataFields
+            variables={[{ name: "v", presentation: { type, label: "V" } }]}
+            data={{ v: value }}
+            onChange={() => {}}
+          />
+        );
+        const misfit = screen.queryByTestId("misfit-v") !== null;
+        unmount();
+        return misfit;
+      };
+      for (const value of shown) {
+        expect(says(value), JSON.stringify(value)).toBe(false);
+      }
+      for (const value of said) {
+        expect(says(value), JSON.stringify(value)).toBe(true);
+      }
+      // Nothing yet: the field starts empty.
+      expect(says(undefined)).toBe(false);
+    }
+  );
+
+  it("draws a type this admin does not know as text, as it did", () => {
+    render(
+      <DataFields
+        variables={[
+          { name: "v", presentation: { type: "colour" as never, label: "V" } },
+        ]}
+        data={{ v: "red" }}
+        onChange={() => {}}
+      />
+    );
+    expect(screen.getByLabelText("V")).toHaveProperty("value", "red");
+  });
+
   it("is drawn once for a name declared twice, as its first declaration", () => {
     render(
       <DataFields

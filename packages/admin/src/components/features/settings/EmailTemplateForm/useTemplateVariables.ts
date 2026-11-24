@@ -39,6 +39,17 @@ export interface TemplateVariableCheck {
   blanks: "checked" | "loading" | "kept" | "unavailable";
 }
 
+/** How far blank values were judged. */
+function blanksOf(
+  liquid: boolean,
+  loaded: boolean,
+  unavailable: boolean
+): TemplateVariableCheck["blanks"] {
+  if (!liquid) return "kept";
+  if (loaded) return "checked";
+  return unavailable ? "unavailable" : "loading";
+}
+
 /**
  * Whether a declaration covers `path`: one of its top-level name, or a dotted
  * one naming it or what it is read from.
@@ -143,13 +154,7 @@ export function useTemplateVariables({
         paths: used,
       })),
       missing,
-      blanks: !liquid
-        ? "kept"
-        : parsed
-          ? "checked"
-          : unavailable
-            ? "unavailable"
-            : "loading",
+      blanks: blanksOf(liquid, parsed !== null, unavailable),
     };
   }, [
     analysis,
