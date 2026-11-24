@@ -695,6 +695,8 @@ export function companionWriteVia(
  */
 export interface CompanionIntrospectAdapter extends CompanionWriteAdapter {
   getDrizzle<T = unknown>(): T;
+  /** Its transaction scope, which a move on SQLite runs in (`inOneSqliteTransaction`). */
+  transaction?<T>(work: (tx: unknown) => Promise<T>): Promise<T>;
 }
 
 /**
@@ -1796,12 +1798,12 @@ async function runStatementsInOrder(
   afterEach?: () => void
 ): Promise<void> {
   if (adapter.dialect === "sqlite") {
-    // One savepoint (`inOneSqliteSavepoint`): a statement SQLite refuses part-way leaves nothing of
-    // the move applied.
-    const { inOneSqliteSavepoint } = await import(
-      "../migration/sqlite-savepoint"
+    // One transaction of the adapter (`inOneSqliteTransaction`): a statement SQLite refuses
+    // part-way leaves nothing of the move applied.
+    const { inOneSqliteTransaction } = await import(
+      "../migration/sqlite-transaction"
     );
-    await inOneSqliteSavepoint(adapter, "nextly_companion_move", async () => {
+    await inOneSqliteTransaction(adapter, async () => {
       for (const statement of statements) {
         await adapter.executeQuery(statement);
         afterEach?.();

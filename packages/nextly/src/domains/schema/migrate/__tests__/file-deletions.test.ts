@@ -2023,6 +2023,27 @@ describe("the tables a statement list leaves dropped", () => {
     ).toEqual([]);
   });
 
+  // Only a plain CREATE TABLE proves a name new, since it fails on a table already there. One made
+  // IF NOT EXISTS may be the table the database held, and one dropped, made again and dropped is
+  // that table gone; a table the list itself made and dropped never held rows. Broken, the two are
+  // taken for tables the list made, and their rows still refuse the run.
+  it("names a table dropped after a conditional create or after it is made again, not one the list made", () => {
+    expect(
+      tablesLeftDropped(
+        [
+          'CREATE TABLE IF NOT EXISTS "dc_notes" ("id" text PRIMARY KEY)',
+          'DROP TABLE "dc_notes"',
+          'DROP TABLE "dc_tags"',
+          'CREATE TABLE "dc_tags" ("id" text PRIMARY KEY)',
+          'DROP TABLE "dc_tags"',
+          'CREATE TABLE "scratch" ("id" text PRIMARY KEY)',
+          'DROP TABLE "scratch"',
+        ],
+        "sqlite"
+      ).sort()
+    ).toEqual(["dc_notes", "dc_tags"]);
+  });
+
   it("names a table renamed away, and nothing for a statement that drops none", () => {
     expect(
       tablesLeftDropped(

@@ -22,11 +22,12 @@
  * `dev-watcher.ts` still call the hook — that wiring is a single line in each,
  * checked by reading them.
  */
+import { AsyncResource } from "node:async_hooks";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   checkbox,
@@ -463,9 +464,78 @@ describe("db:sync creates localized companion tables in-process (integration)", 
     }
   );
 
+  // The move runs in the adapter's own transaction scope, so the adapter knows it is open: a
+  // transaction another flow begins meanwhile waits its turn and runs after the move, rather than
+  // inside it. Broken, with a raw savepoint the adapter cannot see, that transaction begins on the
+  // connection while the move's is open, and SQLite refuses it.
+  it("runs a required field's move in the adapter's transaction, so another flow's waits its turn", async () => {
+    const config = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_in_scope",
+          fields: [
+            text({ name: "title" }),
+            text({ name: "handle", required: true }),
+          ],
+        }),
+      ],
+    });
+    await runSync(config);
+    // Connected by the first sync.
+    const live = adapter;
+    if (!live) throw new Error("the SQLite adapter is not connected");
+    await live.executeQuery(
+      `INSERT INTO "dc_dbsync_in_scope" ("id", "slug", "title", "handle") VALUES ('row1', 'r1', 'Written before', 'first-handle')`
+    );
+    await live.executeQuery(`CREATE TABLE "bystander" ("id" text)`);
+
+    // Each sync opens its own connection, so the one the move runs on is watched through the
+    // adapter's class, and the other flow is started on that connection, from the test's own flow
+    // rather than the move's, as an unrelated request would be.
+    type Connection = typeof live;
+    const otherFlow = AsyncResource.bind((on: Connection) =>
+      on.transaction(async () => {
+        await on.executeQuery(`INSERT INTO "bystander" ("id") VALUES ('b1')`);
+      })
+    );
+    let other: Promise<void> | undefined;
+    const shared = Object.getPrototypeOf(live) as Connection;
+    const executeQuery = shared.executeQuery;
+    const spy = vi.spyOn(shared, "executeQuery").mockImplementation(function (
+      this: Connection,
+      statement: string,
+      params?: Parameters<Connection["executeQuery"]>[1]
+    ) {
+      if (other === undefined && /DROP COLUMN/i.test(statement)) {
+        other = otherFlow(this);
+      }
+      return executeQuery.call(this, statement, params);
+    });
+
+    setPerLanguageStorage(true);
+    try {
+      await runSync(config);
+      spy.mockRestore();
+      expect(other).toBeDefined();
+      await other;
+
+      // Read on the connection the second sync opened.
+      expect(
+        await adapter?.executeQuery(`SELECT "id" FROM "bystander"`)
+      ).toEqual([{ id: "b1" }]);
+      const rows = await adapter?.executeQuery<{ handle: string }>(
+        `SELECT "handle" FROM "dc_dbsync_in_scope_locales" WHERE "_locale" = 'en'`
+      );
+      expect(rows).toEqual([{ handle: "first-handle" }]);
+    } finally {
+      spy.mockRestore();
+      _resetPerLanguageStorage();
+    }
+  });
+
   // Something else holding the required column that moves: an index on it with another column,
   // which a drop would break, is refused before anything runs; a view naming it makes SQLite refuse
-  // the drop itself, and the move runs in one savepoint, so nothing of it applies. Either way the
+  // the drop itself, and the move runs in one transaction, so nothing of it applies. Either way the
   // main table keeps the column and its values, and no translations table is left half filled.
   // Broken, the index case drops the column under it, and the view case leaves a filled
   // translations table beside a main table the next start refuses.

@@ -21,7 +21,7 @@ import {
   buildCompanionTransitionStatements,
   type CompanionFieldLike,
 } from "../../../domains/i18n/migration/reconcile-companion";
-import { inOneSqliteSavepoint } from "../../../domains/i18n/migration/sqlite-savepoint";
+import { inOneSqliteTransaction } from "../../../domains/i18n/migration/sqlite-transaction";
 import { resolveTransitionStore } from "../../../domains/i18n/migration/transition-recorder";
 import { readI18nTransitionState } from "../../../domains/i18n/migration/transition-state";
 import {
@@ -136,9 +136,9 @@ export async function moveValuesPerLanguage(
   const languages = await siteLanguages(context);
   const found = await entitiesToMove(context);
   for (const item of found) {
-    // Each entity's move as one on SQLite (`inOneSqliteSavepoint`): a drop SQLite refuses part-way
+    // Each entity's move as one on SQLite (`inOneSqliteTransaction`): a drop SQLite refuses part-way
     // leaves its columns and its translations table as they were.
-    await inOneSqliteSavepoint(adapter, "nextly_values_move", () =>
+    await inOneSqliteTransaction(adapter, () =>
       moveEntityValues(adapter, languages, item)
     );
   }

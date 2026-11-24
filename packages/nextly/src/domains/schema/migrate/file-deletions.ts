@@ -2823,38 +2823,44 @@ export function functionsDefinedBy(
 }
 
 /**
- * The tables a statement list leaves dropped, lower-cased, read in order: one dropped and then
- * made again, or renamed onto (SQLite's rebuild of a table under a new name, renamed back), is not
- * among them, and one renamed away is. What the localisation steps leave out ahead of a run whose
- * files remove an entity, since the run never reaches the rows those tables hold.
+ * The tables a statement list leaves dropped, lower-cased, read in order: each name the database
+ * could hold before the list runs, and which the list leaves absent. A table dropped and then made
+ * again, or renamed onto (SQLite's rebuild of a table under a new name, renamed back), is not among
+ * them; one renamed away is, and so is one dropped, made again and dropped. A name is known to be
+ * new only where the list first makes it unconditionally (a plain `CREATE TABLE`, or a rename onto
+ * it), which would fail on a table already there; one made `IF NOT EXISTS` may be the table the
+ * database held. What the localisation steps leave out ahead of a run whose files remove an
+ * entity, since the run never reaches the rows those tables hold.
  */
 export function tablesLeftDropped(
   statements: readonly string[],
   dialect: SupportedDialect
 ): string[] {
-  const dropped = new Set<string>();
-  // Made by the list itself: such a table renamed away was never one the database held.
-  const made = new Set<string>();
-  const gone = (table: string) => {
-    if (!made.delete(table)) dropped.add(table);
-  };
-  const there = (table: string) => {
-    dropped.delete(table);
-    made.add(table);
+  // Each name the list touches: whether the database could hold it before, from the first step
+  // naming it, and whether the list leaves it there, from the last.
+  const names = new Map<string, { heldBefore: boolean; there: boolean }>();
+  const step = (table: string, there: boolean, provesNew: boolean) => {
+    const seen = names.get(table);
+    names.set(table, {
+      heldBefore: seen?.heldBefore ?? !provesNew,
+      there,
+    });
   };
   for (const statement of statements) {
-    for (const step of readStatement(statement, dialect)) {
-      if (step.kind === "drop" && step.temporary !== true) {
-        gone(step.table.toLowerCase());
-      } else if (step.kind === "create" && step.temporary !== true) {
-        there(step.table.toLowerCase());
-      } else if (step.kind === "rename-table") {
-        gone(step.from.toLowerCase());
-        there(step.to.toLowerCase());
+    for (const read of readStatement(statement, dialect)) {
+      if (read.kind === "drop" && read.temporary !== true) {
+        step(read.table.toLowerCase(), false, false);
+      } else if (read.kind === "create" && read.temporary !== true) {
+        step(read.table.toLowerCase(), true, read.conditional !== true);
+      } else if (read.kind === "rename-table") {
+        step(read.from.toLowerCase(), false, false);
+        step(read.to.toLowerCase(), true, true);
       }
     }
   }
-  return [...dropped];
+  return [...names]
+    .filter(([, { heldBefore, there }]) => heldBefore && !there)
+    .map(([table]) => table);
 }
 
 /** A read that answers undefined rather than throwing. */

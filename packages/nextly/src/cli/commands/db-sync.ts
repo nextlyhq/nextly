@@ -777,7 +777,9 @@ export { registerDbSyncCommand } from "./db-sync.command";
 /**
  * The live schema of every table, as one comparable text: its tables, their columns, indexes,
  * keys and checks (`introspectLiveSnapshot`). Read before and after a sync, the two say whether
- * the sync changed the schema at all, which none of its steps reports.
+ * the sync changed the schema at all, which none of its steps reports. The catalogs return a
+ * table's keys, checks and indexes in no set order, so each is sorted before it is compared: an
+ * unchanged schema reads the same twice.
  */
 async function liveSchemaOf(adapter: CLIDatabaseAdapter): Promise<string> {
   const drizzle = adapter as unknown as DrizzleAdapter;
@@ -787,5 +789,19 @@ async function liveSchemaOf(adapter: CLIDatabaseAdapter): Promise<string> {
     drizzle.getCapabilities().dialect,
     [...tables].sort()
   );
-  return JSON.stringify(snapshot);
+  const inOrder = <T>(items: readonly T[] | undefined) =>
+    items
+      ?.map(item => JSON.stringify(item))
+      .sort()
+      .join("\n");
+  return JSON.stringify(
+    [...snapshot.tables]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(table => ({
+        ...table,
+        foreignKeys: inOrder(table.foreignKeys),
+        checks: inOrder(table.checks),
+        indexes: inOrder(table.indexes),
+      }))
+  );
 }

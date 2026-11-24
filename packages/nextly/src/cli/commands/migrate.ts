@@ -642,7 +642,7 @@ async function moveEarlierRecords(args: {
     reportDryRun(logger, plan);
     return { ended: true, moved: false };
   }
-  await consolidateLegacyBookkeeping({
+  const moved = await consolidateLegacyBookkeeping({
     adapter,
     dialect,
     bounds: args.bounds,
@@ -655,12 +655,9 @@ async function moveEarlierRecords(args: {
     log: message => logger.info(message),
     warn: message => logger.warn(message),
   });
-  // Moved by this run where the earlier tables are gone now; another run may have moved them
-  // meanwhile, and then this one changed nothing.
-  return {
-    ended: false,
-    moved: !(await detectLegacyBookkeeping(adapter)).hasLegacy,
-  };
+  // Moved by this run only where its own consolidation made the move: another run may have moved
+  // the records meanwhile, and then this one changed nothing.
+  return { ended: false, moved };
 }
 
 /**
@@ -4964,11 +4961,12 @@ export async function migrationsAhead(args: {
     applied,
     undefined
   ).length;
-  const modulesRun = pendingPluginModules(
+  const modulesToRun = pendingPluginModules(
     args.pluginMigrationSets,
     applied,
     args.step
-  ).length;
+  );
+  const modulesRun = modulesToRun.length;
   const files = appFilesInStep(listed, appStepAfter(args.step, modulesRun));
   const runs = new Set(files);
   const filesLeft = listed.some(
@@ -4976,11 +4974,18 @@ export async function migrationsAhead(args: {
   );
   return {
     leavesPending: modulesRun < modulesPending || filesLeft,
+    // Read in the order the run applies them: the plugin modules within the step, then the files,
+    // so a plugin's entity a module removes is left out as an app file's is.
     dropped: new Set(
       tablesLeftDropped(
-        files.flatMap(file =>
-          splitSqlStatements(file.upSql, args.dialect, file)
-        ),
+        [
+          ...modulesToRun.flatMap(({ migration }) =>
+            pluginModuleStatements(migration, args.dialect, "up")
+          ),
+          ...files.flatMap(file =>
+            splitSqlStatements(file.upSql, args.dialect, file)
+          ),
+        ],
         args.dialect
       )
     ),

@@ -225,7 +225,23 @@ export async function codesFoldCase(
   const places = (await codeColumnsOn(adapter, translationTables)).filter(
     place => place.list !== true
   );
-  if (places.length === 0) return true;
+  const folds = await columnsFoldingCase(adapter, places);
+  return places.every(place => folds(place));
+}
+
+/**
+ * Which of `places`' code columns compare codes without regard to letter case, one column at a
+ * time: on MySQL a column of a case-insensitive collation (`..._ci`), and one whose collation could
+ * not be read, as the database's default is; on PostgreSQL and SQLite none. What a check of one
+ * column asks, where a site mixes collations: on a case-insensitive column `pt_BR` and `PT_br`
+ * match the same row, so the two are one stored code there and never a pair of rows.
+ */
+export async function columnsFoldingCase(
+  adapter: DrizzleAdapter,
+  places: readonly { table: string; column: string }[]
+): Promise<(place: { table: string; column: string }) => boolean> {
+  if (adapter.dialect !== "mysql") return () => false;
+  if (places.length === 0) return () => true;
   const tables = [...new Set(places.map(({ table }) => table))];
   const columns = [...new Set(places.map(({ column }) => column))];
   const rows = await adapter.queryStatement<{
@@ -241,13 +257,15 @@ export async function codesFoldCase(
       sql`, `
     )})`
   );
-  const read = new Set(places.map(({ table, column }) => `${table}.${column}`));
-  return rows
-    .filter(row => read.has(`${row.tableName}.${row.columnName}`))
-    .every(
-      row =>
-        row.collation === null || row.collation.toLowerCase().endsWith("_ci")
-    );
+  const keepsCase = new Set(
+    rows
+      .filter(
+        row =>
+          row.collation !== null && !row.collation.toLowerCase().endsWith("_ci")
+      )
+      .map(row => `${row.tableName}.${row.columnName}`)
+  );
+  return ({ table, column }) => !keepsCase.has(`${table}.${column}`);
 }
 
 /**

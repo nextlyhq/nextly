@@ -352,6 +352,59 @@ describeEachDialect(
       expect(await columnsOf("dc_notes")).not.toContain("title");
     });
 
+    // An index on an expression over a moved column, or one whose condition names it, keeps that
+    // column out of the catalog's column list: only its definition names it. Either is refused up
+    // front by name, like any other index a drop would break. Broken, PostgreSQL and MySQL drop it
+    // with the column in silence, and SQLite stops part-way with its own error rather than the
+    // up-front refusal. MySQL has no index with a condition.
+    it.each(
+      (
+        [
+          ["an expression over", "idx_notes_lower_title"],
+          ["a condition naming", "idx_notes_titled"],
+        ] as const
+      ).filter(([, name]) => dialect !== "mysql" || name !== "idx_notes_titled")
+    )(
+      "refuses an index on %s a moved column, naming it",
+      async (_label, indexName) => {
+        await legacySite();
+        const adapter = database!.adapter;
+        const q = (name: string) =>
+          dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+        const { tables } = await introspectLiveColumns(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          ["dc_notes"]
+        );
+        // MySQL writes a functional key part in its own parentheses.
+        const keyed =
+          indexName === "idx_notes_titled"
+            ? `(${q("id")}) WHERE ${q("title")} IS NOT NULL`
+            : dialect === "mysql"
+              ? `((lower(${q("title")})))`
+              : `(lower(${q("title")}))`;
+        await adapter.executeQuery(
+          `CREATE INDEX ${q(indexName)} ON ${q("dc_notes")} ${keyed}`
+        );
+
+        expect(await refusalBeforeSchemaChanges(adapter, SITE)).toMatchObject({
+          code: "NEXTLY_UPGRADE_COLUMN_HELD",
+          publicMessage: expect.stringContaining(indexName),
+        });
+        await expect(upgrade()).rejects.toMatchObject({
+          code: "NEXTLY_UPGRADE_COLUMN_HELD",
+        });
+        const after = await introspectLiveColumns(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          ["dc_notes"]
+        );
+        expect(after.tables[0]?.columns.map(column => column.name)).toEqual(
+          tables[0]?.columns.map(column => column.name)
+        );
+      }
+    );
+
     // A field group declared in code had its columns built by the pipeline, whose rule bounds a
     // text field that states no width (255 characters on MySQL and PostgreSQL); the Schema
     // Builder's field-group creator leaves it unbounded. A moved column keeps the capacity its

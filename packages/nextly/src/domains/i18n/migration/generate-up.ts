@@ -299,7 +299,7 @@ export interface LocalizationUpOptions {
    */
   mainIndexes?: readonly Pick<
     LiveIndex,
-    "name" | "columns" | "wholeColumns" | "droppableByName"
+    "name" | "columns" | "wholeColumns" | "droppableByName" | "definition"
   >[];
 }
 
@@ -308,6 +308,24 @@ export interface LocalizationUpOptions {
  * before the columns go; refused, naming each, where an index stands on one of them with other
  * columns or on part of it, before anything runs.
  */
+/**
+ * Whether an index's `definition` names one of `columns` (lower-cased), as a whole word, quoted
+ * or not. A definition that could not be read names them all, so an index nothing can vouch for
+ * is held rather than dropped under.
+ */
+function definitionNames(
+  definition: string | undefined,
+  columns: ReadonlySet<string>
+): boolean {
+  if (definition === undefined) return true;
+  const text = definition.toLowerCase();
+  return [...columns].some(column =>
+    new RegExp(
+      `(^|[^a-z0-9_$])${column.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9_$])`
+    ).test(text)
+  );
+}
+
 export function indexDropsBeforeColumns(
   spec: Pick<CompanionMigrationSpec, "dialect" | "mainTable" | "collection">,
   dropped: readonly string[],
@@ -320,7 +338,15 @@ export function indexDropsBeforeColumns(
   const held: string[] = [];
   for (const index of indexes) {
     const covered = index.columns.filter(c => going.has(c.toLowerCase()));
-    if (covered.length === 0) continue;
+    // An index on more than whole columns (an expression, a partial or a prefix index) can read a
+    // moving column its `columns` do not name: judged by its definition, and held where that
+    // could not be read, since dropping the column under it is refused or silently changes it.
+    if (
+      covered.length === 0 &&
+      (index.wholeColumns || !definitionNames(index.definition, going))
+    ) {
+      continue;
+    }
     if (
       index.columns.length === 1 &&
       index.wholeColumns &&
@@ -332,7 +358,12 @@ export function indexDropsBeforeColumns(
           : `DROP INDEX ${q(index.name, dialect)}`
       );
     } else {
-      held.push(`"${index.name}" (${index.columns.join(", ")})`);
+      // An expression index names no plain column, so its own name is what identifies it.
+      held.push(
+        index.columns.length > 0
+          ? `"${index.name}" (${index.columns.join(", ")})`
+          : `"${index.name}"`
+      );
     }
   }
   if (held.length > 0) {
@@ -341,7 +372,7 @@ export function indexDropsBeforeColumns(
       publicMessage:
         `The translatable values of "${spec.collection}" move to its translations table, and ` +
         `their columns leave ${mainTable}, but the index ${held.join(", ")} stands on one of ` +
-        `them with other columns, or on part of it, so dropping it would break the index or ` +
+        `them with other columns, on part of it or on an expression over it, so dropping it would break the index or ` +
         `change what it keeps unique. Nothing was changed. Drop that index, or make it stand on ` +
         `the moving column alone, then run the command again.`,
       logContext: { mainTable, held, columns: [...dropped] },

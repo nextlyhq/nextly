@@ -23,6 +23,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { standardLanguageCode } from "../../../domains/i18n/config/standard-code";
 import {
   codesFoldCase,
+  columnsFoldingCase,
   sameStoredCode,
   storedOlderSpellings,
   tablesHoldingCode,
@@ -334,10 +335,25 @@ async function refuseCollisions(
   targets: readonly KeyedTarget[],
   conversions: readonly CodeConversion[]
 ): Promise<void> {
+  // Each target's language column by its own collation (`columnsFoldingCase`): a site can keep
+  // `_locale` binary beside a case-insensitive version history.
+  const folds = await columnsFoldingCase(
+    context.adapter as unknown as DrizzleAdapter,
+    targets.map(({ table, language }) => ({ table, column: language }))
+  );
   for (const [index, one] of conversions.entries()) {
     for (const other of conversions.slice(index + 1)) {
       if (other.to !== one.to) continue;
-      const meeting = await tablesMeetingBoth(context, targets, {
+      // Two spellings that differ only in letter case are one stored code where the column folds
+      // case: a single row there matches both, and is no pair kept under both.
+      const apart = targets.filter(
+        target =>
+          !(
+            folds({ table: target.table, column: target.language }) &&
+            sameStoredCode(true, one.from, other.from)
+          )
+      );
+      const meeting = await tablesMeetingBoth(context, apart, {
         from: one.from,
         to: other.from,
       });
