@@ -79,8 +79,12 @@ export interface LoadedRegistryRow {
   /** The fields the write names in what it stores: those it sets, and defaults nobody changed. */
   readonly namesFields: readonly string[];
   readonly insertsOnly?: true;
+  /** Whether the write sets the entry's publishing state (`status`, the lifecycle's own column). */
+  readonly setsStatus: boolean;
   /** Whether the collection's Draft/Published lifecycle was on in the row loaded. */
   readonly lifecycle: boolean;
+  /** Whether the collection was translated in the row loaded. */
+  readonly localized: boolean;
   /** The tries the write is made in, which its hold tells and asks. */
   readonly tries?: HeldTries;
 }
@@ -120,11 +124,12 @@ export function loadedRegistryRowOf(
   data?: WrittenData,
   options?: LoadedRegistryRowOptions
 ): LoadedRegistryRow | undefined {
-  const { id, schemaVersion, fields, status } = (row ?? {}) as {
+  const { id, schemaVersion, fields, status, localized } = (row ?? {}) as {
     id?: unknown;
     schemaVersion?: unknown;
     fields?: unknown;
     status?: unknown;
+    localized?: unknown;
   };
   if (typeof id !== "string" && typeof id !== "number") return undefined;
   const version = Number(schemaVersion);
@@ -140,7 +145,9 @@ export function loadedRegistryRowOf(
       name => options?.untouchedDefaults?.has(name) !== true
     ),
     namesFields: written,
+    setsStatus: data !== undefined && setBy(data)("status"),
     lifecycle: isOn(status),
+    localized: isOn(localized),
     ...(options?.insertsOnly === true ? { insertsOnly: true as const } : {}),
     ...(options?.tries === undefined ? {} : { tries: options.tries }),
   };
@@ -364,7 +371,7 @@ async function refuseChanged(
 ): Promise<void> {
   if (refuseUnlessSameRow(entity, loaded, held)) {
     const row = await tx.selectOne<HeldDefinitionRow>("dynamic_collections", {
-      columns: ["fields", "status"],
+      columns: DEFINITION_COLUMNS,
       where: { and: [{ column: "slug", op: "=", value: entity.slug }] },
     });
     refuseMadeFromEarlier(entity, loaded, heldDefinitionOf(row), dialect);
@@ -425,7 +432,9 @@ function refuseUnlessSameRow(
  * stands, made from a definition with a field that is gone or stored differently, as one made for a
  * definition that changed (`COLLECTION_BEING_CHANGED`), since its read names that field's column.
  * A create reads no entry first and writes only the columns its data names, so it goes on where
- * none of those changed. A lifecycle that came or went changes what every write writes or reads.
+ * none of those changed. A lifecycle that came or went, or translation, changes what every write
+ * writes or reads; a write that sets the status of a lifecycle that went is refused naming it, as
+ * one that sets a removed field is.
  *
  * A write refused as made for a definition that changed has its tries told: one that can be
  * made again, from what its hooks left, is (`WriteTries`). A field it sets is named instead, since
@@ -440,9 +449,15 @@ function refuseMadeFromEarlier(
   // Made again from the definition as it stands, however it is refused: the rows this process
   // keeps of it are cleared, so a retry reads it rather than the one the write was made from.
   clearRegistryRowCache();
-  const set = setFieldsNotAsHeld(loaded, held.fields, dialect);
+  const set = [
+    ...setFieldsNotAsHeld(loaded, held.fields, dialect),
+    ...statusNotAsHeld(loaded, held),
+  ];
   if (set.length > 0) throw setFieldsChangedWhileHeld(entity.slug, set);
-  if (loaded.lifecycle === held.lifecycle) {
+  if (
+    loaded.lifecycle === held.lifecycle &&
+    loaded.localized === held.localized
+  ) {
     const reads =
       loaded.insertsOnly === true ? loaded.namesFields : loaded.fields;
     if (madeFromWhatHolds(reads, loaded, held.fields, dialect)) return;
@@ -451,16 +466,24 @@ function refuseMadeFromEarlier(
   throw changedWhileHeld(entity.slug);
 }
 
-/** The columns a held definition is read from: its fields, and whether its lifecycle is on. */
+/** The columns a held definition is read from (`HeldDefinition`). */
+const DEFINITION_COLUMNS = ["fields", "status", "localized"];
+
+/** What those columns hold. */
 interface HeldDefinitionRow {
   fields: unknown;
   status: unknown;
+  localized: unknown;
 }
 
-/** A definition as held: its fields as the row stores them, and whether its lifecycle is on. */
+/**
+ * A definition as held: its fields as the row stores them, and whether its lifecycle is on and it is
+ * translated, which decide the columns an entry is kept in beside its fields'.
+ */
 interface HeldDefinition {
   readonly fields: readonly FieldDefinition[];
   readonly lifecycle: boolean;
+  readonly localized: boolean;
 }
 
 /** The definition `row` holds, or none of its fields where there is no row. */
@@ -470,6 +493,7 @@ function heldDefinitionOf(
   return {
     fields: storedFieldsOf(row?.fields),
     lifecycle: isOn(row?.status),
+    localized: isOn(row?.localized),
   };
 }
 
@@ -497,7 +521,7 @@ function currentRow(
     reading = tx.selectOne<HeldRegistryRow & HeldDefinitionRow>(
       "dynamic_collections",
       {
-        columns: ["id", "schema_version", "fields", "status"],
+        columns: ["id", "schema_version", ...DEFINITION_COLUMNS],
         where: { and: [{ column: "slug", op: "=", value: entity.slug }] },
         forShare: true,
       }
@@ -536,6 +560,16 @@ function setFieldsNotAsHeld(
     if (!names.has(name)) return [{ name, was: "removed" }];
     return different.has(name) ? [{ name, was: "changed" }] : [];
   });
+}
+
+/** The entry's status, where a write sets it and the lifecycle it belongs to is gone (`held`). */
+function statusNotAsHeld(
+  loaded: LoadedRegistryRow,
+  held: HeldDefinition
+): SetField[] {
+  return loaded.setsStatus && loaded.lifecycle && !held.lifecycle
+    ? [{ name: "status", was: "removed" }]
+    : [];
 }
 
 /** The fields `held` keeps from `loaded`, by name, but stores differently (`fieldsStoredDifferently`). */

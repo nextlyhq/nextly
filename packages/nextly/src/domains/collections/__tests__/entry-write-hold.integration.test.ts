@@ -646,8 +646,69 @@ describe.each(getConfiguredTestDialects())(
       );
       const updates = await loadedNow(t, { title: "t" });
       const creates = await loadedNow(t, { title: "t" }, { insertsOnly: true });
+      const updatesStatus = await loadedNow(t, { status: "published" });
+      const createsStatus = await loadedNow(
+        t,
+        { title: "t", status: "draft" },
+        { insertsOnly: true }
+      );
       await t.adapter.executeQuery(
         `UPDATE dynamic_collections SET status = ${dialect === "postgresql" ? "false" : "0"}, schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+      );
+
+      for (const loaded of [updates, creates]) {
+        await expect(heldFor(t, loaded)).rejects.toMatchObject({
+          code: "COLLECTION_BEING_CHANGED",
+        });
+      }
+      // One that sets the status is named instead: made again, it would write a column the save took
+      // out, so being told to try again would have it fail the same way each time.
+      for (const loaded of [updatesStatus, createsStatus]) {
+        await expect(heldFor(t, loaded)).rejects.toMatchObject({
+          code: "VALIDATION_ERROR",
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: "fields.status",
+                code: "FIELD_REMOVED",
+              }),
+            ],
+          },
+        });
+      }
+    }, 30_000);
+
+    // A collection with no lifecycle may have a field of its own named `status`, which is compared as
+    // any field is: nothing about it goes with a lifecycle.
+    it("lets a write that sets a field named status go on where the collection never had a lifecycle", async () => {
+      const t = await boot();
+      await saveDefinition(t, fields => [
+        ...fields,
+        { name: "status", type: "text" },
+      ]);
+      const sets = await loadedNow(t, { title: "t", status: "mine" });
+      await saveDefinition(t, fields =>
+        fields.map(field =>
+          field.name === "title" ? { ...field, label: "Renamed" } : field
+        )
+      );
+
+      await expect(heldFor(t, sets)).resolves.toBeUndefined();
+    }, 30_000);
+
+    // Whether the collection is translated decides where its status, and on the earlier layout its
+    // values, are kept, with no field's own flag changed.
+    it("refuses a write made while the collection was translated, after a save turned translation off", async () => {
+      const t = await boot();
+      const set = (on: boolean) =>
+        dialect === "postgresql" ? String(on) : on ? "1" : "0";
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET localized = ${set(true)} WHERE slug = '${SLUG}'`
+      );
+      const updates = await loadedNow(t, { title: "t" });
+      const creates = await loadedNow(t, { title: "t" }, { insertsOnly: true });
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET localized = ${set(false)}, schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
       );
 
       for (const loaded of [updates, creates]) {
