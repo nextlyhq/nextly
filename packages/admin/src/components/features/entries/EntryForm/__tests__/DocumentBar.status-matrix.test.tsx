@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@admin/__tests__/utils";
 
 import { BarUnderTest as DocumentBar } from "./bar-under-test";
+import { mainMenuRows } from "./main-menu";
 
 // The Publish and Unpublish affordances are permission-gated. The matrix cases
 // below are about lifecycle state, not authorization, so the caller holds every
@@ -75,14 +76,15 @@ function Harness({
 }
 
 describe("DocumentBar — button matrix", () => {
-  it("create + hasStatus → Save Draft + Publish", () => {
+  it("create + hasStatus → Publish, with Save draft on its menu", async () => {
     render(<Harness mode="create" hasStatus />);
-    expect(
-      screen.getByRole("button", { name: /^save draft$/i })
-    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /^publish$/i })
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^save draft$/i })
+    ).not.toBeInTheDocument();
+    expect(await mainMenuRows()).toContain("Save draft");
     expect(
       screen.queryByRole("button", { name: /^save changes$/i })
     ).not.toBeInTheDocument();
@@ -91,7 +93,7 @@ describe("DocumentBar — button matrix", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("edit + draft entry → Save Draft + Publish", () => {
+  it("edit + draft entry → Publish, with Save draft on its menu", async () => {
     render(
       <Harness
         mode="edit"
@@ -100,11 +102,9 @@ describe("DocumentBar — button matrix", () => {
       />
     );
     expect(
-      screen.getByRole("button", { name: /^save draft$/i })
-    ).toBeInTheDocument();
-    expect(
       screen.getByRole("button", { name: /^publish$/i })
     ).toBeInTheDocument();
+    expect(await mainMenuRows()).toContain("Save draft");
     expect(
       screen.queryByRole("button", { name: /^unpublish$/i })
     ).not.toBeInTheDocument();
@@ -190,8 +190,9 @@ describe("DocumentBar — button matrix", () => {
     render(
       <Harness mode="edit" hasStatus entry={{ id: "x", status: "draft" }} />
     );
+    // The main button, and Save draft is a menu row, never a submit button.
     expect(
-      screen.getByRole("button", { name: /^save draft$/i }).getAttribute("type")
+      screen.getByRole("button", { name: /^publish$/i }).getAttribute("type")
     ).toBe("button");
   });
 
@@ -234,7 +235,7 @@ describe("DocumentBar — drafts-enabled working-draft matrix", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("published + drafts on + pending working draft → two controls, not three", () => {
+  it("published + drafts on + pending working draft → one control, saving on its menu", async () => {
     render(
       <Harness
         mode="edit"
@@ -250,20 +251,23 @@ describe("DocumentBar — drafts-enabled working-draft matrix", () => {
     /*
      * The state this whole change is about. It drew Save, Publish and Unpublish
      * side by side at equal weight, so an author read three buttons to find the
-     * one they wanted. Two now: the act, and the quieter way to keep the work
-     * private.
+     * one they wanted. One now: the act, with the quieter way to keep the work
+     * private on its menu.
      *
      * The label carries the rest — "Publish changes" rather than "Publish",
      * which on a document already live reads as a no-op and says nothing about
      * the draft it promotes.
      */
-    expect(screen.getByRole("button", { name: /^save$/i })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /^publish changes$/i })
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /^unpublish$/i })
     ).not.toBeInTheDocument();
+    // The quieter way to keep the work private is a row of its menu.
+    expect(screen.queryByRole("button", { name: /^save$/i })).toBeNull();
+    // Its row says why where nothing has changed yet.
+    expect(await mainMenuRows()).toContainEqual(expect.stringMatching(/^Save/));
   });
 });
 

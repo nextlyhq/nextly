@@ -357,9 +357,13 @@ function waitingWhere(
 /**
  * "Past `after` in the waiting list's order": entered the stage later, or at the same time with a
  * greater key. Entry time and key order every part exactly once, so a read from a position never
- * repeats or skips one.
+ * repeats or skips one. A position at a part no step has moved stands after every review state of
+ * its moment (`waiting-cursor`), so only later ones are past it.
  */
 function pastPosition(after: WaitingPosition): WhereClause {
+  if (after.source === "unmoved") {
+    return { and: [{ column: "enteredAt", op: ">", value: after.enteredAt }] };
+  }
   return {
     or: [
       { column: "enteredAt", op: ">", value: after.enteredAt },
@@ -422,7 +426,11 @@ export async function readWaitingReviewStates(
  * @experimental
  */
 export function waitingPosition(state: ReviewState): WaitingPosition {
-  return { enteredAt: state.enteredAt, partKey: orderKey(state) };
+  return {
+    source: "state",
+    enteredAt: state.enteredAt,
+    partKey: orderKey(state),
+  };
 }
 
 /**

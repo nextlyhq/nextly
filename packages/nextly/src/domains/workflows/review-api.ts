@@ -19,7 +19,7 @@ import type { PublishCaller } from "../collections/services/publish-gate";
 import { configuredLocales } from "../i18n/configured-locales";
 import { newestVersionNoPerLocale } from "../versions/versions-repository";
 
-import { primaryStep } from "./define-workflow";
+import { isReviewStage, primaryStep } from "./define-workflow";
 import { holdersOf } from "./holders";
 import { livePartsOf, partStage, pendingPartsOn } from "./implicit-stage";
 import { lastMovesOn, type LastMove } from "./last-moves";
@@ -68,6 +68,12 @@ import {
   type WorkflowCaller,
 } from "./steps";
 import type { ResolvedWorkflowStep, Workflow, WorkflowStepKind } from "./types";
+import {
+  readUnmovedParts,
+  unmovedPosition,
+  type UnmovedPart,
+  type UnmovedScope,
+} from "./unmoved-parts";
 import type { WaitingPosition } from "./waiting-cursor";
 import { mayPublishWithoutReview } from "./workflow-publish-gate";
 
@@ -487,7 +493,17 @@ export async function waitingFor(
   // next page), everything is read, or the request reaches its ceiling.
   const need = query.offset + query.limit + 1;
   const ceiling = query.scanCeiling ?? WAITING_SCAN_CEILING;
-  const scan = waitingScan(adapter, terms, query.after);
+  // Collections whose workflow starts in a review stage the caller may move parts out of: a part
+  // there that no step has moved yet waits with no review state, so it is read from its document.
+  const unmovedScopes: UnmovedScope[] = takeable
+    .filter(
+      scoped =>
+        scoped.kind === "collection" &&
+        scoped.stage === scoped.workflow.firstStage &&
+        isReviewStage(scoped.workflow, scoped.stage)
+    )
+    .map(scoped => ({ slug: scoped.slug, stage: scoped.stage }));
+  const scan = waitingScan(adapter, terms, unmovedScopes, query.after);
   const waiting: PlacedPart[] = [];
   while (waiting.length < need && !scan.done() && scan.read < ceiling) {
     const window = await scan.next(
@@ -545,9 +561,71 @@ interface WaitingContext {
   ) => Promise<(stage: string) => StagePresentation>;
 }
 
+/**
+ * What the waiting list decides and shows of a part: a review state's, or for a part no step has
+ * moved yet, what its first stage and its document say (assigned to no one, brought in by no one,
+ * in the stage since its document was created).
+ */
+type WaitingRow = Pick<
+  ReviewState,
+  | "scopeKind"
+  | "scopeSlug"
+  | "entryId"
+  | "part"
+  | "stage"
+  | "assignee"
+  | "enteredBy"
+  | "enteredAt"
+  | "dueAt"
+>;
+
+/** A part a waiting scan read: a review state, or a part no step has moved yet. */
+type WaitingCandidate =
+  | { kind: "state"; state: ReviewState }
+  | { kind: "unmoved"; part: UnmovedPart };
+
+function rowOf(candidate: WaitingCandidate): WaitingRow {
+  if (candidate.kind === "state") return candidate.state;
+  const { part } = candidate;
+  return {
+    scopeKind: "collection",
+    scopeSlug: part.scopeSlug,
+    entryId: part.entryId,
+    part: part.part,
+    stage: part.stage,
+    assignee: null,
+    enteredBy: null,
+    enteredAt: part.createdAt,
+    dueAt: null,
+  };
+}
+
+function positionOf(candidate: WaitingCandidate): WaitingPosition {
+  return candidate.kind === "state"
+    ? waitingPosition(candidate.state)
+    : unmovedPosition(candidate.part);
+}
+
+/**
+ * The waiting list's order (`waiting-cursor`): time, then review states before unmoved parts of
+ * their moment, then each kind by its own key. Unmoved parts compared here come from one read, so
+ * their place in it is their order.
+ */
+function candidateOrder(a: WaitingCandidate, b: WaitingCandidate): number {
+  const at = rowOf(a).enteredAt.getTime() - rowOf(b).enteredAt.getTime();
+  if (at !== 0) return at;
+  if (a.kind === "state" && b.kind === "state") {
+    return waitingOrder(a.state, b.state);
+  }
+  if (a.kind === "unmoved" && b.kind === "unmoved") {
+    return a.part.seq - b.part.seq;
+  }
+  return a.kind === "state" ? -1 : 1;
+}
+
 /** The parts of one window that wait for the caller and that they may read, in order. */
 async function waitingIn(
-  window: readonly ReviewState[],
+  window: readonly WaitingCandidate[],
   {
     query,
     isMine,
@@ -560,11 +638,12 @@ async function waitingIn(
   // Who each part's assignee or default reviewer is, asked in batches per collection or Single
   // before any part of the window is decided, so a long queue of distinct assignees costs a few
   // reads.
-  await primeDeciders(window, stageOfRow, deciderOf);
-  const movable: ReviewState[] = [];
-  const stageOf = new Map<ReviewState, ScopedStage>();
-  const waitsOf = new Map<ReviewState, PartWaits>();
-  for (const row of window) {
+  await primeDeciders(window.map(rowOf), stageOfRow, deciderOf);
+  const movable: WaitingCandidate[] = [];
+  const stageOf = new Map<WaitingCandidate, ScopedStage>();
+  const waitsOf = new Map<WaitingCandidate, PartWaits>();
+  for (const candidate of window) {
+    const row = rowOf(candidate);
     const scoped = stageOfRow.get(
       `${row.scopeKind}:${row.scopeSlug}:${row.stage}`
     );
@@ -577,33 +656,37 @@ async function waitingIn(
     }
     // Work the caller brought into a stage whose step refuses that is not theirs to move.
     if (takesStep(scoped.step, query.caller, accountable, row.enteredBy)) {
-      movable.push(row);
-      stageOf.set(row, scoped);
-      waitsOf.set(row, waits);
+      movable.push(candidate);
+      stageOf.set(candidate, scoped);
+      waitsOf.set(candidate, waits);
     }
   }
   // The read check, asked of every part the caller may move at once, before the page is cut: a
   // part they may not read never takes a place on a page or counts.
   const readable = await query.readable(
-    movable.map(row => ({
-      document: {
-        scopeKind: row.scopeKind,
-        scopeSlug: row.scopeSlug,
-        entryId: row.entryId,
-      },
-      part: row.part,
-    }))
+    movable.map(candidate => {
+      const row = rowOf(candidate);
+      return {
+        document: {
+          scopeKind: row.scopeKind,
+          scopeSlug: row.scopeSlug,
+          entryId: row.entryId,
+        },
+        part: row.part,
+      };
+    })
   );
   const items: PlacedPart[] = [];
-  for (const [index, row] of movable.entries()) {
-    const scoped = stageOf.get(row);
-    const waits = waitsOf.get(row);
+  for (const [index, candidate] of movable.entries()) {
+    const scoped = stageOf.get(candidate);
+    const waits = waitsOf.get(candidate);
     if (readable[index] !== true || !scoped || waits === undefined) continue;
+    const row = rowOf(candidate);
     // Shown as every surface shows the stage: its saved label and colour, else the code's.
     const shown = (await presentationOf(scoped.workflow))(row.stage);
     items.push({
       part: waitingItem(row, row.assignee, shown),
-      position: waitingPosition(row),
+      position: positionOf(candidate),
       waits,
     });
   }
@@ -673,13 +756,13 @@ function decidersByEntity(
 
 /** Primes each collection's or Single's decider with its candidates, one batch per action. */
 async function primeDeciders(
-  candidates: readonly ReviewState[],
+  candidates: readonly WaitingRow[],
   stageOfRow: ReadonlyMap<string, ScopedStage>,
   deciderOf: (scoped: ScopedStage) => Decider
 ): Promise<void> {
   const byEntity = new Map<
     string,
-    { scoped: ScopedStage; rows: ReviewState[] }
+    { scoped: ScopedStage; rows: WaitingRow[] }
   >();
   for (const row of candidates) {
     const scoped = stageOfRow.get(
@@ -727,75 +810,94 @@ async function stageTerms(
 
 /** One share's place in a waiting scan: whether a window has held all of it. */
 interface ShareCursor {
-  share: WaitingShare;
+  /** The caller's own work, the rest of the stages' review states, or the parts no step moved. */
+  share: WaitingShare | "unmoved";
   done: boolean;
 }
 
 /**
- * The review states a list decides, oldest first, a window at a time, from two bounded reads per
- * window: the caller's own work, and the rest, so the rest of a busy stage never crowds their own
- * work out of a window. Each read asks for one row past the window, so a share that fits is known
- * to be whole. One that does not is whole only up to the window's last row; past the earlier such
- * end the window would miss what that read never reached, so it ends there, and the next window
- * reads on from it. A share is done only once a window held all of it.
+ * The parts a list decides, in the list's order (`candidateOrder`), a window at a time, from a
+ * bounded read per share per window: the caller's own work, the rest, so the rest of a busy stage
+ * never crowds their own work out of a window, and, where a workflow starts in a review stage
+ * (`unmovedScopes`), the parts no step has moved yet. Each read asks for one part past the window,
+ * so a share that fits is known to be whole. One that does not is whole only up to the window's
+ * last part; past the earliest such end the window would miss what that read never reached, so it
+ * ends there, and the next window reads on from it. A share is done only once a window held all of
+ * it.
  *
- * Every window holds each share's states up to its last one and none past it, so one position, the
- * last state consumed (`position`), says where both shares go on from. Each read starts just past
+ * Every window holds each share's parts up to its last one and none past it, so one position, the
+ * last part consumed (`position`), says where every share goes on from. Each read starts just past
  * it (a keyset), from `after` for the first window.
  */
 function waitingScan(
   adapter: DrizzleAdapter,
   terms: WaitingTerms,
+  unmovedScopes: readonly UnmovedScope[],
   after: WaitingPosition | undefined
 ): {
   read: number;
   position: WaitingPosition | undefined;
   done: () => boolean;
-  next: (size: number) => Promise<ReviewState[]>;
+  next: (size: number) => Promise<WaitingCandidate[]>;
 } {
-  const cursors: ShareCursor[] = (["own", "rest"] as const).map(share => ({
-    share,
-    done: false,
-  }));
+  const shares: ShareCursor["share"][] = [
+    "own",
+    "rest",
+    ...(unmovedScopes.length > 0 ? (["unmoved"] as const) : []),
+  ];
+  const cursors: ShareCursor[] = shares.map(share => ({ share, done: false }));
+  /** At most `limit` of `share`'s parts past `position`, in the list's order. */
+  const readShare = async (
+    share: ShareCursor["share"],
+    limit: number,
+    position: WaitingPosition | undefined
+  ): Promise<WaitingCandidate[]> =>
+    share === "unmoved"
+      ? (await readUnmovedParts(adapter, unmovedScopes, limit, position)).map(
+          (part): WaitingCandidate => ({ kind: "unmoved", part })
+        )
+      : (
+          await readWaitingReviewStates(adapter, terms, share, limit, position)
+        ).map((state): WaitingCandidate => ({ kind: "state", state }));
   const scan = {
     read: 0,
     position: after,
     done: () => cursors.every(cursor => cursor.done),
-    async next(size: number): Promise<ReviewState[]> {
-      const fetched: { cursor: ShareCursor; state: ReviewState }[] = [];
+    async next(size: number): Promise<WaitingCandidate[]> {
+      const fetched: { cursor: ShareCursor; candidate: WaitingCandidate }[] =
+        [];
       const full = new Set<ShareCursor>();
-      let end: ReviewState | undefined;
-      // The window's budget split between the shares still being read, so neither read fetches
-      // more than its part of `size` (at least one state, plus the one that says whether it is
-      // whole).
+      let end: WaitingCandidate | undefined;
+      // The window's budget split between the shares still being read, so no read fetches more
+      // than its part of `size` (at least one part, plus the one that says whether it is whole).
       const reading = cursors.filter(cursor => !cursor.done);
       const perShare = Math.max(
         1,
         Math.floor(size / Math.max(1, reading.length))
       );
       for (const cursor of reading) {
-        const states = await readWaitingReviewStates(
-          adapter,
-          terms,
+        const candidates = await readShare(
           cursor.share,
           perShare + 1,
           scan.position
         );
-        if (states.length > perShare) {
-          states.length = perShare;
+        if (candidates.length > perShare) {
+          candidates.length = perShare;
           full.add(cursor);
-          const last = states[perShare - 1];
-          if (end === undefined || waitingOrder(last, end) < 0) end = last;
+          const last = candidates[perShare - 1];
+          if (end === undefined || candidateOrder(last, end) < 0) end = last;
         }
-        for (const state of states) fetched.push({ cursor, state });
+        for (const candidate of candidates) fetched.push({ cursor, candidate });
       }
-      // Never more than `size` states, so a request stops at its ceiling: where the shares' parts
-      // together come to more (each read at least one state), the earliest in the list's order
-      // are kept. What is cut is past the window's last state, so the next window, reading on
+      // Never more than `size` parts, so a request stops at its ceiling: where the shares' parts
+      // together come to more (each read at least one part), the earliest in the list's order
+      // are kept. What is cut is past the window's last part, so the next window, reading on
       // from that position, reaches it; and its share is not whole, so the scan goes on.
       const window = fetched
-        .filter(each => end === undefined || waitingOrder(each.state, end) <= 0)
-        .sort((a, b) => waitingOrder(a.state, b.state))
+        .filter(
+          each => end === undefined || candidateOrder(each.candidate, end) <= 0
+        )
+        .sort((a, b) => candidateOrder(a.candidate, b.candidate))
         .slice(0, size);
       const kept = new Set(window);
       for (const cursor of cursors) {
@@ -807,8 +909,8 @@ function waitingScan(
       }
       scan.read += window.length;
       const last = window[window.length - 1];
-      if (last !== undefined) scan.position = waitingPosition(last.state);
-      return window.map(each => each.state);
+      if (last !== undefined) scan.position = positionOf(last.candidate);
+      return window.map(each => each.candidate);
     },
   };
   return scan;
@@ -816,7 +918,7 @@ function waitingScan(
 
 /** One waiting part, its stage shown as `shown` says (its workflow's saved presentation). */
 function waitingItem(
-  row: ReviewState,
+  row: WaitingRow,
   assignee: ReviewAssignee | null,
   shown: StagePresentation
 ): WaitingPart {

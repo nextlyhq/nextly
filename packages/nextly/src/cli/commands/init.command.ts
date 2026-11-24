@@ -22,6 +22,6 @@ export function registerInitCommand(program: Command): void {
       .option("-y, --yes", "Skip prompts and use defaults", false)
       .option("-f, --force", "Overwrite existing files", false)
       .action(lazyAction(async () => (await import("./init")).initAction)),
-    startLine("Initializing the project...")
+    startLine("Initializing the project...", "no database")
   );
 }

@@ -19,6 +19,7 @@ import {
   ReleaseAttentionStrip,
   useAttentionStripKnown,
 } from "@admin/components/features/releases/ReleaseAttentionStrip";
+import { ReleaseBoard } from "@admin/components/features/releases/ReleaseBoard";
 import { ReleaseCalendar } from "@admin/components/features/releases/ReleaseCalendar";
 import {
   ReleaseBodyOutline,
@@ -26,12 +27,17 @@ import {
 } from "@admin/components/features/releases/ReleaseList";
 import { Plus } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { Breadcrumbs } from "@admin/components/shared/breadcrumbs";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Button } from "@admin/components/ui";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useCan } from "@admin/hooks/useCan";
-import { navigateTo } from "@admin/lib/navigation";
+import { navigateTo, setSearchParams } from "@admin/lib/navigation";
+import type { ReleaseListTab } from "@admin/types/releases";
+
+/** The page's views of one set of releases, in the switch's order. */
+const RELEASE_VIEWS = ["list", "calendar", "board"] as const;
 
 export default function ReleasesPage(): JSX.Element {
   // The same authority the server checks, asked here so the button is not
@@ -45,7 +51,15 @@ export default function ReleasesPage(): JSX.Element {
   // and a calendar answers "what is coming, and is anything colliding" — the
   // same releases, read for different questions, which is how every product
   // that ships this surface arranges it rather than as a separate feature.
-  const [view, setView] = useState<"list" | "calendar">("list");
+  //
+  // The Board is the third: the list's tabs side by side, read-only (see
+  // `ReleaseBoard`). Remembered as the other two are, for the page's life.
+  const [view, setView] = useState<(typeof RELEASE_VIEWS)[number]>("list");
+  // From the Board, a full column's rest is its tab in the List.
+  const showTab = (tab: ReleaseListTab) => {
+    setSearchParams({ tab: tab === "upcoming" ? null : tab, reason: null });
+    setView("list");
+  };
   // Whether the attention strip is drawn is known only once its read answers.
   // Until then what stands under it is held as one outline, and the strip,
   // the tabs and the list are drawn together in its place: drawn at once and
@@ -56,6 +70,13 @@ export default function ReleasesPage(): JSX.Element {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
+        {/* Where the page is, in the top bar, as on every other page. */}
+        <Breadcrumbs
+          items={[
+            { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
+            { label: "Releases" },
+          ]}
+        />
         {/* Names the page's SUBJECT rather than one of its questions, so it
                 stays true whether the list is empty, full of drafts, or showing
                 a launch that already happened. */}
@@ -76,7 +97,7 @@ export default function ReleasesPage(): JSX.Element {
                   aria-label="View releases as"
                   className="flex items-center rounded-md border border-border p-0.5"
                 >
-                  {(["list", "calendar"] as const).map(option => (
+                  {RELEASE_VIEWS.map(option => (
                     <button
                       key={option}
                       type="button"
@@ -114,6 +135,10 @@ export default function ReleasesPage(): JSX.Element {
 
           {view === "calendar" ? (
             <ReleaseCalendar />
+          ) : view === "board" ? (
+            // The Board reads every tab whole: the search and kind filters
+            // belong to the List's own toolbar, not to the page.
+            <ReleaseBoard onShowTab={showTab} />
           ) : (
             <ReleaseList
               onCreate={canAssemble ? () => setCreating(true) : undefined}

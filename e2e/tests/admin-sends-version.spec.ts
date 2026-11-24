@@ -20,6 +20,7 @@ import { EVERY_DIALECT } from "./support/every-dialect";
 import { LOCK } from "./support/locks";
 import { createEntry } from "./support/runtime-collection";
 import { test } from "./support/test";
+import { saveFromBar } from "./support/document-bar";
 
 test.describe.configure({ lock: [LOCK.siteSettings, LOCK.homepage] });
 
@@ -100,10 +101,7 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
     // A save of the draft.
     await excerpt(page).fill(`Draft ${tag}`);
     let sent = nextWrite(page, toThis);
-    await page
-      .getByRole("button", { name: /^Save draft$/ })
-      .first()
-      .click();
+    await saveFromBar(page, /^Save draft$/);
     await sent;
 
     // A publish. The form takes in the published entry once the read after
@@ -133,19 +131,18 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
       page.getByRole("main").getByText("Published", { exact: true }).first()
     ).toBeVisible({ timeout: 30_000 });
 
-    // A held working-draft save, of the published entry.
-    const saveChanges = page
-      .getByRole("button", { name: /^Save( draft| changes)?$/ })
-      .first();
+    // A held working-draft save, of the published entry. The edit is typed
+    // until the form holds it as unsaved work: the read after the publish
+    // can reset one typed before it.
     await expect(async () => {
       await excerpt(page).fill(`Pending ${tag}`);
-      await expect(saveChanges).toBeEnabled({ timeout: 2_000 });
+      await expect(
+        page.getByTestId("document-bar").getByText("Unsaved changes")
+      ).toBeVisible({ timeout: 2_000 });
     }).toPass({ timeout: 30_000 });
     sent = nextWrite(page, toThis);
-    await page
-      .getByRole("button", { name: /^Save( draft| changes)?$/ })
-      .first()
-      .click();
+    // The main button where Save leads, else its menu's Save row.
+    await saveFromBar(page, /^Save( draft| changes)?$/);
     await sent;
 
     // An unpublish, from the document's own menu.
@@ -169,8 +166,8 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
     await expect(rows.first()).toBeVisible({ timeout: 30_000 });
     await rows.last().click();
     await page
-      .getByRole("button", { name: "Restore this version" })
-      .first()
+      .getByRole("banner")
+      .getByRole("button", { name: "Restore…" })
       .click();
     await page
       .getByRole("alertdialog")

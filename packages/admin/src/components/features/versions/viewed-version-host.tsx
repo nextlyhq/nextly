@@ -51,6 +51,7 @@ import {
   layoutFor,
   useChangesLayoutPreference,
 } from "./diff/changes-layout";
+import { SideLabelsProvider } from "./diff/diff-primitives";
 import { fieldPathLabel } from "./diff/field-path";
 import {
   useDocumentHistory,
@@ -778,61 +779,76 @@ function ViewedVersionFrame({
     preference,
     changes?.byField.values() ?? []
   );
+  // The two sides of a split change, named as the bar names them.
+  const sideLabels = useMemo(
+    () => ({
+      before:
+        viewing.comparedWith.kind === "version"
+          ? `Version ${viewing.comparedWith.versionNo}`
+          : "Before",
+      after: viewing.about?.label
+        ? `“${viewing.about.label}”`
+        : `Version ${viewing.versionNo}`,
+    }),
+    [viewing.comparedWith, viewing.about, viewing.versionNo]
+  );
   return (
     // The reader's remembered layout, for every change drawn below.
     <ChangesLayoutProvider value={changesLayout}>
-      {/* Room under the last field for the phone's bottom bar, even where it
+      <SideLabelsProvider value={sideLabels}>
+        {/* Room under the last field for the phone's bottom bar, even where it
           wraps to two rows (6rem). The container
           the changes query, as on the comparison page: side by side, each
           change's two sides take columns only where this box has room. */}
-      <div className="@container/diff @4xl/content:p-8 pt-6 pb-24 sm:pb-0">
-        <VersionBanner slot={bannerSlot}>
-          <VersionComparisonBar
-            // Inside the host's band, the bar drops its own card surface.
-            {...(bannerSlot
-              ? { className: "mb-0 rounded-none border-0 bg-transparent p-0" }
-              : {})}
-            layoutToggle={
-              order.length > 0 ? (
-                <ChangesLayoutToggle
-                  layout={changesLayout}
-                  onChange={setChangesLayout}
-                  splittable={splittable}
-                />
-              ) : null
-            }
-            versionNo={viewing.versionNo}
-            about={viewing.about}
-            comparedWith={viewing.comparedWith}
-            changes={state}
-            position={position}
-            currentLabel={currentChangeLabel}
-            onMove={move}
-            onBackToHistory={restore?.backToHistory}
-            onOpenComparison={restore?.compare}
-            onCompareCurrent={restore?.compareCurrent}
+        <div className="@container/diff @4xl/content:p-8 pt-6 pb-24 sm:pb-0">
+          <VersionBanner slot={bannerSlot}>
+            <VersionComparisonBar
+              // Inside the host's band, the bar drops its own card surface.
+              {...(bannerSlot
+                ? { className: "mb-0 rounded-none border-0 bg-transparent p-0" }
+                : {})}
+              layoutToggle={
+                order.length > 0 ? (
+                  <ChangesLayoutToggle
+                    layout={changesLayout}
+                    onChange={setChangesLayout}
+                    splittable={splittable}
+                  />
+                ) : null
+              }
+              versionNo={viewing.versionNo}
+              about={viewing.about}
+              comparedWith={viewing.comparedWith}
+              changes={state}
+              position={position}
+              currentLabel={currentChangeLabel}
+              onMove={move}
+              onBackToHistory={restore?.backToHistory}
+              onOpenComparison={restore?.compare}
+              onCompareCurrent={restore?.compareCurrent}
+            />
+          </VersionBanner>
+          <VersionContent
+            viewing={viewing}
+            fields={fields}
+            values={values}
+            changes={changes}
+            order={order}
+            current={current}
+            {...(restoreField ? { restoreField } : {})}
           />
-        </VersionBanner>
-        <VersionContent
-          viewing={viewing}
-          fields={fields}
-          values={values}
-          changes={changes}
-          order={order}
-          current={current}
-          {...(restoreField ? { restoreField } : {})}
-        />
-        {actions ? (
-          <VersionPhoneBar
-            actions={actions}
-            state={state}
-            changed={order.length}
-            position={position}
-            currentLabel={currentChangeLabel}
-            onMove={move}
-          />
-        ) : null}
-      </div>
+          {actions ? (
+            <VersionPhoneBar
+              actions={actions}
+              state={state}
+              changed={order.length}
+              position={position}
+              currentLabel={currentChangeLabel}
+              onMove={move}
+            />
+          ) : null}
+        </div>
+      </SideLabelsProvider>
     </ChangesLayoutProvider>
   );
 }

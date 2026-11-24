@@ -158,8 +158,14 @@ describe("the dialog", () => {
     show();
     expect(text("dialog")).toBe("no-dialog");
     await userEvent.click(screen.getByRole("button", { name: "open" }));
+    // The first open in this file loads the dialog's code, a lazy chunk whose
+    // first load can outlast the default second on a busy machine.
     expect(
-      await screen.findByRole("dialog", { name: /^Schedule “/ })
+      await screen.findByRole(
+        "dialog",
+        { name: /^Schedule “/ },
+        { timeout: 10_000 }
+      )
     ).toBeTruthy();
   });
 });

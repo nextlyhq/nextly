@@ -16,6 +16,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { chooseFromMainMenu } from "./support/document-bar";
 
 interface Case {
   collection: string;
@@ -56,7 +57,10 @@ for (const { collection, singular, button } of CASES) {
 
     // The slug is made from the title, so the title alone saves.
     await title(page).fill(name);
-    await page.getByRole("button", { name: button, exact: true }).click();
+    // Save draft is a row of the main button's menu; Publish and Create are
+    // the main button itself.
+    if (button === "Save draft") await chooseFromMainMenu(page, button);
+    else await page.getByRole("button", { name: button, exact: true }).click();
 
     // The entry's own address, with the confirmation shown there and the
     // saved value in the form.

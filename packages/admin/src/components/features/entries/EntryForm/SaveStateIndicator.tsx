@@ -24,7 +24,7 @@ import {
   TooltipTrigger,
 } from "@nextlyhq/ui";
 import type { JSX, ReactElement } from "react";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 
 import {
   AlertCircle,
@@ -310,6 +310,7 @@ function OfferChip({
   take,
   notice,
   trigger,
+  openOnArrival = false,
 }: {
   label: string;
   /** What the popover holds, said after the label to a screen reader. */
@@ -328,10 +329,15 @@ function OfferChip({
    * button); the chip's own words otherwise.
    */
   trigger?: ReactElement;
+  /** Drawn open when it first appears: see `LastVisitChip`. */
+  openOnArrival?: boolean;
 }): JSX.Element {
   // Made here, so the banner a document view would draw stands down.
   useClaimRecoveryOffer();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(openOnArrival);
+  // Open unasked, it leaves the focus where it was, so the author can read
+  // and edit the page; opened by a press, it takes the focus as usual.
+  const unasked = useRef(openOnArrival);
   const answer = (choice: () => void) => () => {
     setOpen(false);
     choice();
@@ -353,7 +359,15 @@ function OfferChip({
           </button>
         )}
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-72 text-sm">
+      <PopoverContent
+        align="end"
+        className="w-72 text-sm"
+        onOpenAutoFocus={event => {
+          if (!unasked.current) return;
+          unasked.current = false;
+          event.preventDefault();
+        }}
+      >
         {notice === undefined ? null : (
           <p className="mb-1 font-medium text-foreground">{notice}</p>
         )}
@@ -435,12 +449,20 @@ export function LastVisitChip({
   offer,
   save,
   trigger,
+  openOnArrival = false,
 }: {
   label: string;
   offer: HostedRecoveryOffer;
   save: OfferedSave;
   /** A surface's own control that opens it, such as its Save button. */
   trigger?: ReactElement;
+  /**
+   * Drawn open as it first appears, so the choice is in front of the author
+   * as the page opens, rather than behind a press nobody knows to make. It
+   * closes at the first press elsewhere, and nothing is lost meanwhile: the
+   * editor records nothing over these changes until they are answered.
+   */
+  openOnArrival?: boolean;
 }): JSX.Element {
   return (
     <OfferChip
@@ -449,6 +471,7 @@ export function LastVisitChip({
       offer={offer}
       notice={LAST_VISIT_SENTENCE}
       {...(trigger === undefined ? {} : { trigger })}
+      openOnArrival={openOnArrival}
       lead="You made them"
       // Discard lasts: the point is emptied, so no later session offers it.
       leave={{ label: "Discard", run: offer.discard }}

@@ -1,27 +1,21 @@
 /**
- * The version history page's frame: its header, and the rail beside the
- * comparison. Shared by the page and by its loading outline, so the outline
- * stands where the page will draw and nothing moves when the page arrives.
+ * The comparison page's frame, shared by the page and by its loading outline,
+ * so the outline stands where the page will draw and nothing moves when the
+ * page arrives.
  *
  * @module components/features/versions/history-layout
  */
 
-/** The page as a whole: the header over the rail and the comparison. */
-export const HISTORY_FRAME = "flex h-full min-h-0 flex-col";
-
-/** The header: the way back, the page's title and the document's name. */
-export const HISTORY_HEAD =
-  "flex items-center gap-3 border-b border-border px-4 py-3";
-
-/** The title and the document's name under it, one line each. */
-export const HISTORY_TITLES = "min-w-0";
-
-/** The rail and the comparison: stacked below `lg`, side by side above it. */
-export const HISTORY_SPLIT = "flex min-h-0 flex-1 flex-col lg:flex-row";
-
 /**
- * The rail of versions: a fixed 18rem beside the comparison, and a bounded
- * height over it when stacked.
+ * The page as a whole: at least the height it is given, growing with the
+ * comparison, which scrolls with the page rather than inside a box of its own.
  */
-export const HISTORY_RAIL =
-  "max-h-[40vh] shrink-0 overflow-y-auto border-b border-border lg:max-h-none lg:w-72 lg:border-r lg:border-b-0";
+export const HISTORY_FRAME = "flex min-h-full flex-col";
+
+/** The page's column: the trail, the title row, the picker and the fields. */
+export const HISTORY_COLUMN =
+  "mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-5 sm:px-6";
+
+/** The card that chooses the two versions and the language. */
+export const HISTORY_PICKER =
+  "flex flex-wrap items-end gap-3 rounded-lg border border-border bg-card p-4";

@@ -869,7 +869,29 @@ export async function runMigrate(
     // Data an earlier release stored is brought up to date once the
     // migrations have applied, and only with a backup confirmed: work whose
     // backup nobody confirmed is refused here, before anything changes.
-    await storedData.confirmBeforeSchemaChanges(options.step).catch(fail);
+    // A run whose `--step` takes every pending migration reaches the data steps as a run without
+    // it does, so it is asked the same before its schema changes; only one that leaves some
+    // pending leaves the steps to the run that finishes them. A count that cannot be read is
+    // taken as leaving some, as `--step` always was.
+    const stepLeavesPending =
+      options.step !== undefined &&
+      (await migrationsStillPending({
+        adapter,
+        db,
+        dialect,
+        migrationsDir: appMigrationsDir,
+        logger,
+        declared,
+        pluginMigrationSets: (
+          await pluginMigrationArgs(configResult.config.plugins ?? [])
+        ).pluginMigrationSets,
+      }).then(
+        pending => pending > (options.step ?? 0),
+        () => true
+      ));
+    await storedData
+      .confirmBeforeSchemaChanges(stepLeavesPending ? options.step : undefined)
+      .catch(fail);
 
     // The consent a deleting file needs, read from the flag and the environment before anything
     // below changes the project or the database: a value the command refuses ends the run here.
@@ -1142,7 +1164,11 @@ export async function runMigrate(
         // schema lock: with every migration applied, since each step reads
         // the tables as this release keeps them, and after the permissions
         // the run seeded, which a role's conversion gives.
-        await storedData.takeAfterSchemaChanges();
+        await storedData.takeAfterSchemaChanges(
+          appliedThisRun === 0
+            ? undefined
+            : `the ${formatCount(appliedThisRun, "migration")} this run applied`
+        );
         // The plugins' own deploy work, last, once every step above has
         // left the schema in step (`migrate-hooks`). Not where migrations
         // are still pending, as none of the steps above are.

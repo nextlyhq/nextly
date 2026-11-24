@@ -40,12 +40,14 @@ export type ActionPlacement = "primary" | "toolbar" | "menu";
  * Where the editor's own header draws an action: the public placements, and
  * `publish-menu`.
  *
- * `publish-menu` is the menu on the primary action's own arrow: the other
- * ways of putting this document live, such as at a time or with a release.
+ * `publish-menu` is the menu on the primary action's own arrow: the main
+ * button's companions, such as saving a draft, the other ways of putting this
+ * document live (at a time, with a release) and the steps that do not lead.
  * They sit beside the act they vary rather than in More, where nobody
- * deciding WHEN to publish would look. With no primary action drawn, they
- * join More's document rows instead, so a person who may not publish still
- * finds them and reads why they are held.
+ * deciding WHEN to publish would look, and the header draws no second button
+ * for them. With no primary action drawn, they join More's document rows
+ * instead, so a person who may not publish still finds them and reads why
+ * they are held.
  *
  * Kept off the published {@link ActionPlacement}, which a plugin's document
  * view reads through `useDocumentActions()` and may handle exhaustively. That
@@ -413,23 +415,26 @@ function permissionReason(verb: string): string {
  */
 const BUILT_IN_ACTIONS: readonly ActionRule[] = [
   /*
-   * Saving a published document is offered BESIDE publishing it, not folded
+   * Saving a published document is offered WITH publishing it, not folded
    * into it. They are different acts once drafts are enabled — one keeps the
    * work private, the other shows it to readers — and an author part-way
-   * through a rewrite needs the first without the second.
+   * through a rewrite needs the first without the second. It is a row of the
+   * main button's menu rather than a button beside it, so the header draws
+   * one main action.
    */
   {
     id: "save",
     applies: s => isPublishedEdit(s) && s.hasWorkingDraft && s.canPublish,
     label: s => (s.draftsEnabled ? "Save" : "Save changes"),
-    placement: "toolbar",
+    placement: "publish-menu",
     mutates: true,
     edits: true,
   },
   /*
    * A DRAFT — or a document being created where a lifecycle exists — keeps its
-   * save in the toolbar for the same reason from the other side: Publish leads,
-   * and an author not ready for readers still needs somewhere to put the work.
+   * save on the main button's menu for the same reason from the other side:
+   * Publish leads, and an author not ready for readers still needs somewhere to
+   * put the work.
    * Creating is included because a collection with a lifecycle has always
    * offered both from the start; dropping one would take away the ability to
    * begin a document without publishing it.
@@ -441,7 +446,7 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
       s.hasStatus &&
       (s.mode === "create" || s.status === "draft"),
     label: () => "Save draft",
-    placement: "toolbar",
+    placement: "publish-menu",
     mutates: true,
     edits: true,
   },
@@ -586,6 +591,14 @@ function createHeldByWorkflow(state: DocumentActionState): DocumentActionState {
     : state;
 }
 
+/**
+ * The id of "Publish without review…", which a page contributes where the
+ * person may publish past the workflow. Named here so the header can draw it
+ * last on the main button's menu, apart from the everyday rows: it skips the
+ * review, and asks why.
+ */
+export const PUBLISH_WITHOUT_REVIEW_ACTION_ID = "publish-without-review";
+
 /** The id a workflow step is offered under, apart from every built-in. */
 const REVIEW_STEP_ACTION_PREFIX = "review-step:";
 
@@ -703,12 +716,15 @@ function reviewPrimary(
 /**
  * The workflow's rows beside the one that leads.
  *
- * - Where a step leads, the work still needs a Save, and a person who may
- *   publish still sees Publish, held with why. Both sit in the toolbar.
- * - Every other step the person holds is offered too: beside the leading one
- *   while the stage holds publishing (Request changes beside Approve), and in
- *   the menu once the stage allows it, where asking for changes is the rarer
- *   act.
+ * - Where a step leads, the work still needs a Save, on the main button's
+ *   menu. Publish is not offered beside the step: a held Publish next to it
+ *   would be a second main-looking control the person cannot use, and
+ *   publishing past the review is its own row (publish without review).
+ * - Every other step the person holds is offered too. Asking for changes sits
+ *   beside the leading step while the stage holds publishing (Request changes
+ *   beside Approve), the one secondary control the header draws; any other
+ *   step is a row of the main button's menu; and once the stage allows
+ *   publishing, asking for changes is the rarer act, in More.
  */
 function reviewActions(
   state: DocumentActionState,
@@ -720,23 +736,11 @@ function reviewActions(
   }
   const leading = stepThatLeads(state);
   const rows: EditorDocumentAction[] = [];
-  if (leading !== undefined && state.canEdit && !builtInToolbarSave(state)) {
+  if (leading !== undefined && state.canEdit && !builtInSave(state)) {
     rows.push(
       withReason(
-        { id: "save", label: saveLabel(state), placement: "toolbar" },
+        { id: "save", label: saveLabel(state), placement: "publish-menu" },
         blocked
-      )
-    );
-  }
-  if (
-    leading !== undefined &&
-    state.canPublish &&
-    hasSomethingToPublish(state)
-  ) {
-    rows.push(
-      withReason(
-        { id: "publish", label: publishLabel(state), placement: "toolbar" },
-        blocked ?? needsApprovalReason(review)
       )
     );
   }
@@ -747,9 +751,7 @@ function reviewActions(
         {
           id: reviewStepActionId(step.name),
           label: step.label,
-          ...(review.publishable
-            ? { placement: "menu" as const, group: "document" as const }
-            : { placement: "toolbar" as const }),
+          ...stepPlacement(step, review),
         },
         blocked ?? review.stepReason
       )
@@ -758,11 +760,26 @@ function reviewActions(
   return rows;
 }
 
-/** Whether a built-in rule already offers Save in the toolbar. */
-function builtInToolbarSave(state: DocumentActionState): boolean {
+/**
+ * Where a step that does not lead is drawn: asking for changes beside the
+ * main button while the stage holds publishing, any other step on its menu,
+ * and every step in More once the stage allows publishing.
+ */
+function stepPlacement(
+  step: ReviewStepState,
+  review: ReviewActionState
+): Pick<EditorDocumentAction, "placement" | "group"> {
+  if (review.publishable) return { placement: "menu", group: "document" };
+  return step.kind === "request-changes"
+    ? { placement: "toolbar" }
+    : { placement: "publish-menu" };
+}
+
+/** Whether a built-in rule already offers Save beside the leading action. */
+function builtInSave(state: DocumentActionState): boolean {
   return BUILT_IN_ACTIONS.some(
     rule =>
-      rule.id === "save" && rule.placement === "toolbar" && rule.applies(state)
+      rule.id === "save" && rule.placement !== "menu" && rule.applies(state)
   );
 }
 
