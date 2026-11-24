@@ -605,6 +605,69 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // A rollback gives each value back as the earlier type reads it, the fill's among them: which row
+    // held what it replaced is said nowhere, and the file's fill is its own change's, never its
+    // reverse's.
+    converts(
+      "rolls a filled value back as the value it is, and writes no fill of its own",
+      async () => {
+        const first = await boot(dialect);
+        await createPosts([{ name: "v", type: "text", required: true }]);
+        const created = await filesWritten();
+        await write(first, "lost", { v: "abc" });
+        await save(first, [{ name: "v", type: "number", required: true }], {
+          confirmedTypeChanges: [
+            { field: "v", kept: 0, changed: 0, lost: 1, fill: 7 },
+          ],
+        });
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await write(second, "word", { v: "zzz" });
+        await migrateFolder(second, undefined, consentTo("dc_tcf_posts.v"));
+        await write(second, "since", { v: 3 });
+        expect(await read(second)).toEqual({ word: 7, since: 3 });
+
+        await migrateDown(second);
+
+        expect(await storedV(second)).toEqual({ word: "7", since: "3" });
+        expect(await takesNull(second, "v")).toBe(false);
+      }
+    );
+
+    // Made required in the same save, a renamed column's file rebuilds its table on SQLite too, after the
+    // conversion gave the column its type: the rebuild states the NOT NULL.
+    converts(
+      "makes a field required as one save renames it and changes its type",
+      async () => {
+        const t = await boot(dialect);
+        await createPosts([{ name: "v", type: "text" }]);
+        await write(t, "kept", { v: "12" });
+
+        const outcome = await save(
+          t,
+          [
+            {
+              name: "w",
+              type: "number",
+              required: true,
+              options: { format: "float" },
+            },
+          ],
+          RENAMED_TO_W
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+        expect(outcome).toBeUndefined();
+        expect(await takesNull(t, "w")).toBe(false);
+        expect(await read(t, "w")).toEqual({ kept: 12 });
+      }
+    );
+
     // The mark names each column as it was before the file, and a rollback reads the file's change
     // the other way round, from the column the file left: a field the file renamed is converted
     // back through the name it had there, so SQLite's cast never writes 34 back as 34.0.

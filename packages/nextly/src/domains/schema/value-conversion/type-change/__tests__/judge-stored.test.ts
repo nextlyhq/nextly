@@ -121,6 +121,78 @@ describe("a type change collected over its stored values", () => {
     ]);
   });
 
+  // A required field's fill goes into each row left with no value: one lost, one emptied, and one that
+  // holds none only where the column would refuse it. Each is counted as its own value was judged.
+  it.each([
+    ["text", "number", "0", true, { kept: 1, changed: 1, lost: 1 }, [1, 1, 3]],
+    ["text", "number", "0", false, { kept: 1, changed: 1, lost: 1 }, [1, 1, 2]],
+    [
+      "chips",
+      "text",
+      "none",
+      true,
+      { kept: 2, changed: 1, lost: 0 },
+      [1, 1, 3],
+    ],
+    [
+      "chips",
+      "text",
+      "none",
+      false,
+      { kept: 2, changed: 1, lost: 0 },
+      [1, 1, 2],
+    ],
+  ] as const)(
+    "hands the fill over for each row it is written into (%s to %s, %s, rows holding none too: %s)",
+    async (from, to, readsAs, empties, counts, [emptied, empty, written]) => {
+      const handed: [string, string][] = [];
+      const texts =
+        from === "text" ? ["012", "abc", null] : ['["x"]', "[]", null];
+      const result = await collectTypeChange(
+        typeOf("postgresql", from),
+        typeOf("postgresql", to),
+        stored(...texts),
+        undefined,
+        {
+          rewrites: true,
+          fill: { readsAs, empties },
+          onReading: (key, reading) =>
+            handed.push([(key as { id: string }).id, reading]),
+        }
+      );
+
+      expect(handed).toEqual([
+        ["1", from === "text" ? "12" : "x"],
+        ["2", readsAs],
+        ...(empties ? [["3", readsAs]] : []),
+      ]);
+      expect(result.counts).toMatchObject(counts);
+      expect([result.emptied, result.empty, result.written]).toEqual([
+        emptied,
+        empty,
+        written,
+      ]);
+    }
+  );
+
+  it("counts a fill as a value a unique field holds once", async () => {
+    const read = (...texts: (string | null)[]) =>
+      collectTypeChange(
+        typeOf("postgresql", "text"),
+        typeOf("postgresql", "number"),
+        stored(...texts),
+        undefined,
+        { rewrites: true, unique: true, fill: { readsAs: "0", empties: true } }
+      );
+
+    expect((await read("12", "abc")).judgement.class).toBe("lossy");
+    expect((await read("abc", "def")).judgement.reasons).toContainEqual(
+      expect.objectContaining({ kind: "repeated" })
+    );
+    // One another row holds already, as its own value.
+    expect((await read("0", null)).judgement.class).toBe("blocked");
+  });
+
   // What the database's own conversion does not reach: a value lost, emptied, or stored in another
   // form than its reading. Where it counts none, the judgement without the rewrite blocks none.
   it.each([

@@ -492,6 +492,71 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // A required field's value in one language goes as a shared field's does: the fill is written into
+    // that language's lost value, and a language with none keeps none, as its column may.
+    converts(
+      "writes a fill into each language's lost value, and into none a language does not hold",
+      async () => {
+        const t = await boot(dialect, LANGUAGES);
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: SLUG,
+            label: "Post",
+            localized: true,
+            fields: [
+              { name: "v", type: "text", localized: true, required: true },
+            ],
+          }
+        );
+        for (const [title, en, es] of [
+          ["kept", "a@b.co", undefined],
+          ["en", "zzz", "c@d.co"],
+          ["es", "e@f.co", "yyy"],
+        ] as const) {
+          const made = (await t.nextly.create({
+            collection: SLUG,
+            data: { title, v: en },
+            locale: "en",
+          } as never)) as { item?: { id?: string }; id?: string };
+          if (es === undefined) continue;
+          await t.nextly.update({
+            collection: SLUG,
+            id: made.item?.id ?? made.id,
+            data: { v: es, _overwrite: true },
+            locale: "es",
+          } as never);
+        }
+        const next = [
+          { name: "v", type: "email", localized: true, required: true },
+        ];
+
+        await expect(save(t, next, { localized: true })).rejects.toMatchObject(
+          refusedSaying("2 rows would be left with no value")
+        );
+        await save(t, next, {
+          localized: true,
+          confirmedTypeChanges: [
+            { field: "v", kept: 3, changed: 0, lost: 2, fill: "x@y.co" },
+          ],
+        });
+
+        const rows = await exec<{ title: string; l: string; v: unknown }>(
+          t,
+          `SELECT m.title AS title, l._locale AS l, l.v AS v FROM dc_${SLUG}_locales l JOIN dc_${SLUG} m ON m.id = l._parent ORDER BY m.title, l._locale`
+        );
+        expect(rows.map(row => [row.title, row.l, row.v])).toEqual([
+          ["en", "en", "x@y.co"],
+          ["en", "es", "c@d.co"],
+          ["es", "en", "e@f.co"],
+          ["es", "es", "x@y.co"],
+          ["kept", "en", "a@b.co"],
+        ]);
+      }
+    );
+
     // The file that moves a field into the translations table copies its values there before the
     // change's own file, which would convert them in a column it then drops: what could not convert
     // would stay in the translations table as it was. Refused unless every value is one the new type

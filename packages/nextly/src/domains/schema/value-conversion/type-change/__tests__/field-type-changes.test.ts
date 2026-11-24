@@ -227,6 +227,55 @@ describe("the refusals a save's type changes give", () => {
     ).toEqual([]);
   });
 
+  // A required field's rows left with none take a fill or stop the change, whatever was confirmed; a
+  // fill the field takes waits for the same consent as a cleared value, even where none is lost.
+  it.each([
+    ["none chosen", { leavesEmpty: 2 }, ["price"], /2 rows would be left/],
+    [
+      "one it takes, not consented to",
+      { leavesEmpty: 2, fill: { value: 0, readsAs: "0" } },
+      [],
+      /Change the values that cannot convert/,
+    ],
+    [
+      "one it takes, consented to",
+      { leavesEmpty: 2, fill: { value: 0, readsAs: "0" } },
+      ["price"],
+      undefined,
+    ],
+    [
+      "one it takes, no row for it",
+      { leavesEmpty: 0, fill: { value: 0, readsAs: "0" } },
+      [],
+      undefined,
+    ],
+    [
+      "one it does not take",
+      { leavesEmpty: 2, fill: { value: "x" } },
+      ["price"],
+      /fill value chosen for it is not one/,
+    ],
+  ] as const)(
+    "answers a required field's rows left with no value: %s",
+    (_, given, acknowledged, says) => {
+      const change = {
+        ...judged("safe"),
+        to: { ...f("price", "number"), required: true },
+        converted: true as const,
+        ...given,
+      };
+      const refusals = typeChangeRefusals(
+        "Collection 'products'",
+        [change],
+        new Set(acknowledged)
+      );
+
+      expect(refusals.map(r => r.message)).toEqual(
+        says === undefined ? [] : [expect.stringMatching(says)]
+      );
+    }
+  );
+
   it("refuses any type change while the recorded definition awaits its migration", () => {
     const change = [judged("safe")];
     expect(

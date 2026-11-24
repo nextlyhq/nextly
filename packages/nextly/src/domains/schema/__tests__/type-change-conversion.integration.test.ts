@@ -1918,6 +1918,54 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    // And its fill, where the field is required.
+    it.skipIf(!rewritesValuesOn(dialect))(
+      "writes a fill into a required Single's value that cannot convert",
+      async () => {
+        vi.stubEnv("NODE_ENV", "development");
+        const t = await createTestNextly({ dialect });
+        instance = t;
+        await dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: "tcc_hero",
+            label: "Hero",
+            fields: [{ name: "v", type: "text", required: true }],
+          }
+        );
+        await t.nextly.updateSingle({
+          slug: "tcc_hero",
+          data: { v: "abc", _overwrite: true },
+        } as never);
+        const single = (await t
+          .getService("singleRegistryService")
+          .getSingleBySlug("tcc_hero")) as { schemaVersion?: number } | null;
+
+        const refused = await dispatchSingles(
+          "applySingleSchemaChanges",
+          { slug: "tcc_hero" },
+          {
+            fields: [{ name: "v", type: "number", required: true }],
+            confirmed: true,
+            schemaVersion: single?.schemaVersion ?? 1,
+            confirmedTypeChanges: [
+              { field: "v", kept: 0, changed: 0, lost: 1, fill: 5 },
+            ],
+          }
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+        expect(refused).toBeUndefined();
+        const read = (await t.nextly.findSingle({
+          slug: "tcc_hero",
+        } as never)) as { v?: unknown; item?: { v?: unknown } } | undefined;
+        expect(read?.item?.v ?? read?.v).toBe(5);
+      }
+    );
+
     // The Single's save takes the person's confirmed clears as a collection's does.
     it.skipIf(!rewritesValuesOn(dialect))(
       "clears a Single's value that cannot convert once the clear is confirmed with its count",
@@ -2217,6 +2265,76 @@ describe.each(getConfiguredTestDialects())(
             found.items.map(item => [item.title, item.box?.v ?? null])
           )
         ).toEqual({ kept: 12, lost: null });
+      }
+    );
+
+    // And its fill, where the field is required.
+    it.skipIf(!rewritesValuesOn(dialect))(
+      "writes a fill into a required field group's value that cannot convert",
+      async () => {
+        vi.stubEnv("NODE_ENV", "development");
+        const t = await createTestNextly({ dialect });
+        instance = t;
+        await dispatchComponents(
+          "createComponent",
+          {},
+          {
+            slug: "tcc_box",
+            label: "Box",
+            fields: [{ name: "v", type: "text", required: true }],
+          }
+        );
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: SLUG,
+            label: "Post",
+            fields: [{ name: "box", type: "component", component: "tcc_box" }],
+          }
+        );
+        for (const [title, v] of [
+          ["kept", "12"],
+          ["lost", "abc"],
+        ] as const) {
+          await t.nextly.create({
+            collection: SLUG,
+            data: { title, box: { v } },
+          } as never);
+        }
+        const stored = (await t
+          .getService("fieldGroupRegistryService")
+          .getComponent("tcc_box")) as { schemaVersion?: number };
+
+        const refused = await dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "tcc_box" },
+          {
+            fields: [{ name: "v", type: "number", required: true }],
+            confirmed: true,
+            schemaVersion: stored.schemaVersion,
+            confirmedTypeChanges: [
+              { field: "v", kept: 0, changed: 1, lost: 1, fill: 5 },
+            ],
+          }
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+        expect(refused).toBeUndefined();
+        const found = (await t.nextly.find({
+          collection: SLUG,
+          limit: 10,
+        } as never)) as unknown as {
+          items: Array<{ title: string; box?: { v?: unknown } }>;
+        };
+        expect(
+          Object.fromEntries(
+            found.items.map(item => [item.title, item.box?.v ?? null])
+          )
+        ).toEqual({ kept: 12, lost: 5 });
       }
     );
 
