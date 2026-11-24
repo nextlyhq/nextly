@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig, number, text } from "../../../config";
 import { definePlugin } from "../../../plugins/plugin-context";
+import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 import { isNextlyOwnedDocumentColumn } from "../../../lib/system-columns";
 import { _resetEnvCache } from "../../../shared/lib/env";
 
@@ -265,18 +266,25 @@ describe("one list", () => {
         .filter(file => !before.includes(file))
         .map(file => readFile(join(dir, "migrations", file), "utf-8"))
     );
-    const alters = added.map(sql =>
-      [
-        ...sql.split("-- DOWN")[0].matchAll(/ALTER TABLE\s+["`]?(\w+)["`]?/g),
-      ].map(([, table]) => table)
-    );
-    expect(added.some(sql => /"views"/.test(sql.split("-- DOWN")[0]))).toBe(
-      true
-    );
-    expect(alters.flat()).toContain("dc_posts");
-    expect(added.some(sql => /dc_posts_locales[\s\S]*price/.test(sql))).toBe(
-      true
-    );
+    // Read as `nextly migrate` reads a file: its UP section, statement by statement, so nothing in a
+    // header or a DOWN section counts.
+    const [besideUp, mainUp] = added
+      .map(sql =>
+        parseSqlSections(sql)
+          .upSql.split(";")
+          .map(statement => statement.trim())
+          .filter(statement => statement !== "" && !statement.startsWith("--"))
+      )
+      .sort((a, b) => b.length - a.length);
+    expect(mainUp).toEqual([
+      'ALTER TABLE "dc_posts" ADD COLUMN "views" integer',
+    ]);
+    expect(besideUp).toEqual([
+      'ALTER TABLE "dc_posts_locales" ADD COLUMN "__retype_price" INTEGER',
+      'UPDATE "dc_posts_locales" SET "__retype_price" = CAST("price" AS INTEGER)',
+      'ALTER TABLE "dc_posts_locales" DROP COLUMN "price"',
+      'ALTER TABLE "dc_posts_locales" RENAME COLUMN "__retype_price" TO "price"',
+    ]);
     expect(written.said).toContain(`Operations: ${String(tables)}`);
     expect(written.said.filter(line => line.startsWith("Settings: "))).toEqual(
       settings.map(line => line.replace("~ settings ", "Settings: "))
