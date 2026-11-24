@@ -95,7 +95,7 @@ import { WithheldFieldsProvider } from "./withheld-fields-context";
  * document, which is not what is on screen while a version is being read, and
  * a colleague's claim refuses them the rest of the time. One answer for every
  * surface that offers a write — the header's actions, the submission path,
- * the rail, the language panel — so none of them disagrees about when a write
+ * the rail, the Languages menu — so none of them disagrees about when a write
  * is offered.
  *
  * Takes the published version rather than reading the context: the editors

@@ -57,20 +57,15 @@ function asTabLabel(label: string): string {
  *
  * The four language states take `LANGUAGE_STATE_LABEL`'s wording, title-cased
  * because these are buttons rather than prose. That catalog already answers
- * "what is this state called" for the header control, the editor's language
- * panel, its menu and the list's per-language dots, and a worklist with a
- * vocabulary of its own would describe the same document differently depending
- * on which screen asked.
+ * "what is this state called", and a worklist with a vocabulary of its own would
+ * describe the same document differently depending on which screen asked.
  *
  * 🔴 `stale` is the one state that is NOT a language state, and it is
  * deliberately not added to `LANGUAGE_STATES`: that is the load-bearing decision
- * of the staleness vocabulary. `languageState()` is a mutually exclusive
- * classifier — missing, then published, then draft, then translated, first
- * match wins — and staleness is ORTHOGONAL to every one of them: a stale
- * translation is still translated, and still published if it was published. A
- * fifth member would make the classifier return "stale" INSTEAD of "published",
- * so the entry list's dots and the editor's language panel would stop reporting
- * a live translation as live. A FILTER, though, is a question rather than a
+ * of the staleness vocabulary. The states are mutually exclusive, and staleness
+ * is ORTHOGONAL to every one of them: a stale translation is still translated,
+ * and still published if it was published. A fifth member would say "stale"
+ * INSTEAD of "published", of a translation that is live. A FILTER, though, is a question rather than a
  * classification, and "which documents need review" is as legitimate a question
  * as "which are drafts" — so the worklist offers it where the catalog does not.
  */

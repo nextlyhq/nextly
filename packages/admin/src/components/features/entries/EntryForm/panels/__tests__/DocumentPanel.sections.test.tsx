@@ -1,7 +1,7 @@
 /**
- * The document panel's sections: Status, Publishing, Language, Details, in
- * that order, each drawn only where it applies. Status says where the document
- * stands in the language being edited, as the bar's pill does; Publishing
+ * The document panel's sections: Status, Publishing, Details, in that order,
+ * each drawn only where it applies, and none for the document's languages.
+ * Status says where the document stands in the language being edited, as the bar's pill does; Publishing
  * reads the releases holding the document.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
@@ -55,13 +55,6 @@ const SCHEDULED = {
 const can = vi.hoisted(() => ({ current: true }));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => can.current }));
 
-// The language panel as it is today, stood in for: what matters here is where
-// the section puts it.
-vi.mock("../../../LanguagePanel", async importOriginal => ({
-  ...(await importOriginal<typeof import("../../../LanguagePanel")>()),
-  DocumentLanguagePanel: () => <div data-testid="language-panel" />,
-}));
-
 const releaseDocument = {
   scopeKind: "collection" as const,
   scopeSlug: "posts",
@@ -114,7 +107,20 @@ beforeEach(() => {
 });
 
 describe("the document panel's sections", () => {
-  it("reads Status, Publishing, Language, Details, in that order", () => {
+  it("reads Status, Publishing, Details, in that order", () => {
+    panel();
+    expect(sectionTitles()).toEqual(["Status", "Publishing", "Details"]);
+    // Each section is named by its heading, for a screen reader moving
+    // between them.
+    expect(
+      within(screen.getByRole("region", { name: "Details" })).getByRole(
+        "button",
+        { name: /copy id to clipboard/i }
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("draws no section for a translated document's languages", () => {
     localization.current = {
       enabled: true,
       locales: [
@@ -124,27 +130,6 @@ describe("the document panel's sections", () => {
       defaultLocale: "en",
     };
     panel({}, true);
-    expect(sectionTitles()).toEqual([
-      "Status",
-      "Publishing",
-      "Language",
-      "Details",
-    ]);
-    // Each section is named by its heading, for a screen reader moving
-    // between them.
-    expect(screen.getByRole("region", { name: "Language" })).toContainElement(
-      screen.getByTestId("language-panel")
-    );
-    expect(
-      within(screen.getByRole("region", { name: "Details" })).getByRole(
-        "button",
-        { name: /copy id to clipboard/i }
-      )
-    ).toBeInTheDocument();
-  });
-
-  it("draws no Language section on a document with no languages", () => {
-    panel();
     expect(sectionTitles()).toEqual(["Status", "Publishing", "Details"]);
   });
 

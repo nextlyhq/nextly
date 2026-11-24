@@ -481,7 +481,7 @@ function claimAffordances(
 /**
  * What holds the document for what a plugin draws on its editor, a side panel
  * section, a replaced action or a tab, as both editors tell it: `readOnly`
- * where the fields and the language panel's copies into the form are held
+ * where the fields and a copy from another language are held
  * (`contentHeld`), and `actionsDisabled` where the built-in Delete is: a
  * colleague's claim or a past version on screen (`writesHeld`), a refused
  * publish's recovery, or a document removed from code, where the server

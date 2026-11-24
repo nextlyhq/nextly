@@ -26,6 +26,7 @@ import { languageLabelOf } from "../publishAllOutcomes";
 
 import type { TranslationOverview } from "./out-of-date";
 import { OutOfDateNotice } from "./OutOfDateNotice";
+import { otherLanguagesChoice } from "./publish-parts-choice";
 import { useOutOfDateNotice } from "./useOutOfDateNotice";
 import {
   usePublishPartsAction,
@@ -98,6 +99,11 @@ export interface DocumentPublishing
   extends Pick<PublishPartsAction, "contributed" | "withoutReview" | "dialog"> {
   /** What the header's Publish runs, or undefined where it stays one click. */
   smartPublish: SmartPublish | undefined;
+  /**
+   * Opens the choice at the languages not on screen; undefined where there is no other language
+   * or the person may not publish.
+   */
+  publishOthers: (() => void) | undefined;
   /** The notice after a publish, drawn under the editor's header. */
   notice: ReactNode;
 }
@@ -181,11 +187,21 @@ export function useDocumentPublishing({
     onPublished,
   });
 
+  const mayPublish =
+    contributed !== null && contributed.action.disabledReason === undefined;
+  const publishOthers = () =>
+    open(
+      otherLanguagesChoice({ languages, onScreen, overview, sharedPending }),
+      "menu"
+    );
+
   return {
     contributed,
     withoutReview,
     dialog,
     smartPublish,
+    publishOthers:
+      mayPublish && languages.length > 1 ? publishOthers : undefined,
     notice: (
       <OutOfDateNotice
         notice={outOfDate.notice}

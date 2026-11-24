@@ -1,5 +1,5 @@
 /**
- * A Single's side panel: what it is, then Status, Publishing and Language
+ * A Single's side panel: what it is, then Status and Publishing
  * where they apply, then when it was last changed and by whom, then the
  * sections plugins add, then "For developers" with its API address and ID.
  *
@@ -59,11 +59,6 @@ vi.mock("@admin/hooks/queries/useReleasesContaining", () => ({
   }),
 }));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
-// The language panel stood in for: what matters here is where it is drawn.
-vi.mock("../../../LanguagePanel", async importOriginal => ({
-  ...(await importOriginal<typeof import("../../../LanguagePanel")>()),
-  DocumentLanguagePanel: () => <div data-testid="language-panel" />,
-}));
 
 const SEARCH = "test/seo#Search";
 function Search(props: DocumentPanelSectionProps) {
@@ -222,7 +217,7 @@ describe("a Single's side panel", () => {
     ]);
   });
 
-  it("with languages, reads Language above Last changed", () => {
+  it("draws no section for its languages", () => {
     localization.current = {
       enabled: true,
       locales: [
@@ -234,7 +229,6 @@ describe("a Single's side panel", () => {
     singlePanel({}, true);
     expect(sectionTitles()).toEqual([
       "What this is",
-      "Language",
       "Last changed",
       "For developers",
     ]);

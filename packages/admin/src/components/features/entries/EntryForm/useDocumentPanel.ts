@@ -52,8 +52,8 @@ export interface DocumentPanelState {
   /** Whether it is out of the way: the opposite of `shown`. */
   collapsed: boolean;
   /**
-   * Whether it is on screen as the docked column, which carries the id and
-   * the language panel, so the field column's own copies of them step aside.
+   * Whether it is on screen as the docked column, which carries the id, so
+   * the field column's own copy of it steps aside.
    */
   docked: boolean;
   /** Shows the panel if it is not on screen, and hides it if it is. */

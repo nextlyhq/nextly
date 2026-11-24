@@ -1,0 +1,90 @@
+"use client";
+
+/**
+ * DocumentLanguagesButton: the Languages button as an editor mounts it, for an entry and a Single
+ * alike, given what its form knows about the document and the language on screen.
+ *
+ * @module components/features/languages-menu/DocumentLanguagesButton
+ */
+
+import type { JSX } from "react";
+
+import type { DocumentPanelMode } from "@admin/components/features/entries/EntryForm/document-panel-mode";
+import { translateAddress } from "@admin/components/features/entries/publish-parts/out-of-date";
+import { barFolds } from "@admin/components/layout/header/bar-fold";
+import { useTopBarWidth } from "@admin/components/layout/header/TopBarPlaces";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { useLocalization } from "@admin/hooks/useLocalization";
+import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
+
+import {
+  currentLanguageOf,
+  documentLanguagesOf,
+  editAddress,
+  languagesHeldReason,
+  type LanguagesHold,
+} from "./document-languages";
+import { languagesMenuModel } from "./languages-menu-model";
+import { LanguagesButton } from "./LanguagesButton";
+
+export interface DocumentLanguagesButtonProps {
+  /** Whether the document is translated. */
+  documentLocalized: boolean;
+  /** The document, as the editor read it. */
+  document: unknown;
+  /** Whether it has a Draft / Published lifecycle. */
+  hasStatus: boolean;
+  /** The editor's own address, which the rows' addresses add a language to. */
+  editorPath: string;
+  /** The language on screen; undefined is the default one. */
+  locale: string | undefined;
+  /** Whether the language on screen is being translated, its source beside it. */
+  translating: boolean;
+  /** What holds the language on screen. */
+  hold: LanguagesHold;
+  /** Opens the choice of which languages to publish. Absent where the person may not publish. */
+  onPublishOthers: (() => void) | undefined;
+  /** How the document panel sits: as a sheet, on a phone, the bar keeps icons alone. */
+  panelMode: DocumentPanelMode;
+}
+
+export function DocumentLanguagesButton({
+  documentLocalized,
+  document,
+  hasStatus,
+  editorPath,
+  locale,
+  translating,
+  hold,
+  onPublishOthers,
+  panelMode,
+}: DocumentLanguagesButtonProps): JSX.Element | null {
+  const { enabled, locales, defaultLocale } = useLocalization();
+  const { hasPermission } = useCurrentUserPermissions();
+  const barWidth = useTopBarWidth();
+  // Both switches: the site has languages, and this document is translated.
+  if (!enabled || !documentLocalized) return null;
+
+  const heldReason = languagesHeldReason(hold);
+  return (
+    <LanguagesButton
+      model={languagesMenuModel({
+        languages: locales,
+        defaultLanguage: defaultLocale,
+        ...documentLanguagesOf(document, hasStatus),
+      })}
+      translateHref={code => translateAddress(editorPath, code, defaultLocale)}
+      editHref={editAddress(editorPath, defaultLocale)}
+      currentLanguage={currentLanguageOf({
+        locale,
+        defaultLanguage: defaultLocale,
+        translating,
+      })}
+      heldReason={heldReason}
+      // Publishing is held with everything else that acts on the live document.
+      onPublishOthers={heldReason === undefined ? onPublishOthers : undefined}
+      canManageLanguages={hasPermission(READ_SETTINGS)}
+      iconOnly={panelMode === "sheet" || barFolds(barWidth)}
+    />
+  );
+}

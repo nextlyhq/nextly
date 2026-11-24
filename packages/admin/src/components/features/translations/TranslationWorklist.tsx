@@ -5,7 +5,7 @@
  * collection that has any.
  *
  * Every other translation surface in the admin answers "what state is THIS
- * document in": the language panel, translation mode, the language dots on a
+ * document in": the Languages menu, translation mode, the language chips on a
  * list row. None of them can answer the question a translator actually arrives
  * with — *what needs me, anywhere, in my language?* — so finding the work meant
  * opening every document in turn.

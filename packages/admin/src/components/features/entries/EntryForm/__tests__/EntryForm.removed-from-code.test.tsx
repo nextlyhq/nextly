@@ -1,9 +1,9 @@
 /**
  * The entry editor of a collection removed from code offers no control that
  * would write, for a user holding every permission: no Save or Publish, no
- * Unpublish, Delete, Duplicate or discard, no page-contributed action, the
- * panel's actions held, its fields read-only and no claim made on the
- * document. Reading stays: the menu keeps "View API response". The notice is
+ * Unpublish, Delete, Duplicate or discard, no page-contributed action,
+ * its fields read-only and no claim made on the document. Reading stays: the
+ * menu keeps "View API response". The notice is
  * the page's document banner, drawn under the header; the lock strip adds no
  * reader's sentence of its own.
  *
@@ -19,24 +19,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { cleanup, createTestQueryClient, screen } from "@admin/__tests__/utils";
 
-const { useDocumentLock, sidebarProps } = vi.hoisted(() => ({
+const { useDocumentLock, menuProps, siteLocales } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
-  sidebarProps: vi.fn(),
+  menuProps: vi.fn(),
+  // The site's languages; none unless a case configures them.
+  siteLocales: { list: [] as { code: string; label: string }[] },
 }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
-// Drawn as it is, its props recorded: the panel's holds are handed down here.
-vi.mock("../EntryFormSidebar", async importOriginal => {
-  const actual = await importOriginal<typeof import("../EntryFormSidebar")>();
-  return {
-    EntryFormSidebar: (
-      props: Parameters<typeof actual.EntryFormSidebar>[0]
-    ) => {
-      sidebarProps(props);
-      return actual.EntryFormSidebar(props);
+// The Languages menu, as what the editor hands it.
+vi.mock(
+  "@admin/components/features/languages-menu/DocumentLanguagesButton",
+  () => ({
+    DocumentLanguagesButton: (props: { hold: unknown }) => {
+      menuProps(props);
+      return null;
     },
-  };
-});
+  })
+);
 vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
   useUpdateEntry: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
@@ -60,7 +60,7 @@ vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
     enabled: false,
-    locales: [],
+    locales: siteLocales.list,
     defaultLocale: "en",
     fallback: true,
     getLocale: () => undefined,
@@ -152,6 +152,7 @@ function renderEditor(removed: boolean) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  siteLocales.list = [];
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
     takeOver: vi.fn(),
@@ -178,13 +179,22 @@ describe("the entry editor of a collection removed from code", () => {
     );
   });
 
-  it("holds the panel's actions, and still lets its reader open the other languages", () => {
+  it("still lets its reader open the other languages", () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
     renderEditor(true);
 
-    expect(sidebarProps).toHaveBeenLastCalledWith(
+    expect(menuProps).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        actionsDisabled: true,
-        navigationDisabled: false,
+        editorPath: "/admin/collections/pages/p1",
+        hold: {
+          viewingPastVersion: false,
+          recovering: false,
+          changeAwaiting: false,
+          documentHeld: false,
+        },
       })
     );
   });
@@ -214,12 +224,6 @@ describe("the entry editor of a collection removed from code", () => {
     );
     expect(useDocumentLock).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: true })
-    );
-    expect(sidebarProps).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        actionsDisabled: false,
-        navigationDisabled: false,
-      })
     );
   });
 });

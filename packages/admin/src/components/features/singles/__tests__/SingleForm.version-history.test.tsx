@@ -13,7 +13,7 @@
  * whether a version is being read, so covering only the arrived state would
  * leave the other states free to drift.
  */
-import { useEffect } from "react";
+import { useEffect, type ReactElement } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import userEvent from "@testing-library/user-event";
@@ -26,28 +26,24 @@ import {
   waitFor,
   within,
 } from "@admin/__tests__/utils";
+import type { LanguagesHold } from "@admin/components/features/languages-menu/document-languages";
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
 
 const {
   viewed,
-  sidebarProps,
   headerProps,
-  languagePanelProps,
-  localizationEnabled,
   useDocumentLock,
   useDocumentAutosave,
   useAutosaveRecovery,
 } = vi.hoisted(() => ({
   viewed: { current: null as ViewedVersion | null },
-  sidebarProps: {
-    current: null as { actionsDisabled?: boolean } | null,
+  headerProps: {
+    current: null as {
+      hasUnsavedWork?: boolean;
+      languagesControl?: ReactElement<{ hold: LanguagesHold }>;
+    } | null,
   },
-  headerProps: { current: null as { hasUnsavedWork?: boolean } | null },
-  languagePanelProps: {
-    current: null as { actionsDisabled?: boolean } | null,
-  },
-  localizationEnabled: { current: false },
   useDocumentLock: vi.fn(),
   useDocumentAutosave: vi.fn(() => ({ status: "idle", lastSavedAt: null })),
   useAutosaveRecovery: vi.fn<
@@ -77,32 +73,15 @@ vi.mock("@admin/hooks/useAutosaveRecovery", async importOriginal => ({
   useAutosaveRecovery,
 }));
 
-// The rail is where the withheld-write decision has to LAND: a prop passed to
-// the wrong component type-checks perfectly, so the stand-in records what the
-// editor actually handed it rather than what the code looks like it hands it.
 vi.mock(
   "@admin/components/features/entries/EntryForm/EntryFormSidebar",
-  () => ({
-    EntryFormSidebar: (props: { actionsDisabled?: boolean }) => {
-      sidebarProps.current = props;
-      return null;
-    },
-  })
+  () => ({ EntryFormSidebar: () => null })
 );
-
-// The language panel is where the withheld-write decision lands for locale
-// actions: a stand-in records what the editor actually handed it.
-vi.mock("@admin/components/features/entries/LanguagePanel", () => ({
-  DocumentLanguagePanel: (props: { actionsDisabled?: boolean }) => {
-    languagePanelProps.current = props;
-    return null;
-  },
-}));
 // The header is where the history panel normally mounts and publishes both the
 // chosen version and the restore affordance. Standing in for it lets a test
 // name the arrival state directly, which no fixture of the real panel can.
 vi.mock("@admin/components/features/entries/EntryForm/DocumentBar", () => ({
-  DocumentBar: (props: { hasUnsavedWork?: boolean }) => {
+  DocumentBar: (props: NonNullable<typeof headerProps.current>) => {
     headerProps.current = props;
     const { setViewing, setRestore } = useDocumentHistory();
     useEffect(() => {
@@ -119,7 +98,7 @@ vi.mock("@admin/components/features/entries/EntryForm/DocumentBar", () => ({
 
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
-    enabled: localizationEnabled.current,
+    enabled: false,
     locales: [],
     defaultLocale: "en",
     fallback: true,
@@ -178,15 +157,15 @@ beforeEach(() => {
   // The module-level holder outlives a test; a version published by the
   // previous test would leak into this one's first render.
   viewed.current = null;
-  sidebarProps.current = null;
   headerProps.current = null;
-  languagePanelProps.current = null;
-  localizationEnabled.current = false;
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
     takeOver: vi.fn(),
   });
 });
+
+/** What the editor last handed the Languages menu as holding the language on screen. */
+const languagesHold = () => headerProps.current?.languagesControl?.props.hold;
 
 function renderViewing(version: ViewedVersion) {
   viewed.current = version;
@@ -303,10 +282,9 @@ describe("SingleForm — a published version replaces the document", () => {
     );
   });
 
-  it("withholds the rail's document actions while a version is on screen", () => {
-    // The rail's actions act on the LIVE document, which is not what is on
-    // screen. Asserted on the props the editor HANDS the rail, not on what
-    // the code looks like it hands it — the wiring was once connected to a
+  it("holds the move to another language while a version is on screen", () => {
+    // Asserted on what the editor HANDS the Languages menu, not on what the
+    // code looks like it hands it: the decision was once connected to a
     // context read that sat above the provider and always read the default.
     renderViewing({
       versionNo: 7,
@@ -319,39 +297,20 @@ describe("SingleForm — a published version replaces the document", () => {
       comparedWith: { kind: "first" },
       about: null,
     });
-    expect(sidebarProps.current?.actionsDisabled).toBe(true);
+    expect(languagesHold()).toMatchObject({ viewingPastVersion: true });
   });
 
-  it("leaves the rail's document actions alone while the live document is on screen", () => {
+  it("holds nothing while the live document is on screen", () => {
     // The other direction, so the gate cannot be satisfied by refusing always.
     render(
       <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
     );
-    expect(sidebarProps.current?.actionsDisabled).toBe(false);
-  });
-
-  it("withholds the language panel's actions while a version is on screen", () => {
-    localizationEnabled.current = true;
-    renderViewing({
-      versionNo: 7,
-      snapshot: { heroTitle: "as it was" },
-      locale: null,
-      withheld: [],
-      isLoading: false,
-      error: null,
-      scope: { kind: "single", slug: "homepage", documentId: "d1" },
-      comparedWith: { kind: "first" },
-      about: null,
+    expect(languagesHold()).toEqual({
+      viewingPastVersion: false,
+      recovering: false,
+      changeAwaiting: false,
+      documentHeld: false,
     });
-    expect(languagePanelProps.current?.actionsDisabled).toBe(true);
-  });
-
-  it("leaves the language panel's actions alone while the live document is on screen", () => {
-    localizationEnabled.current = true;
-    render(
-      <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
-    );
-    expect(languagePanelProps.current?.actionsDisabled).toBe(false);
   });
 
   it("refuses the native submit path while a version is on screen", async () => {

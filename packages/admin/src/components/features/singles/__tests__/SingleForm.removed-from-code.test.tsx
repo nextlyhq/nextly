@@ -1,7 +1,7 @@
 /**
  * The Single editor of a Single removed from code offers no control that would
  * write, for a user holding every permission: no Save or Publish, no
- * Unpublish, no page-contributed action, the panel's actions held, its fields
+ * Unpublish, no page-contributed action, its fields
  * read-only and no claim made on the document. Its history and a
  * preview stay. The notice is the page's document banner; the lock strip adds
  * no reader's sentence of its own.
@@ -17,29 +17,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { cleanup, createTestQueryClient, screen } from "@admin/__tests__/utils";
 
-const { useDocumentLock, sidebarProps } = vi.hoisted(() => ({
+const { useDocumentLock, menuProps, siteLocales } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
-  sidebarProps: vi.fn(),
+  menuProps: vi.fn(),
+  // The site's languages; none unless a case configures them.
+  siteLocales: { list: [] as { code: string; label: string }[] },
 }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
-// Drawn as it is, its props recorded: the panel's holds are handed down here.
+// The Languages menu, as what the editor hands it.
 vi.mock(
-  "@admin/components/features/entries/EntryForm/EntryFormSidebar",
-  async importOriginal => {
-    const actual =
-      await importOriginal<
-        typeof import("@admin/components/features/entries/EntryForm/EntryFormSidebar")
-      >();
-    return {
-      EntryFormSidebar: (
-        props: Parameters<typeof actual.EntryFormSidebar>[0]
-      ) => {
-        sidebarProps(props);
-        return actual.EntryFormSidebar(props);
-      },
-    };
-  }
+  "@admin/components/features/languages-menu/DocumentLanguagesButton",
+  () => ({
+    DocumentLanguagesButton: (props: { hold: unknown }) => {
+      menuProps(props);
+      return null;
+    },
+  })
 );
 vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
   useAutosaveRecovery: () => ({
@@ -58,7 +52,7 @@ vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
     enabled: false,
-    locales: [],
+    locales: siteLocales.list,
     defaultLocale: "en",
     fallback: true,
     getLocale: () => undefined,
@@ -162,6 +156,7 @@ function renderEditor(removed: boolean) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  siteLocales.list = [];
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
     takeOver: vi.fn(),
@@ -185,13 +180,21 @@ describe("the Single editor of a Single removed from code", () => {
     expect(items).toContain("History");
   });
 
-  it("holds the panel's actions, and still lets its reader open the other languages", () => {
+  it("still lets its reader open the other languages", () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
     renderEditor(true);
 
-    expect(sidebarProps).toHaveBeenLastCalledWith(
+    expect(menuProps).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        actionsDisabled: true,
-        navigationDisabled: false,
+        hold: {
+          viewingPastVersion: false,
+          recovering: false,
+          changeAwaiting: false,
+          documentHeld: false,
+        },
       })
     );
   });
@@ -218,12 +221,6 @@ describe("the Single editor of a Single removed from code", () => {
     );
     expect(useDocumentLock).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: true })
-    );
-    expect(sidebarProps).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        actionsDisabled: false,
-        navigationDisabled: false,
-      })
     );
   });
 });

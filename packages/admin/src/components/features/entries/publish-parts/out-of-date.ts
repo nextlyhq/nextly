@@ -32,6 +32,8 @@ export interface FieldOrigin {
 export interface OverviewLanguage {
   /** The language-level answer, for a language whose values have no recorded origin. */
   stale?: boolean;
+  /** Whether a saved change waits to be published in it. */
+  pendingChange?: boolean;
   /** Each field's origin, by field name; absent where none is recorded. */
   fields?: Readonly<Record<string, FieldOrigin>>;
 }

@@ -13,6 +13,7 @@ import { parseApiError } from "@admin/lib/api/parseApiError";
 import {
   choosesAnything,
   defaultPartsChoice,
+  otherLanguagesChoice,
   partsOutcomeSentence,
   refusalsByPart,
   sharedSentence,
@@ -56,6 +57,45 @@ describe("the choice the menu opens with", () => {
         sharedPending: false,
       })
     ).toEqual({ locales: [], shared: true });
+  });
+});
+
+describe("the choice of other languages", () => {
+  const overview = {
+    en: { pendingChange: true },
+    es: { pendingChange: true },
+    // A draft, never live: not chosen for the person.
+    ar: {},
+  };
+
+  it("chooses the others that hold a saved change, never the one on screen", () => {
+    expect(
+      otherLanguagesChoice({
+        languages: LANGUAGES,
+        onScreen: "en",
+        overview,
+        sharedPending: false,
+      })
+    ).toEqual({ locales: ["es"], shared: false });
+    expect(
+      otherLanguagesChoice({
+        languages: LANGUAGES,
+        onScreen: "ar",
+        overview,
+        sharedPending: true,
+      })
+    ).toEqual({ locales: ["en", "es"], shared: true });
+  });
+
+  it("chooses none where no language's state was read", () => {
+    expect(
+      otherLanguagesChoice({
+        languages: LANGUAGES,
+        onScreen: "en",
+        overview: undefined,
+        sharedPending: false,
+      })
+    ).toEqual({ locales: [], shared: false });
   });
 });
 
