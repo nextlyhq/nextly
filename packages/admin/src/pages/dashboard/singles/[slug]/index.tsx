@@ -448,7 +448,7 @@ export default function SingleEditPage({
             // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
             // expects FieldConfig[] (discriminated). The runtime payload is the
             // same; widening here until the schema layer unifies on FieldConfig.
-            schema={schema}
+            schema={schema as unknown as SingleSchema}
             document={document}
             /* A Single is a release member exactly as a collection entry is — the
              engine models both and the release detail page links to both — so

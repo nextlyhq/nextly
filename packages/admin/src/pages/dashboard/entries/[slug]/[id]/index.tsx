@@ -885,7 +885,7 @@ export default function EditEntryPage({
                 {publishing.notice}
               </>
             }
-            collection={collection}
+            collection={collection as unknown as EntryFormCollection}
             entry={entry}
             mode="edit"
             /* The same destination the entry list already sends people to, and
