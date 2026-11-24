@@ -336,7 +336,7 @@ describe("the allowlist", () => {
   // 429 -> 427: one of the five recorded offences in `cli/commands/migrate-check.ts`
   // and the one in `cli/commands/upgrade.test.ts` no longer exist, and the record
   // shrank with them.
-  const EXPECTED_TOTAL = 427;
+  const EXPECTED_TOTAL = 425;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
