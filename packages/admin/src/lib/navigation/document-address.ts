@@ -12,9 +12,13 @@
  * 3. Else the form.
  *
  * Then the form, whatever those say, for a reader who may not update the
- * document (a view edits it) and for a document asked for in a language other
- * than the default (a view edits the default language). A view that is not
- * published, because its plugin is off or gone, leaves the form too.
+ * document (a view edits it). A view that is not published, because its plugin
+ * is off or gone, leaves the form too.
+ *
+ * A document asked for in a language other than the default opens its
+ * translation page instead, where that language is written. Where it is not
+ * known whether the document keeps its text per language, the link names the
+ * language on the form, which moves on by what it then knows.
  *
  * A Single follows the same rule as a collection of the same shape, so a
  * Homepage whose main field is a page layout opens where a page does. A view
@@ -40,6 +44,11 @@ import {
   type RegisteredDocumentView,
 } from "@admin/lib/plugins/document-view-registry";
 
+import {
+  translationAddress,
+  type TranslatedDocument,
+} from "./translation-address";
+
 /** What `opensIn` says to keep a collection's entries in the form. */
 const FORM = "form";
 
@@ -60,6 +69,8 @@ export interface OpenableCollection {
   fields?: readonly object[];
   schemaDefinition?: { fields?: readonly object[] };
   admin?: { useAsTitle?: string; opensIn?: string };
+  /** Whether it keeps text per language; absent where that is not known. */
+  localized?: boolean;
 }
 
 /** Who is opening the document, and in which language. */
@@ -250,17 +261,46 @@ function withLocale(path: string, locale: string | undefined): string {
     : `${path}?${new URLSearchParams({ [LOCALE_PARAM]: locale }).toString()}`;
 }
 
+/** The document as its translation page names it: an entry needs an id. */
+function translatedDocument(
+  document: OpenedDocument
+): TranslatedDocument | undefined {
+  const { kind, slug, id } = document;
+  if (kind === "single") return { kind, slug };
+  return id === undefined ? undefined : { kind, slug, id };
+}
+
 /**
- * The form's address for a document, in the language asked for: a
- * collection's entry by its id, else the Single's by its slug.
+ * The address the document is written at in the language asked for: its
+ * translation page for a language other than the site's default, where the
+ * document keeps its text per language, else its form (a collection's entry
+ * by its id, the Single by its slug).
  */
-function formAddress(document: OpenedDocument, locale?: string): string {
+function formAddress(
+  document: OpenedDocument,
+  collection: OpenableCollection | undefined,
+  request: OpenRequest
+): string {
   const { slug, id } = document;
+  const { locale, defaultLocale } = request;
+  const translated = translatedDocument(document);
+  if (
+    translated !== undefined &&
+    collection?.localized === true &&
+    locale !== undefined &&
+    // A site with no default to compare leaves the form to decide.
+    defaultLocale !== undefined &&
+    defaultLocale !== "" &&
+    otherLanguage(request)
+  ) {
+    return translationAddress(translated, { target: locale });
+  }
   return withLocale(
     document.kind === "collection" && id !== undefined
       ? buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id })
       : buildRoute(ROUTES.SINGLE_EDIT, { slug }),
-    locale
+    // The form is in the default language without being told.
+    locale === defaultLocale ? undefined : locale
   );
 }
 
@@ -359,7 +399,7 @@ export function documentAddress(
       ? {}
       : ruleDestination(viewable.document, viewable.collection, views);
   return viewable === undefined || destination.view === undefined
-    ? formAddress(document, request.locale)
+    ? formAddress(document, collection, request)
     : viewAddress(viewable.document, destination);
 }
 
@@ -490,7 +530,7 @@ export function rowWaysIn(
   return [
     {
       label: EDIT_DETAILS,
-      address: formAddress(document, request.locale),
+      address: formAddress(document, collection, request),
       opens: "form",
     },
     ...others,

@@ -180,6 +180,12 @@ const SinglesPage = lazyRoute(() => import("./dashboard/singles/index"));
 const TranslationsPage = lazyRoute(
   () => import("./dashboard/translations/index")
 );
+const TranslationEntryPage = lazyRoute(
+  () => import("./dashboard/translations/document")
+);
+const TranslationSinglePage = lazyRoute(
+  () => import("./dashboard/translations/single")
+);
 const CreateUserPage = lazyRoute(() => import("./dashboard/users/create"));
 const EditUserPage = lazyRoute(() => import("./dashboard/users/edit"));
 const CreateUserFieldPage = lazyRoute(
@@ -413,6 +419,20 @@ export const routeConfig: Record<string, RouteConfig> = {
     // Its own rail section rather than Collections': the page exists to cross
     // collection boundaries, so highlighting one collection's rail while
     // showing every collection's work would point at the wrong thing.
+    section: overridableBy("translations"),
+  },
+  // One document in one language. Gated by reading the document, in
+  // `lib/routing`, as its editor is.
+  [ROUTES.TRANSLATION_ENTRY]: {
+    component: TranslationEntryPage,
+    screenName: collectionScreen,
+    type: "private",
+    section: overridableBy("translations"),
+  },
+  [ROUTES.TRANSLATION_SINGLE]: {
+    component: TranslationSinglePage,
+    screenName: singleScreen,
+    type: "private",
     section: overridableBy("translations"),
   },
 

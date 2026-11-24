@@ -144,6 +144,8 @@ type SingleApiType = {
       locale?: string;
       fallbackLocale?: string;
       translationStatus?: boolean;
+      /** Every language's stored value of each translatable field, under `_allLocales`. */
+      everyLanguage?: boolean;
       /**
        * Opt into the working-draft overlay, so an editor sees this Single's
        * pending change rather than the published document. Gated server-side on
@@ -323,6 +325,11 @@ export const singleApi: SingleApiType = {
       fallbackLocale?: string;
       translationStatus?: boolean;
       /**
+       * Every language's stored value of each translatable field, under
+       * `_allLocales` as field name, then language.
+       */
+      everyLanguage?: boolean;
+      /**
        * Opt into the working-draft overlay, so an editor sees this Single's
        * pending change rather than the published document. Gated server-side on
        * an update-capability probe, so passing it never widens what a
@@ -341,6 +348,7 @@ export const singleApi: SingleApiType = {
       params.set("fallback-locale", options.fallbackLocale);
     }
     if (options?.translationStatus) params.set("translation-status", "1");
+    if (options?.everyLanguage) params.set("translations", "all");
     if (options?.draft) params.set("draft", "1");
     // context is trusted; pass status=all so a freshly-created Single
     // (auto-created with status='draft') is reachable. Without this

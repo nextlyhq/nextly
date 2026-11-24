@@ -86,6 +86,12 @@ export interface FindParams {
    */
   translationStatus?: boolean;
   /**
+   * Request every language's stored value of each translatable field, under
+   * `_allLocales` as field name, then language (`?translations=all`). A read of
+   * one entry only.
+   */
+  everyLanguage?: boolean;
+  /**
    * Request each row's review state under `_review` (`?reviewState=true`): each part where it
    * stands in the collection's workflow, as the Review column and the bulk moves read it.
    */
@@ -576,7 +582,12 @@ export const entryApi = {
     id: string,
     options?: Pick<
       FindParams,
-      "depth" | "locale" | "fallbackLocale" | "draft" | "translationStatus"
+      | "depth"
+      | "locale"
+      | "fallbackLocale"
+      | "draft"
+      | "translationStatus"
+      | "everyLanguage"
     > & {
       /**
        * Also answer with the entry as stored, as a depth-0 read in the same
@@ -598,6 +609,7 @@ export const entryApi = {
     if (options?.draft !== undefined) query.set("draft", String(options.draft));
     // Opt into the per-locale translation-status overview map.
     if (options?.translationStatus) query.set("translation-status", "1");
+    if (options?.everyLanguage) query.set("translations", "all");
     if (options?.stored && collectionSlug !== "users") query.set("stored", "1");
     // Why: admin context is trusted (the route is gated by
     // requireCollectionAccess). Pass `status=all` so the server's default

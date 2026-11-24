@@ -14,6 +14,24 @@
  * @module components/features/entries/translation-meta
  */
 
+/**
+ * Where one field's value in one language came from, and whether its source
+ * changed since, as the backend records it.
+ */
+export interface FieldTranslationMeta {
+  /** Written originally, or made from another language, and by whom. */
+  origin: string;
+  /** The engine of a machine translation. */
+  engine?: string;
+  /** The language it was made from; absent for a value written originally. */
+  sourceLocale?: string;
+  /**
+   * Whether the source's value changed after this one was made from it. Absent
+   * where that cannot be told, which is not the same as up to date.
+   */
+  outOfDate?: boolean;
+}
+
 /** Per-locale translation state, mirroring the backend `_translations` map. */
 export interface LocaleTranslationMeta {
   translated: boolean;
@@ -39,6 +57,11 @@ export interface LocaleTranslationMeta {
    * existed is UNKNOWN, which is not the same as up to date.
    */
   stale?: boolean;
+  /**
+   * Each translatable field's own record, by name. Absent where nothing is
+   * recorded for the language.
+   */
+  fields?: Record<string, FieldTranslationMeta>;
 }
 
 export interface TranslationCounts {

@@ -1686,6 +1686,81 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     });
   });
 
+  it("puts a later language live and leaves the default language and the shared part as they were", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: ["en"],
+      data: { _overwrite: true },
+    });
+
+    const published = await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: ["es"],
+      data: { _overwrite: true },
+    });
+
+    expect(published.item.languages).toEqual([
+      { locale: "es", outcome: "goes-live" },
+    ]);
+    expect(published.item.shared).toEqual({ changes: false, added: false });
+    expect(await states(id)).toEqual({
+      shared: "published",
+      en: "published",
+      es: "published",
+    });
+    const english = (await t!.nextly.findByID({
+      collection: "posts",
+      id,
+      locale: "en",
+    })) as Doc;
+    expect(english).toMatchObject({ title: "Hello", tagline: "Shared" });
+  });
+
+  it("refuses to take one language offline for a caller without the right to unpublish", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    // Both may read and change it; only one may unpublish it.
+    const may = await userWhoMay(t!, "may", "unpublish", ["posts"]);
+    const mayNot = await userWhoMay(t!, "may-not", "publish", ["posts"]);
+    for (const user of [may, mayNot]) {
+      await grantTo(t!, user, "update", ["posts"]);
+      await grantTo(t!, user, "read", ["posts"]);
+    }
+    const takeDown = (caller: string) =>
+      refusalOf(
+        t!.nextly.unpublish({
+          collection: "posts",
+          id,
+          locales: ["es"],
+          overrideAccess: false,
+          user: {
+            id: caller,
+            email: `${caller}@example.test`,
+            roles: [],
+          },
+          data: { _overwrite: true },
+        })
+      );
+    const before = await states(id);
+
+    expect(await takeDown(mayNot)).toMatch(/FORBIDDEN/);
+    expect(await states(id)).toEqual(before);
+
+    // With the right, that language alone comes down.
+    expect(await takeDown(may)).toBe("");
+    expect(await states(id)).toEqual({ ...before, es: "draft" });
+  });
+
   it("refuses a language whose required translated field holds only a fallback, when every language must hold its own", async () => {
     await boot(posts({ requireEveryLanguage: true }));
     // Spanish has a row, and its title falls back to English.
