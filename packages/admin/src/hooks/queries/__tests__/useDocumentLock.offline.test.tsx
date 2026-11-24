@@ -190,8 +190,18 @@ describe("a claim lost while offline", () => {
    * second, which still names `t1`, is refused by this editor's own new
    * claim. That refusal is not a colleague's.
    */
-  async function overlappingReclaims() {
+  async function overlappingReclaims(
+    refusedBy: object = {
+      ownerId: "u1",
+      ownerLabel: "Ada",
+      expiresInSeconds: 150,
+    }
+  ) {
     const hook = await lostWhileOffline();
+    // The connection is back: a late win is confirmed by renewing it.
+    patch.mockImplementation(() =>
+      answer({ status: "renewed", waiting: false })
+    );
     let firstAnswers: (value: unknown) => void = () => {};
     post.mockImplementationOnce(
       () =>
@@ -200,11 +210,7 @@ describe("a claim lost while offline", () => {
         })
     );
     post.mockImplementation(() =>
-      answer({
-        status: "held",
-        holder: { ownerId: "u1", ownerLabel: "Ada", expiresInSeconds: 150 },
-        waiting: false,
-      })
+      answer({ status: "held", holder: refusedBy, waiting: false })
     );
     const before = hook.seen.length;
     const sent = post.mock.calls.length;
@@ -248,6 +254,38 @@ describe("a claim lost while offline", () => {
     // The earlier reclaim's win arrives after all: it was this editor's own.
     await firstAnswers("t2");
     await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+  });
+
+  it("does not take a late win that a colleague's takeover since replaced", async () => {
+    const { result, firstAnswers } = await overlappingReclaims(colleague);
+    await beat();
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        status: "taken-over",
+        holder: colleague,
+      })
+    );
+
+    // The colleague's claim replaced the one the late win made.
+    patch.mockImplementation(() =>
+      answer({ status: "lost", holder: colleague })
+    );
+    await firstAnswers("t2");
+
+    expect(patch).toHaveBeenLastCalledWith("/document-lock", {
+      ...ref,
+      claimToken: "t2",
+    });
+    await waitFor(() =>
+      expect(del).toHaveBeenCalledWith("/document-lock", {
+        ...ref,
+        claimToken: "t2",
+      })
+    );
+    expect(result.current.state).toEqual({
+      status: "taken-over",
+      holder: colleague,
+    });
   });
 
   it.each([

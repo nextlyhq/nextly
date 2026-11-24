@@ -402,8 +402,13 @@ export function useDocumentLock({
     let reclaimsOut = 0;
     let deferredHolder: DocumentLockHolder | null = null;
     // The lapsed token whose reclaim may still answer after its refusal was
-    // reported: that late win was this editor's own, and is taken.
+    // reported: that late win may be this editor's own, and is taken once a
+    // renewal confirms it.
     let adoptable: string | null = null;
+    // Whether a reclaim of `adoptable` has been refused: a win that answers
+    // after a refusal predates it, and the refusal may be a colleague's
+    // takeover since, so it is confirmed before it is taken.
+    let reclaimRefused = false;
     // Whether a colleague's claim has been reported since this editor last
     // held the document, and whether it has held it at all in this run. A
     // claim won after the first, and never the second, is a gain.
@@ -496,6 +501,7 @@ export function useDocumentLock({
       lapsed = null;
       deferredHolder = null;
       adoptable = null;
+      reclaimRefused = false;
       // Winning the document ends the ask: nobody waits for what they hold. The
       // server clears its own mark on the same event, so neither side is left
       // telling somebody that this editor is queueing for its own claim.
@@ -709,6 +715,42 @@ export function useDocumentLock({
       token === null &&
       (lapsed === asked || (lapsed === null && adoptable === asked));
 
+    /**
+     * Take a reclaim's win that answered after a refusal, once a renewal says
+     * the server still holds it: the refusal may have been a colleague's
+     * takeover since, and installed unconfirmed the editor would save under a
+     * claim already replaced. Not confirmed, it is handed back (deleting
+     * nothing that replaced it), and a refusal waiting on it is reported.
+     */
+    const confirmLateWin = (
+      asked: string,
+      won: string,
+      changed: DocumentLockChange | undefined
+    ) => {
+      const sentAt = Date.now();
+      void protectedApi
+        .patch<MutationResponse<RenewDocumentLockOutcome>>(
+          "/document-lock",
+          withVersion({ ...ref, claimToken: won })
+        )
+        .then(({ item }) => {
+          if (!cancelled && item.status === "renewed" && mayTake(asked)) {
+            installAcquired(won, sentAt);
+            tell(changed, true);
+            return;
+          }
+          release(won);
+          if (!cancelled && lapsed === asked && deferredHolder !== null) {
+            reportReclaimRefused(deferredHolder);
+          }
+        })
+        .catch(() => {
+          // Unconfirmed: handed back, and the claim stays as it was, lost or
+          // reported, to be asked about again.
+          release(won);
+        });
+    };
+
     const askAboutLapsed = () => {
       const asked = lapsed;
       if (cancelled || asked === null || lapsedAsk !== null) return;
@@ -721,6 +763,7 @@ export function useDocumentLock({
       const seq = (lapsedAsks += 1);
       lapsedAsk = seq;
       reclaimsOut += 1;
+      if (adoptable !== asked) reclaimRefused = false;
       adoptable = asked;
       const freeSlot = () => {
         if (lapsedAsk === seq) lapsedAsk = null;
@@ -751,10 +794,15 @@ export function useDocumentLock({
               release(item.claimToken);
               return;
             }
+            if (reclaimRefused) {
+              confirmLateWin(asked, item.claimToken, item.changed);
+              return;
+            }
             installAcquired(item.claimToken, sentAt);
             tell(item.changed, true);
             return;
           }
+          if (adoptable === asked) reclaimRefused = true;
           if (cancelled || lapsed !== asked) return;
           // Refused while an earlier reclaim is out: perhaps by the claim
           // that one won. It waits for it, at most a beat.
