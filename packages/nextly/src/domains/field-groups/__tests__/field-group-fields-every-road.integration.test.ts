@@ -488,7 +488,7 @@ describe.each(getConfiguredTestDialects())(
           ).toEqual({ accepted: true });
         }
         const groups = t.getService("fieldGroupRegistryService");
-        const read = groups.findComponentForWrite.bind(groups);
+        const read = groups.getAllFieldLists.bind(groups);
         const cardVersion = (await groups.getComponent(CARD)).schemaVersion;
 
         // The comparison reads the field group first, then its own editor's save lands before the
@@ -516,21 +516,22 @@ describe.each(getConfiguredTestDialects())(
           );
         })();
         let concurrent: Outcome | undefined;
-        vi.spyOn(groups, "findComponentForWrite").mockImplementation(
-          async slug => {
-            const found = await read(slug);
-            if (slug === CARD && concurrent === undefined) {
-              begin();
-              concurrent = await Promise.race([
-                edit,
-                new Promise<Outcome>(resolve =>
-                  setTimeout(() => resolve({ refused: "timed out" }), 8000)
-                ),
-              ]);
-            }
-            return found;
+        let raced = false;
+        vi.spyOn(groups, "getAllFieldLists").mockImplementation(async () => {
+          const found = await read();
+          // The edit itself reads the lists too: only the comparison's own read starts it.
+          if (!raced) {
+            raced = true;
+            begin();
+            concurrent = await Promise.race([
+              edit,
+              new Promise<Outcome>(resolve =>
+                setTimeout(() => resolve({ refused: "timed out" }), 8000)
+              ),
+            ]);
           }
-        );
+          return found;
+        });
 
         expect(await outcomeOf(() => road.send(t, ECHO))).toEqual({
           accepted: true,

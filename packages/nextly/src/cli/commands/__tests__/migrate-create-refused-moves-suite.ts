@@ -24,6 +24,7 @@ import {
   definitions,
   ENTITY_KINDS,
   FRAME,
+  INSIDE_REPEATER_MOVES,
   HOME,
   PEOPLE,
   POSTS,
@@ -233,6 +234,54 @@ export function describeRefusedCodeMoves(loaded: { config: unknown }): void {
               refusalMessage(kind.name, target)
             );
             expect(await state(t), target.what).toEqual(before);
+          }
+        }
+      );
+
+      it.each(ENTITY_KINDS)(
+        "%s: a unique field already inside a repeater, moved out of it or within it: nothing written, nothing changed",
+        async entity => {
+          const kind = UNIQUE_KINDS[0];
+          if (kind === undefined) throw new Error("no unique kind");
+          const url = await openDatabase();
+          setNonInteractive(true);
+          await start(url);
+          loaded.config = configOf(entity, kind, ["items"]);
+          const created = command();
+          expect(
+            await exiting(created.said, () =>
+              runMigrateCreate(
+                "create_entity",
+                { cwd: dir, acceptDataLoss: true },
+                created.context
+              )
+            ),
+            created.said.join("\n")
+          ).toBeUndefined();
+          const applied = command();
+          expect(
+            await exiting(applied.said, () =>
+              runMigrate({ cwd: dir, acceptDataLoss: true }, applied.context)
+            ),
+            applied.said.join("\n")
+          ).toBeUndefined();
+          const t = await start(url);
+          const before = await state(t);
+
+          for (const { what, path, message } of INSIDE_REPEATER_MOVES) {
+            loaded.config = configOf(entity, kind, path);
+            const run = command();
+            const code = await exiting(run.said, () =>
+              runMigrateCreate(
+                `move_${(path ?? ["row"]).join("_")}`,
+                { cwd: dir, acceptDataLoss: true, acceptMoves: true },
+                run.context
+              )
+            );
+            const said = run.said.join("\n");
+            expect(code, `${what}: ${said}`).toBe(1);
+            expect(said, what).toContain(message);
+            expect(await state(t), what).toEqual(before);
           }
         }
       );

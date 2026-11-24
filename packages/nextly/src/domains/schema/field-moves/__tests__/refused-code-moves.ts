@@ -204,6 +204,35 @@ export function refusalMessage(name: string, target: MoveTarget): string {
 }
 
 /**
+ * A unique field already inside a repeater, moved out of it or within it: refused for its rows,
+ * which taking its uniqueness away would not change, on every road.
+ */
+export const INSIDE_REPEATER_MOVES: {
+  what: string;
+  path: string[] | null;
+  message: string;
+}[] = [
+  {
+    what: "out to the row",
+    path: null,
+    message:
+      "code cannot be moved out of the repeating rows items: each entry may hold several rows of it, which one field cannot keep. Add a new field instead.",
+  },
+  {
+    what: "into a group outside it",
+    path: ["meta"],
+    message:
+      "code cannot be moved out of the repeating rows items: each entry may hold several rows of it, which one field cannot keep. Add a new field instead.",
+  },
+  {
+    what: "into a group inside it",
+    path: ["items", "each"],
+    message:
+      "Moving code within the repeating rows items is not available yet.",
+  },
+];
+
+/**
  * The rows the app stores for `entity` with a value in its moved field: two posts with one each, a
  * Single's document, and for a field group, whose values sit in its hosts, none.
  */

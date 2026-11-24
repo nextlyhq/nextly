@@ -688,15 +688,17 @@ export function repeatedValuesAt(
 }
 
 /**
- * A value as `target`'s column compares it for its unique index. MySQL's text column takes its
- * table's collation, the database's default, which folds case and accents in MySQL 8
- * (`utf8mb4_0900_ai_ci`), while the text read out of JSON compares byte by byte: read in the
- * character set's default collation instead, as a column created without one compares. PostgreSQL
+ * A value as `target`'s column compares it for its unique index. On MySQL a text column takes its
+ * table's collation, which is the one its other text columns were made with, and the text read out
+ * of JSON compares byte by byte: it is read through the table's `id` column, whose collation the
+ * whole expression takes (the id itself is never the result), so the values compare as the new
+ * column will, whatever collation the table has on the database the statement runs on. A table
+ * whose default was changed without converting its columns compares by the older one. PostgreSQL
  * and SQLite compare text as written, and every other kind compares as the value it is.
  */
 function asTheIndexCompares(target: MoveColumn, value: string): string {
   return target.dialect === "mysql" && TEXT_KINDS.has(target.kind)
-    ? `CONVERT(${value} USING utf8mb4)`
+    ? `IF(0, ${quoteIdent("id", target.dialect)}, ${value})`
     : value;
 }
 

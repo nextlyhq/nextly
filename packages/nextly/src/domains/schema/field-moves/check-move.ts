@@ -362,15 +362,20 @@ function storageRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
  * The refusal of a field the database keeps unique moved into a group or a repeater, at any depth,
  * named by the first one it enters: its values would sit in one JSON value, which no index keeps
  * unique. Judged before the containers themselves, so a repeater's "not available yet" never
- * stands in for it. Unique before the move or after it: a move that also drops the uniqueness is
- * two changes, and the uniqueness is changed in a save of its own first. A move into a field
- * group or a blocks field is refused for that (`crossingRefusal`).
+ * stands in for it. Only for a field that was outside every repeater: one already inside one is
+ * refused for its rows, which no change of its uniqueness helps. Unique before the move or after
+ * it: a move that also drops the uniqueness is two changes, and the uniqueness is changed in a save
+ * of its own first. A move into a field group or a blocks field is refused for that
+ * (`crossingRefusal`).
  */
 function uniqueRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
   if (to.place.kind !== "json") return null;
   if (!builderColumnIsUnique(from.field) && !builderColumnIsUnique(to.field)) {
     return null;
   }
+  // A field already inside a repeater is refused for its rows (`placesRefusal`), which taking its
+  // uniqueness away would not change: the advice this refusal gives would be followed for nothing.
+  if (from.containers.some(each => each.type === "repeater")) return null;
   const holder =
     to.containers.slice(sharedDepth(from.containers, to.containers))[0] ??
     to.containers[0];

@@ -359,6 +359,53 @@ export function describeRefusedMoves(): void {
         });
       });
 
+      // A field already inside a repeater is refused for its rows, whatever it is: a unique one is not
+      // told that losing its uniqueness would move it, as it would not.
+      describe("a unique field already inside a repeater", () => {
+        const items = (inside: Field[], row: Field[] = []) =>
+          repeater("items", [NOTE, ...inside, group("row", [NOTE, ...row])]);
+        const BEFORE = [HEADLINE, META(), items([CODE])];
+        it.each([
+          {
+            what: "out to the row",
+            fields: [HEADLINE, CODE, META(), items([])],
+            move: [{ from: ["items", "code"], to: ["code"] }],
+            message:
+              "code cannot be moved out of the repeating rows items: each entry may hold several rows of it, which one field cannot keep. Add a new field instead.",
+          },
+          {
+            what: "into a group outside it",
+            fields: [HEADLINE, META([CODE]), items([])],
+            move: [{ from: ["items", "code"], to: ["meta", "code"] }],
+            message:
+              "code cannot be moved out of the repeating rows items: each entry may hold several rows of it, which one field cannot keep. Add a new field instead.",
+          },
+          {
+            what: "into a group inside it",
+            fields: [HEADLINE, META(), items([], [CODE])],
+            move: [{ from: ["items", "code"], to: ["items", "row", "code"] }],
+            message:
+              "Moving code within the repeating rows items is not available yet.",
+          },
+        ])(
+          "moved $what is refused for its rows, nothing changed",
+          async ({ fields, move, message }) => {
+            const t = await boot();
+            await createEntities(t, BEFORE);
+            await post(t, {
+              title: "P",
+              slug: "p",
+              headline: "H",
+              items: [
+                { note: "a", code: "x" },
+                { note: "b", code: "y" },
+              ],
+            });
+            await expectRefused(t, fields, move, message);
+          }
+        );
+      });
+
       // Each entry may hold several rows of it, and one field keeps one value: refused, no row
       // dropped, and a new field suggested.
       describe("a field out of a repeater", () => {

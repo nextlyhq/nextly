@@ -109,6 +109,87 @@ describe("checkMove", () => {
     );
   });
 
+  // At any depth: the walk that finds the place a field moves to has no bound, so a field kept unique
+  // is refused however many containers deep the place is, and named by the first it enters.
+  it.each([
+    ...[1, 2, 3, 4, 5, 8, 16].map(depth => ["group", depth] as const),
+    ...[1, 2, 3, 4, 5, 8, 16].map(depth => ["repeater", depth] as const),
+  ])(
+    "refuses a field the database keeps unique into a %s, its containers %i deep, naming the outermost",
+    (outermost, depth) => {
+      const chain = Array.from({ length: depth }, (_, at) => ({
+        name: `level${at}`,
+        // The outermost is of the kind asked for; every container below it alternates.
+        type: at === 0 ? outermost : at % 2 === 0 ? "repeater" : "group",
+      }));
+      const nested = (inside: FieldDefinition[]): FieldDefinition[] =>
+        chain.reduceRight(
+          (fields, container) => [
+            { ...container, fields } as unknown as FieldDefinition,
+          ],
+          inside
+        );
+      const slug = text("slug", { unique: true });
+      const path = chain.map(({ name }) => name);
+      const checked = checkMove([slug, ...nested([])], nested([slug]), {
+        from: ["slug"],
+        to: [...path, "slug"],
+      });
+      expect(checked).toMatchObject({ ok: false, reason: "unique" });
+      expect(checked.ok ? "" : checked.message).toContain(
+        `slug cannot be moved into the ${outermost} level0: a ${outermost} keeps its values in one JSON value, which cannot be kept unique.`
+      );
+    }
+  );
+
+  // A field already inside a repeater is refused for its rows, whatever it is: taking its uniqueness
+  // away would not make the move possible, so the message never says it would.
+  it.each([
+    [
+      "out to the row",
+      ["items"],
+      ["slug"],
+      "out-of-repeater",
+      /cannot be moved out of the repeating rows items/,
+    ],
+    [
+      "into a group outside it",
+      ["items"],
+      ["meta", "slug"],
+      "out-of-repeater",
+      /cannot be moved out of the repeating rows items/,
+    ],
+    [
+      "into a group inside it",
+      ["items"],
+      ["items", "row", "slug"],
+      "within-repeater",
+      /^Moving slug within the repeating rows items is not available yet\./,
+    ],
+  ] as const)(
+    "refuses a unique field inside a repeater moved %s for its rows, not its uniqueness",
+    (_what, _from, to, reason, message) => {
+      const slug = text("slug", { unique: true });
+      const items = (inside: FieldDefinition[], row: FieldDefinition[]) =>
+        ({
+          name: "items",
+          type: "repeater",
+          fields: [...inside, group("row", row)],
+        }) as unknown as FieldDefinition;
+      const checked = checkMove(
+        [items([slug], []), group("meta", [])],
+        [
+          items(to[0] === "items" ? [] : [], to[0] === "items" ? [slug] : []),
+          ...(to[0] === "slug" ? [slug] : []),
+          group("meta", to[0] === "meta" ? [slug] : []),
+        ],
+        { from: ["items", "slug"], to: [...to] }
+      );
+      expect(checked).toMatchObject({ ok: false, reason });
+      expect(checked.ok ? "" : checked.message).toMatch(message);
+    }
+  );
+
   // Uniqueness is judged before the repeater: what stops the move is that its values would lose
   // their uniqueness, which the repeater's own "not available yet" would not say.
   it("refuses a field the database keeps unique into a repeater, naming the repeater", () => {

@@ -13,6 +13,7 @@ import {
   configOf,
   ENTITY_KINDS,
   FRAME,
+  INSIDE_REPEATER_MOVES,
   HOME,
   PEOPLE,
   POSTS,
@@ -126,6 +127,32 @@ export function describeRefusedReloads(loaded: { config: unknown }): void {
               "Run nextly migrate:create"
             );
             expect(await state(t), target.what).toEqual(before);
+          }
+        }
+      );
+
+      it.each(ENTITY_KINDS)(
+        "%s: a unique field already inside a repeater, moved out of it or within it: said why, nothing changed",
+        async entity => {
+          const kind = UNIQUE_KINDS[0];
+          if (kind === undefined) throw new Error("no unique kind");
+          vi.spyOn(console, "warn").mockImplementation(() => {});
+          vi.spyOn(console, "error").mockImplementation(() => {});
+          handle = await createTestNextly({
+            dialect,
+            localization: { locales: ["en", "es"], defaultLocale: "en" },
+          });
+          loaded.config = configOf(entity, kind, ["items"]);
+          await reloadNextlyConfig();
+          const t = handle;
+          const before = await state(t);
+
+          for (const { what, path, message } of INSIDE_REPEATER_MOVES) {
+            loaded.config = configOf(entity, kind, path);
+            const said = await reload();
+            expect(said, what).toContain(message);
+            expect(said, what).toContain("The change was not applied.");
+            expect(await state(t), what).toEqual(before);
           }
         }
       );

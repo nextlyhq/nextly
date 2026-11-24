@@ -1828,6 +1828,118 @@ describe.each(getConfiguredTestDialects())(
         expect((await columnsOf(second)).sort()).toEqual(columns);
       });
 
+      // The new column takes its table's collation, not the server's: the count reads it where the
+      // values are, so a table in another collation is counted as its own column compares.
+      it.runIf(dialect === "mysql")(
+        "counts codes its table's own collation holds as one, whatever the server's default, nothing changed",
+        async () => {
+          const t = await boot(dialect);
+          await createPosts(t, SLUG, { fields: GROUPED });
+          // Ignores trailing spaces (PAD SPACE), where the server's default does not.
+          await run(
+            t,
+            `ALTER TABLE ${q(TABLE)} CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+          );
+          await seedHeld(t, "code", ['"a"', '"a "']);
+          const groups = await storedGroups(t);
+          const files = await migrationFiles();
+          const columns = (await columnsOf(t)).sort();
+          const registry = await registryRow(t);
+
+          await expect(save(t, ON_ROW, OUT_OF_META)).rejects.toThrow(
+            expect.objectContaining({
+              publicData: {
+                errors: [
+                  expect.objectContaining({
+                    code: "FIELD_MOVE_REFUSED",
+                    message: expect.stringContaining(
+                      "1 of its values is held by more than one entry"
+                    ),
+                  }),
+                ],
+              },
+            })
+          );
+
+          expect(await storedGroups(t)).toEqual(groups);
+          expect(await migrationFiles()).toEqual(files);
+          expect((await columnsOf(t)).sort()).toEqual(columns);
+          expect(await registryRow(t)).toBe(registry);
+        }
+      );
+
+      it.runIf(dialect === "mysql")(
+        "moves codes a stricter collation of its table keeps apart, which the server's default would not",
+        async () => {
+          const t = await boot(dialect);
+          await createPosts(t, SLUG, { fields: GROUPED });
+          await run(
+            t,
+            `ALTER TABLE ${q(TABLE)} CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`
+          );
+          await seedCodes(t, ["Code", "code"]);
+
+          await save(t, ON_ROW, OUT_OF_META);
+
+          const after = await readAll(t);
+          expect([...after.values()].map(item => item.code).sort()).toEqual([
+            "Code",
+            "code",
+          ]);
+        }
+      );
+
+      it.runIf(dialect === "mysql")(
+        "stops a replay on a database whose table's collation holds one code as two, before anything changes",
+        async () => {
+          const first = await boot(dialect);
+          await createPosts(first, SLUG, { fields: GROUPED });
+          const created = await filesWritten();
+          await seedCodes(first, ["a", "b"]);
+          await save(first, ON_ROW, OUT_OF_META);
+          await first.destroy();
+          instance = undefined;
+
+          const second = await boot(dialect);
+          await migrateFolder(second, created);
+          await run(
+            second,
+            `ALTER TABLE ${q(TABLE)} CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+          );
+          await seedHeld(second, "code", ['"a"', '"a "']);
+          const groups = await storedGroups(second);
+          const columns = (await columnsOf(second)).sort();
+
+          await expect(migrateFolder(second)).rejects.toThrow(
+            /two_entries_hold_one_code/
+          );
+
+          expect(await storedGroups(second)).toEqual(groups);
+          expect((await columnsOf(second)).sort()).toEqual(columns);
+        }
+      );
+
+      // The limit of comparing by the table's `id` column: a table whose default collation was
+      // changed without converting its columns keeps the older one there, while the column the move
+      // adds takes the new default. What the comparison misses, the index refuses, part-way through
+      // the copy, with every value still in the group.
+      it.runIf(dialect === "mysql")(
+        "compares by the older collation where a table's default was changed without converting its columns, and the index refuses the copy with every value intact",
+        async () => {
+          const t = await boot(dialect);
+          await createPosts(t, SLUG, { fields: GROUPED });
+          await run(t, `ALTER TABLE ${q(TABLE)} COLLATE = utf8mb4_unicode_ci`);
+          await seedHeld(t, "code", ['"a"', '"a "']);
+          const groups = await storedGroups(t);
+
+          await expect(save(t, ON_ROW, OUT_OF_META)).rejects.toThrow(
+            /stopped part way/
+          );
+
+          expect(await storedGroups(t)).toEqual(groups);
+        }
+      );
+
       // MySQL's text column folds case, as its database's default collation does; PostgreSQL's
       // and SQLite's compare text as written, so there the two are two values and move.
       it("counts two codes differing only in case as one where the column does", async () => {

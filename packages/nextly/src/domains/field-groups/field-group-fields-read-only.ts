@@ -23,11 +23,12 @@ import {
 } from "./storage/field-group-field-type";
 
 /**
- * Where a check reads each field group's fields as stored: past the registry row cache, so a
- * copy is compared with the field group as it stands, not as an earlier read cached it.
+ * Where a check reads the field groups' fields as stored: past the registry row cache, so a copy
+ * is compared with the field group as it stands, not as an earlier read cached it, and all of them
+ * in one read, so a save's hold on the schema exclusion does not grow with the field groups it uses.
  */
 export interface StoredFieldGroups {
-  findComponentForWrite(slug: string): Promise<{ fields?: unknown } | null>;
+  getAllFieldLists(): Promise<readonly { slug: string; fields?: unknown }[]>;
 }
 
 /** The field groups a request's save compares its copies with, while its service call runs. */
@@ -123,22 +124,18 @@ export async function refuseFieldGroupFieldsChangedInHost(
 }
 
 /**
- * Each field group's stored fields by its slug, or `undefined` for one `fieldGroups` does not
- * hold: read once each, however many copies of it a save carries.
+ * Each field group's stored fields by its slug, or `undefined` for one `fieldGroups` does not hold:
+ * read together, once, when the first copy asks, and not at all for a save that copies none.
  */
 function storedFieldsReader(
   fieldGroups: StoredFieldGroups
 ): (slug: string) => Promise<unknown> {
-  const read = new Map<string, Promise<unknown>>();
-  return slug => {
-    let stored = read.get(slug);
-    if (stored === undefined) {
-      stored = fieldGroups
-        .findComponentForWrite(slug)
-        .then(found => (found === null ? undefined : (found.fields ?? [])));
-      read.set(slug, stored);
-    }
-    return stored;
+  let lists: Promise<Map<string, unknown>> | undefined;
+  return async slug => {
+    lists ??= fieldGroups
+      .getAllFieldLists()
+      .then(all => new Map(all.map(each => [each.slug, each.fields ?? []])));
+    return (await lists).get(slug);
   };
 }
 

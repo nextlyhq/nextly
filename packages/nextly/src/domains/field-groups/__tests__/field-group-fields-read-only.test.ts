@@ -23,16 +23,13 @@ const BADGE_REF: Field = {
 };
 const CARD_FIELDS: Field[] = [NOTE, SUMMARY, BADGE_REF];
 
-/** The field groups as stored, read through a counter so a test can see each is read once. */
+/** The field groups as stored, read through a counter so a test can see they are read once. */
 function stored(card: Field[] = CARD_FIELDS) {
-  const fields: Record<string, Field[]> = {
-    card,
-    badge: BADGE_FIELDS,
-  };
-  const findComponentForWrite = vi.fn(async (slug: string) =>
-    slug in fields ? { fields: fields[slug] } : null
-  );
-  return { findComponentForWrite };
+  const getAllFieldLists = vi.fn(async () => [
+    { slug: "card", fields: card },
+    { slug: "badge", fields: BADGE_FIELDS },
+  ]);
+  return { getAllFieldLists };
 }
 
 const cardRef = (extra: Field): Field => ({
@@ -73,8 +70,8 @@ describe("refuseFieldGroupFieldsChangedInHost", () => {
         fieldGroups
       )
     ).resolves.toBeUndefined();
-    // Each field group read once, however many copies of it the save carries.
-    expect(fieldGroups.findComponentForWrite).toHaveBeenCalledTimes(2);
+    // All read together, once, however many copies of them the save carries.
+    expect(fieldGroups.getAllFieldLists).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a changed componentFields beside an unchanged fields", async () => {
@@ -162,6 +159,36 @@ describe("refuseFieldGroupFieldsChangedInHost", () => {
       ).resolves.toBeUndefined();
     }
   );
+
+  // A save holds the schema exclusion while it is checked, so the field groups it uses are read
+  // together: one read however many of them there are.
+  it.each([1, 5])(
+    "reads the field groups once for a save using %i of them",
+    async many => {
+      const slugs = Array.from({ length: many }, (_, at) => `group${at}`);
+      const getAllFieldLists = vi.fn(async () =>
+        slugs.map(slug => ({ slug, fields: [NOTE] }))
+      );
+      await refuseFieldGroupFieldsChangedInHost(
+        slugs.map(slug => ({
+          name: slug,
+          type: "component",
+          component: slug,
+          fields: [NOTE],
+        })),
+        { getAllFieldLists }
+      );
+      expect(getAllFieldLists).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("reads no field group for a save that copies none", async () => {
+    const getAllFieldLists = vi.fn(async () => []);
+    await refuseFieldGroupFieldsChangedInHost([NOTE, SUMMARY], {
+      getAllFieldLists,
+    });
+    expect(getAllFieldLists).not.toHaveBeenCalled();
+  });
 
   it("leaves a field group it does not hold to the save's own checks", async () => {
     await expect(
