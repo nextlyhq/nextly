@@ -7,11 +7,11 @@
  *
  * Every plan the companion step makes is recorded (`buildCompanionTransitionStatements`): a save
  * the push applied instead would plan the companion's change itself, as the push leaves the
- * companion alone. The save also plans the companion once before any statement, to judge what the
- * step would drop of another owner's; that plan, made before the file, sees the change still to
- * come, so it is the step's last plan, made after the file, that must have nothing to run.
+ * companion alone. The save also plans the companion once before its file is written, to judge what
+ * the step would drop of another owner's; that plan sees the change still to come, so it is told
+ * apart by whether the file was there yet, and every plan made once it was must have nothing to run.
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,10 +28,15 @@ import {
 } from "../../../../plugins/test-nextly";
 import type * as ReconcileCompanion from "../../../i18n/migration/reconcile-companion";
 
-/** Every companion plan made since the last reset. */
-const plans = vi.hoisted(
-  () => [] as { statements: string[]; beforeMain?: string[] }[]
-);
+/** Every companion plan made since the last reset, with whether the save's file was written by then. */
+const recorded = vi.hoisted(() => ({
+  plans: [] as {
+    statements: string[];
+    beforeMain?: string[];
+    afterFile: boolean;
+  }[],
+  fileWritten: (): boolean => false,
+}));
 
 vi.mock("../../../i18n/migration/reconcile-companion", async importOriginal => {
   const actual = await importOriginal<typeof ReconcileCompanion>();
@@ -41,7 +46,7 @@ vi.mock("../../../i18n/migration/reconcile-companion", async importOriginal => {
       ...args: Parameters<typeof actual.buildCompanionTransitionStatements>
     ) => {
       const plan = actual.buildCompanionTransitionStatements(...args);
-      plans.push(plan);
+      recorded.plans.push({ ...plan, afterFile: recorded.fileWritten() });
       return plan;
     },
   };
@@ -196,29 +201,45 @@ for (const dialect of getConfiguredTestDialects()) {
     ];
 
     describe.each(KINDS)("$name", kind => {
+      /** The migration files written so far. */
+      const migrationFiles = () =>
+        existsSync(join(basePath, "migrations"))
+          ? readdirSync(join(basePath, "migrations")).filter(name =>
+              name.endsWith(".sql")
+            ).length
+          : 0;
+
       /**
-       * The companion step's plan after the file `save` runs, the last made, has nothing to run.
-       * The plan judged before any statement comes first and may carry the change the file makes.
+       * The one plan `save` judges before its file is written, which may carry the change the file
+       * makes, after checking that every plan made once the file is there has nothing to run.
        */
-      async function plansNothingDuring(save: () => Promise<unknown>) {
-        plans.length = 0;
+      async function plansNothingAfterItsFile(save: () => Promise<unknown>) {
+        const before = migrationFiles();
+        recorded.plans.length = 0;
+        recorded.fileWritten = () => migrationFiles() > before;
         await save();
-        // The judged plan and the step's own: with one alone, the step planned nothing at all.
-        expect(plans.length).toBeGreaterThan(1);
-        const afterTheFile = plans.at(-1);
-        expect(afterTheFile?.statements).toEqual([]);
-        expect(afterTheFile?.beforeMain ?? []).toEqual([]);
+        const judged = recorded.plans.filter(plan => !plan.afterFile);
+        const after = recorded.plans.filter(plan => plan.afterFile);
+        expect(judged).toHaveLength(1);
+        expect(after.length).toBeGreaterThan(0);
+        for (const plan of after) {
+          expect(plan.statements).toEqual([]);
+          expect(plan.beforeMain ?? []).toEqual([]);
+        }
+        return judged[0]!;
       }
 
       it("adds a translated field and a shared one, the companion step planning nothing after the file", async () => {
         await kind.create();
-        await plansNothingDuring(() =>
+        const judged = await plansNothingAfterItsFile(() =>
           kind.save([
             ...TRANSLATED,
             { name: "summary", type: "text", localized: true },
             { name: "rank", type: "number", localized: false },
           ])
         );
+        // Judged with the change still to come, as the recorder would show it after the file too.
+        expect(judged.statements.join("\n")).toContain("summary");
         // The file added the translated field's companion column: a read of it finds no value.
         expect(await companionValues(kind.table, "summary")).toEqual({});
       });
@@ -268,7 +289,7 @@ for (const dialect of getConfiguredTestDialects()) {
       it("renames a shared field, keeping its value and every language's, the companion step planning nothing after the file", async () => {
         await kind.create();
         await kind.seed(t);
-        await plansNothingDuring(() =>
+        await plansNothingAfterItsFile(() =>
           kind.save(
             [
               TRANSLATED[0]!,
