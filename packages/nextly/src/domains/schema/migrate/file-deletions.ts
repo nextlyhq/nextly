@@ -720,8 +720,7 @@ function readCalls(tokens: readonly Token[]): Step | undefined {
 function namesTable(tokens: readonly Token[], at: number): boolean {
   const start = nameStart(tokens, at);
   if (tokens[start - 1] === "REFERENCES") return true;
-  // Only the first list of a creation follows its table's name.
-  if (tokens[0] !== "CREATE" || tokens.indexOf("(") !== at + 1) return false;
+  if (tokens[0] !== "CREATE") return false;
   const head = tokens.slice(1, start);
   return head.every(isTableCreationWord)
     ? head.includes("TABLE")
