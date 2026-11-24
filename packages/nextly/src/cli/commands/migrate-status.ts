@@ -71,7 +71,7 @@ import {
   resolveDeclaredSchema,
 } from "../../domains/schema/migrate/resolved-schema";
 import { marksNoTransaction } from "../../domains/schema/migrate/split-sql";
-import { describeError } from "../../errors/index";
+import { describeError, NextlyError } from "../../errors/index";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import type {
   MigrationErrorJson,
@@ -263,6 +263,18 @@ function endWithError(
 }
 
 /**
+ * What `--json` says of a database that could not be used. A failure to connect carries a code,
+ * given it by the open; one that carries none came after the database answered, and is named as
+ * it is.
+ */
+function openFailureText(error: unknown): string {
+  const text = describeError(error);
+  return NextlyError.is(error)
+    ? `Failed to connect to database: ${text}`
+    : text;
+}
+
+/**
  * Execute the migrate:status command
  *
  * @param options - Combined global and command options
@@ -333,12 +345,7 @@ export async function runMigrateStatus(
     });
     logger.debug("Database connected");
   } catch (error) {
-    endWithError(
-      options,
-      logger,
-      `Failed to connect to database: ${describeError(error)}`,
-      error
-    );
+    endWithError(options, logger, openFailureText(error), error);
   }
 
   try {
