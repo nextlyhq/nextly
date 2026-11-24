@@ -49,6 +49,7 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { consoleLogger } from "../../../../shared/types";
+import { namedCollectionLockNames } from "../../../dynamic-collections/services/dynamic-collection-registry-service";
 import { MIGRATION_LOCK_TABLE } from "../../../field-groups/migration/session";
 import { MetaService } from "../../../meta/services/meta-service";
 import { splitSqlStatements } from "../../migrate/split-sql";
@@ -484,15 +485,30 @@ describe.each(
       const db = t.adapter.getDrizzle<{
         execute: (q: unknown) => Promise<unknown>;
       }>();
-      const result = await db.execute(
-        sql`SELECT IS_USED_LOCK(${MYSQL_MIGRATE_LOCK_NAME}) AS holder`
-      );
-      const rows = (
-        Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result
-      ) as Array<{ holder: number | null }>;
-      const holder = rows[0]?.holder;
-      if (holder !== null && holder !== undefined) {
-        await t.adapter.executeQuery(`KILL ${Number(holder)}`);
+      const first = async (query: ReturnType<typeof sql>) => {
+        const result = await db.execute(query);
+        const rows = (
+          Array.isArray(result) && Array.isArray(result[0]) ? result[0] : result
+        ) as Array<Record<string, unknown>>;
+        return rows[0] ?? {};
+      };
+      // The migrate lock, and the collection's own, which a save that removes a field's values
+      // holds: each kept by its connection, which a killed process would have ended.
+      const { db: database } = await first(sql`SELECT DATABASE() AS db`);
+      const names = [
+        MYSQL_MIGRATE_LOCK_NAME,
+        ...namedCollectionLockNames(
+          typeof database === "string" ? database : null,
+          [slug]
+        ),
+      ];
+      for (const name of names) {
+        const { holder } = await first(
+          sql`SELECT IS_USED_LOCK(${name}) AS holder`
+        );
+        if (holder !== null && holder !== undefined) {
+          await t.adapter.executeQuery(`KILL ${Number(holder)}`);
+        }
       }
     }
 
