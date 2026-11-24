@@ -10,6 +10,8 @@
  */
 import { randomUUID } from "node:crypto";
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
 import { apiKeyScope } from "../../../../auth/authenticated-scope";
 import { defineCollection, defineSingle, text } from "../../../../config";
 import { getDialectTables } from "../../../../database/index";
@@ -21,7 +23,7 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import { permissionSlug } from "../../../../schemas/_zod/rbac";
-import { REVIEW_STATES_TABLE } from "../../../../schemas/review-states";
+import { reviewStatesTables } from "../../../../schemas/review-states";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
 import { ServiceContainer } from "../../../../services/index";
 import { WITHOUT_REVIEW_KEY } from "../../../collections/services/save-door-gate";
@@ -335,7 +337,7 @@ export function seedState(
 
 /**
  * Rows a statement inserts at once: each review state row binds under 20 values, so this stays
- * under SQLite's 999 bound values, and MySQL takes the batch as one round trip.
+ * under SQLite's 999 bound values, and every dialect takes the batch as one round trip.
  */
 const STATES_PER_INSERT = 40;
 
@@ -366,11 +368,21 @@ export async function seedStates(
       ...fields,
     });
   }
+  // Through the dialect's own table, as the repository's insert writes: the rows name its
+  // properties (`scopeKind`), which the table turns into its columns (`scope_kind`) and encodes
+  // (dates, JSON) for the dialect. An adapter's raw bulk insert takes column names as given.
+  const { nextlyReviewStates } = reviewStatesTables(
+    t.adapter.dialect as SupportedDialect
+  );
+  const db = t.adapter.getDrizzle<{
+    insert(table: unknown): {
+      values(rows: Record<string, unknown>[]): PromiseLike<unknown>;
+    };
+  }>();
   for (let at = 0; at < rows.length; at += STATES_PER_INSERT) {
-    await t.adapter.insertMany(
-      REVIEW_STATES_TABLE,
-      rows.slice(at, at + STATES_PER_INSERT)
-    );
+    await db
+      .insert(nextlyReviewStates)
+      .values(rows.slice(at, at + STATES_PER_INSERT));
   }
 }
 
