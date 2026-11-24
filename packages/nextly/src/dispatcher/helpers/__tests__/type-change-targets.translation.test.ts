@@ -70,6 +70,22 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       });
     });
 
+    // A rename in the same draft is the save's to judge: the change of type is asked of the one field.
+    it("a field the draft renamed too is judged by its saved name", () => {
+      expect(
+        targetOf(
+          { type: "number", localized: false },
+          "text",
+          COLLECTION,
+          false,
+          {
+            name: "renamed",
+            localized: true,
+          }
+        )
+      ).toMatchObject({ blocked: "joins-translation", outcome: null });
+    });
+
     // Controls: the same change where no translation rule applies is judged by its values alone.
     it("a shared text, a field inside a group's JSON, or the earlier layout: no translation rule asked", () => {
       const open = { blocked: null, refusal: null, outcome: "may-lose" };

@@ -5,6 +5,7 @@
  * @module services/typeChangeTargetsApi
  */
 import { protectedApi } from "@admin/lib/api/protectedApi";
+import type { FieldDefinition } from "@admin/types/collection";
 
 import type { ListResponse } from "../lib/api/response-types";
 
@@ -19,13 +20,19 @@ export interface TypeChangeTarget {
   outcome: "keeps" | "converts" | "may-lose" | null;
 }
 
-/**
- * A type the picker offers, and what the change would leave the field: whether it would hold several
- * values, and the values of the options it would have to choose from.
- */
+/** A type the picker offers, and the field as the change to it would be saved. */
 export interface TypeChangeCandidate {
   type: string;
+  field: FieldDefinition;
+}
+
+/** The settings a field was saved with that decide the answer, as the page loaded them. */
+export interface SavedFieldSettings {
   hasMany: boolean;
+  unique: boolean;
+  /** Undefined where the saved definition does not say. */
+  localized: boolean | undefined;
+  /** The values of its options. */
   options: readonly string[];
 }
 
@@ -35,7 +42,9 @@ export interface TypeChangeQuestion {
   path: readonly string[];
   /** Its type as the page knows it saved: an answer about another is refused. */
   type: string;
-  /** Each type the picker offers, with what the change leaves the field. */
+  /** Its settings as the page knows them saved: an answer about others is refused. */
+  saved: SavedFieldSettings;
+  /** Each type the picker offers, with the field the change to it would save. */
   candidates: readonly TypeChangeCandidate[];
 }
 
@@ -52,6 +61,7 @@ export async function typeChangeTargetsAt(
     {
       field: [...question.path],
       type: question.type,
+      saved: { ...question.saved },
       candidates: question.candidates.map(candidate => ({ ...candidate })),
     }
   );

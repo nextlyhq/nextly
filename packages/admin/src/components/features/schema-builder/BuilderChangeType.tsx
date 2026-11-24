@@ -23,7 +23,7 @@ import {
 } from "@admin/components/field-ui/FieldPicker";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useTypeChangeTargets } from "@admin/hooks/queries/useTypeChangeTargets";
-import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { apiErrorMessage, isApiError } from "@admin/lib/api/parseApiError";
 import {
   containerChangeRefused,
   settingsFittingType,
@@ -34,13 +34,17 @@ import {
   findFieldPlacement,
   type FieldPlacement,
 } from "@admin/lib/builder/field-placement";
-import { findFieldById } from "@admin/lib/builder/field-transformers";
+import {
+  convertToFieldDefinition,
+  findFieldById,
+} from "@admin/lib/builder/field-transformers";
 import {
   BUILDER_FIELD_TYPES,
   builderOfferedTypes,
 } from "@admin/lib/builder/offered-field-types";
 import { pluginFieldTypeCatalogEntries } from "@admin/lib/builder/plugin-field-type-entries";
 import type {
+  SavedFieldSettings,
   TypeChangeQuestion,
   TypeChangeTarget,
 } from "@admin/services/typeChangeTargetsApi";
@@ -116,10 +120,25 @@ function changedTo(
   );
 }
 
+/** The settings `saved` was saved with that decide what another type does to its values. */
+function savedSettingsOf(saved: BuilderField): SavedFieldSettings {
+  return {
+    hasMany: saved.hasMany === true,
+    unique: saved.advanced?.unique === true,
+    localized:
+      typeof saved.advanced?.localized === "boolean"
+        ? saved.advanced.localized
+        : undefined,
+    options: (saved.options ?? [])
+      .map(option => option.value)
+      .filter(value => typeof value === "string"),
+  };
+}
+
 /**
- * What the picker asks the server of the saved field `saved`: every type it offers, a plugin's among
- * them, each with what picking it would leave the field (whether it holds several values, and its
- * options), so the server judges the field as the save would write it.
+ * What the picker asks the server of the saved field `saved`: its settings as saved, and every type
+ * it offers, a plugin's among them, each with the field as picking it would be saved
+ * (`convertToFieldDefinition`), so the server judges the field the save would write.
  */
 function questionOf(
   config: BuilderConfig,
@@ -133,15 +152,18 @@ function questionOf(
   );
   const candidates = [...offered]
     .filter(type => type !== saved.field.type)
-    .map(type => {
-      const next = changedTo(field, saved.field, type, plugins);
-      return {
-        type,
-        hasMany: next.hasMany === true,
-        options: (next.options ?? []).map(option => option.value),
-      };
-    });
-  return { path: savedPathOf(saved), type: saved.field.type, candidates };
+    .map(type => ({
+      type,
+      field: convertToFieldDefinition(
+        changedTo(field, saved.field, type, plugins)
+      ),
+    }));
+  return {
+    path: savedPathOf(saved),
+    type: saved.field.type,
+    saved: savedSettingsOf(saved.field),
+    candidates,
+  };
 }
 
 type Props = {
@@ -238,11 +260,17 @@ function pendingOf(
   if (saved === null) return {};
   if (targets.isPending) return { pending: { kind: "loading" } };
   if (!targets.isError) return {};
+  const { error } = targets;
+  // The saved field has changed since the page loaded it, which the server's words say and how to
+  // go on: trying again would ask about the same earlier definition.
+  if (isApiError(error) && error.code === "CONFLICT") {
+    return { pending: { kind: "failed", message: error.message } };
+  }
   return {
     pending: {
       kind: "failed",
       // What failed, then why, as the server or the network said it.
-      message: `What each type would do to the saved values could not be checked (${apiErrorMessage(targets.error, "no answer")}). Close and try again.`,
+      message: `What each type would do to the saved values could not be checked (${apiErrorMessage(error, "no answer")}). Close and try again.`,
     },
   };
 }

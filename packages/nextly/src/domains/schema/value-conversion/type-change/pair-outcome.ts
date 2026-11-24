@@ -2,9 +2,10 @@
  * What a change from one field type to another can do to the values a field of the first type may
  * hold, as a picker marks each type before anything is saved: keeps every value, converts some, or
  * may lose some. Judged by the rules themselves (`judgeValue`), over a value of each kind the old
- * type holds, so the mark never says more than the rules would of a stored value: a stored value
- * the rules would cut or round, or two values a unique field would read as one, are found only by
- * judging the stored values, which the save does.
+ * type holds and one longer than the new type's column does, so the mark never says more than the
+ * rules would of a stored value: a stored value the rules would round, or cut once it is written as
+ * the new type writes it, or two values a unique field would read as one, are found only by judging
+ * the stored values, which the save does.
  *
  * @module domains/schema/value-conversion/type-change/pair-outcome
  */
@@ -62,13 +63,24 @@ function dateValues(): OldValue[] {
 /** An address an email field holds, which no plain text above is. */
 const EMAIL = "someone@example.com";
 
-/** A value of each kind a field of `type` may hold, as the rules read stored values. */
-function valuesOf(type: FieldTypeOnDialect): OldValue[] {
+/** A text longer than `to` holds, where its column bounds a text; a short one where none does. */
+function longerThan(to: FieldTypeOnDialect): string {
+  return "x".repeat((to.textBound?.most ?? 0) + 1);
+}
+
+/**
+ * A value of each kind a field of `type` may hold, as the rules read stored values, and one longer
+ * than `to`, the type it becomes, holds.
+ */
+function valuesOf(
+  type: FieldTypeOnDialect,
+  to: FieldTypeOnDialect
+): OldValue[] {
   switch (type.family) {
     case "text":
-      return TEXTS.map(textValue);
+      return [...TEXTS, longerThan(to)].map(textValue);
     case "email":
-      return [...TEXTS, EMAIL].map(textValue);
+      return [...TEXTS, EMAIL, `${longerThan(to)}${EMAIL}`].map(textValue);
     case "choice":
       return [...(type.options ?? []), ...TEXTS].map(textValue);
     case "richText":
@@ -89,7 +101,7 @@ function valuesOf(type: FieldTypeOnDialect): OldValue[] {
       return JSON_VALUES.map(value => ({ kind: "json" as const, value }));
     case "list": {
       // A list of one item and of two, each item a value its item type holds (rule 5).
-      const items = type.item ? valuesOf(type.item) : TEXTS.map(textValue);
+      const items = type.item ? valuesOf(type.item, to) : TEXTS.map(textValue);
       return items.flatMap(item => [
         { kind: "list" as const, items: [item] },
         { kind: "list" as const, items: [item, item] },
@@ -159,7 +171,7 @@ export function pairOutcome(
   let converts = false;
   // Only values a field of `from` can hold: those the rules keep for the type itself. None of them
   // held means no value here is judged, so nothing says every value is kept.
-  const held = valuesOf(from).filter(
+  const held = valuesOf(from, to).filter(
     value => judgeValue(from, from, value).outcome === "kept"
   );
   if (held.length === 0) return "may-lose";

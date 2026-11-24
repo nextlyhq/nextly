@@ -49,6 +49,7 @@ import {
 } from "../../domains/schema/value-conversion/type-change/pair-outcome";
 import { NextlyError } from "../../errors/nextly-error";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import { selectOptionValues } from "../../shared/lib/entry-validation";
 
 import { getAdapterFromDI } from "./di";
 import { toPaginationMeta } from "./service-envelope";
@@ -71,14 +72,14 @@ export interface TypeChangeRefusalWords {
 }
 
 /**
- * A type the picker offers, and what the Builder's change would leave the field (`withTypeChanged`):
- * whether it would hold several values, and the options it would have to choose from, by value. The
- * field is judged with these, as the save would write it; each left undefined keeps the saved one's.
+ * A type the picker offers, and the field as the Builder's change would save it: its own settings
+ * (several values, its options, Unique, whether it is translated, the rules it keeps) decide the
+ * column the change makes, so the field is judged with them and no others. Where none are given, the
+ * saved field's are kept.
  */
 export interface TypeChangeCandidate {
   type: string;
-  hasMany?: boolean;
-  options?: readonly string[];
+  field?: Readonly<Record<string, unknown>>;
 }
 
 /** One type a saved field could be changed to, as the picker shows it. */
@@ -199,14 +200,12 @@ export function typeChangeTargets(args: {
   const from = typeOf(args.field);
   return args.candidates
     .filter(candidate => candidate.type !== args.field.type)
-    .map(({ type, hasMany, options }) => {
+    .map(({ type, field }) => {
+      // Asked under its saved name: a rename is the save's to judge, with the rest of it.
       const candidate = {
-        ...args.field,
+        ...(field ?? args.field),
+        name: args.field.name,
         type,
-        ...(hasMany === undefined ? {} : { hasMany }),
-        ...(options === undefined
-          ? {}
-          : { options: options.map(value => ({ label: value, value })) }),
       } as FieldDefinition;
       const to = typeOf(candidate);
       const blocked = pairBlocked(from, to);
@@ -233,26 +232,66 @@ export function typeChangeTargets(args: {
 }
 
 /**
+ * A field as the change would save it. Of its settings, those the rules read are parsed here; a
+ * choice's options are a list, a relationship's an object, and each is read as far as it is one.
+ */
+const CandidateField = z.looseObject({
+  hasMany: z.boolean().nullish(),
+  unique: z.boolean().nullish(),
+  localized: z.boolean().nullish(),
+  options: z
+    .union([z.array(z.unknown()), z.record(z.string(), z.unknown())])
+    .nullish(),
+  validation: z.record(z.string(), z.unknown()).nullish(),
+});
+
+/** The settings the page knows a field as saved by, each as the Builder loads it. */
+const SavedSettings = z.object({
+  hasMany: z.boolean(),
+  unique: z.boolean(),
+  /** Left out where the saved definition does not say: the type's own default. */
+  localized: z.boolean().optional(),
+  options: z.array(z.string()),
+});
+
+/**
  * What the type picker asks: the saved field, by its path of names through its groups and repeaters,
- * the type the page knows it as saved by, and the types it offers, each with what the change would
- * leave the field; the field types the catalog lists where it names none.
+ * the type and settings the page knows it as saved by, and the types it offers, each with the field
+ * as the change would save it; the field types the catalog lists where it names none.
  */
 const TargetsRequest = z.object({
   field: z.array(z.string().min(1)).min(1).max(20),
-  // The type the page knows the field as saved by: an answer for another type is refused, since the
-  // picker's marks would describe a definition that is no longer stored.
+  // What the page knows the field as saved by: an answer for another type, or other settings, is
+  // refused, since the picker's marks would describe a definition that is no longer stored.
   type: z.string().min(1),
+  saved: SavedSettings.optional(),
   candidates: z
     .array(
-      z.object({
-        type: z.string().min(1),
-        hasMany: z.boolean().optional(),
-        options: z.array(z.string()).optional(),
-      })
+      z.object({ type: z.string().min(1), field: CandidateField.optional() })
     )
     .max(100)
     .optional(),
 });
+
+/**
+ * Whether the stored field reads by the settings the page knows it as saved by. Each is compared as
+ * it reads, never as it is written, so a definition that leaves a default out and one that states it
+ * are the same: whether it is translated by `isFieldLocalized`, its options by their values.
+ */
+function savedAsKnown(
+  stored: FieldDefinition,
+  known: z.infer<typeof SavedSettings>
+): boolean {
+  const asKnown = { ...stored, localized: known.localized };
+  const values = (options: readonly string[]) =>
+    JSON.stringify([...options].sort());
+  return (
+    (stored.hasMany === true) === known.hasMany &&
+    (stored.unique === true) === known.unique &&
+    isFieldLocalized(stored, true) === isFieldLocalized(asKnown, true) &&
+    values(selectOptionValues(stored)) === values(known.options)
+  );
+}
 
 /**
  * The fields on one level as a value is read there: a group with no name holds its fields on the
@@ -307,9 +346,12 @@ export function respondTypeChangeTargets(args: {
       message: `No saved field ${request.field.join(".")}.`,
     });
   }
-  if (found.field.type !== request.type) {
+  if (
+    found.field.type !== request.type ||
+    (request.saved !== undefined && !savedAsKnown(found.field, request.saved))
+  ) {
     throw NextlyError.conflict({
-      message: `The type of the saved field ${request.field.join(".")} has changed since the page was loaded. Reload it to see the field as saved.`,
+      message: `The saved field ${request.field.join(".")} has changed since the page was loaded. Reload it to see the field as saved.`,
     });
   }
   const adapter = getAdapterFromDI();
