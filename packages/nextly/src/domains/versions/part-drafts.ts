@@ -36,6 +36,7 @@ import {
   assembleSharedStructure,
   componentStructureShape,
   type ComponentFieldsOf,
+  overlayOver,
   placesComponent,
   sameShare,
   sharedStructureShape,
@@ -441,9 +442,15 @@ export function combinedDraft(
       delete combined[name];
       continue;
     }
+    // The language's held text over its live text: a text the draft holds,
+    // a cleared one included, is the draft's; any other is as live.
     combined[name] = assembleSharedStructure(
       structure,
-      [inLanguage ? language[name] : undefined, live.overlay],
+      [
+        inLanguage
+          ? overlayOver(language[name], live.overlay, shape)
+          : live.overlay,
+      ],
       shape
     );
   }

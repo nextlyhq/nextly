@@ -387,3 +387,75 @@ describe("a container saying it is not translated", () => {
     ).toEqual({ kind: "group", texts: ["heading"], inner: {} });
   });
 });
+
+describe("rows keyed by an id their repeater declares", () => {
+  const LINES = {
+    name: "lines",
+    type: "repeater",
+    fields: [
+      { name: "id", type: "number" },
+      { name: "label", type: "text" },
+    ],
+  };
+  const shape = () => sharedStructureShape(LINES)!;
+
+  // A repeater declaring its own `id` field keeps that value as authored, a number among them:
+  // each row's text is still the language's, keyed by the id's text.
+  it("keeps a row's text apart by a numeric id", () => {
+    const { structure, overlay } = splitSharedStructure(
+      [
+        { id: 7, label: "seven" },
+        { id: 8, label: "eight" },
+      ],
+      shape()
+    );
+    expect(structure).toEqual([{ id: 7 }, { id: 8 }]);
+    expect(overlay).toEqual({
+      "7": { label: "seven" },
+      "8": { label: "eight" },
+    });
+    expect(
+      assembleSharedStructure(
+        structure,
+        [{ "7": { label: "siete" } }, overlay],
+        shape()
+      )
+    ).toEqual([
+      { id: 7, label: "siete" },
+      { id: 8, label: "eight" },
+    ]);
+  });
+
+  // Two rows under one id would share one overlay entry, one row's text read on the other.
+  it("keeps the text of a row repeating an earlier row's id on the structure", () => {
+    const { structure, overlay } = splitSharedStructure(
+      [
+        { id: 7, label: "first" },
+        { id: 7, label: "second" },
+      ],
+      shape()
+    );
+    expect(overlay).toEqual({ "7": { label: "first" } });
+    expect(structure).toEqual([{ id: 7 }, { id: 7, label: "second" }]);
+    expect(assembleSharedStructure(structure, [overlay], shape())).toEqual([
+      { id: 7, label: "first" },
+      { id: 7, label: "second" },
+    ]);
+  });
+});
+
+describe("an overlay held as the container's whole value", () => {
+  // The default language's overlay seeded from a container that kept its text on the main table
+  // before is its whole value: it reads as that language's text.
+  it("reads as the text alone", () => {
+    expect(
+      assembleSharedStructure(
+        [{ id: "r1", rank: 1 }],
+        [[{ id: "r1", caption: "first", rank: 9 }]],
+        slidesShape()
+      )
+    ).toEqual([
+      expect.objectContaining({ id: "r1", caption: "first", rank: 1 }),
+    ]);
+  });
+});

@@ -345,6 +345,22 @@ describe("a structured field's shares", () => {
     ]);
   });
 
+  // A held draft that clears a text means it: publishing it clears the text, rather than putting
+  // back the translation the language has live.
+  it("keeps a text a language's held draft clears, rather than the live one", async () => {
+    const keys = await partKeysOf([slides]);
+    const combined = combinedDraft(
+      {},
+      { language: row({ slides: { r1: { caption: "" } } }) },
+      { keys, live }
+    );
+
+    expect(combined.slides).toEqual([
+      { id: "r1", caption: null, rank: 1 },
+      { id: "r2", caption: "segundo", rank: 2 },
+    ]);
+  });
+
   it("leaves out a language's held text with no structure to lay it on", async () => {
     const keys = await partKeysOf([slides]);
     const combined = combinedDraft(

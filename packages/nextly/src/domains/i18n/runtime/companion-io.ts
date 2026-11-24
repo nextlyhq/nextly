@@ -757,13 +757,20 @@ export function splitSharedStructureWrite(
   value: unknown
 ): { written: SharedStructureWritten; overlay: unknown } {
   const { structure, overlay } = splitStoredValue(value, shape);
-  // An overlay holding no text (every value blank, or none) is no translation: stored as none, so
-  // every reader that asks whether a language is translated (status, filters, the source a value
-  // came from) reads this language as untranslated, as a read falling back already does.
   return {
     written: { field: ref.name, column: ref.column, structure, shape },
-    overlay: sameShare(overlay, {}) ? null : overlay,
+    overlay: storedOverlay(overlay),
   };
+}
+
+/**
+ * An overlay as it is stored: one holding no text (every value blank, or none) is no translation,
+ * stored as none, so every reader that asks whether a language is translated (status, filters, the
+ * source a value came from) reads this language as untranslated, as a read falling back already
+ * does. The one rule every write of an overlay keeps, a write's and a removed row's prune alike.
+ */
+function storedOverlay(overlay: unknown): unknown {
+  return sameShare(overlay, {}) ? null : overlay;
 }
 
 /**
@@ -842,7 +849,9 @@ export async function pruneOverlaysOfRemovedRows(
       const stored = row[column];
       if (stored === null || stored === undefined) continue;
       const pruned = pruneOverlay(stored, structure, shape);
-      if (pruned.changed) changed[column] = JSON.stringify(pruned.overlay);
+      if (!pruned.changed) continue;
+      const kept = storedOverlay(pruned.overlay);
+      changed[column] = kept === null ? null : JSON.stringify(kept);
     }
     if (Object.keys(changed).length === 0) continue;
     await upsertCompanionRow(

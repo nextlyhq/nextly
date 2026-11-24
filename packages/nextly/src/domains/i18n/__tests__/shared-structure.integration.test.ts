@@ -759,6 +759,59 @@ describeEachDialect("one structure across languages", dialect => {
     BOOT_TIMEOUT
   );
 
+  // A language whose last translated row is removed holds no text there any more: stored as no
+  // translation, as a write holding none is, so it never reads as translated.
+  it(
+    "stores no translation for a language whose last translated row a removal takes",
+    async () => {
+      const { nextly } = await site();
+      const created = await nextly.create({
+        collection: "articles",
+        locale: "en",
+        data: {
+          title: "Hello",
+          slides: [
+            { caption: "first", rank: 1 },
+            { caption: "second", rank: 2 },
+          ],
+        },
+      });
+      const id = (created.item as { id: string }).id;
+      const [first, second] = (await read(nextly, id, "en")).slides;
+      // Spanish translates the second row alone.
+      await write(nextly, id, "es", {
+        slides: [
+          { id: first!.id, rank: 1 },
+          { id: second!.id, caption: "segundo", rank: 2 },
+        ],
+      });
+      const spanish = async () =>
+        (
+          await t!.adapter.select<{ _locale: string; slides: unknown }>(
+            "dc_articles_locales",
+            {
+              where: {
+                and: [
+                  { column: "_parent", op: "=", value: id },
+                  { column: "_locale", op: "=", value: "es" },
+                ],
+              },
+            }
+          )
+        )[0]?.slides;
+      // The control: Spanish holds the second row's text.
+      expect(JSON.stringify(await spanish())).toContain("segundo");
+
+      // English removes the second row: Spanish's text there goes with it, and nothing is left.
+      await write(nextly, id, "en", {
+        slides: [{ id: first!.id, caption: "first", rank: 1 }],
+      });
+
+      expect(await spanish()).toBeNull();
+    },
+    BOOT_TIMEOUT
+  );
+
   /** The paths of one document's live provenance records in `locale`, sorted. */
   async function livePaths(
     scope: { kind: string; slug: string; id: string },

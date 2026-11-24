@@ -305,11 +305,40 @@ function shapeOfRow(
   return (type !== undefined && shape.byType[type]) || shape;
 }
 
-/** A repeater row's id, where it has one: a non-empty string. */
-function idOf(row: unknown): string | undefined {
-  return isPlainRecord(row) && typeof row.id === "string" && row.id !== ""
-    ? row.id
-    : undefined;
+/**
+ * The key each row of a list keeps its translations under: its id, a non-empty string as the
+ * system gives every row, or a finite number a repeater declaring its own `id` field may hold, by
+ * its text. A row with no such id, or whose id an earlier row of the list already holds, has none,
+ * and keeps its translatable values on the structure: two rows never share one overlay entry.
+ */
+function rowKeys(rows: readonly unknown[]): (string | undefined)[] {
+  const taken = new Set<string>();
+  return rows.map(row => {
+    const key = keyOf(row);
+    if (key === undefined || taken.has(key)) return undefined;
+    taken.add(key);
+    return key;
+  });
+}
+
+/** A row's id as an overlay key, before {@link rowKeys} judges it against the other rows. */
+function keyOf(row: unknown): string | undefined {
+  if (!isPlainRecord(row)) return undefined;
+  const { id } = row;
+  if (typeof id === "string") return id === "" ? undefined : id;
+  return typeof id === "number" && Number.isFinite(id) ? String(id) : undefined;
+}
+
+/**
+ * One language's overlay as the text alone: a value held whole (`isWholeValue`), as a container's
+ * value is when it is copied over to the default language from before the container kept its
+ * text apart, is read as its split's overlay, so every reader reads it the same as a written one.
+ */
+function overlayOf(value: unknown, shape: SharedStructureShape): unknown {
+  const parsed = valueOf(value);
+  return isWholeValue(parsed, shape)
+    ? (splitSharedStructure(parsed, shape).overlay ?? {})
+    : parsed;
 }
 
 /** A value as stored or sent: JSON text read, anything else as it is. */
@@ -339,9 +368,10 @@ export function splitSharedStructure(
   }
   if (!Array.isArray(parsed)) return { structure: value, overlay: undefined };
   const overlay: OverlayLevel = {};
-  const structure = parsed.map(row => {
+  const keys = rowKeys(parsed);
+  const structure = parsed.map((row, index) => {
     if (!isPlainRecord(row)) return row;
-    const id = idOf(row);
+    const id = keys[index];
     if (id === undefined) return row;
     const split = splitLevel(row, shapeOfRow(row, shape));
     if (Object.keys(split.overlay).length > 0) overlay[id] = split.overlay;
@@ -387,16 +417,19 @@ export function assembleSharedStructure(
   shape: SharedStructureShape
 ): unknown {
   const parsed = valueOf(structure);
-  const levels = overlays.map(valueOf).map(o => (isPlainRecord(o) ? o : {}));
+  const levels = overlays
+    .map(overlay => overlayOf(overlay, shape))
+    .map(o => (isPlainRecord(o) ? o : {}));
   if (shape.kind === "group") {
     return isPlainRecord(parsed)
       ? assembleLevel(parsed, levels, shape)
       : structure;
   }
   if (!Array.isArray(parsed)) return structure;
-  return parsed.map(row => {
+  const keys = rowKeys(parsed);
+  return parsed.map((row, index) => {
     if (!isPlainRecord(row)) return row;
-    const id = idOf(row);
+    const id = keys[index];
     const rowLevels = levels.map(level => {
       if (id === undefined || !Object.hasOwn(level, id)) return {};
       const entry = level[id];
@@ -437,6 +470,53 @@ function assembleLevel(
 }
 
 /**
+ * One language's overlay `primary` over `fallback`, an older overlay of the same language: each
+ * text `primary` holds wins, a blank one included, since a held draft that clears a text means it;
+ * each text it does not hold is `fallback`'s. Rows by their key and nested containers in turn,
+ * read by `shape`, so a text value that is itself an object (a rich text document) is one value,
+ * never merged with another.
+ */
+export function overlayOver(
+  primary: unknown,
+  fallback: unknown,
+  shape: SharedStructureShape
+): OverlayLevel {
+  const over = asLevel(overlayOf(primary, shape));
+  const under = asLevel(overlayOf(fallback, shape));
+  if (shape.kind === "repeater") {
+    const out: OverlayLevel = { ...under };
+    for (const [key, entry] of Object.entries(over)) {
+      out[key] = levelOver(asLevel(entry), asLevel(under[key]), shape);
+    }
+    return out;
+  }
+  return levelOver(over, under, shape);
+}
+
+/** {@link overlayOver} for one row's (or one group's) entry. */
+function levelOver(
+  over: OverlayLevel,
+  under: OverlayLevel,
+  shape: SharedStructureShape
+): OverlayLevel {
+  const out: OverlayLevel = { ...under };
+  for (const name of shape.texts) {
+    if (Object.hasOwn(over, name)) out[name] = over[name];
+  }
+  for (const [name, nested] of Object.entries(shape.inner)) {
+    if (Object.hasOwn(over, name)) {
+      out[name] = overlayOver(over[name], under[name], nested);
+    }
+  }
+  return out;
+}
+
+/** A value as an overlay level: a plain record, or an empty one. */
+function asLevel(value: unknown): OverlayLevel {
+  return isPlainRecord(value) ? value : {};
+}
+
+/**
  * `overlay` without the entries of rows `structure` no longer holds, at every depth, and whether
  * anything was dropped. Run on every language's overlay when a write changes the structure, so a
  * removed row's translations go with it rather than waiting for a row given its id again.
@@ -454,10 +534,11 @@ export function pruneOverlay(
   }
   const rows = new Map<string, Record<string, unknown>>();
   if (Array.isArray(kept)) {
-    for (const row of kept) {
-      const id = idOf(row);
+    const keys = rowKeys(kept);
+    kept.forEach((row, index) => {
+      const id = keys[index];
       if (id !== undefined && isPlainRecord(row)) rows.set(id, row);
-    }
+    });
   }
   const out: OverlayLevel = {};
   let changed = false;
