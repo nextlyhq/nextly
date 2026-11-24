@@ -202,15 +202,15 @@ describe("the Single editor's document panel", () => {
     ).toHaveLength(0);
   });
 
-  it("reads what it is, Status, Publishing, Last changed and For developers beside the fields, addressing the Single's releases by its slug", () => {
+  it("reads what it is, Status, Last changed and For developers beside the fields, addressing the Single's releases by its slug", () => {
     renderEditor();
     const sections = within(dockedPanel()!)
       .getAllByRole("region")
       .map(section => section.getAttribute("data-panel-section"));
+    // No Publishing section: it is drawn only while the document is scheduled.
     expect(sections).toEqual([
       "What this is",
       "Status",
-      "Publishing",
       "Last changed",
       "For developers",
     ]);

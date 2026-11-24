@@ -1,7 +1,9 @@
 /**
- * The document panel's Review section, as the editor draws it: its steps wait
- * for what holds the header's (unsaved edits, a save on its way), and say why;
- * and it is a part of the panel of its own, kept where a plugin replaces Status.
+ * The document panel's Review section, as the editor draws it: the steps it
+ * offers (those of a part the header does not move, here the shared fields
+ * waiting in another stage than the language on screen) wait for what holds
+ * the header's (unsaved edits, a save on its way), and say why; and it is a
+ * part of the panel of its own, kept where a plugin replaces Status.
  *
  * The plausible broken panels: one that offers the side panel's steps while
  * the page holds unsaved edits, so a step approves the stored content while
@@ -86,6 +88,18 @@ const IN_REVIEW: PartReview = {
   lastMove: null,
 };
 
+/**
+ * The language on screen, drafting with no step this person holds: the
+ * header moves it, so the panel offers only the shared fields' Approve.
+ */
+const EN_DRAFTING: PartReview = {
+  ...IN_REVIEW,
+  part: "en",
+  stage: "drafting",
+  stageLabel: "Drafting",
+  steps: [],
+};
+
 function panel(props: Partial<DocumentPanelProps> = {}) {
   return render(
     <EntryLocaleProvider
@@ -114,7 +128,7 @@ beforeEach(() => {
     attached: true,
     review: {
       workflow: { slug: "review", label: "Review" },
-      parts: [IN_REVIEW],
+      parts: [EN_DRAFTING, IN_REVIEW],
       mayPublishWithoutReview: false,
     },
   });
