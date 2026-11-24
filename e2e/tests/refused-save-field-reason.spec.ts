@@ -18,6 +18,7 @@ import { expect } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { includingHidden, test } from "./support/test";
+import { chooseFromMainMenu } from "./support/document-bar";
 
 const API = "/admin/api";
 // Unique to this attempt: a retry seeds again.
@@ -82,7 +83,7 @@ test("a refused save puts the server's reason on its field and keeps the edit", 
       response.request().method() === "PATCH" &&
       response.url().includes(`/collections/layouts/entries/${layoutId}`)
   );
-  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  await chooseFromMainMenu(page, "Save draft");
   const refusal = await answer;
 
   // The server refused it, on the field, in these words.

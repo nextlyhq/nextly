@@ -8,8 +8,9 @@ import { expect } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { chooseFromMainMenu } from "./support/document-bar";
 
-test("keeps Save draft and Publish inside the bar while the preview narrows the editor", async ({
+test("keeps the main button and More inside the bar while the preview narrows the editor", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1024, height: 900 });
@@ -25,18 +26,8 @@ test("keeps Save draft and Publish inside the bar while the preview narrows the 
     page.getByRole("textbox", { name: "Title", exact: true })
   ).toHaveValue("Narrow editor", { timeout: 30_000 });
 
-  // Where the bar's right part is too narrow for every control on one row,
-  // the preview's controls are rows of the document's menu instead.
-  const showPreview = page.getByRole("button", {
-    name: "Show preview",
-    exact: true,
-  });
-  if (await showPreview.isVisible()) {
-    await showPreview.click();
-  } else {
-    await page.getByRole("button", { name: "More actions" }).click();
-    await page.getByRole("menuitem", { name: /^Show preview/ }).click();
-  }
+  // The preview's controls are rows of the main button's menu.
+  await chooseFromMainMenu(page, "Show preview pane");
   const divider = page.getByRole("separator", { name: /^Resize the editor/ });
   await divider.focus();
   // The editor at the narrowest the divider allows.
@@ -46,7 +37,7 @@ test("keeps Save draft and Publish inside the bar while the preview narrows the 
     .getByRole("banner")
     .filter({ has: page.getByTestId("document-bar") });
   const controls = page.getByRole("button", {
-    name: /^(Save draft|Publish|More actions)$/,
+    name: /^(Publish|More ways to publish|More actions)$/,
   });
   await expect(controls).toHaveCount(3);
   // Each control lies within the bar, on its row, and within the window.

@@ -61,7 +61,7 @@ async function restoreTitleAndSummary(
   // In the admin's top bar, where an open document draws its controls.
   await page
     .getByRole("banner")
-    .getByRole("button", { name: "Restore this version" })
+    .getByRole("button", { name: "Restore…" })
     .click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog.getByText(/Restore from version 1/)).toBeVisible();
