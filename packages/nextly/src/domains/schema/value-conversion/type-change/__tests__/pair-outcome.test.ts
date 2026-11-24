@@ -31,6 +31,8 @@ const choices = {
   ],
 } as Partial<FieldDefinition>;
 
+const several = { hasMany: true } as Partial<FieldDefinition>;
+
 describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
   const outcome = (
     from: string,
@@ -77,7 +79,40 @@ describe.each(DIALECTS)("the mark of a type change (%s)", dialect => {
     expect(outcome("email", "text")).toBe("keeps");
   });
 
-  it("is blocked whatever the values hold: a group, or a relationship to text", () => {
+  // A family with no value of its own to judge would answer "may lose" for a change to itself.
+  it("keeps every value of rich text, JSON and a list changed to themselves", () => {
+    expect(outcome("richText", "richText")).toBe("keeps");
+    expect(outcome("json", "json")).toBe("keeps");
+    expect(outcome("text", "text", several, several)).toBe("keeps");
+  });
+
+  it("judges a list by its items: each converted as a list, all but one lost as one value", () => {
+    expect(outcome("number", "text", several, several)).toBe("converts");
+    expect(outcome("text", "text", several)).toBe("may-lose");
+  });
+
+  // A JSON field holds a list of several, which no type of one value takes, and an object, which no
+  // list does: nothing but JSON keeps or converts them all, whatever length their writing has.
+  it("may lose values: JSON becoming anything but JSON", () => {
+    for (const to of [
+      "text",
+      "textarea",
+      "code",
+      "email",
+      "richText",
+      "number",
+      "checkbox",
+      "date",
+      "chips",
+    ]) {
+      expect(outcome("json", to), to).toBe("may-lose");
+    }
+    expect(outcome("json", "select", {}, choices)).toBe("may-lose");
+    expect(outcome("json", "text", {}, several)).toBe("may-lose");
+  });
+
+  it("is blocked whatever the values hold: a group, a relationship to text, or rich text to a number", () => {
+    expect(outcome("richText", "number")).toBeNull();
     expect(outcome("group", "text", { fields: [] })).toBeNull();
     expect(outcome("relationship", "text", { relationTo: "posts" })).toBeNull();
   });

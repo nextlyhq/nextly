@@ -195,6 +195,33 @@ describe("the route's answer for a field found by its path", () => {
     expect(targetOf()).toBe("converts");
   });
 
+  // The options are the ones the change would save, which a draft may have dropped or edited: the
+  // saved field's own answer for values the saved field held.
+  it("judges a change to a choice over the options the change would leave, not the saved ones", () => {
+    const targetOf = (options?: string[]) =>
+      typeChangeTargets({
+        field: {
+          name: "f",
+          type: "select",
+          options: [
+            { label: "A", value: "a" },
+            { label: "B", value: "b" },
+          ],
+        } as FieldDefinition,
+        candidates: [
+          { type: "radio", ...(options === undefined ? {} : { options }) },
+        ],
+        dialect: "postgresql",
+        builtBy: "collection",
+        layout: { perLanguage: false, fileRetypes: true },
+      })[0]?.outcome;
+    expect(targetOf(["a", "b"])).toBe("keeps");
+    expect(targetOf(["a"])).toBe("may-lose");
+    expect(targetOf([])).toBe("may-lose");
+    // Not said, the field's own.
+    expect(targetOf()).toBe("keeps");
+  });
+
   it("refuses an answer for a field whose saved type is no longer the one the page knows", () => {
     container.registerSingleton("adapter", () => ({
       getCapabilities: () => ({ dialect: "sqlite" }),

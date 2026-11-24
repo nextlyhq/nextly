@@ -192,6 +192,56 @@ describe("Change type… on a saved field", () => {
     expect(keeps("text")).toBe(false);
   });
 
+  // What the draft holds is what the change would save: its options, dropped or edited, and no
+  // others, so the answer is about the field the person would get.
+  it("asks of each type over the options the change would leave the field", async () => {
+    answer = async () => [];
+    const optionsAsked = (type: string) =>
+      asked[0]?.question.candidates.find(each => each.type === type)?.options;
+    const saved: BuilderField = {
+      ...kind,
+      options: [
+        { label: "A", value: "a" },
+        { label: "B", value: "b" },
+      ],
+    };
+    const ask = (draft: BuilderField) => {
+      asked.length = 0;
+      return render(
+        <BuilderChangeType
+          config={COLLECTION_BUILDER_CONFIG}
+          fields={[draft]}
+          fieldId="f-kind"
+          entitySlug="posts"
+          savedFields={[saved]}
+          onCancel={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      );
+    };
+    // The draft is a text now, its options gone: radio buttons picked from it have none.
+    const { unmount } = ask({
+      id: "f-kind",
+      name: "kind",
+      label: "Kind",
+      type: "text",
+      validation: {},
+    });
+    await waitFor(() => expect(asked).toHaveLength(1));
+    expect(optionsAsked("radio")).toEqual([]);
+    unmount();
+    // The draft is radio buttons with one option left.
+    ask({
+      ...saved,
+      type: "radio",
+      hasMany: undefined,
+      options: [{ label: "A", value: "a" }],
+    });
+    await waitFor(() => expect(asked).toHaveLength(1));
+    expect(optionsAsked("checkbox")).toEqual(["a"]);
+    expect(optionsAsked("text")).toEqual([]);
+  });
+
   it("changed already, it offers its type as saved back, as keeping every value", async () => {
     answer = async () => [];
     const { user, onChanged } = renderChange("f-kind", [

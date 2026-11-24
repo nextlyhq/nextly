@@ -115,6 +115,27 @@ describe("a field changed to another type", () => {
     expect(next.admin).toEqual({});
   });
 
+  it("a dropdown becoming a set of choices keeps what a dropdown shows beside its options", () => {
+    expect(
+      changed(
+        {
+          type: "select",
+          admin: { isClearable: false, placeholder: "Choose…" },
+        },
+        "checkbox"
+      ).admin
+    ).toEqual({ isClearable: false, placeholder: "Choose…" });
+  });
+
+  it("radio buttons keep how they are laid out only as radio buttons", () => {
+    expect(
+      changed({ type: "radio", admin: { layout: "vertical" } }, "select").admin
+    ).toEqual({});
+    expect(
+      changed({ type: "select", admin: { layout: "vertical" } }, "radio").admin
+    ).toEqual({ layout: "vertical" });
+  });
+
   it("a number becoming a text drops its numeric bounds and keeps what a text has", () => {
     const next = changed(
       {
