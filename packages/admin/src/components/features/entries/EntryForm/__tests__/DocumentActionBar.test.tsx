@@ -11,7 +11,7 @@
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { fireEvent, render, screen } from "@admin/__tests__/utils";
+import { fireEvent, render, screen, waitFor } from "@admin/__tests__/utils";
 
 import {
   acceptContributions,
@@ -275,6 +275,81 @@ describe("an action that cannot be used", () => {
     expect(press).not.toHaveAttribute("data-held");
     await user.click(press);
     expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  describe("focus as a held press's reason closes", () => {
+    const held = {
+      id: "publish",
+      label: "Publish",
+      placement: "primary" as const,
+      disabledReason: "Needs approval: In review, waiting for Editors",
+    };
+
+    it("comes back to the press when the reason is closed with Escape", async () => {
+      // The reason is anchored to the press rather than triggered by it, so
+      // nothing hands focus back unless the bar does: it would fall to the page.
+      const user = userEvent.setup();
+      render(
+        <DocumentActionBar
+          actions={[held]}
+          bindings={{ publish: { onSelect: vi.fn() } }}
+        />
+      );
+      const press = screen.getByRole("button", { name: /^publish$/i });
+      press.focus();
+      await user.keyboard("{Enter}");
+      await screen.findByRole("dialog");
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(press).toHaveFocus();
+    });
+
+    it("comes back to the press when the hold lifts with the reason open", async () => {
+      const user = userEvent.setup();
+      const onSelect = vi.fn();
+      const { rerender } = render(
+        <DocumentActionBar
+          actions={[held]}
+          bindings={{ publish: { onSelect } }}
+        />
+      );
+      const press = screen.getByRole("button", { name: /^publish$/i });
+      press.focus();
+      await user.keyboard("{Enter}");
+      await screen.findByRole("dialog");
+      const { disabledReason: _lifted, ...free } = held;
+      rerender(
+        <DocumentActionBar
+          actions={[free]}
+          bindings={{ publish: { onSelect } }}
+        />
+      );
+      expect(screen.queryByRole("dialog")).toBeNull();
+      // The popover hands focus on as it unmounts, a tick after the close.
+      await waitFor(() => expect(press).toHaveFocus());
+    });
+
+    it("stays where a person put it by pressing something else", async () => {
+      // The control: a press that took focus back on every close would pull it
+      // from the control the person just chose.
+      const user = userEvent.setup();
+      render(
+        <>
+          <DocumentActionBar
+            actions={[held]}
+            bindings={{ publish: { onSelect: vi.fn() } }}
+          />
+          <button type="button">Elsewhere</button>
+        </>
+      );
+      const press = screen.getByRole("button", { name: /^publish$/i });
+      await user.click(press);
+      await screen.findByRole("dialog");
+      const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+      await user.click(elsewhere);
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(elsewhere).toHaveFocus();
+    });
   });
 
   it("names the arrow for what it holds: publishing where it holds a way to publish, the document's actions where it holds none", () => {
