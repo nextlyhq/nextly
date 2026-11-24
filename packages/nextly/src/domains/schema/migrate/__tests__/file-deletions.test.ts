@@ -1424,6 +1424,203 @@ describe("foreign keys and columns the list itself adds", () => {
     ).toEqual([rows("posts")]);
   });
 
+  /** A name in another schema or database, as each dialect writes it: bare, and quoted. */
+  const elsewhere = {
+    postgresql: ["auth.users", '"auth"."users"'],
+    mysql: ["auth.users", "`auth`.`users`"],
+  } as const;
+  const SERVERS = ["postgresql", "mysql"] as const;
+
+  it.each(SERVERS)(
+    "asks nothing on %s for a key into another schema or database when the list removes no rows",
+    dialect => {
+      const asked = elsewhere[dialect].flatMap(users =>
+        [
+          "",
+          " ON DELETE NO ACTION",
+          " ON DELETE RESTRICT",
+          " ON DELETE CASCADE",
+          " ON DELETE SET NULL",
+        ].flatMap(action =>
+          [
+            `ALTER TABLE posts ADD CONSTRAINT fk FOREIGN KEY (owner_id) REFERENCES ${users} (id)${action}`,
+            `ALTER TABLE posts ADD CONSTRAINT fk FOREIGN KEY (owner_id) REFERENCES ${users}${action}`,
+            `ALTER TABLE posts ADD COLUMN owner_id integer REFERENCES ${users} (id)${action}`,
+            `CREATE TABLE notes (id integer PRIMARY KEY, owner_id integer, FOREIGN KEY (owner_id) REFERENCES ${users} (id)${action})`,
+          ].filter(statement => read(dialect, [statement]).length > 0)
+        )
+      );
+      expect(asked).toEqual([]);
+    }
+  );
+
+  it.each(SERVERS)(
+    "names the child of a key into another schema or database on %s once the list removes rows, whatever it removes them from",
+    dialect => {
+      for (const users of elsewhere[dialect]) {
+        const key = (action: string) =>
+          `ALTER TABLE posts ADD CONSTRAINT fk FOREIGN KEY (owner_id) REFERENCES ${users} (id)${action}`;
+        expect(
+          read(dialect, [key(" ON DELETE CASCADE"), "DELETE FROM accounts"])
+        ).toEqual([rows("accounts"), rows("posts")]);
+        expect(
+          read(dialect, [key(" ON DELETE SET NULL"), "DELETE FROM accounts"])
+        ).toEqual([rows("accounts"), column("posts", "owner_id")]);
+        // A key with no action blocks the delete rather than following it.
+        expect(read(dialect, [key(""), "DELETE FROM accounts"])).toEqual([
+          rows("accounts"),
+        ]);
+        // Added after the removal, it reaches nothing.
+        expect(
+          read(dialect, ["DELETE FROM accounts", key(" ON DELETE CASCADE")])
+        ).toEqual([rows("accounts")]);
+        // Followed on from the child, through the live keys that reference it.
+        expect(
+          read(dialect, [key(" ON DELETE CASCADE"), "DELETE FROM accounts"], {
+            cascade: { posts: ["comments"] },
+          })
+        ).toEqual([rows("accounts"), rows("posts"), rows("comments")]);
+      }
+    }
+  );
+
+  it("names every table TRUNCATE CASCADE empties through a key the list added, its action aside", () => {
+    const truncate = "TRUNCATE users CASCADE";
+    for (const action of [
+      "",
+      " ON DELETE NO ACTION",
+      " ON DELETE RESTRICT",
+      " ON DELETE SET NULL",
+      " ON DELETE CASCADE",
+    ]) {
+      expect(
+        read("postgresql", [
+          `ALTER TABLE posts ADD CONSTRAINT fk FOREIGN KEY (owner_id) REFERENCES users (id)${action}`,
+          truncate,
+        ])
+      ).toEqual([rows("users"), rows("posts")]);
+    }
+    expect(
+      read("postgresql", [
+        "ALTER TABLE posts ADD COLUMN owner_id integer REFERENCES users (id)",
+        truncate,
+      ])
+    ).toEqual([rows("users"), rows("posts")]);
+    // A child written with its schema is named with it.
+    for (const guest of ["auth.guest", '"auth"."guest"']) {
+      expect(
+        read("postgresql", [
+          `ALTER TABLE ${guest} ADD CONSTRAINT fk FOREIGN KEY (ref) REFERENCES users (id)`,
+          truncate,
+        ])
+      ).toEqual([rows("users"), rows("auth.guest")]);
+    }
+    // Without CASCADE, PostgreSQL refuses to truncate a referenced table.
+    expect(
+      read("postgresql", [
+        "ALTER TABLE posts ADD CONSTRAINT fk FOREIGN KEY (owner_id) REFERENCES users (id)",
+        "TRUNCATE users",
+      ])
+    ).toEqual([rows("users")]);
+  });
+
+  it("still ends a conditional table's hold when a key with no action is added to it", () => {
+    expect(
+      read(
+        "postgresql",
+        [
+          "CREATE TABLE IF NOT EXISTS scratch (id integer)",
+          "ALTER TABLE scratch ADD CONSTRAINT fk FOREIGN KEY (id) REFERENCES posts (id)",
+          "DELETE FROM scratch",
+        ],
+        { free: ["scratch"] }
+      )
+    ).toEqual([rows("scratch")]);
+  });
+
+  it("asks nothing for a key with no action added once the search path changed", () => {
+    expect(
+      read("postgresql", [
+        "SET search_path TO auth, public",
+        "ALTER TABLE posts ADD CONSTRAINT fk FOREIGN KEY (owner_id) REFERENCES users (id)",
+      ])
+    ).toEqual([]);
+  });
+
+  it("stands for a key whose referenced table cannot be read, and a removal written with a schema, by consent without targets", () => {
+    const unnamed = (dialect: SupportedDialect, statement: string) =>
+      read(dialect, [statement]).map(deletion => deletion.kind);
+    const key = (references: string) =>
+      `ALTER TABLE posts ADD CONSTRAINT fk FOREIGN KEY (owner_id) REFERENCES ${references} (id)`;
+    const unreadable: [SupportedDialect, string][] = [
+      ["postgresql", key('"main"."auth"."users"')],
+      ["postgresql", key('U&"users"')],
+      ["mysql", key("`main`.`auth`.`users`")],
+      ["postgresql", "DELETE FROM auth.users"],
+      ["postgresql", "DROP TABLE auth.users CASCADE"],
+      ["mysql", "DELETE FROM `auth`.`users`"],
+      ["mysql", "DROP TABLE auth.users"],
+      [
+        "postgresql",
+        'ALTER TABLE "main"."auth"."guest" ADD CONSTRAINT fk FOREIGN KEY (ref) REFERENCES users (id)',
+      ],
+      [
+        "postgresql",
+        "ALTER TABLE auth.guest ADD CONSTRAINT fk FOREIGN KEY (ref) REFERENCES users (id) ON DELETE CASCADE",
+      ],
+    ];
+    const read0 = unreadable.filter(
+      ([dialect, statement]) => !unnamed(dialect, statement).includes("unnamed")
+    );
+    expect(read0).toEqual([]);
+  });
+
+  it.each(SERVERS)(
+    "still asks on %s for a function called beside a referenced table, and asks nothing for a table named as a function",
+    dialect => {
+      const functions = ["purge", "users"];
+      const calling = [
+        "CREATE TABLE notes (id integer CHECK (ops.purge(id) > 0), owner_id integer, FOREIGN KEY (owner_id) REFERENCES auth.users (id))",
+        "CREATE TABLE auth.notes (id integer CHECK (purge(id) > 0))",
+        "CREATE TABLE notes AS SELECT ops.purge(1)",
+        "CREATE TABLE auth.notes AS SELECT purge(1)",
+        "CREATE INDEX i ON auth.posts ((ops.purge(id)))",
+        "CREATE INDEX i ON posts ((purge(id)))",
+        "ALTER TABLE posts ADD COLUMN owner_id integer DEFAULT ops.purge(1) REFERENCES auth.users (id)",
+        "SELECT auth.users (1)",
+      ];
+      const silent = calling.filter(
+        statement => read(dialect, [statement], { functions }).length === 0
+      );
+      expect(silent).toEqual([]);
+      const tables = [
+        "CREATE TABLE auth.notes (id integer)",
+        "CREATE TABLE IF NOT EXISTS auth.notes (id integer)",
+        "CREATE TABLE users (id integer)",
+        "CREATE INDEX i ON auth.posts (title)",
+        "CREATE UNIQUE INDEX i ON auth.posts (title)",
+        "CREATE INDEX i ON users (title)",
+        "ALTER TABLE posts ADD CONSTRAINT fk FOREIGN KEY (owner_id) REFERENCES users (id)",
+        ...(dialect === "postgresql"
+          ? [
+              'CREATE TABLE "auth"."notes" (id integer)',
+              "CREATE UNLOGGED TABLE auth.notes (id integer)",
+              'CREATE INDEX CONCURRENTLY IF NOT EXISTS i ON ONLY "auth"."posts" (title)',
+              "CREATE INDEX ON auth.posts USING btree (title)",
+            ]
+          : [
+              "CREATE TABLE `auth`.`notes` (id integer)",
+              "CREATE FULLTEXT INDEX i ON `auth`.`posts` (title)",
+              "CREATE INDEX i USING BTREE ON auth.posts (title)",
+            ]),
+      ];
+      const asked = tables.filter(
+        statement => read(dialect, [statement], { functions }).length > 0
+      );
+      expect(asked).toEqual([]);
+    }
+  );
+
   it("asks nothing for a column the list adds and drops again, renamed or not", () => {
     expect(
       read(
