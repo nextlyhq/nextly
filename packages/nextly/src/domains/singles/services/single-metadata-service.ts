@@ -1059,7 +1059,7 @@ export class SingleMetadataService {
         current.fields ?? []
       );
       // A field group's fields are changed only in its own editor, for a request's save.
-      await judgeFieldGroupCopies(args.fields);
+      await judgeFieldGroupCopies(args.fields, () => current.fields);
     }
 
     // The `was*` flags describe the state being transitioned FROM, so they follow the refreshed

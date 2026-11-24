@@ -205,4 +205,137 @@ describe("refuseFieldGroupFieldsChangedInHost", () => {
       )
     ).resolves.toBeUndefined();
   });
+
+  describe("a copy the host already holds", () => {
+    const heldCard = [NOTE, SUMMARY];
+
+    it("passes, though the field group has changed since, where a copy no one holds is refused", async () => {
+      const held = () => [
+        {
+          name: "meta",
+          type: "group",
+          fields: [cardRef({ fields: heldCard })],
+        },
+      ];
+      await expect(
+        refuseFieldGroupFieldsChangedInHost(
+          [cardRef({ fields: heldCard })],
+          stored(),
+          held
+        )
+      ).resolves.toBeUndefined();
+      await expect(
+        refuseFieldGroupFieldsChangedInHost(
+          [cardRef({ fields: EDITED })],
+          stored(),
+          held
+        )
+      ).rejects.toThrow(refusedNaming("card"));
+      await expect(
+        refuseFieldGroupFieldsChangedInHost(
+          [cardRef({ fields: heldCard })],
+          stored()
+        )
+      ).rejects.toThrow(refusedNaming("card"));
+    });
+
+    it("stands in for no other field group's", async () => {
+      const heldBadge = [{ ...NOTE, required: true }];
+      const held = () => [
+        cardRef({ fields: heldCard }),
+        { ...BADGE_REF, fields: heldBadge },
+      ];
+      await expect(
+        refuseFieldGroupFieldsChangedInHost(
+          [cardRef({ fields: heldBadge })],
+          stored(),
+          held
+        )
+      ).rejects.toThrow(refusedNaming("card"));
+    });
+
+    it("passes with the copy of a field group it places, held inside it", async () => {
+      const heldBadge = [{ ...NOTE, required: true }];
+      const copy = [NOTE, { ...BADGE_REF, fields: heldBadge }];
+      const host = [cardRef({ fields: copy })];
+      await expect(
+        refuseFieldGroupFieldsChangedInHost(host, stored(), () => host)
+      ).resolves.toBeUndefined();
+      await expect(
+        refuseFieldGroupFieldsChangedInHost(
+          [cardRef({ fields: [NOTE, { ...BADGE_REF, fields: [SUMMARY] }] })],
+          stored([NOTE, { ...BADGE_REF, fields: [SUMMARY] }]),
+          () => host
+        )
+      ).rejects.toThrow(refusedNaming("badge"));
+    });
+
+    it("is read once, and only where a copy differs from its field group", async () => {
+      const held = vi.fn(() => [cardRef({ fields: heldCard })]);
+      await refuseFieldGroupFieldsChangedInHost(
+        [cardRef({ fields: CARD_FIELDS })],
+        stored(),
+        held
+      );
+      expect(held).not.toHaveBeenCalled();
+      await refuseFieldGroupFieldsChangedInHost(
+        [cardRef({ fields: heldCard }), cardRef({ fields: heldCard })],
+        stored(),
+        held
+      );
+      expect(held).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // What the Schema Builder writes on a field that leaves it out says nothing new; the same keys
+  // set to anything else are an edit.
+  it("takes a copy with the Schema Builder's spelling of its fields, and refuses what it would change", async () => {
+    const CHOICE: Field = {
+      name: "choice",
+      type: "select",
+      options: [{ label: "A", value: "a" }],
+    };
+    const card = [NOTE, CHOICE];
+    const spelled = [
+      { ...NOTE, label: "note", required: false, unique: false, index: false },
+      {
+        ...CHOICE,
+        label: "choice",
+        options: [{ id: "opt_1_0_a", label: "A", value: "a" }],
+      },
+    ];
+    await expect(
+      refuseFieldGroupFieldsChangedInHost(
+        [cardRef({ fields: spelled })],
+        stored(card)
+      )
+    ).resolves.toBeUndefined();
+    for (const changed of [
+      { ...NOTE, required: true },
+      { ...NOTE, unique: true },
+      { ...NOTE, index: true },
+      { ...NOTE, label: "Note" },
+      { ...NOTE, localized: false },
+    ]) {
+      await expect(
+        refuseFieldGroupFieldsChangedInHost(
+          [cardRef({ fields: [changed, CHOICE] })],
+          stored(card)
+        )
+      ).rejects.toThrow(refusedNaming("card"));
+    }
+    await expect(
+      refuseFieldGroupFieldsChangedInHost(
+        [
+          cardRef({
+            fields: [
+              NOTE,
+              { ...CHOICE, options: [{ label: "A", value: "b" }] },
+            ],
+          }),
+        ],
+        stored(card)
+      )
+    ).rejects.toThrow(refusedNaming("card"));
+  });
 });

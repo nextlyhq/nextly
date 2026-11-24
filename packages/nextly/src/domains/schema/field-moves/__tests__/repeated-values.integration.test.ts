@@ -1,9 +1,10 @@
 /**
  * The repeats counted for a field moved out of a group into a unique column are the ones the
- * column itself would hold: two values the column stores as one are counted, and two it keeps
- * apart are not. Each database is asked, not imitated: every value is copied into a real column of
- * the field's type by the move's own statement, and the values the column then compares as one are
- * held against what the count says of them, for every kind a unique field's column can take.
+ * column itself refuses: two values its unique index holds as one are counted, and two it keeps
+ * apart are not. Each database is asked, not imitated: a collection holding the field, made as the
+ * product makes it (the Schema Builder's create, or the push of a collection declared in code),
+ * has each pair of values copied into the field's own column by the move's own statement, and its
+ * unique index refuses the pair or takes it.
  *
  * Values the column would not keep (`keptValuesOf`) are left out: they are refused before repeats
  * are counted.
@@ -13,8 +14,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { defineCollection } from "../../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -22,9 +24,9 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import type { CollectionService } from "../../../collections/services/collection-service";
 import {
   classifyFieldKind,
-  type ColumnOrigin,
   getColumnDescriptor,
 } from "../../services/field-column-descriptor";
 import { keptValuesOf } from "../kept-values";
@@ -35,7 +37,9 @@ import {
   repeatedValuesAt,
 } from "../move-statements";
 
-const TABLE = "repeated_values_probe";
+const SLUG = "rv_posts";
+const PEOPLE = "rv_people";
+const TABLE = `dc_${SLUG}`;
 const FROM = { kind: "json" as const, column: "meta", keys: ["v"] };
 const TO = { kind: "column" as const, column: "v" };
 
@@ -68,6 +72,8 @@ const HELD = [
   '"2026-07-17"',
   '"2026-07-17T00:00:00Z"',
   '"2026-07-17T02:00:00+02:00"',
+  // The same form twice, which every unique column refuses.
+  '"xyz"',
 ];
 
 /**
@@ -93,14 +99,23 @@ const HELD_ON_SQLITE = [
 const field = (extra: Record<string, unknown>) =>
   ({ name: "v", label: "v", unique: true, ...extra }) as FieldDefinition;
 
+/**
+ * Every kind a unique field's column can take, and who makes it. A field group's own table is made
+ * by a generator of its own, with the same columns for these kinds but text's width.
+ */
 const KINDS: {
   what: string;
   field: FieldDefinition;
-  builtBy: ColumnOrigin;
-  /** A kind MySQL cannot index at all. */
+  builtBy: "collection" | "codeFirst";
+  /** A kind whose column the product does not make unique on MySQL. */
   notOnMysql?: true;
 }[] = [
   { what: "text", field: field({ type: "text" }), builtBy: "collection" },
+  {
+    what: "text declared in code",
+    field: field({ type: "text" }),
+    builtBy: "codeFirst",
+  },
   {
     what: "a text of a declared width",
     field: field({
@@ -113,16 +128,22 @@ const KINDS: {
   {
     what: "textarea",
     field: field({ type: "textarea" }),
-    builtBy: "codeFirst",
+    builtBy: "collection",
+    notOnMysql: true,
   },
-  { what: "code", field: field({ type: "code" }), builtBy: "codeFirst" },
+  {
+    what: "code",
+    field: field({ type: "code" }),
+    builtBy: "collection",
+    notOnMysql: true,
+  },
   {
     what: "json",
     field: field({ type: "json" }),
-    builtBy: "codeFirst",
+    builtBy: "collection",
     notOnMysql: true,
   },
-  { what: "email", field: field({ type: "email" }), builtBy: "codeFirst" },
+  { what: "email", field: field({ type: "email" }), builtBy: "collection" },
   { what: "number", field: field({ type: "number" }), builtBy: "collection" },
   {
     what: "a fractional number",
@@ -130,7 +151,7 @@ const KINDS: {
     builtBy: "collection",
   },
   {
-    what: "decimal",
+    what: "decimal declared in code",
     field: field({ type: "number", dbType: "decimal" }),
     builtBy: "codeFirst",
   },
@@ -145,7 +166,8 @@ const KINDS: {
     field: field({
       type: "relationship",
       unique: undefined,
-      options: { relationType: "oneToOne", target: "people" },
+      relationTo: PEOPLE,
+      options: { relationType: "oneToOne", target: PEOPLE },
     }),
     builtBy: "collection",
   },
@@ -156,14 +178,16 @@ let basePath: string;
 
 beforeEach(async () => {
   basePath = await mkdtemp(join(tmpdir(), "nextly-repeated-values-"));
+  // The Schema Builder's create makes its table in development.
+  vi.stubEnv("NODE_ENV", "development");
 });
 
 afterEach(async () => {
   try {
-    if (instance) await run(`DROP TABLE IF EXISTS ${TABLE}`);
     await instance?.destroy();
   } finally {
     instance = undefined;
+    vi.unstubAllEnvs();
     await rm(basePath, { recursive: true, force: true });
   }
 });
@@ -177,7 +201,7 @@ const run = <T>(statement: string) =>
 function columnOf(
   moved: FieldDefinition,
   dialect: TestDialect,
-  builtBy: ColumnOrigin
+  builtBy: "collection" | "codeFirst"
 ): MoveColumn {
   const descriptor = getColumnDescriptor(moved, dialect, builtBy);
   if (descriptor === null) throw new Error("the field has no column");
@@ -192,117 +216,194 @@ function columnOf(
   };
 }
 
-/** A table with a row for each of `values`, held aside until `holding` puts it where a move reads. */
-async function makeTable(
-  target: MoveColumn,
-  values: readonly string[]
-): Promise<void> {
-  const json = { postgresql: "jsonb", mysql: "json", sqlite: "text" }[
-    target.dialect
-  ];
-  await run(`DROP TABLE IF EXISTS ${TABLE}`);
-  await run(
-    `CREATE TABLE ${TABLE} (id varchar(36) PRIMARY KEY, held ${json}, meta ${json}, v ${target.columnType} NULL)`
-  );
+/**
+ * The collection holding `moved` on its row beside two groups, as the product makes it: `meta`,
+ * where the move reads values, and `aside`, which keeps each entry's own until a pair is tried.
+ */
+async function makePosts(
+  dialect: TestDialect,
+  moved: FieldDefinition,
+  builtBy: "collection" | "codeFirst"
+): Promise<TestNextly> {
+  const group = (name: string) => ({
+    name,
+    type: "group",
+    fields: [{ name: "note", type: "text" }],
+  });
+  const fields = [moved, group("meta"), group("aside")];
+  const inCode = [defineCollection({ slug: SLUG, fields: fields as never })];
+  const t = await createTestNextly({
+    dialect,
+    basePath,
+    db: { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" },
+    ...(builtBy === "codeFirst" ? { collections: inCode } : {}),
+  });
+  instance = t;
+  if (builtBy === "codeFirst") return t;
+  const make = (name: string, made: unknown[]) =>
+    t
+      .getService("collectionService")
+      .createCollection(
+        { name, label: name, fields: made } as Parameters<
+          CollectionService["createCollection"]
+        >[0],
+        {}
+      );
+  await make(PEOPLE, [{ name: "note", type: "text" }]);
+  await make(SLUG, fields);
+  return t;
+}
+
+const entry = (i: number) => `p${i}`;
+const among = (slugs: readonly string[]) =>
+  `slug IN (${slugs.map(slug => `'${slug}'`).join(", ")})`;
+
+/** An entry for each of `values`, in its `aside` group. */
+async function seed(t: TestNextly, values: readonly string[]): Promise<void> {
   for (const [i, value] of values.entries()) {
+    const slug = entry(i);
+    await t.nextly.create({ collection: SLUG, data: { title: slug, slug } });
     await run(
-      `INSERT INTO ${TABLE} (id, held) VALUES ('${i}', '{"v":${value}}')`
+      `UPDATE ${TABLE} SET aside = '{"v":${value}}' WHERE slug = '${slug}'`
     );
   }
 }
 
-/** Puts the values at `ids` where the move reads them, and no other. */
-async function holding(ids: readonly string[]): Promise<void> {
-  await run(`UPDATE ${TABLE} SET meta = NULL`);
-  const list = ids.map(id => `'${id}'`).join(", ");
-  await run(`UPDATE ${TABLE} SET meta = held WHERE id IN (${list})`);
+/** An entry of the people for every id the values read as, which a one-to-one's key asks for. */
+async function seedPeople(t: TestNextly, dialect: TestDialect): Promise<void> {
+  const people = `dc_${PEOPLE}`;
+  await t.nextly.create({
+    collection: PEOPLE,
+    data: { title: "First", slug: "first" },
+  });
+  const [first] = await run<Record<string, unknown>>(`SELECT * FROM ${people}`);
+  const q = (name: string) =>
+    dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+  const columns = Object.keys(first);
+  const { text } = heldValueAt("aside", ["v"], dialect);
+  const read = await run<{ id: string }>(
+    `SELECT ${dialect === "sqlite" ? `CAST(${text} AS TEXT)` : text} AS id FROM ${TABLE}`
+  );
+  // Told apart here, byte for byte: a database may hold two of them as one.
+  const ids = new Set(read.map(row => row.id));
+  for (const [i, id] of [...ids].entries()) {
+    const literal = `'${id.replaceAll("'", "''")}'`;
+    const given: Record<string, string> = {
+      id: literal,
+      slug: `'person-${i}'`,
+    };
+    const ignoring = {
+      mysql: ["INSERT IGNORE", ""],
+      postgresql: ["INSERT", " ON CONFLICT DO NOTHING"],
+      sqlite: ["INSERT", " ON CONFLICT DO NOTHING"],
+    }[dialect];
+    await run(
+      `${ignoring[0]} INTO ${people} (${columns.map(q).join(", ")}) SELECT ${columns.map(name => given[name] ?? q(name)).join(", ")} FROM ${people} WHERE slug = 'first'${ignoring[1]}`
+    );
+  }
 }
 
-/** Whether the count takes the values at `ids` as repeating one. */
-async function counted(
-  target: MoveColumn,
-  ids: readonly string[]
-): Promise<boolean> {
-  await holding(ids);
-  return (await run(repeatedValuesAt(target, FROM))).length > 0;
-}
-
-/** The ids of the values `target`'s column keeps (`keptValuesOf`). */
-async function keptIds(target: MoveColumn): Promise<string[]> {
-  const { type, text } = heldValueAt("meta", ["v"], target.dialect);
-  await run(`UPDATE ${TABLE} SET meta = held`);
-  const rows = await run<{ id: string; type: unknown; text: unknown }>(
-    `SELECT id, ${type} AS type, ${text} AS text FROM ${TABLE}`
+/** The entries whose values `target`'s column keeps (`keptValuesOf`). */
+async function keptEntries(target: MoveColumn): Promise<string[]> {
+  const { type, text } = heldValueAt("aside", ["v"], target.dialect);
+  const rows = await run<{ slug: string; type: unknown; text: unknown }>(
+    `SELECT slug, ${type} AS type, ${text} AS text FROM ${TABLE} ORDER BY slug`
   );
   const kept = keptValuesOf(target, target.dialect);
   return rows
     .filter(row => kept === undefined || kept.keeps(row))
-    .map(row => String(row.id));
+    .map(row => row.slug);
 }
 
-/** The values at `ids` by what the column holds once the move copied them: each class holds one. */
-async function classesInColumn(
+/** Puts the values of `pair` where the move reads them, in an otherwise empty column. */
+async function holding(pair: readonly string[]): Promise<void> {
+  await run(`UPDATE ${TABLE} SET meta = NULL, v = NULL WHERE ${among(pair)}`);
+  await run(`UPDATE ${TABLE} SET meta = aside WHERE ${among(pair)}`);
+}
+
+/** The entries of `kept` whose value the move's own statement leaves the column without. */
+async function notArriving(
   target: MoveColumn,
-  ids: readonly string[]
-): Promise<string[][]> {
-  await holding(ids);
+  kept: readonly string[]
+): Promise<string[]> {
   const { copy } = moveDataStatements({ from: FROM, to: TO }, target);
-  for (const statement of copy) await run(statement);
-  const firsts = await run<{ id: string; first: string }>(
-    `SELECT a.id AS id, MIN(b.id) AS first FROM ${TABLE} a JOIN ${TABLE} b ON a.v = b.v GROUP BY a.id`
-  );
-  const classes = new Map<string, string[]>();
-  for (const { id, first } of firsts) {
-    classes.set(first, [...(classes.get(first) ?? []), String(id)]);
+  const lost: string[] = [];
+  for (const slug of kept) {
+    await holding([slug]);
+    for (const statement of copy) await run(statement);
+    const rows = await run(
+      `SELECT slug FROM ${TABLE} WHERE slug = '${slug}' AND v IS NOT NULL`
+    );
+    if (rows.length !== 1) lost.push(slug);
+    await run(
+      `UPDATE ${TABLE} SET meta = NULL, v = NULL WHERE ${among([slug])}`
+    );
   }
-  return [...classes.values()];
+  return lost;
 }
 
-/** The pairs the count gets wrong, as its ids: one the column holds as one value, and two. */
-async function disagreements(
+/** Whether the column's unique index refuses the two values the move copies into it. */
+async function refusedByColumn(
   target: MoveColumn,
-  classes: readonly string[][]
-): Promise<{ missed: string[][]; wrong: string[][] }> {
-  const missed: string[][] = [];
-  for (const [one, ...others] of classes) {
-    for (const other of others) {
-      if (!(await counted(target, [one, other]))) missed.push([one, other]);
-    }
+  pair: readonly string[]
+): Promise<boolean> {
+  const { copy } = moveDataStatements({ from: FROM, to: TO }, target);
+  try {
+    for (const statement of copy) await run(statement);
+    return false;
+  } catch (error) {
+    const said = `${String(error)} ${String((error as { cause?: unknown }).cause)}`;
+    // Any other refusal is not the index's answer, and fails the test.
+    if (/unique|duplicate/i.test(said)) return true;
+    throw error;
+  } finally {
+    await run(`UPDATE ${TABLE} SET meta = NULL, v = NULL WHERE ${among(pair)}`);
   }
-  const wrong: string[][] = [];
-  const ones = classes.map(([one]) => one);
-  for (const [i, one] of ones.entries()) {
-    for (const other of ones.slice(i + 1)) {
-      if (await counted(target, [one, other])) wrong.push([one, other]);
-    }
-  }
-  return { missed, wrong };
 }
 
 describe.each(getConfiguredTestDialects())(
-  "the repeats counted for a unique column are the ones it would hold (%s)",
+  "the repeats counted for a unique column are the ones it refuses (%s)",
   dialect => {
     const values = dialect === "sqlite" ? [...HELD, ...HELD_ON_SQLITE] : HELD;
     const kinds = KINDS.filter(
       kind => !(dialect === "mysql" && kind.notOnMysql === true)
     );
 
-    it.each(kinds)("$what", async ({ field: moved, builtBy }) => {
-      instance = await createTestNextly({ dialect, basePath });
-      const target = columnOf(moved, dialect, builtBy);
-      await makeTable(target, values);
-      const ids = await keptIds(target);
-      expect(ids.length).toBeGreaterThan(1);
+    it.each(kinds)(
+      "$what",
+      async ({ field: moved, builtBy }) => {
+        const target = columnOf(moved, dialect, builtBy);
+        const t = await makePosts(dialect, moved, builtBy);
+        await seed(t, values);
+        if (moved.type === "relationship") await seedPeople(t, dialect);
+        const kept = await keptEntries(target);
+        expect(kept.length).toBeGreaterThan(1);
+        // A value the copy left out would repeat nothing: each arrives, to be compared at all.
+        expect(await notArriving(target, kept)).toEqual([]);
 
-      const classes = await classesInColumn(target, ids);
-      const { missed, wrong } = await disagreements(target, classes);
-
-      const told = (pairs: string[][]) =>
-        pairs.map(pair => pair.map(id => values[Number(id)]).join(" and "));
-      expect({ missed: told(missed), wrong: told(wrong) }).toEqual({
-        missed: [],
-        wrong: [],
-      });
-    });
+        const missed: string[] = [];
+        const wrong: string[] = [];
+        let refused = 0;
+        for (const [i, one] of kept.entries()) {
+          for (const other of kept.slice(i + 1)) {
+            const pair = [one, other];
+            await holding(pair);
+            const counted =
+              (await run(repeatedValuesAt(target, FROM))).length > 0;
+            const held = await refusedByColumn(target, pair);
+            if (held) refused += 1;
+            if (held === counted) continue;
+            const told = pair
+              .map(slug => values[Number(slug.slice(1))])
+              .join(" and ");
+            (held ? missed : wrong).push(told);
+          }
+        }
+        // The column is unique: some pair is one value to it.
+        expect(refused).toBeGreaterThan(0);
+        expect({ missed, wrong }).toEqual({ missed: [], wrong: [] });
+      },
+      120_000
+    );
   }
 );

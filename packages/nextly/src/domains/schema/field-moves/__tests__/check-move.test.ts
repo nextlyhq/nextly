@@ -190,6 +190,47 @@ describe("checkMove", () => {
     }
   );
 
+  // A container no move goes into or out of, or that stores nothing, refuses the move whatever the
+  // field is: taking its uniqueness away would not make the move possible, so the message never
+  // says it would, though the first container the move enters is a group.
+  it.each([
+    ["component", "field-group"],
+    ["fieldGroup", "field-group"],
+    ["blocks", "blocks"],
+    ["virtual", "no-column"],
+  ] as const)(
+    "refuses a unique field into a %s inside a group, and out of one into a group, for the container",
+    (type, reason) => {
+      const slug = text("slug", { unique: true });
+      const held = (...fields: FieldDefinition[]) =>
+        (type === "virtual"
+          ? group("inner", fields, { virtual: true })
+          : { name: "inner", type, fields }) as unknown as FieldDefinition;
+      const refusedFor = (
+        before: FieldDefinition[],
+        after: FieldDefinition[],
+        from: string[],
+        to: string[]
+      ) => {
+        const checked = checkMove(before, after, { from, to });
+        expect(checked).toMatchObject({ ok: false, reason });
+        expect(checked.ok ? "" : checked.message).not.toMatch(/unique/);
+      };
+      refusedFor(
+        [slug, group("meta", [held()])],
+        [group("meta", [held(slug)])],
+        ["slug"],
+        ["meta", "inner", "slug"]
+      );
+      refusedFor(
+        [held(slug), group("meta", [])],
+        [held(), group("meta", [slug])],
+        ["inner", "slug"],
+        ["meta", "slug"]
+      );
+    }
+  );
+
   // Uniqueness is judged before the repeater: what stops the move is that its values would lose
   // their uniqueness, which the repeater's own "not available yet" would not say.
   it("refuses a field the database keeps unique into a repeater, naming the repeater", () => {

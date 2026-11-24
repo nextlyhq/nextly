@@ -277,10 +277,11 @@ export const PATCH = withErrorHandler(
       },
       async () => {
         // A field group's fields are changed only in its own editor: compared with each field
-        // group as stored while the lock is held, before the Single's row is read.
+        // group as stored while the lock is held, before the Single's row is read below.
         await refuseFieldGroupFieldsChangedInHost(
           body.fields,
-          getService("fieldGroupRegistryService")
+          getService("fieldGroupRegistryService"),
+          async () => (await registry.getSingleForWrite(slug))?.fields
         );
         const hasOverrides = Object.keys(adminOverrides).length > 0;
         if (hasOverrides || body.fields !== undefined) {

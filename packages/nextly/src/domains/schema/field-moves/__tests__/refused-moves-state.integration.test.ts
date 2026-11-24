@@ -1,7 +1,8 @@
 /**
  * The comparison every refused move is held to (`databaseState`) sees each thing a save could have
- * changed: a registry value, a row's value, a column, an index, a migration file and the
- * definition file. One of them changed, the states differ, so a refusal that left one changed could
+ * changed: a registry value and one inside its JSON, a row's value and one inside its group, a
+ * column, its nullability and default, a check, an index, a migration file and the definition file.
+ * One of them changed, the states differ, so a refusal that left one changed could
  * not pass for "nothing changed".
  */
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -73,13 +74,24 @@ describe.each(getConfiguredTestDialects())(
           fields: [
             { name: "headline", type: "text" },
             { name: "code", type: "text", unique: true },
+            {
+              name: "meta",
+              type: "group",
+              fields: [{ name: "note", type: "text" }],
+            },
           ],
         } as Parameters<CollectionService["createCollection"]>[0],
         {}
       );
       await t.nextly.create({
         collection: SLUG as never,
-        data: { title: "P", slug: "p", headline: "H", code: "a" } as never,
+        data: {
+          title: "P",
+          slug: "p",
+          headline: "H",
+          code: "a",
+          meta: { note: "n" },
+        } as never,
       });
       const before = await state(t);
       // Read again, nothing changed, the state is the same: none of what it compares drifts by itself.
@@ -94,6 +106,67 @@ describe.each(getConfiguredTestDialects())(
               `UPDATE dynamic_collections SET description = 'changed' WHERE slug = '${SLUG}'`
             ),
         },
+        {
+          // A key below the row's own: the databases that keep JSON hand it out parsed.
+          what: "a value inside a registry row's JSON",
+          change: async () => {
+            const [row] = await run<{ fields: unknown }>(
+              t,
+              `SELECT fields FROM dynamic_collections WHERE slug = '${SLUG}'`
+            );
+            const fields = (
+              typeof row.fields === "string"
+                ? JSON.parse(row.fields)
+                : row.fields
+            ) as { name: string; label?: string }[];
+            const changed = fields.map(field =>
+              field.name === "headline" ? { ...field, label: "Changed" } : field
+            );
+            await run(
+              t,
+              `UPDATE dynamic_collections SET fields = '${JSON.stringify(changed)}' WHERE slug = '${SLUG}'`
+            );
+          },
+        },
+        {
+          what: "a value inside a row's group",
+          change: () =>
+            run(
+              t,
+              `UPDATE ${q(TABLE)} SET ${q("meta")} = '{"note":"changed"}'`
+            ),
+        },
+        // SQLite changes no column it has in place.
+        ...(dialect === "sqlite"
+          ? []
+          : [
+              {
+                what: "a column's default",
+                change: () =>
+                  run(
+                    t,
+                    `ALTER TABLE ${q(TABLE)} ALTER COLUMN ${q("code")} SET DEFAULT 'x'`
+                  ),
+              },
+              {
+                what: "a check",
+                change: () =>
+                  run(
+                    t,
+                    `ALTER TABLE ${q(TABLE)} ADD CONSTRAINT rms_check CHECK (${q("slug")} <> '')`
+                  ),
+              },
+              {
+                what: "a column's nullability",
+                change: () =>
+                  run(
+                    t,
+                    dialect === "mysql"
+                      ? `ALTER TABLE ${q(TABLE)} MODIFY COLUMN ${q("code")} varchar(255) NOT NULL`
+                      : `ALTER TABLE ${q(TABLE)} ALTER COLUMN ${q("code")} SET NOT NULL`
+                  ),
+              },
+            ]),
         {
           what: "a row's value",
           change: () =>
@@ -123,11 +196,13 @@ describe.each(getConfiguredTestDialects())(
             writeFile(join(basePath, "ui-schema.json"), "{}", { flag: "a" }),
         },
       ];
+      const unseen: string[] = [];
       for (const { what, change } of changes) {
-        const held = await state(t);
+        const held = JSON.stringify(await state(t));
         await change();
-        expect(await state(t), what).not.toEqual(held);
+        if (JSON.stringify(await state(t)) === held) unseen.push(what);
       }
+      expect(unseen).toEqual([]);
     });
   }
 );

@@ -362,7 +362,8 @@ export const PATCH = withErrorHandler(
           // group as stored while the lock is held.
           await refuseFieldGroupFieldsChangedInHost(
             body.fields,
-            getService("fieldGroupRegistryService")
+            getService("fieldGroupRegistryService"),
+            () => existing?.fields
           );
         }
         if (hasOverrides) {

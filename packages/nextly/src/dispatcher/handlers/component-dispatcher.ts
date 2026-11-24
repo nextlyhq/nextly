@@ -544,7 +544,8 @@ export const COMPONENTS_METHODS: Record<
       // the apply would.
       await refuseFieldGroupFieldsChangedInHost(
         fields,
-        getComponentRegistryFromDI()
+        getComponentRegistryFromDI(),
+        () => component.fields
       );
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
@@ -715,7 +716,8 @@ export const COMPONENTS_METHODS: Record<
           // edit in its own editor cannot land between the comparison and this write.
           await refuseFieldGroupFieldsChangedInHost(
             fields,
-            getComponentRegistryFromDI()
+            getComponentRegistryFromDI(),
+            () => component.fields
           );
 
           // 🔴 The same refusal the metadata service makes, from the same function rather than a copy.

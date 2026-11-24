@@ -461,6 +461,102 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    /** The field group's own edit, in its own editor. */
+    async function editCard(t: TestNextly, fields: Field[]): Promise<void> {
+      const card = await t
+        .getService("fieldGroupRegistryService")
+        .getComponent(CARD);
+      expect(
+        await outcomeOf(() =>
+          dispatchComponents(
+            "applyComponentSchemaChanges",
+            { slug: CARD },
+            {
+              fields,
+              confirmed: true,
+              schemaVersion: card.schemaVersion ?? 1,
+            }
+          )
+        )
+      ).toEqual({ accepted: true });
+    }
+
+    /** Fields as the Schema Builder writes each one, what it leaves out written as off. */
+    const builderSpelled = (fields: Field[]): Field[] =>
+      fields.map(field => ({
+        ...field,
+        label: field.name,
+        required: false,
+        unique: false,
+        index: false,
+      }));
+
+    // A host whose definition already holds a copy of the field group's fields, which the field
+    // group's own editor then changes: a save that sends the host back as it holds it, changing
+    // something else, changes no field group and goes through, however either copy is spelled.
+    const HELD_COPIES: { what: string; held: Field[]; sent: Field[] }[] = [
+      {
+        what: "as it is stored",
+        held: [NOTE, SUMMARY],
+        sent: [NOTE, SUMMARY],
+      },
+      {
+        what: "as the Schema Builder writes each field",
+        held: [NOTE, SUMMARY],
+        sent: builderSpelled([NOTE, SUMMARY]),
+      },
+      {
+        what: "without the Schema Builder's defaults its copy holds",
+        held: builderSpelled([NOTE, SUMMARY]),
+        sent: [NOTE, SUMMARY],
+      },
+    ];
+    const UPDATES = ROADS.filter(road => !road.creates);
+
+    it.each(
+      UPDATES.flatMap(road => HELD_COPIES.map(copy => ({ ...road, ...copy })))
+    )(
+      "$road takes a host that held a copy before the field group changed, sent back $what",
+      async road => {
+        const t = await boot();
+        expect(
+          await outcomeOf(() =>
+            builderCreate[road.kind]([
+              HEADLINE,
+              { ...cardRef, fields: road.held },
+            ])
+          )
+        ).toEqual({ accepted: true });
+        await editCard(t, [NOTE, SUMMARY, { name: "extra", type: "text" }]);
+
+        // A copy that is neither what the host holds nor what the field group does is an edit: a
+        // setting changed, a field added, one removed, and the two in another order.
+        const before = await hostRow(t, road.kind);
+        for (const edited of [
+          [NOTE, { ...SUMMARY, required: true }],
+          [NOTE, SUMMARY, { name: "other", type: "text" }],
+          [NOTE],
+          [SUMMARY, NOTE],
+        ]) {
+          expect(
+            await outcomeOf(() =>
+              road.send(t, [HEADLINE, { ...cardRef, fields: edited }])
+            )
+          ).toEqual(READ_ONLY);
+        }
+        expect(await hostRow(t, road.kind)).toEqual(before);
+
+        expect(
+          await outcomeOf(() =>
+            road.send(t, [
+              { ...HEADLINE, label: "Headline" },
+              { ...cardRef, fields: road.sent },
+            ])
+          )
+        ).toEqual({ accepted: true });
+      }
+    );
+
     // A road that saves through a service compares a save's copies inside that service's schema
     // exclusion, and writes them in it: no other schema change lands between the two. Proved by a
     // field group's own edit begun while the comparison reads it.

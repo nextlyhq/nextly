@@ -514,7 +514,7 @@ export class FieldGroupMetadataService {
         existing.fields ?? []
       );
       // Another field group's fields are changed only in its own editor, for a request's save.
-      await judgeFieldGroupCopies(input.fields);
+      await judgeFieldGroupCopies(input.fields, () => existing.fields);
       await this.assertSaveLeavesNoCycle(input.slug, input.fields);
     }
 

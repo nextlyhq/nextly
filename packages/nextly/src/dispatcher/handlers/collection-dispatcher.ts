@@ -1008,7 +1008,8 @@ const COLLECTIONS_METHODS: Record<
       // apply would.
       await refuseFieldGroupFieldsChangedInHost(
         sentFields,
-        getComponentRegistryFromDI()
+        getComponentRegistryFromDI(),
+        () => collection.fields
       );
       // Planned as the apply will write them: an earlier-shaped relationship in its stored shape.
       // A collection's stored built-in fields stay: the admin never sends them (`keepBuiltIns`).
@@ -1218,7 +1219,8 @@ const COLLECTIONS_METHODS: Record<
           // in its own editor cannot land between the comparison and this write.
           await refuseFieldGroupFieldsChangedInHost(
             sentFields,
-            getComponentRegistryFromDI()
+            getComponentRegistryFromDI(),
+            () => collection.fields
           );
           // An earlier-shaped relationship the editor read is written back in its stored shape,
           // through a rename the save makes, against the row this save is checked and written

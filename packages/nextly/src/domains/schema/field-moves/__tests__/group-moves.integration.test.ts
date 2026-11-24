@@ -50,6 +50,8 @@ import { marksNoTransaction } from "../../migrate/split-sql";
 import { parseSqlSections } from "../../migrate/sql-sections";
 import { withMigrateLock } from "../../pipeline/locks";
 
+import { rowAsText } from "./refused-moves-state";
+
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
 const SLUG = "gmv_posts";
@@ -231,7 +233,7 @@ async function registryRow(t: TestNextly, slug = SLUG): Promise<string> {
     t,
     `SELECT * FROM dynamic_collections WHERE slug = '${slug}'`
   );
-  return JSON.stringify(row ?? null, Object.keys(row ?? {}).sort());
+  return rowAsText(row);
 }
 
 /** How many migration files the saves have written so far. */

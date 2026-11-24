@@ -362,20 +362,16 @@ function storageRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
  * The refusal of a field the database keeps unique moved into a group or a repeater, at any depth,
  * named by the first one it enters: its values would sit in one JSON value, which no index keeps
  * unique. Judged before the containers themselves, so a repeater's "not available yet" never
- * stands in for it. Only for a field that was outside every repeater: one already inside one is
- * refused for its rows, which no change of its uniqueness helps. Unique before the move or after
- * it: a move that also drops the uniqueness is two changes, and the uniqueness is changed in a save
- * of its own first. A move into a field group or a blocks field is refused for that
- * (`crossingRefusal`).
+ * stands in for it. Never for a move another refusal stands against whatever the field is: it
+ * would advise a change that helps nothing. Unique before the move or after it: a move that also
+ * drops the uniqueness is two changes, and the uniqueness is changed in a save of its own first.
  */
 function uniqueRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
   if (to.place.kind !== "json") return null;
   if (!builderColumnIsUnique(from.field) && !builderColumnIsUnique(to.field)) {
     return null;
   }
-  // A field already inside a repeater is refused for its rows (`placesRefusal`), which taking its
-  // uniqueness away would not change: the advice this refusal gives would be followed for nothing.
-  if (from.containers.some(each => each.type === "repeater")) return null;
+  if (refusedWhateverItIs(from, to)) return null;
   const holder =
     to.containers.slice(sharedDepth(from.containers, to.containers))[0] ??
     to.containers[0];
@@ -384,6 +380,24 @@ function uniqueRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
   return refuse(
     "unique",
     `${label(to.field)} cannot be moved into the ${noun} ${label(holder)}: a ${noun} keeps its values in one JSON value, which cannot be kept unique. It can be moved once it is no longer unique (a one-to-one changed to many-to-one, or its unique setting removed), as a change of its own.`
+  );
+}
+
+/**
+ * Whether a move is refused whatever its field is (`placesRefusal`): from inside a repeater for its
+ * rows, and through a field group, a blocks field or a container that stores nothing, on either
+ * side. Taking the field's uniqueness away would change none of them.
+ */
+function refusedWhateverItIs(from: PlacedField, to: PlacedField): boolean {
+  return (
+    from.containers.some(each => each.type === "repeater") ||
+    [...from.containers, ...to.containers].some(
+      each =>
+        isFieldGroupFieldType(each.type) ||
+        // A blocks field is a plugin's type, so its name is compared as the text it is.
+        String(each.type) === "blocks" ||
+        !fieldProducesColumn(each)
+    )
   );
 }
 

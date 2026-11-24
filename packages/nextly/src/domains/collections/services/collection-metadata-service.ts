@@ -1314,7 +1314,12 @@ export class CollectionMetadataService extends BaseService {
   ): Promise<MetadataServiceResult> {
     // A field group's fields are changed only in its own editor, for a request's save: asked
     // outside the result mapping below, so its code and field reach the answer.
-    await judgeFieldGroupCopies(body.fields);
+    await judgeFieldGroupCopies(
+      body.fields,
+      async () =>
+        (await this.collectionService.getCollection(params.collectionName))
+          .fields
+    );
     try {
       // The collection as it stands before the save, read inside the lock: what the apply changes
       // it from.

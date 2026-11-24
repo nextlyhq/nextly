@@ -1454,7 +1454,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // apply would.
       await refuseFieldGroupFieldsChangedInHost(
         sentFields,
-        getComponentRegistryFromDI()
+        getComponentRegistryFromDI(),
+        () => single.fields
       );
       // Only named fields at the top level, as every road that saves a Single takes them.
       assertTopLevelFieldsNamed(sentFields);
@@ -1667,7 +1668,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // in its own editor cannot land between the comparison and this write.
           await refuseFieldGroupFieldsChangedInHost(
             sentFields,
-            getComponentRegistryFromDI()
+            getComponentRegistryFromDI(),
+            () => single.fields
           );
           // An earlier-shaped relationship the editor read is written back in its stored shape,
           // through a rename the save makes, against the row this save is checked and written

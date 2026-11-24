@@ -4,7 +4,9 @@
  * host's save carries a field group as a reference; one that also carries the field group's fields
  * (`fields`, or the `componentFields` and `componentSchemas` a read hands out) is refused, naming
  * the field group, where any copy differs from the field group's own, by a field added, removed,
- * edited or reordered. A copy that matches is the read's own echo and changes nothing.
+ * edited or reordered. A copy that matches is the read's own echo and changes nothing, and neither
+ * does one the host already holds: the field group may have changed since that copy was stored,
+ * and a save that sends the host back as it is, changing something else, edits no field group.
  *
  * Asked on every road a request saves a host's fields by: the Schema Builder's creates, updates,
  * previews and applies, and the schema REST routes. Server code (a service, a plugin's services,
@@ -31,6 +33,12 @@ export interface StoredFieldGroups {
   getAllFieldLists(): Promise<readonly { slug: string; fields?: unknown }[]>;
 }
 
+/**
+ * Reads the fields the host holds before a save, where the save changes a host there is. Asked only
+ * for a copy that differs from its field group, so a save that carries none reads nothing.
+ */
+export type HeldHostFields = () => unknown;
+
 /** The field groups a request's save compares its copies with, while its service call runs. */
 const judging = new AsyncLocalStorage<StoredFieldGroups>();
 
@@ -52,28 +60,55 @@ export function withFieldGroupCopiesJudged<T>(
  * a field group's fields through a host (`refuseFieldGroupFieldsChangedInHost`), for a request's
  * save alone: a save of server code opens no scope (`withFieldGroupCopiesJudged`) and is not asked.
  */
-export async function judgeFieldGroupCopies(fields: unknown): Promise<void> {
-  await refuseFieldGroupFieldsChangedInHost(fields, judging.getStore());
+export async function judgeFieldGroupCopies(
+  fields: unknown,
+  held?: HeldHostFields
+): Promise<void> {
+  await refuseFieldGroupFieldsChangedInHost(fields, judging.getStore(), held);
 }
 
 /** What a read adds to a field-group field beside its reference, which is not its definition. */
 const DERIVED = ["componentFields", "componentSchemas"] as const;
 
+/** The settings a field without them has turned off, which the Schema Builder writes as `false`. */
+const OFF_UNLESS_SET = ["required", "unique", "index"] as const;
+
 /**
- * `fields` with what a read adds to each field-group field taken away, at any depth: from a
- * field-group field alone, since another type's `componentFields` or `componentSchemas` is an
- * option of its own (a plugin field's), which a change must be seen in.
+ * `fields` as two spellings of one definition compare, at any depth. Without what a read adds to
+ * each field-group field: to a field-group field alone, since another type's `componentFields` or
+ * `componentSchemas` is an option of its own (a plugin field's), which a change must be seen in. And
+ * without what the Schema Builder writes on every field it sends back though the definition leaves
+ * it out: a setting that is off, a label that is the name, an option's id.
  */
-function withoutDerived(fields: unknown): unknown {
-  if (!Array.isArray(fields)) return fields;
-  return fields.map(field => {
-    if (field === null || typeof field !== "object") return field;
-    const copy: Record<string, unknown> = { ...field };
-    if (isFieldGroupFieldType(copy.type)) {
-      for (const key of DERIVED) delete copy[key];
-    }
-    if (Array.isArray(copy.fields)) copy.fields = withoutDerived(copy.fields);
-    return copy;
+function asCompared(fields: unknown): unknown {
+  return Array.isArray(fields) ? fields.map(fieldAsCompared) : fields;
+}
+
+/** One field of `asCompared`. */
+function fieldAsCompared(field: unknown): unknown {
+  if (field === null || typeof field !== "object") return field;
+  const copy: Record<string, unknown> = { ...field };
+  for (const key of saysNothing(copy)) delete copy[key];
+  if (Array.isArray(copy.options)) copy.options = withoutIds(copy.options);
+  if (Array.isArray(copy.fields)) copy.fields = asCompared(copy.fields);
+  return copy;
+}
+
+/** The keys of a field that add nothing to its definition (`asCompared`). */
+function saysNothing(field: Record<string, unknown>): string[] {
+  return [
+    ...(isFieldGroupFieldType(field.type) ? DERIVED : []),
+    ...OFF_UNLESS_SET.filter(key => field[key] === false),
+    ...(field.label === field.name ? ["label"] : []),
+  ];
+}
+
+/** A field's options without the ids the Schema Builder gives them. */
+function withoutIds(options: readonly unknown[]): unknown[] {
+  return options.map(option => {
+    if (option === null || typeof option !== "object") return option;
+    const { id: _id, ...rest } = option as Record<string, unknown>;
+    return rest;
   });
 }
 
@@ -106,21 +141,62 @@ function copiesIn(
 /**
  * Refuses a host's save that changes the fields of a field group it uses, before anything is
  * written. Each field-group field the save carries, in a group or repeater too, is compared, by
- * every copy of a field group's fields it carries, with that field group's stored fields; and the
- * field groups each copy places are compared with their own in turn, since a read's additions are
- * left out of the comparison that holds them. A field group `fieldGroups` does not hold is left to
- * the save's own checks.
+ * every copy of a field group's fields it carries, with that field group's stored fields, and, where
+ * it differs, with each copy of that field group's fields the host holds (`held`); and the field
+ * groups each copy places are compared with their own in turn, since a read's additions are left out
+ * of the comparison that holds them. A field group `fieldGroups` does not hold is left to the save's
+ * own checks.
  */
 export async function refuseFieldGroupFieldsChangedInHost(
   fields: unknown,
-  fieldGroups: StoredFieldGroups | undefined
+  fieldGroups: StoredFieldGroups | undefined,
+  held?: HeldHostFields
 ): Promise<void> {
   if (fieldGroups === undefined) return;
-  const storedFieldsOf = storedFieldsReader(fieldGroups);
+  const compared: Compared = {
+    storedFieldsOf: storedFieldsReader(fieldGroups),
+    heldCopiesOf: heldCopiesReader(held),
+  };
   const pending: unknown[] = Array.isArray(fields) ? [...fields] : [];
   for (let field = pending.pop(); field !== undefined; field = pending.pop()) {
-    pending.push(...(await fieldsWithin(field, storedFieldsOf)));
+    pending.push(...(await fieldsWithin(field, compared)));
   }
+}
+
+/** What a save's copies of a field group's fields are compared with, by the field group's slug. */
+interface Compared {
+  storedFieldsOf: (slug: string) => Promise<unknown>;
+  heldCopiesOf: (slug: string) => Promise<readonly unknown[][]>;
+}
+
+/** The copies of each field group's fields the host holds, read once, when the first is asked for. */
+function heldCopiesReader(
+  held: HeldHostFields | undefined
+): Compared["heldCopiesOf"] {
+  let copies: Promise<Map<string, unknown[][]>> | undefined;
+  return async slug => {
+    copies ??= (async () => copiesHeldIn(await held?.()))();
+    return (await copies).get(slug) ?? [];
+  };
+}
+
+/** Every copy of a field group's fields `fields` holds, at any depth, by the field group's slug. */
+function copiesHeldIn(fields: unknown): Map<string, unknown[][]> {
+  const held = new Map<string, unknown[][]>();
+  const pending: unknown[] = Array.isArray(fields) ? [...fields] : [];
+  for (let field = pending.pop(); field !== undefined; field = pending.pop()) {
+    if (field === null || typeof field !== "object") continue;
+    const record = field as Record<string, unknown>;
+    if (!isFieldGroupFieldType(record.type)) {
+      if (Array.isArray(record.fields)) pending.push(...record.fields);
+      continue;
+    }
+    for (const { slug, copy } of copiesIn(record)) {
+      held.set(slug, [...(held.get(slug) ?? []), copy]);
+      pending.push(...copy);
+    }
+  }
+  return held;
 }
 
 /**
@@ -141,11 +217,12 @@ function storedFieldsReader(
 
 /**
  * The fields to look through below `field`: a group's or repeater's own, or a field-group field's
- * copies of its field groups' fields, once each is compared with what its field group stores.
+ * copies of its field groups' fields, once each is compared with what its field group stores and,
+ * where it differs, with what the host holds.
  */
 async function fieldsWithin(
   field: unknown,
-  storedFieldsOf: (slug: string) => Promise<unknown>
+  compared: Compared
 ): Promise<unknown[]> {
   if (field === null || typeof field !== "object") return [];
   const record = field as Record<string, unknown>;
@@ -154,21 +231,23 @@ async function fieldsWithin(
   }
   const within: unknown[] = [];
   for (const { slug, copy } of copiesIn(record)) {
-    const stored = await storedFieldsOf(slug);
-    if (stored !== undefined) refuseChangedCopy(record, slug, copy, stored);
+    const stored = await compared.storedFieldsOf(slug);
+    if (stored !== undefined && !sameFields(copy, stored)) {
+      const held = await compared.heldCopiesOf(slug);
+      if (!held.some(each => sameFields(copy, each))) refuseCopy(record, slug);
+    }
     within.push(...copy);
   }
   return within;
 }
 
-/** Refuses one copy of a field group's fields that differs from what it stores, naming it. */
-function refuseChangedCopy(
-  record: Record<string, unknown>,
-  slug: string,
-  copy: unknown[],
-  stored: unknown
-): void {
-  if (deepEqual(withoutDerived(copy), withoutDerived(stored))) return;
+/** Whether two lists of fields are one definition, however each spells it (`asCompared`). */
+function sameFields(a: unknown, b: unknown): boolean {
+  return deepEqual(asCompared(a), asCompared(b));
+}
+
+/** Refuses a field-group field whose copy of the field group's fields changes them, naming it. */
+function refuseCopy(record: Record<string, unknown>, slug: string): never {
   const name = typeof record.name === "string" ? record.name : slug;
   const message = `${name} holds the field group ${slug}, whose fields are changed only in its own editor: a change there reaches every collection, Single and field group using it. Change ${slug} in its own editor.`;
   throw NextlyError.validation({

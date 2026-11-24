@@ -1,12 +1,13 @@
 /**
  * What a refused move must leave as it was, read the same way for every road that refuses it: each
- * of the entities' tables with its columns, indexes and rows, the registry rows, the migrations
- * folder and the definition file beside it.
+ * of the entities' tables with its whole definition (`readTableDefinition`) and its rows, the
+ * registry rows, the migrations folder and the definition file beside it.
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 
 import type { TestDialect } from "../../../../plugins/test-nextly";
+import { readTableDefinition } from "../../__tests__/helpers/table-definition";
 
 type Run = <T>(statement: string) => Promise<T[]>;
 
@@ -29,52 +30,25 @@ async function tableNames(
   return rows.map(row => row.name).sort();
 }
 
-async function columnsOf(run: Run, dialect: TestDialect, table: string) {
-  const rows = await run<{ name: string; type: string }>(
-    dialect === "mysql"
-      ? `SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}'`
-      : dialect === "sqlite"
-        ? `SELECT name, type FROM pragma_table_info('${table}')`
-        : `SELECT column_name AS name, data_type AS type FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}'`
+/**
+ * A row as text, the same for the same values: every key at every depth, in an order of its own,
+ * since a database that keeps JSON hands it out parsed, its keys in whatever order it keeps.
+ */
+export function rowAsText(row: unknown): string {
+  return JSON.stringify(row ?? null, (_key, value: unknown) =>
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1))
+        )
+      : value
   );
-  return rows.map(column => `${column.name} ${column.type}`).sort();
-}
-
-/** Each index of the table with what it is made of, a unique one so on MySQL. */
-async function indexesOf(run: Run, dialect: TestDialect, table: string) {
-  if (dialect === "mysql") {
-    const rows = await run<{
-      name: string;
-      nonunique: number | string;
-      col: string;
-    }>(
-      `SELECT INDEX_NAME AS name, NON_UNIQUE AS nonunique, COLUMN_NAME AS col FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' ORDER BY INDEX_NAME, SEQ_IN_INDEX`
-    );
-    const byName = new Map<string, string[]>();
-    for (const row of rows) {
-      const parts = byName.get(row.name) ?? [
-        Number(row.nonunique) === 0 ? "unique" : "index",
-      ];
-      parts.push(row.col);
-      byName.set(row.name, parts);
-    }
-    return [...byName.entries()]
-      .map(([name, parts]) => `${name}: ${parts.join(",")}`)
-      .sort();
-  }
-  const rows = await run<{ name: string; sql: string | null }>(
-    dialect === "sqlite"
-      ? `SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = '${table}'`
-      : `SELECT indexname AS name, indexdef AS sql FROM pg_indexes WHERE schemaname = current_schema() AND tablename = '${table}'`
-  );
-  return rows.map(row => `${row.name}: ${row.sql ?? "auto"}`).sort();
 }
 
 async function rowsOf(run: Run, dialect: TestDialect, table: string) {
   return (
     await run<Record<string, unknown>>(`SELECT * FROM ${quote(dialect, table)}`)
   )
-    .map(row => JSON.stringify(row, Object.keys(row).sort()))
+    .map(rowAsText)
     .sort();
 }
 
@@ -90,7 +64,7 @@ async function registryRowsOf(
       `SELECT * FROM ${table} WHERE slug IN (${named})`
     )
   )
-    .map(row => JSON.stringify(row, Object.keys(row).sort()))
+    .map(rowAsText)
     .sort();
 }
 
@@ -137,8 +111,7 @@ export async function databaseState(args: {
         tables.map(async table => [
           table,
           {
-            columns: await columnsOf(run, dialect, table),
-            indexes: await indexesOf(run, dialect, table),
+            definition: await readTableDefinition(run, dialect, table),
             rows: await rowsOf(run, dialect, table),
           },
         ])
