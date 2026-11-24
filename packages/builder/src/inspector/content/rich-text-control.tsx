@@ -18,10 +18,17 @@ import {
 import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { richTextChanged } from "../../canvas/inline-rich-text";
+import { TypingCancel } from "../../live-draft";
 import { joinTyping } from "../../typing-run";
 import { propLabel } from "../inspector";
 
 import type { ContentControlProps, ContentServices } from "./content-services";
+import {
+  PropRefusalContext,
+  refusalWords,
+  type PropRefusal,
+} from "./prop-refusal";
 import { FULL_EDITOR_WORDS, RichTextFullEditor } from "./rich-text-full-editor";
 
 /** The live attachment of the shared editor to this field, while focused. */
@@ -101,18 +108,30 @@ function attachField(
 }
 
 /**
- * Write what the editor read when the field is left: restricted to one
- * paragraph, and joined to the attachment's run of typing, for a value that
- * is one; as read otherwise.
+ * The passage the field writes when it is left: what the editor read,
+ * restricted to one paragraph for a value that is one.
  */
-function writeRead(
+function passageToWrite(
   read: unknown,
+  oneParagraph: boolean,
+  run: object | null
+): unknown {
+  if (!oneParagraph || run === null) return read;
+  return toOneParagraph(read).value;
+}
+
+/**
+ * Write the passage the field is left with, joined to the attachment's run
+ * of typing for a value that is one paragraph.
+ */
+function writeLeft(
+  next: unknown,
   oneParagraph: boolean,
   run: object | null,
   write: (value: unknown) => BlockDocument | null | void
 ): BlockDocument | null | void {
-  if (!oneParagraph || run === null) return write(read);
-  return joinTyping(run, () => write(toOneParagraph(read).value));
+  if (!oneParagraph || run === null) return write(next);
+  return joinTyping(run, () => write(next));
 }
 
 /**
@@ -132,6 +151,10 @@ export function RichTextControl({
   const oneParagraph = isOneParagraphProp(prop.schema);
   const label = propLabel(prop.name, prop.schema);
   const write = (value: unknown) => onCommit(prop.name, value);
+  // Why a write of this prop was refused, where the panel can say.
+  const why = React.useContext(PropRefusalContext);
+  const refusalOf =
+    why === undefined ? undefined : (value: unknown) => why(prop.name, value);
   return (
     <div
       className="nx-inspector__field"
@@ -146,6 +169,7 @@ export function RichTextControl({
         value={prop.value}
         disabled={disabled}
         onCommit={write}
+        refusalOf={refusalOf}
         services={services}
         oneParagraph={oneParagraph}
       />
@@ -155,6 +179,7 @@ export function RichTextControl({
           value={prop.value}
           disabled={disabled}
           onCommit={write}
+          refusalOf={refusalOf}
           services={services}
         />
       )}
@@ -172,12 +197,14 @@ function FullEditorEntry({
   value,
   disabled,
   onCommit,
+  refusalOf,
   services,
 }: {
   label: string;
   value: unknown;
   disabled: boolean;
   onCommit: (value: unknown) => BlockDocument | null | void;
+  refusalOf: ((value: unknown) => PropRefusal) | undefined;
   services: ContentServices;
 }): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
@@ -202,6 +229,7 @@ function FullEditorEntry({
           label={label}
           value={value}
           onCommit={onCommit}
+          refusalOf={refusalOf}
           services={services}
           onClose={() => setOpen(false)}
           returnFocus={() => button.current}
@@ -253,6 +281,7 @@ export function RichTextField({
   value,
   disabled,
   onCommit,
+  refusalOf,
   services,
   oneParagraph = false,
 }: {
@@ -274,6 +303,11 @@ export function RichTextField({
    * which keeps the passage open with the author's words.
    */
   onCommit: (value: unknown) => BlockDocument | null | void;
+  /**
+   * Why a write was refused, asked once it is, so the field says the real
+   * reason; without it the field does not guess one.
+   */
+  refusalOf?: ((value: unknown) => PropRefusal) | undefined;
   services: ContentServices | undefined;
 }): React.JSX.Element {
   const field = React.useRef<HTMLDivElement>(null);
@@ -285,6 +319,15 @@ export function RichTextField({
   const [refused, setRefused] = React.useState<
     "held" | "unsupported" | "unsaved" | null
   >(null);
+  // Why the last write was refused, while a refused passage is held open.
+  const [reason, setReason] = React.useState<PropRefusal | undefined>(
+    undefined
+  );
+  // What the page holds now, which the passage left is compared with.
+  const storedNow = React.useRef(value);
+  storedNow.current = value;
+  // Takes back what this attachment's typing wrote, on Escape.
+  const cancelTyping = React.useContext(TypingCancel);
   const load = services?.loadRichTextEditor;
   const editable = !disabled && load !== undefined;
   // A one-paragraph value is read through its restriction, so an older
@@ -349,18 +392,24 @@ export function RichTextField({
     }
     // Read and written BEFORE letting go: the words exist in the editor alone.
     // A one-paragraph value is written restricted, joining its typing run.
-    const written = writeRead(
-      live.read(),
-      oneParagraph,
-      typing.current,
-      onCommit
-    );
+    const next = passageToWrite(live.read(), oneParagraph, typing.current);
+    // Nothing left to write: a Text's words were written as they were typed,
+    // or the passage was not changed. Written again, the edit changes nothing,
+    // which the page refuses, and that refusal is not one: the words are on
+    // the page. The canvas's own passages are let go the same way.
+    if (!richTextChanged(storedNow.current, next)) {
+      letGo(live);
+      return undefined;
+    }
+    const written = writeLeft(next, oneParagraph, typing.current, onCommit);
     if (written === null) {
       // Refused (a size cap, a lock that arrived): the passage stays open with
       // the author's words, held against anything else taking the editor,
-      // until they shorten it or press Escape, as on the canvas.
+      // until they shorten it or press Escape, as on the canvas. Said with
+      // the reason the panel gives, not a guess.
       live.hold();
       setRefused("unsaved");
+      setReason(refusalOf?.(next));
       return null;
     }
     letGo(live);
@@ -375,7 +424,23 @@ export function RichTextField({
     typing.current = null;
     live.detach();
     setRefused(null);
+    setReason(undefined);
     setDropped(false);
+  };
+
+  /**
+   * Escape on a refused passage: the words are let go, and so is what its
+   * typing wrote, so the page and the canvas go back to what the box shows.
+   * Where the typing can no longer be taken back (a save or another edit came
+   * after it), the box shows what the page holds instead.
+   */
+  const discard = (live: RichTextSession): void => {
+    const run = typing.current;
+    letGo(live);
+    const cancelled = run !== null && cancelTyping?.(run) === true;
+    if (!cancelled && field.current !== null) {
+      field.current.textContent = previewNow.current;
+    }
   };
 
   // A write as the author types, through the latest render's write path.
@@ -386,6 +451,8 @@ export function RichTextField({
   // the element rather than rendered as children: the editor takes the
   // element's contents over once attached, and React must not own them.
   const preview = isRichTextValue(passage) ? passagePreview(passage) : "";
+  const previewNow = React.useRef(preview);
+  previewNow.current = preview;
   // A stored passage that changes under words the document refused (a Reset,
   // an undo) is what the page now holds: the refused draft is let go and the
   // field shows the stored one, rather than the draft and its notice sitting
@@ -455,7 +522,7 @@ export function RichTextField({
           const live = session.current;
           if (live === null) return;
           event.preventDefault();
-          letGo(live);
+          discard(live);
         }}
       />
       {refused === null ? null : (
@@ -463,7 +530,7 @@ export function RichTextField({
           {refused === "held"
             ? "This passage is being edited on the canvas. Finish there first."
             : refused === "unsaved"
-              ? "This change could not be saved, perhaps because the page is at its size limit. Shorten it, or press Escape to discard it."
+              ? refusalWords(reason, "Escape")
               : "This passage can't be edited here."}
         </p>
       )}
