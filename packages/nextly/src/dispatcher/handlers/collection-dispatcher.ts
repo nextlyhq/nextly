@@ -141,6 +141,12 @@ import {
   type BuilderSaveReview,
 } from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import {
+  type ConfirmedDeletions,
+  confirmedDeletionsAnswer,
+  dialogConfirmations,
+  readConfirmedDeletions,
+} from "../helpers/confirmed-deletions";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -381,65 +387,11 @@ const TogetherParam = z
       .max(500)
   );
 
-/**
- * The counts of removed fields' values the person confirmed in the review, as an apply's body
- * sends them: each field's name and a whole number of values. Absent where the body sends none,
- * and the save then deletes as it always has (`CollectionSave.confirmedDeletions`).
- */
-const ConfirmedDeletionsBody = z.object({
-  confirmedDeletions: z
-    .array(
-      z.object({
-        field: z.string().min(1),
-        count: z.number().int().min(0),
-      })
-    )
-    .max(500)
-    .optional(),
-});
-
-function readConfirmedDeletions(
-  body: unknown
-): z.infer<typeof ConfirmedDeletionsBody>["confirmedDeletions"] {
-  try {
-    return ConfirmedDeletionsBody.parse(body ?? {}).confirmedDeletions;
-  } catch (error) {
-    if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
-    throw error;
-  }
-}
-
-/**
- * The dialog's confirmations by field name, as its questions read them
- * (`refuseUnansweredDialogQuestions`): each field's own resolution, and each removed field whose
- * count of values the person confirmed deleting (`confirmedDeletions`), a count being its drop
- * confirmed. Nothing where the body sends neither.
- */
-function dialogConfirmations(
-  tableName: string,
-  resolutions: Record<string, FieldResolution> | undefined,
-  confirmedDeletions: ReturnType<typeof readConfirmedDeletions>
-): { legacy?: LegacyResolutionsBundle } {
-  const confirmDrop: LegacyResolutionsBundle["byFieldName"][string] = {
-    action: "confirm_drop",
-  };
-  const counted = (confirmedDeletions ?? []).map(
-    deletion => [deletion.field, confirmDrop] as const
-  );
-  if (resolutions === undefined && counted.length === 0) return {};
-  return {
-    legacy: {
-      tableName,
-      byFieldName: { ...Object.fromEntries(counted), ...resolutions },
-    },
-  };
-}
-
 /** The dialog's confirmations as the change's `confirmedBeside`, where it sent any. */
 function dialogConfirmationsBeside(
   tableName: string,
   resolutions: Record<string, FieldResolution> | undefined,
-  confirmedDeletions: ReturnType<typeof readConfirmedDeletions>
+  confirmedDeletions: ConfirmedDeletions
 ): { confirmedBeside?: LegacyResolutionsBundle } {
   const { legacy } = dialogConfirmations(
     tableName,
@@ -447,15 +399,6 @@ function dialogConfirmationsBeside(
     confirmedDeletions
   );
   return legacy === undefined ? {} : { confirmedBeside: legacy };
-}
-
-/** The save's answer of the counts confirmed, where the body sent them; nothing otherwise. */
-function confirmedDeletionsAnswer(
-  confirmedDeletions: z.infer<
-    typeof ConfirmedDeletionsBody
-  >["confirmedDeletions"]
-): { confirmedDeletions?: readonly ConfirmedDeletion[] } {
-  return confirmedDeletions === undefined ? {} : { confirmedDeletions };
 }
 
 /**
