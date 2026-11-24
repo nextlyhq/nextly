@@ -40,7 +40,14 @@ import { fieldGroupUsersClause } from "../../../domains/field-groups/storage/fie
 import { fieldGroupUsersForMoves } from "../readable-field-owners";
 
 const adapter = {} as DrizzleAdapter;
-const MOVE = [{ from: ["meta", "title"], to: ["title"] }];
+const SEO = { name: "seo", type: "component", component: "seo" };
+const TITLE = { name: "title", type: "text" };
+/** `title` moved into the field group `seo`, a move refused for the field group, naming its users. */
+const INTO_SEO = {
+  before: [TITLE, SEO],
+  after: [SEO],
+} as unknown as Parameters<typeof fieldGroupUsersForMoves>[2];
+const MOVE = [{ from: ["title"], to: ["seo", "title"] }];
 
 const placing = (slug: string) => [
   { name: "seo", type: "component", component: slug },
@@ -70,7 +77,7 @@ describe("fieldGroupUsersForMoves", () => {
       })
     );
 
-    const usersOf = await fieldGroupUsersForMoves(adapter, MOVE);
+    const usersOf = await fieldGroupUsersForMoves(adapter, MOVE, INTO_SEO);
     const users = usersOf?.("seo");
 
     expect(users).toEqual({
@@ -90,7 +97,7 @@ describe("fieldGroupUsersForMoves", () => {
   it("names every user, with none left out, where nothing scopes the read", async () => {
     readFieldOwners.mockResolvedValue(OWNERS);
 
-    const usersOf = await fieldGroupUsersForMoves(adapter, MOVE);
+    const usersOf = await fieldGroupUsersForMoves(adapter, MOVE, INTO_SEO);
 
     expect(usersOf?.("seo")).toEqual({
       uses: [
@@ -106,7 +113,28 @@ describe("fieldGroupUsersForMoves", () => {
   it("reads no field list for a save that moves nothing", async () => {
     readFieldOwners.mockResolvedValue(OWNERS);
 
-    expect(await fieldGroupUsersForMoves(adapter, [])).toBeUndefined();
+    expect(
+      await fieldGroupUsersForMoves(adapter, [], INTO_SEO)
+    ).toBeUndefined();
+    expect(readFieldOwners).not.toHaveBeenCalled();
+  });
+
+  // Only a move refused for a field group names its users, so a save whose moves are not depends
+  // on no field list: one that cannot be read refuses nothing here.
+  it("reads no field list for a move no field group takes part in", async () => {
+    readFieldOwners.mockRejectedValue(new Error("registry unreadable"));
+    const intoMeta = {
+      before: [TITLE, { name: "meta", type: "group", fields: [] }],
+      after: [{ name: "meta", type: "group", fields: [TITLE] }],
+    } as unknown as Parameters<typeof fieldGroupUsersForMoves>[2];
+
+    expect(
+      await fieldGroupUsersForMoves(
+        adapter,
+        [{ from: ["title"], to: ["meta", "title"] }],
+        intoMeta
+      )
+    ).toBeUndefined();
     expect(readFieldOwners).not.toHaveBeenCalled();
   });
 });

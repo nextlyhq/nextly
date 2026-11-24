@@ -22,6 +22,7 @@ import {
   SYSTEM_READ_POLICY,
   SYSTEM_WRITE_POLICY,
 } from "../domains/auth/system-write-policy";
+import { refuseFieldGroupFieldsChangedInHost } from "../domains/field-groups/field-group-fields-read-only";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -162,6 +163,11 @@ export const PATCH = withErrorHandler(
       // Builder's own.
       const stored = await (await getComponentRegistry()).getComponent(slug);
       assertValidFieldsPayload(body.fields, { stored: stored?.fields ?? [] });
+      // Another field group's fields are changed only in its own editor.
+      await refuseFieldGroupFieldsChangedInHost(
+        body.fields,
+        getService("fieldGroupRegistryService")
+      );
     }
 
     // 🔴 Through the metadata service, not the registry. Writing the registry directly is what made

@@ -182,8 +182,13 @@ moved into a group or a repeater, at any depth: a group or repeater keeps its va
 value, which cannot be kept unique. Make it many-to-one, or take its unique setting away, in a
 migration of its own first. Moved out of a group onto its entity's row as a unique field, its
 column is made unique, and the migration stops before it changes anything where two entries hold
-one value (`nextly_repeated_<field>`), naming the field; give each entry its own value, or clear
-the repeats, and run it again. A field is not moved out of a repeater either, since each entry may
+one value (`nextly_repeated_<field>`), naming the field. Values count as one as the column would
+hold them: the same instant written at two offsets, a decimal with and without trailing zeros,
+and on MySQL two texts its collation compares as equal. Give each entry its own value, or clear the
+repeats, and run `nextly migrate` again. On MySQL, which commits each schema statement as it runs,
+the stopped file is first recorded as cleaned up with `nextly migrate:resolve --failed-cleanup
+
+<file>`: the stop ran before the file changed anything. A field is not moved out of a repeater either, since each entry may
 hold several rows of it, which one field cannot keep: add a new field instead.
 
 A field kept for each language cannot be moved with its values yet. Every installation now keeps

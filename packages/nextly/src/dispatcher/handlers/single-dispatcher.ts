@@ -42,6 +42,7 @@ import {
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
+import { refuseFieldGroupFieldsChangedInHost } from "../../domains/field-groups/field-group-fields-read-only";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import {
   appLanguageOrder,
@@ -159,7 +160,6 @@ import {
   getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
-import { refuseFieldGroupFieldsChangedInHost } from "../helpers/field-group-fields-read-only";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { readRequestedMoves } from "../helpers/request-moves";
 import {
@@ -870,6 +870,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // can judge a plugin type's own options, so an unsatisfiable declaration
       // would be stored and then fail on every write to the single.
       assertValidPluginFieldOptions(b.fields);
+      // A field group's fields are changed only in its own editor, a new Single's too.
+      await refuseFieldGroupFieldsChangedInHost(
+        b.fields,
+        getComponentRegistryFromDI()
+      );
 
       const schemaHash = calculateSchemaHash(b.fields);
       // Canonical resolver keeps the UI-create path in sync with registry
@@ -1380,6 +1385,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           stored: existing.fields ?? [],
           lifecycleEnabled: hasStatus,
         });
+        // A field group's fields are changed only in its own editor.
+        await refuseFieldGroupFieldsChangedInHost(
+          b.fields,
+          getComponentRegistryFromDI()
+        );
         // An earlier-shaped relationship the editor read is written back in its stored shape.
         const fields = fieldsAsStored(b.fields, existing);
         updateData.fields = fields;
@@ -1435,6 +1445,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         lifecycleEnabled:
           single.status === true || readRequestedLifecycle(body) === true,
       });
+      // A field group's fields are changed only in its own editor: the review refuses what the
+      // apply would.
+      await refuseFieldGroupFieldsChangedInHost(
+        sentFields,
+        getComponentRegistryFromDI()
+      );
       // Only named fields at the top level, as every road that saves a Single takes them.
       assertTopLevelFieldsNamed(sentFields);
       // Planned as the save will write them: an earlier-shaped relationship in its stored shape.
@@ -1611,9 +1627,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The fields the save moves, each kept by statements its migration file carries.
       const moves = readRequestedMoves(body);
       assertValidFieldsPayload(sentFields, { stored: "under-lock" });
-      // A field group's fields are changed only in its own editor: a save that changes them here
-      // is refused before anything is read under the lock (`refuseFieldGroupFieldsChangedInHost`).
-      await refuseFieldGroupFieldsChangedInHost(sentFields);
       // Only named fields at the top level, as every road that saves a Single takes them.
       assertTopLevelFieldsNamed(sentFields);
 
@@ -1644,6 +1657,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           const single = await svc.registry.getSingleForWrite(slug);
           if (!single) throw new Error("Single not found");
           refuseChangeDefinedInCode(single, "Single", slug);
+          // A field group's fields are changed only in its own editor: a save that changes them
+          // here is refused, compared with each field group as stored under the lock, so an edit
+          // in its own editor cannot land between the comparison and this write.
+          await refuseFieldGroupFieldsChangedInHost(
+            sentFields,
+            getComponentRegistryFromDI()
+          );
           // An earlier-shaped relationship the editor read is written back in its stored shape,
           // through a rename the save makes, against the row this save is checked and written
           // against.

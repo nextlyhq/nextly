@@ -119,6 +119,7 @@ import {
   heldValueAt,
   holdsValueAt,
   repeatedValuesAt,
+  type MoveColumn,
 } from "../field-moves/move-statements";
 import { movedColumnSentences } from "../field-moves/moved-column-facts";
 import type { EntityMoves } from "../field-moves/plan-moves";
@@ -3504,17 +3505,19 @@ async function judgedMovesOf(
 ): Promise<EntityMoves> {
   const planned = plannedMovesOf(deps, save, table);
   await refuseEmptyRequiredRefills(deps, planned);
-  await refuseRepeatedUniqueRefills(deps, planned);
+  // Repeats are counted as the column keeps the values, so once every value is one it keeps.
   await refuseUnkeptValues(deps, planned);
+  await refuseRepeatedUniqueRefills(deps, planned);
   await refuseMovesUnderWorkingDrafts(deps, save);
   return planned;
 }
 
 /**
- * Refuses a unique field moved out of a group while two entries hold one value for it, counted
- * before anything is written (`repeatedValuesAt`), naming the field and how many values repeat:
- * its column is made unique, which those entries would break part-way through the file. The file
- * stops over any repeat the database it runs on holds as well (`repeatedValuesStop`).
+ * Refuses a unique field moved out of a group while two entries hold one value for it, as its
+ * column would hold them, counted before anything is written (`repeatedValuesAt`), naming the
+ * field and how many values repeat: its column is made unique, which those entries would break
+ * part-way through the file. The file stops over any repeat the database it runs on holds as well
+ * (`repeatedValuesStop`).
  */
 async function refuseRepeatedUniqueRefills(
   deps: CollectionSaveDeps,
@@ -3524,10 +3527,21 @@ async function refuseRepeatedUniqueRefills(
   for (const refill of planned.refilledColumns) {
     if (!refill.unique) continue;
     const from = { kind: "json" as const, ...refill.source };
+    // The column the values are copied into, whose conversion and comparison the count reads.
+    const target: MoveColumn = {
+      table: refill.table,
+      dialect,
+      kind: refill.kind,
+      columnType: refill.columnType,
+      ...(refill.precision === undefined
+        ? {}
+        : { precision: refill.precision }),
+      ...(refill.scale === undefined ? {} : { scale: refill.scale }),
+    };
     const [row] = await querySqlRows<{ count: string | number }>(
       deps.adapter.getDrizzle(),
       dialect,
-      sql`SELECT COUNT(*) AS count FROM (${sql.raw(repeatedValuesAt(refill.table, from, dialect))}) AS ${sql.identifier("repeats")}`
+      sql`SELECT COUNT(*) AS count FROM (${sql.raw(repeatedValuesAt(target, from))}) AS ${sql.identifier("repeats")}`
     );
     const repeats = Number(row?.count ?? 0);
     if (repeats === 0) continue;

@@ -297,15 +297,21 @@ export function entityDialogQuestions(
 
 /**
  * The save with the fields it moves, whose statements its file carries, and who uses each field
- * group, which a move into or out of one is refused naming; as it was without any.
+ * group, which a move into or out of one is refused naming; as it was without any. The one place
+ * a Builder save is given its moves, for the collection's road as for the Single's and the field
+ * group's.
  */
-async function withMoves(
+export async function withMoves(
   save: CollectionSave,
   moves: readonly FieldMoveRequest[] | undefined,
   adapter: CollectionSaveDeps["adapter"]
 ): Promise<CollectionSave> {
   if (moves === undefined || moves.length === 0) return save;
-  const fieldGroupUsers = await fieldGroupUsersForMoves(adapter, moves);
+  // Checked against the fields before the save and after it, as the planner checks them.
+  const fieldGroupUsers = await fieldGroupUsersForMoves(adapter, moves, {
+    before: (save.previous?.fields ?? []) as FieldDefinition[],
+    after: (save.entity?.fields ?? []) as FieldDefinition[],
+  });
   return {
     ...save,
     moves,

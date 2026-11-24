@@ -7,11 +7,13 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldOwner } from "../../domains/collections/services/collection-dependents";
-import type {
-  FieldMoveRequest,
-  MoveEntity,
+import {
+  checkMove,
+  type FieldMoveRequest,
+  type MoveEntity,
 } from "../../domains/schema/field-moves/check-move";
 import { NextlyError } from "../../errors";
+import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 import { readAccessCallerForDispatch } from "../handlers/read-access-caller";
 
@@ -69,15 +71,26 @@ async function readableOwnerSlugs(
 
 /**
  * Who uses each field group, as this reader may know them, for a save that moves fields: a move
- * into or out of a field group is refused naming them (`checkMove`). Read only for a save that
- * moves something, since only such a save can be refused for it; none otherwise, and the refusal
- * then names the field group alone.
+ * into or out of a field group is refused naming them (`checkMove`). Read only where `checkMove`
+ * refuses one of the save's moves for a field group, the one refusal that names them, so no other
+ * save reads every field list or depends on reading them; none otherwise.
+ *
+ * @param fields the entity's fields before the save and after it, as the moves are checked against
  */
 export async function fieldGroupUsersForMoves(
   adapter: DrizzleAdapter | undefined,
-  moves: readonly FieldMoveRequest[]
+  moves: readonly FieldMoveRequest[],
+  fields: {
+    before: readonly FieldDefinition[];
+    after: readonly FieldDefinition[];
+  }
 ): Promise<MoveEntity["fieldGroupUsers"]> {
-  if (moves.length === 0 || adapter === undefined) return undefined;
+  if (adapter === undefined) return undefined;
+  const refusedForFieldGroup = moves.some(move => {
+    const checked = checkMove(fields.before, fields.after, move);
+    return !checked.ok && checked.reason === "field-group";
+  });
+  if (!refusedForFieldGroup) return undefined;
   const { fieldGroupUsersOf } = await import(
     "../../domains/schema/field-moves/field-group-users"
   );

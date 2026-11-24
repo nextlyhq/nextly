@@ -23,6 +23,7 @@ import { LIST_READ_GATES, requireRouteListRead } from "../auth/list-read-gates";
 import { getService } from "../di";
 import { SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import { clampLimit } from "../domains/collections/query/query-parser";
+import { refuseFieldGroupFieldsChangedInHost } from "../domains/field-groups/field-group-fields-read-only";
 import type {
   CreateFieldGroupInput,
   FieldGroupMetadataService,
@@ -192,6 +193,11 @@ export const POST = withErrorHandler(async (request: Request) => {
 
   // Same rules as the ui-schema.json mirror (see api/fields-payload).
   assertValidFieldsPayload(validated.fields);
+  // Another field group's fields are changed only in its own editor, a new field group's too.
+  await refuseFieldGroupFieldsChangedInHost(
+    validated.fields,
+    getService("fieldGroupRegistryService")
+  );
 
   // Validated by assertValidFieldsPayload above; cast through `unknown`
   // to the registry's config type while keeping the payload unstripped.

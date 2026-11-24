@@ -26,6 +26,7 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertSaveLeavesNoFieldGroupCycle } from "../../domains/field-groups/field-group-cycles";
+import { refuseFieldGroupFieldsChangedInHost } from "../../domains/field-groups/field-group-fields-read-only";
 import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
 import {
   registerComponentRuntimeSchema,
@@ -107,7 +108,6 @@ import {
   getFieldGroupMetadataServiceFromDI,
   getLoggerFromDI,
 } from "../helpers/di";
-import { refuseFieldGroupFieldsChangedInHost } from "../helpers/field-group-fields-read-only";
 import { readableFieldOwners } from "../helpers/readable-field-owners";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { readRequestedMoves } from "../helpers/request-moves";
@@ -376,6 +376,11 @@ export const COMPONENTS_METHODS: Record<
       // what none of them can judge is a plugin type's own options, so an
       // unsatisfiable declaration would be stored and fail on every write.
       assertValidPluginFieldOptions(b.fields);
+      // Another field group's fields are changed only in its own editor, a new field group's too.
+      await refuseFieldGroupFieldsChangedInHost(
+        b.fields,
+        getComponentRegistryFromDI()
+      );
 
       const isLocalized = b.localized === true;
       // i18n: a localized component stores translatable values via the
@@ -485,6 +490,11 @@ export const COMPONENTS_METHODS: Record<
           },
         });
       }
+      // Another field group's fields are changed only in its own editor.
+      await refuseFieldGroupFieldsChangedInHost(
+        b?.fields,
+        getComponentRegistryFromDI()
+      );
       const { record } = await metadataService.updateFieldGroup({
         slug,
         label: b?.label,
@@ -523,6 +533,12 @@ export const COMPONENTS_METHODS: Record<
         kind: "component",
         stored: component.fields ?? [],
       });
+      // Another field group's fields are changed only in its own editor: the review refuses what
+      // the apply would.
+      await refuseFieldGroupFieldsChangedInHost(
+        fields,
+        getComponentRegistryFromDI()
+      );
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -662,9 +678,6 @@ export const COMPONENTS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields, { stored: "under-lock" });
-      // A field group's fields are changed only in its own editor: a save that changes them here
-      // is refused before anything is read under the lock (`refuseFieldGroupFieldsChangedInHost`).
-      await refuseFieldGroupFieldsChangedInHost(fields);
       // The fields the save moves, each kept by statements its migration file carries.
       const moves = readRequestedMoves(body);
 
@@ -690,6 +703,13 @@ export const COMPONENTS_METHODS: Record<
           const component = await svc.registry.getComponentForWrite(slug);
           if (!component) throw new Error("Component not found");
           refuseChangeDefinedInCode(component, "component", slug);
+          // Another field group's fields are changed only in its own editor: a save that changes
+          // them here is refused, compared with each field group as stored under the lock, so an
+          // edit in its own editor cannot land between the comparison and this write.
+          await refuseFieldGroupFieldsChangedInHost(
+            fields,
+            getComponentRegistryFromDI()
+          );
 
           // 🔴 The same refusal the metadata service makes, from the same function rather than a copy.
           // This route moves storage exactly as `updateFieldGroup` does and reaches the registry by a

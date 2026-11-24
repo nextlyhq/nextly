@@ -666,20 +666,38 @@ function guardedStop(
 }
 
 /**
- * Each value the key `keys` of `column` holds in more than one entry of `table`, as a query: what
- * a field moved out of the group into a unique column would repeat there. An entry holding no
- * value, or JSON null, repeats nothing, as a unique index leaves NULL free on every dialect. Values
- * are compared by their text, so the number 1 and the string "1" count as one value, as the column
- * would hold them. The save counts these rows before it writes anything; the file stops over the
- * first (`repeatedValuesStop`).
+ * Each value the key `keys` of `column` holds in more than one entry of `target`'s table, as a
+ * query: what a field moved out of the group into a unique column would repeat there. Values are
+ * compared as that column's unique index compares them once copied: through the copy's own
+ * conversion (`fromJson`), so the same instant written at two offsets, or 1 and 1.00 in a decimal,
+ * count as one value (`asTheIndexCompares` for MySQL's text). An entry holding no value, or JSON
+ * null, repeats nothing, as a unique index leaves NULL free on every dialect. The save counts these
+ * rows before it writes anything, once every value is one the column keeps; the file stops over
+ * the first (`repeatedValuesStop`), after its stop on a value the column would not keep.
  */
 export function repeatedValuesAt(
-  table: string,
-  from: Extract<StoragePlace, { kind: "json" }>,
-  dialect: SupportedDialect
+  target: MoveColumn,
+  from: Extract<StoragePlace, { kind: "json" }>
 ): string {
-  const value = heldValueAt(from.column, from.keys, dialect).text;
-  return `SELECT ${value} AS ${quoteIdent("value", dialect)} FROM ${quoteIdent(table, dialect)} WHERE ${holdsValueAt(from.column, from.keys, dialect)} GROUP BY ${value} HAVING COUNT(*) > 1`;
+  const q = (name: string) => quoteIdent(name, target.dialect);
+  const stored = asTheIndexCompares(
+    target,
+    DIALECTS[target.dialect].fromJson(q(from.column), from.keys, target)
+  );
+  return `SELECT ${stored} AS ${q("value")} FROM ${q(target.table)} WHERE ${holdsValueAt(from.column, from.keys, target.dialect)} AND ${stored} IS NOT NULL GROUP BY ${stored} HAVING COUNT(*) > 1`;
+}
+
+/**
+ * A value as `target`'s column compares it for its unique index. MySQL's text column takes its
+ * table's collation, the database's default, which folds case and accents in MySQL 8
+ * (`utf8mb4_0900_ai_ci`), while the text read out of JSON compares byte by byte: read in the
+ * character set's default collation instead, as a column created without one compares. PostgreSQL
+ * and SQLite compare text as written, and every other kind compares as the value it is.
+ */
+function asTheIndexCompares(target: MoveColumn, value: string): string {
+  return target.dialect === "mysql" && TEXT_KINDS.has(target.kind)
+    ? `CONVERT(${value} USING utf8mb4)`
+    : value;
 }
 
 /**
@@ -700,7 +718,7 @@ export function repeatedValuesStop(
       guard: `nextly_repeated_${column}`,
       reason: `two_entries_hold_one_${column}`,
     },
-    repeatedValuesAt(target.table, from, target.dialect)
+    repeatedValuesAt(target, from)
   );
 }
 

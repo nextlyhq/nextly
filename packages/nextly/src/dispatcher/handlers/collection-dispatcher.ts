@@ -42,6 +42,7 @@ import { container } from "../../di/container";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { DynamicCollectionService } from "../../domains/dynamic-collections/services/dynamic-collection-service";
+import { refuseFieldGroupFieldsChangedInHost } from "../../domains/field-groups/field-group-fields-read-only";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { fieldsAsFirstPushed } from "../../domains/i18n/migration/archive-preflight";
 import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
@@ -52,7 +53,6 @@ import {
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import type {
   BuilderSaveSetup,
-  CollectionSave,
   writeCollectionSave,
 } from "../../domains/schema/builder-save/collection-save";
 import {
@@ -132,6 +132,7 @@ import {
 import {
   NOTHING_TO_REVIEW,
   reviewOf,
+  withMoves,
   type BuilderSaveReview,
 } from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
@@ -141,12 +142,11 @@ import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
   getCollectionsHandlerFromDI,
+  getComponentRegistryFromDI,
   getLoggerFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
 import { entryWithStored } from "../helpers/entry-with-stored";
-import { refuseFieldGroupFieldsChangedInHost } from "../helpers/field-group-fields-read-only";
-import { fieldGroupUsersForMoves } from "../helpers/readable-field-owners";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { readRequestedMoves } from "../helpers/request-moves";
 import {
@@ -744,6 +744,11 @@ const COLLECTIONS_METHODS: Record<
       const createdFields = (created as { fields?: unknown }).fields;
       if (createdFields !== undefined) {
         assertValidPluginFieldOptions(createdFields);
+        // A field group's fields are changed only in its own editor, a new collection's too.
+        await refuseFieldGroupFieldsChangedInHost(
+          createdFields,
+          getComponentRegistryFromDI()
+        );
       }
       const result = await svc.createCollection(created);
       const collection = unwrapServiceResult(result);
@@ -885,6 +890,11 @@ const COLLECTIONS_METHODS: Record<
       const updatedFields = (body as { fields?: unknown }).fields;
       if (updatedFields !== undefined) {
         assertValidPluginFieldOptions(updatedFields);
+        // A field group's fields are changed only in its own editor.
+        await refuseFieldGroupFieldsChangedInHost(
+          updatedFields,
+          getComponentRegistryFromDI()
+        );
       }
       // The request's answers for a field leaving and another arriving: the change runs with
       // them, so a pair it doesn't answer is refused, not taken for a rename.
@@ -989,6 +999,12 @@ const COLLECTIONS_METHODS: Record<
         lifecycleEnabled:
           collection.status === true || readRequestedLifecycle(body) === true,
       });
+      // A field group's fields are changed only in its own editor: the review refuses what the
+      // apply would.
+      await refuseFieldGroupFieldsChangedInHost(
+        sentFields,
+        getComponentRegistryFromDI()
+      );
       // Planned as the apply will write them: an earlier-shaped relationship in its stored shape.
       // A collection's stored built-in fields stay: the admin never sends them (`keepBuiltIns`).
       const fields = fieldsAsStored(sentFields, collection, [], {
@@ -1152,9 +1168,6 @@ const COLLECTIONS_METHODS: Record<
         kind: "collection",
         stored: "under-lock",
       });
-      // A field group's fields are changed only in its own editor: a save that changes them here
-      // is refused before anything is read under the lock (`refuseFieldGroupFieldsChangedInHost`).
-      await refuseFieldGroupFieldsChangedInHost(sentFields);
 
       // Log a debug line when hints arrive so we can track adoption
       // without surprising operators with errors. The current version
@@ -1195,6 +1208,13 @@ const COLLECTIONS_METHODS: Record<
           );
           if (!collection) throw new Error("Collection not found");
           refuseChangeDefinedInCode(collection, "collection", p.collectionName);
+          // A field group's fields are changed only in its own editor: a save that changes them
+          // here is refused, compared with each field group as stored under the lock, so an edit
+          // in its own editor cannot land between the comparison and this write.
+          await refuseFieldGroupFieldsChangedInHost(
+            sentFields,
+            getComponentRegistryFromDI()
+          );
           // An earlier-shaped relationship the editor read is written back in its stored shape,
           // through a rename the save makes, against the row this save is checked and written
           // against.
@@ -2351,26 +2371,8 @@ async function writerSaveOf(change: WriterChange): Promise<
       logger,
       applies: process.env.NODE_ENV === "development",
     },
-    save: await withMovesOf(save, change.moves, adapter),
+    save: await withMoves(save, change.moves, adapter),
     fields,
-  };
-}
-
-/**
- * The save with the fields it moves, and who uses each field group, which a move into or out of
- * one is refused naming (`fieldGroupUsersForMoves`); as it was without any.
- */
-async function withMovesOf(
-  save: CollectionSave,
-  moves: readonly FieldMoveRequest[] | undefined,
-  adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>
-): Promise<CollectionSave> {
-  if (moves === undefined || moves.length === 0) return save;
-  const fieldGroupUsers = await fieldGroupUsersForMoves(adapter, moves);
-  return {
-    ...save,
-    moves,
-    ...(fieldGroupUsers === undefined ? {} : { fieldGroupUsers }),
   };
 }
 

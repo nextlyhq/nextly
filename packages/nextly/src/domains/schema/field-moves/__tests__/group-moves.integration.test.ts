@@ -1707,6 +1707,146 @@ describe.each(getConfiguredTestDialects())(
         expect(await storedGroups(second)).toEqual(groups);
         expect((await columnsOf(second)).sort()).toEqual(columns);
       });
+
+      /**
+       * Entries whose group holds each of `held` at `field`, written into the group's JSON as
+       * given (`held` is JSON text), beside a note: forms the API would not write itself, which
+       * a database's own rows may still hold.
+       */
+      async function seedHeld(
+        t: TestNextly,
+        field: string,
+        held: readonly string[]
+      ): Promise<void> {
+        for (const [i, json] of held.entries()) {
+          await t.nextly.create({
+            collection: SLUG,
+            data: { title: `P${i}`, slug: `p${i}`, meta: { note: "n" } },
+          });
+          await run(
+            t,
+            `UPDATE ${q(TABLE)} SET ${q("meta")} = '{"note":"n","${field}":${json}}' WHERE ${q("slug")} = 'p${i}'`
+          );
+        }
+      }
+
+      // Values whose JSON differs but which the unique column stores as one value: compared as
+      // they arrive there, so the copy never meets a repeat part-way through the file.
+      const SAME_STORED = [
+        {
+          what: "one instant written at two offsets",
+          field: { name: "day", type: "date" },
+          held: ['"2026-07-17T10:00:00Z"', '"2026-07-17T12:00:00+02:00"'],
+        },
+        {
+          what: "one decimal written with and without its trailing zeros",
+          field: { name: "price", type: "number", dbType: "decimal" },
+          held: ["1", "1.00"],
+        },
+      ] as const;
+
+      it.each(SAME_STORED)(
+        "is refused while two entries hold $what, nothing changed",
+        async ({ field, held }) => {
+          const t = await boot(dialect);
+          await createPosts(t, SLUG, {
+            fields: [group("meta", [NOTE, field])],
+          });
+          await seedHeld(t, field.name, held);
+          const groups = await storedGroups(t);
+          const files = await migrationFiles();
+          const columns = (await columnsOf(t)).sort();
+
+          await expect(
+            save(
+              t,
+              [{ ...field, unique: true }, group("meta", [NOTE])],
+              [{ from: ["meta", field.name], to: [field.name] }]
+            )
+          ).rejects.toThrow(
+            expect.objectContaining({
+              publicData: {
+                errors: [
+                  expect.objectContaining({
+                    code: "FIELD_MOVE_REFUSED",
+                    message: `${field.name} is unique where it moves to, and 1 of its values is held by more than one entry in the group it moves out of. Give each entry its own value, or clear the repeats, then move it.`,
+                  }),
+                ],
+              },
+            })
+          );
+
+          expect(await storedGroups(t)).toEqual(groups);
+          expect(await migrationFiles()).toEqual(files);
+          expect((await columnsOf(t)).sort()).toEqual(columns);
+        }
+      );
+
+      it("stops a replay on a database whose entries hold one instant at two offsets", async () => {
+        const day = { name: "day", type: "date" };
+        const first = await boot(dialect);
+        await createPosts(first, SLUG, {
+          fields: [group("meta", [NOTE, day])],
+        });
+        const created = await filesWritten();
+        await seedHeld(first, "day", ['"2026-07-17T10:00:00Z"']);
+        await save(
+          first,
+          [{ ...day, unique: true }, group("meta", [NOTE])],
+          [{ from: ["meta", "day"], to: ["day"] }]
+        );
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await seedHeld(second, "day", [
+          '"2026-07-17T10:00:00Z"',
+          '"2026-07-17T12:00:00+02:00"',
+        ]);
+        const groups = await storedGroups(second);
+        const columns = (await columnsOf(second)).sort();
+
+        await expect(migrateFolder(second)).rejects.toThrow(
+          /two_entries_hold_one_day/
+        );
+
+        expect(await storedGroups(second)).toEqual(groups);
+        expect((await columnsOf(second)).sort()).toEqual(columns);
+      });
+
+      // MySQL's text column folds case, as its database's default collation does; PostgreSQL's
+      // and SQLite's compare text as written, so there the two are two values and move.
+      it("counts two codes differing only in case as one where the column does", async () => {
+        const t = await boot(dialect);
+        await createPosts(t, SLUG, { fields: GROUPED });
+        await seedCodes(t, ["Code", "code"]);
+
+        const saving = save(t, ON_ROW, OUT_OF_META);
+        if (dialect === "mysql") {
+          await expect(saving).rejects.toThrow(
+            expect.objectContaining({
+              publicData: {
+                errors: [
+                  expect.objectContaining({
+                    code: "FIELD_MOVE_REFUSED",
+                    message: expect.stringContaining(
+                      "1 of its values is held by more than one entry"
+                    ),
+                  }),
+                ],
+              },
+            })
+          );
+          return;
+        }
+        await saving;
+        const after = await readAll(t);
+        expect([...after.values()].map(item => item.code).sort()).toEqual([
+          "Code",
+          "code",
+        ]);
+      });
     });
 
     describe("a move that cannot keep its values is refused before anything is written", () => {

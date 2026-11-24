@@ -742,7 +742,10 @@ describe.each(getConfiguredTestDialects())(
         clearRegistryRowCache();
       }
 
-      /** What every save could change: the definition file, the migrations, the shared table's rows. */
+      /**
+       * What every save could change: the definition file, the migrations, and the shared table's
+       * rows, each with every value it holds, in one order whatever the database returns them in.
+       */
       async function state(t: TestNextly): Promise<unknown> {
         const { tableName } = await t
           .getService("fieldGroupRegistryService")
@@ -754,7 +757,9 @@ describe.each(getConfiguredTestDialects())(
         return {
           definition: await readFile(join(basePath, "ui-schema.json"), "utf-8"),
           files: await filesWritten(),
-          rows: rows.length,
+          rows: rows
+            .map(row => JSON.stringify(row, Object.keys(row).sort()))
+            .sort(),
         };
       }
 
@@ -839,6 +844,16 @@ describe.each(getConfiguredTestDialects())(
           });
           const t = await boot(dialect);
           await createUsers(t);
+          // An entry holding values in the shared table, so a refused save is seen to leave them.
+          await t.nextly.create({
+            collection: POSTS as never,
+            data: {
+              title: "P",
+              slug: "p",
+              headline: "H",
+              card: { note: "N", summary: "S" },
+            } as never,
+          });
           const before = await state(t);
           const card = await t
             .getService("fieldGroupRegistryService")
