@@ -11,7 +11,7 @@
  *   that also needs the push, one outside development, and a translated field's, whose values
  *   kept for each language would need the language table's own statements.
  */
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { migrateCore } from "../../../../cli/commands/migrate";
 import { createLogger } from "../../../../cli/utils/logger";
+import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import {
@@ -28,6 +29,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../../services";
 import type { CollectionService } from "../../../collections/services/collection-service";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import {
@@ -655,6 +657,313 @@ describe.each(getConfiguredTestDialects())(
         const read = await readSingle(t, "sgm_page", locale);
         expect(read.tagline, locale).toBe(text);
       }
+    });
+
+    // A field group is changed only in its own editor, and a change there reaches every entity
+    // using it: a move between a host and a field group it uses is refused, naming the field group
+    // and every collection, Single and field group using it, directly or through another.
+    describe("a move between a host and a field group it uses", () => {
+      const CARD = "rfm_card";
+      const FRAME = "rfm_frame";
+      const POSTS = "rfm_posts";
+      const ARTICLES = "rfm_articles";
+      const HERO = "rfm_hero";
+      const cardRef: Field = {
+        name: "card",
+        type: "component",
+        component: CARD,
+      };
+      const headline: Field = { name: "headline", type: "text" };
+      const caption: Field = { name: "caption", type: "text" };
+      /** Each user the refusal names, in the clause's words: the Single through the second field group. */
+      const USERS = [
+        `the collection ${POSTS}`,
+        `the collection ${ARTICLES}`,
+        `the field group ${FRAME}`,
+        `the Single ${HERO} (through ${FRAME})`,
+      ];
+
+      /** The field group, two collections and a second field group using it, and a Single using that one. */
+      async function createUsers(t: TestNextly): Promise<void> {
+        await dispatchComponents(
+          "createComponent",
+          {},
+          { slug: CARD, label: "Card", fields: [NOTE, SUMMARY] }
+        );
+        await dispatchComponents(
+          "createComponent",
+          {},
+          { slug: FRAME, label: "Frame", fields: [cardRef, caption] }
+        );
+        for (const name of [POSTS, ARTICLES]) {
+          await t.getService("collectionService").createCollection(
+            {
+              name,
+              label: name,
+              localized: false,
+              fields: [cardRef, headline],
+            } as Parameters<CollectionService["createCollection"]>[0],
+            {}
+          );
+        }
+        await dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: HERO,
+            label: "Hero",
+            fields: [{ name: "frame", type: "component", component: FRAME }],
+          }
+        );
+      }
+
+      /** A collection's schema dialog save of `fields`, with the moves the Builder sends. */
+      async function saveCollection(
+        t: TestNextly,
+        slug: string,
+        fields: Field[],
+        moves: Move[]
+      ): Promise<void> {
+        const [row] = await run<{ version: number | string | null }>(
+          t,
+          `SELECT schema_version AS version FROM dynamic_collections WHERE slug = '${slug}'`
+        );
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: slug },
+          {
+            fields,
+            confirmed: true,
+            schemaVersion: Number(row?.version ?? 1),
+            hints: { moves },
+          }
+        );
+        clearRegistryRowCache();
+      }
+
+      /** What every save could change: the definition file, the migrations, the shared table's rows. */
+      async function state(t: TestNextly): Promise<unknown> {
+        const { tableName } = await t
+          .getService("fieldGroupRegistryService")
+          .getComponent(CARD);
+        const rows = await run<Record<string, unknown>>(
+          t,
+          `SELECT * FROM ${dialect === "mysql" ? `\`${tableName}\`` : `"${tableName}"`}`
+        );
+        return {
+          definition: await readFile(join(basePath, "ui-schema.json"), "utf-8"),
+          files: await filesWritten(),
+          rows: rows.length,
+        };
+      }
+
+      /**
+       * The refusal of moving `field`: its own sentence, then the users clause naming every user once,
+       * in the order the field lists are read (direct ones first).
+       */
+      const refusal = (field: string) => {
+        const escaped = (text: string) =>
+          text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const each = USERS.map(user => `(?=.*${escaped(user)}[,.])`).join("");
+        return expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: expect.stringMatching(
+                  new RegExp(
+                    `^${escaped(`${field} cannot be moved into or out of the field group ${CARD}: a field group is changed only in its own editor. It is used by `)}${each}[^]*\\.$`
+                  )
+                ),
+              }),
+            ],
+          },
+        });
+      };
+
+      it("refuses a collection's field moved into the field group, and one moved out of it, naming every user", async () => {
+        const t = await boot(dialect);
+        await createUsers(t);
+        await t.nextly.create({
+          collection: POSTS as never,
+          data: {
+            title: "P",
+            slug: "p",
+            headline: "H",
+            card: { note: "N", summary: "S" },
+          } as never,
+        });
+        const before = await state(t);
+
+        await expect(
+          saveCollection(
+            t,
+            POSTS,
+            [cardRef],
+            [{ from: ["headline"], to: ["card", "headline"] }]
+          )
+        ).rejects.toThrow(refusal("headline"));
+        await expect(
+          saveCollection(
+            t,
+            POSTS,
+            [cardRef, headline, SUMMARY],
+            [{ from: ["card", "summary"], to: ["summary"] }]
+          )
+        ).rejects.toThrow(refusal("summary"));
+        expect(await state(t)).toEqual(before);
+      });
+
+      // Inside a host the field group's fields are read-only: a host's save that changes them, by
+      // adding, removing, editing or reordering one, is refused naming the field group.
+      it.each([
+        ["adds one", [NOTE, SUMMARY, { name: "extra", type: "text" }]],
+        ["removes one", [NOTE]],
+        ["edits one", [NOTE, { ...SUMMARY, required: true }]],
+        ["reorders them", [SUMMARY, NOTE]],
+      ] as const)(
+        "refuses a host's save that %s of the field group's fields, nothing changed",
+        async (_what, inline) => {
+          const readOnly = expect.objectContaining({
+            publicData: {
+              errors: [
+                expect.objectContaining({
+                  code: "FIELD_GROUP_READ_ONLY",
+                  message: expect.stringContaining(
+                    `holds the field group ${CARD}, whose fields are changed only in its own editor`
+                  ),
+                }),
+              ],
+            },
+          });
+          const t = await boot(dialect);
+          await createUsers(t);
+          const before = await state(t);
+          const card = await t
+            .getService("fieldGroupRegistryService")
+            .getComponent(CARD);
+          await expect(
+            saveCollection(
+              t,
+              POSTS,
+              [{ ...cardRef, fields: inline as unknown as Field[] }, headline],
+              []
+            )
+          ).rejects.toThrow(readOnly);
+          await expect(
+            saveFieldGroup(
+              t,
+              FRAME,
+              [{ ...cardRef, fields: inline as unknown as Field[] }, caption],
+              []
+            )
+          ).rejects.toThrow(readOnly);
+          expect(await state(t)).toEqual(before);
+          expect(
+            (await t.getService("fieldGroupRegistryService").getComponent(CARD))
+              .fields
+          ).toEqual(card.fields);
+        }
+      );
+
+      it("applies a change in the field group's own editor to every user, through the second field group too", async () => {
+        const t = await boot(dialect);
+        await createUsers(t);
+        const extra: Field = { name: "extra", type: "text" };
+        await saveFieldGroup(t, CARD, [NOTE, SUMMARY, extra], []);
+
+        for (const collection of [POSTS, ARTICLES]) {
+          const { item } = await t.nextly.create({
+            collection: collection as never,
+            data: {
+              title: collection,
+              slug: collection,
+              card: { note: "N", extra: `in ${collection}` },
+            } as never,
+          });
+          const read = (await t.nextly.findByID({
+            collection: collection as never,
+            id: (item as { id: never }).id,
+          })) as { card?: { extra?: unknown } };
+          expect(read.card?.extra, collection).toBe(`in ${collection}`);
+        }
+        await t.nextly.updateSingle({
+          slug: HERO as never,
+          data: {
+            frame: { card: { note: "N", extra: "in hero" } },
+            _overwrite: true,
+          },
+          overrideAccess: true,
+        });
+        const hero = (await readSingle(t, HERO)) as {
+          frame?: { card?: { extra?: unknown } };
+        };
+        expect(hero.frame?.card?.extra).toBe("in hero");
+      });
+
+      // The field group's own "used by" list reads the same walk: today's direct list, and with
+      // `through=field-groups` the holders reaching it through another field group too.
+      it("lists its users, and on request those through the second field group with the chain", async () => {
+        const t = await boot(dialect);
+        await createUsers(t);
+        type Use = {
+          entityType: string;
+          entitySlug: string;
+          fieldPath: string;
+          via?: string[];
+        };
+        const read = async (params: Record<string, string>) =>
+          (await (
+            (await dispatchComponents(
+              "getComponentUsedBy",
+              params,
+              undefined
+            )) as Response
+          ).json()) as { items: Use[]; meta: { complete?: boolean } };
+
+        const direct = await read({ slug: CARD });
+        expect(
+          direct.items.map(use => `${use.entityType}:${use.entitySlug}`).sort()
+        ).toEqual(
+          [
+            `collection:${ARTICLES}`,
+            `collection:${POSTS}`,
+            `fieldGroup:${FRAME}`,
+          ].sort()
+        );
+        expect(direct.items.some(use => use.via !== undefined)).toBe(false);
+        expect(direct.meta.complete).toBe(true);
+
+        const through = await read({ slug: CARD, through: "field-groups" });
+        expect(through.items.slice(0, direct.items.length)).toEqual(
+          direct.items
+        );
+        expect(through.items.slice(direct.items.length)).toEqual([
+          {
+            entityType: "single",
+            entitySlug: HERO,
+            fieldPath: "frame",
+            via: [FRAME],
+          },
+        ]);
+        expect(through.meta.complete).toBe(true);
+      });
+
+      it("refuses the second field group's field moved into the field group it holds, naming every user", async () => {
+        const t = await boot(dialect);
+        await createUsers(t);
+        const before = await state(t);
+        await expect(
+          saveFieldGroup(
+            t,
+            FRAME,
+            [cardRef],
+            [{ from: ["caption"], to: ["card", "caption"] }]
+          )
+        ).rejects.toThrow(refusal("caption"));
+        expect(await state(t)).toEqual(before);
+      });
     });
   }
 );

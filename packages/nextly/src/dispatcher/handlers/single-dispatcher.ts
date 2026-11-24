@@ -159,6 +159,7 @@ import {
   getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
+import { refuseFieldGroupFieldsChangedInHost } from "../helpers/field-group-fields-read-only";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { readRequestedMoves } from "../helpers/request-moves";
 import {
@@ -1610,6 +1611,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The fields the save moves, each kept by statements its migration file carries.
       const moves = readRequestedMoves(body);
       assertValidFieldsPayload(sentFields, { stored: "under-lock" });
+      // A field group's fields are changed only in its own editor: a save that changes them here
+      // is refused before anything is read under the lock (`refuseFieldGroupFieldsChangedInHost`).
+      await refuseFieldGroupFieldsChangedInHost(sentFields);
       // Only named fields at the top level, as every road that saves a Single takes them.
       assertTopLevelFieldsNamed(sentFields);
 
@@ -1859,7 +1863,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               fields: {
                 tableName,
                 builtBy: "collection",
-                oldFields: (single.fields ?? []) as unknown as FieldDefinition[],
+                oldFields: (single.fields ??
+                  []) as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
                 wasLocalized,
                 isLocalized,

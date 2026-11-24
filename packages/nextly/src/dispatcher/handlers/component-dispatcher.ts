@@ -25,7 +25,6 @@ import {
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import type { FieldOwner } from "../../domains/collections/services/collection-dependents";
 import { assertSaveLeavesNoFieldGroupCycle } from "../../domains/field-groups/field-group-cycles";
 import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
 import {
@@ -78,14 +77,12 @@ import {
   type FieldGroupMigrationStatus,
 } from "../../schemas/dynamic-field-groups/types";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
-import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 import { assertAddressAllowed } from "../../shared/address-rule";
 import type { Logger } from "../../shared/types";
 import {
   registryInFileTransaction,
   writeAppliedFieldsRow,
 } from "../helpers/applied-fields-row";
-import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import {
   builderSaveDeps,
   checkBuilderSaveHistory,
@@ -110,6 +107,8 @@ import {
   getFieldGroupMetadataServiceFromDI,
   getLoggerFromDI,
 } from "../helpers/di";
+import { refuseFieldGroupFieldsChangedInHost } from "../helpers/field-group-fields-read-only";
+import { readableFieldOwners } from "../helpers/readable-field-owners";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { readRequestedMoves } from "../helpers/request-moves";
 import { requireParam, toNumber } from "../helpers/validation";
@@ -118,7 +117,6 @@ import type { MethodHandler, Params } from "../types";
 import { respondAddressCheck } from "./address-check-route";
 import { readListOffset } from "./list-offset";
 import { readListOwner, slugListsForOwner } from "./list-owner";
-import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 
 interface ComponentsServices {
@@ -219,79 +217,32 @@ function readMigrationStatus(
  * A test reading these keys turns that into a failure by name.
  */
 /**
- * The fields that place one field group, as its own editor lists them.
+ * The fields that place one field group, as its own editor lists them: the fields placing it, and,
+ * with `throughFieldGroups`, then each holder reaching it through other field groups, with the
+ * chain (`fieldGroupUsedThrough`). `complete` is false where the reader may not read every
+ * collection and Single, whose uses are left out unnamed.
  *
  * Unlike the list page's count, this refuses when the field lists cannot be
  * read: the answer is the whole response, and an empty list would claim the
  * field group is used nowhere when that is not known.
  */
-async function placementsOf(slug: string) {
+async function placementsOf(slug: string, throughFieldGroups = false) {
   const adapter = getAdapterFromDI();
   if (!adapter) throw placementsUnreadable(slug, "no database adapter");
   try {
     // Loaded when asked, as the list and the delete path load it.
-    const { fieldGroupUsedBy } = await import(
+    const { fieldGroupUsedBy, fieldGroupUsedThrough } = await import(
       "../../domains/collections/services/collection-dependents"
     );
-    const { owners } = await readableFieldOwners(adapter);
-    return await fieldGroupUsedBy(slug, {
-      fieldOwners: () => Promise.resolve(owners),
-    });
+    const { owners, complete } = await readableFieldOwners(adapter);
+    const sources = { fieldOwners: () => Promise.resolve(owners) };
+    const uses = throughFieldGroups
+      ? await fieldGroupUsedThrough(slug, sources)
+      : await fieldGroupUsedBy(slug, sources);
+    return { uses, complete };
   } catch (error) {
     throw placementsUnreadable(slug, error);
   }
-}
-
-/**
- * Every stored field list this reader may learn about, for where a field
- * group is used and how often. A collection or Single the reader may not read
- * is left out, by the same decision their own lists are scoped by
- * (`readableSlugAllowlist`), so neither answer names or counts one those
- * lists hide. A delete's refusal reads every field list instead: it must know
- * every use, whoever asks.
- */
-async function readableFieldOwners(
-  adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>
-): Promise<{
-  owners: FieldOwner[];
-  /** Whether the reader may read every collection and Single there is. */
-  complete: boolean;
-}> {
-  const { ownersReadableBy, readFieldOwners } = await import(
-    "../../domains/collections/services/collection-dependents"
-  );
-  const reader = readAuthenticatedUser();
-  const caller = reader ? readAccessCallerForDispatch(reader) : undefined;
-  const [collection, single, owners] = await Promise.all([
-    readableOwnerSlugs(caller, "collection"),
-    readableOwnerSlugs(caller, "single"),
-    readFieldOwners(adapter),
-  ]);
-  const readable = ownersReadableBy(owners, { collection, single });
-  // Every collection and Single is an owner, so dropping any means the
-  // reader may not read all of them.
-  return { owners: readable, complete: readable.length === owners.length };
-}
-
-/**
- * The slugs of `kind` the reader may read, or `undefined` for no reader.
- * A registry that cannot be enumerated rejects rather than answering none:
- * leaving out a whole kind would claim the field group is used less, or not
- * at all, when that is not known. The caller turns the rejection into its
- * own "could not be read".
- */
-async function readableOwnerSlugs(
-  caller: ReturnType<typeof readAccessCallerForDispatch> | undefined,
-  kind: "collection" | "single"
-): Promise<string[] | undefined> {
-  if (!caller) return undefined;
-  const { slugs, reachable } = await readableSlugsOfKind(caller, kind);
-  if (!reachable) {
-    throw NextlyError.serviceUnavailable({
-      logContext: { reason: "readable-owners-unreachable", kind },
-    });
-  }
-  return slugs;
 }
 
 /** The refusal when a field group's uses cannot be read. */
@@ -494,11 +445,15 @@ export const COMPONENTS_METHODS: Record<
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Component slug");
       await svc.registry.getComponent(slug);
-      const placements = await placementsOf(slug);
-      return respondList(
-        placements,
-        offsetPaginationToMeta({ total: placements.length })
+      // `through=field-groups` adds the holders reaching it through other field groups.
+      const { uses, complete } = await placementsOf(
+        slug,
+        p.through === "field-groups"
       );
+      return respondList(uses, {
+        ...offsetPaginationToMeta({ total: uses.length }),
+        complete,
+      });
     },
   },
 
@@ -707,6 +662,9 @@ export const COMPONENTS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields, { stored: "under-lock" });
+      // A field group's fields are changed only in its own editor: a save that changes them here
+      // is refused before anything is read under the lock (`refuseFieldGroupFieldsChangedInHost`).
+      await refuseFieldGroupFieldsChangedInHost(fields);
       // The fields the save moves, each kept by statements its migration file carries.
       const moves = readRequestedMoves(body);
 
@@ -963,7 +921,8 @@ export const COMPONENTS_METHODS: Record<
               fields: {
                 tableName,
                 builtBy: "fieldGroup",
-                oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
+                oldFields: (component.fields ??
+                  []) as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
                 wasLocalized,
                 isLocalized,

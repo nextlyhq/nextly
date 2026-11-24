@@ -1780,7 +1780,9 @@ function parseComponentRoutes(
   }
 
   // GET /api/field-groups/[slug]/used-by → the fields that place the field
-  // group, and what holds each. Matched before the bare slug routes below,
+  // group, and what holds each; with `?through=field-groups`, then each holder
+  // reaching it through other field groups, with the chain (`via`). The query
+  // travels as a route param. Matched before the bare slug routes below,
   // which do not look at a subresource and would answer this as the field
   // group itself.
   if (id && subresource === "used-by" && !subId && httpMethod === "GET") {

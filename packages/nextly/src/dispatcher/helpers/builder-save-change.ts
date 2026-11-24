@@ -39,6 +39,7 @@ import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { consoleLogger } from "../../shared/types";
 
 import { getAdapterFromDI, getLoggerFromDI } from "./di";
+import { fieldGroupUsersForMoves } from "./readable-field-owners";
 
 /**
  * The Builder save writer, loaded where a save runs: it brings the migration
@@ -255,7 +256,8 @@ async function entitySaveOf(
   };
   return withMoves(
     saveOfSchemaChange({ ...change, row, definition }).save,
-    change.moves
+    change.moves,
+    deps.adapter
   );
 }
 
@@ -293,12 +295,22 @@ export function entityDialogQuestions(
     });
 }
 
-/** The save with the fields it moves, whose statements its file carries; as it was without any. */
-function withMoves(
+/**
+ * The save with the fields it moves, whose statements its file carries, and who uses each field
+ * group, which a move into or out of one is refused naming; as it was without any.
+ */
+async function withMoves(
   save: CollectionSave,
-  moves: readonly FieldMoveRequest[] | undefined
-): CollectionSave {
-  return moves === undefined || moves.length === 0 ? save : { ...save, moves };
+  moves: readonly FieldMoveRequest[] | undefined,
+  adapter: CollectionSaveDeps["adapter"]
+): Promise<CollectionSave> {
+  if (moves === undefined || moves.length === 0) return save;
+  const fieldGroupUsers = await fieldGroupUsersForMoves(adapter, moves);
+  return {
+    ...save,
+    moves,
+    ...(fieldGroupUsers === undefined ? {} : { fieldGroupUsers }),
+  };
 }
 
 /**

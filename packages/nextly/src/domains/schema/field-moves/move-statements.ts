@@ -620,6 +620,36 @@ function stopWhereNot(
   table: string,
   stop: { guard: string; reason: string; kept: string; where: string }
 ): string[] {
+  return guardedStop(
+    dialect,
+    stop,
+    `SELECT NULL FROM ${table} WHERE ${stop.where} AND (CASE WHEN ${stop.kept} THEN 0 ELSE 1 END) = 1 LIMIT 1`
+  );
+}
+
+/** A run's stop where the query `rows` gives any row (`guardedStop`). */
+function stopWhereAnyRow(
+  dialect: SupportedDialect,
+  stop: { guard: string; reason: string },
+  rows: string
+): string[] {
+  const found = quoteIdent("found", dialect);
+  return guardedStop(
+    dialect,
+    stop,
+    `SELECT NULL FROM (${rows}) AS ${found} LIMIT 1`
+  );
+}
+
+/**
+ * The statements of one stop: a temporary table whose NOT NULL column `select`'s first row, a
+ * NULL, is written into, so the run stops on that constraint, the table and column naming why.
+ */
+function guardedStop(
+  dialect: SupportedDialect,
+  stop: { guard: string; reason: string },
+  select: string
+): string[] {
   const q = (name: string) => quoteIdent(boundedIdentifier(name), dialect);
   // Unqualified: SQLite and PostgreSQL look a name up among temporary tables first, and the
   // migration's deletion check reads a table the file creates as temporary as the file's own.
@@ -628,11 +658,50 @@ function stopWhereNot(
   const temporary = dialect === "mysql" ? "TEMPORARY" : "TEMP";
   return [
     `CREATE ${temporary} TABLE ${guard} (${reason} INTEGER NOT NULL);`,
-    `INSERT INTO ${guard} (${reason}) SELECT NULL FROM ${table} WHERE ${stop.where} AND (CASE WHEN ${stop.kept} THEN 0 ELSE 1 END) = 1 LIMIT 1;`,
+    `INSERT INTO ${guard} (${reason}) ${select};`,
     dialect === "mysql"
       ? `DROP TEMPORARY TABLE ${guard};`
       : `DROP TABLE ${guard};`,
   ];
+}
+
+/**
+ * Each value the key `keys` of `column` holds in more than one entry of `table`, as a query: what
+ * a field moved out of the group into a unique column would repeat there. An entry holding no
+ * value, or JSON null, repeats nothing, as a unique index leaves NULL free on every dialect. Values
+ * are compared by their text, so the number 1 and the string "1" count as one value, as the column
+ * would hold them. The save counts these rows before it writes anything; the file stops over the
+ * first (`repeatedValuesStop`).
+ */
+export function repeatedValuesAt(
+  table: string,
+  from: Extract<StoragePlace, { kind: "json" }>,
+  dialect: SupportedDialect
+): string {
+  const value = heldValueAt(from.column, from.keys, dialect).text;
+  return `SELECT ${value} AS ${quoteIdent("value", dialect)} FROM ${quoteIdent(table, dialect)} WHERE ${holdsValueAt(from.column, from.keys, dialect)} GROUP BY ${value} HAVING COUNT(*) > 1`;
+}
+
+/**
+ * Statements that stop a run, before the file changes anything, where two entries of the database
+ * it runs on hold one value for a field moved out of a group into a unique column: the save's own
+ * count (`repeatedValuesAt`) reads the database the file is written from, and a deploy's may
+ * repeat a value that one never did. The run stops on `two_entries_hold_one_<field>` in
+ * `nextly_repeated_<field>`.
+ */
+export function repeatedValuesStop(
+  target: MoveColumn,
+  from: Extract<StoragePlace, { kind: "json" }>,
+  column: string
+): string[] {
+  return stopWhereAnyRow(
+    target.dialect,
+    {
+      guard: `nextly_repeated_${column}`,
+      reason: `two_entries_hold_one_${column}`,
+    },
+    repeatedValuesAt(target.table, from, target.dialect)
+  );
 }
 
 /**

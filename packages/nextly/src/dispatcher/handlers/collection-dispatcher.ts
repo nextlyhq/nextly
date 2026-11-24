@@ -52,6 +52,7 @@ import {
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import type {
   BuilderSaveSetup,
+  CollectionSave,
   writeCollectionSave,
 } from "../../domains/schema/builder-save/collection-save";
 import {
@@ -144,6 +145,8 @@ import {
   getSchemaRegistryFromDI,
 } from "../helpers/di";
 import { entryWithStored } from "../helpers/entry-with-stored";
+import { refuseFieldGroupFieldsChangedInHost } from "../helpers/field-group-fields-read-only";
+import { fieldGroupUsersForMoves } from "../helpers/readable-field-owners";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { readRequestedMoves } from "../helpers/request-moves";
 import {
@@ -1149,6 +1152,9 @@ const COLLECTIONS_METHODS: Record<
         kind: "collection",
         stored: "under-lock",
       });
+      // A field group's fields are changed only in its own editor: a save that changes them here
+      // is refused before anything is read under the lock (`refuseFieldGroupFieldsChangedInHost`).
+      await refuseFieldGroupFieldsChangedInHost(sentFields);
 
       // Log a debug line when hints arrive so we can track adoption
       // without surprising operators with errors. The current version
@@ -2345,11 +2351,26 @@ async function writerSaveOf(change: WriterChange): Promise<
       logger,
       applies: process.env.NODE_ENV === "development",
     },
-    save:
-      change.moves === undefined || change.moves.length === 0
-        ? save
-        : { ...save, moves: change.moves },
+    save: await withMovesOf(save, change.moves, adapter),
     fields,
+  };
+}
+
+/**
+ * The save with the fields it moves, and who uses each field group, which a move into or out of
+ * one is refused naming (`fieldGroupUsersForMoves`); as it was without any.
+ */
+async function withMovesOf(
+  save: CollectionSave,
+  moves: readonly FieldMoveRequest[] | undefined,
+  adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>
+): Promise<CollectionSave> {
+  if (moves === undefined || moves.length === 0) return save;
+  const fieldGroupUsers = await fieldGroupUsersForMoves(adapter, moves);
+  return {
+    ...save,
+    moves,
+    ...(fieldGroupUsers === undefined ? {} : { fieldGroupUsers }),
   };
 }
 

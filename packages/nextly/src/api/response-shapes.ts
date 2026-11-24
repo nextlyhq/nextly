@@ -60,6 +60,12 @@ export type PaginationMeta = {
    */
   notConsulted?: string[];
   /**
+   * Whether the list holds every item there is, where the reader's scope may leave some out without
+   * naming them: false when it did, so a screen says there are others rather than reading as the
+   * whole list. Sent only by a list narrowed that way (a field group's "used by" list).
+   */
+  complete?: boolean;
+  /**
    * Records on this list the caller may not read, counted per scope (the
    * collection or Single they belong to), with nothing else about them.
    *

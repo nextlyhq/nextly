@@ -109,6 +109,37 @@ describe("checkMove", () => {
     );
   });
 
+  // Uniqueness is judged before the repeater: what stops the move is that its values would lose
+  // their uniqueness, which the repeater's own "not available yet" would not say.
+  it("refuses a field the database keeps unique into a repeater, naming the repeater", () => {
+    const items = (fields: FieldDefinition[]) =>
+      ({
+        name: "items",
+        label: "items",
+        type: "repeater",
+        fields,
+      }) as unknown as FieldDefinition;
+    const checked = checkMove(
+      [text("slug", { unique: true }), items([])],
+      [items([text("slug", { unique: true })])],
+      { from: ["slug"], to: ["items", "slug"] }
+    );
+    expect(checked).toMatchObject({ ok: false, reason: "unique" });
+    expect(checked.ok ? "" : checked.message).toBe(
+      "slug cannot be moved into the repeater items: a repeater keeps its values in one JSON value, which cannot be kept unique. It can be moved once it is no longer unique (a one-to-one changed to many-to-one, or its unique setting removed), as a change of its own."
+    );
+    // At any depth: into a group inside the repeater, the repeater is what it enters first.
+    const deep = checkMove(
+      [text("slug", { unique: true }), items([group("meta", [])])],
+      [items([group("meta", [text("slug", { unique: true })])])],
+      { from: ["slug"], to: ["items", "meta", "slug"] }
+    );
+    expect(deep).toMatchObject({ ok: false, reason: "unique" });
+    expect(deep.ok ? "" : deep.message).toMatch(
+      /^slug cannot be moved into the repeater items: a repeater keeps/
+    );
+  });
+
   it("refuses a one-to-one relationship into a group", () => {
     const owner = {
       name: "owner",
@@ -339,16 +370,18 @@ describe("checkMove", () => {
     });
   });
 
-  it("refuses a move out of a group into a unique field, whose values would arrive after the uniqueness", () => {
+  // Its column is made unique as the move fills it: the repeats are counted before anything is
+  // written, and the file stops over any the database it runs on holds (`repeatedValuesStop`).
+  it("plans a move out of a group into a unique field", () => {
     const checked = checkMove(
       [group("meta", [text("slug")])],
       [text("slug", { unique: true }), group("meta", [])],
       { from: ["meta", "slug"], to: ["slug"] }
     );
-    expect(checked).toMatchObject({ ok: false, reason: "unique" });
-    expect((checked as { message: string }).message).toMatch(
-      /Move it first, then make it unique as a change of its own/
-    );
+    expect(checked).toMatchObject({
+      ok: true,
+      move: { to: { kind: "column", column: "slug" } },
+    });
   });
 
   it("refuses a move into a group in the same save that takes the field's uniqueness away", () => {
@@ -389,6 +422,110 @@ describe("checkMove", () => {
         to: ["box", "meta", "title"],
       })
     ).toMatchObject({ ok: false, reason: "out-of-repeater" });
+  });
+
+  // The field group is named with every collection, Single and field group using it, directly or
+  // through another field group, as the save reads them (`fieldGroupUsers`).
+  it("names a field group's every user when it refuses a move into or out of it", () => {
+    const placed = {
+      name: "seo",
+      label: "SEO",
+      type: "component",
+      component: "seo_box",
+      fields: [],
+    } as unknown as FieldDefinition;
+    const holding = { ...placed, fields: [text("title")] } as FieldDefinition;
+    const checked = checkMove(
+      [text("title"), placed],
+      [holding],
+      { from: ["title"], to: ["seo", "title"] },
+      {
+        fieldGroupUsers: slug =>
+          slug === "seo_box"
+            ? {
+                uses: [
+                  { entityType: "collection", entitySlug: "posts" },
+                  { entityType: "collection", entitySlug: "articles" },
+                  { entityType: "fieldGroup", entitySlug: "card" },
+                  {
+                    entityType: "single",
+                    entitySlug: "home",
+                    via: ["card"],
+                  },
+                ],
+                complete: true,
+              }
+            : undefined,
+      }
+    );
+    expect(checked).toMatchObject({ ok: false, reason: "field-group" });
+    expect(checked.ok ? "" : checked.message).toBe(
+      "title cannot be moved into or out of the field group seo_box: a field group is changed only in its own editor. It is used by the collection posts, the collection articles, the field group card, the Single home (through card)."
+    );
+  });
+
+  // A blocks field holds blocks declared in code, not fields, so no path goes through it: a move
+  // naming one is refused saying that, where it would otherwise read as naming no field.
+  it("refuses a move into or out of a blocks field, which holds blocks declared in code", () => {
+    const body = {
+      name: "body",
+      label: "Body",
+      type: "blocks",
+    } as unknown as FieldDefinition;
+    const into = checkMove([text("title"), body], [body], {
+      from: ["title"],
+      to: ["body", "title"],
+    });
+    expect(into).toMatchObject({ ok: false, reason: "blocks" });
+    expect(into.ok ? "" : into.message).toBe(
+      "title cannot be moved into or out of Body: a blocks field holds blocks declared in code, not fields."
+    );
+    expect(
+      checkMove([body], [text("title"), body], {
+        from: ["body", "title"],
+        to: ["title"],
+      })
+    ).toMatchObject({ ok: false, reason: "blocks" });
+  });
+
+  // A host's stored definition holds a field group by reference, without its fields, so its paths
+  // go through the reference: refused for the field group, where they would read as naming no field.
+  it("refuses a move into or out of a field group held by reference, naming its users", () => {
+    const placed = {
+      name: "card",
+      label: "Card",
+      type: "component",
+      component: "card_box",
+    } as unknown as FieldDefinition;
+    const users = {
+      fieldGroupUsers: (slug: string) =>
+        slug === "card_box"
+          ? {
+              uses: [
+                { entityType: "collection" as const, entitySlug: "posts" },
+              ],
+              complete: false,
+            }
+          : undefined,
+    };
+    const out = checkMove(
+      [placed],
+      [text("summary"), placed],
+      { from: ["card", "summary"], to: ["summary"] },
+      users
+    );
+    expect(out).toMatchObject({ ok: false, reason: "field-group" });
+    expect(out.ok ? "" : out.message).toBe(
+      "summary cannot be moved into or out of the field group card_box: a field group is changed only in its own editor. It is used by the collection posts, and others you may not read."
+    );
+    expect(
+      checkMove(
+        [text("summary"), placed],
+        [placed],
+        { from: ["summary"], to: ["card", "summary"] },
+        users
+      )
+    ).toMatchObject({ ok: false, reason: "field-group" });
   });
 
   it("refuses a move into a field group spelled either way", () => {

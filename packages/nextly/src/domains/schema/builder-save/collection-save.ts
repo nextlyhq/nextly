@@ -112,10 +112,14 @@ import { runUnitInTries } from "../busy-table/run-unit";
 import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
-import type { FieldMoveRequest } from "../field-moves/check-move";
+import type { FieldMoveRequest, MoveEntity } from "../field-moves/check-move";
 import { movesFileFacts, planMovingEntity } from "../field-moves/entity-moves";
 import { keptValuesOf, type KeptValues } from "../field-moves/kept-values";
-import { heldValueAt, holdsValueAt } from "../field-moves/move-statements";
+import {
+  heldValueAt,
+  holdsValueAt,
+  repeatedValuesAt,
+} from "../field-moves/move-statements";
 import { movedColumnSentences } from "../field-moves/moved-column-facts";
 import type { EntityMoves } from "../field-moves/plan-moves";
 import { checksumOf } from "../migrate/applied-checksums";
@@ -358,6 +362,11 @@ export interface CollectionSave {
    * and a move that cannot keep them is refused before anything is written.
    */
   moves?: readonly FieldMoveRequest[];
+  /**
+   * Who uses each field group, by slug, as the person saving may know them: a move into or out of
+   * one is refused naming them (`checkMove`). Read for a save that moves fields only.
+   */
+  fieldGroupUsers?: MoveEntity["fieldGroupUsers"];
   /** Override the clock for tests. */
   now?: Date;
 }
@@ -1251,10 +1260,7 @@ async function writeSave(
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   // A move that cannot keep its values is refused here, before the definition is written.
-  const planned = plannedMovesOf(deps, save, plan.table);
-  await refuseEmptyRequiredRefills(deps, planned);
-  await refuseUnkeptValues(deps, planned);
-  await refuseMovesUnderWorkingDrafts(deps, save);
+  await judgedMovesOf(deps, save, plan.table);
   await settledRows(deps, save, plan.table);
   // The translations table is judged before anything is written wherever the change reaches it:
   // the file's statements are planned from the history's record of it, and a push changes it too,
@@ -1640,10 +1646,7 @@ export async function previewCollectionSave(
       ...files.change,
     ];
     const conversions = plan.adoption?.conversions ?? [];
-    const planned = plannedMovesOf(deps, save, plan.table);
-    await refuseEmptyRequiredRefills(deps, planned);
-    await refuseUnkeptValues(deps, planned);
-    await refuseMovesUnderWorkingDrafts(deps, save);
+    const planned = await judgedMovesOf(deps, save, plan.table);
     const moved = await moveSentencesOf(deps, planned);
     return {
       adopts: plan.adoption !== null,
@@ -3461,6 +3464,9 @@ function plannedMovesOf(
       before: (save.previous.fields ?? []) as FieldDefinition[],
       after: (save.entity.fields ?? []) as FieldDefinition[],
       moves: save.moves,
+      ...(save.fieldGroupUsers === undefined
+        ? {}
+        : { fieldGroupUsers: save.fieldGroupUsers }),
       // Where the values are stored, not whether the entity is translated: under per-language
       // storage a shared entity keeps its translatable fields in the language table too.
       localized: storesPerLanguage(save.entity),
@@ -3481,6 +3487,59 @@ function plannedMovesOf(
   );
   refuseDeletesBeforeRefill(save, planned);
   return planned;
+}
+
+/**
+ * The save's moves planned (`plannedMovesOf`) and judged against the values the database holds,
+ * every check counted or read before anything is written: a required field moved out with an entry
+ * holding no value, a unique one with a value held twice, a value its new column would not keep,
+ * and a working draft keeping the field where it was. The first that fails refuses the save.
+ */
+async function judgedMovesOf(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<EntityMoves> {
+  const planned = plannedMovesOf(deps, save, table);
+  await refuseEmptyRequiredRefills(deps, planned);
+  await refuseRepeatedUniqueRefills(deps, planned);
+  await refuseUnkeptValues(deps, planned);
+  await refuseMovesUnderWorkingDrafts(deps, save);
+  return planned;
+}
+
+/**
+ * Refuses a unique field moved out of a group while two entries hold one value for it, counted
+ * before anything is written (`repeatedValuesAt`), naming the field and how many values repeat:
+ * its column is made unique, which those entries would break part-way through the file. The file
+ * stops over any repeat the database it runs on holds as well (`repeatedValuesStop`).
+ */
+async function refuseRepeatedUniqueRefills(
+  deps: CollectionSaveDeps,
+  planned: EntityMoves
+): Promise<void> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  for (const refill of planned.refilledColumns) {
+    if (!refill.unique) continue;
+    const from = { kind: "json" as const, ...refill.source };
+    const [row] = await querySqlRows<{ count: string | number }>(
+      deps.adapter.getDrizzle(),
+      dialect,
+      sql`SELECT COUNT(*) AS count FROM (${sql.raw(repeatedValuesAt(refill.table, from, dialect))}) AS ${sql.identifier("repeats")}`
+    );
+    const repeats = Number(row?.count ?? 0);
+    if (repeats === 0) continue;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: refill.field,
+          code: "FIELD_MOVE_REFUSED",
+          message: `${refill.field} is unique where it moves to, and ${repeats} of its ${repeats === 1 ? "values is" : "values are"} held by more than one entry in the group it moves out of. Give each entry its own value, or clear the repeats, then move it.`,
+        },
+      ],
+      logContext: { table: refill.table, column: refill.column, repeats },
+    });
+  }
 }
 
 /**

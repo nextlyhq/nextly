@@ -1611,6 +1611,104 @@ describe.each(getConfiguredTestDialects())(
       expect(upSql.indexOf("dynamic_collections")).toBeGreaterThan(copy);
     });
 
+    // Out of a group into a column its definition makes unique: the column is made unique, its
+    // repeats counted before anything is written and stopped over in the file on any other
+    // database.
+    describe("a unique field moved out of a group", () => {
+      const code: Field = { name: "code", type: "text" };
+      const uniqueCode: Field = { ...code, unique: true };
+      const GROUPED: Field[] = [group("meta", [NOTE, code])];
+      const ON_ROW: Field[] = [uniqueCode, group("meta", [NOTE])];
+      const OUT_OF_META = [{ from: ["meta", "code"], to: ["code"] }];
+
+      /** Entries holding `codes` in their group, one each. */
+      async function seedCodes(
+        t: TestNextly,
+        codes: readonly string[]
+      ): Promise<void> {
+        for (const [i, value] of codes.entries()) {
+          await t.nextly.create({
+            collection: SLUG,
+            data: { title: `P${i}`, slug: `p${i}`, meta: { code: value } },
+          });
+        }
+      }
+
+      it("is moved, its column unique: every value kept, and a repeat refused", async () => {
+        const t = await boot(dialect);
+        await createPosts(t, SLUG, { fields: GROUPED });
+        await seedCodes(t, ["a", "b"]);
+
+        await save(t, ON_ROW, OUT_OF_META);
+
+        const after = await readAll(t);
+        expect([...after.values()].map(item => item.code).sort()).toEqual([
+          "a",
+          "b",
+        ]);
+        await expect(
+          t.nextly.create({
+            collection: SLUG,
+            data: { title: "Again", slug: "again", code: "a" },
+          })
+        ).rejects.toThrow();
+      });
+
+      it("is refused, nothing changed, while two entries hold one value, naming the field and the count", async () => {
+        const t = await boot(dialect);
+        await createPosts(t, SLUG, { fields: GROUPED });
+        await seedCodes(t, ["a", "a", "b", "b", "c"]);
+        const before = await readAll(t);
+        const files = await migrationFiles();
+        const stated = await definition();
+        const columns = (await columnsOf(t)).sort();
+
+        await expect(save(t, ON_ROW, OUT_OF_META)).rejects.toThrow(
+          expect.objectContaining({
+            publicData: {
+              errors: [
+                expect.objectContaining({
+                  code: "FIELD_MOVE_REFUSED",
+                  message:
+                    "code is unique where it moves to, and 2 of its values are held by more than one entry in the group it moves out of. Give each entry its own value, or clear the repeats, then move it.",
+                }),
+              ],
+            },
+          })
+        );
+
+        expect(await readAll(t)).toEqual(before);
+        expect(await migrationFiles()).toEqual(files);
+        expect(await definition()).toBe(stated);
+        expect((await columnsOf(t)).sort()).toEqual(columns);
+      });
+
+      // The save counted its own database; a deploy's may repeat a value that one never did. The file
+      // stops before it changes anything there.
+      it("stops a replay on a database whose entries repeat a value, before anything changes", async () => {
+        const first = await boot(dialect);
+        await createPosts(first, SLUG, { fields: GROUPED });
+        const created = await filesWritten();
+        await seedCodes(first, ["a", "b"]);
+        await save(first, ON_ROW, OUT_OF_META);
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await seedCodes(second, ["a", "a"]);
+        const groups = await storedGroups(second);
+        const columns = (await columnsOf(second)).sort();
+
+        await expect(migrateFolder(second)).rejects.toThrow(
+          /nextly_repeated_code\.two_entries_hold_one_code|two_entries_hold_one_code/
+        );
+
+        expect(await storedGroups(second)).toEqual(groups);
+        expect((await columnsOf(second)).sort()).toEqual(columns);
+      });
+    });
+
     describe("a move that cannot keep its values is refused before anything is written", () => {
       /** The save refused, in its review and in its apply, and nothing about the database changed. */
       async function expectRefused(
@@ -1652,6 +1750,72 @@ describe.each(getConfiguredTestDialects())(
           [...MOVED_FIELDS, group("meta", [NOTE, code])],
           [{ from: ["code"], to: ["meta", "code"] }],
           "cannot be kept unique"
+        );
+        expect(await readAll(t)).toEqual(before);
+      });
+
+      // Judged before the repeater: what stops it is the uniqueness its values would lose, which the
+      // repeater's own "not available yet" would not say. At any depth, the repeater is named.
+      it("a unique field into a repeater, and into a group inside one, naming the repeater", async () => {
+        const t = await boot(dialect);
+        const code: Field = { name: "code", type: "text", unique: true };
+        const items = (fields: Field[]): Field => ({
+          name: "items",
+          type: "repeater",
+          fields,
+        });
+        await createPosts(t, SLUG, {
+          fields: [code, ...OUTSIDE, items([group("row", [NOTE])])],
+        });
+        await seed(t);
+        const before = await readAll(t);
+        const message =
+          "code cannot be moved into the repeater items: a repeater keeps its values in one JSON value, which cannot be kept unique.";
+        await expectRefused(
+          t,
+          [...OUTSIDE, items([code, group("row", [NOTE])])],
+          [{ from: ["code"], to: ["items", "code"] }],
+          message
+        );
+        await expectRefused(
+          t,
+          [...OUTSIDE, items([group("row", [NOTE, code])])],
+          [{ from: ["code"], to: ["items", "row", "code"] }],
+          message
+        );
+        expect(await readAll(t)).toEqual(before);
+      });
+
+      // Each entry may hold several rows, and one field keeps one value: the move is refused, no row
+      // dropped, and a new field suggested.
+      it("a field out of a repeater whose entries hold several rows", async () => {
+        const t = await boot(dialect);
+        const label: Field = { name: "label", type: "text" };
+        const items = (fields: Field[]): Field => ({
+          name: "items",
+          type: "repeater",
+          fields,
+        });
+        await createPosts(t, SLUG, {
+          fields: [...OUTSIDE, items([label, NOTE])],
+        });
+        await t.nextly.create({
+          collection: SLUG,
+          data: {
+            title: "Rows",
+            slug: "rows",
+            items: [
+              { label: "First", note: "a" },
+              { label: "Second", note: "b" },
+            ],
+          },
+        });
+        const before = await readAll(t);
+        await expectRefused(
+          t,
+          [...OUTSIDE, label, items([NOTE])],
+          [{ from: ["items", "label"], to: ["label"] }],
+          "cannot be moved out of the repeating rows items: each entry may hold several rows of it, which one field cannot keep. Add a new field instead."
         );
         expect(await readAll(t)).toEqual(before);
       });

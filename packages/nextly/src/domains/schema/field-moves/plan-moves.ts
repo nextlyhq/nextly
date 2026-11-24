@@ -21,6 +21,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { getPrebuiltHook } from "../../../hooks/prebuilt";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { asRowBackedRelationFields } from "../../field-groups/services/field-group-utils";
+import { builderColumnIsUnique } from "../field-rules";
 import {
   classifyFieldKind,
   fieldProducesColumn,
@@ -35,6 +36,7 @@ import {
   checkMove,
   placeOf,
   type FieldMoveRequest,
+  type MoveEntity,
   type PlannedMove,
   type StoragePlace,
 } from "./check-move";
@@ -44,6 +46,7 @@ import {
   mediaUsePathStatement,
   missingValuesStop,
   moveDataStatements,
+  repeatedValuesStop,
   type MoveColumn,
 } from "./move-statements";
 
@@ -70,6 +73,8 @@ export interface EntityMoves {
     field: string;
     /** Whether the field is required, so every entry needs a value to move. */
     required: boolean;
+    /** Whether the column is unique, so no two entries may hold one value to move. */
+    unique: boolean;
     /** The column's kind, which says what a value from the group must be to be read into it. */
     kind: MoveColumn["kind"];
     /** The column's SQL type and a decimal's digits, which bound what it keeps (`keptValuesOf`). */
@@ -165,13 +170,18 @@ function besideOf(
   const uses = args.mediaUses;
   const { from, to } = move;
   // A field required where it moves out to needs a value on every entry of the database the file
-  // runs on, unless the save fills the column first.
+  // runs on, unless the save fills the column first; one unique there needs no value held twice.
   const first =
-    from.kind === "json" &&
-    to.kind === "column" &&
-    (move.field as { required?: unknown }).required === true &&
-    !(args.filledColumns ?? []).includes(to.column)
-      ? missingValuesStop(target, from, to.column)
+    from.kind === "json" && to.kind === "column"
+      ? [
+          ...((move.field as { required?: unknown }).required === true &&
+          !(args.filledColumns ?? []).includes(to.column)
+            ? missingValuesStop(target, from, to.column)
+            : []),
+          ...(builderColumnIsUnique(move.field)
+            ? repeatedValuesStop(target, from, to.column)
+            : []),
+        ]
       : [];
   // The way back restores the definition before the save: its column is required again where
   // the field was, and the group is nullable where it was, whatever this save made of either.
@@ -663,6 +673,11 @@ export function planEntityMoves(given: {
   mediaUses?: { kind: "collection" | "single"; slug: string };
   /** The columns the save fills before its copies (a `fill` answer), which need no stop. */
   filledColumns?: readonly string[];
+  /**
+   * Who uses each field group, by slug, so a move into or out of one is refused naming them
+   * (`checkMove`). Absent, the refusal names the field group alone.
+   */
+  fieldGroupUsers?: MoveEntity["fieldGroupUsers"];
 }): EntityMoves {
   const args = asStoredByRow(given);
   const result: EntityMoves = {
@@ -745,6 +760,9 @@ function checkedMove(
   refuseUnmatched(args.before, args.after, request);
   const checked = checkMove(args.before, args.after, request, {
     localized: args.localized,
+    ...(args.fieldGroupUsers === undefined
+      ? {}
+      : { fieldGroupUsers: args.fieldGroupUsers }),
   });
   if (!checked.ok) throw refused(request, checked.message);
   const { move } = checked;
@@ -859,6 +877,7 @@ function recordColumns(
       column: to.column,
       field: request.to.join("."),
       required: (move.field as { required?: unknown }).required === true,
+      unique: builderColumnIsUnique(move.field),
       kind: target.kind,
       columnType: target.columnType,
       ...(target.precision === undefined
