@@ -217,9 +217,7 @@ describe("SingleForm — a published version replaces the document", () => {
       )
     ).toBeInTheDocument();
     expect(screen.getByTestId("snapshot-form")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Restore this version" })
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Restore…" })).toBeEnabled();
     // The live editor's own fields stay mounted behind the version so their
     // rich state (undo, selection) survives the round trip — but they are
     // inert: removed from the accessibility tree and from every pointer.
@@ -246,9 +244,7 @@ describe("SingleForm — a published version replaces the document", () => {
     // An absent snapshot must not render as an empty version.
     expect(screen.queryByTestId("snapshot-form")).toBeNull();
     expect(screen.getByText(/loading version 7/i)).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Restore this version" })
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restore…" })).toBeDisabled();
   });
 
   it("reports a failed read instead of rendering it as the version", () => {
@@ -513,7 +509,7 @@ describe("SingleForm — a published version replaces the document", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: "Restore this version" })
+      screen.queryByRole("button", { name: "Restore…" })
     ).not.toBeInTheDocument();
   });
 });

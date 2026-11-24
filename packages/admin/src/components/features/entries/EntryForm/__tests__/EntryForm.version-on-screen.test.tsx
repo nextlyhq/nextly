@@ -90,9 +90,7 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
     });
 
     expect(screen.getByTestId("snapshot-form")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Restore this version" })
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Restore…" })).toBeEnabled();
   });
 
   it("prevents the native form submit while a version is being read", () => {
@@ -143,8 +141,6 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
     // An absent snapshot must not render as an empty version.
     expect(screen.queryByTestId("snapshot-form")).toBeNull();
     expect(screen.getByText(/loading version 7/i)).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Restore this version" })
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restore…" })).toBeDisabled();
   });
 });
