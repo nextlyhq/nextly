@@ -19,6 +19,7 @@
  * - a database with nothing of the kind asked for a backup it does not need;
  * - a dry run that hashes, or that names no work.
  */
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,6 +51,7 @@ import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+import { fileLedgerDdl, journalDdl } from "./helpers/legacy-bookkeeping-tables";
 
 // `nextly migrate` as every installation runs it: per-language storage (`storage-layout`).
 perLanguageStorageSuite();
@@ -529,6 +531,49 @@ describe.each(getConfiguredTestDialects())(
       const tables = await on(adapter => adapter.listTables());
       expect(tables).not.toContain(TABLE);
       expect(tables).not.toContain(`${TABLE}_locales`);
+    }, 240_000);
+
+    /**
+     * The database's migration records as an earlier release kept them: each applied file in
+     * `nextly_migrations`, one finished push in `nextly_migration_journal`, and no events table.
+     */
+    async function recordsAsAnEarlierReleaseKeptThem(): Promise<void> {
+      const files = await sql(
+        `SELECT ${id("filename")} AS filename, ${id("sha256")} AS sha256 FROM ${id("nextly_schema_events")} WHERE ${id("event_type")} = 'file_apply' AND ${id("status")} = 'applied'`
+      );
+      expect(files.length).toBeGreaterThan(0);
+      for (const statement of fileLedgerDdl(dialect)) await sql(statement);
+      for (const file of files) {
+        await sql(
+          `INSERT INTO ${id("nextly_migrations")} (${id("id")}, ${id("filename")}, ${id("sha256")}, ${id("status")}${dialect === "sqlite" ? `, ${id("applied_at")}` : ""}) VALUES ('${randomUUID()}', '${String(file.filename)}', '${String(file.sha256)}', 'applied'${dialect === "sqlite" ? `, ${Date.now()}` : ""})`
+        );
+      }
+      await sql(journalDdl(dialect));
+      await sql(
+        `INSERT INTO ${id("nextly_migration_journal")} (${id("id")}, ${id("source")}, ${id("status")}, ${id("duration_ms")}) VALUES ('${randomUUID()}', 'ui', 'success', 12)`
+      );
+      await sql(`DROP TABLE ${id("nextly_schema_events")}`);
+    }
+
+    // The earlier release's records move first, under their own lock, and are kept: a refusal
+    // the count of the stored data makes after them names that move as applied, never "Nothing
+    // was changed". Broken, it ends with "Nothing was changed" though the move committed.
+    it("names the move of an earlier release's records in a refusal made after it", async () => {
+      await siteWithTwoSpellings();
+      await recordsAsAnEarlierReleaseKeptThem();
+
+      const refusal = await confirmedRefusal();
+
+      expect(NextlyError.isCode(refusal, "NEXTLY_LANGUAGE_CODES_COLLIDE")).toBe(
+        true
+      );
+      expect(messageOf(refusal)).not.toContain("Nothing was changed");
+      expect(messageOf(refusal)).toContain("nextly_schema_events");
+      // The records moved, and the waiting migration did not apply.
+      const tables = await on(adapter => adapter.listTables());
+      expect(tables).toContain("nextly_schema_events");
+      expect(tables).not.toContain("nextly_migrations");
+      expect(await summaryColumnExists()).toBe(false);
     }, 240_000);
 
     it("lists the work in a dry run and changes nothing", async () => {

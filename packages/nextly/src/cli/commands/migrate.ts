@@ -350,7 +350,11 @@ import {
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
 import { runPluginsOnMigrate } from "./migrate-hooks";
-import { storedDataOfRun } from "./stored-data-of-run";
+import {
+  appliedBeforeDataSteps,
+  EARLIER_RECORDS_MOVED,
+  storedDataOfRun,
+} from "./stored-data-of-run";
 import {
   CORE_UPGRADE_LABEL,
   coreUpgradeSource,
@@ -601,9 +605,10 @@ function announceRun(
  * (`consolidateLegacyBookkeeping`). A database with neither is left alone,
  * whatever the flag says.
  *
- * Answers whether the run ends here: true for a dry run on such a database,
- * which lists the move alone, since which files are pending is not known
- * until the records are moved.
+ * Answers whether the run ends here (`ended`): true for a dry run on such a
+ * database, which lists the move alone, since which files are pending is not
+ * known until the records are moved; and whether this run moved them
+ * (`moved`), which a refusal made after names as applied.
  */
 async function moveEarlierRecords(args: {
   adapter: DrizzleAdapter;
@@ -616,10 +621,10 @@ async function moveEarlierRecords(args: {
   askBackedUp: () => Promise<boolean>;
   lockTtlSeconds: number | undefined;
   logger: CommandContext["logger"];
-}): Promise<boolean> {
+}): Promise<{ ended: boolean; moved: boolean }> {
   const { adapter, dialect, options, logger } = args;
   const legacy = await detectLegacyBookkeeping(adapter);
-  if (!legacy.hasLegacy) return false;
+  if (!legacy.hasLegacy) return { ended: false, moved: false };
   // Loaded only for a database that needs it.
   const { consolidateLegacyBookkeeping, previewLegacyConsolidation } =
     await import("./legacy-bookkeeping");
@@ -633,9 +638,9 @@ async function moveEarlierRecords(args: {
     });
     // No plan: another run moved the records meanwhile, and this dry run
     // goes on to list the pending migrations as on any database.
-    if (plan === undefined) return false;
+    if (plan === undefined) return { ended: false, moved: false };
     reportDryRun(logger, plan);
-    return true;
+    return { ended: true, moved: false };
   }
   await consolidateLegacyBookkeeping({
     adapter,
@@ -650,7 +655,12 @@ async function moveEarlierRecords(args: {
     log: message => logger.info(message),
     warn: message => logger.warn(message),
   });
-  return false;
+  // Moved by this run where the earlier tables are gone now; another run may have moved them
+  // meanwhile, and then this one changed nothing.
+  return {
+    ended: false,
+    moved: !(await detectLegacyBookkeeping(adapter)).hasLegacy,
+  };
 }
 
 /**
@@ -775,7 +785,7 @@ export async function runMigrate(
       site: upgradeSiteOf(configResult.config),
     });
 
-    const ended = await moveEarlierRecords({
+    const earlierRecords = await moveEarlierRecords({
       adapter: adapter as unknown as DrizzleAdapter,
       dialect,
       bounds,
@@ -785,7 +795,7 @@ export async function runMigrate(
       lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
       logger,
     });
-    if (ended) return;
+    if (earlierRecords.ended) return;
 
     // What the declared schema names, with the ledger's old Builder marks:
     // the one value every reader of the folder below reads it through.
@@ -886,7 +896,8 @@ export async function runMigrate(
     await storedData
       .confirmBeforeSchemaChanges(
         stepLeavesPending ? options.step : undefined,
-        ahead?.dropped
+        ahead?.dropped,
+        earlierRecords.moved ? EARLIER_RECORDS_MOVED : undefined
       )
       .catch(fail);
 
@@ -1161,10 +1172,14 @@ export async function runMigrate(
         // schema lock: with every migration applied, since each step reads
         // the tables as this release keeps them, and after the permissions
         // the run seeded, which a role's conversion gives.
+        // What applied before the steps, which a refusal they make then names as kept: the move of
+        // an earlier release's records, this run's migrations, and the deploy work after them,
+        // which can change the database where no migration file applied.
         await storedData.takeAfterSchemaChanges(
-          appliedThisRun === 0
-            ? undefined
-            : `the ${formatCount(appliedThisRun, "migration")} this run applied`
+          appliedBeforeDataSteps({
+            recordsMoved: earlierRecords.moved,
+            migrationsApplied: appliedThisRun,
+          })
         );
         // The plugins' own deploy work, last, once every step above has
         // left the schema in step (`migrate-hooks`). Not where migrations

@@ -322,7 +322,7 @@ export async function runDataSteps(
  * carries on from it, so the refusal says that, in place of "Nothing was changed", and that the
  * cause it names is what to fix first. Anything that is not a step's refusal is left as it is.
  */
-function refusalAfterWork(
+export function refusalAfterWork(
   error: unknown,
   deps: Pick<DataStepsDeps, "command" | "schemaChanges">,
   ran: readonly { title: string; changed: number }[]

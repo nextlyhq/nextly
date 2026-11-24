@@ -19,6 +19,7 @@ import { countPasswordsStoredAsGiven } from "../../domains/field-groups/stored-p
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { describeError, type NextlyError } from "../../errors";
 import type { DryRunPlan } from "../dry-run";
+import { formatCount } from "../utils/logger";
 import { askYesInTerminal } from "../utils/prompt-cancelled";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
@@ -27,6 +28,7 @@ import {
   firstDataStepWithWork,
   isDataStepsBackupRefusal,
   previewDataSteps,
+  refusalAfterWork,
   refusalOfSteps,
   runDataSteps,
   type DataStepsDeps,
@@ -68,7 +70,13 @@ export interface StoredDataOfRun {
    */
   confirmBeforeSchemaChanges: (
     step?: number,
-    droppedAhead?: ReadonlySet<string>
+    droppedAhead?: ReadonlySet<string>,
+    /**
+     * What the command changed before this check, kept whatever it refuses (the move of an
+     * earlier release's migration records): a refusal made here names it as applied rather than
+     * saying nothing was changed (`refusalAfterWork`).
+     */
+    appliedBefore?: string
   ) => Promise<void>;
   /**
    * Once the schema is up to date: runs the steps. `schemaChanges` names what the command changed
@@ -79,6 +87,32 @@ export interface StoredDataOfRun {
   warnOfPasswordsLeft: () => Promise<void>;
   /** The backup refusal the steps ended with after the schema changed, if any. */
   refusal: () => NextlyError | null;
+}
+
+/** What a refusal made after the move of an earlier release's records names as applied. */
+export const EARLIER_RECORDS_MOVED =
+  "the move of an earlier release's migration records (`nextly_migrations`, `nextly_migration_journal`) into `nextly_schema_events`";
+
+/**
+ * What applied before `nextly migrate`'s data steps, which a refusal they make then names as kept
+ * (`refusalAfterWork`): the move of an earlier release's records, the run's migrations, and the
+ * deploy work after them (the core schema's reconcile, translation tables, user fields, the
+ * workflow pass), which can change the database where no migration file applied. That work says
+ * nothing of whether it changed anything, so it is named as run, each part where it had any.
+ */
+export function appliedBeforeDataSteps(run: {
+  recordsMoved: boolean;
+  migrationsApplied: number;
+}): string {
+  return [
+    ...(run.recordsMoved ? [EARLIER_RECORDS_MOVED] : []),
+    ...(run.migrationsApplied === 0
+      ? []
+      : [
+          `the ${formatCount(run.migrationsApplied, "migration")} this run applied`,
+        ]),
+    "this run's deploy work before the data steps (the core schema's reconcile, the translation tables, the user fields and the workflow pass, each where it had any)",
+  ].join(" and ");
 }
 
 /**
@@ -280,7 +314,7 @@ export function storedDataOfRun(args: {
     // steps leaves the schema as it was too. A count that cannot be read
     // yet, on a database whose tables the run creates, is taken again after
     // it; a refusal made then says that the schema changes had applied.
-    confirmBeforeSchemaChanges: async (step, droppedAhead) => {
+    confirmBeforeSchemaChanges: async (step, droppedAhead, appliedBefore) => {
       if (step !== undefined) return;
       try {
         const before = deps(false, droppedAhead);
@@ -291,7 +325,15 @@ export function storedDataOfRun(args: {
           before,
           refusesBeforeSchemaChanges
         );
-        if (refusal !== undefined) throw refusal;
+        if (refusal !== undefined) {
+          throw appliedBefore === undefined
+            ? refusal
+            : refusalAfterWork(
+                refusal,
+                { command: args.command, schemaChanges: appliedBefore },
+                []
+              );
+        }
         await confirmDataStepsBackup(
           before,
           await firstDataStepWithWork(before).catch(() => undefined)
