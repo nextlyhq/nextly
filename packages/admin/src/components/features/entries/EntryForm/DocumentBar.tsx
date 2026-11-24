@@ -1008,12 +1008,13 @@ function EditingLanguageChip({ code }: { code: string | undefined }) {
 }
 
 /**
- * The language a new document is being created in, on a localized site only:
- * it has no translations yet to switch between.
+ * The language a new document is being created in, on a site with two
+ * languages or more only: it has no translations yet to switch between. A
+ * one-language site speaks no language words.
  */
 function CreatingInLanguageNote({ mode }: { mode: EntryFormMode }) {
-  const { enabled, defaultLocale, getLocale } = useLocalization();
-  if (!enabled || mode !== "create") return null;
+  const { enabled, locales, defaultLocale, getLocale } = useLocalization();
+  if (!enabled || locales.length < 2 || mode !== "create") return null;
   return (
     <CreatingInLanguage
       code={defaultLocale}

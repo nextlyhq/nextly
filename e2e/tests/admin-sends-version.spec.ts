@@ -131,19 +131,18 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
       page.getByRole("main").getByText("Published", { exact: true }).first()
     ).toBeVisible({ timeout: 30_000 });
 
-    // A held working-draft save, of the published entry.
-    const saveChanges = page
-      .getByRole("button", { name: /^Save( draft| changes)?$/ })
-      .first();
+    // A held working-draft save, of the published entry. The edit is typed
+    // until the form holds it as unsaved work: the read after the publish
+    // can reset one typed before it.
     await expect(async () => {
       await excerpt(page).fill(`Pending ${tag}`);
-      await expect(saveChanges).toBeEnabled({ timeout: 2_000 });
+      await expect(
+        page.getByTestId("document-bar").getByText("Unsaved changes")
+      ).toBeVisible({ timeout: 2_000 });
     }).toPass({ timeout: 30_000 });
     sent = nextWrite(page, toThis);
-    await page
-      .getByRole("button", { name: /^Save( draft| changes)?$/ })
-      .first()
-      .click();
+    // The main button where Save leads, else its menu's Save row.
+    await saveFromBar(page, /^Save( draft| changes)?$/);
     await sent;
 
     // An unpublish, from the document's own menu.

@@ -139,6 +139,10 @@ describe("DocumentBar language", () => {
 
   it("says which language a new entry starts in on a localized site", () => {
     localization.enabled = true;
+    localization.locales = [
+      { code: "en", label: "English" },
+      { code: "fr", label: "French" },
+    ];
     render(<Harness mode="create" />);
     const sentence =
       "Creating in English — other languages can be added after the first save";
@@ -154,6 +158,10 @@ describe("DocumentBar language", () => {
     // explanation gives way first, then the words "Creating in English" give
     // way to the language's code, so a phone's bar keeps to one row.
     localization.enabled = true;
+    localization.locales = [
+      { code: "en", label: "English" },
+      { code: "fr", label: "French" },
+    ];
     render(<Harness mode="create" />);
     const note = screen.getByTestId("document-bar-creating-in");
     const part = (text: string) =>
@@ -174,6 +182,16 @@ describe("DocumentBar language", () => {
     expect(note.querySelector("svg")?.getAttribute("class")).toMatch(
       /shrink-0/
     );
+  });
+
+  it("says nothing about language when creating on a site with one language", () => {
+    // Localized in its config, but with nothing else to translate into: a
+    // one-language site shows no language words at all.
+    localization.enabled = true;
+    localization.locales = [{ code: "en", label: "English" }];
+    render(<Harness mode="create" />);
+    expect(screen.getByTestId("document-bar")).toBeInTheDocument();
+    expect(screen.queryByText(/Creating in/)).not.toBeInTheDocument();
   });
 
   it("says nothing about language when creating on an unlocalized site", () => {
