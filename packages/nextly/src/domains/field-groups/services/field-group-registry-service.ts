@@ -35,11 +35,15 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { lookingUpRegistry } from "../migration/moved-storage";
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
 } from "../storage/field-group-field-type";
-import { resolveRegistryTableName } from "../storage/resolve-storage-names";
+import {
+  forgetFieldGroupStorageNames,
+  resolveRegistryTableName,
+} from "../storage/resolve-storage-names";
 
 import {
   fieldGroupTableNameFor,
@@ -320,9 +324,57 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * database has *before* that runs and not a fact about the database in front
    * of us. Resolved from the catalog and memoized per adapter, so the answer
    * costs one catalog read per process rather than one per query.
+   *
+   * A transaction that found the registry moved addresses it as it found it
+   * until it ends (`lookingUp`); the first lookup after it resolves again.
    */
   protected override async resolveRegistryTableName(): Promise<string> {
+    if (this.movedName !== undefined) {
+      if (this.adapter.transactionOpenInFlow()) return this.movedName;
+      this.movedName = undefined;
+      forgetFieldGroupStorageNames(this.adapter);
+      clearRegistryRowCache();
+    }
     return resolveRegistryTableName(this.adapter);
+  }
+
+  /** The name a transaction found the registry under, when the storage migration moved it. */
+  private movedName: string | undefined;
+
+  /**
+   * One lookup of the registry, following it when the storage migration moved it
+   * (`lookingUpRegistry`). Here rather than at each caller, since every one of them meets it: a
+   * write asks for definitions long before it reaches the field group's own rows.
+   */
+  private lookingUp<T>(
+    executor: unknown,
+    lookup: () => Promise<T>
+  ): Promise<T> {
+    return lookingUpRegistry({
+      adapter: this.adapter,
+      executor,
+      lookup,
+      useName: name => {
+        this.movedName = name;
+      },
+    });
+  }
+
+  protected override getRecordBySlug(
+    slug: string,
+    executor?: unknown,
+    forRead = false
+  ): Promise<DynamicFieldGroupRecord | null> {
+    return this.lookingUp(executor, () =>
+      super.getRecordBySlug(slug, executor, forRead)
+    );
+  }
+
+  protected override listStored<T>(
+    view: (rows: readonly Readonly<Record<string, unknown>>[]) => T,
+    options: { forWrite?: boolean } = {}
+  ): Promise<T> {
+    return this.lookingUp(undefined, () => super.listStored(view, options));
   }
 
   protected getSearchColumns(): string[] {
@@ -348,7 +400,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * decides from the stored row and re-reads it to learn whether its own write landed.
    */
   async getComponentForWrite(slug: string): Promise<DynamicFieldGroupRecord> {
-    return this.getRecordForWrite(slug);
+    return this.lookingUp(undefined, () => this.getRecordForWrite(slug));
   }
 
   /**
@@ -359,13 +411,13 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   async findComponentForWrite(
     slug: string
   ): Promise<DynamicFieldGroupRecord | null> {
-    return this.findRecordForWrite(slug);
+    return this.lookingUp(undefined, () => this.findRecordForWrite(slug));
   }
 
   async getAllComponents(
     options?: ListComponentsOptions
   ): Promise<DynamicFieldGroupRecord[]> {
-    return this.getAllRecords(options);
+    return this.lookingUp(undefined, () => this.getAllRecords(options));
   }
 
   /**
@@ -373,7 +425,9 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * what a save's cycle check judges the saved definition against.
    */
   async getAllFieldLists(): Promise<DynamicFieldGroupRecord[]> {
-    return this.getAllRecordsWithColumns(["fields"], { forWrite: true });
+    return this.lookingUp(undefined, () =>
+      this.getAllRecordsWithColumns(["fields"], { forWrite: true })
+    );
   }
 
   /**
@@ -382,6 +436,10 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * one, so the read waits on no second connection, and as stored rather than cached.
    */
   async getAllTableNames(executor?: unknown): Promise<string[]> {
+    return this.lookingUp(executor, () => this.storedTableNames(executor));
+  }
+
+  private async storedTableNames(executor?: unknown): Promise<string[]> {
     try {
       const rows = await this.adapter.select<Record<string, unknown>>(
         await this.resolveRegistryTableName(),

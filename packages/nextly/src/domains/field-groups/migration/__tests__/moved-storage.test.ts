@@ -16,15 +16,20 @@
  * @module domains/field-groups/migration/__tests__/moved-storage.test
  */
 import { tableNotRegisteredError } from "@nextlyhq/adapter-drizzle/types";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { introspectLiveColumns } from "../../../schema/pipeline/diff/introspect-live";
-import { forgetFieldGroupStorageNames } from "../../storage/resolve-storage-names";
+import {
+  forgetFieldGroupStorageNames,
+  resolveRegistryTableName,
+} from "../../storage/resolve-storage-names";
 import { registerComponentRuntimeSchema } from "../../services/field-group-table-provisioning";
 import {
-  followingMovedRegistry,
   isMovedStorageError,
+  isStorageMovingRefusal,
+  lookingUpRegistry,
   raiseIfMoved,
   refusalAfterFollowing,
   refusingMovedStorage,
@@ -47,6 +52,8 @@ let held: Record<string, string[]> = {};
 /** The connections the catalog was read on. */
 let readOn: unknown[] = [];
 
+/** The connection of the transaction open in this flow, if one is. */
+let inFlow: object | undefined;
 /** The field groups' tables this process registered, each with its discriminator. */
 let registered: Record<string, string> = {};
 /** What the pool's connections see, MySQL's table-name case setting among it. */
@@ -60,6 +67,7 @@ const MOVING = {
 beforeEach(() => {
   held = {};
   readOn = [];
+  inFlow = undefined;
   registered = { comp_hero: "_component_type", comp_cta: "_component_type" };
   forgetFieldGroupStorageNames();
   vi.mocked(registerComponentRuntimeSchema).mockClear();
@@ -89,6 +97,15 @@ const adapterOf = (dialect: Dialect) => {
       getCapabilities: () => ({ dialect }),
       tableExists: async (name: string) => held[name] !== undefined,
       listTables: async () => Object.keys(held),
+      transactionOpenInFlow: () => inFlow !== undefined,
+      transactionInFlow: () =>
+        inFlow === undefined
+          ? undefined
+          : {
+              transaction: inFlow,
+              undone: () => false,
+              runsOn: (executor: unknown) => executor === inFlow,
+            },
       afterRollback: async (effect: () => unknown) => {
         effects.push(effect);
       },
@@ -108,20 +125,17 @@ const adapterOf = (dialect: Dialect) => {
 };
 type Adapter = ReturnType<typeof adapterOf>;
 
-/** A transaction that records the savepoints taken on it. */
+/** A transaction, open in this flow, that records what was run on its connection. */
 const txOf = () => {
   const said: string[] = [];
-  const handle = { select: () => undefined };
-  return {
-    said,
-    handle,
-    tx: {
-      getDrizzle: () => handle,
-      savepoint: async () => void said.push("savepoint"),
-      rollbackToSavepoint: async () => void said.push("rollback"),
-      releaseSavepoint: async () => void said.push("release"),
-    } as never,
+  const handle = {
+    execute: async (statement: never) => {
+      said.push(new PgDialect().sqlToQuery(statement).sql);
+      if (/1 \/ 0/.test(said.at(-1)!)) throw new Error("division by zero");
+    },
   };
+  inFlow = handle;
+  return { said, handle, tx: { getDrizzle: () => handle } as never };
 };
 const TX = { select: () => undefined };
 const rowsOf = (...slugs: string[]) => ({
@@ -284,31 +298,80 @@ describe.each(["sqlite", "mysql", "postgresql"] as const)(
   }
 );
 
-describe("the savepoint a write takes", () => {
-  const said = async (dialect: Dialect, error?: unknown) => {
-    const tx = txOf();
-    await refusingMovedStorage({
-      adapter: adapterOf(dialect) as never,
+describe("the savepoint a transaction takes", () => {
+  const SAVEPOINT = /^SAVEPOINT "nextly_moved_storage_\d+"$/;
+  const ROLLBACK = /^ROLLBACK TO SAVEPOINT "nextly_moved_storage_\d+"$/;
+  const guarded = (
+    adapter: Adapter,
+    tx: ReturnType<typeof txOf>,
+    error?: unknown
+  ) =>
+    refusingMovedStorage({
+      adapter: adapter as never,
       rows: rowsOf("hero"),
       tx: tx.tx,
       work: () =>
         error === undefined ? Promise.resolve() : Promise.reject(error),
-    }).catch(() => undefined);
+    }).catch((raised: unknown) => {
+      // The failure it was given, or the refusal of it; anything else is the case's own.
+      if (raised !== error && !isStorageMovingRefusal(raised)) throw raised;
+    });
+  const said = async (dialect: Dialect, error?: unknown) => {
+    const tx = txOf();
+    await guarded(adapterOf(dialect), tx, error);
     return tx.said;
   };
 
-  it("is taken on PostgreSQL while the site is on the legacy names, and released", async () => {
+  it("is taken on PostgreSQL while the site is on the legacy names", async () => {
     held = { dynamic_components: ["id"] };
-    expect(await said("postgresql")).toEqual(["savepoint", "release"]);
-    expect(
-      await said("postgresql", missingTable.postgresql("comp_hero"))
-    ).toEqual(["savepoint", "rollback", "release"]);
+    expect(await said("postgresql")).toEqual([
+      expect.stringMatching(SAVEPOINT),
+    ]);
+  });
+
+  it("is taken once for a transaction, however many of its steps reach field groups", async () => {
+    held = { dynamic_components: ["id"] };
+    const adapter = adapterOf("postgresql");
+    const tx = txOf();
+    await guarded(adapter, tx);
+    await guarded(adapter, tx);
+    await lookingUpRegistry({
+      adapter: adapter as never,
+      executor: tx.handle,
+      lookup: async () => null,
+      useName: () => undefined,
+    });
+    expect(tx.said).toHaveLength(1);
+  });
+
+  it("is rolled back to and the transaction left aborted, whether or not storage moved", async () => {
+    // Rolled back it has lost what came after; a caller that went on would commit the rest.
+    const expected = [
+      expect.stringMatching(SAVEPOINT),
+      expect.stringMatching(ROLLBACK),
+      "SELECT 1 / 0",
+    ];
+    held = { dynamic_components: ["id"] };
+    const error = missingTable.postgresql("comp_hero");
+    expect(await said("postgresql", error)).toEqual(expected);
+    held = { ...held, fg_hero: ["id"] };
+    expect(await said("postgresql", error)).toEqual(expected);
+  });
+
+  it("is not rolled back to for a failure that names no field-group storage", async () => {
+    held = { dynamic_components: ["id"] };
+    expect(await said("postgresql", new Error("connection reset"))).toEqual([
+      expect.stringMatching(SAVEPOINT),
+    ]);
   });
 
   it("is not taken on SQLite or MySQL, whose transactions a failed statement leaves usable", async () => {
     held = { dynamic_components: ["id"] };
-    expect(await said("sqlite")).toEqual([]);
-    expect(await said("mysql")).toEqual([]);
+    for (const dialect of ["sqlite", "mysql"] as const) {
+      expect(await said(dialect, missingTable[dialect]("comp_hero"))).toEqual(
+        []
+      );
+    }
   });
 
   it("is not taken once the registry and every registered table are on the current names", async () => {
@@ -318,6 +381,54 @@ describe("the savepoint a write takes", () => {
       legal_blocks: "_field_group_type",
     };
     expect(await said("postgresql")).toEqual([]);
+  });
+
+  it("is taken while a table registered before the registry was renamed is still the old one", async () => {
+    // The registry is renamed last and resolved again by a lookup; a group with a table name of
+    // its own keeps that name, and only its discriminator says it was registered before.
+    held = { dynamic_field_groups: ["id"] };
+    registered = {
+      fg_hero: "_field_group_type",
+      legal_blocks: "_component_type",
+    };
+    expect(await said("postgresql")).toHaveLength(1);
+  });
+
+  it("is taken again as soon as a table is registered under the old names, with nothing told", async () => {
+    held = { dynamic_field_groups: ["id"] };
+    registered = { fg_hero: "_field_group_type" };
+    expect(await said("postgresql")).toEqual([]);
+    // A development reload, a schema-version change or a follow registers one.
+    registered = { ...registered, fg_hero: "_component_type" };
+    expect(await said("postgresql")).toHaveLength(1);
+  });
+
+  it("is taken again once the names this process resolved are reset and resolve to the old ones", async () => {
+    held = { dynamic_field_groups: ["id"] };
+    registered = { fg_hero: "_field_group_type" };
+    const adapter = adapterOf("postgresql");
+    const settled = txOf();
+    await guarded(adapter, settled);
+    expect(settled.said).toEqual([]);
+
+    held = { dynamic_components: ["id"] };
+    forgetFieldGroupStorageNames(adapter as never);
+    const after = txOf();
+    await guarded(adapter, after);
+    expect(after.said).toHaveLength(1);
+  });
+
+  it("is taken when the registry cannot be resolved", async () => {
+    registered = { fg_hero: "_field_group_type" };
+    const tx = txOf();
+    await guarded(
+      {
+        ...adapterOf("postgresql"),
+        listTables: () => Promise.reject(new Error("denied")),
+      },
+      tx
+    );
+    expect(tx.said).toHaveLength(1);
   });
 
   it("a settled process meeting a rollback keeps its error, and follows the names once it has ended", async () => {
@@ -334,41 +445,6 @@ describe("the savepoint a write takes", () => {
     expect(
       vi.mocked(registerComponentRuntimeSchema).mock.calls.map(call => call[2])
     ).toContain("comp_hero");
-  });
-
-  it("is taken while a table registered before the registry was renamed is still the old one", async () => {
-    // The registry is renamed last and resolved again by a lookup; a group with a table name of
-    // its own keeps that name, and only its discriminator says it was registered before.
-    held = { dynamic_field_groups: ["id"] };
-    registered = {
-      fg_hero: "_field_group_type",
-      legal_blocks: "_component_type",
-    };
-    expect(await said("postgresql")).toContain("savepoint");
-  });
-
-  it("is taken again as soon as a table is registered under the old names, with nothing told", async () => {
-    held = { dynamic_field_groups: ["id"] };
-    registered = { fg_hero: "_field_group_type" };
-    expect(await said("postgresql")).toEqual([]);
-    // A development reload, a schema-version change or a follow registers one.
-    registered = { ...registered, fg_hero: "_component_type" };
-    expect(await said("postgresql")).toContain("savepoint");
-  });
-
-  it("is taken when the registry cannot be resolved", async () => {
-    registered = { fg_hero: "_field_group_type" };
-    const tx = txOf();
-    await refusingMovedStorage({
-      adapter: {
-        ...adapterOf("postgresql"),
-        listTables: () => Promise.reject(new Error("denied")),
-      } as never,
-      rows: rowsOf("hero"),
-      tx: tx.tx,
-      work: () => Promise.resolve(),
-    });
-    expect(tx.said).toContain("savepoint");
   });
 });
 
@@ -421,70 +497,116 @@ describe("isMovedStorageError", () => {
   });
 });
 
-describe("followingMovedRegistry", () => {
-  const MISSING = new Error("no such table: dynamic_components");
-
-  it("looks up once more after a lookup failed as a move, and answers what that finds", async () => {
-    const getComponent = vi
-      .fn()
-      .mockRejectedValueOnce(NextlyError.internal({ cause: MISSING }))
-      .mockResolvedValueOnce({ slug: "hero", tableName: "fg_hero" });
-    const registry = followingMovedRegistry(
-      { getComponent },
-      adapterOf("sqlite") as never
-    );
-
-    await expect(registry.getComponent("hero")).resolves.toEqual({
-      slug: "hero",
-      tableName: "fg_hero",
+describe("lookingUpRegistry", () => {
+  /** A lookup that finds the registry under `names`, starting with the legacy one. */
+  const lookupOf = (dialect: Dialect, ...names: string[]) => {
+    let name = "dynamic_components";
+    const asked: string[] = [];
+    return {
+      asked,
+      useName: (other: string) => {
+        name = other;
+      },
+      lookup: async () => {
+        asked.push(name);
+        if (!names.includes(name)) throw missingTable[dialect](name);
+        return { slug: "hero" };
+      },
+    };
+  };
+  const run = (
+    adapter: Adapter,
+    registry: ReturnType<typeof lookupOf>,
+    executor?: unknown
+  ) =>
+    lookingUpRegistry({
+      adapter: adapter as never,
+      executor,
+      lookup: registry.lookup,
+      useName: registry.useName,
     });
-    expect(getComponent).toHaveBeenCalledTimes(2);
-  });
 
-  it("does not look up again after any other failure", async () => {
-    const getComponent = vi
+  it("looks up once more off a transaction, and never a third time", async () => {
+    const lookup = vi
       .fn()
-      .mockRejectedValue(new Error("connection reset"));
-    const registry = followingMovedRegistry(
-      { getComponent },
-      adapterOf("sqlite") as never
-    );
+      .mockRejectedValueOnce(missingTable.sqlite("dynamic_components"))
+      .mockResolvedValueOnce({ slug: "hero" });
+    const args = {
+      adapter: adapterOf("sqlite") as never,
+      executor: undefined,
+      lookup,
+      useName: () => undefined,
+    };
+    await expect(lookingUpRegistry(args)).resolves.toEqual({ slug: "hero" });
 
-    await expect(registry.getComponent("hero")).rejects.toThrow(
-      "connection reset"
-    );
-    expect(getComponent).toHaveBeenCalledTimes(1);
+    lookup.mockReset();
+    lookup.mockRejectedValue(missingTable.sqlite("dynamic_components"));
+    await expect(lookingUpRegistry(args)).rejects.toThrow("dynamic_components");
+    expect(lookup).toHaveBeenCalledTimes(2);
   });
 
-  it("looks up at most twice, so a move that does not resolve cannot loop", async () => {
-    const getComponent = vi.fn().mockRejectedValue(MISSING);
-    const registry = followingMovedRegistry(
-      { getComponent },
-      adapterOf("sqlite") as never
-    );
-
-    await expect(registry.getComponent("hero")).rejects.toThrow(
-      "dynamic_components"
-    );
-    expect(getComponent).toHaveBeenCalledTimes(2);
+  it("does not look up again after any other failure, another missing table among them", async () => {
+    for (const error of [
+      new Error("connection reset"),
+      missingTable.sqlite("comp_hero"),
+    ]) {
+      const lookup = vi.fn().mockRejectedValue(error);
+      await expect(
+        lookingUpRegistry({
+          adapter: adapterOf("sqlite") as never,
+          executor: undefined,
+          lookup,
+          useName: () => undefined,
+        })
+      ).rejects.toBe(error);
+      expect(lookup).toHaveBeenCalledTimes(1);
+    }
   });
 
-  it("on a transaction, raises the failure as it was and looks up no more: the write decides", async () => {
+  it.each(["sqlite", "mysql", "postgresql"] as const)(
+    "answers on a transaction that meets a moved registry first, asking on its connection (%s)",
+    async dialect => {
+      const tx = txOf();
+      const registry = lookupOf(dialect, "dynamic_field_groups");
+      const adapter = adapterOf(dialect);
+      // What this process resolved, before the move: the registry under its legacy name.
+      held = { dynamic_components: ["id"] };
+      await resolveRegistryTableName(adapter as never);
+      held = { dynamic_field_groups: ["id"] };
+
+      await expect(run(adapter, registry, tx.handle)).resolves.toEqual({
+        slug: "hero",
+      });
+      expect(registry.asked).toEqual([
+        "dynamic_components",
+        "dynamic_field_groups",
+      ]);
+      expect(readOn).toEqual([tx.handle]);
+    }
+  );
+
+  it("refuses a PostgreSQL write that came after the savepoint, rather than losing it", async () => {
+    const adapter = adapterOf("postgresql");
+    held = { dynamic_components: ["id"] };
+    const tx = txOf();
+    await run(adapter, lookupOf("postgresql", "dynamic_components"), tx.handle);
     held = { dynamic_field_groups: ["id"] };
-    const getComponent = vi.fn().mockRejectedValue(MISSING);
-    const registry = followingMovedRegistry(
-      { getComponent },
-      adapterOf("sqlite") as never
-    );
 
-    await expect(registry.getComponent("hero", TX)).rejects.toBe(MISSING);
-    expect(getComponent).toHaveBeenCalledTimes(1);
+    await expect(
+      run(adapter, lookupOf("postgresql", "dynamic_field_groups"), tx.handle)
+    ).rejects.toMatchObject(MOVING);
+    expect(tx.said.at(-1)).toBe("SELECT 1 / 0");
   });
 
-  it("a write whose registry lookup failed as a move is refused to be retried", async () => {
-    held = { dynamic_field_groups: ["id"] };
-    expect(await failing(adapterOf("sqlite"), MISSING)).toMatchObject(MOVING);
-  });
+  it.each(["sqlite", "mysql", "postgresql"] as const)(
+    "raises the failure as it was when the registry is in neither place (%s)",
+    async dialect => {
+      const tx = txOf();
+      await expect(
+        run(adapterOf(dialect), lookupOf(dialect), tx.handle)
+      ).rejects.toThrow(/dynamic_components/);
+    }
+  );
 });
 
 describe("storageMovingRefusal", () => {

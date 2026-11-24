@@ -10,6 +10,7 @@
  *
  * @module domains/field-groups/__tests__/field-group-storage-not-migrated-yet.integration.test
  */
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
@@ -32,6 +33,8 @@ import {
   text,
 } from "../../../config";
 import { getConfiguredTestDialects } from "../../../plugins/test-nextly";
+import { underSavepoint } from "../../versions/version-capture-service";
+import { refusingMovedStorage } from "../migration/moved-storage";
 
 import {
   openStorageGenerationSite,
@@ -243,6 +246,123 @@ describe.each(getConfiguredTestDialects())(
       expect(await heading()).toBe("Back");
       expect(await rowsIn(TABLE)).toBe(1);
     });
+
+    describe.runIf(dialect === "postgresql")(
+      "a transaction whose later step meets a move",
+      () => {
+        /**
+         * A site on the legacy names with a table for what a transaction writes, and the group's
+         * table moved. `step` writes a row; `meetMove` is a step that meets the moved table.
+         */
+        const openMoved = async () => {
+          await openSite();
+          await run(`CREATE TABLE fgnm_marks (id integer PRIMARY KEY)`);
+          const adapter = site!.adapter;
+          const guarded = <T>(
+            tx: TransactionContext,
+            work: () => Promise<T>
+          ): Promise<T> =>
+            refusingMovedStorage({
+              adapter,
+              rows: { getAllComponents: async () => [] },
+              tx,
+              work,
+            });
+          const step = (tx: TransactionContext, id: number) =>
+            guarded(tx, () =>
+              tx.execute(`INSERT INTO fgnm_marks (id) VALUES (${id})`)
+            );
+          const meetMove = (tx: TransactionContext) =>
+            guarded(tx, () => tx.execute(`SELECT * FROM ${quoted(TABLE)}`));
+          const marks = async () =>
+            (
+              (await run(`SELECT id FROM fgnm_marks ORDER BY id`)) as {
+                id: number;
+              }[]
+            ).map(row => row.id);
+          return { adapter, step, meetMove, marks };
+        };
+
+        it("is refused, and keeps none of what its earlier steps wrote", async () => {
+          const { adapter, step, meetMove, marks } = await openMoved();
+          await rename(TABLE, CURRENT);
+
+          expect(
+            await outcome(
+              adapter.transaction(async tx => {
+                await step(tx, 1);
+                await meetMove(tx);
+              })
+            )
+          ).toBe(MOVING);
+          expect(await marks()).toEqual([]);
+        });
+
+        it("cannot be reported as done by a caller that goes on past the refusal", async () => {
+          const { adapter, step, meetMove, marks } = await openMoved();
+          await rename(TABLE, CURRENT);
+
+          const done = await outcome(
+            adapter.transaction(async tx => {
+              await step(tx, 1);
+              await meetMove(tx).catch(() => undefined);
+              await tx.execute(`INSERT INTO fgnm_marks (id) VALUES (2)`);
+            })
+          );
+          expect(done).not.toBe("ok");
+          expect(await marks()).toEqual([]);
+        });
+
+        it("cannot be reported as done by a caller that goes on and runs nothing more", async () => {
+          const { adapter, step, meetMove, marks } = await openMoved();
+          await rename(TABLE, CURRENT);
+
+          const done = await outcome(
+            adapter.transaction(async tx => {
+              await step(tx, 1);
+              await meetMove(tx).catch(() => undefined);
+            })
+          );
+          expect([done, await marks()]).not.toEqual(["ok", []]);
+        });
+
+        it("inside another part's savepoint, undoes that part alone when it is the first to take its own", async () => {
+          const { adapter, step, meetMove, marks } = await openMoved();
+          await rename(TABLE, CURRENT);
+
+          let refused = "";
+          await adapter.transaction(async tx => {
+            await tx.execute(`INSERT INTO fgnm_marks (id) VALUES (1)`);
+            refused = await outcome(
+              underSavepoint(tx as never, () => meetMove(tx))
+            );
+            // The other part's savepoint undid it, as it undoes any failure of its own.
+            await step(tx, 2);
+          });
+          expect(refused).toBe(MOVING);
+          expect(await marks()).toEqual([1, 2]);
+        });
+
+        it("inside another part's savepoint taken after its own, is refused with the whole transaction undone", async () => {
+          const { adapter, step, meetMove, marks } = await openMoved();
+          await rename(TABLE, CURRENT);
+
+          const seen: string[] = [];
+          const done = await outcome(
+            adapter.transaction(async tx => {
+              await step(tx, 1);
+              seen.push(
+                await outcome(underSavepoint(tx as never, () => meetMove(tx)))
+              );
+              await step(tx, 2);
+            })
+          );
+          expect(seen).toEqual([MOVING]);
+          expect(done).not.toBe("ok");
+          expect(await marks()).toEqual([]);
+        });
+      }
+    );
 
     it.runIf(dialect === "postgresql")(
       "takes a savepoint for a save on the legacy names, and none on the current ones",

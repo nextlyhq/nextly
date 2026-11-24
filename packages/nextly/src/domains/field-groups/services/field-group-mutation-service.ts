@@ -90,7 +90,6 @@ import {
   directFieldGroupFields,
 } from "../field-group-write-access";
 import {
-  followingMovedRegistry,
   raiseIfMoved,
   refusalAfterFollowing,
   refusingMovedStorage,
@@ -563,7 +562,7 @@ export class FieldGroupMutationService extends BaseService {
   ) {
     super(adapter, logger);
     // Its lookups follow a registry the storage migration moved under this process.
-    this.registryService = followingMovedRegistry(registryService, adapter);
+    this.registryService = registryService;
   }
 
   /**

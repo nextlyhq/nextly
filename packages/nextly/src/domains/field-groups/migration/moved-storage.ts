@@ -16,6 +16,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { sql, type SQL } from "drizzle-orm";
 
 import {
   firstIdentifierNamed,
@@ -27,7 +28,10 @@ import { getSchemaRegistryFromDI } from "../../../dispatcher/helpers/di";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import {
+  clearRegistryRowCache,
+  registryReadTransaction,
+} from "../../dynamic-collections/services/collection-row-cache";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { introspectLiveColumns } from "../../schema/pipeline/diff/introspect-live";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
@@ -273,60 +277,169 @@ async function followEveryTable(
   }
 }
 
-/**
- * `registry`, its lookups following a registry the storage migration moved: a lookup that fails as
- * moved storage fails (`moveCandidate`) forgets what this process resolved about storage
- * names and runs once more, so it reads the registry under the name it holds now. The migration
- * renames the registry last, after the tables, so a name re-resolved between the two goes stale
- * again; this is where that is caught, whichever lookup meets it first.
- *
- * A lookup on a caller's transaction (an argument that is a database executor) is raised as it was:
- * the failure has aborted that transaction on PostgreSQL, and the write that owns it decides
- * (`refusingMovedStorage`).
- */
-export function followingMovedRegistry<T extends object>(
-  registry: T,
-  adapter: DrizzleAdapter
-): T {
-  return new Proxy(registry, {
-    get(target, property, receiver) {
-      const value: unknown = Reflect.get(target, property, receiver);
-      if (typeof value !== "function") return value;
-      return (...args: unknown[]): unknown => {
-        const run = (): unknown => Reflect.apply(value, target, args);
-        const first = run();
-        if (!(first instanceof Promise)) return first;
-        return first.catch(async (error: unknown) => {
-          if (
-            !isMovedStorageError(error) ||
-            args.some(argument => isExecutor(argument))
-          ) {
-            throw error;
-          }
-          forgetFieldGroupStorageNames(adapter);
-          clearRegistryRowCache();
-          try {
-            return await run();
-          } catch {
-            // The second failure says no more than the first, which is the one raised.
-            throw error;
-          }
-        });
-      };
-    },
-  });
+/** Whether `candidate` is the field-group registry itself. */
+function isRegistry(candidate: MoveCandidate | undefined): boolean {
+  return (
+    candidate?.kind === "table" &&
+    REGISTRY_TABLES.some(name => name === candidate.missing)
+  );
 }
 
 /**
- * Whether `value` is a database executor, as a registry lookup on a caller's transaction is handed:
- * a Drizzle database or transaction, told by the `select` it is queried through.
+ * A registry lookup, following a registry the storage migration moved: one that finds its table
+ * gone looks up once more under the name the registry holds now. The migration renames the registry
+ * last, after the tables, so a name re-resolved between the two goes stale again; this is where that
+ * is caught, whichever caller meets it first.
+ *
+ * On a caller's transaction the registry's other name is read on that connection and the lookup run
+ * again there (`useName`), so nothing that asks is refused, or goes on without its answer, for
+ * asking first. PostgreSQL can do so only while nothing of the transaction came after its savepoint
+ * (`takeSavepoint`): a write that did is refused to be retried instead.
  */
-function isExecutor(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { select?: unknown }).select === "function"
+export async function lookingUpRegistry<T>(args: {
+  adapter: DrizzleAdapter;
+  /** The caller's transaction, when the lookup runs on one. */
+  executor: unknown;
+  lookup: () => Promise<T>;
+  /** Makes `lookup` address the registry as `name` for the rest of the transaction. */
+  useName: (name: string) => void;
+}): Promise<T> {
+  const { adapter, executor, lookup, useName } = args;
+  const forget = (): void => {
+    forgetFieldGroupStorageNames(adapter);
+    clearRegistryRowCache();
+  };
+  const savepoint =
+    executor === undefined ? undefined : await takeSavepoint(adapter, executor);
+  try {
+    return await lookup();
+  } catch (error) {
+    const candidate = moveCandidate(error);
+    if (candidate === undefined || !isRegistry(candidate)) throw error;
+    if (executor === undefined) {
+      if (adapter.transactionOpenInFlow()) {
+        await adapter.afterRollback(forget);
+        throw error;
+      }
+      forget();
+      // A second failure says no more than the first, which is the one raised.
+      return lookup().catch(() => {
+        throw error;
+      });
+    }
+    if (!(await canAsk(adapter, executor, savepoint))) {
+      await adapter.afterRollback(forget);
+      throw error;
+    }
+    const moved = await isMovedStorage(
+      adapter,
+      error,
+      catalogOn(adapter, executor)
+    );
+    if (
+      moved &&
+      (adapter.dialect !== "postgresql" || savepoint?.taken === true)
+    ) {
+      useName(candidate.other);
+      return lookup();
+    }
+    await leaveAborted(adapter, executor);
+    if (!moved) throw error;
+    await adapter.afterRollback(forget);
+    throw storageMovingRefusal(candidate.missing);
+  }
+}
+
+/** The catalog as `executor`, the connection a transaction holds, reads it. */
+function catalogOn(
+  adapter: DrizzleAdapter,
+  executor: unknown
+): CatalogReadAdapter {
+  return { dialect: adapter.dialect, getDrizzle: <H>() => executor as H };
+}
+
+/** A PostgreSQL transaction's savepoint: its name, and whether this call took it. */
+interface TransactionSavepoint {
+  name: string;
+  taken: boolean;
+}
+
+/**
+ * Each transaction's one savepoint, with whether the part that took it has been rolled back since.
+ */
+const savepoints = new WeakMap<
+  object,
+  { name: string; undone: () => boolean }
+>();
+
+/** One statement on a transaction's connection, whichever handle of it the caller holds. */
+async function runOn(executor: unknown, statement: SQL): Promise<void> {
+  await (executor as { execute(query: SQL): Promise<unknown> }).execute(
+    statement
   );
+}
+
+/**
+ * The savepoint the first field-group statement of a PostgreSQL transaction takes, so that one
+ * which fails can be asked about: a failed statement leaves the transaction answering nothing until
+ * it is rolled back to it. One for the whole transaction, never released: what a transaction has
+ * read it holds against a rename until it ends, so what can still fail is asked about the same way.
+ *
+ * Undefined where there is nothing to ask: on SQLite and MySQL, whose transactions a failed
+ * statement leaves usable, and in a process settled on the current names.
+ */
+async function takeSavepoint(
+  adapter: DrizzleAdapter,
+  executor: unknown
+): Promise<TransactionSavepoint | undefined> {
+  if (adapter.dialect !== "postgresql") return undefined;
+  const transaction = registryReadTransaction(adapter, executor);
+  if (transaction === undefined) return undefined;
+  const held = savepoints.get(transaction.transaction);
+  if (held !== undefined && !held.undone()) {
+    return { name: held.name, taken: false };
+  }
+  if (await isSettledOnCurrentNames(adapter)) return undefined;
+  const name = `nextly_moved_storage_${++savepointSequence}`;
+  await runOn(executor, sql`SAVEPOINT ${sql.identifier(name)}`);
+  savepoints.set(transaction.transaction, {
+    name,
+    undone: () => transaction.undone(),
+  });
+  return { name, taken: true };
+}
+
+/** Whether a transaction can be asked anything after a statement failed on it. */
+async function canAsk(
+  adapter: DrizzleAdapter,
+  executor: unknown,
+  savepoint: TransactionSavepoint | undefined
+): Promise<boolean> {
+  if (adapter.dialect !== "postgresql") return true;
+  if (savepoint === undefined) return false;
+  try {
+    await runOn(
+      executor,
+      sql`ROLLBACK TO SAVEPOINT ${sql.identifier(savepoint.name)}`
+    );
+    return true;
+  } catch {
+    // Gone with a part of the transaction that was rolled back: nothing can be asked.
+    return false;
+  }
+}
+
+/**
+ * Leave a PostgreSQL transaction aborted, as the failure left it, once it has been asked: rolled
+ * back to the savepoint it has lost what it wrote since, and a caller that went on past the failure
+ * would commit the rest.
+ */
+async function leaveAborted(
+  adapter: DrizzleAdapter,
+  executor: unknown
+): Promise<void> {
+  if (adapter.dialect !== "postgresql") return;
+  await runOn(executor, sql`SELECT 1 / 0`).catch(() => undefined);
 }
 
 let savepointSequence = 0;
@@ -336,10 +449,9 @@ let savepointSequence = 0;
  * retried when it failed because the migration moved its storage, and raising its failure as it was
  * otherwise.
  *
- * Whether storage moved is read on the transaction's own connection, which a failed statement
- * leaves usable on SQLite and MySQL. PostgreSQL aborts the transaction, so `work` runs in a
- * savepoint there and the question is asked once it is rolled back; a process settled on the
- * current names (`isSettledOnCurrentNames`) has nothing to ask and takes none.
+ * Whether storage moved is read on the transaction's own connection. A failed statement leaves it
+ * usable on SQLite and MySQL; on PostgreSQL it is rolled back to the transaction's savepoint first
+ * (`takeSavepoint`), and left aborted again once it has answered.
  *
  * The names are followed once the transaction has rolled back and its connection is free, so the
  * retry addresses storage as the database holds it.
@@ -351,43 +463,30 @@ export async function refusingMovedStorage<T>(args: {
   work: () => Promise<T>;
 }): Promise<T> {
   const { adapter, rows, tx, work } = args;
-  const savepoint =
-    adapter.dialect === "postgresql" &&
-    !(await isSettledOnCurrentNames(adapter))
-      ? `nextly_moved_storage_${++savepointSequence}`
-      : undefined;
-  if (savepoint !== undefined) await tx.savepoint?.(savepoint);
+  const executor: unknown = tx.getDrizzle();
+  const savepoint = await takeSavepoint(adapter, executor);
   try {
-    const result = await work();
-    if (savepoint !== undefined) await tx.releaseSavepoint?.(savepoint);
-    return result;
+    return await work();
   } catch (error) {
     const candidate = moveCandidate(error);
     if (candidate === undefined) throw error;
-    if (savepoint !== undefined) {
-      try {
-        await tx.rollbackToSavepoint?.(savepoint);
-        await tx.releaseSavepoint?.(savepoint);
-      } catch {
-        // The transaction is gone with its savepoint: nothing can be asked on it.
-        throw error;
-      }
-    } else if (
-      adapter.dialect === "postgresql" &&
-      candidate.kind !== "unregistered"
-    ) {
-      // Nothing can be asked on the aborted transaction. Only a rollback of the migration moves
-      // storage under a process settled on the current names: the names are followed, so a retry
-      // finds them, and the failure is raised as it was.
-      await adapter.afterRollback(() => followEveryTable(adapter, rows, error));
+    const follow = (): Promise<void> => followEveryTable(adapter, rows, error);
+    // A name not registered is refused before any statement runs, so the transaction still answers.
+    const ran = candidate.kind !== "unregistered";
+    if (ran && !(await canAsk(adapter, executor, savepoint))) {
+      // Only a rollback of the migration moves storage under a process settled on the current
+      // names: they are followed, so a retry finds them, and the failure is raised as it was.
+      await adapter.afterRollback(follow);
       throw error;
     }
-    const catalog: CatalogReadAdapter = {
-      dialect: adapter.dialect,
-      getDrizzle: <H>() => tx.getDrizzle<H>(),
-    };
-    if (!(await isMovedStorage(adapter, error, catalog))) throw error;
-    await adapter.afterRollback(() => followEveryTable(adapter, rows, error));
+    const moved = await isMovedStorage(
+      adapter,
+      error,
+      catalogOn(adapter, executor)
+    );
+    if (ran) await leaveAborted(adapter, executor);
+    if (!moved) throw error;
+    await adapter.afterRollback(follow);
     throw storageMovingRefusal(candidate.missing);
   }
 }
@@ -413,10 +512,7 @@ export async function raiseIfMoved(args: {
   }
   if (
     adapter.dialect === "postgresql" ||
-    (await isMovedStorage(adapter, error, {
-      dialect: adapter.dialect,
-      getDrizzle: <H>() => executor as H,
-    }))
+    (await isMovedStorage(adapter, error, catalogOn(adapter, executor)))
   ) {
     throw error;
   }
