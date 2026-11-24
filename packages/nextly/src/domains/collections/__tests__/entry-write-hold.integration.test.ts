@@ -447,6 +447,119 @@ describe.each(getConfiguredTestDialects())(
       await expect(heldFor(t, setsTitle)).resolves.toBeUndefined();
     }, 30_000);
 
+    /** The definition the registry holds, as `change` leaves it, its version moved on. */
+    async function saveDefinition(
+      t: TestNextly,
+      change: (
+        fields: Array<{ name: string } & Record<string, unknown>>
+      ) => Array<Record<string, unknown>>
+    ): Promise<void> {
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      clearRegistryRowCache();
+      const row = (await registry.getCollection(SLUG)) as {
+        fields: Array<{ name: string } & Record<string, unknown>>;
+      };
+      const next = JSON.stringify(change(row.fields));
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET fields = '${next.replace(/'/g, "''")}', schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+      );
+    }
+
+    // A field a save keeps by name but stores differently (a many-to-many pointed at another
+    // collection, a column of another type) is a removed field to a write made from the earlier
+    // definition: the write would read or write it where, or as, it no longer is. A write that
+    // sets it, and one that reads the entry first, is refused to be made again from the new
+    // definition; a create that sets other fields only is not. An edit of a field's label alone
+    // changes nothing of how it is stored, so every write goes on.
+    it("refuses a write made for a field a save kept by name but stores differently", async () => {
+      const t = await boot();
+      const tags = (target: string) => ({
+        name: "tags",
+        type: "relationship",
+        relationTo: target,
+        hasMany: true,
+        options: { target, relationType: "manyToMany" },
+      });
+      await saveDefinition(t, fields => [...fields, tags("alpha")]);
+      const updates = await loadedNow(t, { title: "t" });
+      const createsTags = await loadedNow(
+        t,
+        { title: "t", tags: ["a1"] },
+        { insertsOnly: true }
+      );
+      const createsTitle = await loadedNow(
+        t,
+        { title: "t" },
+        { insertsOnly: true }
+      );
+      // Pointed at another collection, its links are in another table.
+      await saveDefinition(t, fields =>
+        fields.map(field => (field.name === "tags" ? tags("beta") : field))
+      );
+
+      await expect(heldFor(t, updates)).rejects.toMatchObject({
+        code: "COLLECTION_BEING_CHANGED",
+      });
+      await expect(heldFor(t, createsTags)).rejects.toMatchObject({
+        code: "COLLECTION_BEING_CHANGED",
+      });
+      await expect(heldFor(t, createsTitle)).resolves.toBeUndefined();
+
+      // A column stored as another type, the same.
+      const updatesAgain = await loadedNow(t, { title: "t" });
+      await saveDefinition(t, fields =>
+        fields.map(field =>
+          field.name === "note" ? { ...field, type: "number" } : field
+        )
+      );
+      await expect(heldFor(t, updatesAgain)).rejects.toMatchObject({
+        code: "COLLECTION_BEING_CHANGED",
+      });
+    }, 30_000);
+
+    it("lets a write go on when a save since only changed a field's label", async () => {
+      const t = await boot();
+      const updates = await loadedNow(t, { title: "t", note: "n" });
+      await saveDefinition(t, fields =>
+        fields.map(field =>
+          field.name === "note" ? { ...field, label: "Remark" } : field
+        )
+      );
+
+      await expect(heldFor(t, updates)).resolves.toBeUndefined();
+    }, 30_000);
+
+    // The process keeps registry rows it has read: a refusal that names a removed field clears them,
+    // so the retry it asks for reads the definition as the save left it, even where the save ran in
+    // another process and this one's kept row is the earlier.
+    it("clears the rows this process keeps of the collection when it refuses a field a save removed", async () => {
+      const t = await boot();
+      const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+      const loaded = await loadedNow(t, { title: "t", note: "n" });
+      const names = async () =>
+        (
+          (await registry.getCollection(SLUG)) as {
+            fields: Array<{ name: string }>;
+          }
+        ).fields.map(field => field.name);
+      expect(await names()).toContain("note");
+      // Straight to the table, as a save in another process leaves it: this process keeps its row.
+      await t.adapter.executeQuery(
+        `UPDATE dynamic_collections SET fields = '${JSON.stringify(
+          ((await registry.getCollection(SLUG)) as {
+            fields: Array<{ name: string }>;
+          }).fields.filter(field => field.name !== "note")
+        ).replace(/'/g, "''")}', schema_version = schema_version + 1 WHERE slug = '${SLUG}'`
+      );
+      // Still the kept row: the property the refusal is held to change.
+      expect(await names()).toContain("note");
+
+      await expect(heldFor(t, loaded)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+      expect(await names()).not.toContain("note");
+    }, 30_000);
+
     // Entry writes share the hold: two under way at once each take it while the other is open,
     // never waiting on each other. On SQLite every transaction takes its turn anyway.
     it.runIf(dialect !== "sqlite")(
