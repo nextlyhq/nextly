@@ -144,7 +144,9 @@ describe("a type change collected over its stored values", () => {
       expect(
         result.judgement.reasons.find(r => r.kind === "read-as-json")?.rows
       ).toEqual(
-        blocked === 0 ? undefined : { first: [{ id: "2" }, { id: "3" }], count: 2 }
+        blocked === 0
+          ? undefined
+          : { first: [{ id: "2" }, { id: "3" }], count: 2 }
       );
       // Judged by the cast, where no road writes the value, it is the rewrite it needs that blocks it.
       expect(

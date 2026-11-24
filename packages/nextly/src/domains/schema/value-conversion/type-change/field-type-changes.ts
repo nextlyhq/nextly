@@ -1093,8 +1093,9 @@ const MOVES_AS_STORED: Record<
 
 /**
  * Why the change's values themselves stop it, beyond their own reasons: rows of a required field left
- * with no value; values that also move between tables; a lost value the road clears once consented to (`clearsBy`); or one, or a value read only
- * once rewritten, that the deploying cast would not clear or rewrite. Undefined where none does.
+ * with no value; a lost value the road clears once consented to (`clearsBy`); or one, or a value read
+ * only once rewritten, that nothing would clear or rewrite (`unwrittenReason`). Undefined where none
+ * does.
  */
 function valuesReason(of: {
   lossy: boolean;
@@ -1105,20 +1106,24 @@ function valuesReason(of: {
   clearsBy: () => string;
 }): string | undefined {
   if (of.emptiesRequired > 0) {
-    return `It is required, so ${describeRowCount(of.emptiesRequired)} would be left with no value in it: make it optional first, or give ${of.emptiesRequired === 1 ? "that row a value that converts" : "those rows values that convert"}, then save again.`;
+    return `It is required, so ${describeRowCount(of.emptiesRequired)} would be left with no value in it: make it optional first, or change its values so each converts, then save again.`;
   }
-  if (of.moves !== undefined && (of.lossy || of.rewritten)) {
-    return MOVES_AS_STORED[of.moves];
-  }
-  if (of.lossy) {
-    return of.converted
-      ? of.clearsBy()
-      : `Clearing the values that cannot convert can't be deployed yet: ${DEPLOYED_BY_CAST}.`;
-  }
-  if (of.rewritten && !of.converted) {
-    return `Rewriting values into the new type's form can't be deployed yet: ${DEPLOYED_BY_CAST}.`;
-  }
-  return undefined;
+  if (of.converted) return of.lossy ? of.clearsBy() : undefined;
+  return of.lossy || of.rewritten ? unwrittenReason(of) : undefined;
+}
+
+/**
+ * Why a value the change would clear or rewrite is written by nothing: the copy between the entity's
+ * tables takes it as it is stored, or else the database's cast would.
+ */
+function unwrittenReason(of: {
+  lossy: boolean;
+  moves: JudgedFieldTypeChange["movesTranslation"];
+}): string {
+  if (of.moves !== undefined) return MOVES_AS_STORED[of.moves];
+  return of.lossy
+    ? `Clearing the values that cannot convert can't be deployed yet: ${DEPLOYED_BY_CAST}.`
+    : `Rewriting values into the new type's form can't be deployed yet: ${DEPLOYED_BY_CAST}.`;
 }
 
 /** The registry statuses whose recorded fields the database already has. */

@@ -242,10 +242,7 @@ function readBack(
 }
 
 /** Whether a JSON column's `readsAs` is a string an entry's read takes as another value (`readBack`). */
-export function readsAsItsOwnJson(
-  to: FieldTypeOnDialect,
-  readsAs: string
-): boolean {
+function readsAsItsOwnJson(to: FieldTypeOnDialect, readsAs: string): boolean {
   if (to.family !== "json" || to.dialect === "sqlite") return false;
   const value: unknown = JSON.parse(readsAs);
   if (typeof value !== "string") return false;
@@ -291,6 +288,11 @@ function asConverted(
   return verdict;
 }
 
+/** Whether a verdict leaves its row with no value: a lost one, or one kept as no value. */
+function leavesNone(verdict: ValueVerdict): boolean {
+  return verdict.outcome === "lost" || verdict.reason === "empty";
+}
+
 /** The values of one type change counted as they are judged: by outcome, by reason, and cleared. */
 class TypeChangeTally {
   private readonly counts: Record<ValueOutcome, number> = {
@@ -328,12 +330,7 @@ class TypeChangeTally {
     }
     this.counts[verdict.outcome] += 1;
     if (verdict.outcome === "lost") this.cleared.push(key);
-    if (
-      stored !== null &&
-      (verdict.outcome === "lost" || verdict.reason === "empty")
-    ) {
-      this.emptied += 1;
-    }
+    if (stored !== null && leavesNone(verdict)) this.emptied += 1;
     if (verdict.reason === "same-value" || verdict.reason === "empty") return;
     this.note(REPORTED_AS[verdict.reason], key);
   }

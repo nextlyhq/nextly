@@ -543,6 +543,27 @@ function valuesOf(
   );
 }
 
+/** What the review of `v` becoming `to` counts of its values. */
+async function reviewed(
+  to: Field
+): Promise<
+  Array<{ field: string; kept: number; changed: number; lost: number }>
+> {
+  const answer = (await dispatchCollections(
+    {} as ServiceContainer,
+    "previewSchemaChanges",
+    { collectionName: SLUG },
+    { fields: fieldsWith(to) }
+  )) as Response | Record<string, unknown>;
+  const json = (
+    answer instanceof Response ? await answer.json() : answer
+  ) as Record<string, unknown>;
+  const { typeChanges } = (json.data ?? json) as {
+    typeChanges: Awaited<ReturnType<typeof reviewed>>;
+  };
+  return typeChanges;
+}
+
 describe.each(getConfiguredTestDialects())(
   "a type change converts each value as its pair of types says (%s)",
   dialect => {
@@ -566,23 +587,7 @@ describe.each(getConfiguredTestDialects())(
         const before = await definition(t, dialect);
 
         // What the review counts is what the person confirms, sent back as it was shown.
-        const answer = (await dispatchCollections(
-          {} as ServiceContainer,
-          "previewSchemaChanges",
-          { collectionName: SLUG },
-          { fields: fieldsWith(pair.to) }
-        )) as Response | Record<string, unknown>;
-        const json = (
-          answer instanceof Response ? await answer.json() : answer
-        ) as Record<string, unknown>;
-        const { typeChanges } = (json.data ?? json) as {
-          typeChanges: Array<{
-            field: string;
-            kept: number;
-            changed: number;
-            lost: number;
-          }>;
-        };
+        const typeChanges = await reviewed(pair.to);
         expect(typeChanges).toEqual([expect.objectContaining({ field: "v" })]);
         // A value the cast does not read as the rules do is counted as blocked where no road
         // rewrites it, so only where one does are the counts the pair's own.

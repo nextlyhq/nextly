@@ -534,7 +534,9 @@ async function sqliteReadersOf(
     );
   return [
     ...(reads(/\bCHECK\s*\(/gi) ? [`a CHECK that reads ${column}`] : []),
-    ...(reads(/\bAS\s*\(/gi) ? [`a generated column that reads ${column}`] : []),
+    ...(reads(/\bAS\s*\(/gi)
+      ? [`a generated column that reads ${column}`]
+      : []),
   ];
 }
 

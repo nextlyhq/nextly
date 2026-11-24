@@ -667,7 +667,11 @@ describe.each(getConfiguredTestDialects())(
     it.runIf(dialect === "sqlite").each([
       ["a default", "v text DEFAULT 'none'", "has a default"],
       ["a CHECK", "v text CHECK (length(v) < 9)", "CHECK"],
-      ["a named CHECK", "v text CONSTRAINT v_short CHECK (length(v) < 9)", "v_short"],
+      [
+        "a named CHECK",
+        "v text CONSTRAINT v_short CHECK (length(v) < 9)",
+        "v_short",
+      ],
       ["a UNIQUE", "v text UNIQUE", "UNIQUE"],
       ["a foreign key", "v text REFERENCES dc_tcf_posts(id)", "foreign key"],
       ["a generated column of it", "v text, g text AS (v || 'x')", "generated"],

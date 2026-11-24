@@ -865,7 +865,9 @@ describe.each(getConfiguredTestDialects())(
           expect(outcome).toMatchObject(refusedSaying(`id ${id}`));
           expect(outcome).toMatchObject({
             publicData: {
-              errors: [expect.objectContaining({ code: "TYPE_CHANGE_BLOCKED" })],
+              errors: [
+                expect.objectContaining({ code: "TYPE_CHANGE_BLOCKED" }),
+              ],
             },
           });
         } else {

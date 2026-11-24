@@ -243,7 +243,9 @@ async function exec<R>(t: TestNextly, statement: string): Promise<R[]> {
 
 /** The columns of `table`, as the database names them. */
 async function columnsOf(t: TestNextly, table: string): Promise<string[]> {
-  const { dialect } = (t.adapter as unknown as DrizzleAdapter).getCapabilities();
+  const { dialect } = (
+    t.adapter as unknown as DrizzleAdapter
+  ).getCapabilities();
   const columns = await exec<{ name: string }>(
     t,
     dialect === "sqlite"
