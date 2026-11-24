@@ -4596,6 +4596,10 @@ export class CollectionQueryService extends BaseService {
           // and reports the unscoped total beside correctly filtered rows —
           // disclosing how many rows exist outside the grant.
           authenticatedScope: params.authenticatedScope,
+          // And the key behind that scope, by id: `_waitingForMe` names a key's caller by it. The
+          // count shares the page's waiting read today (memoized per filter), but it carries its
+          // own caller so it never depends on that cache to judge a key as the page did.
+          apiKeyId: params.apiKeyId,
         };
         // The page's own access: the total counts the entries the page's
         // filter matched, not those of a second answer of the rule.

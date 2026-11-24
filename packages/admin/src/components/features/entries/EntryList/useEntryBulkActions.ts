@@ -1,6 +1,6 @@
-import { useWaitingScope } from "@admin/hooks/queries/useWaitingForMe";
 import { useCan } from "@admin/hooks/useCan";
 
+import { bulkMoveSteps } from "./bulk-workflow-moves";
 import type { CollectionForColumns } from "./EntryTableColumns";
 
 /** Which bulk actions the entry list offers on a collection. */
@@ -10,8 +10,9 @@ export interface EntryBulkActions {
   unpublish: boolean;
   /**
    * Whether the workflow's moves (Submit for review, Assign…, Send back…) are offered: on a
-   * collection a workflow holds, to a reader who may edit its entries or may take some review
-   * step. Which move each document takes is the server's to judge, each refusal named.
+   * collection a workflow holds, to a reader who may edit its entries or may take, on THIS
+   * collection, a step the list takes in bulk (its one submit or send-back step). Which move each
+   * document takes is the server's to judge, each refusal named.
    */
   workflowMoves: boolean;
   /**
@@ -50,8 +51,19 @@ export function useEntryBulkActions(
   const canPublish = useCan(`publish-${slug}`);
   const canUnpublish = useCan(`unpublish-${slug}`);
   const canUpdate = useCan(`update-${slug}`);
-  // Whether the reader may take any review step at all: one who reviews but does not edit.
-  const reviews = useWaitingScope().data?.reviews === true;
+  // Whether the reader may take, on THIS collection, a step the list takes in bulk: one who reviews
+  // it but does not edit it. A step's action is spelled as stored (`sign-off` → `sign-off-posts`),
+  // so a reviewer of another collection only holds none here. Two fixed asks, one per bulk step;
+  // an empty slug matches no permission.
+  const steps = collection?.workflow?.steps ?? [];
+  const bulkSteps = bulkMoveSteps(steps);
+  const permissionOf = (name: string | undefined) => {
+    const action = steps.find(step => step.name === name)?.action;
+    return action !== undefined && slug !== "" ? `${action}-${slug}` : "";
+  };
+  const submitsHere = useCan(permissionOf(bulkSteps.submit));
+  const sendsBackHere = useCan(permissionOf(bulkSteps.sendBack));
+  const reviewsHere = submitsHere || sendsBackHere;
 
   // A collection deleted through an action of its own (a plugin's) is offered
   // no Delete here: the server would refuse it, and that action is offered
@@ -66,7 +78,7 @@ export function useEntryBulkActions(
       writable &&
       slug !== "" &&
       Boolean(collection?.workflow) &&
-      (canUpdate || reviews),
+      (canUpdate || reviewsHere),
   };
   return {
     ...offered,

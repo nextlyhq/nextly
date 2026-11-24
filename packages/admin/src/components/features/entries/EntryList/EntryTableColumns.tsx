@@ -71,8 +71,18 @@ export interface CollectionForColumns {
     label: string;
     /** Its stages in order, by name and label: the list's stage filter offers them. */
     stages?: readonly { name: string; label: string }[];
-    /** Its steps, by kind: the bulk moves are found among them (`bulkMoveSteps`). */
-    steps?: readonly { name: string; label: string; kind: WorkflowStepKind }[];
+    /**
+     * Its steps, by kind: the bulk moves are found among them (`bulkMoveSteps`), and whether each
+     * needs a comment, which a bulk move asks for first.
+     */
+    steps?: readonly {
+      name: string;
+      label: string;
+      kind: WorkflowStepKind;
+      commentRequired?: boolean;
+      /** The action taking it here needs (`sign-off` → `sign-off-<slug>`), as Settings names it. */
+      action?: string;
+    }[];
   } | null;
   /**
    * Whether the table shows each row's translation state: a collection with multilingual content

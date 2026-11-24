@@ -419,6 +419,8 @@ export const EntryTable: ForwardRefExoticComponent<
       const title = row && titleField ? row[titleField] : undefined;
       return typeof title === "string" && title !== "" ? title : id;
     },
+    // A move answered clears the selection, as a bulk publish does.
+    onMoved: clear,
   });
 
   // A plugin's column decided by a read of its own (whether the collection

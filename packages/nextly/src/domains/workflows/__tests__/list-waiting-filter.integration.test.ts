@@ -37,6 +37,7 @@ import {
   person,
   role,
   seedState,
+  seedStates,
 } from "./helpers/step-harness";
 import { editorial } from "./helpers/step-workflows";
 
@@ -264,11 +265,14 @@ describe.each(getConfiguredTestDialects())(
           copies.slice(at, at + 25)
         );
       }
-      for (const id of ids) {
-        await seedState(app, partOf("pages", id, null), "legal", {
-          definitionHash: HASH,
-        });
-      }
+      // In batched inserts, as the rows above are: a thousand statements one by one is slow on a
+      // busy database.
+      await seedStates(
+        app,
+        ids.map(id => partOf("pages", id, null)),
+        "legal",
+        { definitionHash: HASH }
+      );
 
       const listed = await app.nextly.find({
         collection: "pages",

@@ -6,7 +6,9 @@
  * version its row's review state named (`_review`), so a document changed since is refused rather
  * than moved over content no one saw. The server judges each document on its own and names each
  * refusal, and the list says what moved and why each other did not (`bulkMoveSummary`). Once
- * done, the list and the waiting list are read again.
+ * done, the selection is cleared (each moved row's review state has changed since it was shown, so
+ * it is chosen again from a fresh read, never moved twice as it was), and the list and the waiting
+ * list are read again.
  *
  * @module components/features/entries/EntryList/useWorkflowBulkMoves
  */
@@ -31,11 +33,7 @@ import {
   assignManyWorkflowParts,
   stepManyWorkflowDocuments,
 } from "@admin/services/workflowApi";
-import type {
-  BulkMoveAnswer,
-  ReviewAssignee,
-  StepManyDocument,
-} from "@admin/types/workflows";
+import type { ReviewAssignee, StepManyDocument } from "@admin/types/workflows";
 
 import { StepCommentDialog } from "../review/StepCommentDialog";
 
@@ -45,6 +43,7 @@ import {
   bulkMoveSummary,
   DOCUMENTS_PER_MOVE,
   inBatches,
+  type BatchedMoveAnswer,
   type BulkWorkflowMove,
 } from "./bulk-workflow-moves";
 import type { CollectionForColumns } from "./EntryTableColumns";
@@ -82,8 +81,10 @@ export function useWorkflowBulkMoves(args: {
   rows: readonly EntryRow[];
   /** A row's title as the list shows it, for a refusal to name. */
   titleOf: (row: EntryRow | undefined, id: string) => string;
+  /** Clears the list's selection: called once a move is answered. */
+  onMoved?: () => void;
 }): WorkflowBulkMoves {
-  const { collection, offered, rows, titleOf } = args;
+  const { collection, offered, rows, titleOf, onMoved } = args;
   const queryClient = useQueryClient();
   const me = useCurrentUserId();
   const [result, setResult] = useState<BulkMoveResult | null>(null);
@@ -92,6 +93,8 @@ export function useWorkflowBulkMoves(args: {
     null
   );
   const [assigning, setAssigning] = useState<readonly string[] | null>(null);
+  // The documents a submit step that needs a comment waits to be taken over, while it is asked for.
+  const [submitting, setSubmitting] = useState<readonly string[] | null>(null);
   const steps = bulkMoveSteps(collection.workflow?.steps ?? []);
   // Each row as the list last showed it, kept across pages: a selection carried from an earlier
   // page is moved as that page showed it, not left without what it saw.
@@ -122,11 +125,16 @@ export function useWorkflowBulkMoves(args: {
   /** Runs one move, says what it did, and reads the lists again. */
   const run = async (
     move: BulkWorkflowMove,
-    send: () => Promise<BulkMoveAnswer>
+    send: () => Promise<BatchedMoveAnswer>
   ) => {
     setPending(true);
     try {
       const answer = await send();
+      const { stopped } = answer;
+      if (stopped && answer.items.length === 0 && answer.errors.length === 0) {
+        // The first request went unanswered: nothing was sent, so the failure is all there is to say.
+        throw stopped.reason;
+      }
       setResult(
         bulkMoveSummary(move, {
           moved: answer.items.length,
@@ -137,8 +145,21 @@ export function useWorkflowBulkMoves(args: {
               reason: reasonOf(refusal.message),
             };
           }),
+          // A later request went unanswered: what the earlier ones moved is said, then the rest.
+          ...(stopped
+            ? {
+                unsent: {
+                  count: stopped.unsent,
+                  reason: reasonOf(
+                    apiErrorMessage(stopped.reason, "The request failed.")
+                  ),
+                },
+              }
+            : {}),
         })
       );
+      // Answered: the moved rows changed since they were shown, so none stays selected as it was.
+      onMoved?.();
     } catch (reason) {
       setResult({
         head: apiErrorMessage(reason, "The move wasn't made."),
@@ -148,6 +169,7 @@ export function useWorkflowBulkMoves(args: {
       setPending(false);
       setSendingBack(null);
       setAssigning(null);
+      setSubmitting(null);
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: entryKeys.listsByCollection(collection.slug),
@@ -167,18 +189,33 @@ export function useWorkflowBulkMoves(args: {
       pending,
       ...(submitStep
         ? {
-            submit: () =>
-              void run("submit", () =>
-                inBatches(documentsOf(ids), DOCUMENTS_PER_MOVE, documents =>
-                  stepManyWorkflowDocuments({ step: submitStep, documents })
-                )
-              ),
+            // A submit step that needs a comment asks for it first, as the editor does; the step
+            // would refuse every document taken without one.
+            submit: steps.submitNeedsComment
+              ? () => setSubmitting(ids)
+              : () => submitWith(submitStep, ids, undefined),
           }
         : {}),
       assign: () => setAssigning(ids),
       ...(steps.sendBack ? { sendBack: () => setSendingBack(ids) } : {}),
     };
   };
+
+  /** Takes the submit step over `ids`, with the comment it needs where it needs one. */
+  const submitWith = (
+    step: string,
+    ids: readonly string[],
+    comment: string | undefined
+  ) =>
+    void run("submit", () =>
+      inBatches(documentsOf(ids), DOCUMENTS_PER_MOVE, documents =>
+        stepManyWorkflowDocuments({
+          step,
+          ...(comment === undefined ? {} : { comment }),
+          documents,
+        })
+      )
+    );
 
   /** Each role the selected parts wait for, by id, as the editor offers them. */
   const rolesOf = (ids: readonly string[]) => {
@@ -213,11 +250,23 @@ export function useWorkflowBulkMoves(args: {
     );
 
   const sendBackStep = steps.sendBack;
-  const sendBackLabel =
-    collection.workflow?.steps?.find(step => step.name === sendBackStep)
-      ?.label ?? "Send back";
+  const labelOf = (name: string | undefined, fallback: string) =>
+    collection.workflow?.steps?.find(step => step.name === name)?.label ??
+    fallback;
+  const sendBackLabel = labelOf(sendBackStep, "Send back");
+  const submitStep = steps.submit;
   const dialogs = (
     <>
+      {submitStep && steps.submitNeedsComment ? (
+        <StepCommentDialog
+          open={submitting !== null}
+          label={labelOf(submitStep, "Submit for review")}
+          pending={pending}
+          asksForChanges={false}
+          onCancel={() => setSubmitting(null)}
+          onSend={comment => submitWith(submitStep, submitting ?? [], comment)}
+        />
+      ) : null}
       {sendBackStep ? (
         <StepCommentDialog
           open={sendingBack !== null}

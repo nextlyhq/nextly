@@ -75,6 +75,7 @@ import {
   role,
   saveIn,
   seedState,
+  seedStates,
   shownVersion,
   stateDb,
   stateOf,
@@ -83,6 +84,19 @@ import {
   type Grant,
 } from "./helpers/step-harness";
 import { editorial } from "./helpers/step-workflows";
+
+/**
+ * The action each editorial step needs, as Settings names it: the one it names, else `publish`
+ * into a stage that allows publishing (`fastTrack` into Cleared), else `update`.
+ */
+const EDITORIAL_ACTIONS: Record<string, string> = {
+  send: "update",
+  clear: "sign-off",
+  bounce: "sign-off",
+  park: "update",
+  resume: "update",
+  fastTrack: "publish",
+};
 
 const HASH = workflowDefinitionHash(editorial);
 const PAGES = "pages";
@@ -759,9 +773,10 @@ describe.each(getConfiguredTestDialects())(
             id: "carol",
           });
 
-          // Its stages by name and label, which a list filters by, and its steps by name, label
-          // and kind: a list takes the workflow's one step of a kind in bulk (Submit for review,
-          // Send back), and never an approval.
+          // Its stages by name and label, which a list filters by, and its steps by name, label,
+          // kind and whether each needs a comment: a list takes the workflow's one step of a kind
+          // in bulk (Submit for review, Send back), asking first for a comment one needs, and
+          // never an approval.
           expect(held.workflow).toEqual({
             slug: "editorial",
             label: "Editorial",
@@ -773,6 +788,8 @@ describe.each(getConfiguredTestDialects())(
               name: step.name,
               label: step.label,
               kind: step.kind,
+              commentRequired: step.commentRequired,
+              action: EDITORIAL_ACTIONS[step.name],
             })),
           });
           expect(free.workflow).toBeNull();
@@ -836,6 +853,8 @@ describe.each(getConfiguredTestDialects())(
               name: step.name,
               label: step.label,
               kind: step.kind,
+              commentRequired: step.commentRequired,
+              action: EDITORIAL_ACTIONS[step.name],
             })),
           });
           // The exported schema helper a site can mount names it the same way.
@@ -860,6 +879,8 @@ describe.each(getConfiguredTestDialects())(
               name: step.name,
               label: step.label,
               kind: step.kind,
+              commentRequired: step.commentRequired,
+              action: EDITORIAL_ACTIONS[step.name],
             })),
           });
 
@@ -2138,11 +2159,13 @@ describe.each(getConfiguredTestDialects())(
           ["read", PAGES],
           ["sign-off", PAGES],
         ]);
-        for (let n = 0; n < 1005; n += 1) {
-          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
-            definitionHash: HASH,
-          });
-        }
+        // In batched inserts: a thousand statements one by one is slow on a busy database.
+        await seedStates(
+          app(),
+          Array.from({ length: 1005 }, () => partOf(PAGES, randomUUID(), null)),
+          "legal",
+          { definitionHash: HASH }
+        );
         const later = new Date("2026-11-03T10:00:00.000Z");
         const readable: string[] = [];
         for (let n = 0; n < 10; n += 1) {
