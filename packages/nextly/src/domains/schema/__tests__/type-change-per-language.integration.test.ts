@@ -204,8 +204,13 @@ async function write(
   } as never);
 }
 
-/** A collection with a translated field, so its translations table is there, and a shared `v`. */
-async function createTranslated(): Promise<void> {
+const TRANSLATED_S = { name: "s", type: "text", localized: true };
+const JOINED_V = { name: "v", type: "email", localized: true };
+
+/** A collection with a shared `v`, and `translated`: with one, its translations table is there. */
+async function createTranslated(
+  translated: Record<string, unknown>[] = [TRANSLATED_S]
+): Promise<void> {
   await dispatchCollections(
     {} as ServiceContainer,
     "createCollection",
@@ -214,19 +219,13 @@ async function createTranslated(): Promise<void> {
       name: SLUG,
       label: "Post",
       localized: true,
-      fields: [
-        { name: "s", type: "text", localized: true },
-        { name: "v", type: "text", localized: false },
-      ],
+      fields: [...translated, { name: "v", type: "text", localized: false }],
     }
   );
 }
 
 /** `createTranslated`'s fields with `v` translated and an email. */
-const JOINED = [
-  { name: "s", type: "text", localized: true },
-  { name: "v", type: "email", localized: true },
-];
+const JOINED = [TRANSLATED_S, JOINED_V];
 
 /** The migration files written, in the order they run. */
 async function filesNamed(): Promise<string[]> {
@@ -564,6 +563,41 @@ describe.each(getConfiguredTestDialects())(
         expect(await columnsOf(second, `dc_${SLUG}_locales`)).not.toContain(
           "v"
         );
+      }
+    );
+
+    // A translations table the change itself makes is filled after the change's own file, from values
+    // that file has converted: the order the join above does not have, so nothing is refused.
+    converts(
+      "converts a deploy's own values before the file that makes the translations table copies them",
+      async () => {
+        const first = await boot(dialect, LANGUAGES);
+        await createTranslated([]);
+        const created = await filesWritten();
+        await write(first, "kept", { v: "a@b.co" });
+        await save(first, [JOINED_V], { localized: true });
+        // The control: the file that copies the values was written after the change's own.
+        expect((await filesNamed()).slice(created)).toEqual([
+          expect.stringContaining("update"),
+          expect.stringContaining("enable_localization"),
+        ]);
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect, LANGUAGES);
+        await migrateFolder(second, created);
+        await write(second, "address", { v: "c@d.co" });
+        await write(second, "word", { v: "zzz" });
+        await migrateFolder(
+          second,
+          undefined,
+          resolveDataLossConsent({ flag: true, env: {} })
+        );
+
+        expect(await storedIn(second, "locales")).toEqual({
+          address: "c@d.co",
+          word: null,
+        });
       }
     );
 

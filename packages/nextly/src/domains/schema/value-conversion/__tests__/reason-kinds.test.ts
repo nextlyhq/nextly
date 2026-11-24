@@ -54,6 +54,10 @@ const TYPE_CHANGE: Record<
     "lossy",
     "values the new field's own validation refuses would be cleared",
   ],
+  "read-as-json": [
+    "blocked",
+    "texts that are themselves JSON, which the JSON field would read back as what they say, not as text",
+  ],
   rounded: ["blocked", "values the new type holds only rounded"],
   "out-of-range": ["blocked", "values outside the range the new type holds"],
   "no-time-or-offset": [
