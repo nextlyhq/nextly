@@ -144,6 +144,7 @@ import {
   holdRecordedAtStart,
   registryRows,
 } from "../domains/schema/pipeline/recorded-fields";
+import { configTheCodeOwns } from "../domains/schema/pipeline/registered-collections";
 import type {
   DesiredCollection,
   DesiredSchema,
@@ -156,7 +157,6 @@ import {
   resolvePostgresSchema,
   setActivePostgresSchema,
 } from "../domains/schema/services/postgres-schema";
-import { configTheCodeOwns } from "../domains/schema/pipeline/registered-collections";
 import { assertConfiguredSiblingFields } from "../domains/schema/sibling-fields";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
 import type { SingleMetadataService } from "../domains/singles/services/single-metadata-service";

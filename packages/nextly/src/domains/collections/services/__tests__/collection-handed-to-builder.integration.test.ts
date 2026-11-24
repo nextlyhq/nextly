@@ -21,6 +21,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { DEMOTED_FROM_CODE } from "../../../schema/pipeline/demoted-from-code";
 import { CollectionRegistryService } from "../collection-registry-service";
 import { configurationRegistryRows } from "../../../schema/migrate/first-run";
@@ -247,8 +248,14 @@ describe.each(getConfiguredTestDialects())(
         { source: "ui", locked: false },
         { handOver: "builder" }
       );
-      // The hand-over marks the row; a row the Builder made has no mark.
-      await registry.updateCollection(slug, { configPath: null });
+      // The hand-over marks the row; a row the Builder made has no mark. The registry's update
+      // takes no "no config path", so the mark is cleared on the row itself.
+      await handle.adapter.update(
+        "dynamic_collections",
+        { config_path: null },
+        { and: [{ column: "slug", op: "=", value: slug }] }
+      );
+      clearRegistryRowCache();
       expect(
         (await registry.getCollectionBySlug(slug))?.configPath ?? null
       ).toBe(null);

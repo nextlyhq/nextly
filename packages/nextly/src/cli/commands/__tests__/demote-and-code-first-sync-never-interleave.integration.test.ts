@@ -347,9 +347,9 @@ for (const dialect of getConfiguredTestDialects()) {
       loaded.config = configOf(collection);
       clearCachedSnapshot();
       clearLiveSnapshots();
-      const exit = vi.spyOn(process, "exit").mockImplementation((code => {
+      const exit = vi.spyOn(process, "exit").mockImplementation(code => {
         throw new Error(`db:sync exited ${String(code)}`);
-      }) as never);
+      });
       try {
         await runDbSync(
           { cwd: dir, autoSync: true } as Parameters<typeof runDbSync>[0],
